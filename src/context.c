@@ -334,12 +334,12 @@ install_compact_output(struct context_builder *builder, const char *compact_id,
         json_array_append_new(builder->semantic_items, semantic) < 0) {
         if (semantic)
             json_decref(semantic);
-        set_error(error, error_size, "invalid native compact output");
+        set_error(error, error_size, "invalid compact output");
         return -1;
     }
     semantic = NULL;
     if (append_compact_output_raw(builder->request_input, output) < 0) {
-        set_error(error, error_size, "cannot install native compact output");
+        set_error(error, error_size, "cannot install compact output");
         return -1;
     }
     return 0;
@@ -371,7 +371,7 @@ install_compact_output_active(struct context_builder *builder,
     if (array_append_deep(builder->semantic_items, semantic_suffix) < 0 ||
         array_append_deep(builder->request_input, request_suffix) < 0) {
         set_error(error, error_size,
-                  "cannot preserve active suffix after native compact output");
+                  "cannot preserve active suffix after compact output");
         goto out;
     }
     rc = 0;

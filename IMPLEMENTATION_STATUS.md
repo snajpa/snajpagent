@@ -23,7 +23,7 @@ Approximate release work remaining: **1%**. Approximate completed work:
 | Level-zero session loop, one-turn mode, passive resume, and fixture path | implemented with regression coverage | 0% |
 | Multi-cycle turn semantics, steering, queueing, and durable tool fences | implemented for current scope | 0% |
 | Terminal composer and additive rendering levels 0..6 | live SIGWINCH resize/redraw, Ctrl-Z suspend/continue draft preservation, Linux PTY TERM/width evidence, and a Linux/macOS PTY capability surface are implemented and machine-checked; external advertised-platform evidence is tracked under final integrated qualification | 0% |
-| Responses HTTP/SSE/API-key path | transport, exact response input-token count path, durable standalone manual native compaction, threshold-gated automatic compaction after completed turns, pre-response active-prefix automatic compaction, exact compact-window input/output count metadata, bounded create/count/compact retry handling, and durable provider-profile response-start captures are implemented; live provider evidence is tracked under integrated qualification | 0% |
+| Responses HTTP/SSE/API-key path | transport, exact response input-token count path, durable standalone manual compaction, threshold-gated automatic compaction after completed turns, pre-response active-prefix automatic compaction, exact compact-window input/output count metadata, bounded create/count/compact retry handling, and durable provider-profile response-start captures are implemented; live provider evidence is tracked under integrated qualification | 0% |
 | Process tools | non-PTY `exec_command`, immediate PTY execution, yielded non-PTY and PTY managed handles, bounded `write_stdin`, PTY startup/refresh sizing, one-active-process replay tracking, strict managed-process continuation gating, durable `process_closed` records, owner-loss recovery closure, direct-child kill fallback, and process-family timeout/closure leak regressions are implemented; advertised-platform crash/restart evidence is tracked under final integrated qualification | 0% |
 | Strict `apply_patch` tool | first-party parser/matcher/installer and bounded model-visible diff preview implemented with focused regression coverage; advertised-platform filesystem evidence is tracked under final integrated qualification | 0% |
 | Instruction discovery, metadata, relocation/archive/delete closure, and final lifecycle polish | bounded instruction discovery, turn metadata, explicit resume-time workspace relocation, local archive/unarchive, typed-confirmation delete, active delete-intent completion, and exact post-rename trash completion are implemented for the current scope | 0% |
@@ -45,7 +45,7 @@ and yielded PTY command execution, managed process handles, bounded
 shutdown evidence, bounded AGENTS instruction discovery, explicit resume-time
 workspace relocation, local archive/delete lifecycle closure, exact Responses
 input-token counting, durable manual plus post-turn and pre-response automatic
-native compaction with compact-window count metadata, bounded provider
+compaction with compact-window count metadata, bounded provider
 retry/rate-limit handling, durable provider-profile response-start captures,
 live terminal SIGWINCH resize/redraw, Ctrl-Z suspend/continue handling, Linux
 TERM/width matrix evidence, Linux/macOS PTY capability gating,
@@ -92,12 +92,12 @@ model-visible diff previews.
   evidencematrixcheck` validates a copied set of platform bundles before release
   matrix completion is claimed;
 - idle `/compact`, threshold-gated post-turn automatic compaction, and
-  pre-response active-prefix automatic compaction now run the
-  durable native compact transaction when history has changed since the newest
+  pre-response active-prefix automatic compaction now run the durable compact
+  transaction when history has changed since the newest
   installed compact base: they build the bounded compact-source projection, build
   exact input/output count requests for the compact window, persist count method
   and count-request SHA-256 metadata, sync `compaction_started`, call the
-  provider compact endpoint, validate the bounded `response.compaction.output`,
+  native compact endpoint or Responses fallback, validate the bounded output,
   and sync `compaction_completed`; ordinary future context projection installs
   that output exactly once before uncompacted suffix items, while the
   pre-response path stops the compact source before the active `turn_started`,

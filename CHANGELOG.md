@@ -46,7 +46,7 @@
   parsing without contacting the external provider.
 - Added `make livecheck`, an explicit real-provider evidence harness that
   requires `OPENAI_API_KEY`, network access, and provider quota; it runs an
-  isolated one-turn session with automatic native compaction and verifies exact
+  isolated one-turn session with automatic compaction and verifies
   count/profile/compact evidence in the durable event log.
 - Added machine-checkable release-state gates: `make statuscheck` verifies
   that `IMPLEMENTATION_STATUS.md` percentages are internally consistent,
@@ -85,7 +85,7 @@
   OpenAI Responses compact transport, compact-output validation, compact output
   installation in later context projection, and response-start lineage via the
   installed `compact_id`.
-- Added threshold-gated automatic native compaction after completed turns and
+- Added threshold-gated automatic compaction after completed turns and
   before active-turn provider requests, with `[provider] auto_compact_input_tokens`,
   exact compact-source and compact-output count requests on the real provider
   path, persisted count methods and count-request SHA-256 metadata, active-prefix

@@ -81,7 +81,7 @@ def main() -> int:
         ]
         if profile == "codex-lb":
             lines.extend([
-                "auto_compact_input_tokens = 0\n",
+                "auto_compact_input_tokens = 1\n",
                 "exact_token_count = false\n",
                 "native_compaction = false\n",
             ])
@@ -131,21 +131,20 @@ def main() -> int:
 
         compact_starts = [event for event in events if event.get("type") == "compaction_started"]
         compact_done = [event for event in events if event.get("type") == "compaction_completed"]
-        if profile == "codex-lb":
-            if compact_starts or compact_done:
-                die("codex-lb profile unexpectedly ran native compaction")
-            print("live_provider_check: ok")
-            return 0
         if len(compact_starts) != 1 or len(compact_done) != 1:
-            die("automatic native compaction did not complete exactly once")
+            die("automatic compaction did not complete exactly once")
         start = compact_starts[0]["data"]
         done = compact_done[0]["data"]
+        expected_compact_count_method = (
+            "qualified_upper_bound" if profile == "codex-lb" else "exact"
+        )
         if start.get("reason") != "automatic":
             die("live compaction reason was not automatic")
-        if start.get("count_method") != "exact" or done.get("count_method") != "exact":
-            die("live compaction input count was not exact")
-        if done.get("output_count_method") != "exact":
-            die("live compaction output count was not exact")
+        if (start.get("count_method") != expected_compact_count_method or
+                done.get("count_method") != expected_compact_count_method):
+            die(f"live compaction input count was not {expected_compact_count_method}")
+        if done.get("output_count_method") != expected_compact_count_method:
+            die(f"live compaction output count was not {expected_compact_count_method}")
         require_hex(start.get("request_sha256"), "compact request_sha256")
         require_hex(start.get("count_request_sha256"), "compact count_request_sha256")
         require_hex(done.get("output_count_request_sha256"), "compact output_count_request_sha256")

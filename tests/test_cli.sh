@@ -175,7 +175,7 @@ assert not any(event["type"] == "effort_changed"
                for event in events)
 PY
 
-# Automatic native compaction is threshold-gated and durable.
+# Automatic compaction is threshold-gated and durable.
 auto_state="$root/auto-compact-state"
 mkdir -m 700 "$auto_state"
 cat >"$root/auto-compact.ini" <<'EOF'
@@ -198,6 +198,29 @@ assert started[0]["data"]["count_request_sha256"]
 assert completed[0]["data"]["count_method"] == "qualified_upper_bound"
 assert completed[0]["data"]["output_count_method"] == "qualified_upper_bound"
 assert completed[0]["data"]["output_count_request_sha256"]
+PY
+
+# When the compact endpoint is disabled, compaction still uses Responses.
+responses_compact_state="$root/responses-compact-state"
+mkdir -m 700 "$responses_compact_state"
+cat >"$root/responses-compact.ini" <<'EOF'
+[provider]
+auto_compact_input_tokens = 1
+native_compaction = false
+EOF
+XDG_STATE_HOME="$responses_compact_state" $bin -c "$root/responses-compact.ini" -e -vvvv -- ping >"$root/responses-compact.out" 2>"$root/responses-compact.err"
+[ "$(cat "$root/responses-compact.out")" = pong ]
+responses_compact_id=$(find "$responses_compact_state/snajpagent/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+python3 - "$responses_compact_state/snajpagent/sessions/$responses_compact_id/events.jsonl" <<'PY'
+import json
+import sys
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+started = [event for event in events if event["type"] == "compaction_started"]
+completed = [event for event in events if event["type"] == "compaction_completed"]
+assert len(started) == 1 and len(completed) == 1
+assert completed[0]["data"]["output"][0]["type"] == "message"
+assert completed[0]["data"]["output"][0]["role"] == "developer"
+assert completed[0]["data"]["output"][0]["content"] == "fixture responses compact summary"
 PY
 
 # Automatic pre-response compaction can compact existing history before a
