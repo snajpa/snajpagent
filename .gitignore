@@ -1,0 +1,34 @@
+# Build outputs
+/snajpagent
+/src/*.d
+/src/*.o
+/tests/.fixture-obj/
+/tests/snajpagent-fixture
+/tests/test_base
+/tests/test_config
+/tests/test_context
+/tests/test_credential
+/tests/test_instructions
+/tests/test_json
+/tests/test_provider_retry
+/tests/test_provider_transport
+/tests/test_render
+/tests/test_responses
+/tests/test_sse
+/tests/test_store
+/tests/test_tools
+/tests/test_turn
+/tests/test_wire
+
+# Release and evidence artifacts
+/build/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Editor and OS noise
+*~
+*.swp
+*.swo
+.DS_Store

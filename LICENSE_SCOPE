@@ -1,0 +1,17 @@
+SPDX-License-Identifier: GPL-2.0-only
+
+All first-party source, tests, build files, and documentation in this tree are
+licensed GPL-2.0-only, with no later-version option and no linking exception.
+
+The frozen design baseline is retained byte-for-byte under design/. System
+Jansson and system libcurl are build/runtime dependencies; no third-party
+Jansson or libcurl implementation source or upstream header source is vendored.
+`src/snj_jansson_abi.h` is a GPL-2.0-only first-party declaration shim for
+minimal build roots that provide the Jansson runtime library without the
+development header; it contains no third-party implementation code and is
+inventoried by `make depscheck`. `make depclosurecheck` captures and validates
+the current-host dynamic executable closure, and `make evidencebundle`/
+`make evidencecheck` provide a machine-readable release-evidence record. A
+release must separately archive the complete concrete executable, Jansson,
+libcurl backend, terminal, and live-provider evidence for each shipped platform
+as required by the qualification ledger.
