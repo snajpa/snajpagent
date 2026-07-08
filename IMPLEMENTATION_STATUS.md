@@ -2,23 +2,22 @@
 
 # Implementation status
 
-## Checkpoint 0.9.0-wip
+## 0.9.0-wip
 
-### Continuation state
+snajpagent is usable as an interactive terminal agent, but it is still marked
+work-in-progress until the remaining release checks are finished. The
+`design/` directory contains the current architecture notes for this codebase.
 
-This top-level file is the authoritative implementation state for this source
-tarball. The `design/` subtree is the preserved design-1.0.0 baseline; its
-"0%" wording describes that standalone design snapshot, not the current
-0.9.0-wip implementation archive.
+Release blockers are limited to external qualification work: live-provider
+evidence with a real API key, advertised-platform terminal reruns, and archived
+per-platform dependency-closure records.
 
 Approximate release work remaining: **1%**. Approximate completed work:
-**99%**. The number is a continuation ledger, not a conformance claim. It counts
-remaining implementation and qualification work against the frozen first-release
-scope, not against future deferred features.
+**99%**.
 
 | Area | State | Remaining estimate |
 |---|---|---:|
-| Design freeze and clean-source gate | closed | 0% |
+| Clean-source gate | closed | 0% |
 | Dependency/vendoring policy | no third-party implementation or upstream header source is vendored; system libcurl/Jansson plus the first-party non-shadowing Jansson ABI declaration shim are inventoried and enforced by `make depscheck`; the current-host executable closure is captured by `make depclosurecheck` | 0% |
 | Bounded base, canonical JSON, event log, replay, and private storage | implemented for current scope | 0% |
 | Level-zero session loop, one-turn mode, passive resume, and fixture path | implemented with regression coverage | 0% |
@@ -40,22 +39,23 @@ for concrete shipped binaries on the advertised release platforms.
 enforces the preferred/hard C/header limits plus the 2,000-line per-file review
 trigger. The status document no longer mirrors those numbers.
 
-This source-only checkpoint extends the real provider path with production
-non-PTY command execution, immediate and yielded PTY command execution,
-managed process handles, bounded `write_stdin`, strict durable
-managed-process closure gating, process-family shutdown evidence, bounded
-AGENTS instruction discovery, explicit resume-time workspace relocation, local
-archive/delete lifecycle closure, exact Responses input-token counting, durable
-manual plus post-turn and pre-response automatic native compaction with
-compact-window count metadata, bounded provider retry/rate-limit handling,
-durable provider-profile response-start captures, live terminal SIGWINCH resize/redraw, Ctrl-Z suspend/continue handling,
-Linux TERM/width matrix evidence, Linux/macOS PTY capability gating, state/dependency/portability/source-size/dependency-closure audit gates, local
-loopback provider-transport evidence for create/count/compact, current-host dynamic dependency-closure capture, current-host release-evidence bundle/check tooling with path-confined record validation, final matrix-evidence verification, an optional
-`make livecheck` harness for real-provider evidence, and the first production
-`apply_patch` implementation with bounded model-visible diff previews. It is
-still not a production release: external live-provider qualification on a real
-API key, macOS/architecture terminal reruns, and archived per-platform dependency-closure
-records remain unfinished.
+The real provider path includes production non-PTY command execution, immediate
+and yielded PTY command execution, managed process handles, bounded
+`write_stdin`, strict durable managed-process closure gating, process-family
+shutdown evidence, bounded AGENTS instruction discovery, explicit resume-time
+workspace relocation, local archive/delete lifecycle closure, exact Responses
+input-token counting, durable manual plus post-turn and pre-response automatic
+native compaction with compact-window count metadata, bounded provider
+retry/rate-limit handling, durable provider-profile response-start captures,
+live terminal SIGWINCH resize/redraw, Ctrl-Z suspend/continue handling, Linux
+TERM/width matrix evidence, Linux/macOS PTY capability gating,
+state/dependency/portability/source-size/dependency-closure audit gates, local
+loopback provider-transport evidence for create/count/compact, current-host
+dynamic dependency-closure capture, current-host release-evidence bundle/check
+tooling with path-confined record validation, final matrix-evidence
+verification, an optional `make livecheck` harness for real-provider evidence,
+and the first production `apply_patch` implementation with bounded
+model-visible diff previews.
 
 ### Working
 

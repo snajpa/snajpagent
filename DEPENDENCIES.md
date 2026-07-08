@@ -2,10 +2,14 @@
 
 # Dependency and vendoring inventory
 
-This implementation checkpoint is intentionally **not** a vendored-dependency
-bundle. The frozen design limits the first release to first-party source plus
-platform/POSIX interfaces, system libcurl, and system Jansson. That policy is now
-machine-checked by `make depscheck`; the built executable closure is captured and validated by `make depclosurecheck`, release evidence bundles are created/checked by `make evidencebundle` and `make evidencecheck`, the evidence validators are self-tested by `make evidencetoolcheck`, and the final multi-platform bundle set is checked by `make evidencematrixcheck`.
+This repository intentionally does **not** vendor third-party implementation
+source. The first release is limited to first-party source plus platform/POSIX
+interfaces, system libcurl, and system Jansson. That policy is machine-checked
+by `make depscheck`; the built executable closure is captured and validated by
+`make depclosurecheck`, release evidence bundles are created/checked by
+`make evidencebundle` and `make evidencecheck`, the evidence validators are
+self-tested by `make evidencetoolcheck`, and the final multi-platform bundle set
+is checked by `make evidencematrixcheck`.
 
 Vendored third-party implementation source: none.
 
@@ -43,7 +47,7 @@ with the source-audit and terminal-evidence records for the current host, while
 `make releaseevidence` additionally requires live provider access. Once external
 platform bundles have been copied into the release workspace, `make
 evidencematrixcheck RELEASE_EVIDENCE_DIRS="..."` verifies unique platform ids,
-consistent versioning, required platform coverage, terminal evidence, and live-provider evidence across the matrix. This
-checkpoint includes local transport evidence and an optional `make livecheck`
-harness, but external live-provider and advertised-platform closure evidence
-remain release gates.
+consistent versioning, required platform coverage, terminal evidence, and
+live-provider evidence across the matrix. The tree includes local transport
+evidence and an optional `make livecheck` harness, but external live-provider
+and advertised-platform closure evidence remain release gates.

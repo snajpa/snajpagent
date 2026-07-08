@@ -55,10 +55,8 @@
   clang release-rerun wiring.
 - Added Linux terminal TERM/width matrix coverage for xterm, xterm-256color,
   vt100, TERM=dumb, and narrow fallback behavior.
-- Documented the authoritative continuation state in the source archive,
-  including the remaining-work percentage and the fact that the frozen `design/`
-  subtree is the historical design baseline rather than the current
-  implementation state.
+- Added human-facing project documentation and current architecture notes under
+  `design/`.
 - Split `src/app.c` into event/state, streaming helper, managed-process, lifecycle,
   and provider/tool dispatch translation units, closing the 2,000-line
   simplicity-review breach while keeping all source budgets below their hard
@@ -245,7 +243,7 @@
 
 ## 0.1.0-wip
 
-- Began a clean implementation from frozen design 1.0.0.
+- Began a clean implementation.
 - Added bounded primitives, canonical JSON, and a durable hash-chained event log.
 - Added private session storage, locking, multi-turn level-zero I/O, passive
   resume/listing, and the one-turn durable stdout fence.
