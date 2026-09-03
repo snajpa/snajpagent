@@ -6,7 +6,9 @@ This document is the implementation contract for snajpagent's networked IRC
 mode and for terminal color in every mode. Networked mode keeps one coding
 agent/session and presents its terminal as an operator-facing chat client. It
 may host one local IRC room, connect to one or more snajpagent IRC servers, or
-do both in the same foreground process.
+do both in the same foreground process. IRC is a first-class input, output,
+tool, event-loop, durability, context, and rendering path inside snajpagent;
+it is not a wrapper script, helper daemon, or terminal-only adapter.
 
 ## Command Line Contract
 
@@ -176,27 +178,31 @@ silently consume or invent operator input.
 Networked interactive mode is a chat transcript, not a raw model trace.
 At verbosity 0 it shows only:
 
-- timestamped room messages with the sender name;
+- timestamped operator and remote-room messages with the sender name;
 - a visible `@` marker on names that currently carry `+o`;
 - joins, leaves, reconnects, topic changes, and other room notifications; and
 - the local operator composer and actionable errors.
 
 Model text is buffered during generation. Only terminal public assistant text
-is sent to IRC and rendered once as a message from the agent name. Public text
-emitted on an intermediate tool cycle, raw tool calls, tool results, provider
-traffic, request bodies, and internal agent activity are not written into the
-verbosity-0 transcript. They are never sent to the room. This preserves a
-usable operator conversation while keeping implementation details private.
+is sent to IRC as a message from the agent name. This process's own model text
+is not rendered in its local verbosity-0 UI; it becomes locally visible only
+after verbosity is raised. Public text emitted on an intermediate tool cycle,
+raw tool calls, tool results, provider traffic, request bodies, and internal
+agent activity are not written into the verbosity-0 transcript. Intermediate
+and diagnostic material is never sent to the room. This preserves a usable
+operator conversation while keeping implementation details private.
 
-Existing verbosity levels retain their increasing diagnostic intent. In
-networked mode they add local-only information around the chat:
+Networked mode deliberately spends its first added verbosity step on the
+hidden local reply and keeps IRC debugging behind the more useful agent/tool
+detail. Its local-only ladder is:
 
-- verbosity 1: compact agent/tool activity names and completion state;
-- verbosity 2: existing bounded tool arguments and results;
-- verbosity 3: runtime orientation and provider-cycle status;
-- verbosity 4: durable event information;
-- verbosity 5: sanitized prompt/protocol bodies with the existing warning;
-- verbosity 6: bounded transport diagnostics.
+- verbosity 1: terminal model replies shown once as agent chat lines;
+- verbosity 2: compact agent/tool activity names and completion state;
+- verbosity 3: bounded tool arguments/results and runtime/provider-cycle state;
+- verbosity 4: durable app events and compact IRC connection/event state;
+- verbosity 5: sanitized prompt/protocol bodies and parsed IRC commands, with
+  the existing sensitive-content warning; and
+- verbosity 6: bounded provider and IRC wire-transport diagnostics.
 
 Non-networked interactive and one-shot modes keep their current output model,
 with the same color roles applied to prompts, labels, status, tools, warnings,
@@ -244,7 +250,11 @@ conversation explains:
 - that terminal assistant speech becomes an IRC message while tool activity is
   local-only at normal verbosity; and
 - that the declared coding tools still operate on the local workspace, not on
-  the IRC server or remote peers.
+  the IRC server or remote peers;
+- that IRC connection health, joining, history synchronization, and reconnect
+  are owned by the runtime and must not be polled or babysat by the model; and
+- that a quiet response to peer chatter is valid, while a local operator turn
+  requires one room-facing reply.
 
 IRC input is recorded as typed structured session events before it affects a
 provider request. Each projected user message renders source endpoint, room,
@@ -268,7 +278,17 @@ request per IRC line. During a response or tool call, the existing active
 input pump services sockets as well as terminal input. Immediate entries use
 the durable steering path; background entries wait for the next response
 cycle or queued room-update turn. No network read waits for a model call to
-finish.
+finish. A room-update turn caused only by peers or notifications may end
+without model-authored chat; snajpagent does not remind, retry, or force a
+reaction to that traffic.
+
+For a turn started by the local operator, snajpagent tracks whether terminal
+public assistant text was posted to the room. If the model reaches an otherwise
+terminal boundary without such a reply, the same turn receives one concise
+developer reminder to reply to the local operator in IRC and gets one final
+provider cycle. The turn is then considered finished, whether the model speaks
+or remains quiet. This reminder is never looped and is never applied to peer
+messages, membership traffic, history snapshots, or other background updates.
 
 On the first successful room join, the received topic, names and server
 history are immediately admitted together as a user-role room snapshot. If a
@@ -282,6 +302,24 @@ the current topic, membership/operator state, and up to `history_lines` recent
 events from the local IRC cache. This keeps live room state outside the text
 that compaction may summarize. Snapshot insertion is itself a durable event,
 so restart and replay cannot change which network context the model saw.
+
+## Model IRC Tools
+
+Networked requests expose native bounded IRC tools alongside the existing
+coding tools:
+
+- `irc_send` sends a room message or notice as the agent identity;
+- `irc_state` returns the current endpoints, joins, room, topic, names and
+  operator flags from already-maintained runtime state; and
+- `irc_topic` requests a topic change as the agent identity and succeeds only
+  where that identity currently has the required channel mode.
+
+Tool calls are durable and use the same start/result ordering and secret-safe
+rendering as other tools. They never open sockets, join, poll, reconnect, wait
+for traffic, or expose a manual reconnect action. The event loop owns those
+operations continuously. Ordinary terminal assistant text remains the simple
+way to reply; `irc_send` exists for an explicit mid-turn chat action and is not
+required as a completion ritual.
 
 ## Durability, Bounds, And Failure Semantics
 
@@ -316,6 +354,10 @@ outbound chat is bounded rather than allowed to grow without limit.
 - Network mode does not change tool authority, workspace selection, provider
   credentials, goal lifecycle, queue ordering, or the local-only nature of
   command execution.
+- Network support is integrated into the existing process lifecycle, active
+  input pump, response/tool cycle, durable session log, context builder,
+  compaction hooks and renderer. A parallel IPC/control layer is not an
+  acceptable implementation.
 
 ## Acceptance
 
@@ -328,15 +370,19 @@ pass and focused local smoke checks demonstrate all of the following:
 2. localhost server startup on port 6667, one advertised/default room, default
    path topic, automatic client joins, operator `+o`, agent non-op membership,
    topic changes, ordinary chat, and bounded history delivery;
-3. distinct operator and agent transcript lines, no raw model/tool trace at
-   verbosity 0, useful increasing diagnostics at higher verbosity, safe
-   terminal rendering, and `auto`/`always`/`never` color behavior in networked
-   and non-networked modes;
+3. distinct operator and agent transcript lines, no local model or raw tool
+   trace at verbosity 0, local model display beginning at verbosity 1, useful
+   agent/tool detail before lower-priority IRC debugging, safe terminal
+   rendering, and `auto`/`always`/`never` color behavior in networked and
+   non-networked modes;
 4. immediate steering for local operator, current channel operator, and agent
    mentions; coalesced background events; socket servicing during provider and
    tool work; first-join history projection; and fresh post-compaction history
-   projection; and
-5. reconnect/disconnect behavior, slow/malformed peer isolation, bounded
+   projection; one non-looping reply reminder for otherwise-silent local
+   operator turns; and no forced response to other traffic;
+5. `irc_send`, `irc_state`, and privilege-correct `irc_topic` behavior without
+   model-driven polling, joining, or reconnection; and
+6. autonomous reconnect/disconnect behavior, slow/malformed peer isolation, bounded
    buffers, durable replay/resume, clean shutdown, and no credential, tool
    detail, escape-sequence, or cross-server leakage.
 
