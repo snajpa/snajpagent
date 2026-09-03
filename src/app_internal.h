@@ -70,6 +70,10 @@ json_t *snj_app_preference_changed_data(const char *old_key,
                                         const char *old_value,
                                         const char *new_key,
                                         const char *new_value);
+json_t *snj_app_model_effort_changed_data(const char *old_model,
+                                          const char *new_model,
+                                          const char *old_effort,
+                                          const char *new_effort);
 json_t *snj_app_turn_started_data(const struct app_state *app,
                                   const char *prompt,
                                   const char *turn_id,

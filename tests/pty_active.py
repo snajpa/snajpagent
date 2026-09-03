@@ -122,7 +122,8 @@ def test_steering():
     answer_end = child.wait(b"steered: change course")
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    session_id = new_session(before)
+    log = events(session_id)
     steering = one(log, "steering_added")
     interrupted = one(log, "response_interrupted")
     starts = [item for item in log if item["type"] == "response_started"]
@@ -258,6 +259,112 @@ def test_preferences_and_verbosity():
     assert effort["data"] == {"old_effort": "default", "new_effort": "high"}
     assert turn["data"]["config"]["effort"] == "high"
 
+
+def test_model_catalog_and_index_selection():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+
+    start = len(child.buf)
+    child.send(b"/model\r")
+    end = child.wait(b"5. gpt-5.5-2026-04-23 / xhigh", start=start)
+    shown = bytes(child.buf[start:end])
+    selected = shown.find(b"selected: gpt-5.5-2026-04-23 / medium")
+    first = shown.find(b"1. gpt-5.5-2026-04-23 / none")
+    assert 0 <= selected < first, shown
+    assert b"6. " not in shown, shown
+    child.wait(PROMPT, start=end)
+
+    child.send(b"/model 4\r")
+    selected_end = child.wait(b"selected: gpt-5.5-2026-04-23 / high")
+    child.wait(b"5. gpt-5.5-2026-04-23 / xhigh", start=selected_end)
+    child.wait(PROMPT, start=selected_end)
+
+    child.send(b"ping\r")
+    answer_end = child.wait(b"pong")
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    changed = one(log, "model_effort_changed")
+    turn = one(log, "turn_started")
+    assert changed["data"] == {
+        "old_model": "gpt-5.5-2026-04-23",
+        "new_model": "gpt-5.5-2026-04-23",
+        "old_effort": "default",
+        "new_effort": "high",
+    }
+    assert turn["data"]["config"]["model"] == "gpt-5.5-2026-04-23"
+    assert turn["data"]["config"]["effort"] == "high"
+
+def test_model_catalog_alias_and_name_selection():
+    config = Path(os.environ["XDG_CONFIG_HOME"]) / "model-catalog.ini"
+    config.write_text(
+        "[provider]\nexact_token_count = false\nnative_compaction = false\n",
+        encoding="utf-8",
+    )
+    before = session_ids()
+    child = Child(["-c", str(config)])
+    child.wait(PROMPT)
+
+    start = len(child.buf)
+    child.send(b"/model\r")
+    end = child.wait(b"10. gpt-5.5 / xhigh", start=start)
+    shown = bytes(child.buf[start:end])
+    assert shown.find(b"5. gpt-5.5-2026-04-23 / xhigh") < shown.find(
+        b"6. gpt-5.5 / none"
+    ), shown
+    child.wait(PROMPT, start=end)
+
+    child.send(b"/model 9\r")
+    end = child.wait(b"selected: gpt-5.5 / high")
+    child.wait(PROMPT, start=end)
+
+    child.send(b"/model gpt-5.5-2026-04-23\r")
+    end = child.wait(b"selected: gpt-5.5-2026-04-23 / high")
+    child.wait(PROMPT, start=end)
+
+    for invalid in (b"0", b"11", b"999999999999999999999999999999999"):
+        start = len(child.buf)
+        child.send(b"/model " + invalid + b"\r")
+        end = child.wait(b"model index is not in the displayed list", start=start)
+        child.wait(PROMPT, start=end)
+
+    child.send(b"ping\r")
+    answer_end = child.wait(b"pong")
+    child.exit_cleanly(answer_end)
+
+    session_id = new_session(before)
+    log = events(session_id)
+    indexed = one(log, "model_effort_changed")
+    named = one(log, "model_changed")
+    turn = one(log, "turn_started")
+    assert indexed["data"]["new_model"] == "gpt-5.5"
+    assert indexed["data"]["new_effort"] == "high"
+    assert named["data"] == {
+        "old_model": "gpt-5.5",
+        "new_model": "gpt-5.5-2026-04-23",
+    }
+    assert turn["data"]["config"]["model"] == "gpt-5.5-2026-04-23"
+    assert turn["data"]["config"]["effort"] == "high"
+
+    resumed = Child([
+        "-c", str(config), "-m", "gpt-5.5", "-o", "low", "-r", session_id
+    ])
+    resumed.wait(PROMPT)
+    start = len(resumed.buf)
+    resumed.send(b"/model\r")
+    end = resumed.wait(b"selected: gpt-5.5 / low (staged once)", start=start)
+    end = resumed.wait(b"10. gpt-5.5 / xhigh", start=end)
+    resumed.wait(PROMPT, start=end)
+    resumed.send(b"ping\r")
+    answer_end = resumed.wait(b"pong", start=end)
+    resumed.exit_cleanly(answer_end)
+
+    resumed_turns = [event for event in events(session_id)
+                     if event["type"] == "turn_started"]
+    assert resumed_turns[-1]["data"]["config"]["model"] == "gpt-5.5"
+    assert resumed_turns[-1]["data"]["config"]["effort"] == "low"
+
 test_utf8_prompt_cursor_column()
 test_steering()
 test_split_utf8_steering()
@@ -266,4 +373,6 @@ test_interrupt()
 test_multiline_and_paste()
 test_resume_pauses_fifo()
 test_preferences_and_verbosity()
+test_model_catalog_and_index_selection()
+test_model_catalog_alias_and_name_selection()
 print("pty_active: ok")

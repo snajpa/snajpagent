@@ -22,6 +22,19 @@ change_data(const char *old_key, const char *old_value,
 }
 
 static json_t *
+model_effort_change_data(const char *old_model, const char *new_model,
+                         const char *old_effort, const char *new_effort)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "old_model", json_string(old_model)) == 0);
+    assert(snj_json_set_new(data, "new_model", json_string(new_model)) == 0);
+    assert(snj_json_set_new(data, "old_effort", json_string(old_effort)) == 0);
+    assert(snj_json_set_new(data, "new_effort", json_string(new_effort)) == 0);
+    return data;
+}
+
+static json_t *
 delete_data(const char *prefix, const char *trash_name)
 {
     json_t *data = json_object();
@@ -91,6 +104,12 @@ main(void)
         NULL, error, sizeof(error)) == 0);
     assert(strcmp(session.default_model, "gpt-5.5-2026-04-23-alt") == 0);
     assert(strcmp(session.default_effort, "high") == 0);
+    assert(snj_session_commit(&session, "model_effort_changed",
+        model_effort_change_data("gpt-5.5-2026-04-23-alt",
+                                 "gpt-5.5-2026-04-23", "high", "low"),
+        NULL, error, sizeof(error)) == 0);
+    assert(strcmp(session.default_model, "gpt-5.5-2026-04-23") == 0);
+    assert(strcmp(session.default_effort, "low") == 0);
     assert(snj_session_commit(&session, "workspace_changed",
         change_data("old_workspace", workspace,
                     "new_workspace", workspace2),
@@ -117,11 +136,11 @@ main(void)
     snj_session_init(&session);
     assert(snj_session_open(&store, &session, id, error, sizeof(error)) == 0);
     assert(session.log_end == durable_end);
-    assert(session.next_seq == 5u);
+    assert(session.next_seq == 6u);
     assert(session.turn_count == 0u);
     assert(strcmp(session.workspace, workspace2) == 0);
-    assert(strcmp(session.default_model, "gpt-5.5-2026-04-23-alt") == 0);
-    assert(strcmp(session.default_effort, "high") == 0);
+    assert(strcmp(session.default_model, "gpt-5.5-2026-04-23") == 0);
+    assert(strcmp(session.default_effort, "low") == 0);
 
     assert(snj_session_archive(&session, NULL, error, sizeof(error)) == 0);
     assert(session.archived);

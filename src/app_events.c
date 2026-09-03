@@ -25,6 +25,24 @@ snj_app_preference_changed_data(const char *old_key, const char *old_value,
     return data;
 }
 
+json_t *
+snj_app_model_effort_changed_data(const char *old_model, const char *new_model,
+                                  const char *old_effort, const char *new_effort)
+{
+    json_t *data = json_object();
+
+    if (!data ||
+        snj_json_set_new(data, "new_effort", json_string(new_effort)) < 0 ||
+        snj_json_set_new(data, "new_model", json_string(new_model)) < 0 ||
+        snj_json_set_new(data, "old_effort", json_string(old_effort)) < 0 ||
+        snj_json_set_new(data, "old_model", json_string(old_model)) < 0) {
+        if (data)
+            json_decref(data);
+        return NULL;
+    }
+    return data;
+}
+
 static json_t *
 turn_config(const struct app_state *app)
 {

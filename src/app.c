@@ -125,32 +125,79 @@ graph_outcome_name(enum snj_graph_outcome outcome)
     }
     return "unknown";
 }
+struct compiled_model {
+    const char *selector;
+    bool conditional;
+};
+static const struct compiled_model compiled_models[] = {
+    {SNAJPAGENT_MODEL, false},
+    {SNAJPAGENT_MODEL_SELECTOR, true}
+};
+static const char *const reasoning_modes[] = {
+    "none", "low", "medium", "high", "xhigh"
+};
 static const char *
 resolve_model(const struct snj_config *config, const char *selector)
 {
-    if (!selector || strcmp(selector, "default") == 0 ||
-        strcmp(selector, SNAJPAGENT_MODEL) == 0)
-        return SNAJPAGENT_MODEL;
-    if (strcmp(selector, SNAJPAGENT_MODEL_SELECTOR) == 0) {
-        if (config && !config->provider_exact_token_count &&
-            !config->provider_native_compaction)
-            return SNAJPAGENT_MODEL_SELECTOR;
-        return SNAJPAGENT_MODEL;
+    if (!selector || strcmp(selector, "default") == 0)
+        selector = SNAJPAGENT_MODEL;
+    for (size_t i = 0; i < sizeof(compiled_models) / sizeof(compiled_models[0]); ++i) {
+        if (strcmp(selector, compiled_models[i].selector) != 0)
+            continue;
+        if (compiled_models[i].conditional &&
+            (!config || config->provider_exact_token_count ||
+             config->provider_native_compaction))
+            return SNAJPAGENT_MODEL;
+        return compiled_models[i].selector;
     }
     return NULL;
 }
 static const char *
 resolve_effort(const char *preference)
 {
-    static const char *const supported[] = {
-        "none", "low", "medium", "high", "xhigh"
-    };
     if (!preference || strcmp(preference, "default") == 0)
         return "medium";
-    for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); ++i)
-        if (strcmp(preference, supported[i]) == 0)
-            return supported[i];
+    for (size_t i = 0; i < sizeof(reasoning_modes) / sizeof(reasoning_modes[0]); ++i)
+        if (strcmp(preference, reasoning_modes[i]) == 0)
+            return reasoning_modes[i];
     return NULL;
+}
+static size_t
+available_models(const struct snj_config *config, const char **models)
+{
+    size_t count = 0u;
+
+    for (size_t i = 0; i < sizeof(compiled_models) / sizeof(compiled_models[0]); ++i) {
+        const char *resolved = resolve_model(config, compiled_models[i].selector);
+        bool duplicate = false;
+
+        for (size_t j = 0; j < count; ++j)
+            if (strcmp(resolved, models[j]) == 0) {
+                duplicate = true;
+                break;
+            }
+        if (!duplicate)
+            models[count++] = resolved;
+    }
+    return count;
+}
+static bool
+model_catalog_entry(const struct snj_config *config, size_t index,
+                    const char **model, const char **effort)
+{
+    const char *models[sizeof(compiled_models) / sizeof(compiled_models[0])];
+    const size_t mode_count = sizeof(reasoning_modes) / sizeof(reasoning_modes[0]);
+    size_t model_count = available_models(config, models);
+    size_t offset;
+
+    if (index == 0u)
+        return false;
+    offset = index - 1u;
+    if (offset / mode_count >= model_count)
+        return false;
+    *model = models[offset / mode_count];
+    *effort = reasoning_modes[offset % mode_count];
+    return true;
 }
 static int
 prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
@@ -332,6 +379,37 @@ next_effort(const struct app_state *app)
                                 app->session.default_effort;
 }
 static int
+render_model_catalog(struct app_state *app)
+{
+    const char *selected_model = next_model(app);
+    const char *selected_effort = resolve_effort(next_effort(app));
+    const char *model;
+    const char *effort;
+    struct snj_buf text;
+    size_t index = 1u;
+    int rc = -1;
+
+    if (!selected_effort)
+        selected_effort = next_effort(app);
+    snj_buf_init(&text, 64u * 1024u);
+    if (snj_buf_printf(&text, "selected: %s / %s%s", selected_model,
+                       selected_effort,
+                       app->staged_model || app->staged_effort ?
+                       " (staged once)" : "") < 0)
+        goto out;
+    while (model_catalog_entry(app->config, index, &model, &effort)) {
+        if (snj_buf_printf(&text, "\n%zu. %s / %s", index, model, effort) < 0)
+            goto out;
+        ++index;
+    }
+    if (snj_buf_terminate(&text) < 0)
+        goto out;
+    rc = snj_render_host(&app->render, (const char *)text.data);
+out:
+    snj_buf_free(&text);
+    return rc;
+}
+static int
 render_status(struct app_state *app)
 {
     const char *id = app->render.verbosity >= 3u ? app->session.id : NULL;
@@ -365,7 +443,7 @@ render_help(struct app_state *app)
         "/help                     commands and keys\n"
         "/status                   session and next-turn settings\n"
         "/history                  recent terminal history\n"
-        "/model [MODEL]            show or set next-turn model\n"
+        "/model [INDEX|MODEL]      list or set next-turn model/mode\n"
         "/effort [LEVEL]           show or set next-turn effort\n"
         "/verbose [0..6]           show or set this process's verbosity\n"
         "/queue [TEXT]             list or queue future turns\n"
@@ -384,21 +462,69 @@ show_setting(struct app_state *app, const char *name, const char *value,
     return app_hostf(app, "%s for next turn: %s%s", name, value,
                      staged ? " (staged once)" : "");
 }
+static bool
+parse_model_index(const char *selector, size_t *index)
+{
+    size_t value = 0u;
+
+    if (!selector[0])
+        return false;
+    for (const unsigned char *p = (const unsigned char *)selector; *p; ++p) {
+        size_t digit;
+
+        if (*p < '0' || *p > '9')
+            return false;
+        digit = (size_t)(*p - '0');
+        if (value > (SIZE_MAX - digit) / 10u)
+            value = SIZE_MAX;
+        else
+            value = value * 10u + digit;
+    }
+    *index = value;
+    return true;
+}
+static int
+select_model_catalog_entry(struct app_state *app, size_t index)
+{
+    const char *model;
+    const char *effort;
+    char error[256];
+
+    if (!model_catalog_entry(app->config, index, &model, &effort))
+        return app_error(app, "model index is not in the displayed list");
+    if (strcmp(model, app->session.default_model) != 0 ||
+        strcmp(effort, app->session.default_effort) != 0) {
+        error[0] = '\0';
+        if (commit_event(app, "model_effort_changed",
+                         snj_app_model_effort_changed_data(
+                             app->session.default_model, model,
+                             app->session.default_effort, effort),
+                         error, sizeof(error)) < 0) {
+            (void)app_error(app, error[0] ? error :
+                            "model and effort preferences could not be saved");
+            return -1;
+        }
+    }
+    app->staged_model = NULL;
+    app->staged_effort = NULL;
+    return render_model_catalog(app);
+}
 static int
 change_model(struct app_state *app, const char *selector, bool active)
 {
     const char *resolved;
+    size_t index;
     char error[256];
     if (!selector)
-        return show_setting(app, "model", next_model(app),
-                            app->staged_model != NULL);
+        return render_model_catalog(app);
     if (active)
-        return app_error(app, "/model MODEL is idle-only; interrupt or wait");
+        return app_error(app, "/model INDEX|MODEL is idle-only; interrupt or wait");
+    if (parse_model_index(selector, &index))
+        return select_model_catalog_entry(app, index);
     if (strchr(selector, ' ') ||
         !(resolved = resolve_model(app->config, selector)))
         return app_error(app,
             "model selector is not in the compiled release profile");
-    app->staged_model = NULL;
     if (strcmp(resolved, app->session.default_model) != 0) {
         error[0] = '\0';
         if (commit_event(app, "model_changed",
@@ -411,7 +537,8 @@ change_model(struct app_state *app, const char *selector, bool active)
             return -1;
         }
     }
-    return show_setting(app, "model", app->session.default_model, false);
+    app->staged_model = NULL;
+    return render_model_catalog(app);
 }
 static int
 change_effort(struct app_state *app, const char *value, bool active)

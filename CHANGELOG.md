@@ -4,6 +4,11 @@
 
 ## 0.9.0-wip
 
+- Made interactive `/model` show the selected next-turn model/mode first and
+  one flat numbered catalog after it; numeric selection now durably changes
+  the exact displayed pair, while model-name selection remains supported and
+  preserves the current reasoning mode.
+
 - Recovered safely from invalid managed-process continuations: the active
   handle is bound into the strict `write_stdin` schema, wrong handles become
   durable retryable not-run results without touching the real process,

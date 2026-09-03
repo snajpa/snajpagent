@@ -866,6 +866,34 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !copy_small(session->default_effort,
                         sizeof(session->default_effort), new_effort))
             goto invalid;
+    } else if (strcmp(type, "model_effort_changed") == 0) {
+        static const char *const keys[] = {
+            "new_effort", "new_model", "old_effort", "old_model"
+        };
+        static const char *const efforts[] = {
+            "default", "none", "minimal", "low", "medium", "high", "xhigh"
+        };
+        const char *old_model = snj_json_string(data, "old_model");
+        const char *new_model = snj_json_string(data, "new_model");
+        const char *old_effort = snj_json_string(data, "old_effort");
+        const char *new_effort = snj_json_string(data, "new_effort");
+        if (session->active_turn ||
+            !snj_json_exact_keys(data, keys, sizeof(keys) / sizeof(keys[0])) ||
+            !old_model || !new_model || !*new_model ||
+            strcmp(old_model, session->default_model) != 0 ||
+            strlen(new_model) >= sizeof(session->default_model) ||
+            !snj_utf8_valid((const unsigned char *)new_model,
+                            strlen(new_model), true) ||
+            !string_in(old_effort, efforts, sizeof(efforts) / sizeof(efforts[0])) ||
+            !string_in(new_effort, efforts, sizeof(efforts) / sizeof(efforts[0])) ||
+            strcmp(old_effort, session->default_effort) != 0 ||
+            (strcmp(old_model, new_model) == 0 &&
+             strcmp(old_effort, new_effort) == 0) ||
+            !copy_small(session->default_model,
+                        sizeof(session->default_model), new_model) ||
+            !copy_small(session->default_effort,
+                        sizeof(session->default_effort), new_effort))
+            goto invalid;
     } else if (strcmp(type, "steering_added") == 0) {
         static const char *const keys[] = {"steering_id", "text", "turn_id"};
         const char *steering_id = snj_json_string(data, "steering_id");
