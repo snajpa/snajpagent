@@ -3,6 +3,7 @@
 #include "config.h"
 #include "credential.h"
 #include "json.h"
+#include "model_cache.h"
 #include "provider.h"
 #include "turn.h"
 
@@ -29,6 +30,7 @@ struct local_server {
 };
 
 struct http_request {
+    char method[8];
     char path[128];
     char headers[REQUEST_MAX];
     char body[BODY_MAX];
@@ -136,12 +138,21 @@ read_request(int fd, struct http_request *request)
         server_fail("retained headers exceeded test bound");
     memcpy(request->headers, buffer, header_end);
     request->headers[header_end] = '\0';
-    matched = sscanf(request->headers, "POST %127s HTTP/1", request->path);
-    if (matched != 1)
+    matched = sscanf(request->headers, "%7s %127s HTTP/1",
+                     request->method, request->path);
+    if (matched != 2)
         server_fail("unexpected request line");
     if (!header_contains(request->headers, "Authorization: Bearer transport-secret"))
         server_fail("authorization header missing or unredacted differently");
+    if (!header_contains(request->headers,
+                         "HTTP-Referer: https://github.com/snajpa/snajpagent"))
+        server_fail("OpenRouter referer header missing");
+    if (!header_contains(request->headers,
+                         "X-OpenRouter-Title: snajpagent"))
+        server_fail("OpenRouter title header missing");
     cl = content_length(request->headers);
+    if (strcmp(request->method, "GET") == 0 && cl < 0)
+        cl = 0;
     if (cl < 0 || cl > (long)(sizeof(request->body) - 1u))
         server_fail("invalid content length");
     request->body_len = (size_t)cl;
@@ -181,7 +192,8 @@ send_response(int fd, const char *content_type, const char *body)
 }
 
 static void
-serve_one(int listen_fd, const char *path, const char *marker,
+serve_one(int listen_fd, const char *method, const char *path,
+          const char *marker,
           const char *content_type, const char *body)
 {
     struct http_request request;
@@ -191,9 +203,11 @@ serve_one(int listen_fd, const char *path, const char *marker,
     if (fd < 0)
         server_fail("accept failed");
     read_request(fd, &request);
+    if (strcmp(request.method, method) != 0)
+        server_fail("unexpected provider HTTP method");
     if (strcmp(request.path, path) != 0)
         server_fail("unexpected provider endpoint path");
-    if (!strstr(request.body, marker))
+    if (marker && !strstr(request.body, marker))
         server_fail("request body marker missing");
     send_response(fd, content_type, body);
     if (close(fd) < 0)
@@ -201,7 +215,7 @@ serve_one(int listen_fd, const char *path, const char *marker,
 }
 
 static void
-server_child(int listen_fd)
+server_child(int listen_fd, bool native_models, bool transport)
 {
     static const char create_sse[] =
         "event: response.created\n"
@@ -223,19 +237,26 @@ server_child(int listen_fd)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_transport\",\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
-    serve_one(listen_fd, "/v1/responses/input_tokens", "transport-count",
+    serve_one(listen_fd, "GET", "/v1/models", NULL,
+              "application/json",
+              native_models ?
+              "{\"models\":[{\"slug\":\"vendor/native-model\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"ultra\"}],\"default_reasoning_level\":\"low\"}]}" :
+              "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-standard\",\"metadata\":{\"supported_reasoning_levels\":[\"medium\",\"high\"],\"default_reasoning_level\":\"medium\"}},{\"id\":\"future-standard\",\"supported_reasoning_levels\":[\"quantum\",\"cosmic\"]}]}");
+    if (!transport)
+        _exit(0);
+    serve_one(listen_fd, "POST", "/v1/responses/input_tokens", "transport-count",
               "application/json",
               "{\"object\":\"response.input_tokens\",\"input_tokens\":7}");
-    serve_one(listen_fd, "/v1/responses", "transport-create",
+    serve_one(listen_fd, "POST", "/v1/responses", "transport-create",
               "text/event-stream", create_sse);
-    serve_one(listen_fd, "/v1/responses/compact", "transport-compact",
+    serve_one(listen_fd, "POST", "/v1/responses/compact", "transport-compact",
               "application/json",
               "{\"object\":\"response.compaction\",\"output\":[{\"type\":\"compaction\",\"encrypted_content\":\"transport-compact-output\"}]}");
     _exit(0);
 }
 
 static void
-start_server(struct local_server *server)
+start_server(struct local_server *server, bool native_models, bool transport)
 {
     struct sockaddr_in addr;
     socklen_t len = sizeof(addr);
@@ -251,13 +272,13 @@ start_server(struct local_server *server)
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = 0;
     assert(bind(server->fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
-    assert(listen(server->fd, 3) == 0);
+    assert(listen(server->fd, 4) == 0);
     assert(getsockname(server->fd, (struct sockaddr *)&addr, &len) == 0);
     server->port = ntohs(addr.sin_port);
     server->pid = fork();
     assert(server->pid >= 0);
     if (server->pid == 0)
-        server_child(server->fd);
+        server_child(server->fd, native_models, transport);
 }
 
 static void
@@ -320,6 +341,7 @@ test_local_provider_transport(void)
     struct emitted_text emitted;
     json_t *request;
     json_t *compact_output = NULL;
+    json_t *models = NULL;
     uint64_t tokens = 0u;
     uint64_t compact_bytes = 0u;
     unsigned int retries = 99u;
@@ -327,19 +349,48 @@ test_local_provider_transport(void)
     char endpoint[128];
     char error[256] = {0};
 
-    start_server(&server);
+    start_server(&server, false, true);
     assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
                     (unsigned int)server.port) > 0);
     snj_config_init(&config);
-    config.connect_timeout_ms = 1000u;
-    config.idle_timeout_ms = 1000u;
-    config.request_timeout_ms = 3000u;
-    assert(snprintf(config.provider_base_url, sizeof(config.provider_base_url),
-                    "%s", endpoint) > 0);
+    config.providers[1] = config.providers[0];
+    config.provider_count = 2u;
+    assert(snprintf(config.providers[1].name,
+                    sizeof(config.providers[1].name), "transport") > 0);
+    config.providers[1].connect_timeout_ms = 1000u;
+    config.providers[1].idle_timeout_ms = 1000u;
+    config.providers[1].request_timeout_ms = 3000u;
+    assert(snprintf(config.providers[1].base_url,
+                    sizeof(config.providers[1].base_url),
+                    "%s/v1", endpoint) > 0);
+    assert(snprintf(config.providers[1].openrouter_referer,
+                    sizeof(config.providers[1].openrouter_referer),
+                    "%s", "https://github.com/snajpa/snajpagent") > 0);
+    assert(snprintf(config.providers[1].openrouter_title,
+                    sizeof(config.providers[1].openrouter_title),
+                    "%s", "snajpagent") > 0);
     credential_set(&credential, "transport-secret");
 
+    assert(snj_provider_models_list(&config, &config.providers[1],
+                                    &credential, NULL, &models,
+                                    error, sizeof(error)) == 0);
+    assert(json_array_size(models) == 2u);
+    assert(strcmp(snj_json_string(json_array_get(models, 0), "id"),
+                  "gpt-standard") == 0);
+    assert(strcmp(json_string_value(json_array_get(json_object_get(
+                      json_array_get(models, 0), "efforts"), 1)),
+                  "high") == 0);
+    assert(strcmp(snj_json_string(json_array_get(models, 0),
+                                  "default_effort"), "medium") == 0);
+    assert(strcmp(snj_model_cache_best_effort(json_array_get(models, 1),
+                                              "fallback"),
+                  "quantum") == 0);
+    json_decref(models);
+    models = NULL;
+
     request = request_with_marker("transport-count");
-    assert(snj_provider_responses_count(request, &config, &credential, NULL,
+    assert(snj_provider_responses_count(request, &config, &config.providers[1],
+                                        &credential, NULL,
                                         NULL, NULL, &tokens, error,
                                         sizeof(error), &cancel, &retries) == 0);
     assert(tokens == 7u);
@@ -351,7 +402,8 @@ test_local_provider_transport(void)
     snj_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
     snj_buf_init(&emitted.text, 128u);
-    assert(snj_provider_responses_create(request, &config, &credential, NULL,
+    assert(snj_provider_responses_create(request, &config,
+                                         &config.providers[1], &credential, NULL,
                                          emit_capture, &emitted, NULL, NULL,
                                          &graph, error, sizeof(error), &cancel,
                                          &retries) == 0);
@@ -368,7 +420,8 @@ test_local_provider_transport(void)
     json_decref(request);
 
     request = request_with_marker("transport-compact");
-    assert(snj_provider_responses_compact(request, &config, &credential, NULL,
+    assert(snj_provider_responses_compact(request, &config,
+                                          &config.providers[1], &credential, NULL,
                                           NULL, NULL, &compact_output,
                                           &compact_bytes, error, sizeof(error),
                                           &cancel, &retries) == 0);
@@ -383,10 +436,55 @@ test_local_provider_transport(void)
     stop_server(&server);
 }
 
+static void
+test_native_model_list(void)
+{
+    struct local_server server;
+    struct snj_config config;
+    struct snj_credential credential;
+    json_t *models = NULL;
+    json_t *model;
+    json_t *efforts;
+    char endpoint[128];
+    char error[256] = {0};
+
+    start_server(&server, true, false);
+    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
+                    (unsigned int)server.port) > 0);
+    snj_config_init(&config);
+    assert(snprintf(config.providers[0].base_url,
+                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+    assert(snprintf(config.providers[0].openrouter_referer,
+                    sizeof(config.providers[0].openrouter_referer), "%s",
+                    "https://github.com/snajpa/snajpagent") > 0);
+    assert(snprintf(config.providers[0].openrouter_title,
+                    sizeof(config.providers[0].openrouter_title), "%s",
+                    "snajpagent") > 0);
+    config.providers[0].connect_timeout_ms = 1000u;
+    config.providers[0].idle_timeout_ms = 1000u;
+    config.providers[0].request_timeout_ms = 3000u;
+    credential_set(&credential, "transport-secret");
+    assert(snj_provider_models_list(&config, &config.providers[0],
+                                    &credential, NULL, &models,
+                                    error, sizeof(error)) == 0);
+    assert(json_array_size(models) == 1u);
+    model = json_array_get(models, 0);
+    efforts = json_object_get(model, "efforts");
+    assert(strcmp(snj_json_string(model, "id"), "vendor/native-model") == 0);
+    assert(json_array_size(efforts) == 2u);
+    assert(strcmp(json_string_value(json_array_get(efforts, 0)), "low") == 0);
+    assert(strcmp(json_string_value(json_array_get(efforts, 1)), "ultra") == 0);
+    assert(strcmp(snj_json_string(model, "default_effort"), "low") == 0);
+    json_decref(models);
+    snj_config_free(&config);
+    stop_server(&server);
+}
+
 int
 main(void)
 {
     test_local_provider_transport();
+    test_native_model_list();
     puts("test_provider_transport: ok");
     return 0;
 }

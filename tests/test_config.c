@@ -26,7 +26,7 @@ expect_invalid(const char *path)
 
     snj_config_init(&config);
     error[0] = '\0';
-    assert(snj_config_load(&config, path, error, sizeof(error)) < 0);
+    assert(snj_config_load(&config, path, NULL, error, sizeof(error)) < 0);
     assert(error[0] != '\0');
     snj_config_free(&config);
 }
@@ -37,7 +37,7 @@ main(void)
     static const char valid[] =
         "[agent]\n"
         "model = gpt-5.5\n"
-        "reasoning_effort = high\n"
+        "reasoning_effort = future-effort\n"
         "\n[provider]\n"
         "connect_timeout_ms = 1000\n"
         "idle_timeout_ms = 2000\n"
@@ -45,8 +45,13 @@ main(void)
         "auto_compact_input_tokens = 12345\n"
         "base_url = http://127.0.0.1:2455/backend-api/codex/\n"
         "api_key_env = CODEX_LB_API_KEY\n"
+        "openrouter_referer = https://github.com/snajpa/snajpagent\n"
+        "openrouter_title = snajpagent\n"
         "exact_token_count = false\n"
         "native_compaction = 0\n"
+        "\n[provider backup]\n"
+        "base_url = https://backup.example.test/v1\n"
+        "api_key_env = BACKUP_API_KEY\n"
         "\n[ui]\n"
         "verbosity = 4\n"
         "color = never\n"
@@ -58,7 +63,7 @@ main(void)
         "max_timeout_ms = 5000\n"
         "secret_env = TOKEN_ONE, TOKEN_TWO\n";
     char temp[] = "/tmp/snajpagent-config-XXXXXX";
-    char config_root[4096];
+    char dotdir[4096];
     char path[4096];
     char link_path[4096];
     char error[256];
@@ -66,21 +71,25 @@ main(void)
     char *shell;
 
     assert(mkdtemp(temp));
-    assert(snprintf(config_root, sizeof(config_root), "%s/config", temp) > 0);
-    assert(mkdir(config_root, 0700) == 0);
-    assert(setenv("XDG_CONFIG_HOME", config_root, 1) == 0);
+    assert(snprintf(dotdir, sizeof(dotdir), "%s/dotdir", temp) > 0);
+    assert(mkdir(dotdir, 0700) == 0);
 
     snj_config_init(&config);
-    assert(snj_config_load(&config, NULL, error, sizeof(error)) == 0);
+    assert(snj_config_load(&config, NULL, dotdir,
+                           error, sizeof(error)) == 0);
     assert(strcmp(config.model, "default") == 0);
     assert(strcmp(config.reasoning_effort, "default") == 0);
     assert(config.verbosity == 0u);
     assert(config.resume_history_turns == 2u);
-    assert(config.auto_compact_input_tokens == 120000u);
-    assert(config.provider_exact_token_count);
-    assert(config.provider_native_compaction);
-    assert(strcmp(config.provider_base_url, "https://api.openai.com") == 0);
-    assert(strcmp(config.provider_api_key_env, "OPENAI_API_KEY") == 0);
+    assert(config.provider_count == 1u);
+    assert(strcmp(config.providers[0].name, "default") == 0);
+    assert(config.providers[0].auto_compact_input_tokens == 120000u);
+    assert(config.providers[0].exact_token_count);
+    assert(config.providers[0].native_compaction);
+    assert(strcmp(config.providers[0].base_url, "https://api.openai.com") == 0);
+    assert(strcmp(config.providers[0].api_key_env, "OPENAI_API_KEY") == 0);
+    assert(config.providers[0].openrouter_referer[0] == '\0');
+    assert(config.providers[0].openrouter_title[0] == '\0');
     assert(config.secret_env_count == 0u);
     shell = realpath("/bin/sh", NULL);
     assert(shell);
@@ -91,18 +100,31 @@ main(void)
     assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
     write_bytes(path, valid, sizeof(valid) - 1u);
     snj_config_init(&config);
-    assert(snj_config_load(&config, path, error, sizeof(error)) == 0);
+    assert(snj_config_load(&config, path, dotdir,
+                           error, sizeof(error)) == 0);
     assert(strcmp(config.model, "gpt-5.5") == 0);
-    assert(strcmp(config.reasoning_effort, "high") == 0);
-    assert(config.connect_timeout_ms == 1000u);
-    assert(config.idle_timeout_ms == 2000u);
-    assert(config.request_timeout_ms == 3000u);
-    assert(config.auto_compact_input_tokens == 12345u);
-    assert(strcmp(config.provider_base_url,
+    assert(strcmp(config.reasoning_effort, "future-effort") == 0);
+    assert(config.provider_count == 2u);
+    assert(strcmp(config.providers[0].name, "default") == 0);
+    assert(config.providers[0].connect_timeout_ms == 1000u);
+    assert(config.providers[0].idle_timeout_ms == 2000u);
+    assert(config.providers[0].request_timeout_ms == 3000u);
+    assert(config.providers[0].auto_compact_input_tokens == 12345u);
+    assert(strcmp(config.providers[0].base_url,
                   "http://127.0.0.1:2455/backend-api/codex") == 0);
-    assert(strcmp(config.provider_api_key_env, "CODEX_LB_API_KEY") == 0);
-    assert(!config.provider_exact_token_count);
-    assert(!config.provider_native_compaction);
+    assert(strcmp(config.providers[0].api_key_env, "CODEX_LB_API_KEY") == 0);
+    assert(strcmp(config.providers[0].openrouter_referer,
+                  "https://github.com/snajpa/snajpagent") == 0);
+    assert(strcmp(config.providers[0].openrouter_title, "snajpagent") == 0);
+    assert(!config.providers[0].exact_token_count);
+    assert(!config.providers[0].native_compaction);
+    assert(strcmp(config.providers[1].name, "backup") == 0);
+    assert(strcmp(config.providers[1].base_url,
+                  "https://backup.example.test/v1") == 0);
+    assert(strcmp(config.providers[1].api_key_env, "BACKUP_API_KEY") == 0);
+    assert(snj_config_provider(&config, NULL) == &config.providers[0]);
+    assert(snj_config_provider(&config, "backup") == &config.providers[1]);
+    assert(snj_config_provider(&config, "missing") == NULL);
     assert(config.verbosity == 4u);
     assert(config.color == SNJ_COLOR_NEVER);
     assert(config.resume_history_turns == 0u);
@@ -113,6 +135,18 @@ main(void)
     assert(strcmp(config.secret_env[0], "TOKEN_ONE") == 0);
     assert(strcmp(config.secret_env[1], "TOKEN_TWO") == 0);
     snj_config_free(&config);
+
+    assert(snprintf(path, sizeof(path), "%s/config.ini", dotdir) > 0);
+    write_bytes(path, valid, sizeof(valid) - 1u);
+    snj_config_init(&config);
+    assert(snj_config_load(&config, NULL, dotdir,
+                           error, sizeof(error)) == 0);
+    assert(config.provider_count == 2u);
+    assert(strcmp(config.providers[0].name, "default") == 0);
+    assert(strcmp(config.providers[1].name, "backup") == 0);
+    snj_config_free(&config);
+
+    assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
 
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
     assert(symlink(path, link_path) == 0);
@@ -149,6 +183,22 @@ main(void)
     write_bytes(path, "[provider]\nnative_compaction=yes\n",
                 sizeof("[provider]\nnative_compaction=yes\n") - 1u);
     expect_invalid(path);
+    write_bytes(path, "[provider]\nopenrouter_title=\n",
+                sizeof("[provider]\nopenrouter_title=\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[provider duplicate]\n[provider duplicate]\n",
+                sizeof("[provider duplicate]\n[provider duplicate]\n") - 1u);
+    expect_invalid(path);
+    {
+        static const unsigned char bad_header[] = {
+            '[', 'p', 'r', 'o', 'v', 'i', 'd', 'e', 'r', ']', '\n',
+            'o', 'p', 'e', 'n', 'r', 'o', 'u', 't', 'e', 'r', '_',
+            't', 'i', 't', 'l', 'e', '=', 0x7f, '\n'
+        };
+        write_bytes(path, bad_header, sizeof(bad_header));
+        expect_invalid(path);
+    }
     {
         static const unsigned char with_nul[] = {
             '[', 'u', 'i', ']', '\n', 'v', 'e', 'r', 'b', 'o', 's', 'i', 't', 'y',
@@ -166,7 +216,8 @@ main(void)
         expect_invalid(path);
     }
     snj_config_init(&config);
-    assert(snj_config_load(&config, "relative.ini", error, sizeof(error)) < 0);
+    assert(snj_config_load(&config, "relative.ini", dotdir,
+                           error, sizeof(error)) < 0);
     snj_config_free(&config);
 
     puts("test_config: ok");

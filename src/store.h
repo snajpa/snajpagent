@@ -2,6 +2,7 @@
 #ifndef SNAJPAGENT_STORE_H
 #define SNAJPAGENT_STORE_H
 
+#include "config.h"
 #include "json.h"
 #include "turn.h"
 
@@ -10,6 +11,7 @@
 #include <sys/types.h>
 
 #define SNJ_MODEL_MAX_BYTES 256u
+#define SNJ_EFFORT_MAX_BYTES 64u
 #define SNJ_MAX_STEERING_TEXT (256u * 1024u)
 #define SNJ_MAX_STEERING_PER_TURN 32u
 #define SNJ_MAX_QUEUED_TEXT (256u * 1024u)
@@ -62,9 +64,10 @@ struct snj_session {
     char compact_id[SNJ_ID_HEX_LEN + 1u];
     char active_compact_id[SNJ_ID_HEX_LEN + 1u];
     char active_compact_source_sha256[SNJ_SHA256_HEX_LEN + 1u];
+    char default_provider[SNJ_CONFIG_PROVIDER_NAME_MAX + 1u];
     char default_model[SNJ_MODEL_MAX_BYTES];
     char active_turn_model[SNJ_MODEL_MAX_BYTES];
-    char default_effort[16];
+    char default_effort[SNJ_EFFORT_MAX_BYTES];
     char *workspace;
     char trash_name[SNJ_ID_HEX_LEN + 1u + SNJ_ID_HEX_LEN + 1u];
     char *dir_path;
@@ -102,12 +105,14 @@ struct snj_session {
 
 void snj_store_init(struct snj_store *store);
 void snj_store_close(struct snj_store *store);
-int snj_store_open(struct snj_store *store, char *error, size_t error_size);
+int snj_store_open(struct snj_store *store, const char *dotdir,
+                   char *error, size_t error_size);
 
 void snj_session_init(struct snj_session *session);
 void snj_session_close(struct snj_session *session);
 int snj_session_create(struct snj_store *store, struct snj_session *session,
-                       const char *workspace, const char *model,
+                       const char *workspace, const char *provider,
+                       const char *model,
                        const char *effort, char *error, size_t error_size);
 int snj_session_open(struct snj_store *store, struct snj_session *session,
                      const char *prefix, char *error, size_t error_size);

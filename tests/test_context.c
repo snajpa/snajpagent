@@ -537,15 +537,14 @@ main(void)
     assert(mkdir(workspace, 0700) == 0);
     assert(snprintf(agents, sizeof(agents), "%s/AGENTS.md", workspace) > 0);
     write_file(agents, "context guidance\n");
-    assert(setenv("XDG_STATE_HOME", state, 1) == 0);
-
     snj_store_init(&store);
     snj_session_init(&session);
     snj_context_projection_init(&projection);
     snj_instructions_init(&instructions);
-    assert(snj_store_open(&store, error, sizeof(error)) == 0);
-    assert(snj_session_create(&store, &session, workspace, SNAJPAGENT_MODEL,
-                              "default", error, sizeof(error)) == 0);
+    assert(snj_store_open(&store, state, error, sizeof(error)) == 0);
+    assert(snj_session_create(&store, &session, workspace, "default",
+                              SNAJPAGENT_MODEL, "default",
+                              error, sizeof(error)) == 0);
     assert(snj_session_commit(&session, "turn_started",
                               turn_started(turn1, 1, "ping", workspace, NULL),
                               NULL, error, sizeof(error)) == 0);
@@ -638,8 +637,9 @@ main(void)
         snj_context_projection_init(&active_projection);
         snj_instructions_init(&no_instructions);
         assert(active_steering);
-        assert(snj_session_create(&store, &active, workspace, SNAJPAGENT_MODEL,
-                                  "default", error, sizeof(error)) == 0);
+        assert(snj_session_create(&store, &active, workspace, "default",
+                                  SNAJPAGENT_MODEL, "default",
+                                  error, sizeof(error)) == 0);
         assert(snj_session_commit(&active, "turn_started",
                                   turn_started(active_turn1, 1, "old",
                                                workspace, NULL),

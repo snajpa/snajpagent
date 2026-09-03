@@ -13,6 +13,7 @@
 #include "turn.h"
 #include "tools.h"
 #include "wire.h"
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -26,6 +27,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 static void
 set_error(char *error, size_t size, const char *fmt, ...)
@@ -125,15 +127,12 @@ graph_outcome_name(enum snj_graph_outcome outcome)
     }
     return "unknown";
 }
-static const char *const reasoning_modes[] = {
-    "none", "low", "medium", "high", "xhigh"
-};
 static const struct snj_term_command commands[] = {
     {"/help", "commands and keys"},
     {"/?", "commands and keys (alias for /help)"},
     {"/status", "session and next-turn settings"},
     {"/history", "recent terminal history"},
-    {"/model [MODEL]", "show or set next-turn model"},
+    {"/model [list|cache|#|SELECTOR]", "list, refresh, or select a model"},
     {"/effort [LEVEL]", "show or set next-turn effort"},
     {"/verbose [0..6]", "show or set this process's verbosity"},
     {"/queue [TEXT]", "list or queue future turns"},
@@ -154,10 +153,19 @@ resolve_effort(const char *preference)
 {
     if (!preference || strcmp(preference, "default") == 0)
         return "medium";
-    for (size_t i = 0; i < sizeof(reasoning_modes) / sizeof(reasoning_modes[0]); ++i)
-        if (strcmp(preference, reasoning_modes[i]) == 0)
-            return reasoning_modes[i];
-    return NULL;
+    if (!*preference || strlen(preference) >= SNJ_CONFIG_EFFORT_MAX ||
+        !snj_utf8_valid((const unsigned char *)preference,
+                        strlen(preference), true))
+        return NULL;
+    return preference;
+}
+static const struct snj_provider_config *
+next_provider(const struct app_state *app)
+{
+    if (app->staged_provider)
+        return app->staged_provider;
+    return snj_config_provider(app->config,
+        app->session.default_provider[0] ? app->session.default_provider : NULL);
 }
 static int
 prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
@@ -167,15 +175,22 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
     const char *effort_preference = app->staged_effort ? app->staged_effort :
                                                         app->session.default_effort;
     const char *effort = resolve_effort(effort_preference);
+    const struct snj_provider_config *provider = next_provider(app);
+    if (!provider) {
+        set_error(error, error_size,
+                  "selected provider is not present in the current configuration");
+        errno = ENOENT;
+        return -1;
+    }
     if (!effort) {
         set_error(error, error_size,
-                  "reasoning effort %s is unsupported by %s",
-                  effort_preference, model);
+                  "reasoning effort is empty, oversized, or invalid UTF-8");
         errno = ENOTSUP;
         return -1;
     }
     app->turn_model = model;
     app->turn_effort = effort;
+    app->turn_provider = provider;
     return 0;
 }
 static void
@@ -183,6 +198,7 @@ consume_staged_settings(struct app_state *app)
 {
     app->staged_model = NULL;
     app->staged_effort = NULL;
+    app->staged_provider = NULL;
 }
 static int
 commit_event(struct app_state *app, const char *type, json_t *data,
@@ -336,6 +352,7 @@ render_status(struct app_state *app)
     return app_hostf(app,
         "session: %s\n"
         "state: %s\n"
+        "provider: %s%s\n"
         "model: %s%s\n"
         "effort: %s%s\n"
         "workspace: %s\n"
@@ -348,6 +365,8 @@ render_status(struct app_state *app)
                              app->session.id[4], app->session.id[5],
                              app->session.id[6], app->session.id[7], '\0'},
         app->session.active_turn ? "active" : "idle",
+        next_provider(app) ? next_provider(app)->name : "<missing>",
+        app->staged_provider ? " (staged once)" : "",
         next_model(app), app->staged_model ? " (staged once)" : "",
         next_effort(app), app->staged_effort ? " (staged once)" : "",
         app->session.workspace,
@@ -386,56 +405,410 @@ show_setting(struct app_state *app, const char *name, const char *value,
                      staged ? " (staged once)" : "");
 }
 static int
-change_model(struct app_state *app, const char *value, bool active)
+refresh_model_cache(struct app_state *app, char *error, size_t error_size)
 {
-    const char *model;
-    char error[256];
-    if (!value)
-        return show_setting(app, "model", next_model(app),
-                            app->staged_model != NULL);
-    if (active)
-        return app_error(app, "/model MODEL is idle-only; interrupt or wait");
-    model = effective_model(value);
-    if (strcmp(model, app->session.default_model) != 0) {
-        error[0] = '\0';
-        if (commit_event(app, "model_changed",
-                snj_app_preference_changed_data("old_model",
-                                        app->session.default_model,
-                                        "new_model", model),
+    json_t *providers = json_array();
+    int rc = -1;
+
+    if (!providers) {
+        errno = ENOMEM;
+        return -1;
+    }
+    for (size_t i = 0; i < app->config->provider_count; ++i) {
+        const struct snj_provider_config *provider = &app->config->providers[i];
+        json_t *models = NULL;
+        json_t *entry = NULL;
+        char detail[256] = {0};
+
+        if (snj_app_provider_models(app, provider, &models,
+                                    detail, sizeof(detail)) < 0) {
+            set_error(error, error_size, "cannot refresh provider %s: %s",
+                      provider->name, detail[0] ? detail : strerror(errno));
+            goto out;
+        }
+        entry = json_object();
+        if (!entry) {
+            json_decref(models);
+            set_error(error, error_size, "cannot assemble model cache");
+            errno = ENOMEM;
+            goto out;
+        }
+        if (snj_json_set_new(entry, "models", models) < 0) {
+            models = NULL;
+            json_decref(entry);
+            set_error(error, error_size, "cannot assemble model cache");
+            errno = ENOMEM;
+            goto out;
+        }
+        models = NULL;
+        if (snj_json_set_new(entry, "name", json_string(provider->name)) < 0) {
+            json_decref(entry);
+            set_error(error, error_size, "cannot assemble model cache");
+            errno = ENOMEM;
+            goto out;
+        }
+        if (json_array_append_new(providers, entry) < 0) {
+            entry = NULL;
+            set_error(error, error_size, "cannot assemble model cache");
+            errno = ENOMEM;
+            goto out;
+        }
+        entry = NULL;
+    }
+    if (snj_model_cache_replace(&app->store, providers, snj_time_ms(),
+                                &app->model_cache, error, error_size) < 0)
+        goto out;
+    rc = 0;
+out:
+    json_decref(providers);
+    return rc;
+}
+static int
+local_codex_model_cache_path(char *path, size_t path_size,
+                             char *error, size_t error_size)
+{
+    const char *root = getenv("CODEX_HOME");
+    const char *suffix = "/models_cache.json";
+    size_t root_len;
+    size_t suffix_len;
+
+    if (!root || !root[0]) {
+        root = getenv("HOME");
+        suffix = "/.codex/models_cache.json";
+    }
+    if (!root || !root[0])
+        return 1;
+    root_len = strlen(root);
+    suffix_len = strlen(suffix);
+    if (root[0] != '/' ||
+        !snj_utf8_valid((const unsigned char *)root, root_len, true) ||
+        root_len > SNJ_PATH_MAX_BYTES - suffix_len ||
+        root_len + suffix_len + 1u > path_size) {
+        set_error(error, error_size,
+                  "local Codex home must be an absolute UTF-8 path within the supported limit");
+        errno = EINVAL;
+        return -1;
+    }
+    memcpy(path, root, root_len);
+    memcpy(path + root_len, suffix, suffix_len + 1u);
+    return 0;
+}
+static int
+seed_model_cache_from_codex(struct app_state *app,
+                            char *error, size_t error_size)
+{
+    char path[SNJ_PATH_MAX_BYTES + 1u];
+    int rc = local_codex_model_cache_path(path, sizeof(path),
+                                          error, error_size);
+    if (rc != 0)
+        return rc;
+    return snj_model_cache_import_codex(&app->store, path,
+                                        app->config->providers[0].name,
+                                        snj_time_ms(), &app->model_cache,
+                                        error, error_size);
+}
+static int
+load_model_cache(struct app_state *app, bool refresh, bool seed_missing,
+                 char *error, size_t error_size)
+{
+    int rc;
+    if (refresh)
+        return refresh_model_cache(app, error, error_size);
+    rc = snj_model_cache_load(&app->store, &app->model_cache,
+                              error, error_size);
+    if (rc == 1 && seed_missing)
+        rc = seed_model_cache_from_codex(app, error, error_size);
+    if (rc == 1) {
+        set_error(error, error_size,
+                  "model cache is empty; run Codex once or use /model cache while idle");
+        errno = ENOENT;
+        return -1;
+    }
+    return rc;
+}
+static int
+render_model_catalog(struct app_state *app)
+{
+    const struct snj_provider_config *selected = next_provider(app);
+    struct snj_buf text;
+    char timestamp[64];
+    time_t seconds = (time_t)(app->model_cache.updated_at_ms / 1000u);
+    struct tm broken;
+    size_t count = snj_model_cache_entry_count(&app->model_cache);
+    int rc = -1;
+
+    if (!selected)
+        return app_error(app,
+            "selected provider is not present in the current configuration");
+    snj_buf_init(&text, 16u * 1024u * 1024u);
+    if (snj_buf_printf(&text, "selected: %s / %s / %s%s",
+                       selected->name, next_model(app),
+                       resolve_effort(next_effort(app)) ?
+                           resolve_effort(next_effort(app)) : next_effort(app),
+                       app->staged_provider || app->staged_model ||
+                       app->staged_effort ? " (staged once)" : "") < 0)
+        goto out;
+    for (size_t index = 1u; index <= count; ++index) {
+        const char *provider;
+        const char *model;
+        const char *effort;
+        if (snj_model_cache_entry(&app->model_cache, index,
+                                  resolve_effort(app->config->reasoning_effort),
+                                  &provider, &model, &effort) != 0 ||
+            snj_buf_printf(&text, "\n%zu. %s / %s / %s",
+                           index, provider, model, effort) < 0)
+            goto out;
+    }
+    if (gmtime_r(&seconds, &broken) &&
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ",
+                 &broken) != 0u) {
+        if (snj_buf_printf(&text, "\ncache updated: %s", timestamp) < 0)
+            goto out;
+    } else if (snj_buf_printf(&text, "\ncache updated: %llu ms since epoch",
+                              (unsigned long long)
+                                  app->model_cache.updated_at_ms) < 0) {
+        goto out;
+    }
+    if (snj_buf_terminate(&text) < 0)
+        goto out;
+    rc = snj_render_host(&app->render, (const char *)text.data);
+out:
+    snj_buf_free(&text);
+    return rc;
+}
+static bool
+parse_model_index(const char *value, size_t *index)
+{
+    size_t number = 0u;
+    const unsigned char *p = (const unsigned char *)value;
+    if (*p == '#')
+        ++p;
+    if (!*p)
+        return false;
+    for (; *p; ++p) {
+        size_t digit;
+        if (*p < '0' || *p > '9')
+            return false;
+        digit = (size_t)(*p - '0');
+        if (number > (SIZE_MAX - digit) / 10u)
+            number = SIZE_MAX;
+        else
+            number = number * 10u + digit;
+    }
+    *index = number;
+    return true;
+}
+static char *
+trim_selector_part(char *part)
+{
+    char *end;
+    while (*part && isspace((unsigned char)*part))
+        ++part;
+    end = part + strlen(part);
+    while (end > part && isspace((unsigned char)end[-1]))
+        --end;
+    *end = '\0';
+    return part;
+}
+static int
+commit_model_selection(struct app_state *app,
+                       const struct snj_provider_config *provider,
+                       const char *model, const char *effort)
+{
+    const char *old_provider = app->session.default_provider;
+    char error[256] = {0};
+
+    if (!old_provider[0])
+        old_provider = "";
+    if (strcmp(old_provider, provider->name) != 0 ||
+        strcmp(app->session.default_model, model) != 0 ||
+        strcmp(app->session.default_effort, effort) != 0) {
+        if (commit_event(app, "model_selection_changed",
+                snj_app_model_selection_changed_data(
+                    old_provider, provider->name,
+                    app->session.default_model, model,
+                    app->session.default_effort, effort),
                 error, sizeof(error)) < 0) {
             (void)app_error(app, error[0] ? error :
-                            "model preference could not be saved");
+                            "model selection could not be saved");
             return -1;
         }
     }
+    app->staged_provider = NULL;
     app->staged_model = NULL;
-    return show_setting(app, "model", app->session.default_model, false);
+    app->staged_effort = NULL;
+    return app_hostf(app, "model for next turn: %s / %s / %s",
+                     provider->name, model, effort);
+}
+static int
+select_cached_model(struct app_state *app, const char *value)
+{
+    const struct snj_provider_config *provider_config;
+    const char *provider;
+    const char *model;
+    const char *effort;
+    char error[256] = {0};
+    size_t index;
+    int entry_rc;
+
+    if (!parse_model_index(value, &index))
+        return 1;
+    if (load_model_cache(app, false, true, error, sizeof(error)) < 0)
+        return app_error(app, error);
+    entry_rc = snj_model_cache_entry(&app->model_cache, index,
+                                     resolve_effort(app->config->reasoning_effort),
+                                     &provider, &model, &effort);
+    if (entry_rc != 0)
+        return app_error(app, "model index is not in the displayed cache");
+    provider_config = snj_config_provider(app->config, provider);
+    if (!provider_config)
+        return app_error(app,
+            "cached provider is not configured; use /model cache");
+    return commit_model_selection(app, provider_config, model, effort);
+}
+static int
+select_typed_model(struct app_state *app, const char *value)
+{
+    const struct snj_provider_config *provider;
+    const char *model;
+    const char *effort;
+    char *copy = snj_strdup_checked(value, SNJ_CONFIG_PATH_MAX);
+    char *parts[3];
+    size_t count = 0u;
+    int rc = -1;
+
+    if (!copy)
+        return app_error(app, "model selector is too long");
+    parts[count++] = copy;
+    for (char *p = copy; *p; ++p) {
+        if (*p != '/')
+            continue;
+        if (count == 3u) {
+            (void)app_error(app,
+                "model selector has more than three slash-separated components; use a cached number for model IDs containing slash");
+            goto out;
+        }
+        *p = '\0';
+        parts[count++] = p + 1u;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        parts[i] = trim_selector_part(parts[i]);
+        if (!parts[i][0]) {
+            (void)app_error(app, "model selector contains an empty component");
+            goto out;
+        }
+    }
+    provider = count == 3u ? snj_config_provider(app->config, parts[0]) :
+                             snj_config_provider(app->config, NULL);
+    if (!provider) {
+        (void)app_error(app, count == 3u ?
+            "model selector names an unconfigured provider" :
+            "no provider is configured");
+        goto out;
+    }
+    model = parts[count == 3u ? 1u : 0u];
+    effort = count >= 2u ? parts[count - 1u] : next_effort(app);
+    if (strlen(model) >= SNJ_CONFIG_MODEL_MAX ||
+        !snj_utf8_valid((const unsigned char *)model, strlen(model), true) ||
+        !resolve_effort(effort)) {
+        (void)app_error(app,
+            "model or effort exceeds the supported structural bounds");
+        goto out;
+    }
+    if (count == 1u) {
+        char ignored[256] = {0};
+        if (snj_model_cache_load(&app->store, &app->model_cache,
+                                 ignored, sizeof(ignored)) == 0) {
+            const json_t *cached = snj_model_cache_find(&app->model_cache,
+                                                        provider->name, model);
+            effort = snj_model_cache_best_effort(cached,
+                                                  resolve_effort(effort));
+        }
+    }
+    rc = commit_model_selection(app, provider, model, resolve_effort(effort));
+out:
+    free(copy);
+    return rc;
+}
+static int
+change_model(struct app_state *app, const char *value, bool active)
+{
+    char error[256] = {0};
+    char *copy = NULL;
+    char *selector = NULL;
+    int rc;
+
+    if (value) {
+        copy = snj_strdup_checked(value, SNJ_CONFIG_PATH_MAX);
+        if (!copy)
+            return app_error(app, "model selector is too long");
+        selector = trim_selector_part(copy);
+    }
+    if (!selector || strcmp(selector, "list") == 0) {
+        rc = load_model_cache(app, false, !active, error, sizeof(error));
+        if (rc < 0)
+            rc = app_error(app, error);
+        else
+            rc = render_model_catalog(app);
+        free(copy);
+        return rc;
+    }
+    if (strcmp(selector, "cache") == 0) {
+        if (active)
+            rc = app_error(app,
+                "/model cache is idle-only; interrupt or wait");
+        else if (load_model_cache(app, true, true, error, sizeof(error)) < 0)
+            rc = app_error(app, error);
+        else
+            rc = render_model_catalog(app);
+        free(copy);
+        return rc;
+    }
+    if (active) {
+        free(copy);
+        return app_error(app,
+            "/model selection is idle-only; interrupt or wait");
+    }
+    rc = select_cached_model(app, selector);
+    if (rc == 1)
+        rc = select_typed_model(app, selector);
+    free(copy);
+    return rc;
 }
 static int
 change_effort(struct app_state *app, const char *value, bool active)
 {
     char error[256];
+    char *copy = NULL;
+    char *effort = NULL;
     if (!value)
         return show_setting(app, "effort", next_effort(app),
                             app->staged_effort != NULL);
     if (active)
         return app_error(app, "/effort LEVEL is idle-only; interrupt or wait");
-    if (strchr(value, ' ') || !resolve_effort(value))
+    copy = snj_strdup_checked(value, SNJ_CONFIG_EFFORT_MAX - 1u);
+    if (copy)
+        effort = trim_selector_part(copy);
+    if (!effort || !resolve_effort(effort)) {
+        free(copy);
         return app_error(app,
-            "effort is unsupported by the selected model");
+            "effort exceeds the supported structural bounds");
+    }
     app->staged_effort = NULL;
-    if (strcmp(value, app->session.default_effort) != 0) {
+    if (strcmp(effort, app->session.default_effort) != 0) {
         error[0] = '\0';
         if (commit_event(app, "effort_changed",
                 snj_app_preference_changed_data("old_effort",
                                         app->session.default_effort,
-                                        "new_effort", value),
+                                        "new_effort", effort),
                 error, sizeof(error)) < 0) {
             (void)app_error(app, error[0] ? error :
                             "effort preference could not be saved");
+            free(copy);
             return -1;
         }
     }
+    free(copy);
     return show_setting(app, "effort", app->session.default_effort, false);
 }
 static int
@@ -885,7 +1258,7 @@ run_turn(struct app_state *app, const char *prompt,
         return 2;
     }
 #ifndef SNAJPAGENT_TEST_FIXTURE
-    if (snj_credential_read(&credential, app->config->provider_api_key_env,
+    if (snj_credential_read(&credential, app->turn_provider->api_key_env,
                             error, sizeof(error)) < 0) {
         (void)app_error(app, error);
         snj_credential_clear(&credential);
@@ -967,7 +1340,7 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
 #ifndef SNAJPAGENT_TEST_FIXTURE
-        if (app->config->provider_exact_token_count) {
+        if (app->turn_provider->exact_token_count) {
 #endif
             provider_rc = snj_app_provider_count(app, count_request, &credential,
                                          &input_tokens_bound, error, sizeof(error));
@@ -1488,6 +1861,52 @@ current_workspace(char *error, size_t error_size)
 {
     return resolve_workspace_path(".", "current", error, error_size);
 }
+static char *
+resolve_dotdir(const char *override, char *error, size_t error_size)
+{
+    const char *home = getenv("HOME");
+    char *path;
+    size_t len;
+
+    if (override)
+        path = snj_strdup_checked(override, SNJ_PATH_MAX_BYTES);
+    else if (home && home[0] == '/') {
+        size_t home_len = strlen(home);
+        bool slash = home_len != 0u && home[home_len - 1u] == '/';
+        const char *suffix = slash ? ".snajpagent" : "/.snajpagent";
+        size_t suffix_len = strlen(suffix);
+        if (home_len > SNJ_PATH_MAX_BYTES - suffix_len) {
+            errno = ENAMETOOLONG;
+            path = NULL;
+        } else {
+            path = malloc(home_len + suffix_len + 1u);
+            if (path) {
+                memcpy(path, home, home_len);
+                memcpy(path + home_len, suffix, suffix_len + 1u);
+            }
+        }
+    }
+    else {
+        set_error(error, error_size,
+                  "HOME is unavailable for the default dotdir; use -d DIR");
+        errno = EINVAL;
+        return NULL;
+    }
+    if (!path)
+        return NULL;
+    len = strlen(path);
+    while (len > 1u && path[len - 1u] == '/')
+        path[--len] = '\0';
+    if (path[0] != '/' ||
+        !snj_utf8_valid((const unsigned char *)path, len, true)) {
+        set_error(error, error_size,
+                  "dotdir must be an absolute UTF-8 path within the supported limit");
+        free(path);
+        errno = EINVAL;
+        return NULL;
+    }
+    return path;
+}
 static int
 pick_session(struct app_state *app, const char *workspace,
              char *error, size_t error_size)
@@ -1652,6 +2071,7 @@ snj_app_run(const struct snj_cli *cli)
     struct app_state app;
     struct snj_config config;
     char error[256];
+    char *dotdir = NULL;
     char *workspace = NULL;
     char *relocated_workspace = NULL;
     const char *new_model = NULL;
@@ -1661,6 +2081,7 @@ snj_app_run(const struct snj_cli *cli)
     memset(&app, 0, sizeof(app));
     snj_config_init(&config);
     snj_instructions_init(&app.turn_instructions);
+    snj_model_cache_init(&app.model_cache);
     snj_store_init(&app.store);
     snj_session_init(&app.session);
     snj_term_init(&app.term);
@@ -1682,7 +2103,13 @@ snj_app_run(const struct snj_cli *cli)
         }
     }
     error[0] = '\0';
-    if (snj_config_load(&config, cli->config_path,
+    dotdir = resolve_dotdir(cli->dotdir, error, sizeof(error));
+    if (!dotdir) {
+        (void)snj_render_error(error[0] ? error : "dotdir is unavailable");
+        rc = 2;
+        goto out;
+    }
+    if (snj_config_load(&config, cli->config_path, dotdir,
                         error, sizeof(error)) < 0) {
         (void)snj_render_error(error);
         rc = 2;
@@ -1704,11 +2131,12 @@ snj_app_run(const struct snj_cli *cli)
         new_model = effective_model(cli->model ? cli->model : config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
     if ((!cli->resume || cli->effort) && !resolve_effort(new_effort)) {
-        (void)snj_render_error("reasoning effort is unsupported by the selected model");
+        (void)snj_render_error(
+            "reasoning effort is empty, oversized, or invalid UTF-8");
         rc = 2;
         goto out;
     }
-    if (snj_store_open(&app.store, error, sizeof(error)) < 0) {
+    if (snj_store_open(&app.store, dotdir, error, sizeof(error)) < 0) {
         (void)snj_render_error(error);
         goto out;
     }
@@ -1776,15 +2204,18 @@ snj_app_run(const struct snj_cli *cli)
         app.staged_effort = cli->effort;
         app.turn_model = next_model(&app);
         app.turn_effort = resolve_effort(next_effort(&app));
+        app.turn_provider = next_provider(&app);
     } else {
         const char *selected_workspace = cli->workspace ? cli->workspace : workspace;
         if (snj_session_create(&app.store, &app.session, selected_workspace,
-                               new_model, new_effort, error, sizeof(error)) < 0) {
+                               config.providers[0].name, new_model, new_effort,
+                               error, sizeof(error)) < 0) {
             (void)snj_render_error(error);
             goto out;
         }
         app.turn_model = app.session.default_model;
         app.turn_effort = resolve_effort(app.session.default_effort);
+        app.turn_provider = &config.providers[0];
     }
     if (cli->execute) {
         rc = run_turn(&app, cli->prompt, NULL);
@@ -1810,9 +2241,11 @@ snj_app_run(const struct snj_cli *cli)
     rc = interactive_loop(&app, cli->prompt);
 out:
     snj_term_close(&app.term);
+    free(dotdir);
     free(relocated_workspace);
     free(workspace);
     snj_instructions_free(&app.turn_instructions);
+    snj_model_cache_free(&app.model_cache);
     snj_session_close(&app.session);
     snj_store_close(&app.store);
     snj_config_free(&config);

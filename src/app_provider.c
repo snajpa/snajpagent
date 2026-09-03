@@ -5,8 +5,12 @@
 #include "json.h"
 #include "tools.h"
 
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 typedef int (*fixture_emit_fn)(void *opaque, size_t item_index,
                                enum snj_item_kind kind,
@@ -24,6 +28,88 @@ int snj_fixture_tool(const struct snj_response_item *call, json_t **result,
 #endif
 
 int
+snj_app_provider_models(struct app_state *app,
+                        const struct snj_provider_config *provider,
+                        json_t **models, char *error, size_t error_size)
+{
+#ifdef SNAJPAGENT_TEST_FIXTURE
+    static const char *const ids[] = {
+        "gpt-5.6-sol", "gpt-5.6-terra", "vendor/future-model"
+    };
+    static const char *const efforts[] = {
+        "low", "medium", "high", "xhigh", "max", "ultra"
+    };
+    const char *failure = getenv("SNAJPAGENT_FIXTURE_MODEL_FAILURE");
+    json_t *out = NULL;
+
+    (void)app;
+    if (models)
+        *models = NULL;
+    if (failure && strcmp(failure, provider->name) == 0) {
+        if (error_size)
+            (void)snprintf(error, error_size,
+                           "fixture model discovery failed");
+        errno = EIO;
+        return -1;
+    }
+    out = json_array();
+    if (!models || !out)
+        goto fail;
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); ++i) {
+        json_t *entry = json_object();
+        json_t *variants = json_array();
+        if (!entry || !variants)
+            goto fail_entry;
+        if (i < 2u)
+            for (size_t j = 0; j < sizeof(efforts) / sizeof(efforts[0]); ++j)
+                if (json_array_append_new(variants,
+                                          json_string(efforts[j])) < 0)
+                    goto fail_entry;
+        if (snj_json_set_new(entry, "default_effort",
+                             i < 2u ? json_string("medium") : json_null()) < 0)
+            goto fail_entry;
+        if (snj_json_set_new(entry, "efforts", variants) < 0) {
+            variants = NULL;
+            goto fail_entry;
+        }
+        variants = NULL;
+        if (snj_json_set_new(entry, "id", json_string(ids[i])) < 0)
+            goto fail_entry;
+        if (json_array_append_new(out, entry) < 0) {
+            entry = NULL;
+            goto fail_entry;
+        }
+        entry = NULL;
+        continue;
+fail_entry:
+        if (variants)
+            json_decref(variants);
+        if (entry)
+            json_decref(entry);
+        goto fail;
+    }
+    *models = out;
+    return 0;
+fail:
+    if (out)
+        json_decref(out);
+    errno = ENOMEM;
+    return -1;
+#else
+    struct snj_credential credential;
+    int rc;
+    snj_credential_clear(&credential);
+    if (snj_credential_read(&credential, provider->api_key_env,
+                            error, error_size) < 0)
+        return -1;
+    rc = snj_provider_models_list(app->config, provider, &credential,
+                                  &app->render, models, error, error_size);
+    snj_credential_clear(&credential);
+    return rc;
+#endif
+}
+
+int
 snj_app_provider_count(struct app_state *app, const json_t *count_request,
                        const struct snj_credential *credential,
                        uint64_t *input_tokens, char *error, size_t error_size)
@@ -38,7 +124,8 @@ snj_app_provider_count(struct app_state *app, const json_t *count_request,
     return 0;
 #else
     int cancel_code = 0;
-    int rc = snj_provider_responses_count(count_request, app->config, credential,
+    int rc = snj_provider_responses_count(count_request, app->config,
+                                          app->turn_provider, credential,
                                           &app->render, NULL, NULL,
                                           input_tokens, error, error_size,
                                           &cancel_code, NULL);
@@ -88,6 +175,7 @@ snj_app_provider_compact(struct app_state *app, const json_t *compact_request,
 #else
     int cancel_code = 0;
     int rc = snj_provider_responses_compact(compact_request, app->config,
+                                            app->turn_provider,
                                             credential, &app->render,
                                             snj_app_active_input_pump, app,
                                             output, output_tokens_bound,
@@ -122,7 +210,8 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
     (void)cycle;
     if (retry_count)
         *retry_count = 0u;
-    int rc = snj_provider_responses_create(create_request, app->config, credential,
+    int rc = snj_provider_responses_create(create_request, app->config,
+                                           app->turn_provider, credential,
                                            &app->render,
                                            snj_app_stream_public_response, app,
                                            snj_app_active_input_pump, app, graph,

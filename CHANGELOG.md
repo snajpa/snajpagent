@@ -4,15 +4,25 @@
 
 ## 0.9.0-wip
 
+- Added a configurable `$HOME/.snajpagent` application directory containing
+  default configuration, sessions, trash, and an atomically replaced model
+  cache; `-d`/`--dotdir` and `-c`/`--config` override those defaults.
+
+- Added ordered named provider configurations and authenticated all-provider
+  model/reasoning discovery. `/model`, `/model list`, and `/model cache` expose
+  the persistent user-refreshed catalog and its update time; numbered and
+  typed selectors durably retain provider, model, and effort across resume,
+  while manually entered model and effort names pass through without catalog
+  validation. A missing catalog is seeded offline from a bounded local Codex
+  cache when available, while provider access is reserved for explicit
+  `/model cache` refreshes.
+
 - Added `/?` as an exact interactive alias for `/help`; both render the same
   centralized command catalog and key reference.
 
 - Added Tab completion for interactive slash-command names from the same
   catalog rendered by `/help`, while retaining indentation and active-turn
   queueing for input outside a command-name token.
-
-- Made interactive `/model` show or durably set the next-turn provider model
-  identifier, while `/effort` independently controls the reasoning mode.
 
 - Recovered safely from invalid managed-process continuations: the active
   handle is bound into the strict `write_stdin` schema, wrong handles become

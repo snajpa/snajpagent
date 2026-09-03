@@ -15,6 +15,7 @@ typedef int (*snj_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 
 int snj_provider_responses_count(const json_t *count_request,
                                  const struct snj_config *config,
+                                 const struct snj_provider_config *provider,
                                  const struct snj_credential *credential,
                                  struct snj_render *render,
                                  snj_provider_pump_fn pump,
@@ -26,6 +27,7 @@ int snj_provider_responses_count(const json_t *count_request,
 
 int snj_provider_responses_compact(const json_t *compact_request,
                                    const struct snj_config *config,
+                                   const struct snj_provider_config *provider,
                                    const struct snj_credential *credential,
                                    struct snj_render *render,
                                    snj_provider_pump_fn pump,
@@ -38,6 +40,7 @@ int snj_provider_responses_compact(const json_t *compact_request,
 
 int snj_provider_responses_create(const json_t *create_request,
                                   const struct snj_config *config,
+                                  const struct snj_provider_config *provider,
                                   const struct snj_credential *credential,
                                   struct snj_render *render,
                                   snj_responses_emit_fn emit,
@@ -48,5 +51,15 @@ int snj_provider_responses_create(const json_t *create_request,
                                   char *error, size_t error_size,
                                   int *cancel_code,
                                   unsigned int *retry_count);
+
+int snj_provider_models_list(const struct snj_config *config,
+                             const struct snj_provider_config *provider,
+                             const struct snj_credential *credential,
+                             struct snj_render *render,
+                             json_t **models,
+                             char *error, size_t error_size);
+int snj_provider_models_decode(const unsigned char *data, size_t len,
+                               json_t **models,
+                               char *error, size_t error_size);
 
 #endif

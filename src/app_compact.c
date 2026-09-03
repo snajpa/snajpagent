@@ -334,7 +334,8 @@ run_responses_compaction(struct app_state *app, const json_t *compact_request,
         return -1;
     }
     snj_response_graph_init(&graph);
-    if (snj_provider_responses_create(create_request, app->config, credential,
+    if (snj_provider_responses_create(create_request, app->config,
+                                      app->turn_provider, credential,
                                       &app->render, NULL, NULL,
                                       snj_app_active_input_pump, app, &graph,
                                       error, error_size, &cancel_code, NULL) != 0)
@@ -414,6 +415,16 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
                                                app->session.default_model;
     effort = active_prefix && app->turn_effort ? app->turn_effort :
                                                  app->session.default_effort;
+    if (!active_prefix)
+        app->turn_provider = snj_config_provider(
+            app->config, app->session.default_provider[0] ?
+                         app->session.default_provider : NULL);
+    if (!app->turn_provider) {
+        snprintf(error, error_size,
+                 "selected provider is not present in the current configuration");
+        errno = ENOENT;
+        goto out;
+    }
     build_rc = build_compaction_request(app, active_prefix, model, effort,
                                         &request, &count_request, source_hash,
                                         &source_bytes, request_hash,
@@ -444,12 +455,12 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (!credential) {
         if (snj_credential_read(&owned_credential,
-                                app->config->provider_api_key_env,
+                                app->turn_provider->api_key_env,
                                 error, error_size) < 0)
             goto out;
         credential = &owned_credential;
     }
-    if (app->config->provider_exact_token_count) {
+    if (app->turn_provider->exact_token_count) {
         if (snj_app_provider_count(app, count_request, credential,
                                    &input_tokens_bound, error, error_size) != 0)
             goto out;
@@ -462,8 +473,8 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         goto out;
     }
     if (!active_prefix && strcmp(reason, "automatic") == 0 &&
-        app->config->auto_compact_input_tokens != 0u &&
-        input_tokens_bound < app->config->auto_compact_input_tokens) {
+        app->turn_provider->auto_compact_input_tokens != 0u &&
+        input_tokens_bound < app->turn_provider->auto_compact_input_tokens) {
         rc = 0;
         goto out;
     }
@@ -479,7 +490,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             error, error_size) < 0)
         goto out;
     started = true;
-    if (app->config->provider_native_compaction) {
+    if (app->turn_provider->native_compaction) {
         if (snj_app_provider_compact(app, request, credential, &output,
                                      &output_tokens_bound,
                                      error, error_size) != 0)
@@ -500,7 +511,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         output_count_request_bytes == 0u)
         goto out;
 #ifndef SNAJPAGENT_TEST_FIXTURE
-    if (app->config->provider_exact_token_count) {
+    if (app->turn_provider->exact_token_count) {
         if (snj_app_provider_count(app, output_count_request, credential,
                                    &output_tokens_bound, error, error_size) != 0)
             goto out;
@@ -555,14 +566,15 @@ snj_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
                            const char *count_method,
                            char *error, size_t error_size)
 {
-    if (!app || !app->config || !count_method_valid(count_method)) {
+    if (!app || !app->config || !app->turn_provider ||
+        !count_method_valid(count_method)) {
         snprintf(error, error_size, "invalid automatic compaction state");
         errno = EINVAL;
         return -1;
     }
-    if (app->config->auto_compact_input_tokens == 0u)
+    if (app->turn_provider->auto_compact_input_tokens == 0u)
         return 0;
-    if (input_tokens_bound < app->config->auto_compact_input_tokens)
+    if (input_tokens_bound < app->turn_provider->auto_compact_input_tokens)
         return 0;
     return snj_app_compact_idle_command(app, "automatic", error, error_size);
 }
@@ -576,14 +588,15 @@ snj_app_compact_before_response(struct app_state *app,
 {
     if (compacted)
         *compacted = false;
-    if (!app || !app->config || !compacted || !count_method_valid(count_method)) {
+    if (!app || !app->config || !app->turn_provider || !compacted ||
+        !count_method_valid(count_method)) {
         snprintf(error, error_size, "invalid pre-response compaction state");
         errno = EINVAL;
         return -1;
     }
-    if (app->config->auto_compact_input_tokens == 0u)
+    if (app->turn_provider->auto_compact_input_tokens == 0u)
         return 0;
-    if (input_tokens_bound < app->config->auto_compact_input_tokens)
+    if (input_tokens_bound < app->turn_provider->auto_compact_input_tokens)
         return 0;
     return run_compaction(app, "automatic", true, credential, compacted,
                           error, error_size);

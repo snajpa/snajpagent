@@ -705,6 +705,41 @@ test_provider_secret_removed_from_environment(void)
 }
 
 static void
+test_all_provider_secrets_removed_and_redacted(void)
+{
+    char cwd[4096];
+    struct snj_config config;
+    struct snj_credential credential;
+    struct snj_response_graph graph;
+    json_t *result = NULL;
+    const char *retained;
+    char error[256] = {0};
+
+    assert(getcwd(cwd, sizeof(cwd)) != NULL);
+    snj_config_init(&config);
+    config.providers[1] = config.providers[0];
+    config.provider_count = 2u;
+    assert(snprintf(config.providers[1].name,
+                    sizeof(config.providers[1].name), "second") > 0);
+    assert(snprintf(config.providers[1].api_key_env,
+                    sizeof(config.providers[1].api_key_env),
+                    "SECOND_PROVIDER_KEY") > 0);
+    assert(setenv("SECOND_PROVIDER_KEY", "second-provider-secret", 1) == 0);
+    snj_credential_clear(&credential);
+    make_call(&graph,
+              "printf \"${SECOND_PROVIDER_KEY-unset}:second-provider-secret\"",
+              cwd, 1000, NULL);
+    assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
+                         NULL, NULL, &result, error, sizeof(error)) == 0);
+    retained = snj_json_string(json_object_get(result, "stdout"), "retained");
+    assert(strcmp(retained, "unset:<redacted:secret>") == 0);
+    assert(unsetenv("SECOND_PROVIDER_KEY") == 0);
+    json_decref(result);
+    snj_response_graph_free(&graph);
+    snj_config_free(&config);
+}
+
+static void
 test_apply_patch_add_update_delete(void)
 {
     char *dir = make_temp_workspace();
@@ -920,6 +955,7 @@ main(void)
     test_managed_process_close_returns_terminal_result();
     test_managed_close_kills_process_family();
     test_provider_secret_removed_from_environment();
+    test_all_provider_secrets_removed_and_redacted();
     test_apply_patch_add_update_delete();
     test_apply_patch_rejects_ambiguous_match();
     test_apply_patch_rejects_path_escape();

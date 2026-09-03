@@ -16,6 +16,7 @@ struct snj_cli {
     bool version;
     unsigned int verbosity;
     char *workspace;
+    char *dotdir;
     char *model;
     char *effort;
     char *config_path;

@@ -703,6 +703,9 @@ remove_env_entry(const char *entry, const struct snj_config *config)
 
     if (env_name_matches(entry, "OPENAI_API_KEY"))
         return true;
+    for (size_t i = 0; i < config->provider_count; ++i)
+        if (env_name_matches(entry, config->providers[i].api_key_env))
+            return true;
     for (size_t i = 0; i < config->secret_env_count; ++i)
         if (env_name_matches(entry, config->secret_env[i]))
             return true;
@@ -970,6 +973,28 @@ managed_secret_set_build(struct managed_secret_set *set,
         ++count;
     }
     if (config) {
+        for (size_t i = 0; i < config->provider_count &&
+             count < SNJ_SECRET_VALUES_MAX; ++i) {
+            const char *value = getenv(config->providers[i].api_key_env);
+            size_t len;
+            bool duplicate = false;
+            if (!value)
+                continue;
+            len = strnlen(value, SNJ_WIRE_SECRET_MAX + 1u);
+            if (!len || len > SNJ_WIRE_SECRET_MAX)
+                continue;
+            for (size_t j = 0; j < count; ++j)
+                if (strcmp(set->values[j], value) == 0) {
+                    duplicate = true;
+                    break;
+                }
+            if (duplicate)
+                continue;
+            memcpy(set->storage[count], value, len);
+            set->storage[count][len] = '\0';
+            set->values[count] = set->storage[count];
+            ++count;
+        }
         for (size_t i = 0; i < config->secret_env_count &&
              count < SNJ_SECRET_VALUES_MAX; ++i) {
             const char *value = getenv(config->secret_env[i]);

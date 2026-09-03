@@ -8,11 +8,13 @@ import select
 import signal
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 BINARY = os.path.abspath(sys.argv[1])
 WORKSPACE = os.path.abspath(sys.argv[2])
-STATE_ROOT = Path(os.environ["XDG_STATE_HOME"]) / "snajpagent" / "sessions"
+DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
+STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 
 
@@ -21,7 +23,7 @@ class Child:
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(WORKSPACE)
-            os.execv(BINARY, [BINARY, *args])
+            os.execv(BINARY, [BINARY, "-d", DOTDIR, *args])
         self.buf = bytearray()
 
     def read_once(self, timeout):
@@ -239,8 +241,8 @@ def test_preferences_and_verbosity():
     child = Child([])
     child.wait(PROMPT)
 
-    child.send(b"/effort high\r")
-    end = child.wait(b"effort for next turn: high")
+    child.send(b"/effort quantum\r")
+    end = child.wait(b"effort for next turn: quantum")
     child.wait(PROMPT, start=end)
 
     child.send(b"/verbose 4\r")
@@ -256,8 +258,10 @@ def test_preferences_and_verbosity():
     log = events(new_session(before))
     effort = one(log, "effort_changed")
     turn = one(log, "turn_started")
-    assert effort["data"] == {"old_effort": "default", "new_effort": "high"}
-    assert turn["data"]["config"]["effort"] == "high"
+    assert effort["data"] == {
+        "old_effort": "default", "new_effort": "quantum"
+    }
+    assert turn["data"]["config"]["effort"] == "quantum"
 
 
 def test_command_name_completion():
@@ -346,35 +350,226 @@ def test_command_name_completion():
     child.exit_cleanly(answer_end)
 
 
-def test_arbitrary_model_selection():
-    before = session_ids()
+def cached_timestamp(cache):
+    updated = cache["updated_at_ms"] / 1000
+    return datetime.fromtimestamp(updated, timezone.utc).strftime(
+        "cache updated: %Y-%m-%dT%H:%M:%SZ"
+    ).encode()
+
+
+def test_uncached_typed_model_selection():
+    cache_path = Path(DOTDIR) / "models.json"
+    codex_cache_path = Path(os.environ["HOME"]) / ".codex" / "models_cache.json"
+    cache_path.unlink(missing_ok=True)
+    codex_cache_path.unlink(missing_ok=True)
     child = Child([])
     child.wait(PROMPT)
 
+    # Listing without either cache stays offline and explains how to populate it.
     child.send(b"/model\r")
-    end = child.wait(b"model for next turn: gpt-5.5-2026-04-23")
+    end = child.wait(
+        b"model cache is empty; run Codex once or use /model cache while idle"
+    )
     child.wait(PROMPT, start=end)
+    assert not cache_path.exists()
 
+    # A typed model is trusted without discovery or any cache mutation.
     child.send(b"/model gpt-5.6-sol\r")
-    end = child.wait(b"model for next turn: gpt-5.6-sol")
+    end = child.wait(
+        b"model for next turn: default / gpt-5.6-sol / medium", start=end
+    )
+    child.wait(PROMPT, start=end)
+    assert not cache_path.exists()
+    child.send(b"/exit\r")
+    _, status = os.waitpid(child.pid, 0)
+    os.close(child.fd)
+    assert os.waitstatus_to_exitcode(status) == 0
+
+
+def test_model_cache_and_selection():
+    cache_path = Path(DOTDIR) / "models.json"
+    cache_path.unlink(missing_ok=True)
+    codex_home = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "codex-home"
+    codex_home.mkdir(mode=0o700)
+    codex_cache_path = codex_home / "models_cache.json"
+    codex_cache_path.write_text(json.dumps({
+        "client_version": "test",
+        "fetched_at": "2026-09-03T20:49:06Z",
+        "models": [
+            {
+                "slug": "gpt-5.6-sol",
+                "default_reasoning_level": "medium",
+                "supported_reasoning_levels": [
+                    {"effort": effort} for effort in
+                    ["low", "medium", "high", "xhigh", "max", "ultra"]
+                ],
+            },
+            {
+                "slug": "codex-local-only",
+                "default_reasoning_level": None,
+                "supported_reasoning_levels": [],
+            },
+        ],
+    }), encoding="utf-8")
+    previous_codex_home = os.environ.get("CODEX_HOME")
+    os.environ["CODEX_HOME"] = str(codex_home)
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
+    config.write_text(
+        "[agent]\n"
+        "model = uncached-start\n"
+        "reasoning_effort = low\n"
+        "[provider first]\n"
+        "api_key_env = FIRST_API_KEY\n"
+        "[provider second]\n"
+        "api_key_env = SECOND_API_KEY\n",
+        encoding="utf-8",
+    )
+    before = session_ids()
+    child = Child(["-c", str(config)])
+    child.wait(PROMPT)
+
+    # A first plain listing seeds from local Codex without provider access.
+    start = len(child.buf)
+    child.send(b"/model\r")
+    child.wait(b"selected: first / uncached-start / low", start=start)
+    child.wait(b"1. first / gpt-5.6-sol / low", start=start)
+    child.wait(b"6. first / gpt-5.6-sol / ultra", start=start)
+    child.wait(b"7. first / codex-local-only / low", start=start)
+    cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert [provider["name"] for provider in cache["providers"]] == ["first"]
+    assert [model["id"] for model in cache["providers"][0]["models"]] == [
+        "gpt-5.6-sol", "codex-local-only"
+    ]
+    assert cache_path.stat().st_mode & 0o777 == 0o600
+    stamp = cached_timestamp(cache)
+    end = child.wait(stamp + b"\r\n" + PROMPT, start=start)
+
+    # /model list is a cache-only alias and retains the stored timestamp.
+    original = cache_path.read_bytes()
+    original_inode = cache_path.stat().st_ino
+    child.send(b"/model list\r")
+    end = child.wait(stamp + b"\r\n" + PROMPT, start=end)
+    assert cache_path.read_bytes() == original
+    assert cache_path.stat().st_ino == original_inode
+
+    # Explicit refresh replaces the complete catalog and prints its timestamp.
+    child.send(b"/model cache\r")
+    child.wait(b"26. second / vendor/future-model / low", start=end)
+    refreshed = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert refreshed["updated_at_ms"] >= cache["updated_at_ms"]
+    assert [provider["name"] for provider in refreshed["providers"]] == [
+        "first", "second"
+    ]
+    assert cache_path.stat().st_ino != original_inode
+    refreshed_stamp = cached_timestamp(refreshed)
+    end = child.wait(refreshed_stamp + b"\r\n" + PROMPT, start=end)
+
+    # A bare cached model chooses the highest recognized advertised effort.
+    child.send(b"/model gpt-5.6-sol\r")
+    end = child.wait(
+        b"model for next turn: first / gpt-5.6-sol / ultra", start=end
+    )
     child.wait(PROMPT, start=end)
 
+    # Uncached identifiers and effort names pass through without local lookup.
+    child.send(b"/model definitely-new-model\r")
+    end = child.wait(
+        b"model for next turn: first / definitely-new-model / ultra", start=end
+    )
+    child.wait(PROMPT, start=end)
+    child.send(b"/model fresh-model / quantum\r")
+    end = child.wait(
+        b"model for next turn: first / fresh-model / quantum", start=end
+    )
+    child.wait(PROMPT, start=end)
+    child.send(b"/model default / literal-effort\r")
+    end = child.wait(
+        b"model for next turn: first / default / literal-effort", start=end
+    )
+    child.wait(PROMPT, start=end)
+    child.send(b"/model second / future-new / cosmic\r")
+    end = child.wait(
+        b"model for next turn: second / future-new / cosmic", start=end
+    )
+    child.wait(PROMPT, start=end)
+
+    # Both numeric spellings select the exact flattened cached variant.
+    child.send(b"/model 7\r")
+    end = child.wait(
+        b"model for next turn: first / gpt-5.6-terra / low", start=end
+    )
+    child.wait(PROMPT, start=end)
+    child.send(b"/model #26\r")
+    end = child.wait(
+        b"model for next turn: second / vendor/future-model / low", start=end
+    )
+    child.wait(PROMPT, start=end)
+    child.send(b"/model #18\r")
+    end = child.wait(
+        b"model for next turn: second / gpt-5.6-sol / max", start=end
+    )
+    child.wait(PROMPT, start=end)
     child.send(b"ping\r")
-    answer_end = child.wait(b"pong")
+    answer_end = child.wait(b"pong", start=end)
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
-    changed = one(log, "model_changed")
+    session_id = new_session(before)
+    log = events(session_id)
+    changes = [event for event in log
+               if event["type"] == "model_selection_changed"]
+    assert len(changes) == 8
+    assert changes[-1]["data"]["new_provider"] == "second"
+    assert changes[-1]["data"]["new_model"] == "gpt-5.6-sol"
+    assert changes[-1]["data"]["new_effort"] == "max"
     turn = one(log, "turn_started")
-    assert changed["data"] == {
-        "old_model": "gpt-5.5-2026-04-23",
-        "new_model": "gpt-5.6-sol",
-    }
+    assert turn["data"]["config"]["provider"] == "second"
     assert turn["data"]["config"]["model"] == "gpt-5.6-sol"
-    assert turn["data"]["config"]["effort"] == "medium"
+    assert turn["data"]["config"]["effort"] == "max"
+
+    # Provider/model/effort selection survives a process restart and resume.
+    resumed = Child(["-c", str(config), "-r", session_id])
+    resumed.wait(PROMPT)
+    resumed.send(b"/status\r")
+    status_end = resumed.wait(b"provider: second")
+    resumed.wait(b"model: gpt-5.6-sol", start=status_end)
+    status_end = resumed.wait(b"effort: max", start=status_end)
+    resumed.wait(PROMPT, start=status_end)
+    resumed.send(b"ping\r")
+    answer_end = resumed.wait(b"pong", start=status_end)
+    resumed.exit_cleanly(answer_end)
+    turns = [event for event in events(session_id)
+             if event["type"] == "turn_started"]
+    assert turns[-1]["data"]["config"]["provider"] == "second"
+    assert turns[-1]["data"]["config"]["model"] == "gpt-5.6-sol"
+    assert turns[-1]["data"]["config"]["effort"] == "max"
+
+    # Any provider failure leaves the previous complete cache untouched.
+    complete_cache = cache_path.read_bytes()
+    complete_inode = cache_path.stat().st_ino
+    os.environ["SNAJPAGENT_FIXTURE_MODEL_FAILURE"] = "second"
+    try:
+        failing = Child(["-c", str(config)])
+        failing.wait(PROMPT)
+        failing.send(b"/model cache\r")
+        failed_end = failing.wait(
+            b"cannot refresh provider second: fixture model discovery failed"
+        )
+        failing.wait(b"\r\n" + PROMPT, start=failed_end)
+        failing.send(b"/exit\r")
+        _, status = os.waitpid(failing.pid, 0)
+        os.close(failing.fd)
+        assert os.waitstatus_to_exitcode(status) == 0
+    finally:
+        os.environ.pop("SNAJPAGENT_FIXTURE_MODEL_FAILURE", None)
+    assert cache_path.read_bytes() == complete_cache
+    assert cache_path.stat().st_ino == complete_inode
+    if previous_codex_home is None:
+        os.environ.pop("CODEX_HOME")
+    else:
+        os.environ["CODEX_HOME"] = previous_codex_home
 
 def test_config_and_cli_model_passthrough():
-    config = Path(os.environ["XDG_CONFIG_HOME"]) / "model-passthrough.ini"
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "model-passthrough.ini"
     config.write_text(
         "[agent]\nmodel = openai/gpt-5.6\nreasoning_effort = default\n",
         encoding="utf-8",
@@ -383,8 +578,8 @@ def test_config_and_cli_model_passthrough():
     child = Child(["-c", str(config)])
     child.wait(PROMPT)
 
-    child.send(b"/model\r")
-    end = child.wait(b"model for next turn: openai/gpt-5.6")
+    child.send(b"/status\r")
+    end = child.wait(b"model: openai/gpt-5.6")
     child.wait(PROMPT, start=end)
 
     child.send(b"ping\r")
@@ -398,14 +593,14 @@ def test_config_and_cli_model_passthrough():
     assert turn["data"]["config"]["effort"] == "medium"
 
     resumed = Child([
-        "-c", str(config), "-m", "vendor/future-model", "-o", "low",
+        "-c", str(config), "-m", "vendor/future-model", "-o", "custom-effort",
         "-r", session_id
     ])
     resumed.wait(PROMPT)
     start = len(resumed.buf)
-    resumed.send(b"/model\r")
+    resumed.send(b"/status\r")
     end = resumed.wait(
-        b"model for next turn: vendor/future-model (staged once)", start=start
+        b"model: vendor/future-model (staged once)", start=start
     )
     resumed.wait(PROMPT, start=end)
     resumed.send(b"ping\r")
@@ -415,7 +610,7 @@ def test_config_and_cli_model_passthrough():
     resumed_turns = [event for event in events(session_id)
                      if event["type"] == "turn_started"]
     assert resumed_turns[-1]["data"]["config"]["model"] == "vendor/future-model"
-    assert resumed_turns[-1]["data"]["config"]["effort"] == "low"
+    assert resumed_turns[-1]["data"]["config"]["effort"] == "custom-effort"
 
 test_utf8_prompt_cursor_column()
 test_steering()
@@ -426,6 +621,7 @@ test_multiline_and_paste()
 test_resume_pauses_fifo()
 test_preferences_and_verbosity()
 test_command_name_completion()
-test_arbitrary_model_selection()
+test_uncached_typed_model_selection()
+test_model_cache_and_selection()
 test_config_and_cli_model_passthrough()
 print("pty_active: ok")

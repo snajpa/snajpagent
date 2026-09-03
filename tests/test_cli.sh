@@ -9,10 +9,12 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'cleanup; exit 143' HUP INT TERM
-mkdir -m 700 "$root/state" "$root/work"
-export XDG_STATE_HOME="$root/state"
-mkdir -m 700 "$root/config"
-export XDG_CONFIG_HOME="$root/config"
+mkdir -m 700 "$root/home" "$root/work" "$root/config"
+export HOME="$root/home"
+unset CODEX_HOME
+dotdir="$HOME/.snajpagent"
+export SNAJPAGENT_DOTDIR="$dotdir"
+export SNAJPAGENT_TEST_ROOT="$root"
 cd "$root/work"
 
 set +e
@@ -26,14 +28,16 @@ export LC_ALL=C.utf8
 out=$($bin -e -- ping 2>"$root/err")
 [ "$out" = pong ]
 [ ! -s "$root/err" ]
-id=$(find "$root/state/snajpagent/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+[ -d "$dotdir/sessions" ]
+[ -d "$dotdir/trash" ]
+id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 [ ${#id} -eq 32 ]
-[ "$(wc -l < "$root/state/snajpagent/sessions/$id/events.jsonl")" -eq 5 ]
+[ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 5 ]
 
 out=$($bin -e -r "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]
 [ ! -s "$root/err" ]
-[ "$(wc -l < "$root/state/snajpagent/sessions/$id/events.jsonl")" -eq 9 ]
+[ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 9 ]
 $bin -l >"$root/list" 2>"$root/err"
 grep -q "^$(printf %.8s "$id").*2" "$root/list"
 
@@ -59,7 +63,7 @@ crash_status=$?
 set -e
 [ "$crash_status" -eq 99 ]
 [ ! -s "$root/crash.out" ]
-crash_id=$(grep -rl '"text":"crash"' "$root/state/snajpagent/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+crash_id=$(grep -rl '"text":"crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
 $bin -e -r "$crash_id" -- ping >"$root/crash-recovered.out" 2>"$root/crash-recovered.err"
 [ "$(cat "$root/crash-recovered.out")" = pong ]
 grep -q 'recovered an interrupted turn' "$root/crash-recovered.err"
@@ -67,7 +71,7 @@ grep -q 'recovered an interrupted turn' "$root/crash-recovered.err"
 $bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err" && exit 1
 [ ! -s "$root/fail.out" ]
 grep -q 'fixture provider failed' "$root/fail.err"
-fail_id=$(grep -rl 'fixture provider failed' "$root/state/snajpagent/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+fail_id=$(grep -rl 'fixture provider failed' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
 $bin -e -r "$fail_id" -- ping >"$root/recovered.out" 2>"$root/recovered.err"
 [ "$(cat "$root/recovered.out")" = pong ]
 [ ! -s "$root/recovered.err" ]
@@ -76,7 +80,7 @@ mkdir -m 700 "$root/work2"
 out=$($bin -e -r -C "$root/work2" "$id" -- ping 2>"$root/relocate.err")
 [ "$out" = pong ]
 [ ! -s "$root/relocate.err" ]
-python3 - "$root/state/snajpagent/sessions/$id/events.jsonl" "$root/work2" <<'PY'
+python3 - "$dotdir/sessions/$id/events.jsonl" "$root/work2" <<'PY'
 import json
 import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
@@ -86,7 +90,7 @@ assert relocations[0]["data"]["new_workspace"] == sys.argv[2]
 turns = [event for event in events if event["type"] == "turn_started"]
 assert turns[-1]["data"]["workspace"] == sys.argv[2]
 PY
-(cd "$root/work2" && XDG_STATE_HOME="$root/state" $bin -l >"$root/list2" 2>"$root/list2.err")
+(cd "$root/work2" && $bin -l >"$root/list2" 2>"$root/list2.err")
 grep -q "^$(printf %.8s "$id")" "$root/list2"
 
 out=$($bin -e -- tool_only 2>"$root/tool.err")
@@ -98,8 +102,8 @@ for prompt in managed_wrong_handle managed_malformed; do
     [ "$out" = "managed process recovered" ]
     [ ! -s "$root/$prompt.err" ]
     managed_id=$(grep -rl "\"text\":\"$prompt\"" \
-        "$root/state/snajpagent/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-    python3 - "$root/state/snajpagent/sessions/$managed_id/events.jsonl" \
+        "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+    python3 - "$dotdir/sessions/$managed_id/events.jsonl" \
         "$prompt" <<'PY'
 import json
 import sys
@@ -141,8 +145,8 @@ for prompt in managed_final_violation managed_wrong_tool_violation managed_multi
     grep -q 'provider response violated unresolved managed process ordering' \
         "$root/$prompt.err"
     managed_id=$(grep -rl "\"text\":\"$prompt\"" \
-        "$root/state/snajpagent/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-    python3 - "$root/state/snajpagent/sessions/$managed_id/events.jsonl" <<'PY'
+        "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+    python3 - "$dotdir/sessions/$managed_id/events.jsonl" <<'PY'
 import json
 import sys
 
@@ -173,7 +177,7 @@ set -e
 [ "$status" -eq 4 ]
 [ ! -s "$root/conflict.out" ]
 grep -q 'terminal answer with tool calls' "$root/conflict.err"
-conflict_log=$(grep -rl 'protocol_conflict' "$root/state/snajpagent/sessions" | head -n 1)
+conflict_log=$(grep -rl 'protocol_conflict' "$dotdir/sessions" | head -n 1)
 grep -q '"status":"not_run"' "$conflict_log"
 ! grep -q '"type":"tool_started"' "$conflict_log"
 
@@ -182,11 +186,11 @@ $bin -e -- tool_crash >"$root/tool-crash.out" 2>"$root/tool-crash.err"
 status=$?
 set -e
 [ "$status" -eq 98 ]
-tool_crash_id=$(grep -rl '"text":"tool_crash"' "$root/state/snajpagent/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+tool_crash_id=$(grep -rl '"text":"tool_crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
 out=$($bin -e -r "$tool_crash_id" -- ping 2>"$root/tool-recovery.err")
 [ "$out" = pong ]
 grep -q 'unfinished tool work' "$root/tool-recovery.err"
-grep -q '"status":"outcome_unknown"' "$root/state/snajpagent/sessions/$tool_crash_id/events.jsonl"
+grep -q '"status":"outcome_unknown"' "$dotdir/sessions/$tool_crash_id/events.jsonl"
 
 
 # Configuration is strict, additive, and applied before any state mutation.
@@ -205,12 +209,28 @@ out=$($bin -c "$root/config.ini" -e -v -- ping 2>"$root/config.err")
 [ "$out" = pong ]
 grep -q '^turn › .* effort=high ' "$root/config.err"
 grep -q '^event › .* turn_completed synced$' "$root/config.err"
+
+# The long dotdir switch and its default config path select one coherent root.
+default_config_dotdir="$root/default-config-dotdir"
+mkdir -m 700 "$default_config_dotdir"
+cat >"$default_config_dotdir/config.ini" <<'EOF'
+[agent]
+model = config-default-model
+reasoning_effort = custom-default-effort
+EOF
+out=$($bin --dotdir="$default_config_dotdir" -e -vvvv -- ping 2>"$root/default-config.err")
+[ "$out" = pong ]
+grep -q 'model=config-default-model · effort=custom-default-effort' \
+    "$root/default-config.err"
+[ -d "$default_config_dotdir/sessions" ]
+[ -d "$default_config_dotdir/trash" ]
+
 cat >"$root/bad-config.ini" <<'EOF'
 [ui]
 verbosity = 1
 verbosity = 2
 EOF
-before=$(find "$root/state/snajpagent/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
+before=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
 set +e
 $bin -c "$root/bad-config.ini" -e -- ping >"$root/bad-config.out" 2>"$root/bad-config.err"
 status=$?
@@ -218,17 +238,17 @@ set -e
 [ "$status" -eq 2 ]
 [ ! -s "$root/bad-config.out" ]
 grep -q 'invalid configuration at line 3' "$root/bad-config.err"
-after=$(find "$root/state/snajpagent/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
+after=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
 [ "$before" -eq "$after" ]
 
 # Resume command-line settings are consumed by one admitted turn only.
 override_state="$root/override-state"
 mkdir -m 700 "$override_state"
-XDG_STATE_HOME="$override_state" $bin -e -- ping >/dev/null 2>"$root/override.err"
-override_id=$(find "$override_state/snajpagent/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-XDG_STATE_HOME="$override_state" $bin -e -o low -r "$override_id" -- ping >/dev/null 2>"$root/override.err"
-XDG_STATE_HOME="$override_state" $bin -e -r "$override_id" -- ping >/dev/null 2>"$root/override.err"
-python3 - "$override_state/snajpagent/sessions/$override_id/events.jsonl" <<'PY'
+$bin -d "$override_state" -e -- ping >/dev/null 2>"$root/override.err"
+override_id=$(find "$override_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+$bin -d "$override_state" -e -o low -r "$override_id" -- ping >/dev/null 2>"$root/override.err"
+$bin -d "$override_state" -e -r "$override_id" -- ping >/dev/null 2>"$root/override.err"
+python3 - "$override_state/sessions/$override_id/events.jsonl" <<'PY'
 import json
 import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
@@ -246,10 +266,10 @@ cat >"$root/auto-compact.ini" <<'EOF'
 [provider]
 auto_compact_input_tokens = 1
 EOF
-XDG_STATE_HOME="$auto_state" $bin -c "$root/auto-compact.ini" -e -vvvv -- ping >"$root/auto-compact.out" 2>"$root/auto-compact.err"
+$bin -d "$auto_state" -c "$root/auto-compact.ini" -e -vvvv -- ping >"$root/auto-compact.out" 2>"$root/auto-compact.err"
 [ "$(cat "$root/auto-compact.out")" = pong ]
-auto_id=$(find "$auto_state/snajpagent/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-python3 - "$auto_state/snajpagent/sessions/$auto_id/events.jsonl" <<'PY'
+auto_id=$(find "$auto_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+python3 - "$auto_state/sessions/$auto_id/events.jsonl" <<'PY'
 import json
 import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
@@ -272,10 +292,10 @@ cat >"$root/responses-compact.ini" <<'EOF'
 auto_compact_input_tokens = 1
 native_compaction = false
 EOF
-XDG_STATE_HOME="$responses_compact_state" $bin -c "$root/responses-compact.ini" -e -vvvv -- ping >"$root/responses-compact.out" 2>"$root/responses-compact.err"
+$bin -d "$responses_compact_state" -c "$root/responses-compact.ini" -e -vvvv -- ping >"$root/responses-compact.out" 2>"$root/responses-compact.err"
 [ "$(cat "$root/responses-compact.out")" = pong ]
-responses_compact_id=$(find "$responses_compact_state/snajpagent/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-python3 - "$responses_compact_state/snajpagent/sessions/$responses_compact_id/events.jsonl" <<'PY'
+responses_compact_id=$(find "$responses_compact_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+python3 - "$responses_compact_state/sessions/$responses_compact_id/events.jsonl" <<'PY'
 import json
 import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
@@ -291,12 +311,12 @@ PY
 # resumed turn's response, then post-turn compaction can compact that new turn.
 pre_state="$root/pre-response-compact-state"
 mkdir -m 700 "$pre_state"
-XDG_STATE_HOME="$pre_state" $bin -e -- ping >"$root/pre-first.out" 2>"$root/pre-first.err"
+$bin -d "$pre_state" -e -- ping >"$root/pre-first.out" 2>"$root/pre-first.err"
 [ "$(cat "$root/pre-first.out")" = pong ]
-pre_id=$(find "$pre_state/snajpagent/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-XDG_STATE_HOME="$pre_state" $bin -c "$root/auto-compact.ini" -e -r "$pre_id" -- ping >"$root/pre-second.out" 2>"$root/pre-second.err"
+pre_id=$(find "$pre_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+$bin -d "$pre_state" -c "$root/auto-compact.ini" -e -r "$pre_id" -- ping >"$root/pre-second.out" 2>"$root/pre-second.err"
 [ "$(cat "$root/pre-second.out")" = pong ]
-python3 - "$pre_state/snajpagent/sessions/$pre_id/events.jsonl" <<'PY'
+python3 - "$pre_state/sessions/$pre_id/events.jsonl" <<'PY'
 import json
 import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]

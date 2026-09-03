@@ -8,6 +8,7 @@
 #include "config.h"
 #include "credential.h"
 #include "instructions.h"
+#include "model_cache.h"
 #include "render.h"
 #include "store.h"
 #include "term.h"
@@ -33,10 +34,13 @@ struct app_state {
     struct snj_render render;
     struct snj_term term;
     struct snj_instruction_set turn_instructions;
+    struct snj_model_cache model_cache;
     const struct snj_cli *cli;
     const struct snj_config *config;
     const char *turn_model;
     const char *turn_effort;
+    const struct snj_provider_config *turn_provider;
+    const struct snj_provider_config *staged_provider;
     const char *staged_model;
     const char *staged_effort;
     const struct snj_response_graph *stream_graph;
@@ -70,6 +74,10 @@ json_t *snj_app_preference_changed_data(const char *old_key,
                                         const char *old_value,
                                         const char *new_key,
                                         const char *new_value);
+json_t *snj_app_model_selection_changed_data(
+    const char *old_provider, const char *new_provider,
+    const char *old_model, const char *new_model,
+    const char *old_effort, const char *new_effort);
 json_t *snj_app_turn_started_data(const struct app_state *app,
                                   const char *prompt,
                                   const char *turn_id,
@@ -168,6 +176,10 @@ int snj_app_provider_count(struct app_state *app, const json_t *count_request,
                            const struct snj_credential *credential,
                            uint64_t *input_tokens,
                            char *error, size_t error_size);
+int snj_app_provider_models(struct app_state *app,
+                            const struct snj_provider_config *provider,
+                            json_t **models,
+                            char *error, size_t error_size);
 int snj_app_provider_compact(struct app_state *app, const json_t *compact_request,
                              const struct snj_credential *credential,
                              json_t **output, uint64_t *output_tokens_bound,

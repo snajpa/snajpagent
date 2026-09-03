@@ -15,6 +15,24 @@ snj_secret_set_build(struct snj_secret_set *set,
     if (credential && credential->len)
         set->values[count++] = credential->value;
     if (config) {
+        for (size_t i = 0; i < config->provider_count &&
+             count < SNJ_SECRET_VALUES_MAX; ++i) {
+            const char *value = getenv(config->providers[i].api_key_env);
+            size_t len;
+            bool duplicate = false;
+            if (!value)
+                continue;
+            len = strnlen(value, SNJ_WIRE_SECRET_MAX + 1u);
+            if (!len || len > SNJ_WIRE_SECRET_MAX)
+                continue;
+            for (size_t j = 0; j < count; ++j)
+                if (strcmp(set->values[j], value) == 0) {
+                    duplicate = true;
+                    break;
+                }
+            if (!duplicate)
+                set->values[count++] = value;
+        }
         for (size_t i = 0; i < config->secret_env_count &&
              count < SNJ_SECRET_VALUES_MAX; ++i) {
             const char *value = getenv(config->secret_env[i]);

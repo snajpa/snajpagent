@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "cli.h"
 #include "base.h"
+#include "config.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -30,6 +31,7 @@ void
 snj_cli_free(struct snj_cli *cli)
 {
     free(cli->workspace);
+    free(cli->dotdir);
     free(cli->model);
     free(cli->effort);
     free(cli->config_path);
@@ -107,14 +109,17 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
             break;
         case 'h': cli->help = true; break;
         case 'V': cli->version = true; break;
-        case 'C': case 'm': case 'o': case 'c':
+        case 'C': case 'd': case 'm': case 'o': case 'c':
             arg = option_argument(argc, argv, index, p, flag == 'C' ? "-C" :
+                                  flag == 'd' ? "-d" :
                                   flag == 'm' ? "-m" :
                                   flag == 'o' ? "-o" : "-c", error, error_size);
             if (!arg)
                 return -1;
             p += strlen(p);
             if (flag == 'C' && set_once(&cli->workspace, arg, "-C", error, error_size) < 0)
+                return -1;
+            if (flag == 'd' && set_once(&cli->dotdir, arg, "-d", error, error_size) < 0)
                 return -1;
             if (flag == 'm' && set_once(&cli->model, arg, "-m", error, error_size) < 0)
                 return -1;
@@ -133,15 +138,11 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
 }
 
 static bool
-effort_valid(const char *s)
+bounded_preference(const char *value, size_t max)
 {
-    static const char *const values[] = {
-        "default", "none", "minimal", "low", "medium", "high", "xhigh"
-    };
-    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
-        if (strcmp(s, values[i]) == 0)
-            return true;
-    return false;
+    size_t len = strlen(value);
+    return len != 0u && len < max &&
+           snj_utf8_valid((const unsigned char *)value, len, true);
 }
 
 int
@@ -172,6 +173,22 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         } else if (strcmp(arg, "--no-color") == 0) {
             if (cli->no_color) { set_error(error, error_size, "duplicate --no-color option"); return -1; }
             cli->no_color = true;
+        } else if (strcmp(arg, "--dotdir") == 0 ||
+                   strncmp(arg, "--dotdir=", 9u) == 0) {
+            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
+            const char *value = option_argument(argc, argv, &i, attached,
+                                                "--dotdir", error, error_size);
+            if (!value || set_once(&cli->dotdir, value, "--dotdir",
+                                   error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--config") == 0 ||
+                   strncmp(arg, "--config=", 9u) == 0) {
+            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
+            const char *value = option_argument(argc, argv, &i, attached,
+                                                "--config", error, error_size);
+            if (!value || set_once(&cli->config_path, value, "--config",
+                                   error, error_size) < 0)
+                return -1;
         } else if (arg[1] == '-') {
             set_error(error, error_size, "unknown option %s", arg);
             return -1;
@@ -189,7 +206,8 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         return 0;
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->workspace ||
                       cli->model || cli->effort || cli->verbosity)) {
-        set_error(error, error_size, "-l accepts only -c, --all, and --no-color");
+        set_error(error, error_size,
+                  "-l accepts only -c, -d, --all, and --no-color");
         return -1;
     }
     if (cli->last && !cli->resume) {
@@ -200,8 +218,16 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         set_error(error, error_size, "--all requires -r or -l");
         return -1;
     }
-    if (cli->effort && !effort_valid(cli->effort)) {
-        set_error(error, error_size, "invalid reasoning effort");
+    if (cli->model && !bounded_preference(cli->model,
+                                          SNJ_CONFIG_MODEL_MAX)) {
+        set_error(error, error_size,
+                  "model exceeds the supported structural bounds");
+        return -1;
+    }
+    if (cli->effort && !bounded_preference(cli->effort,
+                                           SNJ_CONFIG_EFFORT_MAX)) {
+        set_error(error, error_size,
+                  "reasoning effort exceeds the supported structural bounds");
         return -1;
     }
     if (cli->resume) {
@@ -261,6 +287,8 @@ snj_cli_usage(int fd)
         "usage: snajpagent [OPTIONS] [--] [INITIAL PROMPT...]\n"
         "       snajpagent -r [OPTIONS] [SESSION_ID|--last] [-- FOLLOW-UP...]\n"
         "       snajpagent -e [OPTIONS] -- PROMPT...\n"
-        "       snajpagent -l [OPTIONS]\n";
+        "       snajpagent -l [OPTIONS]\n"
+        "  -d, --dotdir DIR   use DIR for config, sessions, and model cache\n"
+        "  -c, --config FILE  read FILE instead of DOTDIR/config.ini\n";
     (void)snj_write_full(fd, text, sizeof(text) - 1u);
 }
