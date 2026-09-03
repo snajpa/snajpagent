@@ -12,6 +12,7 @@
 #include <string.h>
 
 struct context_builder {
+    const struct snj_session *session;
     const char *model;
     const char *effort;
     const char *active_process_handle;
@@ -241,6 +242,35 @@ append_managed_gate(struct context_builder *builder)
         "One snajpagent-managed process is unresolved. The only permitted tool call is write_stdin with handle=%s. Do not produce a final answer, refusal, zero-call response, or any other tool call until write_stdin returns a non-running status.",
         builder->active_process_handle);
     return append_message(builder, "managed_process_gate", "developer", text);
+}
+
+static int
+append_goal_controller(struct context_builder *builder)
+{
+    struct snj_buf text;
+    int rc;
+
+    if (!builder->session ||
+        builder->session->goal_status != SNJ_GOAL_ACTIVE)
+        return 0;
+    snj_buf_init(&text, SNJ_MAX_GOAL_PROMPT + 1024u);
+    rc = snj_buf_printf(&text,
+        "Persistent goal %.8s is active (revision %llu, wording %s). "
+        "Keep working across turns until it is complete or genuinely blocked. "
+        "A normal final answer is a checkpoint and snajpagent will start another "
+        "goal turn. Use update_goal action=complete with text=null only when the "
+        "goal is finished. Use action=block with a specific reason only when no "
+        "dependency-ready work remains. You may use action=rewrite to improve the "
+        "wording only when it is unlocked.\n\nCurrent goal wording:\n%s",
+        builder->session->goal_id,
+        (unsigned long long)builder->session->goal_revision,
+        builder->session->goal_locked ? "locked" : "unlocked",
+        builder->session->goal_prompt);
+    if (rc == 0)
+        rc = append_message(builder, "goal_controller", "developer",
+                            (const char *)text.data);
+    snj_buf_free(&text);
+    return rc;
 }
 
 
@@ -549,7 +579,9 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     if (strcmp(type, "turn_started") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
-        if (!turn_id || !text || builder->active_turn) {
+        const char *kind = snj_json_string(data, "input_kind");
+        bool goal_turn = kind && strcmp(kind, "goal") == 0;
+        if (!turn_id || !text || !kind || builder->active_turn) {
             set_error(error, error_size, "invalid turn context transition");
             errno = EINVAL;
             return -1;
@@ -562,7 +594,9 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->active_turn = true;
         builder->active_semantic_start = json_array_size(builder->semantic_items);
         builder->active_request_start = json_array_size(builder->request_input);
-        return append_message(builder, "user_request", "user", text);
+        return append_message(builder,
+                              goal_turn ? "goal_continuation" : "user_request",
+                              goal_turn ? "developer" : "user", text);
     }
     if (strcmp(type, "steering_added") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -751,6 +785,33 @@ nullable_string_schema(void)
 }
 
 static json_t *
+goal_action_schema(void)
+{
+    static const char *const actions[] = {"rewrite", "complete", "block"};
+    json_t *schema = string_schema();
+    json_t *allowed = required_array(actions,
+                                     sizeof(actions) / sizeof(actions[0]));
+
+    if (!schema || !allowed)
+        goto fail;
+    {
+        int rc = json_set_new(schema, "enum", allowed);
+
+        allowed = NULL;
+        if (rc < 0)
+            goto fail;
+    }
+    return schema;
+
+fail:
+    if (schema)
+        json_decref(schema);
+    if (allowed)
+        json_decref(allowed);
+    return NULL;
+}
+
+static json_t *
 nullable_bool_schema(void)
 {
     return primitive_schema("boolean", true);
@@ -899,6 +960,26 @@ patch_tool_schema(void)
 }
 
 static json_t *
+goal_tool_schema(void)
+{
+    static const char *const required[] = {"action", "text"};
+    json_t *properties = json_object();
+
+    if (!properties ||
+        json_set_new(properties, "action", goal_action_schema()) < 0 ||
+        json_set_new(properties, "text", nullable_string_schema()) < 0) {
+        if (properties)
+            json_decref(properties);
+        return NULL;
+    }
+    return tool_schema("update_goal",
+        "Update the active persistent goal: rewrite uses new wording in text, "
+        "complete requires null text, and block uses a specific reason in text.",
+        properties,
+        required_array(required, sizeof(required) / sizeof(required[0])));
+}
+
+static json_t *
 web_search_tool_schema(void)
 {
     json_t *tool = json_object();
@@ -912,7 +993,7 @@ web_search_tool_schema(void)
 }
 
 static json_t *
-tool_schemas(const char *active_handle)
+tool_schemas(const char *active_handle, bool goal_active)
 {
     json_t *tools = json_array();
 
@@ -929,7 +1010,9 @@ tool_schemas(const char *active_handle)
     if (json_array_append_new(tools, exec_tool_schema()) < 0 ||
         json_array_append_new(tools, stdin_tool_schema(NULL)) < 0 ||
         json_array_append_new(tools, patch_tool_schema()) < 0 ||
-        json_array_append_new(tools, web_search_tool_schema()) < 0) {
+        json_array_append_new(tools, web_search_tool_schema()) < 0 ||
+        (goal_active &&
+         json_array_append_new(tools, goal_tool_schema()) < 0)) {
         json_decref(tools);
         return NULL;
     }
@@ -971,6 +1054,8 @@ static json_t *
 model_input_object(struct context_builder *builder)
 {
     json_t *input = json_object();
+    bool goal_active = builder->session &&
+                       builder->session->goal_status == SNJ_GOAL_ACTIVE;
 
     if (!input ||
         json_set_new(input, "capability_version",
@@ -985,7 +1070,8 @@ model_input_object(struct context_builder *builder)
         json_set_new(input, "profile_id", json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
         json_set_new(input, "tool_schema", json_integer(1)) < 0 ||
         json_set_new(input, "tools",
-                     tool_schemas(builder->active_process_handle)) < 0) {
+                     tool_schemas(builder->active_process_handle,
+                                  goal_active)) < 0) {
         if (input)
             json_decref(input);
         return NULL;
@@ -997,6 +1083,8 @@ static json_t *
 create_request_object(struct context_builder *builder)
 {
     json_t *request = json_object();
+    bool goal_active = builder->session &&
+                       builder->session->goal_status == SNJ_GOAL_ACTIVE;
 
     if (!request ||
         json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
@@ -1009,7 +1097,8 @@ create_request_object(struct context_builder *builder)
         json_set_new(request, "stream", json_true()) < 0 ||
         json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
         json_set_new(request, "tools",
-                     tool_schemas(builder->active_process_handle)) < 0 ||
+                     tool_schemas(builder->active_process_handle,
+                                  goal_active)) < 0 ||
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)
             json_decref(request);
@@ -1022,6 +1111,8 @@ static json_t *
 count_request_object(struct context_builder *builder)
 {
     json_t *request = json_object();
+    bool goal_active = builder->session &&
+                       builder->session->goal_status == SNJ_GOAL_ACTIVE;
 
     if (!request ||
         json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
@@ -1030,7 +1121,8 @@ count_request_object(struct context_builder *builder)
         json_set_new(request, "reasoning", reasoning_settings(builder->effort)) < 0 ||
         json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
         json_set_new(request, "tools",
-                     tool_schemas(builder->active_process_handle)) < 0 ||
+                     tool_schemas(builder->active_process_handle,
+                                  goal_active)) < 0 ||
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)
             json_decref(request);
@@ -1098,7 +1190,9 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     if (strcmp(type, "turn_started") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
-        if (!turn_id || !text || builder->active_turn) {
+        const char *kind = snj_json_string(data, "input_kind");
+        bool goal_turn = kind && strcmp(kind, "goal") == 0;
+        if (!turn_id || !text || !kind || builder->active_turn) {
             set_error(error, error_size, "invalid compact turn transition");
             errno = EINVAL;
             return -1;
@@ -1108,7 +1202,9 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->active_semantic_start = json_array_size(builder->semantic_items);
         builder->active_request_start = json_array_size(builder->request_input);
         before = json_array_size(builder->request_input);
-        if (append_message(builder, "user_request", "user", text) < 0)
+        if (append_message(builder,
+                           goal_turn ? "goal_continuation" : "user_request",
+                           goal_turn ? "developer" : "user", text) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         return 0;
@@ -1449,6 +1545,7 @@ snj_context_build(struct snj_session *session, const char *model,
 
     snj_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
+    builder.session = session;
     builder.model = model;
     builder.effort = effort;
     builder.active_process_handle = session && session->active_process_handle[0] ?
@@ -1479,8 +1576,9 @@ snj_context_build(struct snj_session *session, const char *model,
         errno = EINVAL;
         goto out;
     }
-    if (append_managed_gate(&builder) < 0) {
-        set_error(error, error_size, "cannot append managed process gate");
+    if (append_goal_controller(&builder) < 0 ||
+        append_managed_gate(&builder) < 0) {
+        set_error(error, error_size, "cannot append active controller state");
         goto out;
     }
     projection->model_input = model_input_object(&builder);

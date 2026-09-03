@@ -13,6 +13,12 @@ request. Streaming events update the terminal as they arrive. A final answer,
 refusal, or completed tool cycle closes the turn; it does not close the
 session.
 
+An active persistent goal schedules another ordinary turn after a normal final
+answer. Durable queued user turns take precedence over that continuation.
+Goal turns carry a distinct `input_kind` and a developer continuation marker,
+so they do not appear as new user messages. Refusal, failure, input closure,
+and session reopening pause the goal; resumption is explicit.
+
 Tool calls are handled one at a time. Before a tool runs, snajpagent records a
 durable start event. After the tool finishes, snajpagent records the bounded
 result and sends that result into the next provider cycle.
@@ -51,6 +57,12 @@ catalog, but typed model identifiers are not checked against the catalog.
 Hosted web search is exposed as a Responses request tool. There is no separate
 helper binary for web search.
 
+When a goal is active, context projection appends the current durable wording
+and controller rules after replay and compaction. It also exposes the strict
+`update_goal` function for rewrite, completion, or blocking. An unresolved
+managed process still narrows the tool surface to its exact `write_stdin`
+continuation until that process reaches a terminal result.
+
 ## Tools
 
 The first-party tool surface is deliberately small:
@@ -58,6 +70,7 @@ The first-party tool surface is deliberately small:
 - `exec_command` for shell commands, including yielded long-running processes.
 - `write_stdin` for continuing a yielded process.
 - `apply_patch` for strict file edits using the patch grammar.
+- `update_goal` while a persistent goal is active.
 
 Provider credentials and configured secret environment variables are removed
 from child tool environments or redacted before output is persisted or shown.

@@ -57,6 +57,38 @@ turn_started(const char *turn_id, unsigned int number, const char *text,
 }
 
 static json_t *
+goal_turn_started(const char *turn_id, unsigned int number,
+                  const char *workspace, json_t *instructions)
+{
+    json_t *data = turn_started(turn_id, number,
+                                SNJ_GOAL_CONTINUATION_TEXT,
+                                workspace, instructions);
+    assert(json_object_set_new(data, "input_kind",
+                               json_string("goal")) == 0);
+    return data;
+}
+
+static json_t *
+goal_started_data(const char *goal_id, const char *prompt)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
+    assert(snj_json_set_new(data, "prompt", json_string(prompt)) == 0);
+    return data;
+}
+
+static json_t *
+goal_lock_data(const char *goal_id, bool locked)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
+    assert(snj_json_set_new(data, "locked", json_boolean(locked)) == 0);
+    return data;
+}
+
+static json_t *
 response_started(const char *turn_id, const char *response_id,
                  const char *compact_id)
 {
@@ -414,6 +446,21 @@ tool_by_type(json_t *tools, const char *type)
 }
 
 static json_t *
+item_by_kind(json_t *items, const char *kind)
+{
+    size_t index;
+
+    assert(json_is_array(items));
+    for (index = 0u; index < json_array_size(items); ++index) {
+        json_t *item = json_array_get(items, index);
+        const char *item_kind = snj_json_string(item, "kind");
+        if (item_kind && strcmp(item_kind, kind) == 0)
+            return item;
+    }
+    return NULL;
+}
+
+static json_t *
 assert_strict_tool_contract(json_t *tool)
 {
     const char *key;
@@ -505,6 +552,21 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle)
         assert_schema_type(json_object_get(properties, "patch"), "string", 0);
         assert_schema_type(json_object_get(properties, "workdir"), "string", 0);
     }
+
+    tool = tool_by_name(tools, "update_goal");
+    if (tool) {
+        json_t *actions;
+        properties = assert_strict_tool_contract(tool);
+        assert_schema_type(json_object_get(properties, "action"), "string", 0);
+        actions = json_object_get(json_object_get(properties, "action"),
+                                  "enum");
+        assert(json_is_array(actions));
+        assert(json_array_size(actions) == 3u);
+        assert(array_has_string(actions, "rewrite"));
+        assert(array_has_string(actions, "complete"));
+        assert(array_has_string(actions, "block"));
+        assert_schema_type(json_object_get(properties, "text"), "string", 1);
+    }
 }
 
 int
@@ -522,6 +584,8 @@ main(void)
     const char *compact1 = "07070707070707070707070707070707";
     const char *call2 = "05050505050505050505050505050505";
     const char *handle = "06060606060606060606060606060606";
+    const char *goal = "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c";
+    const char *goal_turn = "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d";
     struct snj_store store;
     struct snj_session session;
     struct snj_context_projection projection;
@@ -775,6 +839,9 @@ main(void)
                               tool_finished_data(turn2, call2, running_result(handle)),
                               NULL, error, sizeof(error)) == 0);
     assert(strcmp(session.active_process_handle, handle) == 0);
+    assert(snj_session_commit(&session, "goal_started",
+                              goal_started_data(goal, "finish compacted work"),
+                              NULL, error, sizeof(error)) == 0);
     assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
                              empty_steering, &instructions, &projection,
                              error, sizeof(error)) == 0);
@@ -785,6 +852,7 @@ main(void)
         const char *gate_text;
         assert(json_is_array(tools));
         assert(json_array_size(tools) == 1);
+        assert(tool_by_name(tools, "update_goal") == NULL);
         assert(strcmp(snj_json_string(json_array_get(tools, 0), "name"),
                       "write_stdin") == 0);
         assert_context_tool_schemas(tools, handle);
@@ -803,6 +871,37 @@ main(void)
     assert(snj_session_commit(&session, "turn_interrupted",
                               turn_interrupted_data(turn2),
                               NULL, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "goal_lock_changed",
+                              goal_lock_data(goal, true), NULL,
+                              error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "turn_started",
+                              goal_turn_started(goal_turn, 3, workspace,
+                                  snj_instructions_metadata_json(&instructions)),
+                              NULL, error, sizeof(error)) == 0);
+    assert(session.goal_turn_count == 1u);
+    assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
+                             empty_steering, &instructions, &projection,
+                             error, sizeof(error)) == 0);
+    {
+        json_t *tools = json_object_get(projection.create_request, "tools");
+        json_t *semantic = json_object_get(projection.model_input, "items");
+        json_t *continuation = item_by_kind(semantic, "goal_continuation");
+        json_t *controller = item_by_kind(semantic, "goal_controller");
+
+        assert(json_array_size(tools) == 5u);
+        assert_context_tool_schemas(tools, NULL);
+        assert(tool_by_name(tools, "update_goal") != NULL);
+        assert(continuation != NULL);
+        assert(strcmp(snj_json_string(continuation, "role"), "developer") == 0);
+        assert(strcmp(snj_json_string(continuation, "text"),
+                      SNJ_GOAL_CONTINUATION_TEXT) == 0);
+        assert(controller != NULL);
+        assert(strstr(snj_json_string(controller, "text"),
+                      "finish compacted work") != NULL);
+        assert(strstr(snj_json_string(controller, "text"),
+                      "wording locked") != NULL);
+        assert(item_by_kind(semantic, "native_compact_output") != NULL);
+    }
 
     json_decref(empty_steering);
     snj_context_projection_free(&projection);

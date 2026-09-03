@@ -17,6 +17,18 @@
 #define SNJ_MAX_QUEUED_TEXT (256u * 1024u)
 #define SNJ_MAX_PENDING_TURNS 128u
 #define SNJ_MAX_PENDING_QUEUE_TEXT (16u * 1024u * 1024u)
+#define SNJ_MAX_GOAL_PROMPT (1024u * 1024u)
+#define SNJ_MAX_GOAL_BLOCKER (64u * 1024u)
+#define SNJ_GOAL_CONTINUATION_TEXT "Continue the active goal from its durable state."
+
+enum snj_goal_status {
+    SNJ_GOAL_NONE,
+    SNJ_GOAL_ACTIVE,
+    SNJ_GOAL_PAUSED,
+    SNJ_GOAL_BLOCKED,
+    SNJ_GOAL_COMPLETED,
+    SNJ_GOAL_CANCELLED
+};
 
 enum snj_response_terminal {
     SNJ_RESPONSE_TERMINAL_NONE,
@@ -65,6 +77,7 @@ struct snj_session {
     char active_compact_id[SNJ_ID_HEX_LEN + 1u];
     char active_compact_source_sha256[SNJ_SHA256_HEX_LEN + 1u];
     char default_provider[SNJ_CONFIG_PROVIDER_NAME_MAX + 1u];
+    char goal_id[SNJ_ID_HEX_LEN + 1u];
     char default_model[SNJ_MODEL_MAX_BYTES];
     char active_turn_model[SNJ_MODEL_MAX_BYTES];
     char default_effort[SNJ_EFFORT_MAX_BYTES];
@@ -74,6 +87,8 @@ struct snj_session {
     char *first_user;
     char *last_user;
     char *last_assistant;
+    char *goal_prompt;
+    char *goal_blocker;
     json_t *compact_output;
     int dir_fd;
     int log_fd;
@@ -85,6 +100,8 @@ struct snj_session {
     uint64_t tool_invocations;
     uint64_t compact_seq;
     uint64_t active_compact_source_seq;
+    uint64_t goal_revision;
+    uint64_t goal_turn_count;
     size_t pending_steering_bytes;
     size_t pending_queue_bytes;
     unsigned int active_cycle;
@@ -101,7 +118,11 @@ struct snj_session {
     bool response_open;
     bool response_complete;
     enum snj_response_terminal response_terminal;
+    enum snj_goal_status goal_status;
+    bool goal_locked;
 };
+
+const char *snj_goal_status_name(enum snj_goal_status status);
 
 void snj_store_init(struct snj_store *store);
 void snj_store_close(struct snj_store *store);

@@ -102,6 +102,7 @@ snj_config_init(struct snj_config *config)
     memcpy(config->reasoning_effort, "default", 8u);
     provider_init(&config->providers[0], "default");
     config->provider_count = 1u;
+    config->max_goal_prompt_bytes = 256u * 1024u;
     config->verbosity = 0u;
     config->color = SNJ_COLOR_AUTO;
     config->resume_history_turns = 2u;
@@ -359,6 +360,10 @@ parse_agent(struct parse_state *state, const char *key, const char *value)
         return copy_value(config->reasoning_effort,
                           sizeof(config->reasoning_effort), value);
     }
+    if (strcmp(key, "max_goal_prompt_bytes") == 0)
+        return claim_key(state, 2u) < 0 ? -1 :
+               parse_u32(value, 1u, 1024u * 1024u,
+                         &config->max_goal_prompt_bytes);
 invalid:
     errno = EINVAL;
     return -1;

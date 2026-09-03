@@ -32,6 +32,57 @@ delete_data(const char *prefix, const char *trash_name)
     return data;
 }
 
+static json_t *
+goal_started_data(const char *goal_id, const char *prompt)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
+    assert(snj_json_set_new(data, "prompt", json_string(prompt)) == 0);
+    return data;
+}
+
+static json_t *
+goal_actor_data(const char *goal_id, const char *actor)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "actor", json_string(actor)) == 0);
+    assert(snj_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
+    return data;
+}
+
+static json_t *
+goal_reworded_data(const char *goal_id, const char *actor,
+                   const char *prompt)
+{
+    json_t *data = goal_actor_data(goal_id, actor);
+    assert(snj_json_set_new(data, "prompt", json_string(prompt)) == 0);
+    return data;
+}
+
+static json_t *
+goal_lock_data(const char *goal_id, bool locked)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
+    assert(snj_json_set_new(data, "locked", json_boolean(locked)) == 0);
+    return data;
+}
+
+static json_t *
+goal_reason_data(const char *goal_id, const char *actor,
+                 const char *key, const char *reason)
+{
+    json_t *data = actor ? goal_actor_data(goal_id, actor) : json_object();
+    assert(data);
+    if (!actor)
+        assert(snj_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
+    assert(snj_json_set_new(data, key, json_string(reason)) == 0);
+    return data;
+}
+
 static size_t
 read_file(const char *path, char *buf, size_t size)
 {
@@ -120,6 +171,97 @@ main(void)
     assert(strcmp(session.workspace, workspace2) == 0);
     assert(strcmp(session.default_model, "gpt-5.5-2026-04-23-alt") == 0);
     assert(strcmp(session.default_effort, "high") == 0);
+
+    {
+        const char *goal1 = "11111111111111111111111111111111";
+        const char *goal2 = "22222222222222222222222222222222";
+
+        assert(snj_session_commit(&session, "goal_started",
+            goal_started_data(goal1, "finish the release"), NULL,
+            error, sizeof(error)) == 0);
+        assert(session.goal_status == SNJ_GOAL_ACTIVE);
+        assert(strcmp(session.goal_prompt, "finish the release") == 0);
+        assert(session.goal_revision == 1u);
+        assert(!session.goal_locked);
+        assert(snj_session_commit(&session, "goal_lock_changed",
+            goal_lock_data(goal1, true), NULL, error, sizeof(error)) == 0);
+        durable_end = session.log_end;
+        durable_seq = session.next_seq;
+        assert(snj_session_commit(&session, "goal_reworded",
+            goal_reworded_data(goal1, "model", "model rewrite"), NULL,
+            error, sizeof(error)) < 0);
+        assert(session.log_end == durable_end);
+        assert(session.next_seq == durable_seq);
+        assert(strcmp(session.goal_prompt, "finish the release") == 0);
+        assert(snj_session_commit(&session, "goal_reworded",
+            goal_reworded_data(goal1, "user", "finish and publish the release"),
+            NULL, error, sizeof(error)) == 0);
+        assert(session.goal_revision == 2u);
+        assert(snj_session_commit(&session, "goal_lock_changed",
+            goal_lock_data(goal1, false), NULL, error, sizeof(error)) == 0);
+        assert(!session.goal_locked);
+        assert(snj_session_commit(&session, "goal_lock_changed",
+            goal_lock_data(goal1, true), NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&session, "goal_paused",
+            goal_reason_data(goal1, NULL, "reason", "user"), NULL,
+            error, sizeof(error)) == 0);
+        assert(session.goal_status == SNJ_GOAL_PAUSED);
+        assert(snj_session_commit(&session, "goal_completed",
+            goal_actor_data(goal1, "model"), NULL,
+            error, sizeof(error)) < 0);
+        assert(snj_session_commit(&session, "goal_resumed",
+            goal_reason_data(goal1, NULL, "unused", "bad"), NULL,
+            error, sizeof(error)) < 0);
+        {
+            json_t *resume = json_object();
+            assert(resume);
+            assert(snj_json_set_new(resume, "goal_id",
+                                    json_string(goal1)) == 0);
+            assert(snj_session_commit(&session, "goal_resumed", resume, NULL,
+                                      error, sizeof(error)) == 0);
+        }
+        assert(snj_session_commit(&session, "goal_blocked",
+            goal_reason_data(goal1, "model", "reason",
+                             "dependency unavailable"), NULL,
+            error, sizeof(error)) == 0);
+        assert(session.goal_status == SNJ_GOAL_BLOCKED);
+        assert(strcmp(session.goal_blocker, "dependency unavailable") == 0);
+        {
+            json_t *resume = json_object();
+            assert(resume);
+            assert(snj_json_set_new(resume, "goal_id",
+                                    json_string(goal1)) == 0);
+            assert(snj_session_commit(&session, "goal_resumed", resume, NULL,
+                                      error, sizeof(error)) == 0);
+        }
+        assert(session.goal_blocker == NULL);
+        assert(snj_session_commit(&session, "goal_completed",
+            goal_actor_data(goal1, "model"), NULL,
+            error, sizeof(error)) == 0);
+        assert(session.goal_status == SNJ_GOAL_COMPLETED);
+        assert(snj_session_commit(&session, "goal_started",
+            goal_started_data(goal1, "duplicate id"), NULL,
+            error, sizeof(error)) < 0);
+        assert(snj_session_commit(&session, "goal_started",
+            goal_started_data(goal2, "next goal"), NULL,
+            error, sizeof(error)) == 0);
+        {
+            json_t *cancel = json_object();
+            assert(cancel);
+            assert(snj_json_set_new(cancel, "goal_id",
+                                    json_string(goal2)) == 0);
+            assert(snj_session_commit(&session, "goal_cancelled", cancel, NULL,
+                                      error, sizeof(error)) == 0);
+        }
+        snj_session_close(&session);
+        snj_session_init(&session);
+        assert(snj_session_open(&store, &session, id,
+                                error, sizeof(error)) == 0);
+        assert(session.goal_status == SNJ_GOAL_CANCELLED);
+        assert(strcmp(session.goal_id, goal2) == 0);
+        assert(strcmp(session.goal_prompt, "next goal") == 0);
+        assert(session.goal_turn_count == 0u);
+    }
 
     assert(snj_session_archive(&session, NULL, error, sizeof(error)) == 0);
     assert(session.archived);

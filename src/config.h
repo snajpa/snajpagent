@@ -38,6 +38,7 @@ struct snj_provider_config {
 struct snj_config {
     char model[SNJ_CONFIG_MODEL_MAX];
     char reasoning_effort[SNJ_CONFIG_EFFORT_MAX];
+    uint32_t max_goal_prompt_bytes;
     struct snj_provider_config providers[SNJ_CONFIG_PROVIDER_MAX];
     size_t provider_count;
     unsigned int verbosity;

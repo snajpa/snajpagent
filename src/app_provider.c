@@ -20,6 +20,7 @@ typedef int (*fixture_pump_fn)(void *opaque, unsigned int timeout_ms);
 #ifdef SNAJPAGENT_TEST_FIXTURE
 int snj_fixture_response(const char *prompt, const json_t *steering,
                          const char *workspace, unsigned int cycle,
+                         const char *goal_prompt, uint64_t goal_turn_count,
                          fixture_emit_fn emit, fixture_pump_fn pump, void *opaque,
                          struct snj_response_graph *graph,
                          char *error, size_t error_size);
@@ -201,6 +202,8 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
     if (retry_count)
         *retry_count = 0u;
     return snj_fixture_response(prompt, steering, app->session.workspace, cycle,
+                                app->session.goal_prompt,
+                                app->session.goal_turn_count,
                                 snj_app_stream_public, snj_app_active_input_pump,
                                 app, graph, error, error_size);
 #else
@@ -228,6 +231,8 @@ snj_app_tool_run(struct app_state *app, const struct snj_response_item *call,
                  const struct snj_credential *credential, json_t **result,
                  char *error, size_t error_size)
 {
+    if (call && call->name && strcmp(call->name, "update_goal") == 0)
+        return snj_app_goal_tool(app, call, result, error, error_size);
 #ifdef SNAJPAGENT_TEST_FIXTURE
     (void)app;
     (void)credential;

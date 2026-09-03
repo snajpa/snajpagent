@@ -134,6 +134,7 @@ static const struct snj_term_command commands[] = {
     {"/history", "recent terminal history"},
     {"/model [list|cache|#|SELECTOR]", "list, refresh, or select a model"},
     {"/effort [LEVEL]", "show or set next-turn effort"},
+    {"/goal [COMMAND|TEXT]", "show, start, or control a persistent goal"},
     {"/verbose [0..6]", "show or set this process's verbosity"},
     {"/queue [TEXT]", "list or queue future turns"},
     {"/unqueue ID|all", "cancel queued turns"},
@@ -200,9 +201,9 @@ consume_staged_settings(struct app_state *app)
     app->staged_effort = NULL;
     app->staged_provider = NULL;
 }
-static int
-commit_event(struct app_state *app, const char *type, json_t *data,
-             char *error, size_t error_size)
+int
+snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
+                     char *error, size_t error_size)
 {
     uint64_t seq;
     if (snj_session_commit(&app->session, type, data, &seq,
@@ -214,6 +215,7 @@ commit_event(struct app_state *app, const char *type, json_t *data,
     }
     return 0;
 }
+#define commit_event snj_app_commit_event
 static int
 render_queue(struct app_state *app)
 {
@@ -805,6 +807,8 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return change_effort(app, NULL, active);
     if (strncmp(line, "/effort ", 8u) == 0)
         return change_effort(app, line + 8u, active);
+    if (strcmp(line, "/goal") == 0 || strncmp(line, "/goal ", 6u) == 0)
+        return snj_app_goal_command(app, line, active);
     *handled = false;
     return 0;
 }
@@ -1192,7 +1196,7 @@ execute_calls(struct app_state *app, const char *turn_id,
 }
 static int
 run_turn(struct app_state *app, const char *prompt,
-         const struct snj_queued_turn *queued)
+         const struct snj_queued_turn *queued, bool goal_turn)
 {
     char turn_id[SNJ_ID_HEX_LEN + 1u];
     char response_id[SNJ_ID_HEX_LEN + 1u];
@@ -1206,6 +1210,7 @@ run_turn(struct app_state *app, const char *prompt,
     size_t prompt_max = queued ? SNJ_MAX_QUEUED_TEXT : SNJ_MAX_DIRECT_PROMPT;
     int result = 4;
     snj_credential_clear(&credential);
+    app->last_turn_refused = false;
     error[0] = '\0';
     if (!*prompt || strlen(prompt) > prompt_max ||
         !snj_utf8_valid((const unsigned char *)prompt, strlen(prompt), true)) {
@@ -1243,7 +1248,8 @@ run_turn(struct app_state *app, const char *prompt,
         goto out;
     }
     if (commit_event(app, "turn_started",
-                     snj_app_turn_started_data(app, turn_prompt, turn_id, queued),
+                     snj_app_turn_started_data(app, turn_prompt, turn_id, queued,
+                                               goal_turn),
                      error, sizeof(error)) < 0) {
         (void)app_error(app, error);
         result = 3;
@@ -1684,6 +1690,7 @@ run_turn(struct app_state *app, const char *prompt,
                 result = 3;
                 goto out;
             }
+            app->last_turn_refused = decision.outcome == SNJ_GRAPH_REFUSAL;
             if (app_runtimef(app,
                     "turn › %s completed · response=%s · item=%s",
                     turn_id, response_id, final->local_item_id) < 0) {
@@ -1795,6 +1802,38 @@ out:
     free(turn_prompt);
     return result;
 }
+
+static int
+run_tracked_turn(struct app_state *app, const char *prompt,
+                 const struct snj_queued_turn *queued, bool goal_turn)
+{
+    char error[256] = {0};
+    const char *reason = NULL;
+    const char *message = NULL;
+    int rc = run_turn(app, prompt, queued, goal_turn);
+
+    if (app->session.goal_status != SNJ_GOAL_ACTIVE)
+        return rc;
+    if (app->input_closed) {
+        reason = "input_closed";
+    } else if (app->last_turn_refused) {
+        reason = "refusal";
+        message = "goal paused after model refusal";
+    } else if (rc != 0) {
+        reason = "turn_stopped";
+        message = "goal paused after the turn stopped";
+    }
+    if (!reason)
+        return rc;
+    if (snj_app_goal_pause(app, reason, error, sizeof(error)) < 0) {
+        (void)app_error(app, error[0] ? error : "goal pause could not be saved");
+        return 3;
+    }
+    if (message && app_warning(app, message) < 0)
+        return 6;
+    return rc;
+}
+
 static char *
 resolve_workspace_path(const char *path, const char *label,
                        char *error, size_t error_size)
@@ -1897,7 +1936,7 @@ run_queued_chain(struct app_state *app)
 {
     while (app->queue_armed && app->session.pending_queue_count != 0u) {
         const struct snj_queued_turn *queued = &app->session.pending_queue[0];
-        int turn_rc = run_turn(app, queued->text, queued);
+        int turn_rc = run_tracked_turn(app, queued->text, queued, false);
         if (turn_rc != 0) {
             app->queue_armed = false;
             return turn_rc;
@@ -1907,6 +1946,36 @@ run_queued_chain(struct app_state *app)
         app->queue_armed = false;
     return 0;
 }
+
+static int
+run_ready_chains(struct app_state *app)
+{
+    for (;;) {
+        int turn_rc;
+
+        if (app->input_closed) {
+            app->queue_armed = false;
+            app->goal_armed = false;
+            return 0;
+        }
+        if (app->queue_armed && app->session.pending_queue_count != 0u) {
+            turn_rc = run_queued_chain(app);
+            if (turn_rc != 0)
+                return turn_rc;
+            continue;
+        }
+        if (app->goal_armed &&
+            app->session.goal_status == SNJ_GOAL_ACTIVE) {
+            turn_rc = run_tracked_turn(app, SNJ_GOAL_CONTINUATION_TEXT,
+                                      NULL, true);
+            if (turn_rc != 0)
+                return turn_rc;
+            continue;
+        }
+        return 0;
+    }
+}
+
 static int
 interactive_loop(struct app_state *app, const char *initial)
 {
@@ -1963,7 +2032,11 @@ interactive_loop(struct app_state *app, const char *initial)
                 if (local_rc < 0 || exit_now) { free(owned); return local_rc < 0 ? 3 : 0; }
             }
             if (handled) {
-                /* local view or preference command completed */
+                int chain_rc = run_ready_chains(app);
+                if (chain_rc == 3 || chain_rc == 6) {
+                    free(owned);
+                    return chain_rc;
+                }
             } else if (single_line && strcmp(prompt, "/exit") == 0) {
                 free(owned);
                 return 0;
@@ -1990,7 +2063,7 @@ interactive_loop(struct app_state *app, const char *initial)
                     (void)app_error(app, "future-turn queue is empty");
                 } else {
                     app->queue_armed = true;
-                    chain_rc = run_queued_chain(app);
+                    chain_rc = run_ready_chains(app);
                     if (chain_rc == 3 || chain_rc == 6) {
                         free(owned);
                         return chain_rc;
@@ -2003,13 +2076,14 @@ interactive_loop(struct app_state *app, const char *initial)
                                      prompt + 1 : prompt;
                 int turn_rc;
                 app->queue_armed = false;
-                turn_rc = run_turn(app, actual, NULL);
+                turn_rc = run_tracked_turn(app, actual, NULL, false);
                 if (turn_rc == 3 || turn_rc == 6) {
                     free(owned);
                     return turn_rc;
                 }
-                if (turn_rc == 0 && app->queue_armed) {
-                    int chain_rc = run_queued_chain(app);
+                if (turn_rc == 0 &&
+                    (app->queue_armed || app->goal_armed)) {
+                    int chain_rc = run_ready_chains(app);
                     if (chain_rc == 3 || chain_rc == 6) {
                         free(owned);
                         return chain_rc;
@@ -2038,6 +2112,7 @@ snj_app_run(const struct snj_cli *cli)
     const char *new_model = NULL;
     const char *new_effort;
     unsigned int effective_verbosity;
+    bool goal_paused_on_resume = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
     snj_config_init(&config);
@@ -2149,6 +2224,15 @@ snj_app_run(const struct snj_cli *cli)
             rc = 3;
             goto out;
         }
+        if (app.session.goal_status == SNJ_GOAL_ACTIVE) {
+            if (snj_app_goal_pause(&app, "session_resumed",
+                                   error, sizeof(error)) < 0) {
+                (void)snj_render_error(error);
+                rc = 3;
+                goto out;
+            }
+            goal_paused_on_resume = true;
+        }
         if (relocated_workspace &&
             strcmp(relocated_workspace, app.session.workspace) != 0 &&
             commit_event(&app, "workspace_changed",
@@ -2179,7 +2263,7 @@ snj_app_run(const struct snj_cli *cli)
         app.turn_provider = &config.providers[0];
     }
     if (cli->execute) {
-        rc = run_turn(&app, cli->prompt, NULL);
+        rc = run_tracked_turn(&app, cli->prompt, NULL, false);
         goto out;
     }
     if (snj_term_open(&app.term, error, sizeof(error)) < 0) {
@@ -2195,7 +2279,10 @@ snj_app_run(const struct snj_cli *cli)
          snj_render_history(&app.render, &app.session) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u &&
          app_warning(&app,
-             "queued future turns are paused; use /next to continue FIFO") < 0)) {
+             "queued future turns are paused; use /next to continue FIFO") < 0) ||
+        (goal_paused_on_resume &&
+         app_warning(&app,
+             "active goal was paused on resume; use /goal resume to continue") < 0)) {
         rc = 6;
         goto out;
     }

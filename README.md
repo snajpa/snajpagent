@@ -14,6 +14,9 @@ interactive path is usable.
 
 - Persistent multi-turn sessions stored as append-only local event logs.
 - Persistent model discovery across multiple ordered provider configurations.
+- Persistent `/goal` objectives with automatic multi-turn continuation,
+  pause/resume, user-controlled wording locks, and explicit completion or
+  blocking from the model.
 - `-r` resume support without a background daemon, tmux session, or socket.
 - Interactive mode, one-shot execution mode, and session listing.
 - OpenAI Responses streaming over libcurl, including hosted `web_search`.
@@ -93,6 +96,28 @@ containing `/` can be selected unambiguously by its displayed number.
 
 `/effort LEVEL` remains available to change only the reasoning effort.
 
+`/goal TEXT` starts a persistent objective. A normal model final answer is a
+checkpoint while that goal remains active, so snajpagent begins another goal
+turn automatically. Useful lifecycle commands are:
+
+```text
+/goal                         show status and wording
+/goal TEXT                    start or reword
+/goal set TEXT                use wording beginning with a command word
+/goal "TEXT"                  quote wording beginning with a command word
+/goal pause|resume            stop or restart automatic turns
+/goal lock|unlock             deny or allow model wording changes
+/goal complete|cancel         finish or stop from the user side
+/goal help                    show the complete grammar
+```
+
+The model can rewrite an unlocked active goal, mark it complete, or record a
+specific blocker through the strict `update_goal` tool. User wording changes
+remain allowed while locked. Queued user turns run in FIFO order before the
+next automatic goal turn, and refusal, turn failure, terminal input closure,
+or process restart pauses automatic continuation. See
+[`design/goals.md`](design/goals.md) for the complete lifecycle contract.
+
 ## Configuration
 
 By default snajpagent keeps all private application data under:
@@ -119,6 +144,7 @@ Minimal OpenAI configuration:
 [agent]
 model = gpt-5.5
 reasoning_effort = default
+max_goal_prompt_bytes = 262144
 
 [provider openai]
 base_url = https://api.openai.com
@@ -180,6 +206,12 @@ Other supported config sections are `[ui]` and `[tool]`; the parser in
 `src/config.c` is currently the source of truth for every accepted key.
 The complete cache and selector contract is recorded in
 `design/model-cache.md`.
+`max_goal_prompt_bytes` accepts 1 through 1,048,576 and measures UTF-8 bytes.
+
+## Design
+
+Design notes live in `design/`. Start with `design/architecture.md` for the
+runtime shape and durability model.
 
 ## License
 

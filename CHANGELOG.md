@@ -16,6 +16,16 @@
   validation. A first listing can seed a missing catalog from the local Codex
   model cache without contacting a provider.
 
+- Added durable persistent goals: `/goal TEXT` and quoted or explicit `set`
+  forms start or reword an objective; status/help, pause/resume, lock/unlock,
+  complete/cancel commands control it; `[agent] max_goal_prompt_bytes` bounds
+  new wording; and the strict active-only `update_goal` tool lets the model
+  rewrite unlocked wording, complete, or record a blocker. Normal finals now
+  continue the goal automatically after queued FIFO turns, while refusal,
+  failure, input closure, and session reopening pause it safely. Goal wording
+  is projected after replay/compaction and never weakens unresolved managed
+  process ordering.
+
 - Added `/?` as an exact interactive alias for `/help`; both render the same
   centralized command catalog and key reference.
 

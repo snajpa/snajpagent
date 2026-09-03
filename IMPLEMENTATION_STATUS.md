@@ -22,6 +22,7 @@ Approximate release work remaining: **1%**. Approximate completed work:
 | Bounded base, canonical JSON, event log, replay, and private storage | implemented for current scope | 0% |
 | Level-zero session loop, one-turn mode, passive resume, and fixture path | implemented with regression coverage | 0% |
 | Multi-cycle turn semantics, steering, queueing, and durable tool fences | implemented for current scope | 0% |
+| Persistent goals | durable `/goal` command lifecycle, configurable wording bound, model rewrite/complete/block tool, lock, automatic continuation, FIFO queue precedence, and failure/restart pausing are implemented with replay/context/PTY coverage | 0% |
 | Terminal composer and additive rendering levels 0..6 | live SIGWINCH resize/redraw, Ctrl-Z suspend/continue draft preservation, Linux PTY TERM/width evidence, and a Linux/macOS PTY capability surface are implemented and machine-checked; external advertised-platform evidence is tracked under final integrated qualification | 0% |
 | Responses HTTP/SSE/API-key path | ordered named providers, authenticated persistent model/reasoning discovery, durable provider/model/effort selection, transport, exact response input-token count path, durable standalone manual compaction, threshold-gated automatic compaction after completed turns, pre-response active-prefix automatic compaction, exact compact-window input/output count metadata, bounded create/count/compact retry handling, and durable provider-profile response-start captures are implemented; live provider evidence is tracked under integrated qualification | 0% |
 | Process tools | non-PTY `exec_command`, immediate PTY execution, yielded non-PTY and PTY managed handles, bounded `write_stdin`, PTY startup/refresh sizing, one-active-process replay tracking, strict managed-process continuation gating, durable `process_closed` records, owner-loss recovery closure, direct-child kill fallback, and process-family timeout/closure leak regressions are implemented; advertised-platform crash/restart evidence is tracked under final integrated qualification | 0% |
@@ -55,7 +56,10 @@ dynamic dependency-closure capture, current-host release-evidence bundle/check
 tooling with path-confined record validation, final matrix-evidence
 verification, an optional `make livecheck` harness for real-provider evidence,
 and the first production `apply_patch` implementation with bounded
-model-visible diff previews.
+model-visible diff previews. Persistent goals use the same ordinary provider,
+instruction, tool, compaction, and durability path rather than a separate
+worker; current goal wording is reinstalled after replay/compaction, while an
+unresolved managed process retains exclusive `write_stdin` control.
 
 ### Working
 
@@ -67,6 +71,11 @@ model-visible diff previews.
   accounting, credential admission/scrubbing, irreversible transport redaction,
   additive presentation through level six, disk-derived context projection,
   canonical create request/digests, and the bounded libcurl Responses transport;
+- `/goal` now persists one session objective, automatically continues after
+  checkpoint finals, runs queued user turns first, pauses on refusal/failure/
+  input closure/restart, lets the user pause, resume, reword, lock, unlock,
+  complete, or cancel, and gives the model one strict active-only tool for
+  rewrite, complete, or block transitions;
 - real-provider turns now build a separate canonical Responses input-token count
   request, call the provider count endpoint before `response_started`, and
   persist `count_method=exact`; fixture/local paths keep the conservative

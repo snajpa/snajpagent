@@ -57,11 +57,22 @@ struct app_state {
     bool steering_requested;
     bool interrupt_requested;
     bool queue_armed;
+    bool goal_armed;
+    bool last_turn_refused;
     bool input_closed;
     bool execute;
     uint64_t active_since_ms;
     bool activity_shown;
 };
+
+int snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
+                         char *error, size_t error_size);
+int snj_app_goal_command(struct app_state *app, const char *line, bool active);
+int snj_app_goal_tool(struct app_state *app,
+                      const struct snj_response_item *call,
+                      json_t **result, char *error, size_t error_size);
+int snj_app_goal_pause(struct app_state *app, const char *reason,
+                       char *error, size_t error_size);
 
 enum snj_managed_continuation {
     SNJ_MANAGED_CONTINUATION_NONE,
@@ -81,7 +92,8 @@ json_t *snj_app_model_selection_changed_data(
 json_t *snj_app_turn_started_data(const struct app_state *app,
                                   const char *prompt,
                                   const char *turn_id,
-                                  const struct snj_queued_turn *queued);
+                                  const struct snj_queued_turn *queued,
+                                  bool goal_turn);
 json_t *snj_app_steering_snapshot(const struct snj_session *session);
 int snj_app_request_digests(struct app_state *app, const char *prompt,
                             const json_t *steering, unsigned int cycle,

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
 #include "json.h"
+#include "store.h"
 #include "turn.h"
 
 #include <stdbool.h>
@@ -154,6 +155,30 @@ add_stdin_call(struct snj_response_graph *graph, unsigned int cycle,
                                        "write_stdin", args);
 }
 
+static int
+add_goal_call(struct snj_response_graph *graph, unsigned int cycle,
+              const char *action, const char *text)
+{
+    char item_id[128];
+    char call_id[128];
+    json_t *args = json_object();
+
+    if (!args ||
+        snj_json_set_new(args, "action", json_string(action)) < 0 ||
+        snj_json_set_new(args, "text",
+                         text ? json_string(text) : json_null()) < 0 ||
+        snprintf(item_id, sizeof(item_id),
+                 "item_fixture_goal_%u", cycle) < 0 ||
+        snprintf(call_id, sizeof(call_id),
+                 "call_fixture_goal_%u", cycle) < 0) {
+        if (args)
+            json_decref(args);
+        return -1;
+    }
+    return snj_response_graph_add_call(graph, item_id, call_id,
+                                       "update_goal", args);
+}
+
 static bool
 managed_prompt(const char *prompt)
 {
@@ -167,6 +192,7 @@ managed_prompt(const char *prompt)
 int
 snj_fixture_response(const char *prompt, const json_t *steering,
                      const char *workspace, unsigned int cycle,
+                     const char *goal_prompt, uint64_t goal_turn_count,
                      fixture_emit_fn emit, fixture_pump_fn pump, void *opaque,
                      struct snj_response_graph *graph,
                      char *error, size_t error_size)
@@ -180,6 +206,75 @@ snj_fixture_response(const char *prompt, const json_t *steering,
     }
     if (set_response_id(graph, cycle, "complete") < 0)
         goto allocation;
+    if (strcmp(prompt, SNJ_GOAL_CONTINUATION_TEXT) == 0) {
+        if (!goal_prompt)
+            goto allocation;
+        if (strcmp(goal_prompt, "failing goal") == 0 && cycle == 1u) {
+            if (error_size)
+                (void)snprintf(error, error_size,
+                               "fixture goal provider failed");
+            return -1;
+        }
+        if (strcmp(goal_prompt, "refusing goal") == 0)
+            return emit_public(graph, emit, opaque, SNJ_ITEM_REFUSAL,
+                               SNJ_PHASE_FINAL_ANSWER,
+                               "msg_fixture_goal_refusal",
+                               "I cannot continue this goal.", 0);
+        if (strcmp(goal_prompt, "slow goal") == 0 &&
+            goal_turn_count == 1u) {
+            if (cycle == 1u) {
+                if (emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                                SNJ_PHASE_COMMENTARY,
+                                "msg_fixture_goal_slow_commentary",
+                                "working on goal\n", 0) < 0)
+                    goto allocation;
+                for (unsigned int i = 0; i < 100u; ++i) {
+                    int pump_rc = pump(opaque, 20u);
+                    if (pump_rc != 0)
+                        return pump_rc;
+                }
+            }
+            return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                               SNJ_PHASE_FINAL_ANSWER,
+                               "msg_fixture_goal_checkpoint",
+                               "goal checkpoint", 0);
+        }
+        if (strcmp(goal_prompt, "automatic goal") == 0 &&
+            goal_turn_count == 1u)
+            return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                               SNJ_PHASE_FINAL_ANSWER,
+                               "msg_fixture_goal_checkpoint",
+                               "goal checkpoint", 0);
+        if (strcmp(goal_prompt, "rewrite goal") == 0 && cycle == 1u)
+            return add_goal_call(graph, cycle, "rewrite", "rewritten goal");
+        if (strcmp(goal_prompt, "rewritten goal") == 0 && cycle == 2u)
+            return add_goal_call(graph, cycle, "complete", NULL);
+        if (strcmp(goal_prompt, "tiny") == 0 && cycle == 1u)
+            return add_goal_call(graph, cycle, "rewrite", "too long");
+        if (strcmp(goal_prompt, "locked goal") == 0 && cycle == 1u) {
+            if (emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                            SNJ_PHASE_COMMENTARY,
+                            "msg_fixture_goal_lock_commentary",
+                            "preparing goal rewrite\n", 0) < 0)
+                goto allocation;
+            for (unsigned int i = 0; i < 50u; ++i) {
+                int pump_rc = pump(opaque, 20u);
+                if (pump_rc != 0)
+                    return pump_rc;
+            }
+            return add_goal_call(graph, cycle, "rewrite", "forbidden rewrite");
+        }
+        if (strcmp(goal_prompt, "blocked goal") == 0 && cycle == 1u)
+            return add_goal_call(graph, cycle, "block",
+                                 "fixture dependency is unavailable");
+        if (cycle == 1u ||
+            ((strcmp(goal_prompt, "locked goal") == 0 ||
+              strcmp(goal_prompt, "tiny") == 0) && cycle == 2u))
+            return add_goal_call(graph, cycle, "complete", NULL);
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_goal_done", "goal done", 0);
+    }
     if (managed_prompt(prompt)) {
         if (cycle == 1u)
             return add_call(graph, workspace, cycle, 0u,

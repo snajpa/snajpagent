@@ -61,6 +61,9 @@ class Child:
 
     def exit_cleanly(self, after):
         self.wait(b"\r" + PROMPT, start=after, timeout=8.0)
+        self.exit_now()
+
+    def exit_now(self):
         self.send(b"/exit\r")
         _, status = os.waitpid(self.pid, 0)
         os.close(self.fd)
@@ -235,6 +238,229 @@ def test_resume_pauses_fifo():
     assert one(log, "turn_interrupted")["data"]["origin"] == "recovery"
 
 
+def test_goal_quoted_reserved_wording():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal pause after release\r")
+    error_end = child.wait(b"reserved /goal command has extra text")
+    child.wait(PROMPT, start=error_end)
+    child.send(b'/goal "pause after release"\r')
+    answer_end = child.wait(b"goal done")
+    child.send(b"/goal\r")
+    status_end = child.wait(b": completed", start=answer_end)
+    wording_end = child.wait(b"pause after release", start=status_end)
+    child.wait(PROMPT, start=wording_end)
+    child.exit_now()
+
+    log = events(new_session(before))
+    started = one(log, "goal_started")
+    completed = one(log, "goal_completed")
+    turns = [item for item in log if item["type"] == "turn_started"]
+    assert started["data"]["prompt"] == "pause after release"
+    assert completed["data"]["actor"] == "model"
+    assert [item["data"]["input_kind"] for item in turns] == ["goal"]
+
+
+def test_goal_automatic_continuation():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal automatic goal\r")
+    checkpoint_end = child.wait(b"goal checkpoint")
+    answer_end = child.wait(b"goal done", start=checkpoint_end)
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    turns = [item for item in log if item["type"] == "turn_started"]
+    assert [item["data"]["input_kind"] for item in turns] == ["goal", "goal"]
+    assert all(item["data"]["text"] ==
+               "Continue the active goal from its durable state."
+               for item in turns)
+    assert one(log, "goal_completed")["data"]["actor"] == "model"
+
+
+def test_goal_configured_wording_limit():
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
+        "goal-limit.ini"
+    config.write_text(
+        "[agent]\nmax_goal_prompt_bytes = 4\n",
+        encoding="utf-8",
+    )
+    before = session_ids()
+    child = Child(["-c", str(config)])
+    child.wait(PROMPT)
+    child.send(b"/goal abcde\r")
+    error_end = child.wait(b"goal wording must contain 1..4 UTF-8 bytes")
+    child.wait(PROMPT, start=error_end)
+    child.send(b"/goal tiny\r")
+    answer_end = child.wait(b"goal done")
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    assert one(log, "goal_started")["data"]["prompt"] == "tiny"
+    assert len([item for item in log if item["type"] == "goal_reworded"]) == 0
+    assert one(log, "goal_completed")["data"]["actor"] == "model"
+
+
+def test_goal_model_rewrite_and_lock():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal rewrite goal\r")
+    child.wait(b"goal wording updated by model")
+    answer_end = child.wait(b"goal done")
+    child.exit_cleanly(answer_end)
+    log = events(new_session(before))
+    reworded = one(log, "goal_reworded")
+    assert reworded["data"] == {
+        "actor": "model",
+        "goal_id": one(log, "goal_started")["data"]["goal_id"],
+        "prompt": "rewritten goal",
+    }
+
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal locked goal\r")
+    child.wait(b"preparing goal rewrite")
+    child.send(b"/goal lock\r")
+    lock_end = child.wait(b"goal wording locked against model changes")
+    answer_end = child.wait(b"goal done", start=lock_end)
+    child.exit_cleanly(answer_end)
+    log = events(new_session(before))
+    assert len([item for item in log if item["type"] == "goal_reworded"]) == 0
+    assert one(log, "goal_lock_changed")["data"]["locked"] is True
+    assert one(log, "goal_completed")["data"]["actor"] == "model"
+
+
+def test_goal_pause_resume_and_queue_priority():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal slow goal\r")
+    child.wait(b"working on goal")
+    child.send(b"/goal pause\r")
+    pause_end = child.wait(b"goal paused at the current turn boundary")
+    checkpoint_end = child.wait(b"goal checkpoint", start=pause_end)
+    child.wait(PROMPT, start=checkpoint_end)
+    child.drain(0.2)
+    assert b"goal done" not in child.buf[checkpoint_end:]
+    child.send(b"/goal resume\r")
+    answer_end = child.wait(b"goal done", start=checkpoint_end)
+    child.exit_cleanly(answer_end)
+    log = events(new_session(before))
+    assert one(log, "goal_paused")["data"]["reason"] == "user"
+    one(log, "goal_resumed")
+    turns = [item for item in log if item["type"] == "turn_started"]
+    assert [item["data"]["input_kind"] for item in turns] == ["goal", "goal"]
+
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal slow goal\r")
+    child.wait(b"working on goal")
+    child.send(b"ping\t")
+    child.wait(b"next " + PROMPT + b"ping")
+    checkpoint_end = child.wait(b"goal checkpoint")
+    pong_end = child.wait(b"pong", start=checkpoint_end)
+    answer_end = child.wait(b"goal done", start=pong_end)
+    child.exit_cleanly(answer_end)
+    log = events(new_session(before))
+    turns = [item for item in log if item["type"] == "turn_started"]
+    assert [item["data"]["input_kind"] for item in turns] == [
+        "goal", "queued", "goal"
+    ]
+
+
+def test_goal_user_terminal_commands_and_unlock():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal slow goal\r")
+    child.wait(b"working on goal")
+    child.send(b"/goal lock\r")
+    child.wait(b"goal wording locked against model changes")
+    child.send(b"/goal unlock\r")
+    child.wait(b"goal wording unlocked for model changes")
+    child.send(b"/goal complete\r")
+    complete_end = child.wait(b"goal completed by user")
+    checkpoint_end = child.wait(b"goal checkpoint", start=complete_end)
+    child.wait(PROMPT, start=checkpoint_end)
+
+    child.send(b"/goal slow goal\r")
+    child.wait(b"working on goal", start=checkpoint_end)
+    child.send(b"/goal cancel\r")
+    cancel_end = child.wait(b"goal cancelled", start=checkpoint_end)
+    checkpoint_end = child.wait(b"goal checkpoint", start=cancel_end)
+    child.exit_cleanly(checkpoint_end)
+
+    log = events(new_session(before))
+    completed = one(log, "goal_completed")
+    assert completed["data"]["actor"] == "user"
+    one(log, "goal_cancelled")
+    locks = [item["data"]["locked"] for item in log
+             if item["type"] == "goal_lock_changed"]
+    assert locks == [True, False]
+
+
+def test_goal_refusal_failure_block_and_restart_pause():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal refusing goal\r")
+    child.wait(b"I cannot continue this goal")
+    paused_end = child.wait(b"goal paused after model refusal")
+    child.exit_cleanly(paused_end)
+    log = events(new_session(before))
+    assert one(log, "goal_paused")["data"]["reason"] == "refusal"
+
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal failing goal\r")
+    child.wait(b"fixture goal provider failed")
+    paused_end = child.wait(b"goal paused after the turn stopped")
+    child.exit_cleanly(paused_end)
+    log = events(new_session(before))
+    assert one(log, "goal_paused")["data"]["reason"] == "turn_stopped"
+    one(log, "turn_failed")
+
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal blocked goal\r")
+    child.wait(b"goal blocked by model")
+    answer_end = child.wait(b"goal done")
+    child.send(b"/goal\r")
+    status_end = child.wait(b": blocked", start=answer_end)
+    blocker_end = child.wait(b"fixture dependency is unavailable", start=status_end)
+    child.wait(PROMPT, start=blocker_end)
+    child.exit_now()
+    log = events(new_session(before))
+    assert one(log, "goal_blocked")["data"]["reason"] == \
+        "fixture dependency is unavailable"
+
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"/goal slow goal\r")
+    child.wait(b"working on goal")
+    session_id = new_session(before)
+    child.kill()
+    resumed = Child(["-r", session_id])
+    paused_end = resumed.wait(
+        b"active goal was paused on resume; use /goal resume to continue"
+    )
+    resumed.send(b"/goal\r")
+    status_end = resumed.wait(b": paused", start=paused_end)
+    resumed.wait(PROMPT, start=status_end)
+    resumed.exit_now()
+    log = events(session_id)
+    pauses = [item for item in log if item["type"] == "goal_paused"]
+    assert pauses[-1]["data"]["reason"] == "session_resumed"
+
+
 
 def test_preferences_and_verbosity():
     before = session_ids()
@@ -289,6 +515,7 @@ def test_command_name_completion():
         (b"/hi", b"/history"),
         (b"/mo", b"/model"),
         (b"/ef", b"/effort"),
+        (b"/go", b"/goal"),
         (b"/v", b"/verbose"),
         (b"/q", b"/queue"),
         (b"/u", b"/unqueue"),
@@ -584,6 +811,13 @@ test_armed_fifo()
 test_interrupt()
 test_multiline_and_paste()
 test_resume_pauses_fifo()
+test_goal_quoted_reserved_wording()
+test_goal_automatic_continuation()
+test_goal_configured_wording_limit()
+test_goal_model_rewrite_and_lock()
+test_goal_pause_resume_and_queue_priority()
+test_goal_user_terminal_commands_and_unlock()
+test_goal_refusal_failure_block_and_restart_pause()
 test_preferences_and_verbosity()
 test_command_name_completion()
 test_model_cache_and_selection()

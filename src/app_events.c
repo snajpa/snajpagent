@@ -74,7 +74,8 @@ turn_config(const struct app_state *app)
 
 json_t *
 snj_app_turn_started_data(const struct app_state *app, const char *prompt,
-                  const char *turn_id, const struct snj_queued_turn *queued)
+                  const char *turn_id, const struct snj_queued_turn *queued,
+                  bool goal_turn)
 {
     json_t *data = json_object();
     json_t *instructions = snj_instructions_metadata_json(&app->turn_instructions);
@@ -82,7 +83,8 @@ snj_app_turn_started_data(const struct app_state *app, const char *prompt,
     if (!data || !instructions ||
         snj_json_set_new(data, "config", turn_config(app)) < 0 ||
         snj_json_set_new(data, "input_kind",
-                         json_string(queued ? "queued" : "direct")) < 0 ||
+                         json_string(goal_turn ? "goal" :
+                                     queued ? "queued" : "direct")) < 0 ||
         snj_json_set_new(data, "instructions", instructions) < 0)
         goto fail;
     instructions = NULL;
