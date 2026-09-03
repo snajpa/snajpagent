@@ -110,6 +110,26 @@ append_host_header(struct snj_buf *out, const char *base_url)
 }
 
 static int
+render_config_header(struct provider_ctx *ctx, struct snj_buf *redacted,
+                     const char *name, const char *value)
+{
+    struct snj_buf line;
+    int rc = 0;
+
+    if (!value[0])
+        return 0;
+    snj_buf_init(&line, SNJ_WIRE_HEADER_MAX);
+    if (snj_buf_printf(&line, "%s: %s", name, value) < 0 ||
+        snj_wire_header_redact(line.data, line.len, &ctx->secrets.wire,
+                               redacted) < 0 ||
+        snj_render_transport(ctx->render, '>', (const char *)redacted->data,
+                             redacted->len) < 0)
+        rc = -1;
+    snj_buf_free(&line);
+    return rc;
+}
+
+static int
 render_request_headers(struct provider_ctx *ctx, const char *request_line,
                        const char *accept)
 {
@@ -139,6 +159,15 @@ render_request_headers(struct provider_ctx *ctx, const char *request_line,
                                23u, &ctx->secrets.wire, &redacted) < 0 ||
         snj_render_transport(ctx->render, '>', (const char *)redacted.data,
                              redacted.len) < 0)
+        rc = -1;
+    snj_buf_reset(&redacted);
+    if (rc == 0 &&
+        render_config_header(ctx, &redacted, "HTTP-Referer",
+                             ctx->provider->openrouter_referer) < 0)
+        rc = -1;
+    if (rc == 0 &&
+        render_config_header(ctx, &redacted, "X-OpenRouter-Title",
+                             ctx->provider->openrouter_title) < 0)
         rc = -1;
     snj_buf_free(&redacted);
     snj_buf_free(&host);
@@ -303,6 +332,8 @@ provider_endpoint_url(const struct snj_provider_config *provider,
                       char *buffer, size_t buffer_size, const char **url,
                       char *error, size_t error_size)
 {
+    const char *append_path;
+    size_t base_len;
     int written;
 
     if (!provider || !path || !url || !buffer || !buffer_size) {
@@ -310,8 +341,14 @@ provider_endpoint_url(const struct snj_provider_config *provider,
         errno = EINVAL;
         return -1;
     }
+    append_path = path;
+    base_len = strlen(provider->base_url);
+    if (base_len >= 3u &&
+        strcmp(provider->base_url + base_len - 3u, "/v1") == 0 &&
+        strncmp(path, "/v1/", 4u) == 0)
+        append_path = path + 3u;
     written = snprintf(buffer, buffer_size, "%s%s",
-                       provider->base_url, path);
+                       provider->base_url, append_path);
     if (written <= 0 || (size_t)written >= buffer_size) {
         set_error(error, error_size, "provider endpoint is too long");
         errno = ENAMETOOLONG;
@@ -323,7 +360,12 @@ provider_endpoint_url(const struct snj_provider_config *provider,
         const char *base = getenv("SNAJPAGENT_TEST_OPENAI_BASE");
         if (!base || !*base)
             return 0;
-        written = snprintf(buffer, buffer_size, "%s%s", base, path);
+        append_path = path;
+        base_len = strlen(base);
+        if (base_len >= 3u && strcmp(base + base_len - 3u, "/v1") == 0 &&
+            strncmp(path, "/v1/", 4u) == 0)
+            append_path = path + 3u;
+        written = snprintf(buffer, buffer_size, "%s%s", base, append_path);
         if (written <= 0 || (size_t)written >= buffer_size) {
             set_error(error, error_size, "test provider endpoint is too long");
             errno = ENAMETOOLONG;
@@ -362,6 +404,36 @@ append_authorization(struct curl_slist **headers,
         rc = append_header(headers, (const char *)line.data);
     snj_buf_free(&line);
     return rc;
+}
+
+static int
+append_named_header(struct curl_slist **headers, const char *name,
+                    const char *value)
+{
+    struct snj_buf line;
+    int rc;
+
+    if (!value[0])
+        return 0;
+    snj_buf_init(&line, SNJ_WIRE_HEADER_MAX);
+    rc = snj_buf_printf(&line, "%s: %s", name, value);
+    if (rc == 0)
+        rc = append_header(headers, (const char *)line.data);
+    snj_buf_free(&line);
+    return rc;
+}
+
+static int
+append_provider_headers(struct curl_slist **headers,
+                        const struct snj_provider_config *provider,
+                        const struct snj_credential *credential)
+{
+    return append_authorization(headers, credential) == 0 &&
+           append_named_header(headers, "HTTP-Referer",
+                               provider->openrouter_referer) == 0 &&
+           append_named_header(headers, "X-OpenRouter-Title",
+                               provider->openrouter_title) == 0 ?
+           0 : -1;
 }
 
 static unsigned int
@@ -935,7 +1007,7 @@ snj_provider_models_list(const struct snj_config *config,
         goto out_global;
     }
     if (append_header(&headers, "Accept: application/json") < 0 ||
-        append_authorization(&headers, credential) < 0) {
+        append_provider_headers(&headers, provider, credential) < 0) {
         set_error(error, error_size, "provider headers could not be allocated");
         goto out_global;
     }
@@ -1060,7 +1132,7 @@ snj_provider_responses_count(const json_t *count_request,
     }
     if (append_header(&headers, "Accept: application/json") < 0 ||
         append_header(&headers, "Content-Type: application/json") < 0 ||
-        append_authorization(&headers, credential) < 0) {
+        append_provider_headers(&headers, provider, credential) < 0) {
         set_error(error, error_size, "provider headers could not be allocated");
         goto out_global;
     }
@@ -1208,7 +1280,7 @@ snj_provider_responses_compact(const json_t *compact_request,
     }
     if (append_header(&headers, "Accept: application/json") < 0 ||
         append_header(&headers, "Content-Type: application/json") < 0 ||
-        append_authorization(&headers, credential) < 0) {
+        append_provider_headers(&headers, provider, credential) < 0) {
         set_error(error, error_size, "provider headers could not be allocated");
         goto out_global;
     }
@@ -1354,7 +1426,7 @@ snj_provider_responses_create(const json_t *create_request,
     }
     if (append_header(&headers, "Accept: text/event-stream") < 0 ||
         append_header(&headers, "Content-Type: application/json") < 0 ||
-        append_authorization(&headers, credential) < 0) {
+        append_provider_headers(&headers, provider, credential) < 0) {
         set_error(error, error_size, "provider headers could not be allocated");
         goto out_global;
     }

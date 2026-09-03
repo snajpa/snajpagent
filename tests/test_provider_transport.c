@@ -144,6 +144,12 @@ read_request(int fd, struct http_request *request)
         server_fail("unexpected request line");
     if (!header_contains(request->headers, "Authorization: Bearer transport-secret"))
         server_fail("authorization header missing or unredacted differently");
+    if (!header_contains(request->headers,
+                         "HTTP-Referer: https://github.com/snajpa/snajpagent"))
+        server_fail("OpenRouter referer header missing");
+    if (!header_contains(request->headers,
+                         "X-OpenRouter-Title: snajpagent"))
+        server_fail("OpenRouter title header missing");
     cl = content_length(request->headers);
     if (strcmp(request->method, "GET") == 0 && cl < 0)
         cl = 0;
@@ -356,7 +362,13 @@ test_local_provider_transport(void)
     config.providers[1].request_timeout_ms = 3000u;
     assert(snprintf(config.providers[1].base_url,
                     sizeof(config.providers[1].base_url),
-                    "%s", endpoint) > 0);
+                    "%s/v1", endpoint) > 0);
+    assert(snprintf(config.providers[1].openrouter_referer,
+                    sizeof(config.providers[1].openrouter_referer),
+                    "%s", "https://github.com/snajpa/snajpagent") > 0);
+    assert(snprintf(config.providers[1].openrouter_title,
+                    sizeof(config.providers[1].openrouter_title),
+                    "%s", "snajpagent") > 0);
     credential_set(&credential, "transport-secret");
 
     assert(snj_provider_models_list(&config, &config.providers[1],
@@ -437,11 +449,17 @@ test_native_model_list(void)
     char error[256] = {0};
 
     start_server(&server, true, false);
-    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
+    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
                     (unsigned int)server.port) > 0);
     snj_config_init(&config);
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+    assert(snprintf(config.providers[0].openrouter_referer,
+                    sizeof(config.providers[0].openrouter_referer), "%s",
+                    "https://github.com/snajpa/snajpagent") > 0);
+    assert(snprintf(config.providers[0].openrouter_title,
+                    sizeof(config.providers[0].openrouter_title), "%s",
+                    "snajpagent") > 0);
     config.providers[0].connect_timeout_ms = 1000u;
     config.providers[0].idle_timeout_ms = 1000u;
     config.providers[0].request_timeout_ms = 3000u;

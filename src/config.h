@@ -31,6 +31,8 @@ struct snj_provider_config {
     bool native_compaction;
     char base_url[SNJ_CONFIG_URL_MAX];
     char api_key_env[SNJ_CONFIG_ENV_NAME_MAX + 1u];
+    char openrouter_referer[SNJ_CONFIG_URL_MAX];
+    char openrouter_title[SNJ_CONFIG_MODEL_MAX];
 };
 
 struct snj_config {

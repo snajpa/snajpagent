@@ -61,6 +61,24 @@ copy_value(char *dst, size_t size, const char *value)
     return 0;
 }
 
+static int
+copy_header_value(char *dst, size_t size, const char *value)
+{
+    size_t len = strlen(value);
+    if (!len || len >= size)
+        goto invalid;
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)value[i];
+        if (c < 0x20u || c > 0x7eu)
+            goto invalid;
+    }
+    memcpy(dst, value, len + 1u);
+    return 0;
+invalid:
+    errno = EINVAL;
+    return -1;
+}
+
 static void
 provider_init(struct snj_provider_config *provider, const char *name)
 {
@@ -382,6 +400,16 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "native_compaction") == 0)
         return claim_key(state, 7u) < 0 ? -1 :
                parse_bool(value, &provider->native_compaction);
+    if (strcmp(key, "openrouter_referer") == 0)
+        return claim_key(state, 8u) < 0 ? -1 :
+               copy_header_value(provider->openrouter_referer,
+                                 sizeof(provider->openrouter_referer),
+                                 value);
+    if (strcmp(key, "openrouter_title") == 0)
+        return claim_key(state, 9u) < 0 ? -1 :
+               copy_header_value(provider->openrouter_title,
+                                 sizeof(provider->openrouter_title),
+                                 value);
 invalid:
     errno = EINVAL;
     return -1;

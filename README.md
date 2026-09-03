@@ -142,6 +142,23 @@ exact_token_count = false
 native_compaction = false
 ```
 
+OpenRouter uses the same OpenAI-compatible Responses path. Its `/api/v1`
+base URL is accepted directly:
+
+```ini
+[agent]
+model = openai/gpt-5.5
+reasoning_effort = default
+
+[provider]
+base_url = https://openrouter.ai/api/v1
+api_key_env = OPENROUTER_API_KEY
+openrouter_referer = https://github.com/snajpa/snajpagent
+openrouter_title = snajpagent
+exact_token_count = false
+native_compaction = false
+```
+
 Local codex-lb proxy configuration:
 
 ```ini

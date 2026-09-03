@@ -45,6 +45,8 @@ main(void)
         "auto_compact_input_tokens = 12345\n"
         "base_url = http://127.0.0.1:2455/backend-api/codex/\n"
         "api_key_env = CODEX_LB_API_KEY\n"
+        "openrouter_referer = https://github.com/snajpa/snajpagent\n"
+        "openrouter_title = snajpagent\n"
         "exact_token_count = false\n"
         "native_compaction = 0\n"
         "\n[provider backup]\n"
@@ -86,6 +88,8 @@ main(void)
     assert(config.providers[0].native_compaction);
     assert(strcmp(config.providers[0].base_url, "https://api.openai.com") == 0);
     assert(strcmp(config.providers[0].api_key_env, "OPENAI_API_KEY") == 0);
+    assert(config.providers[0].openrouter_referer[0] == '\0');
+    assert(config.providers[0].openrouter_title[0] == '\0');
     assert(config.secret_env_count == 0u);
     shell = realpath("/bin/sh", NULL);
     assert(shell);
@@ -109,6 +113,9 @@ main(void)
     assert(strcmp(config.providers[0].base_url,
                   "http://127.0.0.1:2455/backend-api/codex") == 0);
     assert(strcmp(config.providers[0].api_key_env, "CODEX_LB_API_KEY") == 0);
+    assert(strcmp(config.providers[0].openrouter_referer,
+                  "https://github.com/snajpa/snajpagent") == 0);
+    assert(strcmp(config.providers[0].openrouter_title, "snajpagent") == 0);
     assert(!config.providers[0].exact_token_count);
     assert(!config.providers[0].native_compaction);
     assert(strcmp(config.providers[1].name, "backup") == 0);
@@ -176,10 +183,22 @@ main(void)
     write_bytes(path, "[provider]\nnative_compaction=yes\n",
                 sizeof("[provider]\nnative_compaction=yes\n") - 1u);
     expect_invalid(path);
+    write_bytes(path, "[provider]\nopenrouter_title=\n",
+                sizeof("[provider]\nopenrouter_title=\n") - 1u);
+    expect_invalid(path);
     write_bytes(path,
                 "[provider duplicate]\n[provider duplicate]\n",
                 sizeof("[provider duplicate]\n[provider duplicate]\n") - 1u);
     expect_invalid(path);
+    {
+        static const unsigned char bad_header[] = {
+            '[', 'p', 'r', 'o', 'v', 'i', 'd', 'e', 'r', ']', '\n',
+            'o', 'p', 'e', 'n', 'r', 'o', 'u', 't', 'e', 'r', '_',
+            't', 'i', 't', 'l', 'e', '=', 0x7f, '\n'
+        };
+        write_bytes(path, bad_header, sizeof(bad_header));
+        expect_invalid(path);
+    }
     {
         static const unsigned char with_nul[] = {
             '[', 'u', 'i', ']', '\n', 'v', 'e', 'r', 'b', 'o', 's', 'i', 't', 'y',
