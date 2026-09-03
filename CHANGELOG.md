@@ -4,6 +4,9 @@
 
 ## 0.9.0-wip
 
+- Added `/?` as an exact interactive alias for `/help`; both render the same
+  centralized command catalog and key reference.
+
 - Added Tab completion for interactive slash-command names from the same
   catalog rendered by `/help`, while retaining indentation and active-turn
   queueing for input outside a command-name token.

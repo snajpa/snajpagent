@@ -130,6 +130,7 @@ static const char *const reasoning_modes[] = {
 };
 static const struct snj_term_command commands[] = {
     {"/help", "commands and keys"},
+    {"/?", "commands and keys (alias for /help)"},
     {"/status", "session and next-turn settings"},
     {"/history", "recent terminal history"},
     {"/model [MODEL]", "show or set next-turn model"},
@@ -452,7 +453,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
                       bool *handled)
 {
     *handled = true;
-    if (strcmp(line, "/help") == 0)
+    if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0)
         return render_help(app);
     if (strcmp(line, "/status") == 0)
         return render_status(app);

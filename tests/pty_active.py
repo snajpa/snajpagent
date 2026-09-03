@@ -272,6 +272,14 @@ def test_command_name_completion():
     child.wait(b"Tab complete/indent/queue", start=help_end)
     child.wait(PROMPT, start=help_end)
 
+    start = len(child.buf)
+    child.send(b"/?\r")
+    alias_end = child.wait(b"/help", start=start)
+    child.wait(b"/?", start=alias_end)
+    alias_end = child.wait(b"/compact", start=alias_end)
+    child.wait(b"Tab complete/indent/queue", start=alias_end)
+    child.wait(PROMPT, start=alias_end)
+
     for prefix, command in (
         (b"/sta", b"/status"),
         (b"/hi", b"/history"),
@@ -312,6 +320,23 @@ def test_command_name_completion():
 
     child.send(b"slow\r")
     child.wait(b"working slowly")
+
+    start = len(child.buf)
+    child.send(b"/he\t")
+    end = child.wait(b"steer " + PROMPT + b"/help", start=start)
+    child.send(b"\r")
+    help_end = child.wait(b"/compact", start=end)
+    child.wait(b"Tab complete/indent/queue", start=help_end)
+    child.wait(b"steer " + PROMPT, start=help_end)
+
+    start = len(child.buf)
+    child.send(b"/?\r")
+    alias_end = child.wait(b"/help", start=start)
+    child.wait(b"/?", start=alias_end)
+    alias_end = child.wait(b"/compact", start=alias_end)
+    child.wait(b"Tab complete/indent/queue", start=alias_end)
+    child.wait(b"steer " + PROMPT, start=alias_end)
+
     start = len(child.buf)
     child.send(b"/sta\t")
     end = child.wait(b"steer " + PROMPT + b"/status", start=start)
