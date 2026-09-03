@@ -167,6 +167,7 @@ Minimal OpenAI configuration:
 model = gpt-5.5
 reasoning_effort = default
 max_goal_prompt_bytes = 262144
+read_agents_md = true
 
 [provider openai]
 base_url = https://api.openai.com
@@ -223,6 +224,14 @@ native_compaction = false
 ```
 
 Set the environment variable named by `api_key_env` before starting the agent.
+
+Project instruction discovery is enabled by default. Before every new turn,
+snajpagent reads the applicable `AGENTS.override.md` or `AGENTS.md` files from
+the workspace's repository root through the workspace itself, including an
+`AGENTS.md` in the current workspace, and supplies their contents to the model
+as project guidance. Set `read_agents_md = false` in `[agent]` to disable all
+such discovery. Instruction paths, sizes, and hashes are frozen in the durable
+`turn_started` event so every response cycle in that turn uses the same files.
 
 The optional typing pause is measured from the most recent input edit, accepts
 `0` through `5000` milliseconds, and defaults to `500`:

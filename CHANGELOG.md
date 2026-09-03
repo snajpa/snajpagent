@@ -4,6 +4,10 @@
 
 ## 0.9.0-wip
 
+- Made Codex-style project instruction discovery explicitly configurable with
+  `[agent] read_agents_md`; it remains enabled by default so an applicable
+  workspace `AGENTS.md` is supplied to the model automatically.
+
 - Added a configurable `$HOME/.snajpagent` application directory containing
   default configuration, sessions, trash, and an atomically replaced model
   cache; `-d`/`--dotdir` and `-c`/`--config` override those defaults.

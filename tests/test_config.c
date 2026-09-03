@@ -39,6 +39,7 @@ main(void)
         "model = gpt-5.5\n"
         "reasoning_effort = future-effort\n"
         "max_goal_prompt_bytes = 123456\n"
+        "read_agents_md = false\n"
         "\n[provider]\n"
         "connect_timeout_ms = 1000\n"
         "idle_timeout_ms = 2000\n"
@@ -82,6 +83,7 @@ main(void)
     assert(strcmp(config.model, "default") == 0);
     assert(strcmp(config.reasoning_effort, "default") == 0);
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
+    assert(config.read_agents_md);
     assert(config.verbosity == 0u);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
@@ -109,6 +111,7 @@ main(void)
     assert(strcmp(config.model, "gpt-5.5") == 0);
     assert(strcmp(config.reasoning_effort, "future-effort") == 0);
     assert(config.max_goal_prompt_bytes == 123456u);
+    assert(!config.read_agents_md);
     assert(config.provider_count == 2u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(config.providers[0].connect_timeout_ms == 1000u);
@@ -201,6 +204,13 @@ main(void)
     expect_invalid(path);
     write_bytes(path, "[agent]\nmax_goal_prompt_bytes=1048577\n",
                 sizeof("[agent]\nmax_goal_prompt_bytes=1048577\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[agent]\nread_agents_md=maybe\n",
+                sizeof("[agent]\nread_agents_md=maybe\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[agent]\nread_agents_md=true\nread_agents_md=false\n",
+                sizeof("[agent]\nread_agents_md=true\nread_agents_md=false\n") - 1u);
     expect_invalid(path);
     write_bytes(path, "[provider]\nopenrouter_title=\n",
                 sizeof("[provider]\nopenrouter_title=\n") - 1u);

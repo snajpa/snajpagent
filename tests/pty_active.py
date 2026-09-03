@@ -218,6 +218,46 @@ def test_armed_fifo():
     assert turns[1]["data"]["text"] == "ping"
 
 
+def test_agents_md_config():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    workspace = root / "agents-workspace"
+    workspace.mkdir()
+    agents = workspace / "AGENTS.md"
+    contents = "Always answer fixture prompts normally.\n"
+    agents.write_text(contents, encoding="utf-8")
+
+    enabled_config = root / "config" / "agents-enabled.ini"
+    enabled_config.write_text(
+        "[agent]\nread_agents_md = true\n",
+        encoding="utf-8",
+    )
+    before = session_ids()
+    child = Child(["-c", str(enabled_config), "-C", str(workspace)])
+    child.wait(PROMPT)
+    child.send(b"ping\r")
+    answer_end = child.wait(b"pong")
+    child.exit_cleanly(answer_end)
+    turn = one(events(new_session(before)), "turn_started")
+    instructions = turn["data"]["instructions"]
+    assert len(instructions) == 1
+    assert instructions[0]["path"] == str(agents)
+    assert instructions[0]["bytes"] == len(contents.encode())
+
+    disabled_config = root / "config" / "agents-disabled.ini"
+    disabled_config.write_text(
+        "[agent]\nread_agents_md = false\n",
+        encoding="utf-8",
+    )
+    before = session_ids()
+    child = Child(["-c", str(disabled_config), "-C", str(workspace)])
+    child.wait(PROMPT)
+    child.send(b"ping\r")
+    answer_end = child.wait(b"pong")
+    child.exit_cleanly(answer_end)
+    turn = one(events(new_session(before)), "turn_started")
+    assert turn["data"]["instructions"] == []
+
+
 def test_interrupt():
     before = session_ids()
     child = Child([])
@@ -975,6 +1015,7 @@ test_steering()
 test_split_utf8_steering()
 test_typing_pause_and_stream_snapshots()
 test_armed_fifo()
+test_agents_md_config()
 test_interrupt()
 test_multiline_and_paste()
 test_resume_pauses_fifo()

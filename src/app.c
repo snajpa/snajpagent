@@ -1386,11 +1386,16 @@ run_turn(struct app_state *app, const char *prompt,
         (void)app_error(app, "cannot retain turn input");
         return 3;
     }
-    if (snj_instructions_discover(&app->turn_instructions, app->session.workspace,
-                                  error, sizeof(error)) < 0) {
-        (void)app_error(app, error);
-        result = 3;
-        goto out;
+    if (app->config->read_agents_md) {
+        if (snj_instructions_discover(&app->turn_instructions,
+                                      app->session.workspace,
+                                      error, sizeof(error)) < 0) {
+            (void)app_error(app, error);
+            result = 3;
+            goto out;
+        }
+    } else {
+        snj_instructions_free(&app->turn_instructions);
     }
     if (snj_random_id(turn_id) < 0) {
         (void)app_error(app, "cryptographic turn id generation failed");
