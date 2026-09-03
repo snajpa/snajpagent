@@ -98,6 +98,15 @@ out=$($bin -e -- tool_only 2>"$root/tool.err")
 [ "$out" = "tool complete" ]
 [ ! -s "$root/tool.err" ]
 
+out=$($bin -e -- many_cycles 2>"$root/many-cycles.err")
+[ "$out" = "130th cycle complete" ]
+[ ! -s "$root/many-cycles.err" ]
+many_cycles_id=$(grep -rl '"text":"many_cycles"' "$dotdir/sessions" |
+    sed 's|/events.jsonl$||;s|.*/||')
+out=$($bin -e -r "$many_cycles_id" -- ping 2>"$root/many-cycles-resume.err")
+[ "$out" = pong ]
+[ ! -s "$root/many-cycles-resume.err" ]
+
 for prompt in managed_wrong_handle managed_malformed; do
     out=$($bin -e -- "$prompt" 2>"$root/$prompt.err")
     [ "$out" = "managed process recovered" ]

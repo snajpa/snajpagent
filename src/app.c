@@ -1423,7 +1423,7 @@ run_turn(struct app_state *app, const char *prompt,
         result = 6;
         goto out;
     }
-    for (unsigned int cycle = 1u; cycle <= SNJ_MAX_RESPONSE_CYCLES; ++cycle) {
+    for (unsigned int cycle = 1u; cycle != 0u; ++cycle) {
         struct snj_response_graph graph;
         struct snj_graph_decision decision;
         json_t *steering = NULL;
@@ -1871,27 +1871,6 @@ run_turn(struct app_state *app, const char *prompt,
         }
         if (decision.outcome == SNJ_GRAPH_CALLS) {
             int tool_rc;
-            if (decision.call_count >
-                SNJ_MAX_TOOL_INVOCATIONS - app->session.tool_invocations) {
-                static const char message[] =
-                    "turn exceeded 128 tool invocations";
-                if (terminalize_pending(app, turn_id, "turn_cancelled",
-                                        error, sizeof(error)) < 0 ||
-                    close_active_process_for_turn(app, turn_id, "internal_failure",
-                                                  false, error, sizeof(error)) < 0 ||
-                    commit_event(app, "turn_failed",
-                                 snj_app_turn_failed_data(turn_id, "resource", message),
-                                 error, sizeof(error)) < 0) {
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
-                    (void)app_error(app, error);
-                    result = 3;
-                    goto out;
-                }
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
-                (void)app_error(app, message);
-                result = 4;
-                goto out;
-            }
             tool_rc = execute_calls(app, turn_id, &graph, &credential,
                                     error, sizeof(error));
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
@@ -1932,7 +1911,7 @@ run_turn(struct app_state *app, const char *prompt,
         }
     }
     {
-        static const char message[] = "turn exceeded 64 response cycles";
+        static const char message[] = "response-cycle counter exhausted";
         if (close_active_process_for_turn(app, turn_id, "internal_failure",
                                           false, error, sizeof(error)) < 0 ||
             commit_event(app, "turn_failed",

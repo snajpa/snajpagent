@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <pwd.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -1263,7 +1264,6 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         if (goal)
             ++session->goal_turn_count;
         session->active_cycle = 0;
-        session->tool_invocations = 0;
         clear_response_state(session);
         if (!goal && ((!session->first_user &&
              replace_text(&session->first_user, text, SNJ_MAX_DIRECT_PROMPT) < 0) ||
@@ -1324,7 +1324,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             snj_json_integer_u64(data, "input_tokens_bound", &token_bound) < 0 ||
             snj_json_integer_u64(data, "cycle", &cycle) < 0 ||
             cycle != (uint64_t)session->active_cycle + 1u ||
-            cycle > SNJ_MAX_RESPONSE_CYCLES)
+            cycle > UINT_MAX)
             goto invalid;
         for (size_t i = 0; i < session->pending_steering_count; ++i) {
             json_t *value = json_array_get(steering_ids, i);
@@ -1504,14 +1504,12 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !workspace || strcmp(workspace, session->workspace) != 0 ||
             !call_id || !(call = find_pending_call(session, call_id, &index)) ||
             strcmp(action, call->action_sha256) != 0 ||
-            call->started || call->finished ||
-            session->tool_invocations >= SNJ_MAX_TOOL_INVOCATIONS)
+            call->started || call->finished)
             goto invalid;
         for (size_t i = 0; i < index; ++i)
             if (!session->pending_calls[i].finished)
                 goto invalid;
         call->started = true;
-        ++session->tool_invocations;
     } else if (strcmp(type, "tool_finished") == 0) {
         static const char *const keys[] = {"call_id", "result", "turn_id"};
         const char *call_id = snj_json_string(data, "call_id");

@@ -454,11 +454,11 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "two tools complete", 0);
     }
     if (strcmp(prompt, "many_cycles") == 0) {
-        if (cycle <= 3u)
+        if (cycle <= 129u)
             return add_call(graph, workspace, cycle, 0u, "fixture loop");
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER, "msg_fixture_many_final",
-                           "fourth cycle complete", 0);
+                           "130th cycle complete", 0);
     }
     if (strcmp(prompt, "multi_item") == 0) {
         if (emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,

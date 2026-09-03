@@ -97,7 +97,6 @@ struct snj_session {
     uint64_t next_seq;
     uint64_t turn_count;
     uint64_t last_time_ms;
-    uint64_t tool_invocations;
     uint64_t compact_seq;
     uint64_t active_compact_source_seq;
     uint64_t goal_revision;

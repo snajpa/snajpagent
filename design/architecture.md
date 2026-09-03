@@ -23,6 +23,11 @@ Tool calls are handled one at a time. Before a tool runs, snajpagent records a
 durable start event. After the tool finishes, snajpagent records the bounded
 result and sends that result into the next provider cycle.
 
+There is no default count ceiling on response cycles or tool invocations in a
+turn. A turn continues until it completes, is explicitly interrupted, or hits
+an actual provider, protocol, storage, or machine-representation failure.
+Per-response item, call, argument, output, and wire-size bounds remain in force.
+
 At most one yielded process can be unresolved. While it is active, the request
 exposes only `write_stdin` and binds that tool's handle schema to the exact
 active handle. A provider-supplied nonmatching handle is durably rejected
