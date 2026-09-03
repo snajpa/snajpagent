@@ -274,7 +274,10 @@ The complete cache and selector contract is recorded in
 ## Design
 
 Design notes live in `design/`. Start with `design/architecture.md` for the
-runtime shape and durability model.
+runtime shape and durability model. The IRC server/client, operator chat,
+steering, history, compaction, and program-wide color contract is recorded in
+[`design/irc-chat.md`](design/irc-chat.md); its implementation is pending on
+the `codex/irc-chat` worktree branch.
 
 ## License
 
