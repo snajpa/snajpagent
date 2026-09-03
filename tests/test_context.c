@@ -446,7 +446,7 @@ assert_strict_tool_contract(json_t *tool)
 }
 
 static void
-assert_context_tool_schemas(json_t *tools)
+assert_context_tool_schemas(json_t *tools, const char *active_handle)
 {
     size_t index;
     json_t *tool;
@@ -480,7 +480,21 @@ assert_context_tool_schemas(json_t *tools)
     tool = tool_by_name(tools, "write_stdin");
     assert(tool != NULL);
     properties = assert_strict_tool_contract(tool);
-    assert_schema_type(json_object_get(properties, "handle"), "string", 0);
+    {
+        json_t *handle_schema = json_object_get(properties, "handle");
+        json_t *allowed;
+
+        assert_schema_type(handle_schema, "string", 0);
+        allowed = json_object_get(handle_schema, "enum");
+        if (active_handle) {
+            assert(json_is_array(allowed));
+            assert(json_array_size(allowed) == 1u);
+            assert(strcmp(json_string_value(json_array_get(allowed, 0)),
+                          active_handle) == 0);
+        } else {
+            assert(allowed == NULL);
+        }
+    }
     assert_schema_type(json_object_get(properties, "data"), "string", 0);
     assert_schema_type(json_object_get(properties, "eof"), "boolean", 1);
     assert_schema_type(json_object_get(properties, "yield_ms"), "integer", 1);
@@ -721,7 +735,7 @@ main(void)
     {
         json_t *tools = json_object_get(projection.create_request, "tools");
         assert(json_array_size(tools) == 4u);
-        assert_context_tool_schemas(tools);
+        assert_context_tool_schemas(tools, NULL);
     }
     items = json_object_get(projection.model_input, "items");
     request_input = json_object_get(projection.create_request, "input");
@@ -773,7 +787,7 @@ main(void)
         assert(json_array_size(tools) == 1);
         assert(strcmp(snj_json_string(json_array_get(tools, 0), "name"),
                       "write_stdin") == 0);
-        assert_context_tool_schemas(tools);
+        assert_context_tool_schemas(tools, handle);
         assert(json_is_array(input));
         gate = json_array_get(input, json_array_size(input) - 1u);
         gate_text = snj_json_string(gate, "content");

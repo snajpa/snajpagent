@@ -93,6 +93,70 @@ out=$($bin -e -- tool_only 2>"$root/tool.err")
 [ "$out" = "tool complete" ]
 [ ! -s "$root/tool.err" ]
 
+for prompt in managed_wrong_handle managed_malformed; do
+    out=$($bin -e -- "$prompt" 2>"$root/$prompt.err")
+    [ "$out" = "managed process recovered" ]
+    [ ! -s "$root/$prompt.err" ]
+    managed_id=$(grep -rl "\"text\":\"$prompt\"" \
+        "$root/state/snajpagent/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+    python3 - "$root/state/snajpagent/sessions/$managed_id/events.jsonl" \
+        "$prompt" <<'PY'
+import json
+import sys
+
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+prompt = sys.argv[2]
+assert not any(event["type"] in {"process_closed", "turn_failed"}
+               for event in events)
+assert events[-1]["type"] == "turn_completed"
+running = [event for event in events if event["type"] == "tool_finished"
+           and event["data"]["result"]["status"] == "running"]
+assert running
+assert all(event["data"]["result"]["handle"] == "a" * 32
+           for event in running)
+if prompt == "managed_wrong_handle":
+    mismatches = [event for event in events
+                  if event["type"] == "tool_finished"
+                  and event["data"]["result"]["status"] == "not_run"
+                  and event["data"]["result"]["reason"] ==
+                      "managed_process_handle_mismatch"]
+    assert len(mismatches) == 2
+    started = {event["data"]["call_id"] for event in events
+               if event["type"] == "tool_started"}
+    assert all(event["data"]["call_id"] not in started
+               for event in mismatches)
+else:
+    assert len(running) == 2
+    assert "interaction was rejected" in running[-1]["data"]["result"]["model_text"]
+PY
+done
+
+for prompt in managed_final_violation managed_wrong_tool_violation managed_multiple_violation; do
+    set +e
+    $bin -e -- "$prompt" >"$root/$prompt.out" 2>"$root/$prompt.err"
+    status=$?
+    set -e
+    [ "$status" -eq 4 ]
+    [ ! -s "$root/$prompt.out" ]
+    grep -q 'provider response violated unresolved managed process ordering' \
+        "$root/$prompt.err"
+    managed_id=$(grep -rl "\"text\":\"$prompt\"" \
+        "$root/state/snajpagent/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+    python3 - "$root/state/snajpagent/sessions/$managed_id/events.jsonl" <<'PY'
+import json
+import sys
+
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+closed = [event for event in events if event["type"] == "process_closed"]
+failed = [event for event in events if event["type"] == "turn_failed"]
+assert len(closed) == 1
+assert closed[0]["data"]["cause"] == "protocol_failure"
+assert closed[0]["data"]["handle"] == "a" * 32
+assert len(failed) == 1
+assert failed[0]["data"]["class"] == "protocol"
+PY
+done
+
 after=$($bin -e -- text_tool 2>"$root/text-tool.err")
 [ "$after" = done ]
 grep -q '^Checking first\.$' "$root/text-tool.err"

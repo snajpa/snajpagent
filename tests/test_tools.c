@@ -211,6 +211,18 @@ run_write_stdin_call(const char *handle, const char *data, bool eof,
     return run_tool_with_args("write_stdin", args);
 }
 
+static json_t *
+run_malformed_write_stdin_call(const char *handle)
+{
+    json_t *args = json_object();
+
+    assert(args != NULL);
+    assert(snj_json_set_new(args, "handle", json_string(handle)) == 0);
+    assert(snj_json_set_new(args, "eof", json_false()) == 0);
+    assert(snj_json_set_new(args, "yield_ms", json_integer(0)) == 0);
+    return run_tool_with_args("write_stdin", args);
+}
+
 static void
 write_text_file(const char *path, const char *text)
 {
@@ -516,6 +528,58 @@ test_write_stdin_rejects_unknown_handle(void)
                                           "x", false, 0);
 
     assert(strcmp(snj_json_string(result, "status"), "failed") == 0);
+    json_decref(result);
+}
+
+static void
+test_wrong_handle_does_not_touch_active_process(void)
+{
+    json_t *result = run_managed_exec(
+        "IFS= read -r line; printf 'got:%s\\n' \"$line\"", 5000, 50);
+    const char *handle;
+    json_t *wrong;
+    json_t *done;
+
+    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    handle = snj_json_string(result, "handle");
+    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    wrong = run_write_stdin_call("00000000000000000000000000000000",
+                                 "wrong\\n", true, 0);
+    assert(strcmp(snj_json_string(wrong, "status"), "failed") == 0);
+    done = run_write_stdin_call(handle, "right\\n", true, 5000);
+    assert(strcmp(snj_json_string(done, "status"), "succeeded") == 0);
+    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+                                  "retained"), "got:right") != NULL);
+    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+                                  "retained"), "got:wrong") == NULL);
+    json_decref(done);
+    json_decref(wrong);
+    json_decref(result);
+}
+
+static void
+test_malformed_interaction_preserves_active_process(void)
+{
+    json_t *result = run_managed_exec(
+        "IFS= read -r line; printf 'got:%s\\n' \"$line\"", 5000, 50);
+    const char *handle;
+    json_t *rejected;
+    json_t *done;
+
+    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    handle = snj_json_string(result, "handle");
+    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    rejected = run_malformed_write_stdin_call(handle);
+    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
+    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
+    assert(strstr(snj_json_string(rejected, "model_text"),
+                  "interaction was rejected") != NULL);
+    done = run_write_stdin_call(handle, "right\\n", true, 5000);
+    assert(strcmp(snj_json_string(done, "status"), "succeeded") == 0);
+    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+                                  "retained"), "got:right") != NULL);
+    json_decref(done);
+    json_decref(rejected);
     json_decref(result);
 }
 
@@ -851,6 +915,8 @@ main(void)
     test_managed_process_accepts_repeated_write_stdin();
     test_managed_process_poll_consumes_exit();
     test_write_stdin_rejects_unknown_handle();
+    test_wrong_handle_does_not_touch_active_process();
+    test_malformed_interaction_preserves_active_process();
     test_managed_process_close_returns_terminal_result();
     test_managed_close_kills_process_family();
     test_provider_secret_removed_from_environment();

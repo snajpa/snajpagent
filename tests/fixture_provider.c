@@ -16,6 +16,49 @@ typedef int (*fixture_emit_fn)(void *opaque, size_t item_index,
                                const char *text, size_t len);
 typedef int (*fixture_pump_fn)(void *opaque, unsigned int timeout_ms);
 
+static const char managed_handle[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+static const char wrong_managed_handle[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+static json_t *
+empty_excerpt(void)
+{
+    json_t *out = json_object();
+
+    if (!out ||
+        snj_json_set_new(out, "discarded_bytes", json_integer(0)) < 0 ||
+        snj_json_set_new(out, "encoding", json_string("utf8")) < 0 ||
+        snj_json_set_new(out, "original_bytes", json_integer(0)) < 0 ||
+        snj_json_set_new(out, "retained", json_string("")) < 0 ||
+        snj_json_set_new(out, "retained_bytes", json_integer(0)) < 0) {
+        if (out)
+            json_decref(out);
+        return NULL;
+    }
+    return out;
+}
+
+static json_t *
+running_result(const char *text)
+{
+    json_t *result = json_object();
+
+    if (!result ||
+        snj_json_set_new(result, "duration_ms", json_integer(0)) < 0 ||
+        snj_json_set_new(result, "exit_code", json_null()) < 0 ||
+        snj_json_set_new(result, "handle", json_string(managed_handle)) < 0 ||
+        snj_json_set_new(result, "model_text", json_string(text)) < 0 ||
+        snj_json_set_new(result, "reason", json_null()) < 0 ||
+        snj_json_set_new(result, "signal", json_null()) < 0 ||
+        snj_json_set_new(result, "status", json_string("running")) < 0 ||
+        snj_json_set_new(result, "stderr", empty_excerpt()) < 0 ||
+        snj_json_set_new(result, "stdout", empty_excerpt()) < 0) {
+        if (result)
+            json_decref(result);
+        return NULL;
+    }
+    return result;
+}
+
 static int
 set_response_id(struct snj_response_graph *graph, unsigned int cycle,
                 const char *suffix)
@@ -85,6 +128,42 @@ add_call(struct snj_response_graph *graph, const char *workspace,
                                        "exec_command", args);
 }
 
+static int
+add_stdin_call(struct snj_response_graph *graph, unsigned int cycle,
+               unsigned int index, const char *handle, bool malformed)
+{
+    char item_id[128];
+    char call_id[128];
+    json_t *args = json_object();
+
+    if (!args ||
+        snj_json_set_new(args, "handle", json_string(handle)) < 0 ||
+        (!malformed &&
+         snj_json_set_new(args, "data", json_string("")) < 0) ||
+        snj_json_set_new(args, "eof", json_null()) < 0 ||
+        snj_json_set_new(args, "yield_ms", json_integer(0)) < 0 ||
+        snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
+                 index) < 0 ||
+        snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle,
+                 index) < 0) {
+        if (args)
+            json_decref(args);
+        return -1;
+    }
+    return snj_response_graph_add_call(graph, item_id, call_id,
+                                       "write_stdin", args);
+}
+
+static bool
+managed_prompt(const char *prompt)
+{
+    return strcmp(prompt, "managed_wrong_handle") == 0 ||
+           strcmp(prompt, "managed_malformed") == 0 ||
+           strcmp(prompt, "managed_final_violation") == 0 ||
+           strcmp(prompt, "managed_wrong_tool_violation") == 0 ||
+           strcmp(prompt, "managed_multiple_violation") == 0;
+}
+
 int
 snj_fixture_response(const char *prompt, const json_t *steering,
                      const char *workspace, unsigned int cycle,
@@ -101,6 +180,40 @@ snj_fixture_response(const char *prompt, const json_t *steering,
     }
     if (set_response_id(graph, cycle, "complete") < 0)
         goto allocation;
+    if (managed_prompt(prompt)) {
+        if (cycle == 1u)
+            return add_call(graph, workspace, cycle, 0u,
+                            "fixture managed start");
+        if (cycle == 2u) {
+            if (strcmp(prompt, "managed_wrong_handle") == 0)
+                return add_stdin_call(graph, cycle, 0u,
+                                      wrong_managed_handle, false);
+            if (strcmp(prompt, "managed_malformed") == 0)
+                return add_stdin_call(graph, cycle, 0u,
+                                      managed_handle, true);
+            if (strcmp(prompt, "managed_final_violation") == 0)
+                return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                                   SNJ_PHASE_FINAL_ANSWER,
+                                   "msg_fixture_managed_early_final",
+                                   "must not complete", 0);
+            if (strcmp(prompt, "managed_wrong_tool_violation") == 0)
+                return add_call(graph, workspace, cycle, 0u,
+                                "fixture forbidden tool");
+            if (add_stdin_call(graph, cycle, 0u, managed_handle, false) < 0 ||
+                add_stdin_call(graph, cycle, 1u, managed_handle, false) < 0)
+                goto allocation;
+            return 0;
+        }
+        if (cycle == 3u && strcmp(prompt, "managed_wrong_handle") == 0)
+            return add_stdin_call(graph, cycle, 0u,
+                                  wrong_managed_handle, false);
+        if (cycle == 3u || cycle == 4u)
+            return add_stdin_call(graph, cycle, 0u, managed_handle, false);
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_managed_recovered",
+                           "managed process recovered", 0);
+    }
     if (strcmp(prompt, "empty") == 0)
         return 0;
     if (strcmp(prompt, "slow") == 0 || strcmp(prompt, "slow_utf8") == 0) {
@@ -260,8 +373,30 @@ snj_fixture_tool(const struct snj_response_item *call, json_t **result,
                  char *error, size_t error_size)
 {
     const char *command;
-    if (!call || call->kind != SNJ_ITEM_TOOL_CALL ||
-        strcmp(call->name, "exec_command") != 0 ||
+    const char *handle;
+
+    if (!call || call->kind != SNJ_ITEM_TOOL_CALL) {
+        if (error_size)
+            (void)snprintf(error, error_size, "fixture received an invalid tool call");
+        return -1;
+    }
+    if (strcmp(call->name, "write_stdin") == 0) {
+        handle = snj_json_string(call->arguments, "handle");
+        if (!handle || strcmp(handle, managed_handle) != 0) {
+            *result = snj_tool_result_terminal(false,
+                                               "fixture rejected wrong handle");
+        } else if (!snj_json_string(call->arguments, "data")) {
+            *result = running_result(
+                "Process is still running; interaction was rejected.");
+        } else {
+            *result = snj_tool_result_terminal(true,
+                                               "fixture process completed");
+        }
+        if (!*result)
+            goto allocation;
+        return 0;
+    }
+    if (strcmp(call->name, "exec_command") != 0 ||
         !(command = snj_json_string(call->arguments, "command"))) {
         if (error_size)
             (void)snprintf(error, error_size, "fixture received an invalid tool call");
@@ -269,6 +404,12 @@ snj_fixture_tool(const struct snj_response_item *call, json_t **result,
     }
     if (strstr(command, "crash"))
         _exit(98);
+    if (strstr(command, "managed start")) {
+        *result = running_result("fixture process is still running");
+        if (!*result)
+            goto allocation;
+        return 0;
+    }
     *result = snj_tool_result_terminal(strstr(command, "fail") == NULL,
                                       strstr(command, "fail") == NULL ?
                                       "fixture command succeeded" :
@@ -279,4 +420,9 @@ snj_fixture_tool(const struct snj_response_item *call, json_t **result,
         return -1;
     }
     return 0;
+
+allocation:
+    if (error_size)
+        (void)snprintf(error, error_size, "fixture allocation failed");
+    return -1;
 }

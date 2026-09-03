@@ -17,6 +17,16 @@ Tool calls are handled one at a time. Before a tool runs, snajpagent records a
 durable start event. After the tool finishes, snajpagent records the bounded
 result and sends that result into the next provider cycle.
 
+At most one yielded process can be unresolved. While it is active, the request
+exposes only `write_stdin` and binds that tool's handle schema to the exact
+active handle. A provider-supplied nonmatching handle is durably rejected
+without starting the tool or touching the process, then returned to the next
+bounded provider cycle. Invalid interaction arguments likewise leave the
+matching process durably active. Terminal speech, refusal, an empty response,
+multiple calls, or a call to another tool remain ordering violations and close
+the process before the turn fails. The active handle is cleared only by a
+terminal result for that exact process or an explicit durable closure event.
+
 ## Storage
 
 Session data is append-only at the event level. Records are synced so a later

@@ -943,7 +943,7 @@ open_pty_pair(int *master_fd, int *slave_fd,
 
 static json_t *
 simple_result(const char *status, const char *reason, const char *message,
-              int exit_code);
+              int exit_code, const char *handle);
 
 static uint64_t
 saturating_deadline(uint64_t start, uint32_t delta_ms)
@@ -1361,7 +1361,8 @@ run_exec_command_managed(const char *command, const char *workdir,
 
     if (proc->active) {
         *result = simple_result("not_run", "managed_process_conflict",
-            "Another managed process is still running; close or finish it before starting a new yielded process.", -1);
+            "Another managed process is still running; close or finish it before starting a new yielded process.",
+            -1, NULL);
         if (!*result) {
             set_error(error, error_size, "cannot allocate tool result");
             return -1;
@@ -1500,30 +1501,49 @@ run_write_stdin(const struct snj_response_item *call,
     struct managed_process *proc = &managed_process;
     size_t len;
 
-    if (!handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN) ||
-        !text_arg_valid(data, SNJ_TOOL_STDIN_MAX) ||
-        !json_bool_member(call->arguments, "eof", false, &eof) ||
-        !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
-                         0u, config->max_timeout_ms, &yield_ms)) {
+    if (!handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN)) {
         set_error(error, error_size, "invalid write_stdin arguments");
         errno = EINVAL;
         return -1;
     }
     if (!proc->active || strcmp(proc->handle, handle) != 0) {
         *result = simple_result("failed", NULL,
-            "No active managed process matches the supplied handle.", 1);
+            "No active managed process matches the supplied handle.", 1,
+            NULL);
         if (!*result) {
             set_error(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
     }
+    if (!text_arg_valid(data, SNJ_TOOL_STDIN_MAX) ||
+        !json_bool_member(call->arguments, "eof", false, &eof) ||
+        !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
+                         0u, config->max_timeout_ms, &yield_ms)) {
+        *result = simple_result("running", NULL,
+            "The write_stdin interaction was rejected because its arguments were invalid; the managed process was not modified.",
+            -1, proc->handle);
+        if (!*result) {
+            managed_cleanup();
+            set_error(error, error_size, "cannot allocate tool result");
+            return -1;
+        }
+        return 0;
+    }
     len = strlen(data);
-    if (!proc->stdin_open && len > 0u)
-        return managed_drive(proc, "", 0u, false, false, yield_ms, pump,
-                             pump_opaque, result, error, error_size);
-    return managed_drive(proc, data, len, true, eof, yield_ms, pump,
-                         pump_opaque, result, error, error_size);
+    {
+        int rc;
+
+        if (!proc->stdin_open && len > 0u)
+            rc = managed_drive(proc, "", 0u, false, false, yield_ms, pump,
+                               pump_opaque, result, error, error_size);
+        else
+            rc = managed_drive(proc, data, len, true, eof, yield_ms, pump,
+                               pump_opaque, result, error, error_size);
+        if (rc < 0)
+            managed_cleanup();
+        return rc;
+    }
 }
 
 static int
@@ -1847,7 +1867,7 @@ out:
 
 static json_t *
 simple_result(const char *status, const char *reason, const char *message,
-              int exit_code)
+              int exit_code, const char *handle)
 {
     struct capture_stream out;
     struct capture_stream err;
@@ -1856,7 +1876,8 @@ simple_result(const char *status, const char *reason, const char *message,
     capture_init(&out);
     capture_init(&err);
     (void)capture_append(&err, (const unsigned char *)message, strlen(message));
-    result = result_json(status, reason, exit_code, -1, 0u, NULL, &out, &err);
+    result = result_json(status, reason, exit_code, -1, 0u, handle, &out,
+                         &err);
     capture_free(&out);
     capture_free(&err);
     return result;

@@ -719,6 +719,32 @@ string_schema(void)
 }
 
 static json_t *
+exact_string_schema(const char *value)
+{
+    json_t *schema = string_schema();
+    json_t *allowed = json_array();
+
+    if (!schema || !allowed ||
+        json_array_append_new(allowed, json_string(value)) < 0)
+        goto fail;
+    {
+        int rc = json_set_new(schema, "enum", allowed);
+
+        allowed = NULL;
+        if (rc < 0)
+            goto fail;
+    }
+    return schema;
+
+fail:
+    if (schema)
+        json_decref(schema);
+    if (allowed)
+        json_decref(allowed);
+    return NULL;
+}
+
+static json_t *
 nullable_string_schema(void)
 {
     return primitive_schema("string", true);
@@ -836,7 +862,7 @@ exec_tool_schema(void)
 }
 
 static json_t *
-stdin_tool_schema(void)
+stdin_tool_schema(const char *active_handle)
 {
     static const char *const required[] = {
         "handle", "data", "eof", "yield_ms"
@@ -845,7 +871,9 @@ stdin_tool_schema(void)
     if (!properties ||
         json_set_new(properties, "data", string_schema()) < 0 ||
         json_set_new(properties, "eof", nullable_bool_schema()) < 0 ||
-        json_set_new(properties, "handle", string_schema()) < 0 ||
+        json_set_new(properties, "handle",
+                     active_handle ? exact_string_schema(active_handle) :
+                                     string_schema()) < 0 ||
         json_set_new(properties, "yield_ms", integer_schema(0, 600000, true)) < 0) {
         if (properties)
             json_decref(properties);
@@ -884,21 +912,22 @@ web_search_tool_schema(void)
 }
 
 static json_t *
-tool_schemas(bool process_only)
+tool_schemas(const char *active_handle)
 {
     json_t *tools = json_array();
 
     if (!tools)
         return NULL;
-    if (process_only) {
-        if (json_array_append_new(tools, stdin_tool_schema()) < 0) {
+    if (active_handle) {
+        if (json_array_append_new(tools,
+                                  stdin_tool_schema(active_handle)) < 0) {
             json_decref(tools);
             return NULL;
         }
         return tools;
     }
     if (json_array_append_new(tools, exec_tool_schema()) < 0 ||
-        json_array_append_new(tools, stdin_tool_schema()) < 0 ||
+        json_array_append_new(tools, stdin_tool_schema(NULL)) < 0 ||
         json_array_append_new(tools, patch_tool_schema()) < 0 ||
         json_array_append_new(tools, web_search_tool_schema()) < 0) {
         json_decref(tools);
@@ -955,7 +984,8 @@ model_input_object(struct context_builder *builder)
         json_set_new(input, "model", json_string(builder->model)) < 0 ||
         json_set_new(input, "profile_id", json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
         json_set_new(input, "tool_schema", json_integer(1)) < 0 ||
-        json_set_new(input, "tools", tool_schemas(builder->active_process_handle != NULL)) < 0) {
+        json_set_new(input, "tools",
+                     tool_schemas(builder->active_process_handle)) < 0) {
         if (input)
             json_decref(input);
         return NULL;
@@ -978,7 +1008,8 @@ create_request_object(struct context_builder *builder)
         json_set_new(request, "store", json_false()) < 0 ||
         json_set_new(request, "stream", json_true()) < 0 ||
         json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
-        json_set_new(request, "tools", tool_schemas(builder->active_process_handle != NULL)) < 0 ||
+        json_set_new(request, "tools",
+                     tool_schemas(builder->active_process_handle)) < 0 ||
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)
             json_decref(request);
@@ -998,7 +1029,8 @@ count_request_object(struct context_builder *builder)
         json_set_new(request, "parallel_tool_calls", json_false()) < 0 ||
         json_set_new(request, "reasoning", reasoning_settings(builder->effort)) < 0 ||
         json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
-        json_set_new(request, "tools", tool_schemas(builder->active_process_handle != NULL)) < 0 ||
+        json_set_new(request, "tools",
+                     tool_schemas(builder->active_process_handle)) < 0 ||
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)
             json_decref(request);

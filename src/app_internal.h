@@ -59,6 +59,13 @@ struct app_state {
     bool activity_shown;
 };
 
+enum snj_managed_continuation {
+    SNJ_MANAGED_CONTINUATION_NONE,
+    SNJ_MANAGED_CONTINUATION_MATCHED,
+    SNJ_MANAGED_CONTINUATION_HANDLE_MISMATCH,
+    SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION
+};
+
 json_t *snj_app_preference_changed_data(const char *old_key,
                                         const char *old_value,
                                         const char *new_key,
@@ -150,9 +157,9 @@ void snj_app_response_cycle_release(struct app_state *app,
                                     json_t **steering, json_t **create_request,
                                     json_t **count_request,
                                     struct snj_buf *request_body);
-bool snj_app_managed_continuation_graph_matches(const struct app_state *app,
-                                               const struct snj_response_graph *graph,
-                                               const struct snj_graph_decision *decision);
+enum snj_managed_continuation snj_app_managed_continuation_classify(
+    const struct app_state *app, const struct snj_response_graph *graph,
+    const struct snj_graph_decision *decision);
 int snj_app_lifecycle_command(struct app_state *app, const char *line,
                               bool *handled, bool *exit_now);
 

@@ -962,6 +962,7 @@ reason_is_not_run(const char *reason)
 {
     return reason && (strcmp(reason, "protocol_conflict") == 0 ||
                       strcmp(reason, "managed_process_conflict") == 0 ||
+                      strcmp(reason, "managed_process_handle_mismatch") == 0 ||
                       strcmp(reason, "recovery_unstarted") == 0 ||
                       strcmp(reason, "superseded_by_steering") == 0 ||
                       strcmp(reason, "turn_cancelled") == 0 ||

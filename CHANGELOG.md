@@ -4,6 +4,13 @@
 
 ## 0.9.0-wip
 
+- Recovered safely from invalid managed-process continuations: the active
+  handle is bound into the strict `write_stdin` schema, wrong handles become
+  durable retryable not-run results without touching the real process,
+  repeated invalid responses remain recoverable, malformed matching
+  interactions retain process ownership, and genuine tool adapter failures
+  clean runtime ownership before durable state advances.
+  Terminal, wrong-tool, and multi-call ordering violations remain fail-closed.
 
 - Hardened release-evidence integrity checks: bundle record paths are now
   canonical relative paths confined to the evidence directory, `make

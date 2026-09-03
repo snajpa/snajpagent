@@ -1263,26 +1263,50 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
         }
-        if (!snj_app_managed_continuation_graph_matches(app, &graph, &decision)) {
-            static const char message[] =
-                "provider response violated unresolved managed process ordering";
-            if ((app->session.pending_call_count != 0u &&
-                 terminalize_pending(app, turn_id, "managed_process_conflict",
-                                     error, sizeof(error)) < 0) ||
-                close_active_process_for_turn(app, turn_id, "protocol_failure",
-                                              false, error, sizeof(error)) < 0 ||
-                commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "protocol", message),
-                             error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
-                (void)app_error(app, error);
-                result = 3;
+        {
+            enum snj_managed_continuation managed =
+                snj_app_managed_continuation_classify(app, &graph, &decision);
+
+            if (managed == SNJ_MANAGED_CONTINUATION_HANDLE_MISMATCH) {
+                if (terminalize_pending(app, turn_id,
+                                        "managed_process_handle_mismatch",
+                                        error, sizeof(error)) < 0) {
+                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                                   NULL, NULL);
+                    (void)app_error(app, error);
+                    result = 3;
+                    goto out;
+                }
+                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
+                                               NULL);
+                continue;
+            }
+            if (managed == SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION) {
+                static const char message[] =
+                    "provider response violated unresolved managed process ordering";
+                if ((app->session.pending_call_count != 0u &&
+                     terminalize_pending(app, turn_id,
+                                         "managed_process_conflict",
+                                         error, sizeof(error)) < 0) ||
+                    close_active_process_for_turn(app, turn_id,
+                                                  "protocol_failure", false,
+                                                  error, sizeof(error)) < 0 ||
+                    commit_event(app, "turn_failed",
+                                 snj_app_turn_failed_data(turn_id, "protocol",
+                                                          message),
+                                 error, sizeof(error)) < 0) {
+                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                                   NULL, NULL);
+                    (void)app_error(app, error);
+                    result = 3;
+                    goto out;
+                }
+                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
+                                               NULL);
+                (void)app_error(app, message);
+                result = 4;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
-            (void)app_error(app, message);
-            result = 4;
-            goto out;
         }
         if (decision.outcome == SNJ_GRAPH_CONFLICT) {
             const char *message = decision.message ? decision.message :
