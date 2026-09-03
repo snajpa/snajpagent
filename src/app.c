@@ -125,14 +125,6 @@ graph_outcome_name(enum snj_graph_outcome outcome)
     }
     return "unknown";
 }
-struct compiled_model {
-    const char *selector;
-    bool conditional;
-};
-static const struct compiled_model compiled_models[] = {
-    {SNAJPAGENT_MODEL, false},
-    {SNAJPAGENT_MODEL_SELECTOR, true}
-};
 static const char *const reasoning_modes[] = {
     "none", "low", "medium", "high", "xhigh"
 };
@@ -140,7 +132,7 @@ static const struct snj_term_command commands[] = {
     {"/help", "commands and keys"},
     {"/status", "session and next-turn settings"},
     {"/history", "recent terminal history"},
-    {"/model [INDEX|MODEL]", "list or set next-turn model/mode"},
+    {"/model [MODEL]", "show or set next-turn model"},
     {"/effort [LEVEL]", "show or set next-turn effort"},
     {"/verbose [0..6]", "show or set this process's verbosity"},
     {"/queue [TEXT]", "list or queue future turns"},
@@ -152,20 +144,9 @@ static const struct snj_term_command commands[] = {
     {"/exit", "preserve session and exit"}
 };
 static const char *
-resolve_model(const struct snj_config *config, const char *selector)
+effective_model(const char *model)
 {
-    if (!selector || strcmp(selector, "default") == 0)
-        selector = SNAJPAGENT_MODEL;
-    for (size_t i = 0; i < sizeof(compiled_models) / sizeof(compiled_models[0]); ++i) {
-        if (strcmp(selector, compiled_models[i].selector) != 0)
-            continue;
-        if (compiled_models[i].conditional &&
-            (!config || config->provider_exact_token_count ||
-             config->provider_native_compaction))
-            return SNAJPAGENT_MODEL;
-        return compiled_models[i].selector;
-    }
-    return NULL;
+    return strcmp(model, "default") == 0 ? SNAJPAGENT_MODEL : model;
 }
 static const char *
 resolve_effort(const char *preference)
@@ -177,60 +158,14 @@ resolve_effort(const char *preference)
             return reasoning_modes[i];
     return NULL;
 }
-static size_t
-available_models(const struct snj_config *config, const char **models)
-{
-    size_t count = 0u;
-
-    for (size_t i = 0; i < sizeof(compiled_models) / sizeof(compiled_models[0]); ++i) {
-        const char *resolved = resolve_model(config, compiled_models[i].selector);
-        bool duplicate = false;
-
-        for (size_t j = 0; j < count; ++j)
-            if (strcmp(resolved, models[j]) == 0) {
-                duplicate = true;
-                break;
-            }
-        if (!duplicate)
-            models[count++] = resolved;
-    }
-    return count;
-}
-static bool
-model_catalog_entry(const struct snj_config *config, size_t index,
-                    const char **model, const char **effort)
-{
-    const char *models[sizeof(compiled_models) / sizeof(compiled_models[0])];
-    const size_t mode_count = sizeof(reasoning_modes) / sizeof(reasoning_modes[0]);
-    size_t model_count = available_models(config, models);
-    size_t offset;
-
-    if (index == 0u)
-        return false;
-    offset = index - 1u;
-    if (offset / mode_count >= model_count)
-        return false;
-    *model = models[offset / mode_count];
-    *effort = reasoning_modes[offset % mode_count];
-    return true;
-}
 static int
 prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
 {
     const char *model = app->staged_model ? app->staged_model :
                                            app->session.default_model;
-    const char *resolved_model = app->staged_model ?
-        resolve_model(app->config, app->staged_model) : app->session.default_model;
     const char *effort_preference = app->staged_effort ? app->staged_effort :
                                                         app->session.default_effort;
     const char *effort = resolve_effort(effort_preference);
-    if (!resolved_model || resolved_model[0] == '\0') {
-        set_error(error, error_size,
-                  "%s is unavailable for new work; choose an active model",
-                  model);
-        errno = ENOTSUP;
-        return -1;
-    }
     if (!effort) {
         set_error(error, error_size,
                   "reasoning effort %s is unsupported by %s",
@@ -238,7 +173,7 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
         errno = ENOTSUP;
         return -1;
     }
-    app->turn_model = resolved_model;
+    app->turn_model = model;
     app->turn_effort = effort;
     return 0;
 }
@@ -394,37 +329,6 @@ next_effort(const struct app_state *app)
                                 app->session.default_effort;
 }
 static int
-render_model_catalog(struct app_state *app)
-{
-    const char *selected_model = next_model(app);
-    const char *selected_effort = resolve_effort(next_effort(app));
-    const char *model;
-    const char *effort;
-    struct snj_buf text;
-    size_t index = 1u;
-    int rc = -1;
-
-    if (!selected_effort)
-        selected_effort = next_effort(app);
-    snj_buf_init(&text, 64u * 1024u);
-    if (snj_buf_printf(&text, "selected: %s / %s%s", selected_model,
-                       selected_effort,
-                       app->staged_model || app->staged_effort ?
-                       " (staged once)" : "") < 0)
-        goto out;
-    while (model_catalog_entry(app->config, index, &model, &effort)) {
-        if (snj_buf_printf(&text, "\n%zu. %s / %s", index, model, effort) < 0)
-            goto out;
-        ++index;
-    }
-    if (snj_buf_terminate(&text) < 0)
-        goto out;
-    rc = snj_render_host(&app->render, (const char *)text.data);
-out:
-    snj_buf_free(&text);
-    return rc;
-}
-static int
 render_status(struct app_state *app)
 {
     const char *id = app->render.verbosity >= 3u ? app->session.id : NULL;
@@ -480,75 +384,23 @@ show_setting(struct app_state *app, const char *name, const char *value,
     return app_hostf(app, "%s for next turn: %s%s", name, value,
                      staged ? " (staged once)" : "");
 }
-static bool
-parse_model_index(const char *selector, size_t *index)
-{
-    size_t value = 0u;
-
-    if (!selector[0])
-        return false;
-    for (const unsigned char *p = (const unsigned char *)selector; *p; ++p) {
-        size_t digit;
-
-        if (*p < '0' || *p > '9')
-            return false;
-        digit = (size_t)(*p - '0');
-        if (value > (SIZE_MAX - digit) / 10u)
-            value = SIZE_MAX;
-        else
-            value = value * 10u + digit;
-    }
-    *index = value;
-    return true;
-}
 static int
-select_model_catalog_entry(struct app_state *app, size_t index)
+change_model(struct app_state *app, const char *value, bool active)
 {
     const char *model;
-    const char *effort;
     char error[256];
-
-    if (!model_catalog_entry(app->config, index, &model, &effort))
-        return app_error(app, "model index is not in the displayed list");
-    if (strcmp(model, app->session.default_model) != 0 ||
-        strcmp(effort, app->session.default_effort) != 0) {
-        error[0] = '\0';
-        if (commit_event(app, "model_effort_changed",
-                         snj_app_model_effort_changed_data(
-                             app->session.default_model, model,
-                             app->session.default_effort, effort),
-                         error, sizeof(error)) < 0) {
-            (void)app_error(app, error[0] ? error :
-                            "model and effort preferences could not be saved");
-            return -1;
-        }
-    }
-    app->staged_model = NULL;
-    app->staged_effort = NULL;
-    return render_model_catalog(app);
-}
-static int
-change_model(struct app_state *app, const char *selector, bool active)
-{
-    const char *resolved;
-    size_t index;
-    char error[256];
-    if (!selector)
-        return render_model_catalog(app);
+    if (!value)
+        return show_setting(app, "model", next_model(app),
+                            app->staged_model != NULL);
     if (active)
-        return app_error(app, "/model INDEX|MODEL is idle-only; interrupt or wait");
-    if (parse_model_index(selector, &index))
-        return select_model_catalog_entry(app, index);
-    if (strchr(selector, ' ') ||
-        !(resolved = resolve_model(app->config, selector)))
-        return app_error(app,
-            "model selector is not in the compiled release profile");
-    if (strcmp(resolved, app->session.default_model) != 0) {
+        return app_error(app, "/model MODEL is idle-only; interrupt or wait");
+    model = effective_model(value);
+    if (strcmp(model, app->session.default_model) != 0) {
         error[0] = '\0';
         if (commit_event(app, "model_changed",
                 snj_app_preference_changed_data("old_model",
                                         app->session.default_model,
-                                        "new_model", resolved),
+                                        "new_model", model),
                 error, sizeof(error)) < 0) {
             (void)app_error(app, error[0] ? error :
                             "model preference could not be saved");
@@ -556,7 +408,7 @@ change_model(struct app_state *app, const char *selector, bool active)
         }
     }
     app->staged_model = NULL;
-    return render_model_catalog(app);
+    return show_setting(app, "model", app->session.default_model, false);
 }
 static int
 change_effort(struct app_state *app, const char *value, bool active)
@@ -1847,14 +1699,8 @@ snj_app_run(const struct snj_cli *cli)
         rc = 2;
         goto out;
     }
-    if (!cli->resume || cli->model) {
-        new_model = resolve_model(&config, cli->model ? cli->model : config.model);
-        if (!new_model) {
-            (void)snj_render_error("model selector is not in the compiled release profile");
-            rc = 2;
-            goto out;
-        }
-    }
+    if (!cli->resume || cli->model)
+        new_model = effective_model(cli->model ? cli->model : config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
     if ((!cli->resume || cli->effort) && !resolve_effort(new_effort)) {
         (void)snj_render_error("reasoning effort is unsupported by the selected model");

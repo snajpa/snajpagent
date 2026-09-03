@@ -77,7 +77,7 @@ model-visible diff previews.
   stream body is accepted, with cancellable backoff and bounded delay-seconds
   `Retry-After` handling; `response_failed.retry_count` records create retries;
 - every new `response_started` event now durably captures the compiled provider
-  profile id, capability version, compiled model, create-request SHA-256, and
+  profile id, capability version, selected model, create-request SHA-256, and
   count-request SHA-256 before provider streaming begins; replay validates those
   fields so an event log cannot silently switch profiles or counts mid-turn;
 - dependency/vendoring state is now explicit and machine-checked: `DEPENDENCIES.md`

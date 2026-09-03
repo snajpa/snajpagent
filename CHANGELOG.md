@@ -8,10 +8,8 @@
   catalog rendered by `/help`, while retaining indentation and active-turn
   queueing for input outside a command-name token.
 
-- Made interactive `/model` show the selected next-turn model/mode first and
-  one flat numbered catalog after it; numeric selection now durably changes
-  the exact displayed pair, while model-name selection remains supported and
-  preserves the current reasoning mode.
+- Made interactive `/model` show or durably set the next-turn provider model
+  identifier, while `/effort` independently controls the reasoning mode.
 
 - Recovered safely from invalid managed-process continuations: the active
   handle is bound into the strict `write_stdin` schema, wrong handles become

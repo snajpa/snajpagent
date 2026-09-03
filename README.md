@@ -69,10 +69,8 @@ The built-in help is intentionally short:
 ./snajpagent -h
 ```
 
-In an interactive session, `/model` prints the selected next-turn model and
-reasoning mode first, followed by one flat numbered list of the available
-model/mode combinations. `/model NUMBER` selects that exact combination;
-`/model MODEL` selects a model by name while preserving the reasoning mode.
+In an interactive session, `/model` prints the next-turn model and
+`/model MODEL` changes it. `/effort` shows or changes the reasoning mode.
 
 ## Configuration
 
