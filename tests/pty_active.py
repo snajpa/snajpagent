@@ -260,6 +260,67 @@ def test_preferences_and_verbosity():
     assert turn["data"]["config"]["effort"] == "high"
 
 
+def test_command_name_completion():
+    child = Child([])
+    child.wait(PROMPT)
+
+    start = len(child.buf)
+    child.send(b"/he\t")
+    end = child.wait(PROMPT + b"/help", start=start)
+    child.send(b"\r")
+    help_end = child.wait(b"/compact", start=end)
+    child.wait(b"Tab complete/indent/queue", start=help_end)
+    child.wait(PROMPT, start=help_end)
+
+    for prefix, command in (
+        (b"/sta", b"/status"),
+        (b"/hi", b"/history"),
+        (b"/mo", b"/model"),
+        (b"/ef", b"/effort"),
+        (b"/v", b"/verbose"),
+        (b"/q", b"/queue"),
+        (b"/u", b"/unqueue"),
+        (b"/n", b"/next"),
+        (b"/a", b"/archive"),
+        (b"/c", b"/compact"),
+        (b"/d", b"/delete"),
+        (b"/ex", b"/exit"),
+    ):
+        start = len(child.buf)
+        child.send(prefix + b"\t")
+        end = child.wait(PROMPT + command, start=start)
+        child.send(b"\x15")
+        child.wait(PROMPT, start=end)
+
+    start = len(child.buf)
+    child.send(b"/mo 4\x1b[D\x1b[D\t")
+    end = child.wait(PROMPT + b"/model 4", start=start)
+    child.send(b"\x15")
+    child.wait(PROMPT, start=end)
+
+    start = len(child.buf)
+    child.send(b"/h\ti\t")
+    end = child.wait(PROMPT + b"/history", start=start)
+    child.send(b"\x15")
+    child.wait(PROMPT, start=end)
+
+    start = len(child.buf)
+    child.send(b"x\t")
+    end = child.wait(PROMPT + b"x   ", start=start)
+    child.send(b"\x15")
+    child.wait(PROMPT, start=end)
+
+    child.send(b"slow\r")
+    child.wait(b"working slowly")
+    start = len(child.buf)
+    child.send(b"/sta\t")
+    end = child.wait(b"steer " + PROMPT + b"/status", start=start)
+    child.send(b"\r")
+    status_end = child.wait(b"state: active", start=end)
+    answer_end = child.wait(b"slow complete", start=status_end)
+    child.exit_cleanly(answer_end)
+
+
 def test_model_catalog_and_index_selection():
     before = session_ids()
     child = Child([])
@@ -373,6 +434,7 @@ test_interrupt()
 test_multiline_and_paste()
 test_resume_pauses_fifo()
 test_preferences_and_verbosity()
+test_command_name_completion()
 test_model_catalog_and_index_selection()
 test_model_catalog_alias_and_name_selection()
 print("pty_active: ok")

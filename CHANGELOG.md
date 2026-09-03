@@ -4,6 +4,10 @@
 
 ## 0.9.0-wip
 
+- Added Tab completion for interactive slash-command names from the same
+  catalog rendered by `/help`, while retaining indentation and active-turn
+  queueing for input outside a command-name token.
+
 - Made interactive `/model` show the selected next-turn model/mode first and
   one flat numbered catalog after it; numeric selection now durably changes
   the exact displayed pair, while model-name selection remains supported and

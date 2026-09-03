@@ -276,6 +276,16 @@ snj_term_init(struct snj_term *term)
     term->history_pos = SIZE_MAX;
 }
 
+void
+snj_term_set_commands(struct snj_term *term,
+                      const struct snj_term_command *commands, size_t count)
+{
+    if (!term)
+        return;
+    term->commands = commands;
+    term->command_count = commands ? count : 0u;
+}
+
 static bool
 term_control_capable(void)
 {
@@ -755,6 +765,91 @@ word_space(unsigned char c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
+static size_t
+command_name_length(const struct snj_term_command *command)
+{
+    size_t len = 0u;
+
+    while (command->syntax[len] &&
+           !word_space((unsigned char)command->syntax[len]))
+        ++len;
+    return len;
+}
+
+static int
+replace_command_name(struct snj_term *term, const char *name, size_t name_len,
+                     size_t token_end)
+{
+    size_t tail_len = term->draft.len - token_end;
+    size_t next_len;
+
+    if (!snj_size_add(name_len, tail_len, &next_len) ||
+        next_len > SNJ_MAX_DIRECT_PROMPT) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if (next_len > term->draft.len &&
+        snj_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
+        return -1;
+    memmove(term->draft.data + name_len, term->draft.data + token_end,
+            tail_len);
+    memcpy(term->draft.data, name, name_len);
+    term->draft.len = next_len;
+    term->cursor = name_len;
+    history_reset_navigation(term);
+    return redraw(term);
+}
+
+static int
+complete_command_name(struct snj_term *term, bool *handled)
+{
+    const char *match = NULL;
+    size_t match_len = 0u;
+    size_t matches = 0u;
+    size_t token_end = 0u;
+    size_t prefix_len = term->cursor;
+
+    *handled = false;
+    if (!term->command_count || !prefix_len || !term->draft.len ||
+        term->draft.data[0] != '/' ||
+        (term->draft.len > 1u && term->draft.data[1] == '/'))
+        return 0;
+    while (token_end < term->draft.len &&
+           !word_space(term->draft.data[token_end]))
+        ++token_end;
+    if (prefix_len > token_end)
+        return 0;
+    *handled = true;
+    for (size_t i = 0u; i < term->command_count; ++i) {
+        const struct snj_term_command *command = &term->commands[i];
+        size_t name_len;
+        size_t common;
+
+        if (!command->syntax)
+            continue;
+        name_len = command_name_length(command);
+        if (name_len < prefix_len ||
+            memcmp(command->syntax, term->draft.data, prefix_len) != 0)
+            continue;
+        ++matches;
+        if (!match) {
+            match = command->syntax;
+            match_len = name_len;
+            continue;
+        }
+        common = prefix_len;
+        while (common < match_len && common < name_len &&
+               match[common] == command->syntax[common])
+            ++common;
+        match_len = common;
+    }
+    if (!match || (matches > 1u && match_len == prefix_len) ||
+        (token_end == match_len &&
+         memcmp(term->draft.data, match, match_len) == 0))
+        return 0;
+    return replace_command_name(term, match, match_len, token_end);
+}
+
 static int
 suspend_terminal(struct snj_term *term)
 {
@@ -986,6 +1081,13 @@ feed_byte(struct snj_term *term, unsigned char byte,
         return insert_bytes(term, &lf, 1u);
     }
     case '\t':
+        {
+            bool handled;
+            int rc = complete_command_name(term, &handled);
+
+            if (rc < 0 || handled)
+                return rc;
+        }
         if (term->active)
             return complete_action(term, SNJ_TERM_QUEUE, action, text);
         else {

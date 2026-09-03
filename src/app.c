@@ -136,6 +136,21 @@ static const struct compiled_model compiled_models[] = {
 static const char *const reasoning_modes[] = {
     "none", "low", "medium", "high", "xhigh"
 };
+static const struct snj_term_command commands[] = {
+    {"/help", "commands and keys"},
+    {"/status", "session and next-turn settings"},
+    {"/history", "recent terminal history"},
+    {"/model [INDEX|MODEL]", "list or set next-turn model/mode"},
+    {"/effort [LEVEL]", "show or set next-turn effort"},
+    {"/verbose [0..6]", "show or set this process's verbosity"},
+    {"/queue [TEXT]", "list or queue future turns"},
+    {"/unqueue ID|all", "cancel queued turns"},
+    {"/next", "run the oldest paused turn"},
+    {"/archive", "archive idle session and exit"},
+    {"/compact", "compact the idle session context"},
+    {"/delete", "delete idle session after confirmation"},
+    {"/exit", "preserve session and exit"}
+};
 static const char *
 resolve_model(const struct snj_config *config, const char *selector)
 {
@@ -439,21 +454,24 @@ render_status(struct app_state *app)
 static int
 render_help(struct app_state *app)
 {
-    static const char text[] =
-        "/help                     commands and keys\n"
-        "/status                   session and next-turn settings\n"
-        "/history                  recent terminal history\n"
-        "/model [INDEX|MODEL]      list or set next-turn model/mode\n"
-        "/effort [LEVEL]           show or set next-turn effort\n"
-        "/verbose [0..6]           show or set this process's verbosity\n"
-        "/queue [TEXT]             list or queue future turns\n"
-        "/unqueue ID|all           cancel queued turns\n"
-        "/next                     run the oldest paused turn\n"
-        "/archive                  archive idle session and exit\n"
-        "/delete                   delete idle session after confirmation\n"
-        "/exit                     preserve session and exit\n"
-        "Enter submit/steer · Tab indent/queue · Ctrl-C clear/interrupt · Ctrl-J newline";
-    return snj_render_host(&app->render, text);
+    static const char keys[] =
+        "Enter submit/steer · Tab complete/indent/queue · "
+        "Ctrl-C clear/interrupt · Ctrl-J newline";
+    struct snj_buf text;
+    int rc = -1;
+
+    snj_buf_init(&text, 64u * 1024u);
+    for (size_t i = 0u; i < sizeof(commands) / sizeof(commands[0]); ++i)
+        if (snj_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
+                           commands[i].description) < 0)
+            goto out;
+    if (snj_buf_append(&text, keys, sizeof(keys) - 1u) < 0 ||
+        snj_buf_terminate(&text) < 0)
+        goto out;
+    rc = snj_render_host(&app->render, (const char *)text.data);
+out:
+    snj_buf_free(&text);
+    return rc;
 }
 static int
 show_setting(struct app_state *app, const char *name, const char *value,
@@ -1793,6 +1811,8 @@ snj_app_run(const struct snj_cli *cli)
     snj_store_init(&app.store);
     snj_session_init(&app.session);
     snj_term_init(&app.term);
+    snj_term_set_commands(&app.term, commands,
+                          sizeof(commands) / sizeof(commands[0]));
     snj_render_init(&app.render, 0u);
     app.cli = cli;
     app.config = &config;

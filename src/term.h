@@ -20,6 +20,11 @@ enum snj_term_action {
     SNJ_TERM_EXIT
 };
 
+struct snj_term_command {
+    const char *syntax;
+    const char *description;
+};
+
 struct snj_term {
     struct termios saved;
     struct sigaction saved_sigint;
@@ -27,7 +32,9 @@ struct snj_term {
     struct snj_buf draft;
     char *history[SNJ_TERM_HISTORY_COUNT];
     char *history_draft;
+    const struct snj_term_command *commands;
     size_t cursor;
+    size_t command_count;
     size_t history_count;
     size_t history_bytes;
     size_t history_pos;
@@ -59,6 +66,9 @@ struct snj_term {
 };
 
 void snj_term_init(struct snj_term *term);
+void snj_term_set_commands(struct snj_term *term,
+                           const struct snj_term_command *commands,
+                           size_t count);
 int snj_term_open(struct snj_term *term, char *error, size_t error_size);
 void snj_term_close(struct snj_term *term);
 int snj_term_set_prompt(struct snj_term *term, bool active);
