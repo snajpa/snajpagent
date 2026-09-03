@@ -734,6 +734,11 @@ def test_uncached_typed_model_selection():
     end = child.wait(
         b"model for next turn: default / gpt-5.6-sol / medium", start=end
     )
+    end = child.wait(
+        b"snajpagent: model is not known in the model cache; "
+        b"it will still be sent unchanged",
+        start=end,
+    )
     child.wait(PROMPT, start=end)
     assert not cache_path.exists()
     child.exit_now()
@@ -816,28 +821,34 @@ def test_model_cache_and_selection():
     end = child.wait(
         b"model for next turn: first / gpt-5.6-sol / ultra", start=end
     )
-    child.wait(PROMPT, start=end)
+    prompt_end = child.wait(PROMPT, start=end)
+    assert b"not known in the model cache" not in child.buf[end:prompt_end]
+    end = prompt_end
 
     # Uncached identifiers and effort names pass through without local lookup.
     child.send(b"/model definitely-new-model\r")
     end = child.wait(
         b"model for next turn: first / definitely-new-model / ultra", start=end
     )
+    end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT, start=end)
     child.send(b"/model fresh-model / quantum\r")
     end = child.wait(
         b"model for next turn: first / fresh-model / quantum", start=end
     )
+    end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT, start=end)
     child.send(b"/model default / literal-effort\r")
     end = child.wait(
         b"model for next turn: first / default / literal-effort", start=end
     )
+    end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT, start=end)
     child.send(b"/model second / future-new / cosmic\r")
     end = child.wait(
         b"model for next turn: second / future-new / cosmic", start=end
     )
+    end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT, start=end)
 
     # Both numeric spellings select the exact flattened cached variant.

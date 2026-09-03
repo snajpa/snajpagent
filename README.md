@@ -95,8 +95,10 @@ trusted and sent to the provider without checking whether it appears in the
 cache. With only `MODEL`, the first configured provider is used and the
 highest recognized advertised effort is selected; if the cache has no effort
 metadata for it, the current/configured effort is kept. Typed selection itself
-makes no provider request. A provider-native ID containing `/` can be selected
-unambiguously by its displayed number.
+makes no provider request. An unknown typed provider/model pair is accepted and
+saved, then gets a warning immediately after the normal next-turn confirmation.
+A provider-native ID containing `/` can be selected unambiguously by its
+displayed number.
 
 `/effort LEVEL` remains available to change only the reasoning effort.
 

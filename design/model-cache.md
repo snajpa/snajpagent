@@ -127,6 +127,12 @@ The three forms change the durable next-turn provider/model/effort preference.
 Provider names must resolve because snajpagent needs routing and credentials;
 model names are deliberately not checked against the cache. The provider API,
 not snajpagent, decides whether a user-supplied model or effort is usable.
+After the normal `model for next turn` confirmation, a typed selection whose
+provider/model pair is not present in the readable cache prints a warning that
+the model is unknown to the cache and will still be sent unchanged. The warning
+does not reject or revert the selection, contact a provider, or validate the
+model name. Numbered selections necessarily resolve through the cache and do
+not print this warning.
 
 Slash is selector syntax. A provider-native model ID that itself contains a
 slash is selected without ambiguity through its numbered cached row; the

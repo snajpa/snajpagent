@@ -718,10 +718,12 @@ trim_selector_part(char *part)
 static int
 commit_model_selection(struct app_state *app,
                        const struct snj_provider_config *provider,
-                       const char *model, const char *effort)
+                       const char *model, const char *effort,
+                       bool known_in_cache)
 {
     const char *old_provider = app->session.default_provider;
     char error[256] = {0};
+    int rc;
 
     if (!old_provider[0])
         old_provider = "";
@@ -742,8 +744,12 @@ commit_model_selection(struct app_state *app,
     app->staged_provider = NULL;
     app->staged_model = NULL;
     app->staged_effort = NULL;
-    return app_hostf(app, "model for next turn: %s / %s / %s",
-                     provider->name, model, effort);
+    rc = app_hostf(app, "model for next turn: %s / %s / %s",
+                   provider->name, model, effort);
+    if (rc < 0 || known_in_cache)
+        return rc;
+    return app_warning(app,
+        "model is not known in the model cache; it will still be sent unchanged");
 }
 static int
 select_cached_model(struct app_state *app, const char *value)
@@ -769,7 +775,7 @@ select_cached_model(struct app_state *app, const char *value)
     if (!provider_config)
         return app_error(app,
             "cached provider is not configured; use /model cache");
-    return commit_model_selection(app, provider_config, model, effort);
+    return commit_model_selection(app, provider_config, model, effort, true);
 }
 static int
 select_typed_model(struct app_state *app, const char *value)
@@ -780,6 +786,7 @@ select_typed_model(struct app_state *app, const char *value)
     char *copy = snj_strdup_checked(value, SNJ_CONFIG_PATH_MAX);
     char *parts[3];
     size_t count = 0u;
+    bool known_in_cache = false;
     int rc = -1;
 
     if (!copy)
@@ -820,17 +827,20 @@ select_typed_model(struct app_state *app, const char *value)
             "model or effort exceeds the supported structural bounds");
         goto out;
     }
-    if (count == 1u) {
+    {
         char ignored[256] = {0};
         if (snj_model_cache_load(&app->store, &app->model_cache,
                                  ignored, sizeof(ignored)) == 0) {
             const json_t *cached = snj_model_cache_find(&app->model_cache,
                                                         provider->name, model);
-            effort = snj_model_cache_best_effort(cached,
-                                                  resolve_effort(effort));
+            known_in_cache = cached != NULL;
+            if (count == 1u)
+                effort = snj_model_cache_best_effort(cached,
+                                                      resolve_effort(effort));
         }
     }
-    rc = commit_model_selection(app, provider, model, resolve_effort(effort));
+    rc = commit_model_selection(app, provider, model, resolve_effort(effort),
+                                known_in_cache);
 out:
     free(copy);
     return rc;
