@@ -98,3 +98,43 @@ typing it directly and pressing Tab.
   and clear events.
 - Configuration coverage checks the default, bounds, duplicate-key handling,
   and explicit `typing_pause_ms` values.
+
+### Real-terminal regression
+
+The permanent terminal test must exercise the complete contract through a real
+terminal multiplexer, not only by inspecting the raw byte stream of a PTY.
+It runs the fixture binary in an isolated, deliberately narrow tmux session and
+asserts tmux's rendered pane contents after each interaction. The deterministic
+scenario covers:
+
+- word-boundary wrapping, explicit newlines, long-word hard wrapping, UTF-8,
+  and terminal resize without changing the stored assistant text;
+- the first steering edit, continued editing before the pause expires, model
+  output resumption below a stable draft snapshot, and another edit/resume
+  cycle after more output;
+- numbered `/q` and `/queue` listing plus edit, delete, clear, and newest-item
+  pop, including the `edit N › ` composer and preservation of queue order;
+- prompt, status, model output, and composer redraws without leaked escape
+  sequences, overwritten text, duplicate fragments, or missing fragments; and
+- enabled and disabled `AGENTS.md` discovery as recorded in the durable
+  `turn_started` event.
+
+The tmux socket, session, workspace, configuration, and state directory are
+unique to the test. The test never addresses or stops an unrelated tmux server
+or snajpagent process. Deterministic tmux coverage is a normal local test target;
+live provider coverage remains explicit because it consumes credentials and
+provider capacity.
+
+The live real-work qualification uses the configured default `codex-lb`
+profile and the exact prompt:
+
+```text
+great... now please gather the complete state of livepatch status for vpsadminos kernel 6.12.95
+```
+
+Only one live qualification instance may run at a time. It runs from `/root`
+in a narrow tmux, admits the applicable `/root/AGENTS.md`, waits through all
+local tool work and response cycles, and exits normally. Acceptance compares
+the final rendered pane/history with the byte-exact `response_completed` data,
+checks the `turn_started.data.instructions` path/size/SHA-256 metadata, and
+rejects dropped, duplicated, reordered, overwritten, or visibly escaped text.
