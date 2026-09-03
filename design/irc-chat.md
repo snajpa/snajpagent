@@ -175,8 +175,11 @@ silently consume or invent operator input.
 
 ## Operator Chat UI
 
-Networked interactive mode is a chat transcript, not a raw model trace.
-At verbosity 0 it shows only:
+Networked interactive mode is a chat transcript, not a raw model trace or a
+windowed full-screen TUI. Every transcript entry has a local display time,
+sender or event marker, and readable IRC-client-style spacing; the composer
+remains at the bottom while output is safely redrawn around it. At verbosity 0
+it shows only:
 
 - timestamped operator and remote-room messages with the sender name;
 - a visible `@` marker on names that currently carry `+o`;
@@ -263,24 +266,36 @@ never upgrades authority.
 
 Admission priority is:
 
-1. local operator text is immediate steering during an active turn and starts
-   an immediate user turn while idle;
-2. a room message from a member currently carrying `+o` is handled the same
+1. local operator text is urgent and starts an immediate user turn while idle;
+2. a room message from a member currently carrying `+o` is urgent in the same
    way;
 3. a room message that mentions the agent name, using IRC case folding and a
-   nick boundary, is immediate steering or an immediate idle turn; and
+   nick boundary, is urgent regardless of the sender; and
 4. other chat and room notifications are coalesced into a bounded user-role
    room update at a convenient provider boundary.
 
 Background traffic is drained before an automatic goal continuation. While
 idle it is briefly coalesced so ordinary chat does not create one provider
 request per IRC line. During a response or tool call, the existing active
-input pump services sockets as well as terminal input. Immediate entries use
-the durable steering path; background entries wait for the next response
-cycle or queued room-update turn. No network read waits for a model call to
-finish. A room-update turn caused only by peers or notifications may end
-without model-authored chat; snajpagent does not remind, retry, or force a
-reaction to that traffic.
+input pump services sockets as well as terminal input. Urgent entries do not
+truncate an in-flight model stream or cancel a running tool: they accumulate
+in one bounded, durable urgent batch and are admitted through the steering
+path at the earliest safe response/tool boundary. Messages arriving before
+that boundary are coalesced in arrival order, so several mentions cause one
+additional model cycle rather than a cancellation/restart storm. Background
+entries wait for the next response cycle or queued room-update turn. No
+network read waits for a model call to finish. A room-update turn caused only
+by peers or notifications may end without model-authored chat; snajpagent does
+not remind, retry, or force a reaction to that traffic.
+
+Managed commands retain the existing asynchronous handoff model. A command may
+yield a live handle, after which the next model cycle receives the coalesced
+urgent IRC batch and the exact `write_stdin` surface for that handle. The model
+can react to chat immediately, wait for command completion, or continue the
+command; neither the IRC runtime nor the model babysits the socket or process.
+An urgent message received while a synchronous command is executing is
+admitted as soon as that command returns. Ordinary terminal interrupt remains
+an explicit cancellation and is not changed by this rule.
 
 For a turn started by the local operator, snajpagent tracks whether terminal
 public assistant text was posted to the room. If the model reaches an otherwise
@@ -359,6 +374,19 @@ outbound chat is bounded rather than allowed to grow without limit.
   compaction hooks and renderer. A parallel IPC/control layer is not an
   acceptable implementation.
 
+## Source-Size Discipline
+
+This feature remains subject to the repository's existing `make sizecheck`
+limits: no more than 35,000 production C/header lines, 50,000 shipped C/header
+lines, and 30 production translation units. The 30,000-production-line level
+and 2,000-line-file level remain review triggers rather than excuses to raise a
+limit. Implementation should reuse the session, event-loop, tool, rendering,
+and managed-process abstractions, consolidate a genuinely trivial unit where
+needed, and omit duplication. Every retained line must serve a contract item,
+failure bound, portability requirement, or focused validation; source-budget
+pressure must not remove required IRC, color, durability, reconnect, steering,
+or UI behavior.
+
 ## Acceptance
 
 Implementation is complete when the existing build and validation commands
@@ -375,11 +403,13 @@ pass and focused local smoke checks demonstrate all of the following:
    agent/tool detail before lower-priority IRC debugging, safe terminal
    rendering, and `auto`/`always`/`never` color behavior in networked and
    non-networked modes;
-4. immediate steering for local operator, current channel operator, and agent
-   mentions; coalesced background events; socket servicing during provider and
-   tool work; first-join history projection; and fresh post-compaction history
-   projection; one non-looping reply reminder for otherwise-silent local
-   operator turns; and no forced response to other traffic;
+4. earliest-safe, coalesced urgent admission for local operator, current
+   channel operator, and agent mentions without truncating active generation or
+   tools; asynchronous managed-command handoff; coalesced background events;
+   socket servicing during provider and tool work; first-join history
+   projection; and fresh post-compaction history projection; one non-looping
+   reply reminder for otherwise-silent local operator turns; and no forced
+   response to other traffic;
 5. `irc_send`, `irc_state`, and privilege-correct `irc_topic` behavior without
    model-driven polling, joining, or reconnection; and
 6. autonomous reconnect/disconnect behavior, slow/malformed peer isolation, bounded
