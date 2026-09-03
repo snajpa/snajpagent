@@ -28,6 +28,7 @@ struct provider_ctx {
     struct snj_buf error_body;
     struct snj_secret_set secrets;
     const struct snj_config *config;
+    const struct snj_provider_config *provider;
     struct snj_render *render;
     snj_provider_pump_fn pump;
     void *pump_opaque;
@@ -120,7 +121,7 @@ render_request_headers(struct provider_ctx *ctx, const char *request_line,
         return 0;
     snj_buf_init(&redacted, SNJ_WIRE_HEADER_MAX);
     snj_buf_init(&host, SNJ_CONFIG_URL_MAX + 8u);
-    if (append_host_header(&host, ctx->config->provider_base_url) < 0) {
+    if (append_host_header(&host, ctx->provider->base_url) < 0) {
         snj_buf_free(&redacted);
         snj_buf_free(&host);
         return -1;
@@ -297,19 +298,20 @@ progress_cb(void *opaque, curl_off_t dltotal, curl_off_t dlnow,
 
 
 static int
-provider_endpoint_url(const struct snj_config *config, const char *path,
+provider_endpoint_url(const struct snj_provider_config *provider,
+                      const char *path,
                       char *buffer, size_t buffer_size, const char **url,
                       char *error, size_t error_size)
 {
     int written;
 
-    if (!config || !path || !url || !buffer || !buffer_size) {
+    if (!provider || !path || !url || !buffer || !buffer_size) {
         set_error(error, error_size, "invalid provider endpoint");
         errno = EINVAL;
         return -1;
     }
     written = snprintf(buffer, buffer_size, "%s%s",
-                       config->provider_base_url, path);
+                       provider->base_url, path);
     if (written <= 0 || (size_t)written >= buffer_size) {
         set_error(error, error_size, "provider endpoint is too long");
         errno = ENAMETOOLONG;
@@ -696,9 +698,307 @@ out:
     return rc;
 }
 
+#define SNJ_PROVIDER_MODELS_MAX 4096u
+#define SNJ_PROVIDER_EFFORTS_MAX 32u
+
+static bool
+bounded_utf8_string(const json_t *value, size_t max, const char **out)
+{
+    const char *text;
+    size_t len;
+
+    if (!json_is_string(value))
+        return false;
+    text = json_string_value(value);
+    len = json_string_length(value);
+    if (!text || !len || len > max || strlen(text) != len ||
+        !snj_utf8_valid((const unsigned char *)text, len, true))
+        return false;
+    *out = text;
+    return true;
+}
+
+static int
+append_efforts(json_t *out, const json_t *source)
+{
+    if (!source)
+        return 0;
+    if (!json_is_array(source) ||
+        json_array_size(source) > SNJ_PROVIDER_EFFORTS_MAX)
+        return -1;
+    for (size_t i = 0; i < json_array_size(source); ++i) {
+        json_t *value = json_array_get(source, i);
+        const char *effort = NULL;
+        bool duplicate = false;
+
+        if (json_is_object(value))
+            value = json_object_get(value, "effort");
+        if (!bounded_utf8_string(value, SNJ_CONFIG_EFFORT_MAX - 1u,
+                                 &effort))
+            return -1;
+        for (size_t j = 0; j < json_array_size(out); ++j)
+            if (strcmp(json_string_value(json_array_get(out, j)), effort) == 0) {
+                duplicate = true;
+                break;
+            }
+        if (!duplicate && json_array_append_new(out, json_string(effort)) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int
+append_model(json_t *out, const json_t *source, bool native)
+{
+    const char *id;
+    const char *default_effort = NULL;
+    json_t *metadata;
+    json_t *effort_source;
+    json_t *entry = NULL;
+    json_t *efforts = NULL;
+
+    if (!json_is_object(source) ||
+        !bounded_utf8_string(json_object_get(source, native ? "slug" : "id"),
+                             SNJ_CONFIG_MODEL_MAX - 1u, &id))
+        return -1;
+    for (size_t i = 0; i < json_array_size(out); ++i) {
+        const char *existing = snj_json_string(json_array_get(out, i), "id");
+        if (existing && strcmp(existing, id) == 0)
+            return 0;
+    }
+    metadata = json_object_get(source, "metadata");
+    if (!json_is_object(metadata))
+        metadata = NULL;
+    effort_source = json_object_get(source, "supported_reasoning_levels");
+    if (!effort_source && metadata)
+        effort_source = json_object_get(metadata, "supported_reasoning_levels");
+    if (json_is_null(effort_source))
+        effort_source = NULL;
+    {
+        json_t *value = json_object_get(source, "default_reasoning_level");
+        if (!value && metadata)
+            value = json_object_get(metadata, "default_reasoning_level");
+        if (value && !json_is_null(value) &&
+            !bounded_utf8_string(value, SNJ_CONFIG_EFFORT_MAX - 1u,
+                                 &default_effort))
+            return -1;
+    }
+    entry = json_object();
+    efforts = json_array();
+    if (!entry || !efforts || append_efforts(efforts, effort_source) < 0)
+        goto fail;
+    if (snj_json_set_new(entry, "default_effort",
+                         default_effort ? json_string(default_effort) :
+                                          json_null()) < 0)
+        goto fail;
+    if (snj_json_set_new(entry, "efforts", efforts) < 0) {
+        efforts = NULL;
+        goto fail;
+    }
+    efforts = NULL;
+    if (snj_json_set_new(entry, "id", json_string(id)) < 0)
+        goto fail;
+    if (json_array_append_new(out, entry) < 0) {
+        entry = NULL;
+        goto fail;
+    }
+    entry = NULL;
+    return 0;
+fail:
+    if (efforts)
+        json_decref(efforts);
+    if (entry)
+        json_decref(entry);
+    errno = EPROTO;
+    return -1;
+}
+
+int
+snj_provider_models_decode(const unsigned char *data, size_t len,
+                           json_t **models, char *error, size_t error_size)
+{
+    char json_error[128] = {0};
+    json_t *root = NULL;
+    json_t *source;
+    json_t *out = NULL;
+    bool native;
+    int rc = -1;
+
+    if (models)
+        *models = NULL;
+    if (!data || !len || !models) {
+        set_error(error, error_size, "invalid model catalog source");
+        errno = EINVAL;
+        return -1;
+    }
+    root = snj_json_load_strict(data, len,
+                                SNJ_WIRE_BODY_MAX, json_error,
+                                sizeof(json_error));
+    if (!root || !json_is_object(root)) {
+        (void)snprintf(error, error_size, "invalid model-list response: %s",
+                       json_error[0] ? json_error : "root is not an object");
+        errno = EPROTO;
+        goto out;
+    }
+    source = json_object_get(root, "models");
+    native = json_is_array(source);
+    if (!native)
+        source = json_object_get(root, "data");
+    if (!json_is_array(source) ||
+        json_array_size(source) > SNJ_PROVIDER_MODELS_MAX) {
+        set_error(error, error_size,
+                  "model-list response has no bounded models array");
+        errno = EPROTO;
+        goto out;
+    }
+    out = json_array();
+    if (!out) {
+        errno = ENOMEM;
+        goto out;
+    }
+    for (size_t i = 0; i < json_array_size(source); ++i)
+        if (append_model(out, json_array_get(source, i), native) < 0) {
+            set_error(error, error_size,
+                      "model-list response contains an invalid model entry");
+            errno = EPROTO;
+            goto out;
+        }
+    *models = out;
+    out = NULL;
+    rc = 0;
+out:
+    if (out)
+        json_decref(out);
+    if (root)
+        json_decref(root);
+    return rc;
+}
+
+static int
+parse_models_body(struct provider_ctx *ctx, json_t **models,
+                  char *error, size_t error_size)
+{
+    if (ctx->body_failed) {
+        set_error(error, error_size, ctx->error[0] ? ctx->error :
+                  "model-list response body exceeds the supported limit");
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return snj_provider_models_decode(ctx->error_body.data,
+                                      ctx->error_body.len,
+                                      models, error, error_size);
+}
+
+int
+snj_provider_models_list(const struct snj_config *config,
+                         const struct snj_provider_config *provider,
+                         const struct snj_credential *credential,
+                         struct snj_render *render, json_t **models,
+                         char *error, size_t error_size)
+{
+    struct provider_ctx ctx;
+    struct curl_slist *headers = NULL;
+    CURL *curl = NULL;
+    CURLcode code;
+    char url_buffer[SNJ_CONFIG_URL_MAX + 64u];
+    const char *url = NULL;
+    unsigned int retry_count = 0u;
+    int rc = -1;
+
+    if (models)
+        *models = NULL;
+    if (!config || !provider || !credential || !credential->len || !models) {
+        set_error(error, error_size, "invalid model-list request");
+        errno = EINVAL;
+        return -1;
+    }
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.config = config;
+    ctx.provider = provider;
+    ctx.render = render;
+    snj_secret_set_build(&ctx.secrets, config, credential);
+    snj_buf_init(&ctx.error_body, SNJ_WIRE_BODY_MAX);
+    if (provider_endpoint_url(provider, "/v1/models", url_buffer,
+                              sizeof(url_buffer), &url,
+                              error, error_size) < 0)
+        goto out;
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
+        set_error(error, error_size, "libcurl could not initialize");
+        errno = EIO;
+        goto out;
+    }
+    curl = curl_easy_init();
+    if (!curl) {
+        set_error(error, error_size,
+                  "libcurl easy handle could not initialize");
+        errno = ENOMEM;
+        goto out_global;
+    }
+    if (append_header(&headers, "Accept: application/json") < 0 ||
+        append_authorization(&headers, credential) < 0) {
+        set_error(error, error_size, "provider headers could not be allocated");
+        goto out_global;
+    }
+    if (render_request_headers(&ctx, "GET /v1/models HTTP/1.1",
+                               "accept: application/json") < 0) {
+        set_error(error, error_size, ctx.error[0] ? ctx.error :
+                  "model-list request headers could not be rendered");
+        goto out_global;
+    }
+    if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, count_write_cb) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
+                         (long)provider->connect_timeout_ms) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
+                         (long)provider->request_timeout_ms) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
+                         (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                         "snajpagent/" SNAJPAGENT_VERSION) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
+        set_error(error, error_size, "libcurl option setup failed");
+        errno = EIO;
+        goto out_global;
+    }
+    code = perform_with_retry(curl, &ctx, error, error_size, NULL,
+                              &retry_count);
+    if (code != CURLE_OK) {
+        (void)snprintf(error, error_size, "%s%s%s",
+                       ctx.error[0] ? ctx.error : "model discovery failed",
+                       ctx.error[0] ? "" : ": ",
+                       ctx.error[0] ? "" : curl_easy_strerror(code));
+        append_retry_suffix(error, error_size, retry_count,
+                            ctx.request_may_have_been_sent);
+        errno = EIO;
+        goto out_global;
+    }
+    if (ctx.http_status < 200 || ctx.http_status >= 300) {
+        (void)classify_non2xx(&ctx, error, error_size);
+        append_retry_suffix(error, error_size, retry_count,
+                            ctx.request_may_have_been_sent);
+        goto out_global;
+    }
+    rc = parse_models_body(&ctx, models, error, error_size);
+out_global:
+    if (curl)
+        curl_easy_cleanup(curl);
+    curl_slist_free_all(headers);
+    curl_global_cleanup();
+out:
+    snj_buf_free(&ctx.error_body);
+    return rc;
+}
+
 int
 snj_provider_responses_count(const json_t *count_request,
                              const struct snj_config *config,
+                             const struct snj_provider_config *provider,
                              const struct snj_credential *credential,
                              struct snj_render *render,
                              snj_provider_pump_fn pump,
@@ -721,7 +1021,7 @@ snj_provider_responses_count(const json_t *count_request,
         *cancel_code = 0;
     if (retry_count)
         *retry_count = 0u;
-    if (!count_request || !config || !credential || !credential->len ||
+    if (!count_request || !config || !provider || !credential || !credential->len ||
         !input_tokens) {
         set_error(error, error_size, "invalid input-token count request");
         errno = EINVAL;
@@ -730,6 +1030,7 @@ snj_provider_responses_count(const json_t *count_request,
     *input_tokens = 0u;
     memset(&ctx, 0, sizeof(ctx));
     ctx.config = config;
+    ctx.provider = provider;
     ctx.render = render;
     ctx.pump = pump;
     ctx.pump_opaque = pump_opaque;
@@ -742,7 +1043,7 @@ snj_provider_responses_count(const json_t *count_request,
                   "input-token count request exceeds the bounded body limit");
         goto out;
     }
-    if (provider_endpoint_url(config, "/v1/responses/input_tokens",
+    if (provider_endpoint_url(provider, "/v1/responses/input_tokens",
                               url_buffer, sizeof(url_buffer), &url,
                               error, error_size) < 0)
         goto out;
@@ -784,12 +1085,12 @@ snj_provider_responses_count(const json_t *count_request,
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-                         (long)config->connect_timeout_ms) != CURLE_OK ||
+                         (long)provider->connect_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
-                         (long)config->request_timeout_ms) != CURLE_OK ||
+                         (long)provider->request_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
-                         (long)low_speed_seconds(config->idle_timeout_ms)) != CURLE_OK ||
+                         (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_USERAGENT,
                          "snajpagent/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
@@ -840,6 +1141,7 @@ out:
 int
 snj_provider_responses_compact(const json_t *compact_request,
                                const struct snj_config *config,
+                               const struct snj_provider_config *provider,
                                const struct snj_credential *credential,
                                struct snj_render *render,
                                snj_provider_pump_fn pump,
@@ -867,7 +1169,8 @@ snj_provider_responses_compact(const json_t *compact_request,
         *output = NULL;
     if (output_tokens_bound)
         *output_tokens_bound = 0u;
-    if (!compact_request || !config || !credential || !credential->len ||
+    if (!compact_request || !config || !provider || !credential ||
+        !credential->len ||
         !output || !output_tokens_bound) {
         set_error(error, error_size, "invalid compact request");
         errno = EINVAL;
@@ -875,6 +1178,7 @@ snj_provider_responses_compact(const json_t *compact_request,
     }
     memset(&ctx, 0, sizeof(ctx));
     ctx.config = config;
+    ctx.provider = provider;
     ctx.render = render;
     ctx.pump = pump;
     ctx.pump_opaque = pump_opaque;
@@ -887,7 +1191,7 @@ snj_provider_responses_compact(const json_t *compact_request,
                   "compact request exceeds the bounded body limit");
         goto out;
     }
-    if (provider_endpoint_url(config, "/v1/responses/compact",
+    if (provider_endpoint_url(provider, "/v1/responses/compact",
                               url_buffer, sizeof(url_buffer), &url,
                               error, error_size) < 0)
         goto out;
@@ -929,12 +1233,12 @@ snj_provider_responses_compact(const json_t *compact_request,
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-                         (long)config->connect_timeout_ms) != CURLE_OK ||
+                         (long)provider->connect_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
-                         (long)config->request_timeout_ms) != CURLE_OK ||
+                         (long)provider->request_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
-                         (long)low_speed_seconds(config->idle_timeout_ms)) != CURLE_OK ||
+                         (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_USERAGENT,
                          "snajpagent/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
@@ -986,6 +1290,7 @@ out:
 int
 snj_provider_responses_create(const json_t *create_request,
                               const struct snj_config *config,
+                              const struct snj_provider_config *provider,
                               const struct snj_credential *credential,
                               struct snj_render *render,
                               snj_responses_emit_fn emit,
@@ -1010,13 +1315,15 @@ snj_provider_responses_create(const json_t *create_request,
         *cancel_code = 0;
     if (retry_count)
         *retry_count = 0u;
-    if (!create_request || !config || !credential || !credential->len || !graph) {
+    if (!create_request || !config || !provider || !credential ||
+        !credential->len || !graph) {
         set_error(error, error_size, "invalid provider request");
         errno = EINVAL;
         return -1;
     }
     memset(&ctx, 0, sizeof(ctx));
     ctx.config = config;
+    ctx.provider = provider;
     ctx.render = render;
     ctx.pump = pump;
     ctx.pump_opaque = pump_opaque;
@@ -1030,7 +1337,7 @@ snj_provider_responses_create(const json_t *create_request,
         set_error(error, error_size, "provider request exceeds the bounded body limit");
         goto out;
     }
-    if (provider_endpoint_url(config, "/v1/responses",
+    if (provider_endpoint_url(provider, "/v1/responses",
                               url_buffer, sizeof(url_buffer), &url,
                               error, error_size) < 0)
         goto out;
@@ -1071,12 +1378,12 @@ snj_provider_responses_create(const json_t *create_request,
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-                         (long)config->connect_timeout_ms) != CURLE_OK ||
+                         (long)provider->connect_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
-                         (long)config->request_timeout_ms) != CURLE_OK ||
+                         (long)provider->request_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
-                         (long)low_speed_seconds(config->idle_timeout_ms)) != CURLE_OK ||
+                         (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_USERAGENT,
                          "snajpagent/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {

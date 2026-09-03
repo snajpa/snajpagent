@@ -33,12 +33,20 @@ Session data is append-only at the event level. Records are synced so a later
 `snajpagent -r` can rebuild the conversation, active tool state, and local
 lifecycle state without depending on process memory.
 
+The default private application directory is `$HOME/.snajpagent`, with a `-d`
+override. It contains `config.ini`, the `sessions/` and `trash/` directories,
+and the atomically replaced `models.json` provider catalog. Cache age never
+causes an implicit refresh. A missing catalog can be seeded offline from the
+local Codex model cache; only explicit `/model cache` performs provider work.
+
 ## Provider
 
-The provider layer targets the Responses API over HTTP/SSE. The base URL and
-credential environment variable are configured in `config.ini`, which lets the
-same binary talk either to OpenAI directly or to an OpenAI-compatible local
-proxy such as codex-lb.
+The provider layer targets the Responses API over HTTP/SSE. Ordered named
+provider sections independently configure base URLs, credential environment
+variables, timeouts, counting, and compaction. Turns route through the durable
+provider/model/effort session selection. Authenticated `GET /v1/models`
+discovery preserves provider model and reasoning-variant order in the local
+catalog, but typed model identifiers are not checked against the catalog.
 
 Hosted web search is exposed as a Responses request tool. There is no separate
 helper binary for web search.

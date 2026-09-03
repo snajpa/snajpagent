@@ -171,36 +171,22 @@ snj_store_close(struct snj_store *store)
     snj_store_init(store);
 }
 int
-snj_store_open(struct snj_store *store, char *error, size_t error_size)
+snj_store_open(struct snj_store *store, const char *dotdir,
+               char *error, size_t error_size)
 {
-    const char *xdg = getenv("XDG_STATE_HOME");
-    const char *home = getenv("HOME");
-    char *base = NULL;
     char *sessions = NULL;
     char *trash = NULL;
     int rc = -1;
-    if (xdg && *xdg) {
-        if (xdg[0] != '/' || strlen(xdg) > SNJ_PATH_MAX_BYTES) {
-            set_error(error, error_size, "XDG_STATE_HOME must be an absolute UTF-8 path");
-            errno = EINVAL;
-            return -1;
-        }
-        base = snj_strdup_checked(xdg, SNJ_PATH_MAX_BYTES);
-    } else {
-        if (!home || home[0] != '/') {
-            set_error(error, error_size, "HOME is unavailable for the state path");
-            errno = EINVAL;
-            return -1;
-        }
-        base = snj_store_path_join(home, ".local/state");
+    if (!dotdir || dotdir[0] != '/' || strlen(dotdir) > SNJ_PATH_MAX_BYTES ||
+        !snj_utf8_valid((const unsigned char *)dotdir, strlen(dotdir), true)) {
+        set_error(error, error_size,
+                  "dotdir must be an absolute UTF-8 path within the supported limit");
+        errno = EINVAL;
+        return -1;
     }
-    if (!base || !snj_utf8_valid((const unsigned char *)base, strlen(base), true))
-        goto out;
-    if (mkdir_parents(base, error, error_size) < 0 ||
-        ensure_directory(base, 0700, false, error, error_size) < 0)
-        goto out;
-    store->root_path = snj_store_path_join(base, "snajpagent");
-    if (!store->root_path || mkdir_parents(store->root_path, error, error_size) < 0 ||
+    store->root_path = snj_strdup_checked(dotdir, SNJ_PATH_MAX_BYTES);
+    if (!store->root_path ||
+        mkdir_parents(store->root_path, error, error_size) < 0 ||
         ensure_directory(store->root_path, 0700, true, error, error_size) < 0)
         goto out;
     store->root_fd = open_dir_path(store->root_path);
@@ -229,7 +215,6 @@ snj_store_open(struct snj_store *store, char *error, size_t error_size)
 io_error:
     set_error(error, error_size, "cannot open state directory: %s", strerror(errno));
 out:
-    free(base);
     free(sessions);
     free(trash);
     if (rc < 0)
@@ -653,6 +638,15 @@ string_in(const char *value, const char *const *choices, size_t count)
     return false;
 }
 
+static bool
+preference_text_valid(const char *value, size_t size)
+{
+    size_t len;
+
+    return value && (len = strlen(value)) != 0u && len < size &&
+           snj_utf8_valid((const unsigned char *)value, len, true);
+}
+
 static int
 apply_event(struct snj_session *session, const char *type, json_t *data,
             uint64_t seq, char *error, size_t error_size)
@@ -660,23 +654,30 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
     uint64_t n;
 
     if (strcmp(type, "session_created") == 0) {
-        static const char *const keys[] = {
+        static const char *const keys_v1[] = {
             "default_effort", "default_model", "format", "protocol", "workspace"
         };
-        static const char *const efforts[] = {
-            "default", "none", "minimal", "low", "medium", "high", "xhigh"
+        static const char *const keys_v2[] = {
+            "default_effort", "default_model", "default_provider", "format",
+            "protocol", "workspace"
         };
         const char *effort = snj_json_string(data, "default_effort");
         const char *model = snj_json_string(data, "default_model");
+        const char *provider = snj_json_string(data, "default_provider");
         const char *protocol = snj_json_string(data, "protocol");
         const char *workspace = snj_json_string(data, "workspace");
 
-        if (seq != 1 || !snj_json_exact_keys(data, keys, 5u) ||
-            snj_json_integer_u64(data, "format", &n) < 0 || n != 1 ||
+        if (seq != 1 ||
+            snj_json_integer_u64(data, "format", &n) < 0 ||
+            (n == 1u ? !snj_json_exact_keys(data, keys_v1, 5u) :
+             n == 2u ? !snj_json_exact_keys(data, keys_v2, 6u) : true) ||
             !protocol || strcmp(protocol, "responses") != 0 ||
-            !string_in(effort, efforts, sizeof(efforts) / sizeof(efforts[0])) ||
-            !model || !*model || strlen(model) >= sizeof(session->default_model) ||
-            !snj_utf8_valid((const unsigned char *)model, strlen(model), true) ||
+            !preference_text_valid(effort, sizeof(session->default_effort)) ||
+            !preference_text_valid(model, sizeof(session->default_model)) ||
+            (n == 2u && (!provider || !*provider ||
+             strlen(provider) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
+             !snj_utf8_valid((const unsigned char *)provider,
+                             strlen(provider), true))) ||
             !workspace || workspace[0] != '/' ||
             strlen(workspace) > SNJ_PATH_MAX_BYTES ||
             !snj_utf8_valid((const unsigned char *)workspace,
@@ -688,7 +689,10 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         if (!copy_small(session->default_effort,
                         sizeof(session->default_effort), effort) ||
             !copy_small(session->default_model,
-                        sizeof(session->default_model), model))
+                        sizeof(session->default_model), model) ||
+            (n == 2u && !copy_small(session->default_provider,
+                                    sizeof(session->default_provider),
+                                    provider)))
             goto invalid;
     } else if (session->delete_requested) {
         goto invalid;
@@ -851,16 +855,44 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !copy_small(session->default_model,
                         sizeof(session->default_model), new_model))
             goto invalid;
+    } else if (strcmp(type, "model_selection_changed") == 0) {
+        static const char *const keys[] = {
+            "new_effort", "new_model", "new_provider",
+            "old_effort", "old_model", "old_provider"
+        };
+        const char *old_provider = snj_json_string(data, "old_provider");
+        const char *new_provider = snj_json_string(data, "new_provider");
+        const char *old_model = snj_json_string(data, "old_model");
+        const char *new_model = snj_json_string(data, "new_model");
+        const char *old_effort = snj_json_string(data, "old_effort");
+        const char *new_effort = snj_json_string(data, "new_effort");
+        if (session->active_turn || !snj_json_exact_keys(data, keys, 6u) ||
+            !old_provider || !new_provider || !*new_provider ||
+            strcmp(old_provider, session->default_provider) != 0 ||
+            strlen(new_provider) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
+            !snj_utf8_valid((const unsigned char *)new_provider,
+                            strlen(new_provider), true) ||
+            !old_model || strcmp(old_model, session->default_model) != 0 ||
+            !preference_text_valid(new_model, sizeof(session->default_model)) ||
+            !old_effort || strcmp(old_effort, session->default_effort) != 0 ||
+            !preference_text_valid(new_effort, sizeof(session->default_effort)) ||
+            (strcmp(old_provider, new_provider) == 0 &&
+             strcmp(old_model, new_model) == 0 &&
+             strcmp(old_effort, new_effort) == 0) ||
+            !copy_small(session->default_provider,
+                        sizeof(session->default_provider), new_provider) ||
+            !copy_small(session->default_model,
+                        sizeof(session->default_model), new_model) ||
+            !copy_small(session->default_effort,
+                        sizeof(session->default_effort), new_effort))
+            goto invalid;
     } else if (strcmp(type, "effort_changed") == 0) {
         static const char *const keys[] = {"new_effort", "old_effort"};
-        static const char *const efforts[] = {
-            "default", "none", "minimal", "low", "medium", "high", "xhigh"
-        };
         const char *old_effort = snj_json_string(data, "old_effort");
         const char *new_effort = snj_json_string(data, "new_effort");
         if (session->active_turn || !snj_json_exact_keys(data, keys, 2u) ||
-            !string_in(old_effort, efforts, sizeof(efforts) / sizeof(efforts[0])) ||
-            !string_in(new_effort, efforts, sizeof(efforts) / sizeof(efforts[0])) ||
+            !preference_text_valid(old_effort, sizeof(session->default_effort)) ||
+            !preference_text_valid(new_effort, sizeof(session->default_effort)) ||
             strcmp(old_effort, session->default_effort) != 0 ||
             strcmp(old_effort, new_effort) == 0 ||
             !copy_small(session->default_effort,
@@ -1798,14 +1830,16 @@ canonical_workspace(const char *workspace, char *error, size_t error_size)
 }
 
 static json_t *
-session_created_data(const char *workspace, const char *model,
+session_created_data(const char *workspace, const char *provider,
+                     const char *model,
                      const char *effort)
 {
     json_t *data = json_object();
     if (!data ||
         json_set_new(data, "default_effort", json_string(effort)) < 0 ||
         json_set_new(data, "default_model", json_string(model)) < 0 ||
-        json_set_new(data, "format", json_integer(1)) < 0 ||
+        json_set_new(data, "default_provider", json_string(provider)) < 0 ||
+        json_set_new(data, "format", json_integer(2)) < 0 ||
         json_set_new(data, "protocol", json_string("responses")) < 0 ||
         json_set_new(data, "workspace", json_string(workspace)) < 0) {
         if (data)
@@ -1817,7 +1851,8 @@ session_created_data(const char *workspace, const char *model,
 
 int
 snj_session_create(struct snj_store *store, struct snj_session *session,
-                   const char *workspace, const char *model, const char *effort,
+                   const char *workspace, const char *provider,
+                   const char *model, const char *effort,
                    char *error, size_t error_size)
 {
     char *resolved = NULL;
@@ -1878,13 +1913,16 @@ snj_session_create(struct snj_store *store, struct snj_session *session,
         goto out;
     session->workspace = resolved;
     resolved = NULL;
-    if (!copy_small(session->default_model, sizeof(session->default_model), model) ||
+    if (!copy_small(session->default_provider,
+                    sizeof(session->default_provider), provider) ||
+        !copy_small(session->default_model, sizeof(session->default_model), model) ||
         !copy_small(session->default_effort, sizeof(session->default_effort), effort)) {
         errno = EOVERFLOW;
         goto out;
     }
     if (snj_session_commit(session, "session_created",
-                           session_created_data(session->workspace, model, effort),
+                           session_created_data(session->workspace, provider,
+                                                model, effort),
                            NULL, error, error_size) < 0)
         goto out;
     if (snj_sync_dir(session->dir_fd) < 0 || snj_sync_dir(store->sessions_fd) < 0) {

@@ -71,13 +71,11 @@ main(void)
     assert(mkdir(workspace, 0700) == 0);
     assert(snprintf(workspace2, sizeof(workspace2), "%s/work2", temp) > 0);
     assert(mkdir(workspace2, 0700) == 0);
-    assert(setenv("XDG_STATE_HOME", state, 1) == 0);
-
     snj_store_init(&store);
     snj_session_init(&session);
-    assert(snj_store_open(&store, error, sizeof(error)) == 0);
+    assert(snj_store_open(&store, state, error, sizeof(error)) == 0);
     assert(snj_session_create(&store, &session, workspace,
-                              "gpt-5.5-2026-04-23", "default",
+                              "default", "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     memcpy(id_prefix, session.id, 8u);
@@ -154,7 +152,7 @@ main(void)
 
     snj_session_init(&session);
     assert(snj_session_create(&store, &session, workspace,
-                              "gpt-5.5-2026-04-23", "default",
+                              "default", "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     memcpy(id_prefix, session.id, 8u);

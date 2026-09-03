@@ -14,7 +14,8 @@ from pathlib import Path
 
 binary = os.path.abspath(sys.argv[1])
 workspace = os.path.abspath(sys.argv[2])
-state_root = Path(os.environ["XDG_STATE_HOME"]) / "snajpagent" / "sessions"
+dotdir = os.environ["SNAJPAGENT_DOTDIR"]
+state_root = Path(dotdir) / "sessions"
 prompt = "› ".encode()
 text = b"resize draft"
 
@@ -34,7 +35,7 @@ before = session_ids()
 pid, fd = pty.fork()
 if pid == 0:
     os.chdir(workspace)
-    os.execv(binary, [binary, "-vvvv"])
+    os.execv(binary, [binary, "-d", dotdir, "-vvvv"])
 
 buf = bytearray()
 

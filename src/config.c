@@ -2,7 +2,6 @@
 #include "config.h"
 #include "base.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -34,6 +33,9 @@ struct parse_state {
     enum section section;
     unsigned int seen_sections;
     unsigned int seen_keys[SECTION_COUNT];
+    unsigned int seen_provider_keys[SNJ_CONFIG_PROVIDER_MAX];
+    size_t provider_index;
+    bool providers_started;
 };
 
 static void
@@ -59,20 +61,29 @@ copy_value(char *dst, size_t size, const char *value)
     return 0;
 }
 
+static void
+provider_init(struct snj_provider_config *provider, const char *name)
+{
+    memset(provider, 0, sizeof(*provider));
+    (void)snprintf(provider->name, sizeof(provider->name), "%s", name);
+    provider->connect_timeout_ms = 30000u;
+    provider->idle_timeout_ms = 120000u;
+    provider->request_timeout_ms = 1800000u;
+    provider->auto_compact_input_tokens = 120000u;
+    provider->exact_token_count = true;
+    provider->native_compaction = true;
+    memcpy(provider->base_url, "https://api.openai.com", 23u);
+    memcpy(provider->api_key_env, "OPENAI_API_KEY", 15u);
+}
+
 void
 snj_config_init(struct snj_config *config)
 {
     memset(config, 0, sizeof(*config));
     memcpy(config->model, "default", 8u);
     memcpy(config->reasoning_effort, "default", 8u);
-    config->connect_timeout_ms = 30000u;
-    config->idle_timeout_ms = 120000u;
-    config->request_timeout_ms = 1800000u;
-    config->auto_compact_input_tokens = 120000u;
-    config->provider_exact_token_count = true;
-    config->provider_native_compaction = true;
-    memcpy(config->provider_base_url, "https://api.openai.com", 23u);
-    memcpy(config->provider_api_key_env, "OPENAI_API_KEY", 15u);
+    provider_init(&config->providers[0], "default");
+    config->provider_count = 1u;
     config->verbosity = 0u;
     config->color = SNJ_COLOR_AUTO;
     config->resume_history_turns = 2u;
@@ -139,18 +150,6 @@ parse_bool(const char *text, bool *out)
     }
     errno = EINVAL;
     return -1;
-}
-
-static bool
-effort_valid(const char *value)
-{
-    static const char *const values[] = {
-        "default", "none", "minimal", "low", "medium", "high", "xhigh"
-    };
-    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
-        if (strcmp(value, values[i]) == 0)
-            return true;
-    return false;
 }
 
 static bool
@@ -255,13 +254,48 @@ parse_secret_env(struct snj_config *config, const char *value)
 }
 
 static int
-set_section(struct parse_state *state, const char *name)
+set_provider_section(struct parse_state *state, const char *name)
+{
+    struct snj_config *config = state->config;
+    const unsigned char *p = (const unsigned char *)name;
+
+    if (!*p || strlen(name) > SNJ_CONFIG_PROVIDER_NAME_MAX)
+        goto invalid;
+    for (; *p; ++p)
+        if (!((*p >= 'A' && *p <= 'Z') ||
+              (*p >= 'a' && *p <= 'z') ||
+              (*p >= '0' && *p <= '9') ||
+              *p == '.' || *p == '_' || *p == '-'))
+            goto invalid;
+    if (!state->providers_started) {
+        memset(config->providers, 0, sizeof(config->providers));
+        config->provider_count = 0u;
+        state->providers_started = true;
+    }
+    for (size_t i = 0; i < config->provider_count; ++i)
+        if (strcmp(config->providers[i].name, name) == 0)
+            goto invalid;
+    if (config->provider_count >= SNJ_CONFIG_PROVIDER_MAX)
+        goto invalid;
+    state->provider_index = config->provider_count++;
+    provider_init(&config->providers[state->provider_index], name);
+    state->section = SECTION_PROVIDER;
+    return 0;
+invalid:
+    errno = EINVAL;
+    return -1;
+}
+
+static int
+set_section(struct parse_state *state, char *name)
 {
     enum section section;
     if (strcmp(name, "agent") == 0)
         section = SECTION_AGENT;
     else if (strcmp(name, "provider") == 0)
-        section = SECTION_PROVIDER;
+        return set_provider_section(state, "default");
+    else if (strncmp(name, "provider ", 9u) == 0)
+        return set_provider_section(state, trim(name + 9u));
     else if (strcmp(name, "ui") == 0)
         section = SECTION_UI;
     else if (strcmp(name, "tool") == 0)
@@ -282,11 +316,14 @@ set_section(struct parse_state *state, const char *name)
 static int
 claim_key(struct parse_state *state, unsigned int bit)
 {
-    if (state->seen_keys[state->section] & (1u << bit)) {
+    unsigned int *seen = state->section == SECTION_PROVIDER ?
+        &state->seen_provider_keys[state->provider_index] :
+        &state->seen_keys[state->section];
+    if (*seen & (1u << bit)) {
         errno = EINVAL;
         return -1;
     }
-    state->seen_keys[state->section] |= 1u << bit;
+    *seen |= 1u << bit;
     return 0;
 }
 
@@ -299,7 +336,7 @@ parse_agent(struct parse_state *state, const char *key, const char *value)
                copy_value(config->model, sizeof(config->model), value);
     }
     if (strcmp(key, "reasoning_effort") == 0) {
-        if (claim_key(state, 1u) < 0 || !effort_valid(value))
+        if (claim_key(state, 1u) < 0)
             goto invalid;
         return copy_value(config->reasoning_effort,
                           sizeof(config->reasoning_effort), value);
@@ -312,38 +349,39 @@ invalid:
 static int
 parse_provider(struct parse_state *state, const char *key, const char *value)
 {
-    struct snj_config *config = state->config;
+    struct snj_provider_config *provider =
+        &state->config->providers[state->provider_index];
     if (strcmp(key, "connect_timeout_ms") == 0)
         return claim_key(state, 0u) < 0 ? -1 :
-               parse_u32(value, 1000u, 120000u, &config->connect_timeout_ms);
+               parse_u32(value, 1000u, 120000u, &provider->connect_timeout_ms);
     if (strcmp(key, "idle_timeout_ms") == 0)
         return claim_key(state, 1u) < 0 ? -1 :
-               parse_u32(value, 1000u, 600000u, &config->idle_timeout_ms);
+               parse_u32(value, 1000u, 600000u, &provider->idle_timeout_ms);
     if (strcmp(key, "request_timeout_ms") == 0)
         return claim_key(state, 2u) < 0 ? -1 :
-               parse_u32(value, 1000u, 3600000u, &config->request_timeout_ms);
+               parse_u32(value, 1000u, 3600000u, &provider->request_timeout_ms);
     if (strcmp(key, "auto_compact_input_tokens") == 0)
         return claim_key(state, 3u) < 0 ? -1 :
                parse_u32(value, 0u, 4000000u,
-                         &config->auto_compact_input_tokens);
+                         &provider->auto_compact_input_tokens);
     if (strcmp(key, "base_url") == 0)
         return claim_key(state, 4u) < 0 ? -1 :
-               copy_base_url(config->provider_base_url,
-                             sizeof(config->provider_base_url), value);
+               copy_base_url(provider->base_url,
+                             sizeof(provider->base_url), value);
     if (strcmp(key, "api_key_env") == 0) {
         if (claim_key(state, 5u) < 0 ||
             strlen(value) > SNJ_CONFIG_ENV_NAME_MAX ||
             !env_name_valid(value))
             goto invalid;
-        return copy_value(config->provider_api_key_env,
-                          sizeof(config->provider_api_key_env), value);
+        return copy_value(provider->api_key_env,
+                          sizeof(provider->api_key_env), value);
     }
     if (strcmp(key, "exact_token_count") == 0)
         return claim_key(state, 6u) < 0 ? -1 :
-               parse_bool(value, &config->provider_exact_token_count);
+               parse_bool(value, &provider->exact_token_count);
     if (strcmp(key, "native_compaction") == 0)
         return claim_key(state, 7u) < 0 ? -1 :
-               parse_bool(value, &config->provider_native_compaction);
+               parse_bool(value, &provider->native_compaction);
 invalid:
     errno = EINVAL;
     return -1;
@@ -488,26 +526,16 @@ parse_file(struct snj_config *config, char *text, char *error, size_t error_size
 }
 
 static char *
-default_path(char *error, size_t error_size)
+default_path(const char *dotdir, char *error, size_t error_size)
 {
-    const char *base = getenv("XDG_CONFIG_HOME");
-    const char *home;
     struct snj_buf path;
     char *result = NULL;
 
     snj_buf_init(&path, SNJ_CONFIG_PATH_MAX);
-    if (base && *base) {
-        if (base[0] != '/')
-            goto invalid;
-        if (snj_buf_printf(&path, "%s/snajpagent/config.ini", base) < 0)
-            goto unavailable;
-    } else {
-        home = getenv("HOME");
-        if (!home || home[0] != '/')
-            goto invalid;
-        if (snj_buf_printf(&path, "%s/.config/snajpagent/config.ini", home) < 0)
-            goto unavailable;
-    }
+    if (!dotdir || dotdir[0] != '/')
+        goto invalid;
+    if (snj_buf_printf(&path, "%s/config.ini", dotdir) < 0)
+        goto unavailable;
     if (snj_buf_terminate(&path) < 0)
         goto unavailable;
     result = (char *)path.data;
@@ -516,7 +544,7 @@ default_path(char *error, size_t error_size)
     return result;
 invalid:
     set_error(error, error_size,
-              "configuration root requires an absolute XDG_CONFIG_HOME or HOME");
+              "configuration requires an absolute dotdir");
     errno = EINVAL;
     snj_buf_free(&path);
     return NULL;
@@ -613,6 +641,7 @@ invalid:
 
 int
 snj_config_load(struct snj_config *config, const char *explicit_path,
+                const char *dotdir,
                 char *error, size_t error_size)
 {
     struct snj_buf text;
@@ -634,7 +663,7 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
         return -1;
     }
     if (!path) {
-        owned_path = default_path(error, error_size);
+        owned_path = default_path(dotdir, error, error_size);
         if (!owned_path)
             return -1;
         path = owned_path;
@@ -659,4 +688,17 @@ out:
     free(owned_path);
     snj_buf_free(&text);
     return rc;
+}
+
+const struct snj_provider_config *
+snj_config_provider(const struct snj_config *config, const char *name)
+{
+    if (!config || config->provider_count == 0u)
+        return NULL;
+    if (!name)
+        return &config->providers[0];
+    for (size_t i = 0; i < config->provider_count; ++i)
+        if (strcmp(config->providers[i].name, name) == 0)
+            return &config->providers[i];
+    return NULL;
 }

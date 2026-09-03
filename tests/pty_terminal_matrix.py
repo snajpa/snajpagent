@@ -13,7 +13,8 @@ from pathlib import Path
 
 binary = os.path.abspath(sys.argv[1])
 workspace = os.path.abspath(sys.argv[2])
-state_root = Path(os.environ["XDG_STATE_HOME"]) / "snajpagent" / "sessions"
+dotdir = os.environ["SNAJPAGENT_DOTDIR"]
+state_root = Path(dotdir) / "sessions"
 prompt = "› ".encode()
 
 
@@ -40,7 +41,7 @@ def run_case(term, cols, expect_ansi, expected_text):
         os.chdir(workspace)
         os.environ["TERM"] = term
         set_winsize(0, 24, cols)
-        os.execv(binary, [binary, "-vvvv"])
+        os.execv(binary, [binary, "-d", dotdir, "-vvvv"])
 
     buf = bytearray()
 

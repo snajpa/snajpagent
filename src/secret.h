@@ -6,7 +6,8 @@
 #include "credential.h"
 #include "wire.h"
 
-#define SNJ_SECRET_VALUES_MAX (1u + SNJ_CONFIG_SECRET_ENV_MAX)
+#define SNJ_SECRET_VALUES_MAX \
+    (1u + SNJ_CONFIG_PROVIDER_MAX + SNJ_CONFIG_SECRET_ENV_MAX)
 
 struct snj_secret_set {
     const char *values[SNJ_SECRET_VALUES_MAX];
