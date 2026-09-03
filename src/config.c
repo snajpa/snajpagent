@@ -106,6 +106,7 @@ snj_config_init(struct snj_config *config)
     config->verbosity = 0u;
     config->color = SNJ_COLOR_AUTO;
     config->resume_history_turns = 2u;
+    config->typing_pause_ms = 500u;
     config->shell = snj_strdup_checked("/bin/sh", SNJ_CONFIG_PATH_MAX);
     config->default_yield_ms = 10000u;
     config->default_timeout_ms = 1800000u;
@@ -452,6 +453,9 @@ parse_ui(struct parse_state *state, const char *key, const char *value)
         config->resume_history_turns = (unsigned int)parsed;
         return 0;
     }
+    if (strcmp(key, "typing_pause_ms") == 0)
+        return claim_key(state, 3u) < 0 ? -1 :
+               parse_u32(value, 0u, 5000u, &config->typing_pause_ms);
     errno = EINVAL;
     return -1;
 }

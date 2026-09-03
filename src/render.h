@@ -21,6 +21,9 @@ struct snj_render {
     bool stdout_item_ended_lf;
     bool protocol_warning_shown;
     struct snj_term *term;
+    struct snj_buf wrap_pending;
+    size_t public_column;
+    bool wrap_has_word;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
 };

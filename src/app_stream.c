@@ -146,6 +146,24 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     int fd = STDOUT_FILENO;
     const char *label = NULL;
 
+    while (len && !app->steering_requested && !app->interrupt_requested) {
+        uint32_t remaining = snj_term_typing_pause_remaining(
+            &app->term, snj_time_ms());
+        int input_rc;
+
+        if (!remaining)
+            break;
+        input_rc = snj_app_active_input_pump(
+            app, remaining > 20u ? 20u : remaining);
+        if (input_rc < 0) {
+            app->stream_failed = true;
+            return -1;
+        }
+        if (input_rc == 1 || input_rc == 2)
+            break;
+    }
+    if (app->steering_requested || app->interrupt_requested)
+        return 0;
     if (len) {
         app->active_since_ms = snj_time_ms();
         app->activity_shown = false;

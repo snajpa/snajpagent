@@ -176,9 +176,10 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
     return 0;
 }
 
-static size_t
-display_width(const unsigned char *text, size_t len)
+size_t
+snj_term_text_width(const char *value, size_t len)
 {
+    const unsigned char *text = (const unsigned char *)value;
     size_t width = 0u;
     size_t i = 0u;
 
@@ -274,6 +275,47 @@ snj_term_init(struct snj_term *term)
     snj_buf_init(&term->draft, SNJ_MAX_DIRECT_PROMPT + 1u);
     term->columns = 80u;
     term->history_pos = SIZE_MAX;
+}
+
+void
+snj_term_set_typing_pause(struct snj_term *term, uint32_t pause_ms)
+{
+    if (term)
+        term->typing_pause_ms = pause_ms;
+}
+
+uint32_t
+snj_term_typing_pause_remaining(const struct snj_term *term, uint64_t now_ms)
+{
+    uint64_t elapsed;
+
+    if (!term || !term->active || !term->typing_active ||
+        term->typing_pause_ms == 0u)
+        return 0u;
+    elapsed = now_ms >= term->last_input_ms ? now_ms - term->last_input_ms : 0u;
+    return elapsed >= term->typing_pause_ms ? 0u :
+           term->typing_pause_ms - (uint32_t)elapsed;
+}
+
+bool
+snj_term_typing_active(const struct snj_term *term)
+{
+    return term && term->active && term->typing_active;
+}
+
+void
+snj_term_note_output(struct snj_term *term, const char *text, size_t len)
+{
+    if (!term || !len)
+        return;
+    term->output_seen = true;
+    term->output_ended_lf = text[len - 1u] == '\n';
+}
+
+unsigned int
+snj_term_columns(const struct snj_term *term)
+{
+    return term ? term->columns : 80u;
 }
 
 void
@@ -445,19 +487,54 @@ snj_term_hide(struct snj_term *term)
 }
 
 static int
+leave_prompt(struct snj_term *term)
+{
+    if (!term->opened || !term->prompt_visible)
+        return 0;
+    if (term->capable && term->rendered_cursor_row + 1u < term->rendered_rows &&
+        move_cursor(term->rendered_rows - term->rendered_cursor_row - 1u, 'B') < 0)
+        return -1;
+    if (snj_write_full(STDERR_FILENO, term->capable ? "\r\n" : "\n",
+                       term->capable ? 2u : 1u) < 0)
+        return -1;
+    term->prompt_visible = false;
+    term->rendered_rows = 0u;
+    term->rendered_cursor_row = 0u;
+    term->output_seen = false;
+    term->output_ended_lf = true;
+    return 0;
+}
+
+static void
+mark_input_activity(struct snj_term *term)
+{
+    if (!term->active)
+        return;
+    term->typing_active = true;
+    term->last_input_ms = snj_time_ms();
+}
+
+static int
 redraw(struct snj_term *term)
 {
     struct snj_buf out;
     size_t cursor_row = 0u, cursor_col = 0u;
     size_t end_row = 0u, end_col = 0u;
     size_t label_len = strlen(term->label);
-    size_t label_cols = display_width((const unsigned char *)term->label,
-                                      label_len);
+    size_t label_cols = snj_term_text_width(term->label, label_len);
     size_t max;
     int rc = -1;
 
     if (!term->opened || !term->prompt_wanted || term->output_depth)
         return 0;
+    if (term->active && term->typing_active && !term->prompt_visible &&
+        term->output_seen) {
+        if (!term->output_ended_lf &&
+            snj_write_full(STDERR_FILENO, term->capable ? "\r\n" : "\n",
+                           term->capable ? 2u : 1u) < 0)
+            return -1;
+        term->output_seen = false;
+    }
     if (!term->capable) {
         int fallback_rc = 0;
 
@@ -526,12 +603,27 @@ snj_term_set_prompt(struct snj_term *term, bool active)
 {
     const char *label = active ? "steer › " : "› ";
 
+    return snj_term_set_prompt_label(term, active, label);
+}
+
+int
+snj_term_set_prompt_label(struct snj_term *term, bool active,
+                          const char *label)
+{
+    size_t len;
+
+    if (!term || !label || !(len = strlen(label)) || len >= sizeof(term->label)) {
+        errno = EINVAL;
+        return -1;
+    }
     if (snj_term_hide(term) < 0)
         return -1;
     term->active = active;
+    if (!active)
+        term->typing_active = false;
     term->prompt_wanted = true;
     term->line_submission_echoed = false;
-    (void)snprintf(term->label, sizeof(term->label), "%s", label);
+    memcpy(term->label, label, len + 1u);
     return redraw(term);
 }
 
@@ -546,9 +638,19 @@ snj_term_output_begin(struct snj_term *term, bool persistent)
         errno = EOVERFLOW;
         return -1;
     }
-    if (term->output_depth++ == 0u && snj_term_hide(term) < 0) {
-        --term->output_depth;
-        return -1;
+    if (term->output_depth++ == 0u) {
+        int rc;
+
+        if (term->active && term->typing_active) {
+            rc = leave_prompt(term);
+            term->typing_active = false;
+        } else {
+            rc = snj_term_hide(term);
+        }
+        if (rc < 0) {
+            --term->output_depth;
+            return -1;
+        }
     }
     return 0;
 }
@@ -563,7 +665,7 @@ snj_term_output_end(struct snj_term *term)
         return -1;
     }
     --term->output_depth;
-    return term->output_depth ? 0 : redraw(term);
+    return term->output_depth || term->active ? 0 : redraw(term);
 }
 
 int
@@ -646,6 +748,7 @@ int
 snj_term_restore_draft(struct snj_term *term, const char *text)
 {
     term->prompt_wanted = true;
+    mark_input_activity(term);
     return replace_draft(term, text);
 }
 
@@ -741,6 +844,7 @@ insert_bytes(struct snj_term *term, const unsigned char *data, size_t len)
     term->draft.len += len;
     term->cursor += len;
     history_reset_navigation(term);
+    mark_input_activity(term);
     return redraw(term);
 }
 
@@ -756,6 +860,7 @@ delete_range(struct snj_term *term, size_t start, size_t end)
     term->draft.len -= end - start;
     term->cursor = start;
     history_reset_navigation(term);
+    mark_input_activity(term);
     return redraw(term);
 }
 
@@ -797,6 +902,7 @@ replace_command_name(struct snj_term *term, const char *name, size_t name_len,
     term->draft.len = next_len;
     term->cursor = name_len;
     history_reset_navigation(term);
+    mark_input_activity(term);
     return redraw(term);
 }
 
@@ -901,6 +1007,7 @@ complete_action(struct snj_term *term, enum snj_term_action action,
     snj_buf_reset(&term->draft);
     term->cursor = 0u;
     term->prompt_wanted = false;
+    term->typing_active = false;
     history_reset_navigation(term);
     *text = copy;
     *out = action;
@@ -972,6 +1079,7 @@ static const struct escape_key keys[] = {
 static int
 apply_key(struct snj_term *term, int key)
 {
+    mark_input_activity(term);
     switch (key) {
     case KEY_UP:
         return history_up(term);

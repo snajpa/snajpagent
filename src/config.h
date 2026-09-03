@@ -44,6 +44,7 @@ struct snj_config {
     unsigned int verbosity;
     enum snj_color_mode color;
     unsigned int resume_history_turns;
+    uint32_t typing_pause_ms;
     char *shell;
     uint32_t default_yield_ms;
     uint32_t default_timeout_ms;

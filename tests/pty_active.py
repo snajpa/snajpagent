@@ -151,6 +151,50 @@ def test_split_utf8_steering():
     assert interrupted["data"]["partial_public"] == []
 
 
+def test_typing_pause_and_stream_snapshots():
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
+        "typing-pause.ini"
+    config.write_text("[ui]\ntyping_pause_ms = 300\n", encoding="utf-8")
+    before = session_ids()
+    child = Child(["-c", str(config)])
+    child.wait(PROMPT)
+    child.send(b"typing_stream\r")
+    first_end = child.wait(b"model-output-one")
+
+    child.send(b"a")
+    child.wait(b"steer " + PROMPT + b"a", start=first_end)
+    time.sleep(0.1)
+    child.send(b"b")
+    child.wait(b"steer " + PROMPT + b"ab", start=first_end)
+    second_start = time.monotonic()
+    quiet_start = len(child.buf)
+    child.drain(0.15)
+    assert b"model-output-two" not in child.buf[quiet_start:]
+    second_end = child.wait(b"model-output-two", start=quiet_start)
+    assert time.monotonic() - second_start >= 0.20
+
+    child.send(b"c")
+    child.wait(b"steer " + PROMPT + b"abc", start=second_end)
+    third_start = time.monotonic()
+    quiet_start = len(child.buf)
+    child.drain(0.15)
+    assert b"model-output-three" not in child.buf[quiet_start:]
+    third_end = child.wait(b"model-output-three", start=quiet_start)
+    assert time.monotonic() - third_start >= 0.20
+    child.wait(PROMPT + b"abc", start=third_end)
+    child.send(b"\x15")
+    child.wait(PROMPT, start=third_end)
+    child.send(b"/exit\r")
+    _, status = os.waitpid(child.pid, 0)
+    os.close(child.fd)
+    assert os.waitstatus_to_exitcode(status) == 0
+
+    completed = one(events(new_session(before)), "response_completed")
+    assert completed["data"]["items"][0]["text"] == (
+        "model-output-one model-output-two model-output-three"
+    )
+
+
 def test_armed_fifo():
     before = session_ids()
     child = Child([])
@@ -461,6 +505,92 @@ def test_goal_refusal_failure_block_and_restart_pause():
     assert pauses[-1]["data"]["reason"] == "session_resumed"
 
 
+def test_queue_mutation_commands():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"queue_slow\r")
+    child.wait(b"working slowly")
+
+    for text in (b"first", b"second", b"third"):
+        child.send(text + b"\t")
+        child.wait(b"next " + PROMPT + text)
+
+    start = len(child.buf)
+    child.send(b"/q\r")
+    listed = child.wait(b"3 ", start=start)
+    child.wait(b"first", start=start)
+    child.wait(b"second", start=start)
+    child.wait(b"third", start=start)
+    child.wait(b"steer " + PROMPT, start=listed)
+
+    child.send(b"/q p\r")
+    child.wait(b"1 future turn cancelled")
+    child.send(b"/q 1d\r")
+    child.wait(b"1 future turn cancelled")
+
+    child.send(b"/q 1e\r")
+    child.wait(b"edit 1 " + PROMPT + b"second")
+    child.send(b" active\r")
+    child.wait(b"edit 1 " + PROMPT + b"second active")
+
+    child.send(b"fourth\t")
+    child.wait(b"next " + PROMPT + b"fourth")
+    child.send(b"\x03")
+    interrupted_end = child.wait(b"turn interrupted")
+    child.wait(b"\r" + PROMPT, start=interrupted_end)
+
+    child.send(b"/queue 1 edit\r")
+    child.wait(b"edit 1 " + PROMPT + b"second active")
+    child.send(b" idle\r")
+    child.wait(b"edit 1 " + PROMPT + b"second active idle")
+
+    child.send(b"/exit\r")
+    _, status = os.waitpid(child.pid, 0)
+    os.close(child.fd)
+    assert os.waitstatus_to_exitcode(status) == 0
+
+    session_id = new_session(before)
+    resumed = Child(["-r", session_id])
+    resumed.wait(b"2 queued paused")
+    resumed.wait(PROMPT)
+    start = len(resumed.buf)
+    resumed.send(b"/q\r")
+    resumed.wait(b"second active idle", start=start)
+    resumed.wait(b"fourth", start=start)
+    resumed.send(b"/queue clear\r")
+    cleared_end = resumed.wait(b"2 future turns cancelled", start=start)
+    resumed.send(b"/q\r")
+    empty_end = resumed.wait(b"future-turn queue is empty", start=cleared_end)
+    resumed.wait(PROMPT, start=empty_end)
+    resumed.send(b"/exit\r")
+    _, status = os.waitpid(resumed.pid, 0)
+    os.close(resumed.fd)
+    assert os.waitstatus_to_exitcode(status) == 0
+
+    log = events(session_id)
+    queued = [item for item in log if item["type"] == "future_turn_queued"]
+    edited = [item for item in log if item["type"] == "future_turn_edited"]
+    cancelled = [item for item in log
+                 if item["type"] == "future_turn_cancelled"]
+    assert [item["data"]["text"] for item in queued] == [
+        "first", "second", "third", "fourth"
+    ]
+    assert [item["data"]["text"] for item in edited] == [
+        "second active", "second active idle"
+    ]
+    assert all(item["data"]["queue_id"] == queued[1]["data"]["queue_id"]
+               for item in edited)
+    assert cancelled[0]["data"]["queue_ids"] == [
+        queued[2]["data"]["queue_id"]
+    ]
+    assert cancelled[1]["data"]["queue_ids"] == [
+        queued[0]["data"]["queue_id"]
+    ]
+    assert cancelled[2]["data"]["queue_ids"] == [
+        queued[1]["data"]["queue_id"], queued[3]["data"]["queue_id"]
+    ]
+
 
 def test_preferences_and_verbosity():
     before = session_ids()
@@ -518,7 +648,6 @@ def test_command_name_completion():
         (b"/go", b"/goal"),
         (b"/v", b"/verbose"),
         (b"/q", b"/queue"),
-        (b"/u", b"/unqueue"),
         (b"/n", b"/next"),
         (b"/a", b"/archive"),
         (b"/c", b"/compact"),
@@ -833,6 +962,7 @@ def test_config_and_cli_model_passthrough():
 test_utf8_prompt_cursor_column()
 test_steering()
 test_split_utf8_steering()
+test_typing_pause_and_stream_snapshots()
 test_armed_fifo()
 test_interrupt()
 test_multiline_and_paste()
@@ -844,6 +974,7 @@ test_goal_model_rewrite_and_lock()
 test_goal_pause_resume_and_queue_priority()
 test_goal_user_terminal_commands_and_unlock()
 test_goal_refusal_failure_block_and_restart_pause()
+test_queue_mutation_commands()
 test_preferences_and_verbosity()
 test_command_name_completion()
 test_uncached_typed_model_selection()

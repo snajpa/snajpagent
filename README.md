@@ -19,6 +19,8 @@ interactive path is usable.
   blocking from the model.
 - `-r` resume support without a background daemon, tmux session, or socket.
 - Interactive mode, one-shot execution mode, and session listing.
+- Terminal-width wrapping for streamed model text without changing stored or
+  redirected response bytes.
 - OpenAI Responses streaming over libcurl, including hosted `web_search`.
 - Codex-style instruction discovery from `AGENTS.override.md` and `AGENTS.md`.
 - Tool support for `exec_command`, yielded process handles, `write_stdin`, and
@@ -120,6 +122,22 @@ next automatic goal turn, and refusal, turn failure, terminal input closure,
 or process restart pauses automatic continuation. See
 [`design/goals.md`](design/goals.md) for the complete lifecycle contract.
 
+While a response is streaming, typing opens the `steer › ` composer on a new
+line and briefly pauses visible model output. Tab queues the current composer
+text as a future turn. `/queue` or `/q` lists queued turns with one-based
+numbers. Queue mutations accept these short and long forms:
+
+```text
+/q 2d          /queue 2 delete
+/q 2e          /queue 2 edit
+/q c           /queue clear
+/q p           /queue pop
+```
+
+`pop` removes the newest queued turn. Editing reopens the selected text under
+an `edit N › ` prompt and saves it in the same FIFO position with Enter (or
+with Tab while another turn is active).
+
 ## Configuration
 
 By default snajpagent keeps all private application data under:
@@ -203,6 +221,14 @@ native_compaction = false
 ```
 
 Set the environment variable named by `api_key_env` before starting the agent.
+
+The optional typing pause is measured from the most recent input edit, accepts
+`0` through `5000` milliseconds, and defaults to `500`:
+
+```ini
+[ui]
+typing_pause_ms = 500
+```
 
 Other supported config sections are `[ui]` and `[tool]`; the parser in
 `src/config.c` is currently the source of truth for every accepted key.

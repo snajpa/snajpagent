@@ -349,6 +349,20 @@ snj_app_future_turn_queued_data(const char *turn_id, const char *queue_id,
 }
 
 json_t *
+snj_app_future_turn_edited_data(const char *queue_id, const char *text)
+{
+    json_t *data = json_object();
+
+    if (!data || snj_json_set_new(data, "queue_id", json_string(queue_id)) < 0 ||
+        snj_json_set_new(data, "text", json_string(text)) < 0) {
+        if (data)
+            json_decref(data);
+        return NULL;
+    }
+    return data;
+}
+
+json_t *
 snj_app_future_turn_cancelled_data(const struct snj_session *session,
                            const bool remove[SNJ_MAX_PENDING_TURNS])
 {

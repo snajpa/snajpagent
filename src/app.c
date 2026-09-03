@@ -136,8 +136,7 @@ static const struct snj_term_command commands[] = {
     {"/effort [LEVEL]", "show or set next-turn effort"},
     {"/goal [COMMAND|TEXT]", "show, start, or control a persistent goal"},
     {"/verbose [0..6]", "show or set this process's verbosity"},
-    {"/queue [TEXT]", "list or queue future turns"},
-    {"/unqueue ID|all", "cancel queued turns"},
+    {"/queue [TEXT|ACTION]", "list/add/edit/delete/clear/pop queued turns (/q alias)"},
     {"/next", "run the oldest paused turn"},
     {"/archive", "archive idle session and exit"},
     {"/compact", "compact the idle session context"},
@@ -223,13 +222,124 @@ render_queue(struct app_state *app)
         return app_warning(app, "future-turn queue is empty");
     for (size_t i = 0; i < app->session.pending_queue_count; ++i) {
         char label[64];
-        (void)snprintf(label, sizeof(label), "next %.8s › ",
+        (void)snprintf(label, sizeof(label), "%zu %.8s › ", i + 1u,
                        app->session.pending_queue[i].queue_id);
         if (snj_render_submitted(&app->render, label,
                                  app->session.pending_queue[i].text) < 0)
             return -1;
     }
     return 0;
+}
+
+static int
+set_input_prompt(struct app_state *app, bool active)
+{
+    char label[32];
+
+    if (!app->queue_edit_id[0])
+        return snj_term_set_prompt(&app->term, active);
+    if (snprintf(label, sizeof(label), "edit %zu › ",
+                 app->queue_edit_number) < 0) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return snj_term_set_prompt_label(&app->term, active, label);
+}
+
+static struct snj_queued_turn *
+queued_by_id(struct app_state *app, const char *queue_id, size_t *index)
+{
+    for (size_t i = 0; i < app->session.pending_queue_count; ++i) {
+        if (strcmp(app->session.pending_queue[i].queue_id, queue_id) == 0) {
+            if (index)
+                *index = i;
+            return &app->session.pending_queue[i];
+        }
+    }
+    return NULL;
+}
+
+static int
+begin_queue_edit(struct app_state *app, size_t number, bool active,
+                 char *error, size_t error_size)
+{
+    struct snj_queued_turn *queued;
+
+    if (number == 0u || number > app->session.pending_queue_count) {
+        set_error(error, error_size, "queue item %zu does not exist", number);
+        return 1;
+    }
+    queued = &app->session.pending_queue[number - 1u];
+    memcpy(app->queue_edit_id, queued->queue_id, sizeof(app->queue_edit_id));
+    app->queue_edit_number = number;
+    app->queue_edit_was_armed = app->queue_armed;
+    app->queue_armed = false;
+    if (set_input_prompt(app, active) < 0 ||
+        snj_term_restore_draft(&app->term, queued->text) < 0) {
+        app->queue_armed = app->queue_edit_was_armed;
+        app->queue_edit_id[0] = '\0';
+        app->queue_edit_number = 0u;
+        app->queue_edit_was_armed = false;
+        set_error(error, error_size, "queue editor could not be displayed");
+        return -1;
+    }
+    return 0;
+}
+
+static int
+finish_queue_edit(struct app_state *app, const char *text, bool active,
+                  char *error, size_t error_size)
+{
+    struct snj_queued_turn *queued;
+    char label[32];
+    size_t len = strlen(text);
+    size_t number = app->queue_edit_number;
+    bool restore_armed = app->queue_edit_was_armed;
+    int rc = 0;
+
+    queued = queued_by_id(app, app->queue_edit_id, NULL);
+    if (!queued) {
+        set_error(error, error_size, "the queued turn being edited no longer exists");
+        (void)snj_render_error_ctx(&app->render, error);
+        error[0] = '\0';
+        rc = 1;
+        goto clear;
+    }
+    if (!len || len > SNJ_MAX_QUEUED_TEXT ||
+        !snj_utf8_valid((const unsigned char *)text, len, true)) {
+        set_error(error, error_size,
+                  "queued text must be nonempty valid UTF-8 within 256 KiB");
+        (void)snj_render_error_ctx(&app->render, error);
+        error[0] = '\0';
+        if (set_input_prompt(app, active) < 0 ||
+            snj_term_restore_draft(&app->term, text) < 0)
+            return -1;
+        return 1;
+    }
+    if (strcmp(queued->text, text) != 0 &&
+        commit_event(app, "future_turn_edited",
+                     snj_app_future_turn_edited_data(queued->queue_id, text),
+                     error, error_size) < 0) {
+        if (set_input_prompt(app, active) == 0)
+            (void)snj_term_restore_draft(&app->term, text);
+        return -1;
+    }
+    if (snprintf(label, sizeof(label), "edit %zu › ", number) < 0 ||
+        snj_render_submitted(&app->render, label, text) < 0) {
+        set_error(error, error_size, "edited turn acknowledgement could not be rendered");
+        return -1;
+    }
+    (void)snj_term_history_add(&app->term, text);
+clear:
+    app->queue_edit_id[0] = '\0';
+    app->queue_edit_number = 0u;
+    app->queue_edit_was_armed = false;
+    if (restore_armed && app->session.active_turn &&
+        app->session.pending_queue_count != 0u)
+        app->queue_armed = true;
+    if (set_input_prompt(app, active) < 0)
+        return -1;
+    return rc;
 }
 static int
 queue_future_turn(struct app_state *app, const char *text, bool arm,
@@ -277,51 +387,25 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
         app->queue_armed = true;
     return 0;
 }
-static bool
-lower_hex_prefix(const char *s)
-{
-    size_t len = strlen(s);
-    if (len < 8u || len > SNJ_ID_HEX_LEN)
-        return false;
-    for (size_t i = 0; i < len; ++i)
-        if (!((s[i] >= '0' && s[i] <= '9') ||
-              (s[i] >= 'a' && s[i] <= 'f')))
-            return false;
-    return true;
-}
 static int
-cancel_future_turns(struct app_state *app, const char *selector,
+remove_queued_turns(struct app_state *app, size_t index, bool all,
                     char *error, size_t error_size)
 {
     bool remove[SNJ_MAX_PENDING_TURNS] = {false};
-    size_t matches = 0;
-    if (strcmp(selector, "all") == 0) {
-        if (app->session.pending_queue_count == 0u) {
-            set_error(error, error_size, "future-turn queue is empty");
-            return 1;
-        }
+    size_t matches;
+
+    if (app->session.pending_queue_count == 0u ||
+        (!all && index >= app->session.pending_queue_count)) {
+        set_error(error, error_size, "future-turn queue is empty");
+        return 1;
+    }
+    if (all) {
         for (size_t i = 0; i < app->session.pending_queue_count; ++i)
             remove[i] = true;
         matches = app->session.pending_queue_count;
     } else {
-        size_t len;
-        if (!lower_hex_prefix(selector)) {
-            set_error(error, error_size,
-                      "/unqueue expects all or an 8..32 lowercase-hex id prefix");
-            return 1;
-        }
-        len = strlen(selector);
-        for (size_t i = 0; i < app->session.pending_queue_count; ++i) {
-            if (strncmp(app->session.pending_queue[i].queue_id, selector, len) == 0) {
-                remove[i] = true;
-                ++matches;
-            }
-        }
-        if (matches != 1u) {
-            set_error(error, error_size, matches ?
-                      "queue id prefix is ambiguous" : "queue id prefix was not found");
-            return 1;
-        }
+        remove[index] = true;
+        matches = 1u;
     }
     if (commit_event(app, "future_turn_cancelled",
                      snj_app_future_turn_cancelled_data(&app->session, remove),
@@ -335,6 +419,64 @@ cancel_future_turns(struct app_state *app, const char *selector,
                        matches, matches == 1u ? "" : "s");
         return app_warning(app, message);
     }
+}
+
+static int
+handle_queue_command(struct app_state *app, const char *line, bool active,
+                     bool *handled, char *error, size_t error_size)
+{
+    enum queue_command_kind kind;
+    const char *argument;
+    size_t number = 0u;
+
+    *handled = true;
+    if (strcmp(line, "/queue") == 0 || strcmp(line, "/q") == 0) {
+        argument = "";
+    } else if (strncmp(line, "/queue ", 7u) == 0) {
+        argument = line + 7u;
+    } else if (strncmp(line, "/q ", 3u) == 0) {
+        argument = line + 3u;
+    } else {
+        *handled = false;
+        return 0;
+    }
+    if (snj_app_parse_queue_argument(argument, &kind, &number) < 0) {
+        set_error(error, error_size,
+                  "queue action expects clear, pop, N delete, Nd, N edit, or Ne");
+        return 1;
+    }
+    switch (kind) {
+    case QUEUE_COMMAND_LIST:
+        return render_queue(app);
+    case QUEUE_COMMAND_ADD:
+        if (!active) {
+            set_error(error, error_size,
+                      "/queue TEXT is active-only; submit it during a running turn");
+            return 1;
+        }
+        return queue_future_turn(app, argument, true, error, error_size);
+    case QUEUE_COMMAND_DELETE:
+        if (number == 0u || number > app->session.pending_queue_count) {
+            set_error(error, error_size, "queue item %zu does not exist", number);
+            return 1;
+        }
+        return remove_queued_turns(app, number - 1u, false,
+                                   error, error_size);
+    case QUEUE_COMMAND_EDIT:
+        return begin_queue_edit(app, number, active, error, error_size);
+    case QUEUE_COMMAND_CLEAR:
+        return remove_queued_turns(app, 0u, true, error, error_size);
+    case QUEUE_COMMAND_POP:
+        if (app->session.pending_queue_count == 0u) {
+            set_error(error, error_size, "future-turn queue is empty");
+            return 1;
+        }
+        return remove_queued_turns(app,
+            app->session.pending_queue_count - 1u, false,
+            error, error_size);
+    }
+    errno = EINVAL;
+    return -1;
 }
 static const char *
 next_model(const struct app_state *app)
@@ -832,7 +974,8 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (rc == 0) {
         uint64_t now = snj_time_ms();
-        if (!app->activity_shown && now >= app->active_since_ms &&
+        if (!snj_term_typing_active(&app->term) &&
+            !app->activity_shown && now >= app->active_since_ms &&
             now - app->active_since_ms >= 750u) {
             if (snj_render_activity(&app->render, "working…") < 0)
                 return -1;
@@ -855,16 +998,20 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     if (!line)
         return 0;
     error[0] = '\0';
-    if (action == SNJ_TERM_QUEUE) {
+    if (app->queue_edit_id[0]) {
+        rc = finish_queue_edit(app, line, true, error, sizeof(error));
+        if (rc != 0 && error[0])
+            (void)snj_render_error_ctx(&app->render, error);
+    } else if (action == SNJ_TERM_QUEUE) {
         rc = queue_future_turn(app, line, true, error, sizeof(error));
         if (rc != 0) {
             (void)snj_render_error_ctx(&app->render, error);
-            if (snj_term_set_prompt(&app->term, true) < 0 ||
+            if (set_input_prompt(app, true) < 0 ||
                 snj_term_restore_draft(&app->term, line) < 0)
                 rc = -1;
         } else {
             (void)snj_term_history_add(&app->term, line);
-            rc = snj_term_set_prompt(&app->term, true);
+            rc = set_input_prompt(app, true);
         }
     } else {
         bool single_line = strchr(line, '\n') == NULL;
@@ -874,28 +1021,21 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
             if (rc < 0)
                 goto active_done;
         }
+        if (!handled && single_line) {
+            rc = handle_queue_command(app, line, true, &handled,
+                                      error, sizeof(error));
+            if (rc != 0 && error[0])
+                (void)snj_render_error_ctx(&app->render, error);
+            if (rc < 0)
+                goto active_done;
+        }
         if (handled) {
-            rc = snj_term_set_prompt(&app->term, true);
-        } else if (single_line && strcmp(line, "/queue") == 0) {
-            rc = render_queue(app);
-            if (snj_term_set_prompt(&app->term, true) < 0)
-                rc = -1;
-        } else if (single_line && strncmp(line, "/queue ", 7u) == 0) {
-            rc = queue_future_turn(app, line + 7u, true, error, sizeof(error));
-            if (rc != 0)
-                (void)snj_render_error_ctx(&app->render, error);
-            if (snj_term_set_prompt(&app->term, true) < 0)
-                rc = -1;
-        } else if (single_line && strncmp(line, "/unqueue ", 9u) == 0) {
-            rc = cancel_future_turns(app, line + 9u, error, sizeof(error));
-            if (rc != 0)
-                (void)snj_render_error_ctx(&app->render, error);
-            if (snj_term_set_prompt(&app->term, true) < 0)
+            if (!app->queue_edit_id[0] && set_input_prompt(app, true) < 0)
                 rc = -1;
         } else if (single_line && line[0] == '/' && line[1] != '/') {
             (void)snj_render_error_ctx(&app->render,
                 "that command is unavailable while a turn is active");
-            rc = snj_term_set_prompt(&app->term, true);
+            rc = set_input_prompt(app, true);
         } else {
             const char *text = line[0] == '/' && line[1] == '/' ? line + 1 : line;
             char steering_id[SNJ_ID_HEX_LEN + 1u];
@@ -916,7 +1056,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 if (rc < 0) {
                     (void)snj_render_error_ctx(&app->render, error[0] ? error :
                                                "steering could not be persisted");
-                    if (snj_term_set_prompt(&app->term, true) == 0)
+                    if (set_input_prompt(app, true) == 0)
                         (void)snj_term_restore_draft(&app->term, line);
                 } else {
                     (void)snj_term_history_add(&app->term, line);
@@ -924,7 +1064,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 }
             }
             if (!app->steering_requested && rc >= 0 &&
-                snj_term_set_prompt(&app->term, true) < 0)
+                set_input_prompt(app, true) < 0)
                 rc = -1;
         }
     }
@@ -1263,7 +1403,7 @@ run_turn(struct app_state *app, const char *prompt,
         result = 6;
         goto out;
     }
-    if (!app->execute && snj_term_set_prompt(&app->term, true) < 0) {
+    if (!app->execute && set_input_prompt(app, true) < 0) {
         (void)app_error(app, "active composer could not be displayed");
         result = 6;
         goto out;
@@ -1795,7 +1935,7 @@ out:
     snj_app_clear_partial_public(app);
     snj_term_clear_status(&app->term);
     if (!app->execute && result != 6 &&
-        snj_term_set_prompt(&app->term, false) < 0)
+        set_input_prompt(app, false) < 0)
         result = 6;
     snj_credential_clear(&credential);
     snj_instructions_free(&app->turn_instructions);
@@ -1981,7 +2121,7 @@ interactive_loop(struct app_state *app, const char *initial)
 {
     char *owned = NULL;
     const char *prompt = initial;
-    if (snj_term_set_prompt(&app->term, false) < 0)
+    if (set_input_prompt(app, false) < 0)
         return 6;
     for (;;) {
         enum snj_term_action action = SNJ_TERM_NONE;
@@ -1994,7 +2134,7 @@ interactive_loop(struct app_state *app, const char *initial)
                     errno == EOVERFLOW ? "prompt exceeds 1 MiB" :
                     errno == EILSEQ ? "terminal input contains invalid UTF-8" :
                     "terminal input could not be read");
-                if (snj_term_set_prompt(&app->term, false) < 0)
+                if (set_input_prompt(app, false) < 0)
                     return 6;
                 continue;
             }
@@ -2007,11 +2147,25 @@ interactive_loop(struct app_state *app, const char *initial)
             if (action != SNJ_TERM_SUBMIT || !owned) {
                 free(owned);
                 owned = NULL;
-                if (snj_term_set_prompt(&app->term, false) < 0)
+                if (set_input_prompt(app, false) < 0)
                     return 6;
                 continue;
             }
             prompt = owned;
+        }
+        if (app->queue_edit_id[0]) {
+            char edit_error[256] = {0};
+            int edit_rc = finish_queue_edit(app, prompt, false,
+                                            edit_error, sizeof(edit_error));
+
+            if (edit_rc != 0 && edit_error[0])
+                (void)app_error(app, edit_error);
+            free(owned);
+            owned = NULL;
+            prompt = NULL;
+            if (edit_rc < 0)
+                return 3;
+            continue;
         }
         if (snj_render_submitted(&app->render, "› ", prompt) < 0) {
             free(owned);
@@ -2026,6 +2180,16 @@ interactive_loop(struct app_state *app, const char *initial)
             if (single_line && prompt[0] == '/' && prompt[1] != '/')
                 local_rc = handle_common_command(app, prompt, false, &handled);
             if (local_rc < 0) { free(owned); return 3; }
+            if (!handled && single_line) {
+                char queue_error[256] = {0};
+
+                local_rc = handle_queue_command(app, prompt, false, &handled,
+                                                 queue_error,
+                                                 sizeof(queue_error));
+                if (local_rc != 0 && queue_error[0])
+                    (void)app_error(app, queue_error);
+                if (local_rc < 0) { free(owned); return 3; }
+            }
             if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 bool exit_now = false;
                 local_rc = snj_app_lifecycle_command(app, prompt, &handled, &exit_now);
@@ -2040,23 +2204,6 @@ interactive_loop(struct app_state *app, const char *initial)
             } else if (single_line && strcmp(prompt, "/exit") == 0) {
                 free(owned);
                 return 0;
-            } else if (single_line && strcmp(prompt, "/queue") == 0) {
-                (void)render_queue(app);
-            } else if (single_line && strncmp(prompt, "/queue ", 7u) == 0) {
-                (void)app_error(app,
-                    "/queue TEXT is active-only; submit it during a running turn");
-            } else if (single_line && strncmp(prompt, "/unqueue ", 9u) == 0) {
-                char error[256];
-                int cancel_rc;
-                error[0] = '\0';
-                cancel_rc = cancel_future_turns(app, prompt + 9u,
-                                                error, sizeof(error));
-                if (cancel_rc != 0)
-                    (void)app_error(app, error);
-                if (cancel_rc < 0) {
-                    free(owned);
-                    return 3;
-                }
             } else if (single_line && strcmp(prompt, "/next") == 0) {
                 int chain_rc;
                 if (app->session.pending_queue_count == 0u) {
@@ -2096,7 +2243,7 @@ interactive_loop(struct app_state *app, const char *initial)
         free(owned);
         owned = NULL;
         prompt = NULL;
-        if (snj_term_set_prompt(&app->term, false) < 0)
+        if (set_input_prompt(app, false) < 0)
             return 6;
     }
 }
@@ -2151,6 +2298,7 @@ snj_app_run(const struct snj_cli *cli)
         rc = 2;
         goto out;
     }
+    snj_term_set_typing_pause(&app.term, config.typing_pause_ms);
     effective_verbosity = config.verbosity;
     if (effective_verbosity < 6u) {
         unsigned int room = 6u - effective_verbosity;

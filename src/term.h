@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <signal.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <termios.h>
 
 #define SNJ_TERM_HISTORY_COUNT 100u
@@ -42,6 +43,8 @@ struct snj_term {
     size_t rendered_cursor_row;
     unsigned int columns;
     unsigned int output_depth;
+    uint32_t typing_pause_ms;
+    uint64_t last_input_ms;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
     unsigned char escape[8];
@@ -63,6 +66,9 @@ struct snj_term {
     bool sigint_installed;
     bool sigwinch_installed;
     bool line_submission_echoed;
+    bool typing_active;
+    bool output_seen;
+    bool output_ended_lf;
 };
 
 void snj_term_init(struct snj_term *term);
@@ -72,6 +78,8 @@ void snj_term_set_commands(struct snj_term *term,
 int snj_term_open(struct snj_term *term, char *error, size_t error_size);
 void snj_term_close(struct snj_term *term);
 int snj_term_set_prompt(struct snj_term *term, bool active);
+int snj_term_set_prompt_label(struct snj_term *term, bool active,
+                              const char *label);
 int snj_term_hide(struct snj_term *term);
 int snj_term_show(struct snj_term *term);
 int snj_term_output_begin(struct snj_term *term, bool persistent);
@@ -82,6 +90,13 @@ int snj_term_poll(struct snj_term *term, int timeout_ms,
                   enum snj_term_action *action, char **text);
 int snj_term_history_add(struct snj_term *term, const char *text);
 int snj_term_restore_draft(struct snj_term *term, const char *text);
+void snj_term_set_typing_pause(struct snj_term *term, uint32_t pause_ms);
+uint32_t snj_term_typing_pause_remaining(const struct snj_term *term,
+                                         uint64_t now_ms);
+bool snj_term_typing_active(const struct snj_term *term);
+void snj_term_note_output(struct snj_term *term, const char *text, size_t len);
+unsigned int snj_term_columns(const struct snj_term *term);
+size_t snj_term_text_width(const char *text, size_t len);
 bool snj_term_consume_echoed_submission(struct snj_term *term,
                                         const char *label);
 int snj_term_write_safe(int fd, const char *text, size_t len);

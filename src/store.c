@@ -1113,6 +1113,39 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         queued->seq = seq;
         queued->text = copy;
         session->pending_queue_bytes += len;
+    } else if (strcmp(type, "future_turn_edited") == 0) {
+        static const char *const keys[] = {"queue_id", "text"};
+        const char *queue_id = snj_json_string(data, "queue_id");
+        const char *text = snj_json_string(data, "text");
+        struct snj_queued_turn *queued = NULL;
+        size_t old_len;
+        size_t len;
+        char *copy;
+
+        if (!snj_json_exact_keys(data, keys, 2u) || !queue_id || !text || !*text ||
+            !snj_hex_is_lower(queue_id, SNJ_ID_HEX_LEN) ||
+            (len = strlen(text)) > SNJ_MAX_QUEUED_TEXT)
+            goto invalid;
+        for (size_t i = 0; i < session->pending_queue_count; ++i) {
+            if (strcmp(session->pending_queue[i].queue_id, queue_id) == 0) {
+                queued = &session->pending_queue[i];
+                break;
+            }
+        }
+        if (!queued || strcmp(queued->text, text) == 0)
+            goto invalid;
+        old_len = strlen(queued->text);
+        if (len > old_len &&
+            session->pending_queue_bytes >
+                SNJ_MAX_PENDING_QUEUE_TEXT - (len - old_len))
+            goto invalid;
+        copy = snj_strdup_checked(text, SNJ_MAX_QUEUED_TEXT);
+        if (!copy)
+            return -1;
+        free(queued->text);
+        queued->text = copy;
+        session->pending_queue_bytes =
+            session->pending_queue_bytes - old_len + len;
     } else if (strcmp(type, "future_turn_cancelled") == 0) {
         static const char *const keys[] = {"queue_ids", "reason"};
         const char *reason = snj_json_string(data, "reason");

@@ -26,6 +26,14 @@
   is projected after replay/compaction and never weakens unresolved managed
   process ordering.
 
+- Added terminal-width word wrapping for streamed public model text while
+  preserving exact stored and redirected bytes, plus a configurable
+  `[ui] typing_pause_ms` interval that keeps live steering drafts readable as
+  output resumes below composer snapshots.
+
+- Added numbered `/queue` and `/q` views with indexed edit/delete actions,
+  queue clearing, newest-item `pop`, and durable in-place edit replay.
+
 - Added `/?` as an exact interactive alias for `/help`; both render the same
   centralized command catalog and key reference.
 
@@ -255,7 +263,7 @@
   cancellation, completion-race precedence, and exact delivered-prefix records.
 - Added the bounded durable future-turn FIFO, atomic queue cancellation and
   consumption, same-process automatic continuation, and restart-paused `/next`.
-- Added the implemented `/queue`, `/unqueue`, `/next`, `/status`, and `/history`
+- Added the implemented `/queue`, `/next`, `/status`, and `/history`
   paths, including literal-slash queue admission.
 - Made persisted response-graph parsing deterministic and removed invented
   runtime identities from replayed tool and opaque items.

@@ -12,6 +12,76 @@ render_event_seq(struct app_state *app, uint64_t seq, const char *type)
     return snj_render_event(&app->render, seq, type) < 0 ? -1 : 0;
 }
 
+static bool
+span_equals(const char *text, size_t len, const char *word)
+{
+    return strlen(word) == len && memcmp(text, word, len) == 0;
+}
+
+int
+snj_app_parse_queue_argument(const char *argument,
+                             enum queue_command_kind *kind, size_t *number)
+{
+    const char *start = argument;
+    const char *end = argument + strlen(argument);
+    const char *p;
+    size_t value = 0u;
+
+    while (start < end && (*start == ' ' || *start == '\t'))
+        ++start;
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t'))
+        --end;
+    if (start == end) {
+        *kind = QUEUE_COMMAND_LIST;
+        return 0;
+    }
+    if (span_equals(start, (size_t)(end - start), "c") ||
+        span_equals(start, (size_t)(end - start), "clear")) {
+        *kind = QUEUE_COMMAND_CLEAR;
+        return 0;
+    }
+    if (span_equals(start, (size_t)(end - start), "p") ||
+        span_equals(start, (size_t)(end - start), "pop")) {
+        *kind = QUEUE_COMMAND_POP;
+        return 0;
+    }
+    p = start;
+    while (p < end && *p >= '0' && *p <= '9') {
+        size_t digit = (size_t)(*p - '0');
+
+        if (value > (SIZE_MAX - digit) / 10u)
+            return -1;
+        value = value * 10u + digit;
+        ++p;
+    }
+    if (p == start || p == end) {
+        *kind = QUEUE_COMMAND_ADD;
+        return 0;
+    }
+    if ((*p == 'd' || *p == 'e') && p + 1u == end) {
+        *kind = *p == 'd' ? QUEUE_COMMAND_DELETE : QUEUE_COMMAND_EDIT;
+        *number = value;
+        return 0;
+    }
+    if (*p != ' ' && *p != '\t')
+        return -1;
+    while (p < end && (*p == ' ' || *p == '\t'))
+        ++p;
+    if (span_equals(p, (size_t)(end - p), "d") ||
+        span_equals(p, (size_t)(end - p), "delete")) {
+        *kind = QUEUE_COMMAND_DELETE;
+        *number = value;
+        return 0;
+    }
+    if (span_equals(p, (size_t)(end - p), "e") ||
+        span_equals(p, (size_t)(end - p), "edit")) {
+        *kind = QUEUE_COMMAND_EDIT;
+        *number = value;
+        return 0;
+    }
+    return -1;
+}
+
 static int
 confirm_delete(struct app_state *app, char prefix[9], char *error,
                size_t error_size)

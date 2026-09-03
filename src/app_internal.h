@@ -59,8 +59,11 @@ struct app_state {
     bool queue_armed;
     bool goal_armed;
     bool last_turn_refused;
+    bool queue_edit_was_armed;
     bool input_closed;
     bool execute;
+    char queue_edit_id[SNJ_ID_HEX_LEN + 1u];
+    size_t queue_edit_number;
     uint64_t active_since_ms;
     bool activity_shown;
 };
@@ -79,6 +82,15 @@ enum snj_managed_continuation {
     SNJ_MANAGED_CONTINUATION_MATCHED,
     SNJ_MANAGED_CONTINUATION_HANDLE_MISMATCH,
     SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION
+};
+
+enum queue_command_kind {
+    QUEUE_COMMAND_LIST,
+    QUEUE_COMMAND_ADD,
+    QUEUE_COMMAND_DELETE,
+    QUEUE_COMMAND_EDIT,
+    QUEUE_COMMAND_CLEAR,
+    QUEUE_COMMAND_POP
 };
 
 json_t *snj_app_preference_changed_data(const char *old_key,
@@ -129,6 +141,8 @@ json_t *snj_app_steering_added_data(const char *turn_id,
                                     const char *text);
 json_t *snj_app_future_turn_queued_data(const char *turn_id,
                                         const char *queue_id,
+                                        const char *text);
+json_t *snj_app_future_turn_edited_data(const char *queue_id,
                                         const char *text);
 json_t *snj_app_future_turn_cancelled_data(const struct snj_session *session,
                                            const bool remove[SNJ_MAX_PENDING_TURNS]);
@@ -182,6 +196,9 @@ enum snj_managed_continuation snj_app_managed_continuation_classify(
     const struct snj_graph_decision *decision);
 int snj_app_lifecycle_command(struct app_state *app, const char *line,
                               bool *handled, bool *exit_now);
+int snj_app_parse_queue_argument(const char *argument,
+                                 enum queue_command_kind *kind,
+                                 size_t *number);
 
 int snj_app_active_input_pump(void *opaque, unsigned int timeout_ms);
 int snj_app_provider_count(struct app_state *app, const json_t *count_request,

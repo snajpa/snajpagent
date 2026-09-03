@@ -57,6 +57,7 @@ main(void)
         "verbosity = 4\n"
         "color = never\n"
         "resume_history_turns = 0\n"
+        "typing_pause_ms = 750\n"
         "\n[tool]\n"
         "shell = /bin/sh\n"
         "default_yield_ms = 0\n"
@@ -83,6 +84,7 @@ main(void)
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
     assert(config.verbosity == 0u);
     assert(config.resume_history_turns == 2u);
+    assert(config.typing_pause_ms == 500u);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(config.providers[0].auto_compact_input_tokens == 120000u);
@@ -131,6 +133,7 @@ main(void)
     assert(config.verbosity == 4u);
     assert(config.color == SNJ_COLOR_NEVER);
     assert(config.resume_history_turns == 0u);
+    assert(config.typing_pause_ms == 750u);
     assert(config.default_yield_ms == 0u);
     assert(config.default_timeout_ms == 4000u);
     assert(config.max_timeout_ms == 5000u);
@@ -163,6 +166,13 @@ main(void)
     expect_invalid(path);
     write_bytes(path, "[ui]\nverbosity=7\n",
                 sizeof("[ui]\nverbosity=7\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[ui]\ntyping_pause_ms=5001\n",
+                sizeof("[ui]\ntyping_pause_ms=5001\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[ui]\ntyping_pause_ms=1\ntyping_pause_ms=2\n",
+                sizeof("[ui]\ntyping_pause_ms=1\ntyping_pause_ms=2\n") - 1u);
     expect_invalid(path);
     write_bytes(path,
         "[tool]\ndefault_timeout_ms=5000\nmax_timeout_ms=4000\n",

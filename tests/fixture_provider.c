@@ -311,7 +311,38 @@ snj_fixture_response(const char *prompt, const json_t *steering,
     }
     if (strcmp(prompt, "empty") == 0)
         return 0;
-    if (strcmp(prompt, "slow") == 0 || strcmp(prompt, "slow_utf8") == 0) {
+    if (strcmp(prompt, "typing_stream") == 0) {
+        static const char full[] =
+            "model-output-one model-output-two model-output-three";
+        static const char first[] = "model-output-one ";
+        static const char second[] = "model-output-two ";
+        static const char third[] = "model-output-three";
+        size_t index = graph->count;
+
+        if (snj_response_graph_add_public(
+                graph, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                "msg_fixture_typing_stream", full) < 0 ||
+            emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 first, sizeof(first) - 1u) < 0)
+            goto allocation;
+        for (unsigned int part = 0u; part < 2u; ++part) {
+            for (unsigned int i = 0u; i < 10u; ++i) {
+                int pump_rc = pump(opaque, 20u);
+
+                if (pump_rc != 0)
+                    return pump_rc;
+            }
+            if (emit(opaque, index, SNJ_ITEM_ASSISTANT,
+                     SNJ_PHASE_FINAL_ANSWER,
+                     part == 0u ? second : third,
+                     part == 0u ? sizeof(second) - 1u :
+                                  sizeof(third) - 1u) < 0)
+                goto allocation;
+        }
+        return 0;
+    }
+    if (strcmp(prompt, "slow") == 0 || strcmp(prompt, "slow_utf8") == 0 ||
+        strcmp(prompt, "queue_slow") == 0) {
         if (cycle == 1u) {
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";
@@ -328,7 +359,9 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "working slowly\n", 0) < 0) {
                 goto allocation;
             }
-            for (unsigned int i = 0; i < 100u; ++i) {
+            unsigned int waits = strcmp(prompt, "queue_slow") == 0 ? 500u : 100u;
+
+            for (unsigned int i = 0; i < waits; ++i) {
                 int pump_rc = pump(opaque, 20u);
                 if (pump_rc != 0)
                     return pump_rc;

@@ -36,6 +36,10 @@ write_block(struct snj_render *render, int fd, const char *text, size_t len,
         return -1;
     rc = terminal_safe ? snj_term_write_safe(fd, text, len) :
                          snj_write_full(fd, text, len);
+    if (rc == 0 && render->term &&
+        ((fd == STDOUT_FILENO && render->stdout_terminal) ||
+         (fd == STDERR_FILENO && render->stderr_terminal)))
+        snj_term_note_output(render->term, text, len);
     if (rc < 0)
         saved_errno = errno;
     if (output_end(render) < 0 && rc == 0)
@@ -164,10 +168,16 @@ utf8_sequence_size(unsigned char first)
     return 0u;
 }
 
+static int public_write(struct snj_render *render, const char *text, size_t len);
+static int close_public_output(struct snj_render *render);
+
 int
 snj_render_public_begin(struct snj_render *render, int fd, const char *label)
 {
-    if (render->public_item_open || render->utf8_pending_len) {
+    size_t label_len = label ? strlen(label) : 0u;
+
+    if (render->public_item_open || render->utf8_pending_len ||
+        render->wrap_pending.data) {
         errno = EBUSY;
         return -1;
     }
@@ -175,19 +185,25 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
         errno = EINVAL;
         return -1;
     }
-    if (output_begin(render, true) < 0)
-        return -1;
-    render->public_output_open = true;
     if (fd == STDOUT_FILENO && render->stdout_item_seen &&
         !render->stdout_item_ended_lf && !render->stdout_terminal &&
         write_literal(STDOUT_FILENO, "\n") < 0)
-        goto fail;
-    if (label && write_literal(fd, label) < 0)
-        goto fail;
+        return -1;
+    snj_buf_init(&render->wrap_pending, SNJ_MAX_PUBLIC_ITEM);
     render->public_fd = fd;
     render->public_item_open = true;
-    render->public_item_bytes = label && *label;
-    render->public_item_ended_lf = label && *label && label[strlen(label) - 1u] == '\n';
+    render->public_item_bytes = label_len != 0u;
+    render->public_item_ended_lf = label_len && label[label_len - 1u] == '\n';
+    render->public_column = label_len ? snj_term_text_width(label, label_len) : 0u;
+    render->wrap_has_word = false;
+    if (render->public_column == SIZE_MAX)
+        goto fail;
+    if (label_len) {
+        if (public_write(render, label, label_len) < 0)
+            goto fail;
+        if (close_public_output(render) < 0)
+            goto fail;
+    }
     return 0;
 fail:
     {
@@ -195,9 +211,126 @@ fail:
         if (render->public_output_open)
             (void)output_end(render);
         render->public_output_open = false;
+        render->public_item_open = false;
+        render->public_item_bytes = false;
+        render->public_item_ended_lf = false;
+        render->public_fd = -1;
+        snj_buf_free(&render->wrap_pending);
         errno = saved_errno;
         return -1;
     }
+}
+
+static bool
+public_terminal(const struct snj_render *render)
+{
+    return render->public_fd == STDOUT_FILENO ? render->stdout_terminal :
+                                                render->stderr_terminal;
+}
+
+static int
+public_write(struct snj_render *render, const char *text, size_t len)
+{
+    bool terminal = public_terminal(render);
+
+    if (!len)
+        return 0;
+    if (!render->public_output_open) {
+        if (output_begin(render, true) < 0)
+            return -1;
+        render->public_output_open = true;
+    }
+    if ((terminal ? snj_term_write_safe(render->public_fd, text, len) :
+                    snj_write_full(render->public_fd, text, len)) < 0)
+        return -1;
+    if (terminal && render->term)
+        snj_term_note_output(render->term, text, len);
+    return 0;
+}
+
+static int
+close_public_output(struct snj_render *render)
+{
+    if (!render->public_output_open)
+        return 0;
+    render->public_output_open = false;
+    return output_end(render);
+}
+
+static int
+flush_wrap_pending(struct snj_render *render)
+{
+    const char *text = (const char *)render->wrap_pending.data;
+    size_t len = render->wrap_pending.len;
+    size_t leading = 0u;
+    size_t width;
+    unsigned int columns;
+
+    if (!len)
+        return 0;
+    while (leading < len && (text[leading] == ' ' || text[leading] == '\t'))
+        ++leading;
+    width = snj_term_text_width(text, len);
+    columns = snj_term_columns(render->term);
+    if (width == SIZE_MAX)
+        return -1;
+    if (render->wrap_has_word && columns >= 20u && render->public_column != 0u &&
+        (width >= columns || render->public_column > columns - width)) {
+        if (public_write(render, "\n", 1u) < 0)
+            return -1;
+        render->public_column = 0u;
+        text += leading;
+        len -= leading;
+        width = snj_term_text_width(text, len);
+        if (width == SIZE_MAX)
+            return -1;
+    }
+    if (public_write(render, text, len) < 0)
+        return -1;
+    if (columns >= 20u)
+        render->public_column = (render->public_column + width) % columns;
+    else if (render->public_column <= SIZE_MAX - width)
+        render->public_column += width;
+    else {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    snj_buf_reset(&render->wrap_pending);
+    render->wrap_has_word = false;
+    return 0;
+}
+
+static int
+write_wrapped(struct snj_render *render, const unsigned char *text, size_t len)
+{
+    size_t i = 0u;
+
+    while (i < len) {
+        size_t n = utf8_sequence_size(text[i]);
+
+        if (!n || n > len - i) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if (text[i] == '\n') {
+            if (flush_wrap_pending(render) < 0 ||
+                public_write(render, "\n", 1u) < 0)
+                return -1;
+            render->public_column = 0u;
+        } else {
+            bool space = text[i] == ' ' || text[i] == '\t';
+
+            if (space && render->wrap_has_word &&
+                flush_wrap_pending(render) < 0)
+                return -1;
+            if (snj_buf_append(&render->wrap_pending, text + i, n) < 0)
+                return -1;
+            if (!space)
+                render->wrap_has_word = true;
+        }
+        i += n;
+    }
+    return 0;
 }
 
 int
@@ -209,7 +342,8 @@ snj_render_public(struct snj_render *render, const char *text, size_t len,
     size_t complete_max;
     int rc = -1;
 
-    if (!snj_size_add(len, sizeof(render->utf8_pending), &complete_max)) {
+    if (!render->public_item_open ||
+        !snj_size_add(len, sizeof(render->utf8_pending), &complete_max)) {
         errno = EOVERFLOW;
         return -1;
     }
@@ -232,34 +366,16 @@ snj_render_public(struct snj_render *render, const char *text, size_t len,
         render->utf8_pending_len = 0;
     }
     if (complete.len) {
-        bool terminal = render->public_fd == STDOUT_FILENO ?
-                        render->stdout_terminal : render->stderr_terminal;
-        if (!render->public_item_open) {
-            errno = EINVAL;
-            goto out;
-        }
-        if (!render->public_output_open) {
-            if (output_begin(render, true) < 0)
-                goto out;
-            render->public_output_open = true;
-        }
         if (delivered && snj_buf_reserve(delivered, complete.len) < 0)
             goto out;
-        rc = terminal ?
-             snj_term_write_safe(render->public_fd, (const char *)complete.data,
-                                 complete.len) :
-             snj_write_full(render->public_fd, complete.data, complete.len);
-        if (rc < 0)
+        if (public_terminal(render) ?
+            write_wrapped(render, complete.data, complete.len) < 0 :
+            public_write(render, (const char *)complete.data, complete.len) < 0)
             goto out;
         if (delivered && snj_buf_append(delivered, complete.data, complete.len) < 0)
             goto out;
         render->public_item_bytes = true;
         render->public_item_ended_lf = complete.data[complete.len - 1u] == '\n';
-        if (render->public_item_ended_lf && render->public_output_open) {
-            if (output_end(render) < 0)
-                goto out;
-            render->public_output_open = false;
-        }
     }
     rc = 0;
     goto out;
@@ -267,6 +383,8 @@ invalid:
     render->utf8_pending_len = 0;
     errno = EILSEQ;
 out:
+    if (close_public_output(render) < 0 && rc == 0)
+        rc = -1;
     snj_buf_free(&complete);
     return rc;
 }
@@ -277,7 +395,6 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     int fd;
     bool ended_lf;
     bool had_bytes;
-    bool output_open;
     bool invalid = false;
     int rc = 0;
     int saved_errno = 0;
@@ -293,31 +410,35 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
         }
         return 0;
     }
+    if (flush_wrap_pending(render) < 0)
+        rc = -1;
+    if (close_public_output(render) < 0 && rc == 0)
+        rc = -1;
     fd = render->public_fd;
     ended_lf = render->public_item_ended_lf;
     had_bytes = render->public_item_bytes;
     render->public_item_open = false;
-    output_open = render->public_output_open;
     render->public_output_open = false;
     render->public_item_bytes = false;
     render->public_item_ended_lf = false;
     render->public_fd = -1;
+    snj_buf_free(&render->wrap_pending);
     if (fd == STDOUT_FILENO && had_bytes) {
         render->stdout_item_seen = true;
         render->stdout_item_ended_lf = ended_lf;
         if (!ended_lf && render->stderr_terminal &&
             write_literal(STDERR_FILENO, "\n") < 0)
             rc = -1;
+        else if (!ended_lf && render->stderr_terminal && render->term)
+            snj_term_note_output(render->term, "\n", 1u);
     } else if (fd == STDERR_FILENO && had_bytes && !ended_lf &&
                write_literal(STDERR_FILENO, "\n") < 0) {
         rc = -1;
+    } else if (fd == STDERR_FILENO && had_bytes && !ended_lf && render->term) {
+        snj_term_note_output(render->term, "\n", 1u);
     }
     if (rc < 0)
         saved_errno = errno;
-    if (output_open && output_end(render) < 0 && rc == 0) {
-        rc = -1;
-        saved_errno = errno;
-    }
     if (saved_errno)
         errno = saved_errno;
     if (invalid && rc == 0) {

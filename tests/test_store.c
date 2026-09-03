@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store.h"
+#include "instructions.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -29,6 +30,56 @@ delete_data(const char *prefix, const char *trash_name)
     assert(snj_json_set_new(data, "confirmed_id_prefix",
                             json_string(prefix)) == 0);
     assert(snj_json_set_new(data, "trash_name", json_string(trash_name)) == 0);
+    return data;
+}
+
+static json_t *
+turn_started_data(const struct snj_session *session, const char *turn_id)
+{
+    struct snj_instruction_set instructions;
+    json_t *config = json_object();
+    json_t *data = json_object();
+    json_t *metadata;
+
+    snj_instructions_init(&instructions);
+    metadata = snj_instructions_metadata_json(&instructions);
+    snj_instructions_free(&instructions);
+    assert(config && data && metadata);
+    assert(snj_json_set_new(config, "model",
+                            json_string(session->default_model)) == 0);
+    assert(snj_json_set_new(data, "config", config) == 0);
+    assert(snj_json_set_new(data, "input_kind", json_string("direct")) == 0);
+    assert(snj_json_set_new(data, "instructions", metadata) == 0);
+    assert(snj_json_set_new(data, "queue_id", json_null()) == 0);
+    assert(snj_json_set_new(data, "queue_seq", json_null()) == 0);
+    assert(snj_json_set_new(data, "text", json_string("queue test")) == 0);
+    assert(snj_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
+    assert(snj_json_set_new(data, "turn_number", json_integer(1)) == 0);
+    assert(snj_json_set_new(data, "workspace",
+                            json_string(session->workspace)) == 0);
+    return data;
+}
+
+static json_t *
+queued_data(const char *turn_id, const char *queue_id, const char *text)
+{
+    json_t *data = json_object();
+
+    assert(data);
+    assert(snj_json_set_new(data, "queue_id", json_string(queue_id)) == 0);
+    assert(snj_json_set_new(data, "text", json_string(text)) == 0);
+    assert(snj_json_set_new(data, "while_turn_id", json_string(turn_id)) == 0);
+    return data;
+}
+
+static json_t *
+edited_data(const char *queue_id, const char *text)
+{
+    json_t *data = json_object();
+
+    assert(data);
+    assert(snj_json_set_new(data, "queue_id", json_string(queue_id)) == 0);
+    assert(snj_json_set_new(data, "text", json_string(text)) == 0);
     return data;
 }
 
@@ -312,6 +363,69 @@ main(void)
     assert(openat(store.trash_fd, trash_name, O_RDONLY | O_DIRECTORY) < 0);
     assert(errno == ENOENT);
     snj_session_close(&session);
+
+    {
+        static const char turn_id[] = "11111111111111111111111111111111";
+        static const char first_id[] = "22222222222222222222222222222222";
+        static const char second_id[] = "33333333333333333333333333333333";
+        static const char missing_id[] = "44444444444444444444444444444444";
+        uint64_t first_seq;
+        uint64_t second_seq;
+
+        snj_session_init(&session);
+        assert(snj_session_create(&store, &session, workspace,
+                                  "default", "gpt-5.5-2026-04-23", "default",
+                                  error, sizeof(error)) == 0);
+        memcpy(id, session.id, sizeof(id));
+        assert(snj_session_commit(&session, "turn_started",
+                                  turn_started_data(&session, turn_id), NULL,
+                                  error, sizeof(error)) == 0);
+        assert(snj_session_commit(&session, "future_turn_queued",
+                                  queued_data(turn_id, first_id, "first"), NULL,
+                                  error, sizeof(error)) == 0);
+        assert(snj_session_commit(&session, "future_turn_queued",
+                                  queued_data(turn_id, second_id, "second"), NULL,
+                                  error, sizeof(error)) == 0);
+        first_seq = session.pending_queue[0].seq;
+        second_seq = session.pending_queue[1].seq;
+        durable_end = session.log_end;
+        durable_seq = session.next_seq;
+        assert(snj_session_commit(&session, "future_turn_edited",
+                                  edited_data(missing_id, "missing"), NULL,
+                                  error, sizeof(error)) < 0);
+        assert(session.log_end == durable_end);
+        assert(session.next_seq == durable_seq);
+        assert(snj_session_commit(&session, "future_turn_edited",
+                                  edited_data(first_id, "first"), NULL,
+                                  error, sizeof(error)) < 0);
+        assert(session.log_end == durable_end);
+        assert(session.next_seq == durable_seq);
+        assert(snj_session_commit(&session, "future_turn_edited",
+                                  edited_data(second_id, "second edited"), NULL,
+                                  error, sizeof(error)) == 0);
+        assert(session.pending_queue_count == 2u);
+        assert(strcmp(session.pending_queue[0].text, "first") == 0);
+        assert(strcmp(session.pending_queue[1].text, "second edited") == 0);
+        assert(session.pending_queue[0].seq == first_seq);
+        assert(session.pending_queue[1].seq == second_seq);
+        assert(session.pending_queue_bytes ==
+               strlen("first") + strlen("second edited"));
+        snj_session_close(&session);
+
+        snj_session_init(&session);
+        assert(snj_session_open(&store, &session, id,
+                                error, sizeof(error)) == 0);
+        assert(session.pending_queue_count == 2u);
+        assert(strcmp(session.pending_queue[0].queue_id, first_id) == 0);
+        assert(strcmp(session.pending_queue[0].text, "first") == 0);
+        assert(strcmp(session.pending_queue[1].queue_id, second_id) == 0);
+        assert(strcmp(session.pending_queue[1].text, "second edited") == 0);
+        assert(session.pending_queue[0].seq == first_seq);
+        assert(session.pending_queue[1].seq == second_seq);
+        assert(session.pending_queue_bytes ==
+               strlen("first") + strlen("second edited"));
+        snj_session_close(&session);
+    }
     snj_store_close(&store);
     puts("test_store: ok");
     return 0;
