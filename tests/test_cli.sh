@@ -11,6 +11,8 @@ trap cleanup EXIT
 trap 'cleanup; exit 143' HUP INT TERM
 mkdir -m 700 "$root/home" "$root/work" "$root/config"
 export HOME="$root/home"
+unset CODEX_HOME
+unset OPENAI_API_KEY
 dotdir="$HOME/.snajpagent"
 export SNAJPAGENT_DOTDIR="$dotdir"
 export SNAJPAGENT_TEST_ROOT="$root"

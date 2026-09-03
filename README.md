@@ -82,8 +82,9 @@ provider/model/reasoning catalog without contacting a provider. If the cache is
 missing, the first listing imports `$CODEX_HOME/models_cache.json`, or
 `$HOME/.codex/models_cache.json` when `CODEX_HOME` is unset, under the first
 configured provider. `/model cache` explicitly refreshes every configured
-provider; there is no automatic age check, so the user decides when it is
-stale. Every catalog display ends with the cache update time.
+provider through its authenticated model endpoint; there is no automatic age
+check, so the user decides when it is stale. Every catalog display ends with
+the cache update time.
 
 `/model NUMBER` and `/model #NUMBER` select an exact displayed row. Typed
 selection accepts `MODEL`, `MODEL / EFFORT`, or
@@ -91,8 +92,9 @@ selection accepts `MODEL`, `MODEL / EFFORT`, or
 trusted and sent to the provider without checking whether it appears in the
 cache. With only `MODEL`, the first configured provider is used and the
 highest recognized advertised effort is selected; if the cache has no effort
-metadata for it, the current/configured effort is kept. A provider-native ID
-containing `/` can be selected unambiguously by its displayed number.
+metadata for it, the current/configured effort is kept. Typed selection itself
+makes no provider request. A provider-native ID containing `/` can be selected
+unambiguously by its displayed number.
 
 `/effort LEVEL` remains available to change only the reasoning effort.
 

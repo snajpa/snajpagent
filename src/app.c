@@ -483,7 +483,7 @@ load_model_cache(struct app_state *app, bool refresh, bool populate_missing,
     }
     if (rc == 1) {
         set_error(error, error_size,
-                  "model cache is empty and no local Codex cache is available; use /model cache while idle");
+                  "model cache is empty; run Codex once or use /model cache while idle");
         errno = ENOENT;
         return -1;
     }

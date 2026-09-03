@@ -76,10 +76,13 @@ cache exists yet, the first listing imports the bounded local Codex catalog
 from `$CODEX_HOME/models_cache.json`, or from
 `$HOME/.codex/models_cache.json` when `CODEX_HOME` is unset, and associates
 that provider-neutral bootstrap catalog with the first configured provider.
-If neither local cache exists, the command asks the user to run
-`/model cache`. After a cache exists, the user alone decides that it is stale
-and refreshes it with `/model cache`; there is no TTL or background refresh.
-Typed selectors never trigger either bootstrap or provider discovery.
+The local source must be a bounded, user-owned regular file containing valid
+Codex JSON, and import atomically replaces only snajpagent's cache. If neither
+local cache exists, the command asks the user to run `/model cache`. After a
+cache exists, the user alone decides that it is stale and refreshes it with
+`/model cache`; there is no TTL or background refresh. No unauthenticated
+public catalog is assumed: authenticated provider discovery is the only online
+refresh path. Typed selectors contact no provider and populate no cache.
 
 The last line of every successful `/model`, `/model list`, and `/model cache`
 catalog display reports when that cache was last updated. The timestamp is

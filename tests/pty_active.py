@@ -584,6 +584,32 @@ def cached_timestamp(cache):
     ).encode()
 
 
+def test_uncached_typed_model_selection():
+    cache_path = Path(DOTDIR) / "models.json"
+    codex_cache_path = Path(os.environ["HOME"]) / ".codex" / "models_cache.json"
+    cache_path.unlink(missing_ok=True)
+    codex_cache_path.unlink(missing_ok=True)
+    child = Child([])
+    child.wait(PROMPT)
+
+    # Listing without either cache stays offline and explains how to populate it.
+    child.send(b"/model\r")
+    end = child.wait(
+        b"model cache is empty; run Codex once or use /model cache while idle"
+    )
+    child.wait(PROMPT, start=end)
+    assert not cache_path.exists()
+
+    # A typed model is trusted without discovery or any cache mutation.
+    child.send(b"/model gpt-5.6-sol\r")
+    end = child.wait(
+        b"model for next turn: default / gpt-5.6-sol / medium", start=end
+    )
+    child.wait(PROMPT, start=end)
+    assert not cache_path.exists()
+    child.exit_now()
+
+
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
     cache_path.unlink(missing_ok=True)
@@ -820,6 +846,7 @@ test_goal_user_terminal_commands_and_unlock()
 test_goal_refusal_failure_block_and_restart_pause()
 test_preferences_and_verbosity()
 test_command_name_completion()
+test_uncached_typed_model_selection()
 test_model_cache_and_selection()
 test_config_and_cli_model_passthrough()
 print("pty_active: ok")
