@@ -686,18 +686,18 @@ prepare_spinner(struct snj_term_spinner *spinner, const char *value)
 }
 
 static int
-compose_prompt(const struct snj_term *term, uint64_t step, char *label,
+compose_prompt(const char *prompt, const struct snj_term_spinner *spinners,
+               unsigned int states, uint64_t step, char *label,
                struct snj_term_spinner next[SNJ_TERM_SPINNER_COUNT])
 {
     size_t used = 0u;
 
-    memcpy(next, term->spinner, sizeof(term->spinner));
+    memcpy(next, spinners, sizeof(*spinners) * SNJ_TERM_SPINNER_COUNT);
     for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i) {
         next[i].present = false;
         next[i].current_len = 0u;
     }
-    for (const unsigned char *p = (const unsigned char *)term->prompt_template;
-         *p; ++p) {
+    for (const unsigned char *p = (const unsigned char *)prompt; *p; ++p) {
         if (*p >= SNJ_TERM_SPINNER_MARKER_BASE) {
             struct snj_term_spinner *cell =
                 &next[*p - SNJ_TERM_SPINNER_MARKER_BASE];
@@ -707,7 +707,7 @@ compose_prompt(const struct snj_term *term, uint64_t step, char *label,
                 return -1;
             cell->present = true;
             cell->label_offset = used;
-            if ((term->spinner_states & (1u <<
+            if ((states & (1u <<
                     (*p - SNJ_TERM_SPINNER_MARKER_BASE))) &&
                 cell->frame_count) {
                 unsigned int frame = (unsigned int)(step % cell->frame_count);
@@ -786,7 +786,8 @@ update_spinners(struct snj_term *term, uint64_t step)
 
     memcpy(old, term->spinner, sizeof(old));
     memcpy(old_label, term->label, sizeof(old_label));
-    if (compose_prompt(term, step, label, next) < 0)
+    if (compose_prompt(term->prompt_template, term->spinner,
+                       term->spinner_states, step, label, next) < 0)
         return -1;
     for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
         if (!!old[i].current_len != !!next[i].current_len)
@@ -830,7 +831,8 @@ spinner_timeout(struct snj_term *term, int timeout_ms)
     now = monotonic_ms();
     elapsed = now >= term->spinner_epoch_ms ? now - term->spinner_epoch_ms : 0u;
     step = spinner_step(term, now);
-    boundary = (step + 1u) * 1000u / term->spinner_per_second;
+    boundary = ((step + 1u) * 1000u + term->spinner_per_second - 1u) /
+               term->spinner_per_second;
     wait = boundary > elapsed ? boundary - elapsed : 1u;
     return timeout_ms < 0 || wait < (uint64_t)timeout_ms ? (int)wait : timeout_ms;
 }
@@ -893,8 +895,9 @@ redraw(struct snj_term *term)
     if (!term->opened || !term->prompt_wanted || term->output_depth)
         return 0;
     if (term->prompt_template[0] &&
-        compose_prompt(term, spinner_step(term, monotonic_ms()),
-                       current, cells) < 0)
+        compose_prompt(term->prompt_template, term->spinner,
+                       term->spinner_states,
+                       spinner_step(term, monotonic_ms()), current, cells) < 0)
         return -1;
     if (term->prompt_template[0])
         install_prompt(term, current, cells);
@@ -1018,6 +1021,7 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
                              const char *const spinners[SNJ_TERM_SPINNER_COUNT],
                              uint32_t per_second, unsigned int states)
 {
+    struct snj_term_spinner configured[SNJ_TERM_SPINNER_COUNT];
     struct snj_term_spinner cells[SNJ_TERM_SPINNER_COUNT];
     char expanded[SNJ_TERM_LABEL_BYTES];
     size_t len;
@@ -1028,18 +1032,18 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
         errno = EINVAL;
         return -1;
     }
+    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
+        if (!spinners[i] || prepare_spinner(&configured[i], spinners[i]) < 0)
+            goto invalid;
+    if (compose_prompt(label, configured, states, 0u, expanded, cells) < 0)
+        goto invalid;
     if (snj_term_hide(term) < 0)
         return -1;
     memcpy(term->prompt_template, label, len + 1u);
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
-        if (!spinners[i] || prepare_spinner(&term->spinner[i], spinners[i]) < 0)
-            goto invalid;
+    install_prompt(term, expanded, cells);
     term->spinner_states = states;
     term->spinner_per_second = per_second;
     term->spinner_epoch_ms = monotonic_ms();
-    if (compose_prompt(term, 0u, expanded, cells) < 0)
-        goto invalid;
-    install_prompt(term, expanded, cells);
     term->active = active;
     if (!active)
         term->typing_active = false;
@@ -1047,7 +1051,6 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     term->line_submission_echoed = false;
     return redraw(term);
 invalid:
-    term->prompt_template[0] = '\0';
     errno = EINVAL;
     return -1;
 }

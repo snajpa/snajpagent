@@ -33,6 +33,23 @@ expect_invalid(const char *path)
     snj_config_free(&config);
 }
 
+static void
+expect_ui(const char *path, const char *key, const char *value, bool valid)
+{
+    struct snj_config config;
+    char data[512], error[256] = {0};
+    int n = snprintf(data, sizeof(data), "[ui]\n%s=%s\n", key, value);
+
+    assert(n > 0 && (size_t)n < sizeof(data));
+    write_bytes(path, data, (size_t)n);
+    snj_config_init(&config);
+    assert((snj_config_load(&config, path, NULL, error, sizeof(error)) == 0) ==
+           valid);
+    if (!valid)
+        assert(error[0]);
+    snj_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -240,6 +257,62 @@ main(void)
     snj_config_free(&config);
 
     assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
+
+    expect_ui(path, "prompt_spinner_goal", "\"\\0\"", true);
+    expect_ui(path, "prompt_spinner_goal", "\" \"", true);
+    expect_ui(path, "prompt_spinner_goal", "\"\\0◆\"", true);
+    expect_ui(path, "prompt_spinner_goal",
+              "\"\\0abcdefghijklmnop\"", true);
+    expect_ui(path, "prompt_spinner_goal",
+              "\"\\0abcdefghijklmnopq\"", false);
+    expect_ui(path, "prompt_spinner_goal", "\"\"", false);
+    expect_ui(path, "prompt_spinner_goal", "unquoted", false);
+    expect_ui(path, "prompt_spinner_goal", "\" aab\"", false);
+    expect_ui(path, "prompt_spinner_goal",
+              "\"\\0" "\xcc\x81" "\"", false);
+    expect_ui(path, "prompt_spinner_goal",
+              "\"\\0" "\xe2\x80\x8b" "\"", false);
+    expect_ui(path, "prompt_spinner_goal",
+              "\"\\0" "\xe2\x80\xae" "\"", false);
+    expect_ui(path, "prompt_spinner_goal",
+              "\"\\0" "\xe7\x95\x8c" "\"", false);
+    expect_ui(path, "prompt_spinner_interrupt", "\" x\"", false);
+    expect_ui(path, "prompt_spinner_per_second", "0", false);
+    expect_ui(path, "prompt_spinner_per_second", "61", false);
+
+    expect_ui(path, "prompt",
+        "{chat:x}{rollout-idle:y}{rollout-active:z}", true);
+    expect_ui(path, "prompt",
+        "{chat:x}{chat:y}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{chat:x}{rollout-idle:y}", false);
+    expect_ui(path, "prompt",
+        "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt",
+        "{chat:{unknown}}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt",
+        "{chat:{goal_spinner}{goal_spinner}}{rollout-idle:y}"
+        "{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{chat:}{rollout-idle:y}{rollout-active:z}",
+              false);
+    {
+        const char *values[7] = {"prov", "model", "high", "", "host",
+                                 "0%", "rollout-idle"};
+        const char template[] =
+            "pre{chat:{operator}:}{rollout-idle:{provider}/{model}/{effort} "
+            "{context}{goal_spinner}›}{rollout-active:A}";
+        const unsigned char expected[] = {
+            'p','r','e','p','r','o','v','/','m','o','d','e','l','/','h','i','g','h',
+            ' ','0','%',0xfd,0xe2,0x80,0xba,' ','\0'
+        };
+        char expanded[128];
+
+        assert(snj_config_prompt_expand(template, 1u, values, 0xfdu,
+                                         expanded, sizeof(expanded)) == 0);
+        assert(memcmp(expanded, expected, sizeof(expected)) == 0);
+        assert(snj_config_prompt_expand(
+            "{chat:{operator}}{rollout-idle:x}{rollout-active:y}", 0u,
+            values, 0xfdu, expanded, sizeof(expanded)) < 0);
+    }
 
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
     assert(symlink(path, link_path) == 0);

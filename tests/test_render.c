@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -20,6 +22,163 @@ count_text(const char *haystack, const char *needle)
     for (const char *p = haystack; (p = strstr(p, needle)); p += n)
         ++count;
     return count;
+}
+
+static bool
+term_history_has(const struct snj_term *term, const char *text)
+{
+    for (size_t i = 0u; i < term->history_count; ++i)
+        if (strcmp(term->history[i], text) == 0)
+            return true;
+    return false;
+}
+
+static void
+test_prompt_history(void)
+{
+    const char sample[] = "one\\two\nthree\r\t\x01z";
+    char build[4096], temp[4096], path[4096], subdir[4096], entry[64];
+    char bytes[4096];
+    struct snj_term term;
+    struct stat st;
+    ssize_t got;
+    int fd, status;
+
+    assert(mkdir("build", 0700) == 0 || errno == EEXIST);
+    assert(realpath("build", build));
+    assert(snprintf(temp, sizeof(temp), "%s/test-history-XXXXXX", build) > 0);
+    assert(mkdtemp(temp));
+    assert(snprintf(path, sizeof(path), "%s/prompt_history", temp) > 0);
+    snj_term_init(&term);
+    assert(snj_term_history_open(&term, temp) == 0);
+    assert(snj_term_history_add(&term, sample) == 0);
+    assert(snj_term_history_add(&term, "duplicate") == 0);
+    assert(snj_term_history_add(&term, "duplicate") == 0);
+    snj_term_close(&term);
+    assert(stat(path, &st) == 0 && (st.st_mode & 0777u) == 0600u);
+    fd = open(path, O_RDONLY);
+    assert(fd >= 0 && (got = read(fd, bytes, sizeof(bytes) - 1u)) > 0);
+    assert(close(fd) == 0);
+    bytes[got] = '\0';
+    assert(count_text(bytes, "\n") == 3u);
+    assert(strstr(bytes, "one\\\\two\\nthree\\r\\t\\x01z\n"));
+
+    fd = open(path, O_WRONLY | O_APPEND);
+    assert(fd >= 0 && snj_write_full(fd, "bad\\q\nunfinished", 17u) == 0);
+    assert(close(fd) == 0 && chmod(path, 0644) == 0);
+    snj_term_init(&term);
+    assert(snj_term_history_open(&term, temp) == 0);
+    assert(snj_term_take_history_warning(&term));
+    assert(!snj_term_take_history_warning(&term));
+    assert(term.history_count == 3u);
+    assert(strcmp(term.history[0], sample) == 0);
+    assert(strcmp(term.history[1], "duplicate") == 0);
+    assert(strcmp(term.history[2], "duplicate") == 0);
+    assert(stat(path, &st) == 0 && (st.st_mode & 0777u) == 0600u);
+    snj_term_close(&term);
+
+    assert(unlink(path) == 0);
+    for (unsigned int process = 0u; process < 2u; ++process) {
+        pid_t child = fork();
+        assert(child >= 0);
+        if (child == 0) {
+            struct snj_term writer;
+            int rc = 0;
+            snj_term_init(&writer);
+            if (snj_term_history_open(&writer, temp) < 0)
+                rc = 1;
+            for (unsigned int i = 0u; !rc && i < 10u; ++i) {
+                (void)snprintf(entry, sizeof(entry), "child-%u-%u", process, i);
+                if (snj_term_history_add(&writer, entry) < 0)
+                    rc = 1;
+            }
+            snj_term_close(&writer);
+            _exit(rc);
+        }
+    }
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        assert(wait(&status) > 0);
+        assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+    snj_term_init(&term);
+    assert(snj_term_history_open(&term, temp) == 0);
+    assert(term.history_count == 20u);
+    for (unsigned int process = 0u; process < 2u; ++process)
+        for (unsigned int i = 0u; i < 10u; ++i) {
+            (void)snprintf(entry, sizeof(entry), "child-%u-%u", process, i);
+            assert(term_history_has(&term, entry));
+        }
+    for (unsigned int i = 0u; i < 105u; ++i) {
+        (void)snprintf(entry, sizeof(entry), "bounded-%03u", i);
+        assert(snj_term_history_add(&term, entry) == 0);
+    }
+    assert(term.history_count == SNJ_TERM_HISTORY_COUNT);
+    assert(strcmp(term.history[0], "bounded-005") == 0);
+    assert(strcmp(term.history[99], "bounded-104") == 0);
+    snj_term_close(&term);
+    assert(unlink(path) == 0);
+
+    assert(snprintf(subdir, sizeof(subdir), "%s/symlink", temp) > 0);
+    assert(mkdir(subdir, 0700) == 0);
+    assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
+    assert(symlink("../target", path) == 0);
+    snj_term_init(&term);
+    assert(snj_term_history_open(&term, subdir) < 0);
+    assert(snj_term_take_history_warning(&term));
+    snj_term_close(&term);
+    assert(unlink(path) == 0 && rmdir(subdir) == 0);
+
+    assert(snprintf(subdir, sizeof(subdir), "%s/nonregular", temp) > 0);
+    assert(mkdir(subdir, 0700) == 0);
+    assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
+    assert(mkdir(path, 0700) == 0);
+    snj_term_init(&term);
+    assert(snj_term_history_open(&term, subdir) < 0);
+    snj_term_close(&term);
+    assert(rmdir(path) == 0 && rmdir(subdir) == 0);
+
+    assert(snprintf(subdir, sizeof(subdir), "%s/oversized", temp) > 0);
+    assert(mkdir(subdir, 0700) == 0);
+    assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    assert(fd >= 0);
+    assert(ftruncate(fd, (off_t)(SNJ_TERM_HISTORY_BYTES * 4u +
+                                 SNJ_TERM_HISTORY_COUNT + 1u)) == 0);
+    assert(close(fd) == 0);
+    snj_term_init(&term);
+    assert(snj_term_history_open(&term, subdir) < 0);
+    snj_term_close(&term);
+    assert(unlink(path) == 0 && rmdir(subdir) == 0);
+    assert(rmdir(temp) == 0);
+}
+
+static void
+test_prompt_spinners(void)
+{
+    struct snj_term term;
+    const char prompt[] = {'x', (char)0xfd, (char)0xfe, (char)0xff, '>', '\0'};
+    const char *spinners[SNJ_TERM_SPINNER_COUNT] = {"\\0◆", " |/-", "\\0"};
+    const char *bad[SNJ_TERM_SPINNER_COUNT] = {"\x80", " ", " "};
+    char saved[SNJ_TERM_LABEL_BYTES];
+
+    snj_term_init(&term);
+    assert(snj_term_set_prompt_template(&term, false, prompt, spinners, 8u, 0u)
+           == 0);
+    assert(strcmp(term.label, "x >") == 0);
+    assert(term.spinner[SNJ_TERM_SPINNER_GOAL].inactive_len == 0u);
+    assert(term.spinner[SNJ_TERM_SPINNER_PROVIDER].inactive_len == 1u);
+    assert(term.spinner[SNJ_TERM_SPINNER_TOOL].inactive_len == 0u);
+    assert(snj_term_set_spinner_states(&term,
+        1u << SNJ_TERM_SPINNER_GOAL) == 0);
+    assert(strcmp(term.label, "x◆ >") == 0);
+    assert(snj_term_set_spinner_states(&term,
+        1u << SNJ_TERM_SPINNER_PROVIDER) == 0);
+    assert(strcmp(term.label, "x|>") == 0);
+    memcpy(saved, term.label, sizeof(saved));
+    assert(snj_term_set_prompt_template(&term, false, prompt, bad, 8u, 0u) < 0);
+    assert(memcmp(saved, term.label, sizeof(saved)) == 0);
+    assert(term.spinner_states == (1u << SNJ_TERM_SPINNER_PROVIDER));
+    snj_term_close(&term);
 }
 
 static size_t
@@ -1022,6 +1181,8 @@ main(void)
     assert(strstr(output, "remote › **literal agent**\n") != NULL);
     assert(strstr(output, "assistant: ## Literal assistant\n") != NULL);
     test_history_failure();
+    test_prompt_history();
+    test_prompt_spinners();
     test_markdown_streaming();
     test_markdown_tables();
     test_append_only_views();

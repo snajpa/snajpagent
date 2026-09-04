@@ -809,6 +809,16 @@ struct optional_limit {
     bool known;
 };
 
+enum limit_field {
+    LIMIT_CONTEXT, LIMIT_MAX_CONTEXT, LIMIT_INPUT_CONTEXT, LIMIT_MAX_INPUT,
+    LIMIT_MAX_OUTPUT, LIMIT_AUTO_COMPACT, LIMIT_EFFECTIVE, LIMIT_COUNT
+};
+
+struct limit_key {
+    enum limit_field field;
+    const char *key;
+};
+
 static int
 merge_limit(const json_t *object, const char *key, uint64_t max,
             struct optional_limit *out)
@@ -829,13 +839,15 @@ merge_limit(const json_t *object, const char *key, uint64_t max,
 }
 
 static int
-collect_limit(const json_t *const *objects, size_t object_count,
-              const char *const *keys, size_t key_count, uint64_t max,
-              struct optional_limit *out)
+collect_limits(const json_t *const *objects, size_t object_count,
+               const struct limit_key *keys, size_t key_count,
+               struct optional_limit limits[LIMIT_COUNT])
 {
     for (size_t i = 0; i < object_count; ++i)
         for (size_t j = 0; j < key_count; ++j)
-            if (merge_limit(objects[i], keys[j], max, out) < 0)
+            if (merge_limit(objects[i], keys[j].key,
+                    keys[j].field == LIMIT_EFFECTIVE ? 100u :
+                    SNJ_CONFIG_TOKEN_LIMIT_MAX, &limits[keys[j].field]) < 0)
                 return -1;
     return 0;
 }
@@ -851,40 +863,46 @@ set_optional_limit(json_t *limits, const char *key,
 static int
 build_model_limits(const json_t *source, bool codex, json_t **out)
 {
-    static const char *const context_keys[] = {
-        "context_window_tokens", "contextWindowTokens", "context_window",
-        "contextWindow", "context_length", "contextLength"
+    static const struct limit_key generic[] = {
+        {LIMIT_CONTEXT, "context_window_tokens"},
+        {LIMIT_CONTEXT, "contextWindowTokens"}, {LIMIT_CONTEXT, "context_window"},
+        {LIMIT_CONTEXT, "contextWindow"}, {LIMIT_CONTEXT, "context_length"},
+        {LIMIT_CONTEXT, "contextLength"},
+        {LIMIT_MAX_CONTEXT, "max_context_window_tokens"},
+        {LIMIT_MAX_CONTEXT, "maxContextWindowTokens"},
+        {LIMIT_MAX_CONTEXT, "max_context_window"},
+        {LIMIT_MAX_CONTEXT, "maxContextWindow"},
+        {LIMIT_INPUT_CONTEXT, "input_context_window_tokens"},
+        {LIMIT_INPUT_CONTEXT, "inputContextWindowTokens"},
+        {LIMIT_INPUT_CONTEXT, "input_context_window"},
+        {LIMIT_INPUT_CONTEXT, "inputContextWindow"},
+        {LIMIT_MAX_INPUT, "max_input_tokens"}, {LIMIT_MAX_INPUT, "maxInputTokens"},
+        {LIMIT_MAX_OUTPUT, "max_output_tokens"},
+        {LIMIT_MAX_OUTPUT, "maxOutputTokens"},
+        {LIMIT_AUTO_COMPACT, "auto_compact_input_tokens"},
+        {LIMIT_AUTO_COMPACT, "autoCompactInputTokens"},
+        {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
+        {LIMIT_AUTO_COMPACT, "autoCompactTokenLimit"},
+        {LIMIT_EFFECTIVE, "effective_context_window_percent"},
+        {LIMIT_EFFECTIVE, "effectiveContextWindowPercent"}
     };
-    static const char *const max_context_keys[] = {
-        "max_context_window_tokens", "maxContextWindowTokens",
-        "max_context_window", "maxContextWindow"
+    static const struct limit_key native[] = {
+        {LIMIT_CONTEXT, "context_window"},
+        {LIMIT_MAX_CONTEXT, "max_context_window"},
+        {LIMIT_INPUT_CONTEXT, "input_context_window"},
+        {LIMIT_MAX_INPUT, "max_input_tokens"},
+        {LIMIT_MAX_OUTPUT, "max_output_tokens"},
+        {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
+        {LIMIT_EFFECTIVE, "effective_context_window_percent"}
     };
-    static const char *const input_context_keys[] = {
-        "input_context_window_tokens", "inputContextWindowTokens",
-        "input_context_window", "inputContextWindow"
-    };
-    static const char *const max_input_keys[] = {
-        "max_input_tokens", "maxInputTokens"
-    };
-    static const char *const max_output_keys[] = {
-        "max_output_tokens", "maxOutputTokens"
-    };
-    static const char *const auto_compact_keys[] = {
-        "auto_compact_input_tokens", "autoCompactInputTokens",
-        "auto_compact_token_limit", "autoCompactTokenLimit"
-    };
-    static const char *const effective_keys[] = {
-        "effective_context_window_percent", "effectiveContextWindowPercent"
+    static const char *const output_keys[LIMIT_COUNT] = {
+        "context_window_tokens", "max_context_window_tokens",
+        "input_context_window_tokens", "max_input_tokens", "max_output_tokens",
+        "auto_compact_input_tokens", "effective_context_window_percent"
     };
     const json_t *objects[3] = {source, NULL, NULL};
     size_t object_count = 1u;
-    struct optional_limit context = {0};
-    struct optional_limit max_context = {0};
-    struct optional_limit input_context = {0};
-    struct optional_limit max_input = {0};
-    struct optional_limit max_output = {0};
-    struct optional_limit auto_compact = {0};
-    struct optional_limit effective = {0};
+    struct optional_limit limit[LIMIT_COUNT] = {{0}};
     json_t *limits = NULL;
 
     if (!codex) {
@@ -898,74 +916,30 @@ build_model_limits(const json_t *source, bool codex, json_t **out)
             objects[object_count++] = value;
         }
     }
-#define COLLECT(field, keys, max) \
-    collect_limit(objects, object_count, keys, \
-                  sizeof(keys) / sizeof((keys)[0]), max, &field)
-    if (codex) {
-        static const char *const native_context[] = {"context_window"};
-        static const char *const native_max_context[] = {"max_context_window"};
-        static const char *const native_input_context[] = {"input_context_window"};
-        static const char *const native_max_input[] = {"max_input_tokens"};
-        static const char *const native_max_output[] = {"max_output_tokens"};
-        static const char *const native_auto[] = {"auto_compact_token_limit"};
-        static const char *const native_effective[] = {
-            "effective_context_window_percent"
-        };
-        if (COLLECT(context, native_context, SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-            COLLECT(max_context, native_max_context,
-                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-            COLLECT(input_context, native_input_context,
-                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-            COLLECT(max_input, native_max_input,
-                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-            COLLECT(max_output, native_max_output,
-                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-            COLLECT(auto_compact, native_auto,
-                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-            COLLECT(effective, native_effective, 100u) < 0)
-            goto invalid;
-    } else if (COLLECT(context, context_keys,
-                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-               COLLECT(max_context, max_context_keys,
-                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-               COLLECT(input_context, input_context_keys,
-                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-               COLLECT(max_input, max_input_keys,
-                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-               COLLECT(max_output, max_output_keys,
-                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-               COLLECT(auto_compact, auto_compact_keys,
-                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
-               COLLECT(effective, effective_keys, 100u) < 0) {
+    if (collect_limits(objects, object_count, codex ? native : generic,
+            codex ? sizeof(native) / sizeof(native[0]) :
+                    sizeof(generic) / sizeof(generic[0]), limit) < 0)
         goto invalid;
-    }
-#undef COLLECT
-    if ((context.known && max_context.known &&
-         context.value > max_context.value) ||
-        (context.known && input_context.known &&
-         input_context.value > context.value) ||
-        (context.known && max_input.known && max_input.value > context.value) ||
-        (context.known && max_output.known &&
-         max_output.value > context.value) ||
-        (context.known && max_input.known && max_output.known &&
-         max_input.value > context.value - max_output.value) ||
-        (context.known && auto_compact.known &&
-         auto_compact.value > context.value))
+    if ((limit[LIMIT_CONTEXT].known && limit[LIMIT_MAX_CONTEXT].known &&
+         limit[LIMIT_CONTEXT].value > limit[LIMIT_MAX_CONTEXT].value) ||
+        (limit[LIMIT_CONTEXT].known && limit[LIMIT_INPUT_CONTEXT].known &&
+         limit[LIMIT_INPUT_CONTEXT].value > limit[LIMIT_CONTEXT].value) ||
+        (limit[LIMIT_CONTEXT].known && limit[LIMIT_MAX_INPUT].known &&
+         limit[LIMIT_MAX_INPUT].value > limit[LIMIT_CONTEXT].value) ||
+        (limit[LIMIT_CONTEXT].known && limit[LIMIT_MAX_OUTPUT].known &&
+         limit[LIMIT_MAX_OUTPUT].value > limit[LIMIT_CONTEXT].value) ||
+        (limit[LIMIT_CONTEXT].known && limit[LIMIT_MAX_INPUT].known &&
+         limit[LIMIT_MAX_OUTPUT].known && limit[LIMIT_MAX_INPUT].value >
+         limit[LIMIT_CONTEXT].value - limit[LIMIT_MAX_OUTPUT].value) ||
+        (limit[LIMIT_CONTEXT].known && limit[LIMIT_AUTO_COMPACT].known &&
+         limit[LIMIT_AUTO_COMPACT].value > limit[LIMIT_CONTEXT].value))
         goto invalid;
     limits = json_object();
-    if (!limits ||
-        set_optional_limit(limits, "context_window_tokens", &context) < 0 ||
-        set_optional_limit(limits, "max_context_window_tokens",
-                           &max_context) < 0 ||
-        set_optional_limit(limits, "input_context_window_tokens",
-                           &input_context) < 0 ||
-        set_optional_limit(limits, "max_input_tokens", &max_input) < 0 ||
-        set_optional_limit(limits, "max_output_tokens", &max_output) < 0 ||
-        set_optional_limit(limits, "auto_compact_input_tokens",
-                           &auto_compact) < 0 ||
-        set_optional_limit(limits, "effective_context_window_percent",
-                           &effective) < 0)
+    if (!limits)
         goto fail;
+    for (size_t i = 0u; i < LIMIT_COUNT; ++i)
+        if (set_optional_limit(limits, output_keys[i], &limit[i]) < 0)
+            goto fail;
     *out = limits;
     return 0;
 invalid:
