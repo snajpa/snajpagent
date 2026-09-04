@@ -674,6 +674,34 @@ def test_interrupt():
     assert turn["data"]["reason"] == "cancelled"
 
 
+def test_active_ctrl_c_clears_draft():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"queue_slow\r")
+    child.wait(b"working slowly")
+
+    edit_start = len(child.buf)
+    child.send(b"discard this")
+    child.wait(b"t\x1b[Kh\x1b[Ki\x1b[Ks\x1b[K", start=edit_start)
+    clear_start = len(child.buf)
+    child.send(b"\x03")
+    clear_end = child.wait(b"\x1b[K", start=clear_start)
+    cleared = bytes(child.buf[clear_start:clear_end])
+    assert b"interrupting" not in cleared
+
+    child.send(b"replacement\r")
+    answer_end = child.wait(b"steered: replacement", start=clear_end)
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    steering = one(log, "steering_added")
+    response = one(log, "response_interrupted")
+    assert steering["data"]["text"] == "replacement"
+    assert response["data"]["origin"] == "steering"
+    assert not [item for item in log if item["type"] == "turn_interrupted"]
+
+
 def test_multiline_and_paste():
     before = session_ids()
     child = Child([])
@@ -1950,6 +1978,7 @@ test_armed_fifo()
 test_managed_command_steering_and_tab_queue()
 test_steering_during_pre_response_compaction()
 test_agents_md_config()
+test_active_ctrl_c_clears_draft()
 test_interrupt()
 test_multiline_and_paste()
 test_resume_pauses_fifo()

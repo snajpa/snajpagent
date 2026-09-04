@@ -1532,12 +1532,12 @@ feed_byte(struct snj_term *term, unsigned char byte,
         }
     case 0x03u:
         sigint_pending = 0;
+        if (term->draft.len)
+            return delete_range(term, 0u, term->draft.len);
         if (term->active) {
             *action = SNJ_TERM_INTERRUPT;
             return 1;
         }
-        if (term->draft.len)
-            return delete_range(term, 0u, term->draft.len);
         if (snj_term_hide(term) < 0)
             return -1;
         term->prompt_wanted = false;

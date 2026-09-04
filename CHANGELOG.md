@@ -8,6 +8,9 @@
   `resume:` label. Both lines now begin at column zero for direct line
   selection and copying.
 
+- Make Ctrl-C clear a nonempty active-turn draft without interrupting the turn;
+  Ctrl-C on an already-empty active composer retains explicit interruption.
+
 - Track the compiler and linker inputs behind every generated binary so a
   normal parallel build automatically replaces artifacts left by an ASan/UBSan
   build instead of linking instrumented objects without sanitizer runtimes.

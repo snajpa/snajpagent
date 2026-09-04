@@ -43,13 +43,17 @@ The pause provides display focus, not a provider-generation guarantee. Input,
 interrupts, and local active-turn commands remain responsive while output is
 paused.
 
-Enter and Tab have distinct active-turn meanings. Enter durably submits the
-draft as immediate steering and interrupts the current provider response at
-the next input-pump boundary. Tab durably appends the draft to the future-turn
-FIFO and does not interrupt the response, yield a managed command, or expose
-the text to the current model cycle. After every accepted Enter steer, an empty
-`MODEL/EFFORT » ` composer is armed immediately, before provider cancellation
-or the next response cycle completes, so another steer can be entered at once.
+Enter, Tab, and Ctrl-C have distinct active-turn meanings. Enter durably
+submits the draft as immediate steering and interrupts the current provider
+response at the next input-pump boundary. Tab durably appends the draft to the
+future-turn FIFO and does not interrupt the response, yield a managed command,
+or expose the text to the current model cycle. Ctrl-C is composer-first in
+both idle and active states: it clears a nonempty draft without changing the
+turn or session. Only Ctrl-C on an already-empty active composer interrupts the
+turn; on an empty idle composer it exits. After every accepted Enter steer, an
+empty `MODEL/EFFORT » ` composer is armed immediately, before provider
+cancellation or the next response cycle completes, so another steer can be
+entered at once.
 
 When Enter interrupts visible model output, `response_interrupted` retains its
 byte-exact public prefix. The next request places that prefix in assistant role,
@@ -187,6 +191,9 @@ non-steering behavior as `/queue TEXT`.
   `future_turn_queued`, creates no steering or response interruption, leaves the
   active response or command running, and drains queued turns later in FIFO
   order.
+- PTY coverage asserts that Ctrl-C clears a nonempty active draft without
+  creating steering or interruption state. Separate coverage retains explicit
+  turn interruption for Ctrl-C on an empty active composer.
 
 ### Real-terminal regression
 

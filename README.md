@@ -113,9 +113,11 @@ COMMAND
 Both lines begin at column zero, with no blank line between them. This
 includes `/exit`, idle Ctrl-C, Ctrl-D or terminal EOF, `/archive`, one-shot
 completion, runtime failure, and graceful SIGHUP/SIGTERM shutdown. Ctrl-C
-during a turn keeps its immediate interrupt meaning; the command is printed
-only when the process later exits. `/delete`, help, version, listing, command
-line errors, and failures before a session exists print no command.
+first clears a nonempty composer without affecting the turn or session. On an
+already-empty composer it interrupts the active turn or exits while idle; the
+command is printed only when the process actually exits. `/delete`, help,
+version, listing, command-line errors, and failures before a session exists
+print no command.
 
 The displayed command names the exact session, dotdir, explicit configuration
 path when one was used, presentation overrides, and any unconsumed one-turn
@@ -230,7 +232,9 @@ While a response is streaming, typing opens the active-turn composer on a new
 line and briefly pauses visible model output. With a nonempty draft, Tab keeps
 its contextual behavior: slash-command completion when possible, indentation
 while idle, or future-turn queueing while active. Empty Tab is a no-op outside
-networked mode. `/queue` or `/q` lists queued turns with one-based numbers.
+networked mode. Ctrl-C clears a nonempty draft first; only Ctrl-C on an empty
+active composer interrupts the turn. `/queue` or `/q` lists queued turns with
+one-based numbers.
 Queue mutations accept these short and long forms:
 
 ```text
