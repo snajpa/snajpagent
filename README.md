@@ -126,7 +126,9 @@ suffixes such as `agent1` or `root1` on the same connection.
 
 The server owns one room. Human IRC clients receive operator status; model
 nicks do not. Operator messages and direct mentions steer the addressed model.
-The runtime handles joining, bounded history, and reconnects.
+Model response text stays in the local rollout; only `irc_send` posts
+model-authored messages or notices. The runtime handles joining, bounded
+history, and reconnects.
 
 `-c` is repeatable. `-s ENDPOINT` selects the listener and may be combined with
 outgoing `-c` connections. Networked mode starts in chat view; Tab on an empty

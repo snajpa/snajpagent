@@ -185,6 +185,52 @@ class FakeResponses:
         ]
         return body + "".join(self.event(kind, data) for kind, data in events)
 
+    def function_body(self, sequence, call_id, name, arguments):
+        response_id = f"resp_irc_ui_{sequence}"
+        item_id = f"fc_irc_ui_{sequence}"
+        encoded = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+        created = {
+            "type": "response.created",
+            "response": {"id": response_id, "status": "in_progress", "output": []},
+        }
+        added_item = {
+            "id": item_id, "type": "function_call", "status": "in_progress",
+            "call_id": call_id, "name": name, "arguments": "",
+        }
+        done_item = dict(added_item)
+        done_item["status"] = "completed"
+        done_item["arguments"] = encoded
+        completed = {
+            "type": "response.completed",
+            "response": {
+                "id": response_id, "status": "completed",
+                "usage": {"input_tokens": 1, "output_tokens": 1,
+                          "total_tokens": 2},
+                "output": [],
+            },
+        }
+        events = [
+            ("response.output_item.added", {
+                "type": "response.output_item.added", "output_index": 0,
+                "item": added_item,
+            }),
+            ("response.function_call_arguments.delta", {
+                "type": "response.function_call_arguments.delta",
+                "item_id": item_id, "output_index": 0, "delta": encoded,
+            }),
+            ("response.function_call_arguments.done", {
+                "type": "response.function_call_arguments.done",
+                "item_id": item_id, "output_index": 0, "arguments": encoded,
+            }),
+            ("response.output_item.done", {
+                "type": "response.output_item.done", "output_index": 0,
+                "item": done_item,
+            }),
+            ("response.completed", completed),
+        ]
+        return (self.event("response.created", created) +
+                "".join(self.event(kind, data) for kind, data in events))
+
     def handle(self, handler):
         try:
             if handler.path != "/v1/responses":
@@ -208,9 +254,31 @@ class FakeResponses:
                 marker = "one"
             elif "integration two from twoop" in latest:
                 marker = "two"
-            text = (f"**{self.AGENTS[model]}** heard `{marker}`"
-                    if marker else "")
-            body = self.response_body(sequence, text).encode()
+            call_id = f"call_irc_ui_{model}_{marker}"
+            sent_text = f"**{self.AGENTS[model]}** heard `{marker}`"
+            completed_calls = {
+                item.get("call_id")
+                for item in request.get("input", [])
+                if item.get("type") == "function_call_output"
+            }
+            call_finished = any(
+                item.get("type") == "function_call" and
+                item.get("name") == "irc_send" and
+                json.loads(item.get("arguments", "{}")).get("text") == sent_text and
+                item.get("call_id") in completed_calls
+                for item in request.get("input", [])
+            )
+            if marker and not call_finished:
+                body = self.function_body(
+                    sequence, call_id, "irc_send", {
+                        "notice": False,
+                        "text": sent_text,
+                    },
+                ).encode()
+            else:
+                text = (f"{self.AGENTS[model]} local completion {marker}"
+                        if marker else "")
+                body = self.response_body(sequence, text).encode()
             handler.send_response(200)
             handler.send_header("Content-Type", "text/event-stream")
             handler.send_header("Content-Length", str(len(body)))
@@ -1508,6 +1576,8 @@ def validate_irc_events(dotdir):
         )
     messages = [event for event in event_list(events, "irc_event")
                 if event["data"]["kind"] == "message"]
+    if any("local completion" in event["data"]["text"] for event in messages):
+        raise AssertionError("local assistant completion leaked into IRC events")
     for nick, text, operator in expected_messages:
         matches = [event for event in messages
                    if event["data"]["nick"] == nick and
@@ -1540,6 +1610,16 @@ def validate_irc_events(dotdir):
     failures = event_list(events, "turn_failed")
     if failures:
         raise AssertionError(f"IRC integration turn failed: {failures[-1]!r}")
+    explicit_calls = [
+        item
+        for response in event_list(events, "response_completed")
+        for item in response["data"]["items"]
+        if item.get("name") == "irc_send"
+    ]
+    if len(explicit_calls) != 2:
+        raise AssertionError(
+            f"expected two explicit IRC sends, got {len(explicit_calls)}"
+        )
 
 
 def validate_irc_styles(terminal, remote_agent, local_agent=None):
@@ -1669,9 +1749,9 @@ def run_irc_case(binary, root):
             requests = provider.matching_requests(marker)
             counts = {model: sum(request["model"] == model for request in requests)
                       for model in FakeResponses.AGENTS}
-            if any(count != 1 for count in counts.values()):
+            if any(count != 2 for count in counts.values()):
                 raise AssertionError(
-                    f"operator message was not modeled once per agent: {counts!r}"
+                    f"operator message did not run send and final cycles: {counts!r}"
                 )
 
         terminals["two"].exit()

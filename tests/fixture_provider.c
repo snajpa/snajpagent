@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
 #include "json.h"
+#include "responses.h"
 #include "store.h"
 #include "turn.h"
 
@@ -313,8 +314,44 @@ snj_fixture_response(const char *prompt, const json_t *steering,
             (void)snprintf(error, error_size, "fixture provider failed");
         return -1;
     }
+    if (strcmp(prompt, "empty_message_recovery") == 0 && cycle == 1u) {
+        if (error_size)
+            (void)snprintf(error, error_size, "%s",
+                           SNJ_RESPONSE_EMPTY_MESSAGE_ERROR);
+        return -1;
+    }
+    if (strcmp(prompt, "oversized_message_recovery") == 0 && cycle == 1u) {
+        if (error_size)
+            (void)snprintf(error, error_size, "%s",
+                           SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR);
+        return -1;
+    }
     if (set_response_id(graph, cycle, "complete") < 0)
         goto allocation;
+    if (strcmp(prompt, "empty_message_recovery") == 0) {
+        if (!steering_contains(steering, SNJ_EMPTY_ASSISTANT_CORRECTION)) {
+            if (error_size)
+                (void)snprintf(error, error_size,
+                               "fixture did not receive empty correction");
+            return -1;
+        }
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_empty_recovered",
+                           "empty message recovered", 0);
+    }
+    if (strcmp(prompt, "oversized_message_recovery") == 0) {
+        if (!steering_contains(steering, SNJ_OVERSIZED_ASSISTANT_CORRECTION)) {
+            if (error_size)
+                (void)snprintf(error, error_size,
+                               "fixture did not receive oversized correction");
+            return -1;
+        }
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_oversized_recovered",
+                           "oversized message recovered", 0);
+    }
     if (strcmp(prompt, "context_anchor_chain") == 0) {
         set_usage(graph, 8000u + (uint64_t)(cycle - 1u) * 24000u, 100u);
         if (cycle <= 4u)
@@ -405,59 +442,99 @@ snj_fixture_response(const char *prompt, const json_t *steering,
     if (strstr(prompt, "network_zero"))
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER, "msg_fixture_network_zero",
-                           "network zero reply", 0);
-    if (strstr(prompt, "network_one"))
+                           "network zero local only", 0);
+    if (strstr(prompt, "network_one")) {
+        if (cycle == 1u)
+            return add_irc_send_call(graph, cycle, 0u, "network one reply");
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER, "msg_fixture_network_one",
-                           "network one reply", 0);
+                           "network one local completion", 0);
+    }
+    if (strstr(prompt, "network_view_stream") && cycle == 1u)
+        return add_irc_send_call(graph, cycle, 0u,
+                                 "network stream acknowledged");
     if (strstr(prompt, "network_commentary")) {
-        if (emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
-                        SNJ_PHASE_COMMENTARY,
-                        "msg_fixture_network_commentary_local",
-                        "network local planning", 0) < 0)
-            return -1;
+        if (cycle == 1u) {
+            if (emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                            SNJ_PHASE_COMMENTARY,
+                            "msg_fixture_network_commentary_local",
+                            "network local planning", 0) < 0)
+                return -1;
+            return add_irc_send_call(graph, cycle, 0u,
+                                     "network commentary reply");
+        }
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_network_commentary_final",
-                           "network commentary reply", 0);
+                           "network commentary local completion", 0);
     }
-    if (strstr(prompt, "network_operator"))
+    if (strstr(prompt, "network_operator")) {
+        if (cycle == 1u)
+            return add_irc_send_call(graph, cycle, 0u,
+                                     "network operator reply");
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_network_operator",
-                           "network operator reply", 0);
-    if (strstr(prompt, "network_mention"))
+                           "network operator local completion", 0);
+    }
+    if (strstr(prompt, "network_mention")) {
+        if (cycle == 1u)
+            return add_irc_send_call(graph, cycle, 0u,
+                                     "network mention reply");
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_network_mention",
-                           "network mention reply", 0);
+                           "network mention local completion", 0);
+    }
     if (strstr(prompt, "network_count_wait")) {
-        if (!steering_contains(steering, "network count mention")) {
+        if (cycle == 1u &&
+            !steering_contains(steering, "network count mention")) {
             if (error_size)
                 (void)snprintf(error, error_size,
                                "fixture count request was not rebuilt for IRC mention");
             return -1;
         }
+        if (cycle == 1u)
+            return add_irc_send_call(graph, cycle, 0u,
+                                     "network count mention reply");
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_network_count",
-                           "network count mention reply", 0);
+                           "network count local completion", 0);
     }
     if (strstr(prompt, "network_reminder")) {
         if (cycle == 1u)
-            return 0;
+            return add_irc_send_call(graph, cycle, 0u, "");
+        if (cycle == 2u)
+            return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                               SNJ_PHASE_FINAL_ANSWER,
+                               "msg_fixture_network_reminder_unsent",
+                               "network reminder unsent local reply", 0);
+        if (cycle == 3u) {
+            if (!steering_contains(steering, "Use irc_send")) {
+                if (error_size)
+                    (void)snprintf(error, error_size,
+                                   "fixture did not receive irc_send reminder");
+                return -1;
+            }
+            return add_irc_send_call(graph, cycle, 0u,
+                                     "network reminder reply");
+        }
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_network_reminder",
-                           "network reminder reply", 0);
+                           "network reminder local completion", 0);
     }
     if (strstr(prompt, "network_tool")) {
         if (cycle == 1u)
             return add_call(graph, workspace, cycle, 0u, "fixture ok");
+        if (cycle == 2u)
+            return add_irc_send_call(graph, cycle, 0u,
+                                     "network tool complete");
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_network_tool",
-                           "network tool complete", 0);
+                           "network tool local completion", 0);
     }
     if (strstr(prompt, "network_managed")) {
         if (cycle == 1u)
@@ -489,7 +566,7 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_network_managed",
-                           "network managed complete", 0);
+                           "network managed local completion", 0);
     }
     if (strcmp(prompt, "managed_command_steer") == 0) {
         if (cycle == 1u)

@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 struct emitted {
@@ -89,7 +90,7 @@ test_deltas_survive_empty_terminal_output(void)
 
     snj_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snj_buf_init(&emitted.text, SNJ_MAX_PUBLIC_ITEM + 1u);
     assert(parse_stream(wire, 1u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
@@ -135,6 +136,81 @@ test_terminal_snapshot_can_supply_unseen_items(void)
     assert(emitted.last_phase == SNJ_PHASE_FINAL_ANSWER);
     snj_buf_free(&emitted.text);
     snj_response_graph_free(&graph);
+}
+
+static void
+test_empty_assistant_message_is_distinct(void)
+{
+    static const char *const wires[] = {
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_text\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_text\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty_text\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}]}]}}\n\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty_refusal\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"\"}]}]}}\n\n"
+    };
+
+    for (size_t i = 0; i < sizeof(wires) / sizeof(wires[0]); ++i) {
+        struct snj_response_graph graph;
+        struct emitted emitted;
+        char error[256] = {0};
+
+        snj_response_graph_init(&graph);
+        memset(&emitted, 0, sizeof(emitted));
+        snj_buf_init(&emitted.text, 1024u);
+        assert(parse_stream(wires[i], 3u, &graph, &emitted,
+                            error, sizeof(error)) < 0);
+        assert(strcmp(error, SNJ_RESPONSE_EMPTY_MESSAGE_ERROR) == 0);
+        assert(graph.count == 0u);
+        assert(emitted.calls == 0u);
+        assert(emitted.text.len == 0u);
+        snj_buf_free(&emitted.text);
+        snj_response_graph_free(&graph);
+    }
+}
+
+static void
+test_oversized_assistant_message_is_distinct(void)
+{
+    static const char header[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_oversized\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_oversized\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_oversized\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n";
+    static const char delta_prefix[] =
+        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_oversized\",\"output_index\":0,\"content_index\":0,\"delta\":\"";
+    static const char delta_suffix[] = "\"}\n\n";
+    size_t chunk_len = 700u * 1024u;
+    size_t wire_len = sizeof(header) - 1u + 3u *
+        (sizeof(delta_prefix) - 1u + chunk_len + sizeof(delta_suffix) - 1u);
+    char *wire = malloc(wire_len + 1u);
+    char *cursor = wire;
+    struct snj_response_graph graph;
+    struct emitted emitted;
+    char error[256] = {0};
+
+    assert(wire != NULL);
+    memcpy(cursor, header, sizeof(header) - 1u);
+    cursor += sizeof(header) - 1u;
+    for (size_t i = 0u; i < 3u; ++i) {
+        memcpy(cursor, delta_prefix, sizeof(delta_prefix) - 1u);
+        cursor += sizeof(delta_prefix) - 1u;
+        memset(cursor, 'x', chunk_len);
+        cursor += chunk_len;
+        memcpy(cursor, delta_suffix, sizeof(delta_suffix) - 1u);
+        cursor += sizeof(delta_suffix) - 1u;
+    }
+    assert((size_t)(cursor - wire) == wire_len);
+    *cursor = '\0';
+    snj_response_graph_init(&graph);
+    memset(&emitted, 0, sizeof(emitted));
+    snj_buf_init(&emitted.text, SNJ_MAX_PUBLIC_ITEM + 1u);
+    assert(parse_stream(wire, wire_len, &graph, &emitted,
+                        error, sizeof(error)) < 0);
+    assert(strcmp(error, SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR) == 0);
+    assert(graph.count == 0u);
+    assert(emitted.calls == 2u);
+    assert(emitted.text.len == 2u * chunk_len);
+    snj_buf_free(&emitted.text);
+    snj_response_graph_free(&graph);
+    free(wire);
 }
 
 static void
@@ -674,6 +750,8 @@ main(void)
 {
     test_deltas_survive_empty_terminal_output();
     test_terminal_snapshot_can_supply_unseen_items();
+    test_empty_assistant_message_is_distinct();
+    test_oversized_assistant_message_is_distinct();
     test_structured_keepalives_do_not_end_response();
     test_unused_response_events_are_ignored();
     test_terminal_snapshot_ignores_unused_text_metadata();

@@ -844,7 +844,8 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         return 0;
     }
     if (strcmp(type, "steering_added") == 0 ||
-        strcmp(type, "irc_reply_reminder") == 0) {
+        strcmp(type, "irc_reply_reminder") == 0 ||
+        strcmp(type, "model_correction") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
         const char *steering_id = snj_json_string(data, "steering_id");
@@ -861,9 +862,8 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
-        if (strcmp(type, "irc_reply_reminder") == 0)
-            return append_message(builder, "irc_reply_reminder", "developer",
-                                  text);
+        if (strcmp(type, "steering_added") != 0)
+            return append_message(builder, type, "developer", text);
         return defer_steering(builder, text);
     }
     if (strcmp(type, "response_interrupted") == 0) {
@@ -1323,9 +1323,10 @@ irc_send_tool_schema(void)
         return NULL;
     }
     return tool_schema("irc_send",
-        "Send bounded room chat as the agent identity. Set notice true only "
-        "for a non-reply informational notice. Connection, join, and retry "
-        "work is owned by the runtime.", properties,
+        "Send bounded room chat as the agent identity. This is the only way "
+        "model text reaches the room; assistant response text remains local. "
+        "Set notice true only for a non-reply informational notice. "
+        "Connection, join, and retry work is owned by the runtime.", properties,
         required_array(required, sizeof(required) / sizeof(required[0])));
 }
 
@@ -1739,7 +1740,8 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         return 0;
     }
     if (strcmp(type, "steering_added") == 0 ||
-        strcmp(type, "irc_reply_reminder") == 0) {
+        strcmp(type, "irc_reply_reminder") == 0 ||
+        strcmp(type, "model_correction") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
         if (!builder->active_turn || !turn_id ||
@@ -1751,8 +1753,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (strcmp(type, "steering_added") == 0)
             return defer_steering(builder, text);
         before = json_array_size(builder->request_input);
-        if (append_message(builder, "irc_reply_reminder", "developer",
-                           text) < 0)
+        if (append_message(builder, type, "developer", text) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         return 0;
@@ -2166,14 +2167,14 @@ snj_context_build(struct snj_session *session, const char *model,
             "aliases; direct mentions of the accepted model nick for that "
             "endpoint require immediate "
             "attention. Unprivileged chat and membership/topic notifications "
-            "are conversational context and may be left unanswered. Terminal "
-            "assistant speech is posted to IRC, while tool activity stays "
-            "local at normal verbosity. Coding tools act only on the local "
+            "are conversational context and may be left unanswered. Assistant "
+            "speech remains in the local rollout; irc_send is the only way "
+            "you address the room. Coding tools act only on the local "
             "workspace. The runtime owns sockets, joining, history, and "
-            "reconnect: do not poll or babysit them. Use irc_send only for an "
-            "intentional mid-turn room message, irc_state for cached state, "
+            "reconnect: do not poll or babysit them. Use irc_state for cached state, "
             "and irc_topic only when the agent has +o. A local operator turn "
-            "requires one room-facing reply; peer/background traffic does not.",
+            "requires one successful irc_send message; a notice does not count "
+            "as a reply, and peer/background traffic requires no response.",
             config->irc_model_nick, config->irc_operator_nick) < 0 ||
           snj_buf_terminate(&network_harness) < 0 ||
           append_message(&builder, "irc_harness", "developer",

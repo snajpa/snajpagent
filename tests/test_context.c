@@ -1802,6 +1802,13 @@ main(void)
                       "operator nick alice") != NULL);
         assert(strstr(snj_json_string(harness, "text"),
                       "do not poll or babysit") != NULL);
+        assert(strstr(snj_json_string(harness, "text"),
+                      "irc_send is the only way") != NULL);
+        assert(strstr(snj_json_string(harness, "text"),
+                      "requires one successful irc_send message") != NULL);
+        assert(strstr(snj_json_string(tool_by_name(tools, "irc_send"),
+                                     "description"),
+                      "only way model text reaches the room") != NULL);
         snj_config_free(&network_config);
     }
 

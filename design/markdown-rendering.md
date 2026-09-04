@@ -93,15 +93,16 @@ and stream abort behavior remain in force. Markdown text and literal terminal
 text share the same punctuation-aware wrapping path; Markdown does not carry a
 separate word-break implementation.
 
-Networked final answers are intentionally buffered before being sent to IRC.
-When those local or remote non-operator messages are painted in the scrolling
-chat UI, the same Markdown presentation is applied after the timestamp and
-sender prefix. Operator chat, topics, membership notices, and protocol
-diagnostics remain literal. Fenced-code state may continue across consecutive
-IRC lines from the same agent; unrelated senders cannot inherit it. Resumed
-non-networked assistant history uses the same static model-text presentation.
-Because IRC messages are independently framed lines, table recognition does
-not join separate IRC messages into one table.
+Networked final answers remain local rollout content. Only `irc_send` publishes
+model-authored IRC text. When explicit local sends or remote non-operator
+messages are painted in the scrolling chat UI, the same Markdown presentation
+is applied after the timestamp and sender prefix. Operator chat, topics,
+membership notices, and protocol diagnostics remain literal. Fenced-code state
+may continue across consecutive IRC lines from the same agent; unrelated
+senders cannot inherit it. Resumed non-networked assistant history uses the
+same static model-text presentation. Because IRC messages are independently
+framed lines, table recognition does not join separate IRC messages into one
+table.
 
 ## Acceptance
 

@@ -121,6 +121,15 @@ app_warning(struct app_state *app, const char *message)
 {
     return snj_render_warning_ctx(&app->render, message);
 }
+static const char *
+model_correction_for_failure(const char *failure)
+{
+    if (failure && strcmp(failure, SNJ_RESPONSE_EMPTY_MESSAGE_ERROR) == 0)
+        return SNJ_EMPTY_ASSISTANT_CORRECTION;
+    if (failure && strcmp(failure, SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR) == 0)
+        return SNJ_OVERSIZED_ASSISTANT_CORRECTION;
+    return NULL;
+}
 static int
 app_hostf(struct app_state *app, const char *fmt, ...)
 {
@@ -2751,12 +2760,14 @@ run_turn(struct app_state *app, const char *prompt,
             int exit_status = app->stream_failed &&
                 strcmp(class_name, "output") == 0 ? 6 : 4;
             char failure[256];
+            const char *model_correction;
             json_t *partial;
             (void)snprintf(failure, sizeof(failure), "%s",
                            app->stream_failed ?
                            (app->stream_error[0] ? app->stream_error :
                             "assistant output could not be delivered") :
                            (error[0] ? error : "provider response failed"));
+            model_correction = model_correction_for_failure(failure);
             if (replay_safe && !capacity_recovery_used) {
                 bool compacted = false;
                 char provider_source_hash[SNJ_SHA256_HEX_LEN + 1u];
@@ -2845,6 +2856,32 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            if (model_correction) {
+                char correction_id[SNJ_ID_HEX_LEN + 1u];
+
+                if (snj_random_id(correction_id) < 0) {
+                    json_decref(partial);
+                    (void)app_error(app,
+                                    "model correction id could not be generated");
+                    result = 3;
+                    goto out;
+                }
+                if (commit_event(app, "response_failed",
+                        snj_app_response_failed_data(
+                            turn_id, response_id, cycle, class_name, failure,
+                            partial, provider_retry_count),
+                        error, sizeof(error)) < 0 ||
+                    commit_event(app, "model_correction",
+                        snj_app_steering_added_data(
+                            turn_id, correction_id, model_correction),
+                        error, sizeof(error)) < 0) {
+                    (void)app_error(app, error[0] ? error :
+                                    "model correction could not be persisted");
+                    result = 3;
+                    goto out;
+                }
+                continue;
+            }
             if (commit_event(app, "response_failed",
                              snj_app_response_failed_data(turn_id, response_id, cycle,
                                                   class_name, failure, partial,
@@ -3028,27 +3065,30 @@ run_turn(struct app_state *app, const char *prompt,
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             continue;
         }
-        if (app->networked && decision.outcome == SNJ_GRAPH_NONPRODUCTIVE) {
-            if (app->irc_turn_local_operator && !app->irc_turn_replied &&
-                !app->session.irc_reply_reminded) {
-                char steering_id[SNJ_ID_HEX_LEN + 1u];
+        if (app->networked && app->irc_turn_local_operator &&
+            !app->irc_turn_replied && !app->session.irc_reply_reminded &&
+            (decision.outcome == SNJ_GRAPH_NONPRODUCTIVE ||
+             decision.outcome == SNJ_GRAPH_FINAL ||
+             decision.outcome == SNJ_GRAPH_REFUSAL)) {
+            char steering_id[SNJ_ID_HEX_LEN + 1u];
 
-                if (snj_random_id(steering_id) < 0 ||
-                    commit_event(app, "irc_reply_reminder",
-                        snj_app_steering_added_data(turn_id, steering_id,
-                            SNJ_IRC_REPLY_REMINDER_TEXT),
-                        error, sizeof(error)) < 0) {
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
-                                                   NULL, NULL);
-                    (void)app_error(app, error[0] ? error :
-                                    "IRC reply reminder could not be persisted");
-                    result = 3;
-                    goto out;
-                }
+            if (snj_random_id(steering_id) < 0 ||
+                commit_event(app, "irc_reply_reminder",
+                    snj_app_steering_added_data(turn_id, steering_id,
+                        SNJ_IRC_REPLY_REMINDER_TEXT),
+                    error, sizeof(error)) < 0) {
                 snj_app_response_cycle_release(app, &graph, NULL, NULL,
                                                NULL, NULL);
-                continue;
+                (void)app_error(app, error[0] ? error :
+                                "IRC reply reminder could not be persisted");
+                result = 3;
+                goto out;
             }
+            snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                           NULL, NULL);
+            continue;
+        }
+        if (app->networked && decision.outcome == SNJ_GRAPH_NONPRODUCTIVE) {
             if (commit_event(app, "turn_completed_silent",
                     silent_turn_data(turn_id, response_id,
                         app->irc_turn_local_operator && !app->irc_turn_replied ?
@@ -3068,16 +3108,6 @@ run_turn(struct app_state *app, const char *prompt,
         if (decision.outcome == SNJ_GRAPH_FINAL ||
             decision.outcome == SNJ_GRAPH_REFUSAL) {
             const struct snj_response_item *final = &graph.items[decision.final_index];
-            if (app->networked &&
-                snj_irc_send_agent(app->irc, final->text,
-                                   error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL,
-                                               NULL, NULL);
-                (void)app_error(app, error[0] ? error :
-                                "assistant reply could not be queued to IRC");
-                result = 4;
-                goto out;
-            }
             if (commit_event(app, "turn_completed",
                              snj_app_turn_completed_data(turn_id, response_id,
                                                  final->local_item_id),

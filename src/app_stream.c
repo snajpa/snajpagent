@@ -267,7 +267,7 @@ fail_partial:
     }
     return stream_fail(app, errno,
                        errno == EOVERFLOW ?
-                       "partial public output exceeds its bound" :
+                       SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR :
                        "public output could not be rendered");
 }
 

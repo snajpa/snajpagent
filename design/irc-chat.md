@@ -191,12 +191,13 @@ output is safely redrawn around it. Chat view shows:
 - joins, leaves, reconnects, topic changes, and other room notifications; and
 - the local operator composer and actionable errors.
 
-Model text is buffered during generation. Only terminal public assistant text
-is sent to IRC as a message from the model nick. Chat view does not render this
-process's own model text or local tool activity at normal verbosity. Public
-text emitted on an intermediate tool cycle, raw tool calls, tool results,
-provider traffic, request bodies, and internal agent activity are never sent
-to the room.
+Model text is buffered during generation and remains local rollout content.
+Only a successful `irc_send` call sends model-authored text to IRC as a message
+or notice from the model nick. Chat view does not render this process's own
+model text or local tool activity at normal verbosity. Final responses,
+refusals, public text emitted on an intermediate tool cycle, raw tool calls,
+tool results, provider traffic, request bodies, and internal agent activity
+are never sent to the room implicitly.
 
 Rollout view shows the local model's streamed work using the ordinary
 non-networked visibility rules at the configured verbosity. At verbosity 0 it
@@ -307,8 +308,8 @@ conversation explains:
 - that a direct mention of the agent requires immediate attention;
 - that unprivileged agent/room traffic and membership notifications are
   conversational context;
-- that terminal assistant speech becomes an IRC message while tool activity is
-  local-only at normal verbosity; and
+- that assistant speech remains in the local rollout and `irc_send` is the
+  only way for the model to address the room; and
 - that the declared coding tools still operate on the local workspace, not on
   the IRC server or remote peers;
 - that IRC connection health, joining, history synchronization, and reconnect
@@ -345,6 +346,12 @@ network read waits for a model call to finish. A room-update turn caused only
 by peers or notifications may end without model-authored chat; snajpagent does
 not remind, retry, or force a reaction to that traffic.
 
+A provider response with no actionable item expresses that quiet outcome. An
+explicit empty or oversized assistant message is not silence: snajpagent tells
+the model which condition occurred in one terse developer correction and lets
+the next cycle recover. The correction stays out of the normal operator UI and
+appears only in higher-verbosity durable diagnostics.
+
 Every command uses the asynchronous-capable managed path. A configured or
 model-requested timeout is a foreground handoff deadline, not a kill deadline:
 if it expires while the command is still live, the same handoff used for local
@@ -358,13 +365,14 @@ process. The IRC runtime does not require the model to babysit the socket or
 process. Ordinary terminal interrupt remains an explicit cancellation and is
 not changed by this rule.
 
-For a turn started by the local operator, snajpagent tracks whether terminal
-public assistant text was posted to the room. If the model reaches an otherwise
-terminal boundary without such a reply, the same turn receives one concise
-developer reminder to reply to the local operator in IRC and gets one final
-provider cycle. The turn is then considered finished, whether the model speaks
-or remains quiet. This reminder is never looped and is never applied to peer
-messages, membership traffic, history snapshots, or other background updates.
+For a turn started by the local operator, snajpagent tracks whether a
+successful `irc_send` message was posted to the room. A notice does not count
+as a reply. If the model reaches an otherwise terminal boundary without such a
+reply, the same turn receives one concise developer reminder to use `irc_send`
+and gets one final provider cycle. The turn is then considered finished,
+whether the model sends or remains quiet. This reminder is never looped and is
+never applied to peer messages, membership traffic, history snapshots, or
+other background updates.
 
 On the first successful room join, the received topic, member nicks and server
 history are immediately admitted together as a user-role room snapshot. If a
@@ -399,9 +407,9 @@ presentation; its default `0` is unlimited, and the complete redacted output
 is always persisted. Command output supplied to the model is separately
 bounded by the calling command tool's `max_output_tokens`. IRC tools never open sockets,
 join, poll, reconnect, wait for traffic, or expose a manual reconnect action.
-The event loop owns those operations continuously. Ordinary terminal assistant
-text remains the simple way to reply; `irc_send` exists for an explicit
-mid-turn chat action and is not required as a completion ritual.
+The event loop owns those operations continuously. `irc_send` is the exclusive
+room-speech path and may be used any number of times during a turn. Assistant
+response text remains local even at a terminal response boundary.
 
 ## Durability, Bounds, And Failure Semantics
 
@@ -487,10 +495,11 @@ pass and focused local smoke checks demonstrate all of the following:
    generation or tools; asynchronous managed-command handoff; coalesced
    background events; socket servicing during provider and tool work;
    first-join history projection; and fresh post-compaction history projection;
-   one non-looping reply reminder for otherwise-silent local operator turns;
-   and no forced response to other traffic;
-6. `irc_send`, `irc_state`, and privilege-correct `irc_topic` behavior without
-   model-driven polling, joining, or reconnection; and
+   one non-looping `irc_send` reminder for otherwise-silent local operator
+   turns; and no forced response to other traffic;
+6. `irc_send` as the only model-authored IRC transmission path, final assistant
+   text remaining local, and `irc_state` plus privilege-correct `irc_topic`
+   behavior without model-driven polling, joining, or reconnection; and
 7. autonomous reconnect/disconnect behavior, slow/malformed peer isolation, bounded
    buffers, durable replay/resume, clean shutdown, and no credential, tool
    detail, escape-sequence, or cross-server leakage.

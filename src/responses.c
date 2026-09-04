@@ -393,10 +393,14 @@ append_part_delta(struct snj_responses_stream *stream, size_t output_index,
         return -1;
     if (part->complete)
         return stream_fail(stream, EPROTO, "public delta follows completion");
-    if (account_bytes(stream, len) < 0 ||
-        snj_buf_append(&part->text, delta, len) < 0)
+    if (len > part->text.max - part->text.len)
         return stream_fail(stream, EOVERFLOW,
-                           "public response item exceeds its limit");
+                           SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR);
+    if (account_bytes(stream, len) < 0)
+        return -1;
+    if (snj_buf_append(&part->text, delta, len) < 0)
+        return stream_fail(stream, errno ? errno : EIO,
+                           "cannot retain public response item");
     part->value_seen = true;
     return emit_text(stream, output_index, item, kind, delta, len);
 }
@@ -413,8 +417,10 @@ reconcile_part(struct snj_responses_stream *stream, size_t output_index,
     if (!text)
         return stream_fail(stream, EPROTO, "public snapshot has no text");
     len = strlen(text);
-    if (len > SNJ_MAX_PUBLIC_ITEM ||
-        !snj_utf8_valid((const unsigned char *)text, len, true))
+    if (len > SNJ_MAX_PUBLIC_ITEM)
+        return stream_fail(stream, EOVERFLOW,
+                           SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR);
+    if (!snj_utf8_valid((const unsigned char *)text, len, true))
         return stream_fail(stream, EPROTO, "invalid public snapshot text");
     part = part_at(stream, item, content_index, kind, true);
     if (!part)
@@ -996,11 +1002,20 @@ build_message(struct snj_responses_stream *stream,
             continue;
         if (kind == SNJ_WIRE_PART_NONE)
             kind = part->kind;
-        if (part->kind != kind ||
-            snj_buf_append(&text, part->text.data, part->text.len) < 0) {
+        if (part->kind != kind) {
             snj_buf_free(&text);
             return stream_fail(stream, EPROTO,
                                "assistant message has mixed or invalid content");
+        }
+        if (part->text.len > SNJ_MAX_PUBLIC_ITEM - text.len) {
+            snj_buf_free(&text);
+            return stream_fail(stream, EOVERFLOW,
+                               SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR);
+        }
+        if (snj_buf_append(&text, part->text.data, part->text.len) < 0) {
+            snj_buf_free(&text);
+            return stream_fail(stream, errno ? errno : EIO,
+                               "cannot retain assistant message");
         }
         ++public_parts;
     }
@@ -1008,10 +1023,15 @@ build_message(struct snj_responses_stream *stream,
         snj_buf_free(&text);
         return 0;
     }
-    if (!text.len || snj_buf_terminate(&text) < 0) {
+    if (!text.len) {
         snj_buf_free(&text);
         return stream_fail(stream, EPROTO,
-                           "assistant message is empty or oversized");
+                           SNJ_RESPONSE_EMPTY_MESSAGE_ERROR);
+    }
+    if (snj_buf_terminate(&text) < 0) {
+        snj_buf_free(&text);
+        return stream_fail(stream, errno ? errno : EIO,
+                           "cannot terminate assistant message");
     }
     if (kind == SNJ_WIRE_PART_REFUSAL) {
         if (public_parts != 1u ||

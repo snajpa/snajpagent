@@ -9,6 +9,10 @@
 #include <stddef.h>
 
 #define SNJ_MAX_RESPONSE_PARTS 96u
+#define SNJ_RESPONSE_EMPTY_MESSAGE_ERROR \
+    "model tried to send an empty assistant message"
+#define SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR \
+    "model tried to send an oversized assistant message"
 
 struct snj_provider_failure {
     char code[64];

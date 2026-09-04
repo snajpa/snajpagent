@@ -634,6 +634,7 @@ clear_pending_steering(struct snj_session *session)
     }
     session->pending_steering_count = 0;
     session->pending_steering_bytes = 0;
+    session->model_correction_pending = false;
 }
 static bool
 pending_user_id_exists(const struct snj_session *session, const char *id)
@@ -1187,7 +1188,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                         sizeof(session->default_effort), new_effort))
             goto invalid;
     } else if (strcmp(type, "steering_added") == 0 ||
-               strcmp(type, "irc_reply_reminder") == 0) {
+               strcmp(type, "irc_reply_reminder") == 0 ||
+               strcmp(type, "model_correction") == 0) {
         static const char *const keys[] = {"steering_id", "text", "turn_id"};
         const char *steering_id = snj_json_string(data, "steering_id");
         const char *text = snj_json_string(data, "text");
@@ -1196,9 +1198,14 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         char *copy;
         struct snj_pending_steering *pending;
         bool reminder = strcmp(type, "irc_reply_reminder") == 0;
+        bool correction = strcmp(type, "model_correction") == 0;
+        bool correction_text = text &&
+            (strcmp(text, SNJ_EMPTY_ASSISTANT_CORRECTION) == 0 ||
+             strcmp(text, SNJ_OVERSIZED_ASSISTANT_CORRECTION) == 0);
 
         if (!snj_json_exact_keys(data, keys, 3u) || !session->active_turn ||
-            session->response_terminal == SNJ_RESPONSE_TERMINAL_FAILED ||
+            (session->response_terminal == SNJ_RESPONSE_TERMINAL_FAILED &&
+             !correction) ||
             session->response_terminal == SNJ_RESPONSE_TERMINAL_INTERRUPTED ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             !steering_id || !snj_hex_is_lower(steering_id, SNJ_ID_HEX_LEN) ||
@@ -1208,10 +1215,15 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             session->pending_steering_bytes >
                 SNJ_MAX_STEERING_PER_TURN * SNJ_MAX_STEERING_TEXT - len ||
             (reminder && (!session->response_complete ||
-                          session->response_outcome != SNJ_GRAPH_NONPRODUCTIVE ||
+                          (session->response_outcome != SNJ_GRAPH_NONPRODUCTIVE &&
+                           session->response_outcome != SNJ_GRAPH_FINAL &&
+                           session->response_outcome != SNJ_GRAPH_REFUSAL) ||
                           session->irc_reply_reminded ||
                           session->pending_steering_count != 0u ||
-                          strcmp(text, SNJ_IRC_REPLY_REMINDER_TEXT) != 0)))
+                          strcmp(text, SNJ_IRC_REPLY_REMINDER_TEXT) != 0)) ||
+            (correction &&
+             (session->response_terminal != SNJ_RESPONSE_TERMINAL_FAILED ||
+              session->model_correction_pending || !correction_text)))
             goto invalid;
         copy = snj_strdup_checked(text, SNJ_MAX_STEERING_TEXT);
         if (!copy)
@@ -1224,6 +1236,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         session->pending_steering_bytes += len;
         if (reminder)
             session->irc_reply_reminded = true;
+        if (correction)
+            session->model_correction_pending = true;
     } else if (strcmp(type, "future_turn_queued") == 0) {
         static const char *const keys[] = {"queue_id", "text", "while_turn_id"};
         const char *queue_id = snj_json_string(data, "queue_id");
@@ -1458,7 +1472,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         bool state_allows_start;
 
         state_allows_start = !session->response_open &&
-            session->response_terminal != SNJ_RESPONSE_TERMINAL_FAILED &&
+            (session->response_terminal != SNJ_RESPONSE_TERMINAL_FAILED ||
+             session->model_correction_pending) &&
             session->response_terminal != SNJ_RESPONSE_TERMINAL_INTERRUPTED &&
             (session->response_terminal != SNJ_RESPONSE_TERMINAL_STEERED ||
              session->pending_steering_count != 0u) &&

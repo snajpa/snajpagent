@@ -2070,6 +2070,51 @@ def test_prompt_identity_is_terminal_safe():
     assert turn["data"]["config"]["effort"] == unsafe_effort
 
 
+def test_model_message_corrections_are_private_and_specific():
+    cases = [
+        (
+            "empty_message_recovery",
+            "model tried to send an empty assistant message",
+            "You tried to send an empty assistant message. "
+            "Send nonempty text or take another action.",
+            b"empty message recovered",
+        ),
+        (
+            "oversized_message_recovery",
+            "model tried to send an oversized assistant message",
+            "You tried to send an oversized assistant message. "
+            "Send a shorter message or take another action.",
+            b"oversized message recovered",
+        ),
+    ]
+    for prompt, failure, correction, recovered in cases:
+        before = session_ids()
+        child = Child([])
+        child.wait(DEFAULT_IDLE_PROMPT)
+        start = len(child.buf)
+        child.send(prompt.encode() + b"\r")
+        recovered_end = child.wait(recovered, start=start)
+        child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=recovered_end)
+        visible = bytes(child.buf[start:])
+        assert failure.encode() not in visible
+        assert correction.encode() not in visible
+        child.exit_cleanly(recovered_end)
+
+        log = events(new_session(before))
+        failed = [event for event in log if event["type"] == "response_failed"]
+        corrections = [
+            event for event in log if event["type"] == "model_correction"
+        ]
+        assert len(failed) == 1
+        assert failed[0]["data"]["message"] == failure
+        assert len(corrections) == 1
+        assert corrections[0]["data"]["text"] == correction
+        assert len([event for event in log
+                    if event["type"] == "response_started"]) == 2
+        assert len([event for event in log
+                    if event["type"] == "turn_completed"]) == 1
+
+
 def test_network_chat_and_managed_mention():
     before = session_ids()
     port = free_port()
@@ -2148,10 +2193,8 @@ def test_network_chat_and_managed_mention():
         child.send(b"/chat\r")
         child.drain()
         assert child.buf[chat_end:].count(b"chat backlog") == 1
-        human.wait(
-            b"PRIVMSG #lab :model-output-one model-output-two model-output-three\r\n",
-            start=model_wire_start,
-        )
+        human.wait(b"PRIVMSG #lab :network stream acknowledged\r\n",
+                   start=model_wire_start)
         child.drain()
         assert b"model-output-three" not in child.buf[chat_end:]
         child.wait(network_idle, start=backlog_end)
@@ -2164,13 +2207,17 @@ def test_network_chat_and_managed_mention():
         child.send(b"\t")
         chat_end = child.wait("── chat ──".encode(), start=tail_end)
         child.wait(network_idle, start=chat_end)
+        assert (b"PRIVMSG #lab :model-output-one model-output-two "
+                b"model-output-three\r\n" not in human.buf[model_wire_start:])
 
         terminal_start = len(child.buf)
         wire_start = len(human.buf)
         child.send(b"network_zero\r")
-        human.wait(b"PRIVMSG #lab :network zero reply\r\n", start=wire_start)
+        child.wait(network_idle, start=terminal_start)
         child.drain()
-        assert b"network zero reply" not in child.buf[terminal_start:]
+        assert b"network zero local only" not in child.buf[terminal_start:]
+        assert (b"PRIVMSG #lab :network zero local only\r\n" not in
+                human.buf[wire_start:])
 
         child.send(b"/verbose 1\r")
         verbose_end = child.wait(b"verbosity: 1", start=terminal_start)
@@ -2194,14 +2241,19 @@ def test_network_chat_and_managed_mention():
         child.send(b"/chat\r")
         child.wait("── chat ──".encode(), start=tool_start)
 
+        operator_start = len(child.buf)
         wire_start = len(human.buf)
         human.message("network_operator")
         human.wait(b"PRIVMSG #lab :network operator reply\r\n", start=wire_start)
+        child.wait(network_idle, start=operator_start)
 
+        mention_start = len(child.buf)
         wire_start = len(human.buf)
         peer_agent.message("agent: network_mention")
         human.wait(b"PRIVMSG #lab :network mention reply\r\n", start=wire_start)
+        child.wait(network_idle, start=mention_start)
 
+        count_start = len(child.buf)
         child.send(b"network_count_wait\r")
         deadline = time.monotonic() + 4.0
         while True:
@@ -2222,14 +2274,18 @@ def test_network_chat_and_managed_mention():
         peer_agent.message("agent: network count mention")
         human.wait(b"PRIVMSG #lab :network count mention reply\r\n",
                    start=wire_start)
+        child.wait(network_idle, start=count_start)
 
+        reminder_start = len(child.buf)
         wire_start = len(human.buf)
         child.send(b"network_reminder\r")
         human.wait(b"PRIVMSG #lab :network reminder reply\r\n", start=wire_start)
+        child.wait(network_idle, start=reminder_start)
 
         child.send(b"/verbose 2\r")
         verbose_end = child.wait(b"verbosity: 2", start=verbose_end)
         child.wait(PROMPT, start=verbose_end)
+        commentary_start = len(child.buf)
         wire_start = len(human.buf)
         child.send(b"network_commentary\r")
         human.wait(b"PRIVMSG #lab :network commentary reply\r\n",
@@ -2238,6 +2294,7 @@ def test_network_chat_and_managed_mention():
         child.wait(b"\xe2\x80\xa2 network local planning", start=verbose_end)
         child.send(b"/chat\r")
         child.wait("── chat ──".encode(), start=verbose_end)
+        child.wait(network_idle, start=commentary_start)
 
         wire_start = len(human.buf)
         child.send(b"network_managed\r\t")
@@ -2245,18 +2302,21 @@ def test_network_chat_and_managed_mention():
         child.wait(b"working\xe2\x80\xa6", start=managed_view)
         peer_agent.message("agent: network managed mention")
         try:
-            human.wait(b"PRIVMSG #lab :network managed reaction\r\n",
-                       start=wire_start)
+            managed_end = human.wait(
+                b"PRIVMSG #lab :network managed reaction\r\n",
+                start=wire_start,
+            )
         except AssertionError as exc:
             child.drain()
             raise AssertionError(
                 f"{exc}; terminal={bytes(child.buf[verbose_end:])!r}"
             ) from exc
-        managed_end = human.wait(
-            b"PRIVMSG #lab :network managed complete\r\n", start=wire_start
-        )
-        child.wait(b"network managed complete", start=verbose_end)
+        managed_complete = child.wait(b"network managed local completion",
+                                      start=verbose_end)
+        child.wait(PROMPT, start=managed_complete)
         assert managed_end > wire_start
+        assert (b"PRIVMSG #lab :network managed local completion\r\n" not in
+                human.buf[wire_start:])
         child.send(b"/chat\r")
         child.wait("── chat ──".encode(), start=managed_view)
 
@@ -2339,7 +2399,38 @@ def test_network_chat_and_managed_mention():
         if event["type"] == "response_started" and
         event["data"]["turn_id"] == reminder_turn["data"]["turn_id"]
     ]
-    assert len(reminder_responses) == 2
+    assert len(reminder_responses) == 4
+    failed_response = next(
+        event for event in log
+        if event["type"] == "response_completed" and
+        event["data"]["turn_id"] == reminder_turn["data"]["turn_id"] and
+        event["data"]["cycle"] == 1
+    )
+    failed_call = failed_response["data"]["items"][0]["call_id"]
+    failed_send = next(
+        event for event in log
+        if event["type"] == "tool_finished" and
+        event["data"]["call_id"] == failed_call
+    )
+    assert failed_send["data"]["result"]["status"] == "failed"
+    assert (failed_send["data"]["result"]["model_text"] ==
+            "irc_send arguments are invalid")
+
+    zero_turn = next(
+        event for event in turns if "network_zero" in event["data"]["text"]
+    )
+    zero_reminders = [
+        event for event in log
+        if event["type"] == "irc_reply_reminder" and
+        event["data"]["turn_id"] == zero_turn["data"]["turn_id"]
+    ]
+    zero_responses = [
+        event for event in log
+        if event["type"] == "response_started" and
+        event["data"]["turn_id"] == zero_turn["data"]["turn_id"]
+    ]
+    assert len(zero_reminders) == 1
+    assert len(zero_responses) == 2
 
     managed_turn = next(
         event for event in turns if "network_managed" in event["data"]["text"]
@@ -2418,5 +2509,6 @@ test_config_and_cli_model_passthrough()
 test_exit_resume_matrix()
 test_network_resume_roles()
 test_prompt_identity_is_terminal_safe()
+test_model_message_corrections_are_private_and_specific()
 test_network_chat_and_managed_mention()
 print("pty_active: ok")

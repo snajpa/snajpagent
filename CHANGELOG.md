@@ -14,6 +14,15 @@
   per-server identities for echo suppression and mention recognition instead
   of reconnecting forever.
 
+- Make `irc_send` the exclusive model-authored IRC transmission path. Final
+  assistant and refusal text remains in the local rollout, and only a
+  successful explicit room message satisfies the local-operator reply rule.
+
+- Tell the model directly whether an attempted assistant message was empty or
+  oversized and retry with that terse developer correction. Keep the
+  correction out of the normal operator UI while retaining high-verbosity
+  durable diagnostics.
+
 - Make five consecutive Ctrl-C presses within two seconds an unconditional
   interactive exit, including during an active turn, while preserving ordinary
   single-press draft clearing, interruption, and idle-exit behavior.

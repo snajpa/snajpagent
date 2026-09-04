@@ -682,9 +682,13 @@ The terminal starts in the timestamped
 view.  It hides local model and tool activity at verbosity 0.  The
 .B rollout
 view shows local model output.  Both append to the scrolling terminal; there is
-no full-screen or windowed interface.  Only public assistant text is sent to
-IRC.  If a local-operator turn ends without a room reply, the model receives
-one reminder.  Other room traffic never forces a reply.
+no full-screen or windowed interface.  Model response text remains local;
+.B irc_send
+is the only model-authored path to a room message or notice.  If a
+local-operator turn reaches a terminal response without a successful
+.B irc_send
+message, the model receives one reminder.  Notices do not satisfy that reply
+requirement.  Other room traffic never forces a reply.
 .PP
 The built-in IRC subset has no TLS or authentication.  A non-loopback listener
 is suitable only for a trusted network or a separately secured tunnel.
