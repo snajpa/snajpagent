@@ -425,6 +425,11 @@ such discovery. Instruction paths, sizes, and hashes are frozen in the durable
 The optional typing pause is measured from the most recent input edit, accepts
 `0` through `5000` milliseconds, and defaults to `500`:
 
+Character insertion, deletion, and cursor movement update the composer in
+place, so ordinary typing does not blank and repaint the complete input line.
+Status changes, interposed output, and terminal resize still perform the
+structural redraw needed to keep the scrolling transcript coherent.
+
 ```ini
 [ui]
 typing_pause_ms = 500

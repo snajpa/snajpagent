@@ -25,6 +25,10 @@ the terminal, and how users inspect and modify queued turns.
   `MODEL/EFFORT » ` composer on a new terminal line immediately. `»` is U+00BB
   RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK; the composer does not spell out
   `steer`.
+- Ordinary character insertion, deletion, and cursor movement update the
+  visible composer in place. They do not erase and repaint its unchanged rows;
+  complete composer reconstruction is reserved for structural transitions such
+  as interposed output, status changes, and terminal resize.
 - Visible model output pauses while the user is editing. Each edit restarts the
   pause. After the pause expires, the current composer line remains as a
   readable snapshot and model output resumes on the following line.
@@ -136,7 +140,8 @@ the view-cycle meaning defined above.
 - Rendering coverage demonstrates word wrapping without changing delivered
   text. PTY coverage demonstrates newline-separated active-turn snapshots, pause
   reset on continued typing, output resumption after the configured delay, and
-  byte-exact persisted text.
+  byte-exact persisted text. It also rejects whole-line erase and prompt replay
+  during ordinary insertion, deletion, and cursor movement.
 - PTY coverage demonstrates `/q` and `/queue` listing, delete, clear, and edit
   forms during active and idle operation.
 - Store replay coverage rejects invalid edit targets and no-op edits, and

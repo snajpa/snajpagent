@@ -74,8 +74,9 @@ def set_winsize(cols):
 
 try:
     wait(prompt)
+    typed_start = len(buf)
     os.write(fd, text)
-    typed_end = wait(text)
+    typed_end = wait(text[-1:] + b"\x1b[K", start=typed_start)
     resize_start = len(buf)
     set_winsize(40)
     wait(prompt, start=resize_start)

@@ -19,6 +19,10 @@
    in order before live output continues. Nonempty Tab retains completion,
    indentation, and active-turn queueing behavior.
 
+- Stopped ordinary input editing from erasing and repainting the complete
+  composer on every keystroke. Character edits and cursor motion now update in
+  place, while output, status, and resize transitions retain structural redraws.
+
 - Made terminal wrapping keep trailing punctuation on the preceding line and
   use hyphens, dashes, periods, commas, and similar closing punctuation as the
   following wrap opportunity through one shared Markdown/literal code path.

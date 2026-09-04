@@ -77,8 +77,9 @@ def wait_stopped(timeout=8.0):
 
 try:
     wait(prompt)
+    typed_start = len(buf)
     os.write(fd, text)
-    typed_end = wait(text)
+    typed_end = wait(text[-1:] + b"\x1b[K", start=typed_start)
     os.write(fd, b"\x1a")
     wait_stopped()
     resume_start = len(buf)

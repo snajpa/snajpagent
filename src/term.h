@@ -43,6 +43,7 @@ struct snj_term {
     size_t history_pos;
     size_t rendered_rows;
     size_t rendered_cursor_row;
+    size_t rendered_cursor_col;
     unsigned int columns;
     unsigned int output_depth;
     uint32_t typing_pause_ms;
@@ -74,6 +75,7 @@ struct snj_term {
     bool color;
     bool networked;
     bool rendered_end_at_margin;
+    bool rendered_cursor_pending_wrap;
 };
 
 void snj_term_init(struct snj_term *term);
