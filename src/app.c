@@ -2558,6 +2558,9 @@ snj_app_run(const struct snj_cli *cli)
             color = SNJ_COLOR_NEVER;
         snj_render_set_color(&app.render, color);
     }
+    snj_render_set_markdown(&app.render,
+        cli->markdown == SNJ_CLI_MARKDOWN_ENABLED ? true :
+        cli->markdown == SNJ_CLI_MARKDOWN_DISABLED ? false : config.markdown);
     if (!cli->execute && !cli->list &&
         snj_irc_apply_cli(&config, cli, error, sizeof(error)) < 0) {
         (void)snj_render_error_ctx(&app.render, error);

@@ -14,6 +14,12 @@ enum snj_cli_color_mode {
     SNJ_CLI_COLOR_NEVER
 };
 
+enum snj_cli_markdown_mode {
+    SNJ_CLI_MARKDOWN_UNSET,
+    SNJ_CLI_MARKDOWN_ENABLED,
+    SNJ_CLI_MARKDOWN_DISABLED
+};
+
 struct snj_cli {
     bool resume;
     bool execute;
@@ -26,6 +32,7 @@ struct snj_cli {
     bool version;
     unsigned int verbosity;
     enum snj_cli_color_mode color;
+    enum snj_cli_markdown_mode markdown;
     char *workspace;
     char *dotdir;
     char *model;

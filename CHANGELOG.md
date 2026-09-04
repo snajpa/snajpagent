@@ -4,6 +4,14 @@
 
 ## 0.9.0-wip
 
+- Added default-on, presentation-only Markdown rendering for live streamed
+  model text across arbitrary delta and UTF-8 boundaries, resumed assistant
+  history, and non-operator model messages in the IRC transcript. The
+  `markdown` setting in `[ui]`, `--markdown`, and `--no-markdown` control it
+  without changing
+  provider, durable, redirected, or IRC bytes; no-color mode retains readable
+  structural rendering.
+
 - Added first-class IRC agent/operator chat: `-d`/`--daemon` hosts one bounded
   room, `-s`/`--listen` selects its endpoint, repeatable `-c`/`--client`
   connections join advertised rooms and reconnect autonomously, and combined

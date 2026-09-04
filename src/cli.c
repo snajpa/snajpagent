@@ -26,6 +26,7 @@ snj_cli_init(struct snj_cli *cli)
 {
     memset(cli, 0, sizeof(*cli));
     cli->color = SNJ_CLI_COLOR_UNSET;
+    cli->markdown = SNJ_CLI_MARKDOWN_UNSET;
 }
 
 void
@@ -131,6 +132,19 @@ set_color(struct snj_cli *cli, enum snj_cli_color_mode color,
         return -1;
     }
     cli->color = color;
+    return 0;
+}
+
+static int
+set_markdown(struct snj_cli *cli, enum snj_cli_markdown_mode markdown,
+             const char *name, char *error, size_t error_size)
+{
+    if (cli->markdown != SNJ_CLI_MARKDOWN_UNSET) {
+        set_error(error, error_size, "duplicate %s option", name);
+        errno = EINVAL;
+        return -1;
+    }
+    cli->markdown = markdown;
     return 0;
 }
 
@@ -275,6 +289,14 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         } else if (strcmp(arg, "--no-color") == 0) {
             if (set_color(cli, SNJ_CLI_COLOR_NEVER, "--no-color",
                           error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--markdown") == 0) {
+            if (set_markdown(cli, SNJ_CLI_MARKDOWN_ENABLED, "--markdown",
+                             error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--no-markdown") == 0) {
+            if (set_markdown(cli, SNJ_CLI_MARKDOWN_DISABLED, "--no-markdown",
+                             error, error_size) < 0)
                 return -1;
         } else if (strcmp(arg, "--color") == 0) {
             if (i + 1 < argc &&
@@ -495,6 +517,8 @@ snj_cli_usage(int fd)
         "      --effort LEVEL           reasoning effort override\n"
         "      --color[=WHEN]            auto, always, or never\n"
         "      --no-color               alias for --color=never\n"
+        "      --markdown               render model Markdown (default)\n"
+        "      --no-markdown            show model Markdown literally\n"
         "  -C DIR                       workspace (or resume relocation)\n"
         "  -m MODEL                     next-turn model override\n"
         "  -v                           increase verbosity; repeatable to 6\n"

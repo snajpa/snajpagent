@@ -3,6 +3,7 @@
 #include "base.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -129,9 +130,16 @@ snj_render_init(struct snj_render *render, unsigned int verbosity)
 {
     memset(render, 0, sizeof(*render));
     render->verbosity = verbosity > 6u ? 6u : verbosity;
+    render->markdown = true;
     render->public_fd = -1;
     render->stdout_terminal = isatty(STDOUT_FILENO) == 1;
     render->stderr_terminal = isatty(STDERR_FILENO) == 1;
+}
+
+void
+snj_render_set_markdown(struct snj_render *render, bool enabled)
+{
+    render->markdown = enabled;
 }
 
 void
@@ -212,17 +220,27 @@ snj_render_history(struct snj_render *render, const struct snj_session *session)
         (session->last_user &&
          (snj_buf_append(&line, "user: ", 6u) < 0 ||
           snj_buf_append(&line, session->last_user, strlen(session->last_user)) < 0 ||
-          snj_buf_putc(&line, '\n') < 0)) ||
-        (session->last_assistant &&
-         (snj_buf_append(&line, "assistant: ", 11u) < 0 ||
-          snj_buf_append(&line, session->last_assistant,
-                         strlen(session->last_assistant)) < 0 ||
-          snj_buf_putc(&line, '\n') < 0)) ||
-        snj_buf_append(&line, "--- end history ---\n", 20u) < 0)
+          snj_buf_putc(&line, '\n') < 0)))
         rc = -1;
-    else
+    else if (line.len)
         rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
                          render->stderr_terminal, true);
+    if (rc == 0 && session->last_assistant) {
+        if (snj_render_public_begin(render, STDERR_FILENO, "assistant: ") < 0) {
+            rc = -1;
+        } else if (snj_render_public(render, session->last_assistant,
+                                     strlen(session->last_assistant), NULL) < 0) {
+            int saved_errno = errno;
+            (void)snj_render_public_abort(render);
+            errno = saved_errno;
+            rc = -1;
+        } else {
+            rc = snj_render_public_end(render);
+        }
+    }
+    if (rc == 0)
+        rc = write_block(render, STDERR_FILENO, "--- end history ---\n", 20u,
+                         false, true);
     snj_buf_free(&line);
     return rc;
 }
@@ -282,6 +300,58 @@ utf8_sequence_size(unsigned char first)
 
 static int public_write(struct snj_render *render, const char *text, size_t len);
 static int close_public_output(struct snj_render *render);
+static int markdown_finish(struct snj_render *render);
+static bool public_terminal(const struct snj_render *render);
+
+static bool
+markdown_has_style(const struct snj_render *render)
+{
+    const struct snj_markdown_state *md = &render->markdown_state;
+
+    return md->heading || md->quote || md->strong || md->emphasis ||
+           md->strike || md->inline_code || md->fence != '\0' || md->link_url;
+}
+
+static int
+markdown_paint_style(struct snj_render *render)
+{
+    const struct snj_markdown_state *md = &render->markdown_state;
+    char sequence[64];
+    size_t len = 3u;
+
+    if (!render->markdown_rendering || md->style_painted ||
+        !color_enabled(render, render->public_fd) || !markdown_has_style(render))
+        return 0;
+    memcpy(sequence, "\033[0", 3u);
+#define ADD_STYLE(value) do { \
+        size_t amount = strlen(value); \
+        if (len > sizeof(sequence) - amount - 1u) { errno = EOVERFLOW; return -1; } \
+        memcpy(sequence + len, value, amount); \
+        len += amount; \
+    } while (0)
+    if (md->heading) ADD_STYLE(";1;36");
+    if (md->quote) ADD_STYLE(";34");
+    if (md->strong && !md->heading) ADD_STYLE(";1");
+    if (md->emphasis) ADD_STYLE(";3");
+    if (md->strike) ADD_STYLE(";2");
+    if (md->inline_code || md->fence) ADD_STYLE(";33");
+    if (md->link_url) ADD_STYLE(";4;34");
+#undef ADD_STYLE
+    sequence[len++] = 'm';
+    if (snj_write_full(render->public_fd, sequence, len) < 0)
+        return -1;
+    render->markdown_state.style_painted = true;
+    return 0;
+}
+
+static int
+markdown_clear_style(struct snj_render *render)
+{
+    if (!render->markdown_state.style_painted)
+        return 0;
+    render->markdown_state.style_painted = false;
+    return write_literal(render->public_fd, COLOR_RESET);
+}
 
 int
 snj_render_public_begin(struct snj_render *render, int fd, const char *label)
@@ -310,6 +380,7 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
     render->wrap_has_word = false;
     render->wrap_continuation = false;
     render->wrap_word_open = false;
+    memset(&render->markdown_state, 0, sizeof(render->markdown_state));
     if (render->public_column == SIZE_MAX)
         goto fail;
     if (label_len) {
@@ -330,6 +401,8 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
         if (close_public_output(render) < 0)
             goto fail;
     }
+    render->markdown_rendering = render->markdown && public_terminal(render);
+    render->markdown_state.line_start = true;
     return 0;
 fail:
     {
@@ -342,6 +415,7 @@ fail:
         render->public_item_open = false;
         render->public_item_bytes = false;
         render->public_item_ended_lf = false;
+        render->markdown_rendering = false;
         render->public_fd = -1;
         snj_buf_free(&render->wrap_pending);
         errno = saved_errno;
@@ -367,22 +441,37 @@ public_write(struct snj_render *render, const char *text, size_t len)
         if (output_begin(render, true) < 0)
             return -1;
         render->public_output_open = true;
+        if (markdown_paint_style(render) < 0)
+            return -1;
     }
     if ((terminal ? snj_term_write_safe(render->public_fd, text, len) :
                     snj_write_full(render->public_fd, text, len)) < 0)
         return -1;
     if (terminal && render->term)
         snj_term_note_output(render->term, text, len);
+    render->public_item_bytes = true;
+    render->public_item_ended_lf = text[len - 1u] == '\n';
     return 0;
 }
 
 static int
 close_public_output(struct snj_render *render)
 {
+    int rc = 0;
+    int saved_errno = 0;
+
     if (!render->public_output_open)
         return 0;
+    if (markdown_clear_style(render) < 0) {
+        rc = -1;
+        saved_errno = errno;
+    }
     render->public_output_open = false;
-    return output_end(render);
+    if (output_end(render) < 0 && rc == 0)
+        rc = -1;
+    if (saved_errno)
+        errno = saved_errno;
+    return rc;
 }
 
 static int
@@ -486,6 +575,535 @@ write_wrapped(struct snj_render *render, const unsigned char *text, size_t len)
     return flush_wrap_pending(render);
 }
 
+static bool
+markdown_word(const unsigned char *text, size_t len)
+{
+    return len != 1u || (text[0] >= '0' && text[0] <= '9') ||
+           (text[0] >= 'A' && text[0] <= 'Z') ||
+           (text[0] >= 'a' && text[0] <= 'z') || text[0] == '_';
+}
+
+static int
+markdown_text(struct snj_render *render, const void *text, size_t len)
+{
+    const unsigned char *bytes = text;
+    size_t last;
+
+    if (!len)
+        return 0;
+    if (write_wrapped(render, bytes, len) < 0)
+        return -1;
+    last = len - 1u;
+    while (last && (bytes[last] & 0xc0u) == 0x80u)
+        --last;
+    render->markdown_state.previous_word =
+        markdown_word(bytes + last, len - last);
+    return 0;
+}
+
+static int
+markdown_repeat(struct snj_render *render, char value, size_t count)
+{
+    char text[16];
+
+    memset(text, value, sizeof(text));
+    while (count) {
+        size_t amount = count < sizeof(text) ? count : sizeof(text);
+        if (markdown_text(render, text, amount) < 0)
+            return -1;
+        count -= amount;
+    }
+    return 0;
+}
+
+static int
+markdown_style_changed(struct snj_render *render)
+{
+    if (flush_wrap_pending(render) < 0 || markdown_clear_style(render) < 0)
+        return -1;
+    return render->public_output_open ? markdown_paint_style(render) : 0;
+}
+
+static int
+markdown_flush_delimiter(struct snj_render *render, bool next_word,
+                         bool at_end)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    char delimiter = md->delimiter;
+    size_t count = md->delimiter_len;
+
+    if (!count)
+        return 0;
+    md->delimiter = '\0';
+    md->delimiter_len = 0u;
+    if (md->inline_code && delimiter != '`')
+        return markdown_repeat(render, delimiter, count);
+    if (delimiter == '`') {
+        if (!md->inline_code) {
+            if (at_end)
+                return markdown_repeat(render, delimiter, count);
+            md->inline_code = true;
+            md->code_ticks = (unsigned int)count;
+        } else if (count == md->code_ticks) {
+            md->inline_code = false;
+            md->code_ticks = 0u;
+        } else {
+            return markdown_repeat(render, delimiter, count);
+        }
+        return markdown_style_changed(render);
+    }
+    if (delimiter == '~') {
+        if (at_end && (!md->strike || !((count / 2u) & 1u)))
+            return markdown_repeat(render, delimiter, count);
+        if (count & 1u && markdown_repeat(render, '~', 1u) < 0)
+            return -1;
+        if ((count / 2u) & 1u) {
+            md->strike = !md->strike;
+            return markdown_style_changed(render);
+        }
+        return 0;
+    }
+    if (delimiter == '_' && md->delimiter_previous_word && next_word)
+        return markdown_repeat(render, delimiter, count);
+    if (at_end && (((count / 2u) & 1u && !md->strong) ||
+                   (count & 1u && !md->emphasis)))
+        return markdown_repeat(render, delimiter, count);
+    if ((count / 2u) & 1u)
+        md->strong = !md->strong;
+    if (count & 1u)
+        md->emphasis = !md->emphasis;
+    return markdown_style_changed(render);
+}
+
+static bool
+markdown_escapable(unsigned char value)
+{
+    return strchr("\\`*{}[]()#+-.!_>~|", (int)value) != NULL;
+}
+
+static int
+markdown_inline(struct snj_render *render, const unsigned char *text, size_t len)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    size_t i = 0u;
+
+    while (i < len) {
+        size_t n = utf8_sequence_size(text[i]);
+        bool word;
+
+        if (!n || n > len - i) {
+            errno = EILSEQ;
+            return -1;
+        }
+        word = markdown_word(text + i, n);
+        if (md->escape) {
+            md->escape = false;
+            if (!(n == 1u && markdown_escapable(text[i])) &&
+                markdown_text(render, "\\", 1u) < 0)
+                return -1;
+            if (markdown_text(render, text + i, n) < 0)
+                return -1;
+            i += n;
+            continue;
+        }
+        if (md->link_after_label) {
+            md->link_after_label = false;
+            if (n == 1u && text[i] == '(') {
+                if (markdown_text(render, " <", 2u) < 0)
+                    return -1;
+                md->link_url = true;
+                if (markdown_style_changed(render) < 0)
+                    return -1;
+                i += n;
+                continue;
+            }
+        }
+        if (md->link_url) {
+            if (n == 1u && text[i] == ')') {
+                md->link_url = false;
+                if (markdown_style_changed(render) < 0 ||
+                    markdown_text(render, ">", 1u) < 0)
+                    return -1;
+            } else if (markdown_text(render, text + i, n) < 0) {
+                return -1;
+            }
+            i += n;
+            continue;
+        }
+        if (md->delimiter_len &&
+            !(n == 1u && text[i] == (unsigned char)md->delimiter) &&
+            markdown_flush_delimiter(render, word, false) < 0)
+            return -1;
+        if (n == 1u && text[i] == '\\' && !md->inline_code) {
+            md->escape = true;
+            i += n;
+            continue;
+        }
+        if (n == 1u && (text[i] == '`' ||
+            (!md->inline_code && (text[i] == '*' || text[i] == '_' ||
+                                  text[i] == '~')))) {
+            if (!md->delimiter_len) {
+                md->delimiter = (char)text[i];
+                md->delimiter_previous_word = md->previous_word;
+            }
+            ++md->delimiter_len;
+            i += n;
+            continue;
+        }
+        if (!md->inline_code && n == 1u && text[i] == ']') {
+            if (markdown_text(render, text + i, n) < 0)
+                return -1;
+            md->link_after_label = true;
+            i += n;
+            continue;
+        }
+        {
+            size_t start = i;
+            do {
+                i += n;
+                if (i >= len)
+                    break;
+                n = utf8_sequence_size(text[i]);
+                if (!n || n > len - i)
+                    break;
+            } while (!(n == 1u &&
+                       (text[i] == '\\' || text[i] == '`' || text[i] == ']' ||
+                        (!md->inline_code && (text[i] == '*' || text[i] == '_' ||
+                                              text[i] == '~')))));
+            if (markdown_text(render, text + start, i - start) < 0)
+                return -1;
+        }
+    }
+    return 0;
+}
+
+static size_t
+markdown_prefix_spaces(const struct snj_markdown_state *md)
+{
+    size_t spaces = 0u;
+
+    while (spaces < md->prefix_len && spaces < 3u &&
+           md->prefix[spaces] == ' ')
+        ++spaces;
+    return spaces;
+}
+
+static int
+markdown_prefix_literal(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    size_t len = md->prefix_len;
+
+    md->prefix_len = 0u;
+    md->line_start = false;
+    return markdown_inline(render, (const unsigned char *)md->prefix, len);
+}
+
+static int
+markdown_code_prefix_literal(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    size_t len = md->prefix_len;
+
+    md->prefix_len = 0u;
+    md->line_start = false;
+    if (markdown_text(render, "│ ", strlen("│ ")) < 0)
+        return -1;
+    return markdown_text(render, md->prefix, len);
+}
+
+static bool
+markdown_fence_close(const struct snj_markdown_state *md)
+{
+    size_t spaces = markdown_prefix_spaces(md);
+    size_t count = 0u;
+    size_t i = spaces;
+
+    while (i < md->prefix_len && md->prefix[i] == md->fence) {
+        ++count;
+        ++i;
+    }
+    while (i < md->prefix_len && md->prefix[i] == ' ')
+        ++i;
+    return count >= md->fence_len && i == md->prefix_len;
+}
+
+static int
+markdown_open_fence(struct snj_render *render, bool newline)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    size_t begin = 0u;
+    size_t end = md->fence_info_len;
+
+    while (begin < end && md->fence_info[begin] == ' ')
+        ++begin;
+    while (end > begin && md->fence_info[end - 1u] == ' ')
+        --end;
+    md->fence_header = false;
+    md->fence_info_len = 0u;
+    if (markdown_style_changed(render) < 0 ||
+        markdown_text(render, "┌─", strlen("┌─")) < 0 ||
+        (end > begin &&
+         (markdown_text(render, " ", 1u) < 0 ||
+          markdown_text(render, md->fence_info + begin, end - begin) < 0)) ||
+        (newline && markdown_text(render, "\n", 1u) < 0))
+        return -1;
+    md->line_start = newline;
+    return 0;
+}
+
+static int
+markdown_line_prefix(struct snj_render *render,
+                     const unsigned char *text, size_t len)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    size_t spaces;
+    const char *body;
+    size_t body_len;
+
+    if (len != 1u || md->prefix_len == sizeof(md->prefix)) {
+        if (md->fence)
+            return markdown_code_prefix_literal(render) < 0 ? -1 :
+                   markdown_text(render, text, len);
+        return markdown_prefix_literal(render) < 0 ? -1 :
+               markdown_inline(render, text, len);
+    }
+    md->prefix[md->prefix_len++] = (char)text[0];
+    spaces = markdown_prefix_spaces(md);
+    body = md->prefix + spaces;
+    body_len = md->prefix_len - spaces;
+    if (spaces == md->prefix_len)
+        return spaces <= 3u ? 0 : markdown_prefix_literal(render);
+    if (md->fence) {
+        size_t marks = 0u;
+        while (marks < body_len && body[marks] == md->fence)
+            ++marks;
+        if (marks == body_len ||
+            (marks >= md->fence_len && body[marks] == ' '))
+            return 0;
+        return markdown_code_prefix_literal(render);
+    }
+    if (body[0] == '#' && body_len >= 2u && body_len <= 7u &&
+        body[body_len - 1u] == ' ') {
+        for (size_t i = 0u; i + 1u < body_len; ++i)
+            if (body[i] != '#')
+                goto ordinary;
+        md->prefix_len = 0u;
+        md->line_start = false;
+        md->heading = true;
+        return markdown_style_changed(render);
+    }
+    if (body[0] == '#' && body_len <= 6u) {
+        for (size_t i = 0u; i < body_len; ++i)
+            if (body[i] != '#')
+                goto ordinary;
+        return 0;
+    }
+    if ((body[0] == '`' || body[0] == '~')) {
+        size_t marks = 0u;
+        while (marks < body_len && body[marks] == body[0])
+            ++marks;
+        if (marks == body_len && marks < 3u)
+            return 0;
+        if (marks >= 3u) {
+            md->fence = body[0];
+            md->fence_len = (unsigned int)marks;
+            md->fence_header = true;
+            md->prefix_len = 0u;
+            md->line_start = false;
+            return 0;
+        }
+    }
+    if ((body[0] == '>' || body[0] == '-' || body[0] == '*' ||
+         body[0] == '+') && body_len == 1u)
+        return 0;
+    if (body_len == 2u && body[1] == ' ' &&
+        (body[0] == '>' || body[0] == '-' || body[0] == '*' ||
+         body[0] == '+')) {
+        const char *marker = body[0] == '>' ? "│ " : "• ";
+        if (body[0] == '>')
+            md->quote = true;
+        md->prefix_len = 0u;
+        md->line_start = false;
+        if (markdown_style_changed(render) < 0 ||
+            markdown_text(render, md->prefix, spaces) < 0)
+            return -1;
+        return markdown_text(render, marker, strlen(marker));
+    }
+    if (body[0] >= '0' && body[0] <= '9') {
+        size_t digits = 0u;
+        while (digits < body_len && body[digits] >= '0' && body[digits] <= '9')
+            ++digits;
+        if (digits == body_len && digits <= 9u)
+            return 0;
+        if (digits && digits <= 9u && digits + 1u == body_len &&
+            (body[digits] == '.' || body[digits] == ')'))
+            return 0;
+        if (digits && digits <= 9u && digits + 2u == body_len &&
+            (body[digits] == '.' || body[digits] == ')') &&
+            body[digits + 1u] == ' ') {
+            size_t amount = md->prefix_len;
+            md->prefix_len = 0u;
+            md->line_start = false;
+            return markdown_text(render, md->prefix, amount);
+        }
+    }
+ordinary:
+    return markdown_prefix_literal(render);
+}
+
+static int
+markdown_newline(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+
+    if (md->fence_header)
+        return markdown_open_fence(render, true);
+    if (md->line_start) {
+        if (md->fence && markdown_fence_close(md)) {
+            md->prefix_len = 0u;
+            if (markdown_text(render, "└─\n", strlen("└─\n")) < 0)
+                return -1;
+            md->fence = '\0';
+            md->fence_len = 0u;
+            return markdown_style_changed(render);
+        }
+        if ((md->fence ? markdown_code_prefix_literal(render) :
+                         markdown_prefix_literal(render)) < 0)
+            return -1;
+    }
+    if (markdown_flush_delimiter(render, false, true) < 0)
+        return -1;
+    if (md->escape && markdown_text(render, "\\", 1u) < 0)
+        return -1;
+    md->escape = false;
+    md->link_after_label = false;
+    if (md->link_url) {
+        md->link_url = false;
+        if (markdown_style_changed(render) < 0 ||
+            markdown_text(render, ">", 1u) < 0)
+            return -1;
+    }
+    if (markdown_text(render, "\n", 1u) < 0)
+        return -1;
+    md->heading = false;
+    md->quote = false;
+    md->line_start = true;
+    md->prefix_len = 0u;
+    return markdown_style_changed(render);
+}
+
+static int
+markdown_write(struct snj_render *render, const unsigned char *text, size_t len)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    size_t i = 0u;
+
+    while (i < len) {
+        size_t n = utf8_sequence_size(text[i]);
+
+        if (!n || n > len - i) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if (text[i] == '\n') {
+            if (markdown_newline(render) < 0)
+                return -1;
+        } else if (md->fence_header) {
+            if (n == 1u && text[i] == (unsigned char)md->fence &&
+                md->fence_info_len == 0u) {
+                if (md->fence_len == UINT_MAX) {
+                    errno = EOVERFLOW;
+                    return -1;
+                }
+                ++md->fence_len;
+                i += n;
+                continue;
+            }
+            if (md->fence_info_len < sizeof(md->fence_info)) {
+                size_t room = sizeof(md->fence_info) - md->fence_info_len;
+                size_t amount = n < room ? n : room;
+                memcpy(md->fence_info + md->fence_info_len, text + i, amount);
+                md->fence_info_len += amount;
+            }
+        } else if (md->line_start) {
+            if (markdown_line_prefix(render, text + i, n) < 0)
+                return -1;
+        } else {
+            size_t start = i;
+
+            while (i + n < len && text[i + n] != '\n') {
+                size_t next = utf8_sequence_size(text[i + n]);
+                if (!next || next > len - i - n)
+                    break;
+                n += next;
+            }
+            if (md->fence ? markdown_text(render, text + start, n) < 0 :
+                            markdown_inline(render, text + start, n) < 0)
+                return -1;
+            i += n;
+            continue;
+        }
+        i += n;
+    }
+    return flush_wrap_pending(render);
+}
+
+static int
+markdown_finish(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+
+    if (!render->markdown_rendering)
+        return 0;
+    if (md->fence_header) {
+        if (markdown_open_fence(render, false) < 0)
+            return -1;
+    } else if (md->line_start && md->prefix_len) {
+        if (md->fence && markdown_fence_close(md)) {
+            md->prefix_len = 0u;
+            if (markdown_text(render, "└─", strlen("└─")) < 0)
+                return -1;
+            md->fence = '\0';
+            md->fence_len = 0u;
+        } else if ((md->fence ? markdown_code_prefix_literal(render) :
+                                markdown_prefix_literal(render)) < 0) {
+            return -1;
+        }
+    }
+    if (markdown_flush_delimiter(render, false, true) < 0)
+        return -1;
+    if (md->escape && markdown_text(render, "\\", 1u) < 0)
+        return -1;
+    md->escape = false;
+    if (md->link_url) {
+        md->link_url = false;
+        if (markdown_style_changed(render) < 0 ||
+            markdown_text(render, ">", 1u) < 0)
+            return -1;
+    }
+    if (md->fence && !render->markdown_preserve_fence) {
+        if (!render->public_item_ended_lf &&
+            markdown_text(render, "\n", 1u) < 0)
+            return -1;
+        if (markdown_text(render, "└─", strlen("└─")) < 0)
+            return -1;
+        md->fence = '\0';
+        md->fence_len = 0u;
+    }
+    md->heading = false;
+    md->quote = false;
+    md->strong = false;
+    md->emphasis = false;
+    md->strike = false;
+    md->inline_code = false;
+    md->link_after_label = false;
+    md->code_ticks = 0u;
+    if (flush_wrap_pending(render) < 0)
+        return -1;
+    return markdown_clear_style(render);
+}
+
 int
 snj_render_public(struct snj_render *render, const char *text, size_t len,
                   struct snj_buf *delivered)
@@ -494,6 +1112,7 @@ snj_render_public(struct snj_render *render, const char *text, size_t len,
     struct snj_buf complete;
     size_t complete_max;
     int rc = -1;
+    int saved_errno = 0;
 
     if (!render->public_item_open ||
         !snj_size_add(len, sizeof(render->utf8_pending), &complete_max)) {
@@ -522,13 +1141,13 @@ snj_render_public(struct snj_render *render, const char *text, size_t len,
         if (delivered && snj_buf_reserve(delivered, complete.len) < 0)
             goto out;
         if (public_terminal(render) ?
-            write_wrapped(render, complete.data, complete.len) < 0 :
+            (render->markdown_rendering ?
+             markdown_write(render, complete.data, complete.len) < 0 :
+             write_wrapped(render, complete.data, complete.len) < 0) :
             public_write(render, (const char *)complete.data, complete.len) < 0)
             goto out;
         if (delivered && snj_buf_append(delivered, complete.data, complete.len) < 0)
             goto out;
-        render->public_item_bytes = true;
-        render->public_item_ended_lf = complete.data[complete.len - 1u] == '\n';
     }
     rc = 0;
     goto out;
@@ -536,9 +1155,13 @@ invalid:
     render->utf8_pending_len = 0;
     errno = EILSEQ;
 out:
+    if (rc < 0)
+        saved_errno = errno;
     if (close_public_output(render) < 0 && rc == 0)
         rc = -1;
     snj_buf_free(&complete);
+    if (saved_errno)
+        errno = saved_errno;
     return rc;
 }
 
@@ -563,10 +1186,20 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
         }
         return 0;
     }
-    if (flush_wrap_pending(render) < 0)
+    if (render->markdown_rendering &&
+        (discard_incomplete ? markdown_clear_style(render) :
+                              markdown_finish(render)) < 0) {
         rc = -1;
-    if (close_public_output(render) < 0 && rc == 0)
+        saved_errno = errno;
+    }
+    if (flush_wrap_pending(render) < 0 && rc == 0) {
         rc = -1;
+        saved_errno = errno;
+    }
+    if (close_public_output(render) < 0 && rc == 0) {
+        rc = -1;
+        saved_errno = errno;
+    }
     fd = render->public_fd;
     ended_lf = render->public_item_ended_lf;
     had_bytes = render->public_item_bytes;
@@ -574,6 +1207,8 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     render->public_output_open = false;
     render->public_item_bytes = false;
     render->public_item_ended_lf = false;
+    render->markdown_rendering = false;
+    render->markdown_preserve_fence = false;
     render->public_fd = -1;
     render->wrap_has_word = false;
     render->wrap_continuation = false;
@@ -593,7 +1228,7 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     } else if (fd == STDERR_FILENO && had_bytes && !ended_lf && render->term) {
         snj_term_note_output(render->term, "\n", 1u);
     }
-    if (rc < 0)
+    if (rc < 0 && !saved_errno)
         saved_errno = errno;
     if (saved_errno)
         errno = saved_errno;
@@ -743,17 +1378,112 @@ irc_piece(struct snj_render *render, const char *text, bool safe)
     return 0;
 }
 
+static struct snj_irc_markdown_state *
+irc_markdown_state(struct snj_render *render, const struct snj_irc_event *event,
+                   bool allocate)
+{
+    struct snj_irc_markdown_state *empty = NULL;
+
+    for (size_t i = 0u; i < SNJ_RENDER_IRC_MARKDOWN_STATES; ++i) {
+        struct snj_irc_markdown_state *state = &render->irc_markdown[i];
+        if (!state->fence) {
+            if (!empty)
+                empty = state;
+            continue;
+        }
+        if (strcmp(state->endpoint, event->endpoint) == 0 &&
+            strcmp(state->nick, event->nick) == 0)
+            return state;
+    }
+    return allocate ? empty : NULL;
+}
+
+static void
+irc_markdown_lifecycle(struct snj_render *render,
+                       const struct snj_irc_event *event)
+{
+    bool endpoint_reset = event->kind == SNJ_IRC_CONNECTED ||
+                          event->kind == SNJ_IRC_DISCONNECTED;
+    bool nick_reset = event->kind == SNJ_IRC_PART ||
+                      event->kind == SNJ_IRC_QUIT ||
+                      event->kind == SNJ_IRC_NICK;
+
+    if (!endpoint_reset && !nick_reset)
+        return;
+    for (size_t i = 0u; i < SNJ_RENDER_IRC_MARKDOWN_STATES; ++i) {
+        struct snj_irc_markdown_state *state = &render->irc_markdown[i];
+        if (state->fence && strcmp(state->endpoint, event->endpoint) == 0 &&
+            (endpoint_reset || strcmp(state->nick, event->nick) == 0))
+            memset(state, 0, sizeof(*state));
+    }
+}
+
+static int
+render_irc_markdown(struct snj_render *render,
+                    const struct snj_irc_event *event, size_t column,
+                    const char *suffix)
+{
+    struct snj_irc_markdown_state *saved =
+        irc_markdown_state(render, event, false);
+    struct snj_render body;
+    int rc = -1;
+
+    snj_render_init(&body, render->verbosity);
+    body.stderr_terminal = render->stderr_terminal;
+    body.color_stderr = render->color_stderr;
+    body.markdown = true;
+    body.term = render->term;
+    if (snj_render_public_begin(&body, STDERR_FILENO, NULL) < 0)
+        return -1;
+    body.public_column = column;
+    body.markdown_preserve_fence = true;
+    if (saved) {
+        body.markdown_state.fence = saved->fence;
+        body.markdown_state.fence_len = saved->fence_len;
+    }
+    if (snj_render_public(&body, event->text, strlen(event->text), NULL) < 0 ||
+        markdown_finish(&body) < 0)
+        goto out;
+    if (body.markdown_state.fence) {
+        if (!saved)
+            saved = irc_markdown_state(render, event, true);
+        if (saved) {
+            (void)snprintf(saved->endpoint, sizeof(saved->endpoint), "%s",
+                           event->endpoint);
+            (void)snprintf(saved->nick, sizeof(saved->nick), "%s", event->nick);
+            saved->fence = body.markdown_state.fence;
+            saved->fence_len = body.markdown_state.fence_len;
+        }
+    } else if (saved) {
+        memset(saved, 0, sizeof(*saved));
+    }
+    body.markdown_rendering = false;
+    if (suffix[0] &&
+        snj_render_public(&body, suffix, strlen(suffix), NULL) < 0)
+        goto out;
+    if (!body.public_item_bytes && public_write(&body, "\n", 1u) < 0)
+        goto out;
+    rc = snj_render_public_end(&body);
+    return rc;
+out:
+    body.markdown_rendering = false;
+    (void)snj_render_public_abort(&body);
+    return -1;
+}
+
 int
 snj_render_irc_event(struct snj_render *render,
                      const struct snj_irc_event *event)
 {
     char when[16u];
     char prefix[768u];
+    char suffix[384u] = {0};
     time_t seconds;
     struct tm tm;
     const char *name_color;
     bool colored;
     bool own_agent;
+    bool markdown_body;
     int n;
     int rc = -1;
 
@@ -761,6 +1491,7 @@ snj_render_irc_event(struct snj_render *render,
         errno = EINVAL;
         return -1;
     }
+    irc_markdown_lifecycle(render, event);
     own_agent = event->local && render->agent_name[0] &&
                 strcmp(event->nick, render->agent_name) == 0;
     if (own_agent && render->verbosity < 1u)
@@ -796,8 +1527,36 @@ snj_render_irc_event(struct snj_render *render,
         if (colored && irc_piece(render, "\033[0m", false) < 0)
             goto out;
         if (irc_piece(render,
-                event->kind == SNJ_IRC_NOTICE ? "- " : "› ", true) < 0 ||
-            irc_piece(render, event->text, true) < 0)
+                event->kind == SNJ_IRC_NOTICE ? "- " : "› ", true) < 0)
+            goto out;
+        markdown_body = event->kind == SNJ_IRC_MESSAGE && render->markdown &&
+                        render->stderr_terminal && !event->op;
+        if (markdown_body) {
+            char visible[1024u];
+            size_t column;
+
+            n = snprintf(visible, sizeof(visible), "%s%s %s%s%s %s ",
+                         when, event->historical ? " history" : "",
+                         event->kind == SNJ_IRC_NOTICE ? "-" : "",
+                         event->op ? "@" : "", event->nick,
+                         event->kind == SNJ_IRC_NOTICE ? "-" : "›");
+            if (n < 0 || (size_t)n >= sizeof(visible))
+                goto out;
+            column = snj_term_text_width(visible, (size_t)n);
+            if (column == SIZE_MAX)
+                goto out;
+            if (render->verbosity >= 4u && event->endpoint[0]) {
+                n = snprintf(suffix, sizeof(suffix), " [%s]", event->endpoint);
+                if (n < 0 || (size_t)n >= sizeof(suffix))
+                    goto out;
+            }
+            if (render_irc_markdown(render, event,
+                    column % snj_term_columns(render->term), suffix) < 0)
+                goto out;
+            rc = 0;
+            goto out;
+        }
+        if (irc_piece(render, event->text, true) < 0)
             goto out;
     } else {
         n = snprintf(prefix, sizeof(prefix), "· %s%s%s %s",

@@ -49,6 +49,7 @@ struct snj_config {
     size_t provider_count;
     unsigned int verbosity;
     enum snj_color_mode color;
+    bool markdown;
     unsigned int resume_history_turns;
     uint32_t typing_pause_ms;
     bool irc_daemon;

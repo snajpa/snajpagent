@@ -57,6 +57,7 @@ main(void)
         "\n[ui]\n"
         "verbosity = 4\n"
         "color = never\n"
+        "markdown = false\n"
         "resume_history_turns = 0\n"
         "typing_pause_ms = 750\n"
         "\n[irc]\n"
@@ -94,6 +95,7 @@ main(void)
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
     assert(config.read_agents_md);
     assert(config.verbosity == 0u);
+    assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
     assert(!config.irc_daemon);
@@ -149,6 +151,7 @@ main(void)
     assert(snj_config_provider(&config, "missing") == NULL);
     assert(config.verbosity == 4u);
     assert(config.color == SNJ_COLOR_NEVER);
+    assert(!config.markdown);
     assert(config.resume_history_turns == 0u);
     assert(config.typing_pause_ms == 750u);
     assert(config.irc_daemon);
@@ -200,6 +203,9 @@ main(void)
     write_bytes(path, "[ui]\ncolor=sometimes\n",
                 sizeof("[ui]\ncolor=sometimes\n") - 1u);
     expect_invalid(path);
+    write_bytes(path, "[ui]\nmarkdown=maybe\n",
+                sizeof("[ui]\nmarkdown=maybe\n") - 1u);
+    expect_invalid(path);
     write_bytes(path, "[irc]\nhistory_lines=0\n",
                 sizeof("[irc]\nhistory_lines=0\n") - 1u);
     expect_invalid(path);
@@ -209,6 +215,9 @@ main(void)
     write_bytes(path,
                 "[ui]\ntyping_pause_ms=1\ntyping_pause_ms=2\n",
                 sizeof("[ui]\ntyping_pause_ms=1\ntyping_pause_ms=2\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[ui]\nmarkdown=true\nmarkdown=false\n",
+                sizeof("[ui]\nmarkdown=true\nmarkdown=false\n") - 1u);
     expect_invalid(path);
     write_bytes(path,
         "[tool]\ndefault_timeout_ms=5000\nmax_timeout_ms=4000\n",

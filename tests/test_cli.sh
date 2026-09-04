@@ -32,6 +32,8 @@ grep -q -- '-d, --daemon' "$root/help"
 grep -q -- '-c, --client\[=ENDPOINT\]' "$root/help"
 grep -q -- '--operator-name' "$root/help"
 grep -q -- '--color\[=WHEN\]' "$root/help"
+grep -q -- '--markdown' "$root/help"
+grep -q -- '--no-markdown' "$root/help"
 
 for args in \
     '-d' \
@@ -111,6 +113,17 @@ status=$?
 set -e
 [ "$status" -eq 2 ]
 grep -q 'accepts auto, always, or never' "$root/bad-color.err"
+
+for args in '--markdown --markdown' '--no-markdown --no-markdown' \
+            '--markdown --no-markdown'; do
+    set +e
+    # These arguments contain no quoting-sensitive values.
+    $bin $args -l >"$root/bad-markdown.out" 2>"$root/bad-markdown.err"
+    status=$?
+    set -e
+    [ "$status" -eq 2 ]
+    grep -q 'duplicate --.*markdown option' "$root/bad-markdown.err"
+done
 
 for option in --client= --listen=; do
     set +e

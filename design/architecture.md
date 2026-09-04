@@ -129,3 +129,12 @@ One semantic 16-color foreground palette serves networked and ordinary modes.
 `auto` emits attributes only on terminals and honors `NO_COLOR`; `always` and
 `never` are explicit overrides. Escape sequences are presentation-only and
 never enter durable events, model input, or IRC frames.
+
+The public-item renderer incrementally recognizes a bounded Markdown subset
+across provider and UTF-8 delta boundaries. It shares the existing wrapping,
+composer, and terminal-safety path; syntax-only prefixes may remain pending,
+but complete semantic text is painted before a delivery callback returns.
+Buffered assistant history and non-operator IRC model messages use the same
+presentation, with fenced-code state isolated by endpoint and sender. Operator
+messages and other IRC events remain literal. Markdown and color can be disabled
+independently, and neither changes stored, provider, redirected, or IRC bytes.

@@ -24,6 +24,8 @@ interactive path is usable.
 - Interactive mode, one-shot execution mode, and session listing.
 - Terminal-width wrapping for streamed model text without changing stored or
   redirected response bytes.
+- Default-on terminal Markdown presentation for streamed model text, resumed
+  assistant history, and non-operator model messages in the IRC transcript.
 - OpenAI Responses streaming over libcurl, including hosted `web_search`.
 - Codex-style instruction discovery from `AGENTS.override.md` and `AGENTS.md`.
 - Tool support for `exec_command`, yielded process handles, `write_stdin`, and
@@ -110,6 +112,8 @@ Useful options:
 --effort LEVEL
 --color[=auto|always|never]
 --no-color  disable color
+--markdown  render model Markdown (default)
+--no-markdown  show model Markdown literally
 ```
 
 `--daemon`, `--listen`, `--client`, `--name`, `--operator-name`, and
@@ -228,6 +232,12 @@ sockets, joining, history, and reconnects; the model may use `irc_send`,
 `irc_state`, and privilege-checked `irc_topic`, but never needs to babysit the
 network.
 
+Model messages in the terminal transcript use the same Markdown presentation
+as locally streamed answers. Operator messages, topics, membership notices,
+and protocol diagnostics stay literal. Fenced code can span consecutive IRC
+messages from one endpoint and sender without leaking parser state to another
+sender.
+
 `--color` selects `always`; `--color=auto|always|never` makes the policy
 explicit, and `--no-color` selects `never`. The default `auto` mode colors only
 terminal output and honors `NO_COLOR`. Color applies to networked and ordinary
@@ -235,6 +245,14 @@ UI roles, uses broadly supported 16-color foreground attributes, and never
 enters stored text, provider input, or IRC traffic. Compact tool-start lines
 color the arrow and tool name, while an `exec` command itself remains in the
 default foreground like its output.
+
+Markdown presentation is enabled by default. `--no-markdown` disables it and
+`--markdown` explicitly enables it, overriding configuration. Headings, lists,
+quotes, fenced code, inline code, emphasis, strikethrough, and links receive a
+compact terminal rendering; link destinations remain visible. This is a
+presentation layer only: redirected output, provider input, durable events,
+and IRC frames retain the model's exact bytes. Disabling color keeps Markdown's
+structural rendering while removing its attributes.
 
 ## Configuration
 
@@ -337,6 +355,7 @@ The optional typing pause is measured from the most recent input edit, accepts
 [ui]
 typing_pause_ms = 500
 color = auto
+markdown = true
 verbosity = 0
 ```
 
@@ -368,6 +387,8 @@ Design notes live in `design/`. Start with `design/architecture.md` for the
 runtime shape and durability model. The IRC server/client, operator chat,
 steering, history, compaction, and program-wide color contract is recorded in
 [`design/irc-chat.md`](design/irc-chat.md).
+The streamed and static model-text presentation contract is recorded in
+[`design/markdown-rendering.md`](design/markdown-rendering.md).
 
 ## License
 

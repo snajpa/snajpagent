@@ -107,6 +107,7 @@ snj_config_init(struct snj_config *config)
     config->read_agents_md = true;
     config->verbosity = 0u;
     config->color = SNJ_COLOR_AUTO;
+    config->markdown = true;
     config->resume_history_turns = 2u;
     config->typing_pause_ms = 500u;
     config->irc_daemon = false;
@@ -468,6 +469,9 @@ parse_ui(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "typing_pause_ms") == 0)
         return claim_key(state, 3u) < 0 ? -1 :
                parse_u32(value, 0u, 5000u, &config->typing_pause_ms);
+    if (strcmp(key, "markdown") == 0)
+        return claim_key(state, 4u) < 0 ? -1 :
+               parse_bool(value, &config->markdown);
     errno = EINVAL;
     return -1;
 }

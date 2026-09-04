@@ -28,6 +28,11 @@ RENDER_TEXT = (
     "tail control:\x1b[31m"
 )
 PACED_TEXT = "Paced tokens form interfragment and finish finalword"
+MARKDOWN_TEXT = (
+    "# Stream **ready**\n"
+    "- split `code` and [docs](https://example.test)\n"
+    "```c\nint value = 1;\n```"
+)
 
 
 def read_events(dotdir):
@@ -188,7 +193,8 @@ class FakeResponses:
                 marker = "one"
             elif "integration two from twoop" in latest:
                 marker = "two"
-            text = f"{self.AGENTS[model]} heard {marker}" if marker else ""
+            text = (f"**{self.AGENTS[model]}** heard `{marker}`"
+                    if marker else "")
             body = self.response_body(sequence, text).encode()
             handler.send_response(200)
             handler.send_header("Content-Type", "text/event-stream")
@@ -414,10 +420,14 @@ def close_fixture_terminal(terminal):
         raise AssertionError(f"tmux socket survived cleanup: {terminal.socket}")
 
 
-def write_config(path, read_agents, pause_ms=300):
+def write_config(path, read_agents, pause_ms=300, markdown=None):
+    markdown_line = "" if markdown is None else (
+        f"markdown = {'true' if markdown else 'false'}\n"
+    )
     path.write_text(
         f"[agent]\nread_agents_md = {'true' if read_agents else 'false'}\n"
-        f"[ui]\ntyping_pause_ms = {pause_ms}\nverbosity = 0\n",
+        f"[ui]\ntyping_pause_ms = {pause_ms}\nverbosity = 0\n"
+        f"{markdown_line}",
         encoding="utf-8",
     )
 
@@ -565,6 +575,81 @@ def run_paced_decode_case(binary, root):
             (case / "screen.txt").write_text(screen, encoding="utf-8")
         finally:
             close_fixture_terminal(terminal)
+
+
+def run_markdown_case(binary, root):
+    cases = (
+        ("default", None, ("--color=always",), True),
+        ("disabled", None, ("--no-markdown", "--color=always"), False),
+        ("config-disabled", False, ("--color=always",), False),
+        ("override", False, ("--markdown", "--color=always"), True),
+    )
+    for name, configured, args, rendered in cases:
+        case = root / f"markdown-{name}"
+        workspace = case / "workspace"
+        workspace.mkdir(mode=0o700, parents=True)
+        config = case / "config.ini"
+        write_config(config, False, markdown=configured)
+        dotdir = case / "state"
+        terminal = TmuxTerminal(
+            case / "terminal", binary, workspace, dotdir, config, 64, 16,
+            args=args,
+        )
+        try:
+            terminal.wait("\n›")
+            terminal.submit("terminal_markdown")
+            if rendered:
+                terminal.wait("Stream rea", timeout=2.0, join_wrapped=True)
+                terminal.wait("Stream ready", timeout=2.0, join_wrapped=True)
+                terminal.wait("• split code and [docs] <https://example.test>",
+                              timeout=2.0, join_wrapped=True)
+                held = terminal.wait("│ int value = 1;", timeout=2.0,
+                                     join_wrapped=True)
+                if any(marker in held for marker in ("**ready**", "```", "](")):
+                    raise AssertionError(
+                        f"rendered Markdown retained syntax markers:\n{held}"
+                    )
+                _, pending_events = maybe_events(dotdir)
+                if event_list(pending_events, "response_completed"):
+                    raise AssertionError(
+                        "Markdown did not become visible during the provider pause"
+                    )
+                styled = terminal.capture_styled()
+                if re.search(
+                        r"(?m)^(?:\x1b\[[0-9;]*m)+Stream", styled) is None:
+                    raise AssertionError("tmux Markdown heading style is missing")
+            else:
+                terminal.wait("# Stream **ready**", timeout=2.0,
+                              join_wrapped=True)
+                held = terminal.wait(
+                    "- split `code` and [docs](https://example.test)",
+                    timeout=2.0, join_wrapped=True,
+                )
+            _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+            completed = event_list(events, "response_completed")
+            if (len(completed) != 1 or
+                    completed[0]["data"]["items"][0]["text"] != MARKDOWN_TEXT):
+                raise AssertionError("Markdown rendering changed durable model text")
+            screen = terminal.capture(join_wrapped=True)
+            if rendered:
+                if "└─" not in screen:
+                    raise AssertionError("completed Markdown fence was not closed")
+                assert_order(screen, [
+                    "Stream ready",
+                    "• split code and [docs] <https://example.test>",
+                    "┌─ c",
+                    "│ int value = 1;",
+                    "└─",
+                ])
+            if any(len(line) > terminal.cols for line in terminal.capture().splitlines()):
+                raise AssertionError("Markdown rendering exceeded the tmux width")
+            terminal.exit()
+        finally:
+            try:
+                screen = terminal.last_screen or terminal.capture()
+                (case / "screen.txt").write_text(screen, encoding="utf-8")
+            finally:
+                close_fixture_terminal(terminal)
 
 
 def run_render_case(binary, root):
@@ -861,6 +946,7 @@ def run_fixture(binary, workspace, root):
     root.mkdir(mode=0o700, parents=True)
     run_status_case(binary, root)
     run_paced_decode_case(binary, root)
+    run_markdown_case(binary, root)
     run_render_case(binary, root)
     run_queue_case(binary, root)
     print("tmux_terminal fixture: ok")
@@ -967,7 +1053,7 @@ def validate_irc_events(dotdir):
     ]
     for suffix in ("one", "two"):
         expected_messages.extend(
-            (nick, f"{nick} heard {suffix}", False)
+            (nick, f"**{nick}** heard `{suffix}`", False)
             for nick in ("hostbot", "onebot", "twobot")
         )
     messages = [event for event in event_list(events, "irc_event")
@@ -1119,6 +1205,8 @@ def run_irc_case(binary, root):
                         )
                     if expected:
                         assert_chat_line(screen, agent, f"{agent} heard {suffix}")
+            if "**hostbot**" in screen or "`one`" in screen or "`two`" in screen:
+                raise AssertionError(f"{name} retained model Markdown markers:\n{screen}")
             if screen.count("@twoop  set topic · shared integration topic") != 1:
                 raise AssertionError(f"{name} did not render the topic change once")
             validate_irc_events(terminal.dotdir)

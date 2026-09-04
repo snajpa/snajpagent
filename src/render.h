@@ -10,6 +10,41 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#define SNJ_RENDER_IRC_MARKDOWN_STATES (SNJ_CONFIG_IRC_CLIENT_MAX + 1u)
+
+struct snj_markdown_state {
+    char prefix[16];
+    char fence_info[64];
+    size_t prefix_len;
+    size_t fence_info_len;
+    size_t delimiter_len;
+    unsigned int fence_len;
+    unsigned int code_ticks;
+    char fence;
+    char delimiter;
+    bool line_start;
+    bool fence_header;
+    bool heading;
+    bool quote;
+    bool strong;
+    bool emphasis;
+    bool strike;
+    bool inline_code;
+    bool link_url;
+    bool link_after_label;
+    bool escape;
+    bool previous_word;
+    bool delimiter_previous_word;
+    bool style_painted;
+};
+
+struct snj_irc_markdown_state {
+    char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    char nick[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char fence;
+    unsigned int fence_len;
+};
+
 struct snj_render {
     unsigned int verbosity;
     bool stdout_terminal;
@@ -24,6 +59,9 @@ struct snj_render {
     bool protocol_warning_shown;
     bool color_stdout;
     bool color_stderr;
+    bool markdown;
+    bool markdown_rendering;
+    bool markdown_preserve_fence;
     bool networked;
     char agent_name[SNJ_CONFIG_IRC_NAME_MAX + 1u];
     struct snj_term *term;
@@ -34,10 +72,13 @@ struct snj_render {
     bool wrap_word_open;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
+    struct snj_markdown_state markdown_state;
+    struct snj_irc_markdown_state irc_markdown[SNJ_RENDER_IRC_MARKDOWN_STATES];
 };
 
 void snj_render_init(struct snj_render *render, unsigned int verbosity);
 void snj_render_set_color(struct snj_render *render, enum snj_color_mode mode);
+void snj_render_set_markdown(struct snj_render *render, bool enabled);
 void snj_render_set_networked(struct snj_render *render, bool networked,
                               const char *agent_name);
 void snj_render_attach_term(struct snj_render *render, struct snj_term *term);

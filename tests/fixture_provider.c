@@ -551,6 +551,40 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "msg_fixture_terminal_paced_final",
                            "paced complete", 0);
     }
+    if (strcmp(prompt, "terminal_markdown") == 0) {
+        static const char full[] =
+            "# Stream **ready**\n"
+            "- split `code` and [docs](https://example.test)\n"
+            "```c\nint value = 1;\n```";
+        static const char *const fragments[] = {
+            "# Stream **rea", "dy**\n- split `co", "de` and [docs](",
+            "https://example.test)\n```", "c\nint value ", "= 1;\n```"
+        };
+        size_t index = graph->count;
+
+        if (snj_response_graph_add_public(
+                graph, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                "msg_fixture_terminal_markdown", full) < 0)
+            goto allocation;
+        for (size_t part = 0u;
+             part < sizeof(fragments) / sizeof(fragments[0]); ++part) {
+            if (emit(opaque, index, SNJ_ITEM_ASSISTANT,
+                     SNJ_PHASE_FINAL_ANSWER, fragments[part],
+                     strlen(fragments[part])) < 0)
+                goto allocation;
+            for (unsigned int wait = 0u; wait < 4u; ++wait) {
+                int pump_rc = pump(opaque, 20u);
+                if (pump_rc != 0)
+                    return pump_rc;
+            }
+        }
+        for (unsigned int wait = 0u; wait < 50u; ++wait) {
+            int pump_rc = pump(opaque, 20u);
+            if (pump_rc != 0)
+                return pump_rc;
+        }
+        return 0;
+    }
     if (strcmp(prompt, "typing_stream") == 0) {
         static const char full[] =
             "model-output-one model-output-two model-output-three";
