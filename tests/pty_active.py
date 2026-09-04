@@ -378,12 +378,12 @@ def test_repeated_steering_rearms_composer():
 
     child.send(b"first steer\r")
     first_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"first steer")
-    child.wait(b"first steer\r\n" + DEFAULT_ACTIVE_PROMPT,
+    child.wait(b"first steer\r\n\r\n" + DEFAULT_ACTIVE_PROMPT,
                start=first_ack - len(b"first steer"))
     child.send(b"second steer\r")
     second_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"second steer",
                             start=first_ack)
-    child.wait(b"second steer\r\n" + DEFAULT_ACTIVE_PROMPT,
+    child.wait(b"second steer\r\n\r\n" + DEFAULT_ACTIVE_PROMPT,
                start=second_ack - len(b"second steer"))
     answer_end = child.wait(b"repeated steering complete")
     child.exit_cleanly(answer_end)

@@ -379,15 +379,26 @@ snj_render_prompt(struct snj_render *render, const char *label)
                             label, strlen(label), strlen(label), false, false);
 }
 
-int
-snj_render_submitted(struct snj_render *render, const char *label, const char *text)
+static int
+render_submitted(struct snj_render *render, const char *label, const char *text,
+                 bool separate)
 {
     struct snj_buf line;
     int rc;
 
     if (render->term &&
-        snj_term_consume_echoed_submission(render->term, label))
-        return 0;
+        snj_term_consume_echoed_submission(render->term, label)) {
+        rc = separate && render->stderr_terminal ?
+             write_block(render, STDERR_FILENO, "\n", 1u, false, true) : 0;
+        if (rc == 0 && render->stderr_terminal) {
+            render->previous_public_item = false;
+            if (render->public_item_open) {
+                render->public_item_ended_lf = true;
+                render->public_trailing_newlines = separate ? 2u : 1u;
+            }
+        }
+        return rc;
+    }
     snj_buf_init(&line, SNJ_MAX_DIRECT_PROMPT * 8u + 64u);
     if (render->public_item_open && !render->public_item_ended_lf) {
         if (snj_buf_putc(&line, '\n') < 0) {
@@ -401,13 +412,56 @@ snj_render_submitted(struct snj_render *render, const char *label, const char *t
         rc = snj_buf_append(&line, text, strlen(text));
     if (rc == 0)
         rc = snj_buf_putc(&line, '\n');
+    if (rc == 0 && separate && render->stderr_terminal)
+        rc = snj_buf_putc(&line, '\n');
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO,
                               render->networked ? COLOR_OPERATOR : COLOR_AGENT,
                               (char *)line.data, line.len, strlen(label),
                               render->stderr_terminal, true);
+    if (rc == 0 && render->stderr_terminal) {
+        render->previous_public_item = false;
+        if (render->public_item_open) {
+            render->public_item_ended_lf = true;
+            render->public_trailing_newlines = separate ? 2u : 1u;
+        }
+    }
     snj_buf_free(&line);
     return rc;
+}
+
+int
+snj_render_submitted(struct snj_render *render, const char *label, const char *text)
+{
+    return render_submitted(render, label, text, false);
+}
+
+int
+snj_render_input_submitted(struct snj_render *render, const char *label,
+                           const char *text)
+{
+    return render_submitted(render, label, text, true);
+}
+
+int
+snj_render_before_prompt(struct snj_render *render)
+{
+    static const char newlines[] = "\n\n";
+    size_t count;
+
+    if (!render->previous_public_item)
+        return 0;
+    if (!render->stderr_terminal) {
+        render->previous_public_item = false;
+        return 0;
+    }
+    count = render->previous_public_newlines < 2u ?
+            2u - render->previous_public_newlines : 0u;
+    if (count && write_block(render, STDERR_FILENO, newlines, count,
+                             false, true) < 0)
+        return -1;
+    render->previous_public_item = false;
+    return 0;
 }
 
 static size_t
@@ -501,16 +555,16 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
     }
     terminal = fd == STDOUT_FILENO ? render->stdout_terminal :
                                      render->stderr_terminal;
-    if (render->markdown && terminal && render->previous_markdown_item &&
-        render->previous_markdown_fd == fd &&
-        render->previous_markdown_newlines < 2u) {
+    if (render->markdown && terminal && render->previous_public_item &&
+        render->previous_public_markdown && render->previous_public_fd == fd &&
+        render->previous_public_newlines < 2u) {
         static const char newlines[] = "\n\n";
-        size_t count = 2u - render->previous_markdown_newlines;
+        size_t count = 2u - render->previous_public_newlines;
 
         if (write_block(render, fd, newlines, count, false, true) < 0)
             return -1;
     }
-    render->previous_markdown_item = false;
+    render->previous_public_item = false;
     if (fd == STDOUT_FILENO && render->stdout_item_seen &&
         !render->stdout_item_ended_lf && !render->stdout_terminal &&
         write_literal(STDOUT_FILENO, "\n") < 0)
@@ -672,6 +726,12 @@ flush_wrap_pending(struct snj_render *render)
                                            snj_term_columns(render->term);
     if (width == SIZE_MAX)
         return -1;
+    if (columns >= 20u && render->public_column == columns && leading == len) {
+        snj_buf_reset(&render->wrap_pending);
+        render->wrap_has_word = false;
+        render->wrap_continuation = false;
+        return 0;
+    }
     if (render->wrap_has_word && !render->wrap_continuation &&
         columns >= 20u && render->public_column != 0u &&
         (width >= columns || render->public_column > columns - width)) {
@@ -680,19 +740,29 @@ flush_wrap_pending(struct snj_render *render)
         render->public_column = 0u;
         text += leading;
         len -= leading;
+        if (render->markdown_rendering && render->markdown_state.prose) {
+            if (public_write(render, "  ", 2u) < 0)
+                return -1;
+            render->public_column = 2u;
+        }
         width = snj_term_text_width(text, len);
         if (width == SIZE_MAX)
             return -1;
     }
     if (public_write(render, text, len) < 0)
         return -1;
-    if (columns >= 20u)
-        render->public_column = (render->public_column + width) % columns;
-    else if (render->public_column <= SIZE_MAX - width)
-        render->public_column += width;
-    else {
+    if (render->public_column > SIZE_MAX - width) {
         errno = EOVERFLOW;
         return -1;
+    }
+    if (columns >= 20u) {
+        size_t total = render->public_column + width;
+
+        render->public_column = total > columns ? total % columns : total;
+        if (total > columns && render->public_column == 0u)
+            render->public_column = columns;
+    } else {
+        render->public_column += width;
     }
     snj_buf_reset(&render->wrap_pending);
     render->wrap_has_word = false;
@@ -2059,13 +2129,14 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     } else if (fd == STDERR_FILENO && had_bytes && !ended_lf && render->term) {
         snj_term_note_output(render->term, "\n", 1u);
     }
-    if (had_bytes && markdown_item && terminal) {
+    if (had_bytes && terminal) {
         if (!ended_lf)
             trailing_newlines = fd == STDERR_FILENO || render->stderr_terminal ?
                                 1u : 0u;
-        render->previous_markdown_item = true;
-        render->previous_markdown_fd = fd;
-        render->previous_markdown_newlines = trailing_newlines;
+        render->previous_public_item = true;
+        render->previous_public_markdown = markdown_item;
+        render->previous_public_fd = fd;
+        render->previous_public_newlines = trailing_newlines;
     }
     if (rc < 0 && !saved_errno)
         saved_errno = errno;
@@ -2330,6 +2401,8 @@ snj_render_activity(struct snj_render *render, const char *message)
         snj_term_clear_status(render->term);
         return 0;
     }
+    if (snj_render_before_prompt(render) < 0)
+        return -1;
     return snj_term_set_status(render->term, message);
 }
 

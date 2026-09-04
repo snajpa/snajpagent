@@ -578,7 +578,7 @@ def run_status_case(binary, root):
             raise AssertionError(f"activity redraw erased streamed text:\n{middle}")
         if "working…" in middle:
             raise AssertionError(f"activity status interrupted a public item:\n{middle}")
-        final = terminal.wait("status-second-\nfragment", timeout=3.0,
+        final = terminal.wait("status-second-\n  fragment", timeout=3.0,
                               join_wrapped=True)
         assert_order(final, ["status-first-fragment", "status-second-",
                              "fragment"])
@@ -659,9 +659,9 @@ def run_paced_decode_case(binary, root):
             raise AssertionError(
                 "activity did not follow the fixture's post-delta pause"
             )
-        if not re.search(r"finalword[ \t]*\nworking…", activity):
+        if not re.search(r"finalword[ \t]*\n\nworking…", activity):
             raise AssertionError(
-                f"activity did not start on the line after visible text:\n{activity}"
+                f"activity did not follow the model block's empty row:\n{activity}"
             )
 
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 6.0)
@@ -771,6 +771,20 @@ def run_markdown_case(binary, root):
                     raise AssertionError(
                         f"prose bullets or paragraph spacing are wrong:\n{raw}"
                     )
+                first_model = "Stream ready"
+                last_model = "• second paragraph"
+            else:
+                first_model = "# Stream **ready**"
+                last_model = "second paragraph"
+            submitted = f"{DEFAULT_IDLE_PROMPT} terminal_markdown"
+            if f"{submitted}\n\n{first_model}" not in screen:
+                raise AssertionError(
+                    f"submitted input and model output lack an empty row:\n{screen}"
+                )
+            if f"{last_model}\n\n{DEFAULT_ACCOUNTED_IDLE_PROMPT}" not in screen:
+                raise AssertionError(
+                    f"model output and the next prompt lack an empty row:\n{screen}"
+                )
             if any(len(line) > terminal.cols for line in terminal.capture().splitlines()):
                 raise AssertionError("Markdown rendering exceeded the tmux width")
             terminal.exit()
@@ -846,7 +860,7 @@ def run_render_case(binary, root):
         ])
         if re.search(r"(?m)^• alpha beta gamma", first) is None:
             raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
-        if "• alpha beta gamma delta-\nextraordinary" not in first:
+        if "• alpha beta gamma delta-\n  extraordinary" not in first:
             raise AssertionError(f"hyphen wrapped on its left side:\n{first}")
 
         time.sleep(0.1)
@@ -895,7 +909,7 @@ def run_render_case(binary, root):
                 f"repeated editing did not restart the typing pause:\n{paused_again}"
             )
 
-        final = wait_wrapped_fragment(terminal, "control:\\x1B[31m", timeout=5.0)
+        final = terminal.wait("control:\n  \\x1B[31m", timeout=5.0)
         if time.monotonic() - repeat_pause_started < 1.2:
             raise AssertionError("repeated typing pause ended too early")
         if f"{exact_margin}\n\nsupercalifragilisticexpialidocious" in final:
@@ -917,7 +931,8 @@ def run_render_case(binary, root):
                 "explicit café € line",
                 exact_margin,
                 "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ",
-                "control:\\x1B[31m",
+                "control:",
+                "\\x1B[31m",
             ],
         )
         if "alpha beta gamma delta-extraordinary" in final:
@@ -948,7 +963,16 @@ def run_render_case(binary, root):
         assert_order(steering_screen, ["working slowly",
                                       f"{DEFAULT_ACTIVE_PROMPT} change course"])
         terminal.send_key("Enter")
-        terminal.wait("steered: change course")
+        steered_screen = terminal.wait("steered: change course")
+        submitted_steer = f"{DEFAULT_ACTIVE_PROMPT} change course"
+        if f"{submitted_steer}\n\n• steered: change course" not in steered_screen:
+            raise AssertionError(
+                f"submitted steer and model output lack one empty row:\n{steered_screen}"
+            )
+        if f"{submitted_steer}\n\n\n• steered: change course" in steered_screen:
+            raise AssertionError(
+                f"submitted steer and model output have an extra empty row:\n{steered_screen}"
+            )
         events = wait_event_count(dotdir, "turn_completed", 2)
         steering = event_list(events, "steering_added")
         interrupted = event_list(events, "response_interrupted")

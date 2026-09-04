@@ -72,9 +72,10 @@ struct snj_render {
     bool public_item_bytes;
     bool public_item_ended_lf;
     unsigned int public_trailing_newlines;
-    unsigned int previous_markdown_newlines;
-    int previous_markdown_fd;
-    bool previous_markdown_item;
+    unsigned int previous_public_newlines;
+    int previous_public_fd;
+    bool previous_public_item;
+    bool previous_public_markdown;
     bool stdout_item_seen;
     bool stdout_item_ended_lf;
     bool protocol_warning_shown;
@@ -120,6 +121,9 @@ int snj_render_history(struct snj_render *render,
 int snj_render_prompt(struct snj_render *render, const char *label);
 int snj_render_submitted(struct snj_render *render, const char *label,
                          const char *text);
+int snj_render_input_submitted(struct snj_render *render, const char *label,
+                               const char *text);
+int snj_render_before_prompt(struct snj_render *render);
 int snj_render_public_begin(struct snj_render *render, int fd,
                             const char *label);
 int snj_render_public(struct snj_render *render, const char *text, size_t len,

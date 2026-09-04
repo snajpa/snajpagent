@@ -12,6 +12,9 @@ the terminal, and how users inspect and modify queued turns.
   the terminal may hard-wrap. Trailing punctuation stays with the preceding
   text; hyphens, dashes, periods, commas, and similar closing punctuation make
   the next character a wrap opportunity rather than beginning a wrapped line.
+  Generated Markdown prose soft-wrap continuation rows begin with two spaces,
+  aligned below the paragraph text after `• `. A separator space that would
+  otherwise be the first character printed after that wrap is omitted.
 - Every complete UTF-8 provider delta becomes visible before its delivery
   callback returns. Word-wrap lookahead must not retain the newest word until
   another delta or response completion. If a provider divides one word across
@@ -74,9 +77,14 @@ closure and return the terminal result. A rejected termination combination does
 not modify the process.
 
 The `working…` activity line is shown only after an open public item has been
-closed. It follows all text already decoded for that item on a separate line;
-response completion must not release a withheld final word and paint the
-activity line as one delayed update.
+closed. When it is the first row of the redrawn prompt block, the model block's
+required empty row precedes it. Response completion must not release a withheld
+final word and paint the activity line as one delayed update.
+
+Interactive submitted input and the first visible model block are separated by
+one empty row. The final visible model block and the next input prompt are also
+separated by one empty row. These terminal-only separators do not alter
+submitted input, response text, events, or provider traffic.
 
 ## Prompt Identity And Tab
 

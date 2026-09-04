@@ -514,8 +514,10 @@ set_input_prompt(struct app_state *app, bool active)
 {
     char label[SNJ_TERM_LABEL_BYTES];
 
-    return format_input_label(app, active, label) < 0 ? -1 :
-           snj_term_set_prompt_label(&app->term, active, label);
+    if (format_input_label(app, active, label) < 0 ||
+        snj_render_before_prompt(&app->render) < 0)
+        return -1;
+    return snj_term_set_prompt_label(&app->term, active, label);
 }
 
 static struct snj_queued_turn *
@@ -1960,7 +1962,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                         error, sizeof(error));
                 if (rc == 0 &&
                     (format_input_label(app, true, label) < 0 ||
-                     snj_render_submitted(&app->render, label, text) < 0))
+                     snj_render_input_submitted(&app->render, label, text) < 0))
                     rc = -1;
                 if (rc < 0) {
                     (void)snj_render_error_ctx(&app->render, error[0] ? error :
@@ -3653,7 +3655,7 @@ interactive_loop(struct app_state *app, const char *initial)
             char label[SNJ_TERM_LABEL_BYTES];
 
             if (format_input_label(app, false, label) < 0 ||
-                snj_render_submitted(&app->render, label, prompt) < 0) {
+                snj_render_input_submitted(&app->render, label, prompt) < 0) {
                 free(owned);
                 return 6;
             }

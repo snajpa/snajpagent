@@ -370,11 +370,13 @@ grid. Escaped pipes and pipes inside code spans stay within their cells.
 This is a presentation layer only: redirected output, provider input, durable
 events, and IRC frames retain the model's exact bytes. Disabling color keeps
 Markdown's structural rendering while removing its attributes. Prose
-paragraphs receive a `• ` prefix and an empty row between paragraphs; wrapped
-continuation lines start at the left margin without a hanging indent. Terminal
-wrapping keeps trailing punctuation with the preceding text and breaks after
-hyphens, dashes, periods, commas, and similar closing punctuation in both
-Markdown modes.
+paragraphs receive a `• ` prefix and an empty row between paragraphs; generated
+soft-wrap continuation lines start with two spaces, aligned below the
+paragraph text. A generated wrap drops the separator space that would otherwise
+start the new row. Submitted prompts and model output have one empty row between
+them in both directions. Terminal wrapping keeps trailing punctuation with the
+preceding text and breaks after hyphens, dashes, periods, commas, and similar
+closing punctuation in both Markdown modes.
 
 ## Configuration
 

@@ -167,8 +167,8 @@ test_punctuation_wrapping(void)
             assert(snprintf(second, sizeof(second), "%smores",
                             punctuation[i]) > 0);
             assert(snprintf(second_output, sizeof(second_output),
-                            "%s%s%s\nmores", prefix, first,
-                            punctuation[i]) > 0);
+                            "%s%s%s\n%smores", prefix, first,
+                            punctuation[i], enabled ? "  " : "") > 0);
             assert(snprintf(delivered_output, sizeof(delivered_output),
                             "%s%smores", first, punctuation[i]) > 0);
             snj_buf_init(&delivered, sizeof(delivered_output));
@@ -185,7 +185,8 @@ test_punctuation_wrapping(void)
             assert(snprintf(first_output, sizeof(first_output),
                             "%s1234567890 ", prefix) > 0);
             assert(snprintf(second_output, sizeof(second_output),
-                            "%s1234567890 \n-something", prefix) > 0);
+                            "%s1234567890 \n%s-something", prefix,
+                            enabled ? "  " : "") > 0);
             snj_buf_init(&delivered, 32u);
             assert(capture_wrapped("1234567890 ", "-something", 20u,
                                    enabled != 0u, first_output, second_output,
@@ -254,6 +255,90 @@ capture_markdown_width(const char *text, bool enabled, bool split,
     out[used] = '\0';
     snj_term_close(&term);
     return used;
+}
+
+static void
+test_conversation_spacing(void)
+{
+    char output[256];
+
+    for (size_t enabled = 0u; enabled < 2u; ++enabled) {
+        struct snj_render render;
+        struct snj_term term;
+        int fds[2];
+        int saved_stdout;
+        int saved_stderr;
+        ssize_t n;
+        size_t used = 0u;
+
+        assert(pipe(fds) == 0);
+        saved_stdout = dup(STDOUT_FILENO);
+        saved_stderr = dup(STDERR_FILENO);
+        assert(saved_stdout >= 0 && saved_stderr >= 0);
+        assert(dup2(fds[1], STDOUT_FILENO) >= 0);
+        assert(dup2(fds[1], STDERR_FILENO) >= 0);
+        close(fds[1]);
+        snj_term_init(&term);
+        snj_render_init(&render, 0u);
+        render.stdout_terminal = true;
+        render.stderr_terminal = true;
+        snj_render_set_markdown(&render, enabled != 0u);
+        snj_render_attach_term(&render, &term);
+        assert(snj_render_input_submitted(&render, "model/low › ",
+                                          "question") == 0);
+        assert(snj_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
+        assert(snj_render_public(&render, "answer", 6u, NULL) == 0);
+        assert(snj_render_public_end(&render) == 0);
+        assert(snj_render_activity(&render, "working…") == 0);
+        assert(snj_render_prompt(&render, "model/low › ") == 0);
+        snj_render_free(&render);
+        snj_term_close(&term);
+        assert(dup2(saved_stdout, STDOUT_FILENO) >= 0);
+        assert(dup2(saved_stderr, STDERR_FILENO) >= 0);
+        close(saved_stdout);
+        close(saved_stderr);
+        while ((n = read(fds[0], output + used,
+                         sizeof(output) - used - 1u)) > 0)
+            used += (size_t)n;
+        assert(n == 0);
+        close(fds[0]);
+        output[used] = '\0';
+        assert(strcmp(output, enabled ?
+                      "model/low › question\n\n• answer\n\nmodel/low › " :
+                      "model/low › question\n\nanswer\n\nmodel/low › ") == 0);
+    }
+    {
+        struct snj_render render;
+        struct snj_term term;
+        int fds[2];
+        int saved;
+        ssize_t n;
+        size_t used = 0u;
+
+        assert(pipe(fds) == 0);
+        saved = dup(STDERR_FILENO);
+        assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
+        close(fds[1]);
+        snj_term_init(&term);
+        memcpy(term.label, "model/low › ", strlen("model/low › ") + 1u);
+        term.line_submission_echoed = true;
+        snj_render_init(&render, 0u);
+        render.stderr_terminal = true;
+        snj_render_attach_term(&render, &term);
+        assert(snj_render_input_submitted(&render, "model/low › ",
+                                          "question") == 0);
+        snj_render_free(&render);
+        snj_term_close(&term);
+        assert(dup2(saved, STDERR_FILENO) >= 0);
+        close(saved);
+        while ((n = read(fds[0], output + used,
+                         sizeof(output) - used - 1u)) > 0)
+            used += (size_t)n;
+        assert(n == 0);
+        close(fds[0]);
+        output[used] = '\0';
+        assert(strcmp(output, "\n") == 0);
+    }
 }
 
 static size_t
@@ -766,14 +851,25 @@ main(void)
     assert(count_text(output, "verbosity 5 exposes") == 1u);
     assert(strstr(output, "> POST https://example.test\n"));
 
+    test_conversation_spacing();
+
     snj_buf_init(&delivered, 1024u);
     assert(capture_wrapped("alpha beta gamm", "a delta", 20u, true,
-                           "• alpha beta gamm", "• alpha beta gamma\ndelta",
+                           "• alpha beta gamm", "• alpha beta gamma\n  delta",
                            output, sizeof(output), &delivered) > 0u);
-    assert(strcmp(output, "• alpha beta gamma\ndelta") == 0);
+    assert(strcmp(output, "• alpha beta gamma\n  delta") == 0);
     assert(snj_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data,
                   "alpha beta gamma delta") == 0);
+    snj_buf_free(&delivered);
+    snj_buf_init(&delivered, 64u);
+    assert(capture_wrapped("123456789012345678 ", "next", 20u, true,
+                           "• 123456789012345678",
+                           "• 123456789012345678\n  next",
+                           output, sizeof(output), &delivered) > 0u);
+    assert(snj_buf_terminate(&delivered) == 0);
+    assert(strcmp((const char *)delivered.data,
+                  "123456789012345678 next") == 0);
     snj_buf_free(&delivered);
     test_punctuation_wrapping();
 

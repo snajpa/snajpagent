@@ -31,11 +31,18 @@ coding models:
 - escapes and inline link destinations, which remain visibly attributable.
 
 Each top-level prose paragraph begins with `• `. Consecutive model items and
-Markdown paragraph breaks have one empty terminal row between them. A soft or
-hard terminal wrap continues at the left margin rather than under the first
-paragraph character; explicit non-blank source line breaks within one paragraph
-also remain unbulleted. Headings, list items, block quotes, and fenced code keep
-their own structural markers instead of gaining a redundant paragraph bullet.
+Markdown paragraph breaks have one empty terminal row between them. A generated
+soft wrap of prose continues with two spaces, aligned with the first paragraph
+character after `• `. When that wrap would otherwise print a separator space as
+the first character on the new row, that one space is omitted. Explicit
+non-blank source line breaks within one paragraph remain unbulleted. Headings,
+list items, block quotes, and fenced code keep their own structural markers
+instead of gaining a redundant paragraph bullet.
+
+An interactively submitted operator prompt and the first model paragraph have
+one empty terminal row between them. The last model paragraph and the next
+interactive prompt have the same separation. These are presentation boundaries
+only and do not add bytes to submitted or model text.
 
 Headings, quotations, lists, code, and inline spans have readable structural
 fallbacks when color is disabled. When color is active, they use only ordinary
@@ -104,7 +111,8 @@ not join separate IRC messages into one table.
   and duplicate assignment. CLI tests cover both overrides and conflicts.
 - Deterministic tmux coverage checks a genuinely paced Markdown response before
   completion, its byte-exact durable form, static Markdown in the IRC chat UI,
-  prose bullets, flush-left continuation lines, paragraph spacing, an aligned
-  table, the disabled setting, width safety, and absence of raw escape leakage.
+  prose bullets, two-space continuation lines, prompt/model and paragraph
+  spacing, discarded wrap-separator spaces, an aligned table, the disabled
+  setting, width safety, and absence of raw escape leakage.
 - Full optimized and sanitizer suites plus `make sizecheck` must pass without a
   new production translation unit or dependency.
