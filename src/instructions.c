@@ -5,7 +5,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,17 +19,6 @@
 #define O_NOFOLLOW 0
 #endif
 
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 static char *
 join_path(const char *left, const char *right)
@@ -83,7 +71,7 @@ append_source(struct snj_instruction_set *set, const char *path,
     if (set->count >= SNJ_MAX_INSTRUCTION_SOURCES ||
         len > SNJ_MAX_INSTRUCTION_FILE ||
         set->bytes > SNJ_MAX_INSTRUCTION_BYTES - len) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "instruction discovery exceeds 16 files or 128 KiB");
         errno = EOVERFLOW;
         return -1;
@@ -92,14 +80,14 @@ append_source(struct snj_instruction_set *set, const char *path,
     if (!canonical || strlen(canonical) > SNJ_PATH_MAX_BYTES ||
         !snj_utf8_valid((const unsigned char *)canonical, strlen(canonical), true)) {
         free(canonical);
-        set_error(error, error_size, "instruction path cannot be canonicalized");
+        snj_errorf(error, error_size, "instruction path cannot be canonicalized");
         errno = EINVAL;
         return -1;
     }
     for (size_t i = 0; i < set->count; ++i) {
         if (strcmp(set->sources[i].path, canonical) == 0) {
             free(canonical);
-            set_error(error, error_size, "duplicate instruction path discovered");
+            snj_errorf(error, error_size, "duplicate instruction path discovered");
             errno = EINVAL;
             return -1;
         }
@@ -133,12 +121,12 @@ try_candidate(struct snj_instruction_set *set, const char *path,
     if (lstat(path, &st) < 0) {
         if (errno == ENOENT)
             return 0;
-        set_error(error, error_size, "cannot inspect instruction %s: %s",
+        snj_errorf(error, error_size, "cannot inspect instruction %s: %s",
                   path, strerror(errno));
         return -1;
     }
     if (S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "instruction %s must be a non-symlink regular file", path);
         errno = EINVAL;
         return -1;
@@ -146,13 +134,13 @@ try_candidate(struct snj_instruction_set *set, const char *path,
     if (st.st_size == 0)
         return 0;
     if (st.st_size < 0 || (uintmax_t)st.st_size > SNJ_MAX_INSTRUCTION_FILE) {
-        set_error(error, error_size, "instruction %s exceeds 32 KiB", path);
+        snj_errorf(error, error_size, "instruction %s exceeds 32 KiB", path);
         errno = EOVERFLOW;
         return -1;
     }
     fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) {
-        set_error(error, error_size, "cannot open instruction %s: %s",
+        snj_errorf(error, error_size, "cannot open instruction %s: %s",
                   path, strerror(errno));
         return -1;
     }
@@ -163,7 +151,7 @@ try_candidate(struct snj_instruction_set *set, const char *path,
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            set_error(error, error_size, "cannot read instruction %s: %s",
+            snj_errorf(error, error_size, "cannot read instruction %s: %s",
                       path, strerror(errno));
             goto out;
         }
@@ -171,7 +159,7 @@ try_candidate(struct snj_instruction_set *set, const char *path,
             break;
         if (snj_buf_append(&text, chunk, (size_t)got) < 0 ||
             text.len > SNJ_MAX_INSTRUCTION_FILE) {
-            set_error(error, error_size, "instruction %s exceeds 32 KiB", path);
+            snj_errorf(error, error_size, "instruction %s exceeds 32 KiB", path);
             errno = EOVERFLOW;
             goto out;
         }
@@ -181,7 +169,7 @@ try_candidate(struct snj_instruction_set *set, const char *path,
         goto out;
     }
     if (!snj_utf8_valid(text.data, text.len, true)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "instruction %s must be valid UTF-8 without NUL bytes", path);
         errno = EILSEQ;
         goto out;
@@ -234,14 +222,14 @@ config_instruction_root(char *error, size_t error_size)
 
     if (xdg && *xdg) {
         if (xdg[0] != '/') {
-            set_error(error, error_size, "XDG_CONFIG_HOME must be absolute");
+            snj_errorf(error, error_size, "XDG_CONFIG_HOME must be absolute");
             errno = EINVAL;
             return NULL;
         }
         base = snj_strdup_checked(xdg, SNJ_PATH_MAX_BYTES);
     } else {
         if (!home || home[0] != '/') {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "HOME is unavailable for instruction discovery");
             errno = EINVAL;
             return NULL;
@@ -274,7 +262,7 @@ find_project_root(const char *workspace, char **root,
         }
         if (lstat(git, &st) == 0) {
             if (S_ISLNK(st.st_mode) || (!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode))) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           ".git at %s must be a non-symlink file or directory", git);
                 free(git);
                 free(current);
@@ -286,7 +274,7 @@ find_project_root(const char *workspace, char **root,
             return 0;
         }
         if (errno != ENOENT) {
-            set_error(error, error_size, "cannot inspect %s: %s",
+            snj_errorf(error, error_size, "cannot inspect %s: %s",
                       git, strerror(errno));
             free(git);
             free(current);
@@ -331,7 +319,7 @@ walk_project_chain(struct snj_instruction_set *set,
         else if (*rest == '/')
             ++rest;
         else {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "project root is not an ancestor of workspace");
             errno = EINVAL;
             goto fail;
@@ -380,7 +368,7 @@ snj_instructions_discover(struct snj_instruction_set *set,
         goto out;
     if (lstat(global, &st) == 0) {
         if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "instruction config root must be a real directory");
             errno = EINVAL;
             goto out;
@@ -388,7 +376,7 @@ snj_instructions_discover(struct snj_instruction_set *set,
         if (try_instruction_dir(set, global, error, error_size) < 0)
             goto out;
     } else if (errno != ENOENT) {
-        set_error(error, error_size, "cannot inspect instruction config root: %s",
+        snj_errorf(error, error_size, "cannot inspect instruction config root: %s",
                   strerror(errno));
         goto out;
     }
@@ -397,7 +385,7 @@ snj_instructions_discover(struct snj_instruction_set *set,
         !snj_utf8_valid((const unsigned char *)canonical_workspace,
                         strlen(canonical_workspace), true) ||
         stat(canonical_workspace, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "workspace must be an existing UTF-8 directory for instruction discovery");
         errno = EINVAL;
         goto out;
@@ -451,7 +439,7 @@ snj_instructions_metadata_valid(const json_t *array,
 
     if (!json_is_array(array) ||
         (count = json_array_size((json_t *)array)) > SNJ_MAX_INSTRUCTION_SOURCES) {
-        set_error(error, error_size, "invalid instruction metadata array");
+        snj_errorf(error, error_size, "invalid instruction metadata array");
         errno = EINVAL;
         return -1;
     }
@@ -468,7 +456,7 @@ snj_instructions_metadata_valid(const json_t *array,
             snj_json_integer_u64(item, "bytes", &bytes) < 0 || bytes == 0u ||
             bytes > SNJ_MAX_INSTRUCTION_FILE ||
             total > SNJ_MAX_INSTRUCTION_BYTES - (size_t)bytes) {
-            set_error(error, error_size, "invalid instruction metadata entry");
+            snj_errorf(error, error_size, "invalid instruction metadata entry");
             errno = EINVAL;
             return -1;
         }
@@ -476,7 +464,7 @@ snj_instructions_metadata_valid(const json_t *array,
             const char *prev = snj_json_string(json_array_get((json_t *)array, j),
                                                "path");
             if (prev && strcmp(prev, path) == 0) {
-                set_error(error, error_size, "duplicate instruction metadata path");
+                snj_errorf(error, error_size, "duplicate instruction metadata path");
                 errno = EINVAL;
                 return -1;
             }
@@ -509,7 +497,7 @@ snj_instructions_match_metadata(const struct snj_instruction_set *set,
     }
     return 0;
 mismatch:
-    set_error(error, error_size,
+    snj_errorf(error, error_size,
               "active turn instruction metadata no longer matches frozen contents");
     errno = EINVAL;
     return -1;

@@ -22,7 +22,6 @@
 #include <util.h>
 #endif
 #include <signal.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,17 +91,6 @@ struct managed_process {
 
 static struct managed_process managed_process;
 static bool managed_cleanup_registered;
-
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 static bool
 json_bool_member(const json_t *object, const char *key, bool default_value,
@@ -1007,7 +995,7 @@ managed_reap_once(struct managed_process *proc, char *error, size_t error_size)
         if (errno == ECHILD) {
             proc->child_done = true;
         } else {
-            set_error(error, error_size, "tool process wait failed: %s",
+            snj_errorf(error, error_size, "tool process wait failed: %s",
                       strerror(errno));
             return -1;
         }
@@ -1055,7 +1043,7 @@ managed_make_result(struct managed_process *proc, const char *status,
             json_decref(*result);
             *result = NULL;
         }
-        set_error(error, error_size, "cannot allocate tool result");
+        snj_errorf(error, error_size, "cannot allocate tool result");
         return -1;
     }
     return 0;
@@ -1238,7 +1226,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
         if (pr < 0) {
             if (errno == EINTR)
                 continue;
-            set_error(error, error_size, "tool process polling failed: %s",
+            snj_errorf(error, error_size, "tool process polling failed: %s",
                       strerror(errno));
             return -1;
         }
@@ -1249,7 +1237,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
                 if (managed_write_pty_input(proc, input, input_len,
                                             &input_written, close_after_input,
                                             &pty_eof_sent) < 0) {
-                    set_error(error, error_size, "tool PTY stdin write failed");
+                    snj_errorf(error, error_size, "tool PTY stdin write failed");
                     return -1;
                 }
             }
@@ -1260,7 +1248,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
                          drain_fd(proc->stdout_fd, &proc->stdout_redactor,
                                   &proc->stdout_open);
                 if (dr < 0) {
-                    set_error(error, error_size,
+                    snj_errorf(error, error_size,
                               proc->pty ? "tool PTY capture failed" :
                                           "tool stdout capture failed");
                     return -1;
@@ -1277,7 +1265,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
         if (stderr_index >= 0 && fds[stderr_index].revents) {
             if (drain_fd(proc->stderr_fd, &proc->stderr_redactor,
                          &proc->stderr_open) < 0) {
-                set_error(error, error_size, "tool stderr capture failed");
+                snj_errorf(error, error_size, "tool stderr capture failed");
                 return -1;
             }
             if (!proc->stderr_open)
@@ -1287,7 +1275,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
             if (write_stdin_chunk(&proc->stdin_fd, input, input_len,
                                   &input_written, &proc->stdin_open,
                                   close_after_input) < 0) {
-                set_error(error, error_size, "tool stdin write failed");
+                snj_errorf(error, error_size, "tool stdin write failed");
                 return -1;
             }
         }
@@ -1326,7 +1314,7 @@ run_exec_command_managed(const char *command, const char *workdir,
             "Another managed process is still running; close or finish it before starting a new yielded process.",
             -1, NULL);
         if (!*result) {
-            set_error(error, error_size, "cannot allocate tool result");
+            snj_errorf(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
@@ -1335,38 +1323,38 @@ run_exec_command_managed(const char *command, const char *workdir,
     if (pty) {
         if (open_pty_pair(&pty_master, &pty_slave,
                           &pty_rows, &pty_cols) < 0) {
-            set_error(error, error_size, "cannot create tool PTY: %s",
+            snj_errorf(error, error_size, "cannot create tool PTY: %s",
                       strerror(errno));
             goto out;
         }
         if (set_cloexec(pty_master) < 0 || set_cloexec(pty_slave) < 0 ||
             set_nonblock(pty_master) < 0) {
-            set_error(error, error_size, "cannot configure tool PTY: %s",
+            snj_errorf(error, error_size, "cannot configure tool PTY: %s",
                       strerror(errno));
             goto out;
         }
     } else {
         if (make_pipe(in_pipe) < 0 || make_pipe(out_pipe) < 0 ||
             make_pipe(err_pipe) < 0) {
-            set_error(error, error_size, "cannot create tool pipes: %s",
+            snj_errorf(error, error_size, "cannot create tool pipes: %s",
                       strerror(errno));
             goto out;
         }
         if (set_nonblock(in_pipe[1]) < 0 || set_nonblock(out_pipe[0]) < 0 ||
             set_nonblock(err_pipe[0]) < 0) {
-            set_error(error, error_size, "cannot configure tool pipes: %s",
+            snj_errorf(error, error_size, "cannot configure tool pipes: %s",
                       strerror(errno));
             goto out;
         }
     }
     env = filtered_environment(config);
     if (!env) {
-        set_error(error, error_size, "cannot allocate tool environment");
+        snj_errorf(error, error_size, "cannot allocate tool environment");
         goto out;
     }
     pid = fork();
     if (pid < 0) {
-        set_error(error, error_size, "cannot fork tool process: %s", strerror(errno));
+        snj_errorf(error, error_size, "cannot fork tool process: %s", strerror(errno));
         goto out;
     }
     if (pid == 0) {
@@ -1417,7 +1405,7 @@ run_exec_command_managed(const char *command, const char *workdir,
     proc->deadline_ms = saturating_deadline(proc->started_ms, timeout_ms);
     proc->max_output_tokens = max_output_tokens;
     if (snj_random_id(proc->handle) < 0) {
-        set_error(error, error_size, "cannot allocate managed process handle");
+        snj_errorf(error, error_size, "cannot allocate managed process handle");
         goto out_active;
     }
     managed_secret_set_build(&proc->secrets, config, credential);
@@ -1471,7 +1459,7 @@ run_write_stdin(const struct snj_response_item *call,
     };
 
     if (!handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN)) {
-        set_error(error, error_size, "invalid write_stdin arguments");
+        snj_errorf(error, error_size, "invalid write_stdin arguments");
         errno = EINVAL;
         return -1;
     }
@@ -1491,7 +1479,7 @@ run_write_stdin(const struct snj_response_item *call,
             proc->active ? -1 : 1, proc->active ? proc->handle : NULL);
         if (!*result) {
             managed_cleanup();
-            set_error(error, error_size, "cannot allocate tool result");
+            snj_errorf(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
@@ -1501,7 +1489,7 @@ run_write_stdin(const struct snj_response_item *call,
             "No active managed process matches the supplied handle.", 1,
             NULL);
         if (!*result) {
-            set_error(error, error_size, "cannot allocate tool result");
+            snj_errorf(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
@@ -1513,7 +1501,7 @@ run_write_stdin(const struct snj_response_item *call,
             -1, proc->handle);
         if (!*result) {
             managed_cleanup();
-            set_error(error, error_size, "cannot allocate tool result");
+            snj_errorf(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
@@ -1573,7 +1561,7 @@ run_exec_command(const struct snj_response_item *call,
                          config->default_max_output_tokens, 1u,
                          (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
                          &max_output_tokens)) {
-        set_error(error, error_size, "invalid exec_command arguments");
+        snj_errorf(error, error_size, "invalid exec_command arguments");
         errno = EINVAL;
         return -1;
     }
@@ -1639,14 +1627,14 @@ snj_tools_close_managed(const char *handle, bool user_interrupt,
     if (result)
         *result = NULL;
     if (!handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN) || !result) {
-        set_error(error, error_size, "invalid managed process closure");
+        snj_errorf(error, error_size, "invalid managed process closure");
         errno = EINVAL;
         return -1;
     }
     if (!proc->active || strcmp(proc->handle, handle) != 0) {
         *result = snj_tool_result_outcome_unknown("owner_lost");
         if (!*result) {
-            set_error(error, error_size, "cannot allocate process closure result");
+            snj_errorf(error, error_size, "cannot allocate process closure result");
             return -1;
         }
         return 0;
@@ -1684,7 +1672,7 @@ snj_tools_run(const struct snj_response_item *call,
         *result = NULL;
     if (!call || call->kind != SNJ_ITEM_TOOL_CALL || !config ||
         !session_workspace || !result) {
-        set_error(error, error_size, "invalid tool invocation");
+        snj_errorf(error, error_size, "invalid tool invocation");
         errno = EINVAL;
         return -1;
     }
@@ -1698,7 +1686,7 @@ snj_tools_run(const struct snj_response_item *call,
         return snj_tools_apply_patch(call, session_workspace, result,
                                      error, error_size);
     else {
-        set_error(error, error_size, "unknown tool name");
+        snj_errorf(error, error_size, "unknown tool name");
         errno = EINVAL;
         return -1;
     }

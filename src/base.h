@@ -29,6 +29,8 @@ int snj_buf_putc(struct snj_buf *buf, unsigned char c);
 int snj_buf_printf(struct snj_buf *buf, const char *fmt, ...);
 int snj_buf_terminate(struct snj_buf *buf);
 
+void snj_errorf(char *error, size_t size, const char *fmt, ...);
+
 bool snj_size_add(size_t a, size_t b, size_t *out);
 bool snj_utf8_valid(const unsigned char *s, size_t len, bool reject_nul);
 int snj_random_id(char out[SNJ_ID_HEX_LEN + 1u]);

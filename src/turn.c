@@ -4,21 +4,10 @@
 
 #include <errno.h>
 #include <limits.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 const char *
 snj_item_kind_name(enum snj_item_kind kind)
@@ -494,14 +483,14 @@ identifiers_valid(const struct snj_response_graph *graph,
 
         if (public_kind(item->kind) &&
             !snj_hex_is_lower(item->local_item_id, SNJ_ID_HEX_LEN)) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "response item %zu has an invalid local id", i);
             errno = EINVAL;
             return -1;
         }
         if (item->kind == SNJ_ITEM_TOOL_CALL &&
             !snj_hex_is_lower(item->call_id, SNJ_ID_HEX_LEN)) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "response item %zu has an invalid call id", i);
             errno = EINVAL;
             return -1;
@@ -511,7 +500,7 @@ identifiers_valid(const struct snj_response_graph *graph,
                 public_kind(graph->items[j].kind) &&
                 strcmp(item->local_item_id,
                        graph->items[j].local_item_id) == 0) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "response graph repeats a local item id");
                 errno = EINVAL;
                 return -1;
@@ -519,7 +508,7 @@ identifiers_valid(const struct snj_response_graph *graph,
             if (item->kind == SNJ_ITEM_TOOL_CALL &&
                 graph->items[j].kind == SNJ_ITEM_TOOL_CALL &&
                 strcmp(item->call_id, graph->items[j].call_id) == 0) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "response graph repeats a call id");
                 errno = EINVAL;
                 return -1;
@@ -544,7 +533,7 @@ snj_response_graph_classify(const struct snj_response_graph *graph,
 
     memset(decision, 0, sizeof(*decision));
     if (!graph->provider_response_id || graph->count > SNJ_MAX_RESPONSE_ITEMS) {
-        set_error(error, error_size, "response graph has no valid response id");
+        snj_errorf(error, error_size, "response graph has no valid response id");
         errno = EINVAL;
         return -1;
     }
@@ -554,7 +543,7 @@ snj_response_graph_classify(const struct snj_response_graph *graph,
         const struct snj_response_item *item = &graph->items[i];
         bad_index = i;
         if (!provider_id_valid(item->provider_item_id)) {
-            set_error(error, error_size, "response item %zu has invalid identity", i);
+            snj_errorf(error, error_size, "response item %zu has invalid identity", i);
             errno = EINVAL;
             return -1;
         }
@@ -601,7 +590,7 @@ snj_response_graph_classify(const struct snj_response_graph *graph,
         }
     }
     if (calls > SNJ_MAX_CALLS_PER_RESPONSE) {
-        set_error(error, error_size, "response graph exceeds 32 tool calls");
+        snj_errorf(error, error_size, "response graph exceeds 32 tool calls");
         errno = EOVERFLOW;
         return -1;
     }
@@ -613,7 +602,7 @@ snj_response_graph_classify(const struct snj_response_graph *graph,
             json_decref(items);
         snj_buf_free(&encoded);
         if (rc < 0) {
-            set_error(error, error_size, "response graph exceeds 8 MiB");
+            snj_errorf(error, error_size, "response graph exceeds 8 MiB");
             errno = EOVERFLOW;
             return -1;
         }
@@ -643,7 +632,7 @@ snj_response_graph_classify(const struct snj_response_graph *graph,
     return 0;
 
 bad_item:
-    set_error(error, error_size, "response item %zu has an invalid shape", bad_index);
+    snj_errorf(error, error_size, "response item %zu has an invalid shape", bad_index);
     errno = EINVAL;
     return -1;
 }
@@ -765,7 +754,7 @@ parse_public(struct snj_response_graph *graph, const json_t *value,
         goto invalid;
     return 0;
 invalid:
-    set_error(error, error_size, "invalid public response item");
+    snj_errorf(error, error_size, "invalid public response item");
     errno = EINVAL;
     return -1;
 }
@@ -776,7 +765,7 @@ snj_response_graph_from_json(struct snj_response_graph *graph,
                              char *error, size_t error_size)
 {
     if (!json_is_array(items) || json_array_size(items) > SNJ_MAX_RESPONSE_ITEMS) {
-        set_error(error, error_size, "invalid response item array");
+        snj_errorf(error, error_size, "invalid response item array");
         errno = EINVAL;
         return -1;
     }
@@ -832,7 +821,7 @@ snj_response_graph_from_json(struct snj_response_graph *graph,
         return -1;
     return 0;
 invalid:
-    set_error(error, error_size, "invalid response item at index %zu",
+    snj_errorf(error, error_size, "invalid response item at index %zu",
               graph->count);
     errno = EINVAL;
     return -1;
@@ -851,7 +840,7 @@ snj_partial_public_validate(const json_t *items,
         goto out;
     for (size_t i = 0; i < graph.count; ++i) {
         if (!public_kind(graph.items[i].kind)) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "partial public array contains a non-public item");
             errno = EINVAL;
             goto out;
@@ -919,12 +908,6 @@ snj_tool_result_terminal(bool succeeded, const char *model_text)
                        succeeded ? 0 : 1);
 }
 
-json_t *
-snj_tool_result_denied(void)
-{
-    return tool_result("denied", "user_denied",
-                       "Tool was denied by the user.", -1);
-}
 
 json_t *
 snj_tool_result_outcome_unknown(const char *reason)

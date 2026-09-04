@@ -128,7 +128,6 @@ const char *snj_item_phase_name(enum snj_item_phase phase);
 
 json_t *snj_tool_result_not_run(const char *reason);
 json_t *snj_tool_result_terminal(bool succeeded, const char *model_text);
-json_t *snj_tool_result_denied(void);
 json_t *snj_tool_result_outcome_unknown(const char *reason);
 int snj_tool_result_valid(const json_t *result);
 

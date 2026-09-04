@@ -45,12 +45,6 @@ mark_sigwinch(int signal_number)
     sigwinch_pending = 1;
 }
 
-static void
-set_error(char *error, size_t size, const char *message)
-{
-    if (size)
-        (void)snprintf(error, size, "%s: %s", message, strerror(errno));
-}
 
 static size_t
 utf8_size(unsigned char first)
@@ -428,17 +422,17 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
 
     if (term->opened) {
         errno = EALREADY;
-        set_error(error, error_size, "terminal already open");
+        snj_errorf(error, error_size, "terminal already open: %s", strerror(errno));
         return -1;
     }
     if (tcgetattr(STDIN_FILENO, &term->saved) < 0) {
-        set_error(error, error_size, "cannot read terminal attributes");
+        snj_errorf(error, error_size, "cannot read terminal attributes: %s", strerror(errno));
         return -1;
     }
     term->capable = term_control_capable();
     update_size(term);
     if (term->capable && set_raw(term) < 0) {
-        set_error(error, error_size, "cannot enter terminal input mode");
+        snj_errorf(error, error_size, "cannot enter terminal input mode: %s", strerror(errno));
         return -1;
     }
     memset(&action, 0, sizeof(action));
@@ -450,7 +444,7 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
             (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
         term->raw = false;
         errno = saved_errno;
-        set_error(error, error_size, "cannot install terminal interrupt handler");
+        snj_errorf(error, error_size, "cannot install terminal interrupt handler: %s", strerror(errno));
         return -1;
     }
     term->sigint_installed = true;
@@ -465,7 +459,7 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
         term->raw = false;
         term->sigint_installed = false;
         errno = saved_errno;
-        set_error(error, error_size, "cannot install terminal resize handler");
+        snj_errorf(error, error_size, "cannot install terminal resize handler: %s", strerror(errno));
         return -1;
     }
     term->sigwinch_installed = true;
@@ -482,7 +476,7 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
         term->sigint_installed = false;
         term->sigwinch_installed = false;
         errno = saved_errno;
-        set_error(error, error_size, "cannot enable bracketed paste");
+        snj_errorf(error, error_size, "cannot enable bracketed paste: %s", strerror(errno));
         return -1;
     }
     term->bracketed_paste = term->capable;
@@ -495,7 +489,8 @@ snj_term_external_begin(struct snj_term *term,
 {
     if (!term || !term->opened) {
         errno = EINVAL;
-        set_error(error, error_size, "terminal is not open");
+        snj_errorf(error, error_size, "terminal is not open: %s",
+                   strerror(errno));
         return -1;
     }
     if (snj_term_hide(term) < 0)
@@ -509,7 +504,8 @@ snj_term_external_begin(struct snj_term *term,
     term->raw = false;
     return 0;
 fail:
-    set_error(error, error_size, "cannot release terminal for editor");
+    snj_errorf(error, error_size, "cannot release terminal for editor: %s",
+               strerror(errno));
     return -1;
 }
 
@@ -519,7 +515,8 @@ snj_term_external_end(struct snj_term *term,
 {
     if (!term || !term->opened) {
         errno = EINVAL;
-        set_error(error, error_size, "terminal is not open");
+        snj_errorf(error, error_size, "terminal is not open: %s",
+                   strerror(errno));
         return -1;
     }
     sigint_pending = 0;
@@ -533,7 +530,8 @@ snj_term_external_end(struct snj_term *term,
     term->bracketed_paste = term->capable;
     return 0;
 fail:
-    set_error(error, error_size, "cannot restore terminal after editor");
+    snj_errorf(error, error_size, "cannot restore terminal after editor: %s",
+               strerror(errno));
     return -1;
 }
 
@@ -994,11 +992,6 @@ out:
     return rc;
 }
 
-int
-snj_term_show(struct snj_term *term)
-{
-    return redraw(term);
-}
 
 int
 snj_term_set_prompt(struct snj_term *term, bool active)

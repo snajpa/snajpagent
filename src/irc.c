@@ -132,18 +132,6 @@ configure_stream(int fd)
     return 0;
 }
 
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
-
 static int
 copy_string(char *dst, size_t size, const char *src)
 {
@@ -430,7 +418,7 @@ config_copy(char *dst, size_t size, const char *src, const char *what,
             char *error, size_t error_size)
 {
     if (copy_string(dst, size, src) < 0) {
-        set_error(error, error_size, "%s exceeds its supported bound", what);
+        snj_errorf(error, error_size, "%s exceeds its supported bound", what);
         return -1;
     }
     return 0;
@@ -488,7 +476,7 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
                     error_size) < 0)
         return -1;
     if (cli->irc_room_name && !config->irc_listen_explicit) {
-        set_error(error, error_size, "-r/--room-name requires -s/--listen");
+        snj_errorf(error, error_size, "-r/--room-name requires -s/--listen");
         errno = EINVAL;
         return -1;
     }
@@ -496,7 +484,7 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
         if (config->irc_model_nick[0] || config->irc_operator_nick[0] ||
             config->irc_room_name[0] ||
             config->irc_listen_explicit) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "IRC nicks, room, and listen settings require a server or client role");
             errno = EINVAL;
             return -1;
@@ -504,37 +492,37 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
         return 0;
     }
     if (cli->prompt && !cli->prompt_after_dashdash) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "networked initial chat text must follow --");
         errno = EINVAL;
         return -1;
     }
     if (!config->irc_listen_explicit && config->irc_room_name[0]) {
-        set_error(error, error_size, "IRC room_name requires a listener");
+        snj_errorf(error, error_size, "IRC room_name requires a listener");
         errno = EINVAL;
         return -1;
     }
     if (!config->irc_model_nick[0])
         memcpy(config->irc_model_nick, "agent", 6u);
     if (!nick_valid(config->irc_model_nick)) {
-        set_error(error, error_size, "IRC model nick is invalid");
+        snj_errorf(error, error_size, "IRC model nick is invalid");
         errno = EINVAL;
         return -1;
     }
     if (!endpoint_valid(config->irc_listen)) {
-        set_error(error, error_size, "invalid IRC listen endpoint");
+        snj_errorf(error, error_size, "invalid IRC listen endpoint");
         return -1;
     }
     for (size_t i = 0; i < config->irc_client_count; ++i) {
         if (!endpoint_valid(config->irc_clients[i])) {
-            set_error(error, error_size, "invalid IRC client endpoint: %s",
+            snj_errorf(error, error_size, "invalid IRC client endpoint: %s",
                       config->irc_clients[i]);
             return -1;
         }
         for (size_t j = 0; j < i; ++j)
             if (endpoint_equal(config->irc_clients[i],
                                config->irc_clients[j])) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "duplicate IRC client endpoint: %s",
                           config->irc_clients[i]);
                 errno = EINVAL;
@@ -553,7 +541,7 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
     }
     if (!nick_valid(config->irc_operator_nick) ||
         irc_casecmp(config->irc_operator_nick, config->irc_model_nick) == 0) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "IRC operator and model nicks must be valid and distinct");
         errno = EINVAL;
         return -1;
@@ -562,7 +550,7 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
         char normalized[sizeof(config->irc_room_name)];
         if (normalize_room(normalized, sizeof(normalized),
                            config->irc_room_name) < 0) {
-            set_error(error, error_size, "invalid IRC room name");
+            snj_errorf(error, error_size, "invalid IRC room name");
             return -1;
         }
         memcpy(config->irc_room_name, normalized, sizeof(normalized));
@@ -597,7 +585,7 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     int gai;
 
     if (split_endpoint(endpoint, host, sizeof(host), port, sizeof(port)) < 0) {
-        set_error(error, error_size, "invalid IRC listen endpoint");
+        snj_errorf(error, error_size, "invalid IRC listen endpoint");
         return -1;
     }
     memset(&hints, 0, sizeof(hints));
@@ -606,7 +594,7 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     hints.ai_protocol = IPPROTO_TCP;
     gai = getaddrinfo(host, port, &hints, &addresses);
     if (gai != 0) {
-        set_error(error, error_size, "cannot resolve IRC listen endpoint: %s",
+        snj_errorf(error, error_size, "cannot resolve IRC listen endpoint: %s",
                   gai_strerror(gai));
         errno = EADDRNOTAVAIL;
         return -1;
@@ -625,7 +613,7 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     }
     freeaddrinfo(addresses);
     if (fd < 0)
-        set_error(error, error_size, "cannot listen on IRC endpoint %s: %s",
+        snj_errorf(error, error_size, "cannot listen on IRC endpoint %s: %s",
                   endpoint, strerror(errno));
     return fd;
 }
@@ -2146,7 +2134,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
 
     if (!out || !config || !workspace || !snj_irc_enabled(config)) {
         errno = EINVAL;
-        set_error(error, error_size, "invalid IRC startup state");
+        snj_errorf(error, error_size, "invalid IRC startup state");
         return -1;
     }
     *out = NULL;
@@ -2179,7 +2167,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     }
     if (strlen(workspace) > IRC_TEXT_CHUNK ||
         sanitize_text(irc->topic, sizeof(irc->topic), workspace) < 0) {
-        set_error(error, error_size, "IRC launch path is too long for a topic");
+        snj_errorf(error, error_size, "IRC launch path is too long for a topic");
         errno = ENAMETOOLONG;
         goto fail;
     }
@@ -2213,7 +2201,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     return 0;
 fail:
     if (error_size && !error[0])
-        set_error(error, error_size, "cannot initialize IRC state");
+        snj_errorf(error, error_size, "cannot initialize IRC state");
     snj_irc_close(irc);
     return -1;
 }
@@ -2342,7 +2330,7 @@ snj_irc_tick(struct snj_irc *irc, int timeout_ms,
     }
     return 0;
 fail:
-    set_error(error, error_size, "IRC event loop failed: %s", strerror(errno));
+    snj_errorf(error, error_size, "IRC event loop failed: %s", strerror(errno));
     return -1;
 }
 
@@ -2423,7 +2411,7 @@ send_chat(struct snj_irc *irc, const char *nick, enum link_role role,
     if (!irc || !text || !*text ||
         !snj_utf8_valid((const unsigned char *)text, strlen(text), true)) {
         errno = EINVAL;
-        set_error(error, error_size, "IRC chat must be nonempty valid UTF-8");
+        snj_errorf(error, error_size, "IRC chat must be nonempty valid UTF-8");
         return -1;
     }
     remaining = strlen(cursor);
@@ -2449,7 +2437,7 @@ send_chat(struct snj_irc *irc, const char *nick, enum link_role role,
     }
     return 0;
 fail:
-    set_error(error, error_size, "cannot queue IRC chat: %s", strerror(errno));
+    snj_errorf(error, error_size, "cannot queue IRC chat: %s", strerror(errno));
     return -1;
 }
 
@@ -2487,12 +2475,12 @@ set_topic_as(struct snj_irc *irc, const char *topic, enum link_role role,
     if (!irc || !topic || strlen(topic) > IRC_TEXT_CHUNK ||
         strchr(topic, '\r') || strchr(topic, '\n') ||
         !snj_utf8_valid((const unsigned char *)topic, strlen(topic), true)) {
-        set_error(error, error_size, "IRC topic is invalid or too long");
+        snj_errorf(error, error_size, "IRC topic is invalid or too long");
         errno = EINVAL;
         return -1;
     }
     if (sanitize_text(clean, sizeof(clean), topic) < 0) {
-        set_error(error, error_size, "IRC topic is invalid or too long");
+        snj_errorf(error, error_size, "IRC topic is invalid or too long");
         return -1;
     }
     if (irc->listener >= 0 &&
@@ -2519,7 +2507,7 @@ set_topic_as(struct snj_irc *irc, const char *topic, enum link_role role,
         ++destinations;
     }
     if (!destinations) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   role == LINK_AGENT ?
                   "agent identity is not an operator in any joined room" :
                   "operator identity is not an operator in any joined room");
@@ -2528,7 +2516,7 @@ set_topic_as(struct snj_irc *irc, const char *topic, enum link_role role,
     }
     return 0;
 fail:
-    set_error(error, error_size, "cannot queue IRC topic change");
+    snj_errorf(error, error_size, "cannot queue IRC topic change");
     return -1;
 }
 
@@ -2639,7 +2627,7 @@ snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
         goto fail;
     return 0;
 fail:
-    set_error(error, error_size, "IRC snapshot exceeds its bound");
+    snj_errorf(error, error_size, "IRC snapshot exceeds its bound");
     return -1;
 }
 

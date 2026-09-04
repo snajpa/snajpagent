@@ -5,21 +5,10 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 static json_t *
 origin_user_data(void)
@@ -70,7 +59,7 @@ make_trash_name(const struct snj_session *session,
 {
     char suffix[SNJ_TRASH_SUFFIX_HEX_LEN + 1u];
     if (snj_random_id(suffix) < 0) {
-        set_error(error, error_size, "cryptographic trash suffix generation failed");
+        snj_errorf(error, error_size, "cryptographic trash suffix generation failed");
         return -1;
     }
     (void)snprintf(out, SNJ_TRASH_NAME_LEN + 1u, "%s.%s", session->id, suffix);
@@ -95,7 +84,7 @@ unlink_expected_file(int dir_fd, const char *name, bool optional,
         return 0;
     if (optional && errno == ENOENT)
         return 0;
-    set_error(error, error_size, "cannot remove deleted-session %s: %s",
+    snj_errorf(error, error_size, "cannot remove deleted-session %s: %s",
               name, strerror(errno));
     return -1;
 }
@@ -106,24 +95,24 @@ snj_session_complete_delete(struct snj_store *store, struct snj_session *session
 {
     if (!store || !session || !session->delete_requested ||
         !session->trash_name[0] || session->dir_fd < 0) {
-        set_error(error, error_size, "no completed delete intent is open");
+        snj_errorf(error, error_size, "no completed delete intent is open");
         errno = EINVAL;
         return -1;
     }
     if (renameat(store->sessions_fd, session->id,
                  store->trash_fd, session->trash_name) < 0) {
-        set_error(error, error_size, "cannot move session to trash: %s",
+        snj_errorf(error, error_size, "cannot move session to trash: %s",
                   strerror(errno));
         return -1;
     }
     if (snj_sync_dir(store->sessions_fd) < 0 || snj_sync_dir(store->trash_fd) < 0) {
-        set_error(error, error_size, "cannot sync delete rename: %s",
+        snj_errorf(error, error_size, "cannot sync delete rename: %s",
                   strerror(errno));
         return -1;
     }
     if (close_fd_slot(&session->log_fd) < 0 ||
         close_fd_slot(&session->lock_fd) < 0) {
-        set_error(error, error_size, "cannot close deleted-session files: %s",
+        snj_errorf(error, error_size, "cannot close deleted-session files: %s",
                   strerror(errno));
         return -1;
     }
@@ -135,17 +124,17 @@ snj_session_complete_delete(struct snj_store *store, struct snj_session *session
                              error, error_size) < 0)
         return -1;
     if (close_fd_slot(&session->dir_fd) < 0) {
-        set_error(error, error_size, "cannot close deleted-session directory: %s",
+        snj_errorf(error, error_size, "cannot close deleted-session directory: %s",
                   strerror(errno));
         return -1;
     }
     if (unlinkat(store->trash_fd, session->trash_name, AT_REMOVEDIR) < 0) {
-        set_error(error, error_size, "cannot remove deleted-session directory: %s",
+        snj_errorf(error, error_size, "cannot remove deleted-session directory: %s",
                   strerror(errno));
         return -1;
     }
     if (snj_sync_dir(store->trash_fd) < 0) {
-        set_error(error, error_size, "cannot sync trash cleanup: %s", strerror(errno));
+        snj_errorf(error, error_size, "cannot sync trash cleanup: %s", strerror(errno));
         return -1;
     }
     return 0;
@@ -174,7 +163,7 @@ snj_store_complete_trash_delete(struct snj_store *store, const char *trash_name,
     int rc = -1;
 
     if (!trash_basename_id(trash_name, id)) {
-        set_error(error, error_size, "invalid deleted-session trash name");
+        snj_errorf(error, error_size, "invalid deleted-session trash name");
         errno = EINVAL;
         return -1;
     }
@@ -187,7 +176,7 @@ snj_store_complete_trash_delete(struct snj_store *store, const char *trash_name,
 #endif
     );
     if (dir_fd < 0) {
-        set_error(error, error_size, "cannot open deleted-session trash: %s",
+        snj_errorf(error, error_size, "cannot open deleted-session trash: %s",
                   strerror(errno));
         return -1;
     }
@@ -203,13 +192,13 @@ snj_store_complete_trash_delete(struct snj_store *store, const char *trash_name,
                            error, error_size) < 0)
         goto out;
     if (!session.delete_requested || strcmp(session.trash_name, trash_name) != 0) {
-        set_error(error, error_size, "deleted-session trash intent mismatch");
+        snj_errorf(error, error_size, "deleted-session trash intent mismatch");
         errno = EINVAL;
         goto out;
     }
     if (close_fd_slot(&session.log_fd) < 0 ||
         close_fd_slot(&session.lock_fd) < 0) {
-        set_error(error, error_size, "cannot close deleted-session files: %s",
+        snj_errorf(error, error_size, "cannot close deleted-session files: %s",
                   strerror(errno));
         goto out;
     }
@@ -221,17 +210,17 @@ snj_store_complete_trash_delete(struct snj_store *store, const char *trash_name,
                              error, error_size) < 0)
         goto out;
     if (close_fd_slot(&session.dir_fd) < 0) {
-        set_error(error, error_size, "cannot close deleted-session directory: %s",
+        snj_errorf(error, error_size, "cannot close deleted-session directory: %s",
                   strerror(errno));
         goto out;
     }
     if (unlinkat(store->trash_fd, trash_name, AT_REMOVEDIR) < 0) {
-        set_error(error, error_size, "cannot remove deleted-session directory: %s",
+        snj_errorf(error, error_size, "cannot remove deleted-session directory: %s",
                   strerror(errno));
         goto out;
     }
     if (snj_sync_dir(store->trash_fd) < 0) {
-        set_error(error, error_size, "cannot sync trash cleanup: %s", strerror(errno));
+        snj_errorf(error, error_size, "cannot sync trash cleanup: %s", strerror(errno));
         goto out;
     }
     rc = 0;
@@ -250,7 +239,7 @@ snj_session_delete(struct snj_store *store, struct snj_session *session,
     if (!confirmed_prefix || strlen(confirmed_prefix) != 8u ||
         !snj_hex_is_lower(confirmed_prefix, 8u) ||
         memcmp(confirmed_prefix, session->id, 8u) != 0) {
-        set_error(error, error_size, "delete confirmation did not match session id");
+        snj_errorf(error, error_size, "delete confirmation did not match session id");
         errno = EINVAL;
         return -1;
     }

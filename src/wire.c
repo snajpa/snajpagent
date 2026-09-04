@@ -9,12 +9,6 @@
 #include <string.h>
 #include <strings.h>
 
-static void
-set_error(char *error, size_t size, const char *message)
-{
-    if (size)
-        (void)snprintf(error, size, "%s", message);
-}
 
 static int
 secrets_valid(const struct snj_wire_secrets *secrets)
@@ -294,7 +288,7 @@ snj_wire_json_redact(const unsigned char *data, size_t len,
     int rc;
 
     if (!out || secrets_valid(secrets) < 0) {
-        set_error(error, error_size, "invalid diagnostic secret set");
+        snj_errorf(error, error_size, "invalid diagnostic secret set");
         return -1;
     }
     value = snj_json_load_strict(data, len, SNJ_WIRE_BODY_MAX,
@@ -305,7 +299,7 @@ snj_wire_json_redact(const unsigned char *data, size_t len,
     rc = encode_value(value, secrets, out, 0u);
     json_decref(value);
     if (rc < 0) {
-        set_error(error, error_size, "sanitized JSON exceeds diagnostic bound");
+        snj_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
         return -1;
     }
     return 0;

@@ -11,6 +11,18 @@
 #include <time.h>
 #include <unistd.h>
 
+void
+snj_errorf(char *error, size_t size, const char *fmt, ...)
+{
+    va_list ap;
+
+    if (!size)
+        return;
+    va_start(ap, fmt);
+    (void)vsnprintf(error, size, fmt, ap);
+    va_end(ap);
+}
+
 bool
 snj_size_add(size_t a, size_t b, size_t *out)
 {

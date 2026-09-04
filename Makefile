@@ -90,8 +90,8 @@ tests/test_irc: src/base.c src/config.c src/irc.c tests/test_irc.c src/base.h sr
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ \
 		src/base.c src/config.c src/irc.c tests/test_irc.c
 
-tests/test_credential: src/credential.c tests/test_credential.c src/credential.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/credential.c tests/test_credential.c
+tests/test_credential: src/base.c src/credential.c tests/test_credential.c src/base.h src/credential.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/credential.c tests/test_credential.c
 
 tests/test_instructions: src/base.c src/json.c src/instructions.c tests/test_instructions.c src/base.h src/json.h src/instructions.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \

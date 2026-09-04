@@ -52,6 +52,28 @@ test_json(void)
 }
 
 static void
+test_max_secret_count(void)
+{
+    char values[SNJ_WIRE_SECRET_COUNT_MAX][16];
+    const char *secrets_array[SNJ_WIRE_SECRET_COUNT_MAX];
+    struct snj_wire_secrets secrets = {secrets_array,
+                                       SNJ_WIRE_SECRET_COUNT_MAX};
+    static const unsigned char body[] = "{\"text\":\"secret-80\"}";
+    struct snj_buf out;
+    char error[256];
+
+    for (size_t i = 0; i < SNJ_WIRE_SECRET_COUNT_MAX; ++i) {
+        assert(snprintf(values[i], sizeof(values[i]), "secret-%02zu", i) > 0);
+        secrets_array[i] = values[i];
+    }
+    snj_buf_init(&out, SNJ_WIRE_BODY_MAX);
+    assert(snj_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
+                                error, sizeof(error)) == 0);
+    expect_text(&out, "{\"text\":\"<redacted:secret>\"}");
+    snj_buf_free(&out);
+}
+
+static void
 test_invalid_json(void)
 {
     struct snj_buf out;
@@ -128,6 +150,7 @@ int
 main(void)
 {
     test_json();
+    test_max_secret_count();
     test_invalid_json();
     test_secret_object_key_fails_closed();
     test_headers();

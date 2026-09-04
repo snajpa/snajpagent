@@ -5,22 +5,11 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 static bool
 copy_small(char *dst, size_t size, const char *src)
@@ -120,7 +109,7 @@ resolve_prefix(struct snj_store *store, const char *prefix,
 
     memset(target, 0, sizeof(*target));
     if (len < 8u || len > SNJ_ID_HEX_LEN || !snj_hex_is_lower(prefix, len)) {
-        set_error(error, error_size, "session id must be 8..32 lowercase hex characters");
+        snj_errorf(error, error_size, "session id must be 8..32 lowercase hex characters");
         errno = EINVAL;
         return -1;
     }
@@ -149,7 +138,7 @@ resolve_prefix(struct snj_store *store, const char *prefix,
     (void)closedir(dir);
 
     if (matches != 1u) {
-        set_error(error, error_size, matches ? "session id prefix is ambiguous" :
+        snj_errorf(error, error_size, matches ? "session id prefix is ambiguous" :
                   "session id was not found");
         errno = matches ? EEXIST : ENOENT;
         return -1;
@@ -180,7 +169,7 @@ open_full_id(struct snj_store *store, struct snj_session *session,
 #endif
     );
     if (session->dir_fd < 0) {
-        set_error(error, error_size, "cannot open session %s: %s", id,
+        snj_errorf(error, error_size, "cannot open session %s: %s", id,
                   strerror(errno));
         return -1;
     }
@@ -194,7 +183,7 @@ open_full_id(struct snj_store *store, struct snj_session *session,
     if (session->delete_requested) {
         if (snj_session_complete_delete(store, session, error, error_size) < 0)
             return -1;
-        set_error(error, error_size, "session deletion was completed");
+        snj_errorf(error, error_size, "session deletion was completed");
         return 1;
     }
     return 0;
@@ -212,7 +201,7 @@ snj_session_open(struct snj_store *store, struct snj_session *session,
         if (snj_store_complete_trash_delete(store, target.trash_name,
                                             error, error_size) < 0)
             return -1;
-        set_error(error, error_size, "session deletion was completed");
+        snj_errorf(error, error_size, "session deletion was completed");
         return 1;
     }
     return open_full_id(store, session, target.id, error, error_size);
@@ -332,7 +321,7 @@ snj_session_open_last(struct snj_store *store, struct snj_session *session,
     }
     (void)closedir(dir);
     if (!best[0]) {
-        set_error(error, error_size, "no matching active session");
+        snj_errorf(error, error_size, "no matching active session");
         errno = ENOENT;
         return -1;
     }
@@ -378,7 +367,7 @@ store_list(struct snj_store *store, const char *workspace, bool all,
             free(first);
             free(saved_workspace);
             (void)closedir(dir);
-            set_error(error, error_size, "cannot write session list");
+            snj_errorf(error, error_size, "cannot write session list");
             return -1;
         }
         snj_buf_free(&row);
@@ -388,7 +377,7 @@ store_list(struct snj_store *store, const char *workspace, bool all,
     }
     (void)closedir(dir);
     if (!shown)
-        set_error(error, error_size, "no matching sessions");
+        snj_errorf(error, error_size, "no matching sessions");
     return 0;
 }
 

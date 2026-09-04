@@ -7,7 +7,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -26,17 +25,6 @@
 #define SNJ_MODEL_CACHE_ENTRIES_MAX 32768u
 #define SNJ_MODEL_CACHE_INPUT_MAX (32u * 1024u * 1024u)
 #define SNJ_MODEL_CACHE_SCHEMA 1u
-
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 void
 snj_model_cache_init(struct snj_model_cache *cache)
@@ -284,7 +272,7 @@ decode_cache(const unsigned char *data, size_t len,
         snj_json_integer_u64(root, "updated_at_ms", &updated) < 0 ||
         updated == 0u ||
         !providers_valid((providers = json_object_get(root, "providers")), true)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "model cache is unusable; use /model cache while idle");
         if (root)
             json_decref(root);
@@ -316,14 +304,14 @@ snj_model_cache_load(struct snj_store *store, struct snj_model_cache *cache,
     if (fd < 0) {
         if (errno == ENOENT)
             return 1;
-        set_error(error, error_size, "cannot open model cache: %s", strerror(errno));
+        snj_errorf(error, error_size, "cannot open model cache: %s", strerror(errno));
         return -1;
     }
     snj_buf_init(&data, SNJ_MODEL_CACHE_FILE_MAX);
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_uid != getuid() ||
         (st.st_mode & 077u) != 0 || st.st_size <= 0 ||
         (uintmax_t)st.st_size > SNJ_MODEL_CACHE_FILE_MAX) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "model cache must be a private user-owned regular file no larger than 8 MiB");
         errno = EACCES;
         goto out;
@@ -334,13 +322,13 @@ snj_model_cache_load(struct snj_store *store, struct snj_model_cache *cache,
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            set_error(error, error_size, "cannot read model cache: %s", strerror(errno));
+            snj_errorf(error, error_size, "cannot read model cache: %s", strerror(errno));
             goto out;
         }
         if (got == 0)
             break;
         if (snj_buf_append(&data, chunk, (size_t)got) < 0) {
-            set_error(error, error_size, "model cache exceeds 8 MiB");
+            snj_errorf(error, error_size, "model cache exceeds 8 MiB");
             goto out;
         }
     }
@@ -365,7 +353,7 @@ lock_cache(struct snj_store *store, char *error, size_t error_size)
     fd = openat(store->root_fd, "models.lock",
                 O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0) {
-        set_error(error, error_size, "cannot open model cache lock: %s",
+        snj_errorf(error, error_size, "cannot open model cache lock: %s",
                   strerror(errno));
         return -1;
     }
@@ -373,7 +361,7 @@ lock_cache(struct snj_store *store, char *error, size_t error_size)
                                     error, error_size) < 0)
         goto fail;
     if (fcntl(fd, F_SETLKW, &lock) < 0) {
-        set_error(error, error_size, "cannot lock model cache: %s",
+        snj_errorf(error, error_size, "cannot lock model cache: %s",
                   strerror(errno));
         goto fail;
     }
@@ -401,8 +389,7 @@ write_cache(struct snj_store *store, const json_t *providers,
     if (!store || store->root_fd < 0 || !cache || !updated_at_ms ||
         updated_at_ms > (uint64_t)INT64_MAX ||
         !providers_valid(providers, true)) {
-        set_error(error, error_size,
-                  "refusing to write an invalid model cache");
+        snj_errorf(error, error_size, "refusing to write an invalid model cache");
         errno = EINVAL;
         return -1;
     }
@@ -417,38 +404,38 @@ write_cache(struct snj_store *store, const json_t *providers,
                          json_integer((json_int_t)updated_at_ms)) < 0 ||
         snj_json_canonical(root, &data) < 0 || snj_buf_putc(&data, '\n') < 0 ||
         snj_random_id(id) < 0) {
-        set_error(error, error_size, "cannot encode model cache");
+        snj_errorf(error, error_size, "cannot encode model cache");
         goto out;
     }
     (void)snprintf(tmp_name, sizeof(tmp_name), "models.json.tmp.%s", id);
     fd = openat(store->root_fd, tmp_name,
                 O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0) {
-        set_error(error, error_size, "cannot create model cache: %s",
+        snj_errorf(error, error_size, "cannot create model cache: %s",
                   strerror(errno));
         goto out;
     }
     if (snj_write_full(fd, data.data, data.len) < 0 ||
         snj_sync_file(fd) < 0) {
-        set_error(error, error_size, "cannot write model cache: %s",
+        snj_errorf(error, error_size, "cannot write model cache: %s",
                   strerror(errno));
         goto out;
     }
     if (close(fd) < 0) {
         fd = -1;
-        set_error(error, error_size, "cannot close model cache: %s",
+        snj_errorf(error, error_size, "cannot close model cache: %s",
                   strerror(errno));
         goto out;
     }
     fd = -1;
     if (renameat(store->root_fd, tmp_name, store->root_fd, "models.json") < 0) {
-        set_error(error, error_size, "cannot install model cache: %s",
+        snj_errorf(error, error_size, "cannot install model cache: %s",
                   strerror(errno));
         goto out;
     }
     tmp_name[0] = '\0';
     if (snj_sync_dir(store->root_fd) < 0) {
-        set_error(error, error_size, "cannot sync model cache directory: %s",
+        snj_errorf(error, error_size, "cannot sync model cache directory: %s",
                   strerror(errno));
         goto out;
     }
@@ -511,7 +498,7 @@ snj_model_cache_replace(struct snj_store *store, const json_t *providers,
     if (!store || store->root_fd < 0 || !cache || !updated_at_ms ||
         updated_at_ms > (uint64_t)INT64_MAX ||
         !providers_valid(providers, false)) {
-        set_error(error, error_size, "invalid model cache replacement");
+        snj_errorf(error, error_size, "invalid model cache replacement");
         errno = EINVAL;
         return -1;
     }
@@ -524,7 +511,7 @@ snj_model_cache_replace(struct snj_store *store, const json_t *providers,
         goto out;
     prepared = json_deep_copy(providers);
     if (!prepared) {
-        set_error(error, error_size, "cannot copy model catalog");
+        snj_errorf(error, error_size, "cannot copy model catalog");
         errno = ENOMEM;
         goto out;
     }
@@ -546,7 +533,7 @@ snj_model_cache_replace(struct snj_store *store, const json_t *providers,
                                      snj_json_string(model, "id")) : NULL;
 
             if (prepare_accounting(model, old_model) < 0) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "cannot preserve model accounting");
                 errno = ENOMEM;
                 goto out;
@@ -631,7 +618,7 @@ snj_model_cache_record(struct snj_store *store, struct snj_model_cache *cache,
     }
     updated = json_deep_copy(cache->providers);
     if (!updated) {
-        set_error(error, error_size, "cannot copy model cache observation");
+        snj_errorf(error, error_size, "cannot copy model cache observation");
         errno = ENOMEM;
         rc = -1;
         goto out;
@@ -639,7 +626,7 @@ snj_model_cache_record(struct snj_store *store, struct snj_model_cache *cache,
     lookup.providers = updated;
     item = snj_model_cache_find(&lookup, provider->name, model);
     if (!item) {
-        set_error(error, error_size, "cannot find copied model cache entry");
+        snj_errorf(error, error_size, "cannot find copied model cache entry");
         errno = EINVAL;
         rc = -1;
         goto out;
@@ -662,7 +649,7 @@ snj_model_cache_record(struct snj_store *store, struct snj_model_cache *cache,
                      error, error_size);
     goto out;
 write_error:
-    set_error(error, error_size, "cannot update model cache observation");
+    snj_errorf(error, error_size, "cannot update model cache observation");
     errno = ENOMEM;
     rc = -1;
 out:
@@ -838,7 +825,7 @@ snj_model_capacity_resolve(const struct snj_model_cache *cache,
 
     if (!config || !provider || !model || !*model || !protocol || !capacity ||
         (strcmp(protocol, "codex") != 0 && strcmp(protocol, "openai") != 0)) {
-        set_error(error, error_size, "invalid model capacity selection");
+        snj_errorf(error, error_size, "invalid model capacity selection");
         errno = EINVAL;
         return -1;
     }
@@ -925,7 +912,8 @@ snj_model_capacity_resolve(const struct snj_model_cache *cache,
          capacity->max_output_known &&
          capacity->max_input_tokens > capacity->context_window_tokens -
                                       capacity->max_output_tokens)) {
-        set_error(error, error_size, "contradictory capacity limits for %s/%s",
+        snj_errorf(error, error_size,
+                  "contradictory capacity limits for %s/%s",
                   provider->name, model);
         errno = EINVAL;
         return -1;

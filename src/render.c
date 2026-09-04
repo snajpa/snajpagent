@@ -2368,23 +2368,6 @@ render_message(struct snj_render *render, const char *message,
     return rc;
 }
 
-int
-snj_render_error(const char *message)
-{
-    struct snj_render render;
-    snj_render_init(&render, 0u);
-    snj_render_set_color(&render, SNJ_COLOR_AUTO);
-    return render_message(&render, message, COLOR_ERROR);
-}
-
-int
-snj_render_warning(const char *message)
-{
-    struct snj_render render;
-    snj_render_init(&render, 0u);
-    snj_render_set_color(&render, SNJ_COLOR_AUTO);
-    return render_message(&render, message, COLOR_WARNING);
-}
 
 int
 snj_render_error_ctx(struct snj_render *render, const char *message)

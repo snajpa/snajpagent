@@ -5,7 +5,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,17 +46,6 @@ struct parse_state {
     size_t model_limit_index;
     bool providers_started;
 };
-
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 static int
 copy_value(char *dst, size_t size, const char *value)
@@ -958,7 +946,7 @@ parse_file(struct snj_config *config, char *text, char *error, size_t error_size
                 rc = parse_assignment(&state, clean);
             }
             if (rc < 0) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "invalid configuration at line %u", number);
                 return -1;
             }
@@ -981,14 +969,14 @@ snj_config_path(const char *explicit_path, const char *dotdir,
     if (explicit_path) {
         if (explicit_path[0] != '/' ||
             strlen(explicit_path) > SNJ_CONFIG_PATH_MAX) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "--config requires an absolute path within the supported limit");
             errno = EINVAL;
             return NULL;
         }
         result = snj_strdup_checked(explicit_path, SNJ_CONFIG_PATH_MAX);
         if (!result)
-            set_error(error, error_size, "configuration path is unavailable");
+            snj_errorf(error, error_size, "configuration path is unavailable");
         return result;
     }
     snj_buf_init(&path, SNJ_CONFIG_PATH_MAX);
@@ -1003,13 +991,13 @@ snj_config_path(const char *explicit_path, const char *dotdir,
     snj_buf_free(&path);
     return result;
 invalid:
-    set_error(error, error_size,
+    snj_errorf(error, error_size,
               "configuration requires an absolute dotdir");
     errno = EINVAL;
     snj_buf_free(&path);
     return NULL;
 unavailable:
-    set_error(error, error_size, "configuration path exceeds the supported limit");
+    snj_errorf(error, error_size, "configuration path exceeds the supported limit");
     snj_buf_free(&path);
     return NULL;
 }
@@ -1026,13 +1014,13 @@ read_config(const char *path, bool require_file, struct snj_buf *text,
     if (fd < 0) {
         if (!require_file && errno == ENOENT)
             return 1;
-        set_error(error, error_size, "cannot open configuration %s: %s",
+        snj_errorf(error, error_size, "cannot open configuration %s: %s",
                   path, strerror(errno));
         return -1;
     }
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t)st.st_size > SNJ_CONFIG_FILE_MAX) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "configuration must be a regular file no larger than 64 KiB");
         errno = EINVAL;
         goto out;
@@ -1045,25 +1033,25 @@ read_config(const char *path, bool require_file, struct snj_buf *text,
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            set_error(error, error_size, "cannot read configuration: %s",
+            snj_errorf(error, error_size, "cannot read configuration: %s",
                       strerror(errno));
             goto out;
         }
         if (got == 0)
             break;
         if (snj_buf_append(text, chunk, (size_t)got) < 0) {
-            set_error(error, error_size, "configuration exceeds 64 KiB");
+            snj_errorf(error, error_size, "configuration exceeds 64 KiB");
             goto out;
         }
     }
     if (!snj_utf8_valid(text->data, text->len, true)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "configuration must be valid UTF-8 without NUL bytes");
         errno = EILSEQ;
         goto out;
     }
     if (snj_buf_terminate(text) < 0) {
-        set_error(error, error_size, "cannot terminate configuration buffer");
+        snj_errorf(error, error_size, "cannot terminate configuration buffer");
         goto out;
     }
     rc = 0;
@@ -1095,7 +1083,7 @@ validate_shell(struct snj_config *config, char *error, size_t error_size)
     config->shell = resolved;
     return 0;
 invalid:
-    set_error(error, error_size,
+    snj_errorf(error, error_size,
               "configured shell must resolve to an executable regular file");
     errno = EINVAL;
     return -1;
@@ -1113,7 +1101,7 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
     int rc = -1;
 
     if (!config->shell) {
-        set_error(error, error_size, "cannot initialize configuration defaults");
+        snj_errorf(error, error_size, "cannot initialize configuration defaults");
         errno = ENOMEM;
         return -1;
     }
@@ -1142,7 +1130,7 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
              limit->max_output_known &&
              limit->max_input_tokens >
                  limit->context_window_tokens - limit->max_output_tokens)) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "invalid model-limit section for %s/%s",
                       limit->provider, limit->model);
             errno = EINVAL;
@@ -1150,7 +1138,7 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
         }
     }
     if (config->default_timeout_ms > config->max_timeout_ms) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "tool default_timeout_ms cannot exceed max_timeout_ms");
         errno = EINVAL;
         goto out;
@@ -1158,7 +1146,7 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
     if (validate_shell(config, error, error_size) < 0)
         goto out;
     if (config->provider[0] && !snj_config_provider(config, config->provider)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "configured agent provider is not defined");
         errno = EINVAL;
         goto out;
@@ -1349,13 +1337,13 @@ validate_config_text(const struct snj_buf *text,
     copy[text->len] = '\0';
     snj_config_init(&candidate);
     if (!candidate.shell) {
-        set_error(error, error_size, "cannot initialize configuration defaults");
+        snj_errorf(error, error_size, "cannot initialize configuration defaults");
         goto out;
     }
     if (parse_file(&candidate, copy, error, error_size) < 0)
         goto out;
     if (candidate.default_timeout_ms > candidate.max_timeout_ms) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "tool default_timeout_ms cannot exceed max_timeout_ms");
         errno = EINVAL;
         goto out;
@@ -1364,7 +1352,7 @@ validate_config_text(const struct snj_buf *text,
         goto out;
     if (candidate.provider[0] &&
         !snj_config_provider(&candidate, candidate.provider)) {
-        set_error(error, error_size, "configured agent provider is not defined");
+        snj_errorf(error, error_size, "configured agent provider is not defined");
         errno = EINVAL;
         goto out;
     }
@@ -1406,7 +1394,7 @@ snj_config_save_model(const char *path, bool allow_create,
         strchr(provider, '\n') || strchr(provider, '\r') ||
         strchr(model, '\n') || strchr(model, '\r') ||
         strchr(effort, '\n') || strchr(effort, '\r')) {
-        set_error(error, error_size, "refusing to save invalid model settings");
+        snj_errorf(error, error_size, "refusing to save invalid model settings");
         errno = EINVAL;
         goto out;
     }
@@ -1415,7 +1403,7 @@ snj_config_save_model(const char *path, bool allow_create,
     if (read_rc < 0)
         goto out;
     if (replace_model_settings(&input, &output, provider, model, effort) < 0) {
-        set_error(error, error_size, "configuration update exceeds 64 KiB");
+        snj_errorf(error, error_size, "configuration update exceeds 64 KiB");
         goto out;
     }
     if (validate_config_text(&output, error, error_size) < 0)
@@ -1425,12 +1413,12 @@ snj_config_save_model(const char *path, bool allow_create,
         goto out;
     slash = strrchr(path_copy, '/');
     if (!slash || !slash[1]) {
-        set_error(error, error_size, "configuration path has no file name");
+        snj_errorf(error, error_size, "configuration path has no file name");
         errno = EINVAL;
         goto out;
     }
     if (strlen(slash + 1u) > NAME_MAX) {
-        set_error(error, error_size, "configuration file name is too long");
+        snj_errorf(error, error_size, "configuration file name is too long");
         errno = ENAMETOOLONG;
         goto out;
     }
@@ -1441,7 +1429,7 @@ snj_config_save_model(const char *path, bool allow_create,
         *slash = '\0';
     parent_fd = open(path_copy, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (parent_fd < 0) {
-        set_error(error, error_size, "cannot open configuration directory: %s",
+        snj_errorf(error, error_size, "cannot open configuration directory: %s",
                   strerror(errno));
         goto out;
     }
@@ -1454,14 +1442,14 @@ snj_config_save_model(const char *path, bool allow_create,
         snj_write_full(fd, output.data, output.len) < 0 ||
         snj_sync_file(fd) < 0) {
         saved = errno;
-        set_error(error, error_size, "cannot write configuration: %s",
+        snj_errorf(error, error_size, "cannot write configuration: %s",
                   strerror(saved));
         errno = saved;
         goto out;
     }
     if (close(fd) < 0) {
         fd = -1;
-        set_error(error, error_size, "cannot close configuration: %s",
+        snj_errorf(error, error_size, "cannot close configuration: %s",
                   strerror(errno));
         goto out;
     }
@@ -1469,14 +1457,14 @@ snj_config_save_model(const char *path, bool allow_create,
     if (read_rc == 0) {
         if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) < 0 ||
             !same_file(&before, &current)) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "configuration changed while it was being saved");
             errno = EAGAIN;
             goto out;
         }
     } else if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) == 0 ||
                errno != ENOENT) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "configuration appeared while it was being saved");
         errno = EAGAIN;
         goto out;
@@ -1484,7 +1472,7 @@ snj_config_save_model(const char *path, bool allow_create,
     if (renameat(parent_fd, temp, parent_fd, leaf) < 0 ||
         snj_sync_dir(parent_fd) < 0) {
         saved = errno;
-        set_error(error, error_size, "cannot install configuration: %s",
+        snj_errorf(error, error_size, "cannot install configuration: %s",
                   strerror(saved));
         errno = saved;
         goto out;

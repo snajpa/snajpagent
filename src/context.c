@@ -6,7 +6,6 @@
 
 #include <errno.h>
 #include <limits.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,18 +46,6 @@ struct context_builder {
 
 #define SNJ_USAGE_ANCHOR_ENVELOPE_RESERVE UINT64_C(512)
 #define SNJ_USAGE_ANCHOR_ITEM_RESERVE UINT64_C(32)
-
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 void
 snj_context_projection_init(struct snj_context_projection *projection)
@@ -499,13 +486,13 @@ install_compact_output(struct context_builder *builder, const char *compact_id,
         json_array_append_new(builder->semantic_items, semantic) < 0) {
         if (semantic)
             json_decref(semantic);
-        set_error(error, error_size, "invalid compact output");
+        snj_errorf(error, error_size, "invalid compact output");
         return -1;
     }
     semantic = NULL;
     if (append_compact_output_raw(builder->request_input, output) < 0 ||
         append_rollout_log_location(builder) < 0) {
-        set_error(error, error_size, "cannot install compact output");
+        snj_errorf(error, error_size, "cannot install compact output");
         return -1;
     }
     return 0;
@@ -668,7 +655,7 @@ append_response_items(struct context_builder *builder, const json_t *items,
             }
         } else {
             snj_buf_free(&notice);
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "opaque response replay is not qualified in this checkpoint");
             errno = ENOTSUP;
             goto out;
@@ -704,7 +691,7 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
     }
     snj_buf_free(&encoded);
     if (!builder->compact_best_known) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "oldest complete history prefix exceeds the conservative compaction budget");
         errno = EOVERFLOW;
         return -1;
@@ -760,7 +747,7 @@ append_interrupted_prefix(struct context_builder *builder, const json_t *data,
 
     if (!json_is_array(partial) ||
         append_response_items(builder, partial, error, error_size) < 0) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "invalid interrupted public response context");
         errno = EINVAL;
         return -1;
@@ -801,7 +788,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     if (strcmp(type, "irc_snapshot") == 0) {
         const char *text = snj_json_string(data, "text");
         if (!text) {
-            set_error(error, error_size, "invalid IRC snapshot context");
+            snj_errorf(error, error_size, "invalid IRC snapshot context");
             errno = EINVAL;
             return -1;
         }
@@ -813,7 +800,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         const char *kind = snj_json_string(data, "input_kind");
         bool goal_turn = kind && strcmp(kind, "goal") == 0;
         if (!turn_id || !text || !kind || builder->active_turn) {
-            set_error(error, error_size, "invalid turn context transition");
+            snj_errorf(error, error_size, "invalid turn context transition");
             errno = EINVAL;
             return -1;
         }
@@ -835,7 +822,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 ||
             append_deferred_steering(builder) < 0) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "invalid response-start steering context");
             errno = EINVAL;
             return -1;
@@ -856,7 +843,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             !steering_id ||
             (pending &&
              !steering_matches_snapshot(builder, steering_id, text))) {
-            set_error(error, error_size, "invalid steering context transition");
+            snj_errorf(error, error_size, "invalid steering context transition");
             errno = EINVAL;
             return -1;
         }
@@ -879,7 +866,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             (pending &&
              !steering_matches_snapshot(builder, correction_id, text)) ||
             append_interrupted_prefix(builder, data, error, error_size) < 0) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "invalid response-output correction context");
             errno = EINVAL;
             return -1;
@@ -895,7 +882,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             goto invalid_interrupted;
         return append_interrupted_prefix(builder, data, error, error_size);
 invalid_interrupted:
-        set_error(error, error_size, "invalid interrupted response context");
+        snj_errorf(error, error_size, "invalid interrupted response context");
         errno = EINVAL;
         return -1;
     }
@@ -906,7 +893,7 @@ invalid_interrupted:
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 ||
             !status || strcmp(status, "completed") != 0) {
-            set_error(error, error_size, "invalid completed response context");
+            snj_errorf(error, error_size, "invalid completed response context");
             errno = EINVAL;
             return -1;
         }
@@ -919,7 +906,7 @@ invalid_interrupted:
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !call_id ||
             snj_tool_result_valid(result) < 0) {
-            set_error(error, error_size, "invalid tool result context");
+            snj_errorf(error, error_size, "invalid tool result context");
             errno = EINVAL;
             return -1;
         }
@@ -932,7 +919,7 @@ invalid_interrupted:
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !cause ||
             snj_tool_result_valid(result) < 0) {
-            set_error(error, error_size, "invalid process closure context");
+            snj_errorf(error, error_size, "invalid process closure context");
             errno = EINVAL;
             return -1;
         }
@@ -941,7 +928,7 @@ invalid_interrupted:
     if (strcmp(type, "turn_completed") == 0 ||
         strcmp(type, "turn_completed_silent") == 0) {
         if (!builder->active_turn) {
-            set_error(error, error_size, "invalid completed turn context");
+            snj_errorf(error, error_size, "invalid completed turn context");
             errno = EINVAL;
             return -1;
         }
@@ -954,7 +941,7 @@ invalid_interrupted:
     if (strcmp(type, "turn_failed") == 0) {
         const char *class_name = snj_json_string(data, "class");
         if (!builder->active_turn || !class_name) {
-            set_error(error, error_size, "invalid failed turn context");
+            snj_errorf(error, error_size, "invalid failed turn context");
             errno = EINVAL;
             return -1;
         }
@@ -969,7 +956,7 @@ invalid_interrupted:
         const char *origin = snj_json_string(data, "origin");
         const char *reason = snj_json_string(data, "reason");
         if (!builder->active_turn || !origin || !reason) {
-            set_error(error, error_size, "invalid interrupted turn context");
+            snj_errorf(error, error_size, "invalid interrupted turn context");
             errno = EINVAL;
             return -1;
         }
@@ -1694,7 +1681,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         strcmp(type, "turn_started") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         if (!turn_id) {
-            set_error(error, error_size, "invalid compact active-turn boundary");
+            snj_errorf(error, error_size, "invalid compact active-turn boundary");
             errno = EINVAL;
             return -1;
         }
@@ -1710,7 +1697,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     if (strcmp(type, "irc_snapshot") == 0) {
         const char *text = snj_json_string(data, "text");
         if (!text) {
-            set_error(error, error_size, "invalid compact IRC snapshot");
+            snj_errorf(error, error_size, "invalid compact IRC snapshot");
             errno = EINVAL;
             return -1;
         }
@@ -1727,7 +1714,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         const char *kind = snj_json_string(data, "input_kind");
         bool goal_turn = kind && strcmp(kind, "goal") == 0;
         if (!turn_id || !text || !kind || builder->active_turn) {
-            set_error(error, error_size, "invalid compact turn transition");
+            snj_errorf(error, error_size, "invalid compact turn transition");
             errno = EINVAL;
             return -1;
         }
@@ -1751,7 +1738,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !text ||
             append_interrupted_prefix(builder, data, error, error_size) < 0) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "invalid compact response-output correction");
             errno = EINVAL;
             return -1;
@@ -1768,7 +1755,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
 
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "invalid compact response-start transition");
             errno = EINVAL;
             return -1;
@@ -1786,7 +1773,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         const char *text = snj_json_string(data, "text");
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !text) {
-            set_error(error, error_size, "invalid compact steering transition");
+            snj_errorf(error, error_size, "invalid compact steering transition");
             errno = EINVAL;
             return -1;
         }
@@ -1803,7 +1790,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
 
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "invalid compact interrupted-response transition");
             errno = EINVAL;
             return -1;
@@ -1822,7 +1809,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 ||
             !status || strcmp(status, "completed") != 0) {
-            set_error(error, error_size, "invalid compact response transition");
+            snj_errorf(error, error_size, "invalid compact response transition");
             errno = EINVAL;
             return -1;
         }
@@ -1839,7 +1826,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !call_id ||
             snj_tool_result_valid(result) < 0) {
-            set_error(error, error_size, "invalid compact tool result transition");
+            snj_errorf(error, error_size, "invalid compact tool result transition");
             errno = EINVAL;
             return -1;
         }
@@ -1856,7 +1843,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !cause ||
             snj_tool_result_valid(result) < 0) {
-            set_error(error, error_size, "invalid compact process closure");
+            snj_errorf(error, error_size, "invalid compact process closure");
             errno = EINVAL;
             return -1;
         }
@@ -1869,7 +1856,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     if (strcmp(type, "turn_completed") == 0 ||
         strcmp(type, "turn_completed_silent") == 0) {
         if (!builder->active_turn) {
-            set_error(error, error_size, "invalid compact completed turn");
+            snj_errorf(error, error_size, "invalid compact completed turn");
             errno = EINVAL;
             return -1;
         }
@@ -1885,7 +1872,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     if (strcmp(type, "turn_failed") == 0) {
         const char *class_name = snj_json_string(data, "class");
         if (!builder->active_turn || !class_name) {
-            set_error(error, error_size, "invalid compact failed turn");
+            snj_errorf(error, error_size, "invalid compact failed turn");
             errno = EINVAL;
             return -1;
         }
@@ -1902,7 +1889,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         const char *origin = snj_json_string(data, "origin");
         const char *reason = snj_json_string(data, "reason");
         if (!builder->active_turn || !origin || !reason) {
-            set_error(error, error_size, "invalid compact interrupted turn");
+            snj_errorf(error, error_size, "invalid compact interrupted turn");
             errno = EINVAL;
             return -1;
         }
@@ -1933,7 +1920,7 @@ snj_context_compact_output_valid(const json_t *output,
         *output_bytes = 0u;
     if (!json_is_array(output) || json_array_size(output) == 0u ||
         json_array_size(output) > SNJ_CONTEXT_MAX_COMPACT_ITEMS) {
-        set_error(error, error_size, "compact output must be a nonempty bounded array");
+        snj_errorf(error, error_size, "compact output must be a nonempty bounded array");
         errno = EINVAL;
         return -1;
     }
@@ -1941,7 +1928,7 @@ snj_context_compact_output_valid(const json_t *output,
         json_t *item = json_array_get(output, i);
         const char *type = snj_json_string(item, "type");
         if (!json_is_object(item) || !type || !*type || strlen(type) > 128u) {
-            set_error(error, error_size, "compact output contains an unsupported item");
+            snj_errorf(error, error_size, "compact output contains an unsupported item");
             errno = EINVAL;
             return -1;
         }
@@ -1954,7 +1941,7 @@ snj_context_compact_output_valid(const json_t *output,
             *output_bytes = encoded.len;
         rc = 0;
     } else {
-        set_error(error, error_size, "compact output exceeds 12 MiB");
+        snj_errorf(error, error_size, "compact output exceeds 12 MiB");
     }
     snj_buf_free(&encoded);
     return rc;
@@ -2003,7 +1990,7 @@ compact_request_build(struct snj_session *session,
         session->response_open || session->active_process_handle[0] != '\0' ||
         session->active_compact_id[0] != '\0' ||
         (active_prefix ? !session->active_turn : session->active_turn)) {
-        set_error(error, error_size, active_prefix ?
+        snj_errorf(error, error_size, active_prefix ?
                   "automatic compaction requires an active turn before response" :
                   "compaction requires an idle session");
         errno = EINVAL;
@@ -2020,13 +2007,13 @@ compact_request_build(struct snj_session *session,
     if (append_deferred_steering(&builder) < 0)
         goto out;
     if (active_prefix && !builder.compact_stopped) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "automatic compact source did not stop before the active turn");
         errno = EINVAL;
         goto out;
     }
     if (!active_prefix && builder.active_turn) {
-        set_error(error, error_size, "compaction source ends inside a turn");
+        snj_errorf(error, error_size, "compaction source ends inside a turn");
         errno = EINVAL;
         goto out;
     }
@@ -2040,14 +2027,14 @@ compact_request_build(struct snj_session *session,
     if (!req || !count ||
         json_set_new(req, "input", json_deep_copy(builder.request_input)) < 0 ||
         json_set_new(req, "model", json_string(model)) < 0) {
-        set_error(error, error_size, "cannot build compact request");
+        snj_errorf(error, error_size, "cannot build compact request");
         goto out;
     }
     if (hash_json_bounded(builder.request_input, SNJ_CONTEXT_MAX_COMPACT,
                           source_hash, source_bytes) < 0 ||
         hash_json_bounded(req, SNJ_CONTEXT_MAX_COMPACT,
                           request_hash, request_bytes) < 0) {
-        set_error(error, error_size, "compact request exceeds 12 MiB");
+        snj_errorf(error, error_size, "compact request exceeds 12 MiB");
         goto out;
     }
     *request = req;
@@ -2128,18 +2115,18 @@ snj_context_compact_output_count_request_build(const json_t *output,
     if (count_request)
         *count_request = NULL;
     if (!output || !model || !count_request) {
-        set_error(error, error_size, "invalid compact output count request");
+        snj_errorf(error, error_size, "invalid compact output count request");
         errno = EINVAL;
         return -1;
     }
     count = compact_count_request_object(output, model);
     if (!count) {
-        set_error(error, error_size, "cannot build compact output count request");
+        snj_errorf(error, error_size, "cannot build compact output count request");
         goto out;
     }
     if (hash_json_bounded(count, SNJ_CONTEXT_MAX_COMPACT,
                           request_hash, request_bytes) < 0) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "compact output count request exceeds 12 MiB");
         goto out;
     }
@@ -2221,7 +2208,7 @@ snj_context_build(struct snj_session *session, const char *model,
           append_message(&builder, "irc_harness", "developer",
                          (const char *)network_harness.data) < 0)) ||
         append_instruction_messages(&builder) < 0) {
-        set_error(error, error_size, "cannot initialize response projection");
+        snj_errorf(error, error_size, "cannot initialize response projection");
         goto out;
     }
     builder.base_semantic_count = json_array_size(builder.semantic_items);
@@ -2236,18 +2223,18 @@ snj_context_build(struct snj_session *session, const char *model,
         goto out;
     if (!builder.active_turn || builder.steering_seen != json_array_size(steering) ||
         builder.steering_seen != session->pending_steering_count) {
-        set_error(error, error_size, "response projection does not end at an active turn");
+        snj_errorf(error, error_size, "response projection does not end at an active turn");
         errno = EINVAL;
         goto out;
     }
     if (append_deferred_steering(&builder) < 0) {
-        set_error(error, error_size, "cannot append deferred steering");
+        snj_errorf(error, error_size, "cannot append deferred steering");
         goto out;
     }
     controller_start = json_array_size(builder.request_input);
     if (append_goal_controller(&builder) < 0 ||
         append_managed_gate(&builder) < 0) {
-        set_error(error, error_size, "cannot append active controller state");
+        snj_errorf(error, error_size, "cannot append active controller state");
         goto out;
     }
     projection->model_input = model_input_object(&builder);
@@ -2268,7 +2255,7 @@ snj_context_build(struct snj_session *session, const char *model,
         hash_json_bounded(projection->count_request, SNJ_CONTEXT_MAX_REQUEST,
                           projection->count_request_sha256,
                           &projection->count_request_bytes) < 0) {
-        set_error(error, error_size, "response request projection exceeds 32 MiB");
+        snj_errorf(error, error_size, "response request projection exceeds 32 MiB");
         goto out;
     }
     projection->request_input_count = json_array_size(
@@ -2276,7 +2263,7 @@ snj_context_build(struct snj_session *session, const char *model,
     projection->request_controller_count =
         projection->request_input_count - controller_start;
     if (projection->model_input_bytes > (size_t)LLONG_MAX) {
-        set_error(error, error_size, "response request projection is too large");
+        snj_errorf(error, error_size, "response request projection is too large");
         errno = EOVERFLOW;
         goto out;
     }

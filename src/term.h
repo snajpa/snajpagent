@@ -132,7 +132,6 @@ int snj_term_set_prompt_template(struct snj_term *term, bool active,
 int snj_term_set_spinner_states(struct snj_term *term, unsigned int states);
 const char *snj_term_prompt_label(const struct snj_term *term);
 int snj_term_hide(struct snj_term *term);
-int snj_term_show(struct snj_term *term);
 int snj_term_output_begin(struct snj_term *term, bool persistent);
 int snj_term_output_end(struct snj_term *term);
 int snj_term_poll(struct snj_term *term, int timeout_ms,

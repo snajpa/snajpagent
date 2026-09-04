@@ -96,16 +96,6 @@ struct patch_set {
     size_t total_file_bytes;
 };
 
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 static void
 line_vec_free(struct line_vec *vec)
@@ -267,33 +257,33 @@ path_valid(const char *path, char *error, size_t error_size)
 
     if (!len || len > PATCH_PATH_MAX || path[0] == '/' ||
         !snj_utf8_valid((const unsigned char *)path, len, true)) {
-        set_error(error, error_size, "patch path is not a bounded relative UTF-8 path");
+        snj_errorf(error, error_size, "patch path is not a bounded relative UTF-8 path");
         errno = EINVAL;
         return -1;
     }
     if (len >= 2u && ((path[0] >= 'A' && path[0] <= 'Z') ||
                       (path[0] >= 'a' && path[0] <= 'z')) &&
         path[1] == ':') {
-        set_error(error, error_size, "patch path uses a drive-prefix form");
+        snj_errorf(error, error_size, "patch path uses a drive-prefix form");
         errno = EINVAL;
         return -1;
     }
     if (starts_with(path, "//")) {
-        set_error(error, error_size, "patch path uses a UNC-like form");
+        snj_errorf(error, error_size, "patch path uses a UNC-like form");
         errno = EINVAL;
         return -1;
     }
     while (*p) {
         if ((unsigned char)*p < 0x20u || (unsigned char)*p == 0x7fu ||
             *p == '\\') {
-            set_error(error, error_size, "patch path contains a rejected byte");
+            snj_errorf(error, error_size, "patch path contains a rejected byte");
             errno = EINVAL;
             return -1;
         }
         if (*p == '/') {
             if (p == component || (p - component == 1 && component[0] == '.') ||
                 (p - component == 2 && component[0] == '.' && component[1] == '.')) {
-                set_error(error, error_size, "patch path contains an invalid component");
+                snj_errorf(error, error_size, "patch path contains an invalid component");
                 errno = EINVAL;
                 return -1;
             }
@@ -303,7 +293,7 @@ path_valid(const char *path, char *error, size_t error_size)
     }
     if (p == component || (p - component == 1 && component[0] == '.') ||
         (p - component == 2 && component[0] == '.' && component[1] == '.')) {
-        set_error(error, error_size, "patch path contains an invalid final component");
+        snj_errorf(error, error_size, "patch path contains an invalid final component");
         errno = EINVAL;
         return -1;
     }
@@ -321,7 +311,7 @@ normalize_patch_text(const char *patch, size_t len, char **out,
     *out = NULL;
     if (len > PATCH_TEXT_MAX || !snj_utf8_valid((const unsigned char *)patch,
                                                 len, true)) {
-        set_error(error, error_size, "patch must be bounded UTF-8 without NUL");
+        snj_errorf(error, error_size, "patch must be bounded UTF-8 without NUL");
         errno = EINVAL;
         return -1;
     }
@@ -330,12 +320,12 @@ normalize_patch_text(const char *patch, size_t len, char **out,
         unsigned char c = (unsigned char)patch[i];
         if (c == '\r') {
             if (i + 1u >= len || patch[i + 1u] != '\n') {
-                set_error(error, error_size, "patch contains a bare carriage return");
+                snj_errorf(error, error_size, "patch contains a bare carriage return");
                 errno = EINVAL;
                 goto out_free;
             }
             if (line_len > PATCH_LINE_MAX) {
-                set_error(error, error_size, "patch line exceeds 1 MiB");
+                snj_errorf(error, error_size, "patch line exceeds 1 MiB");
                 errno = EOVERFLOW;
                 goto out_free;
             }
@@ -348,13 +338,13 @@ normalize_patch_text(const char *patch, size_t len, char **out,
                 goto out_free;
             if (c == '\n') {
                 if (line_len > PATCH_LINE_MAX) {
-                    set_error(error, error_size, "patch line exceeds 1 MiB");
+                    snj_errorf(error, error_size, "patch line exceeds 1 MiB");
                     errno = EOVERFLOW;
                     goto out_free;
                 }
                 line_len = 0;
             } else if (++line_len > PATCH_LINE_MAX) {
-                set_error(error, error_size, "patch line exceeds 1 MiB");
+                snj_errorf(error, error_size, "patch line exceeds 1 MiB");
                 errno = EOVERFLOW;
                 goto out_free;
             }
@@ -406,7 +396,7 @@ split_lines(char *text, char ***out_lines, size_t *out_count,
     }
     if (count < 2u) {
         free(lines);
-        set_error(error, error_size, "patch is missing required frame");
+        snj_errorf(error, error_size, "patch is missing required frame");
         errno = EINVAL;
         return -1;
     }
@@ -421,7 +411,7 @@ check_duplicate_path(const struct patch_set *set, const char *path,
 {
     for (size_t i = 0; i < set->count; ++i) {
         if (strcmp(set->ops[i].path, path) == 0) {
-            set_error(error, error_size, "patch contains duplicate target path");
+            snj_errorf(error, error_size, "patch contains duplicate target path");
             errno = EINVAL;
             return -1;
         }
@@ -437,7 +427,7 @@ parse_hunk_header(const char *line, enum hunk_type *type,
     if (strcmp(line, "@@") == 0)
         return 0;
     if (!starts_with(line, "@@ ") || line[3] == '\0') {
-        set_error(error, error_size, "invalid hunk header");
+        snj_errorf(error, error_size, "invalid hunk header");
         errno = EINVAL;
         return -1;
     }
@@ -456,7 +446,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
 
     if (strcmp(lines[0], "*** Begin Patch") != 0 ||
         strcmp(lines[line_count - 1u], "*** End Patch") != 0) {
-        set_error(error, error_size, "patch frame must begin and end exactly");
+        snj_errorf(error, error_size, "patch frame must begin and end exactly");
         errno = EINVAL;
         return -1;
     }
@@ -477,7 +467,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
             ++i;
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 if (lines[i][0] != '+') {
-                    set_error(error, error_size, "add-file body lines must start with +");
+                    snj_errorf(error, error_size, "add-file body lines must start with +");
                     errno = EINVAL;
                     return -1;
                 }
@@ -498,7 +488,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 return -1;
             ++i;
             if (i + 1u < line_count && !is_file_header(lines[i])) {
-                set_error(error, error_size, "delete-file sections cannot have a body");
+                snj_errorf(error, error_size, "delete-file sections cannot have a body");
                 errno = EINVAL;
                 return -1;
             }
@@ -525,14 +515,14 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                        !is_hunk_header(lines[i])) {
                     if (hunk->type == HUNK_START || hunk->type == HUNK_END) {
                         if (lines[i][0] != '+') {
-                            set_error(error, error_size,
+                            snj_errorf(error, error_size,
                                       "anchored hunks may contain only + lines");
                             errno = EINVAL;
                             return -1;
                         }
                     } else if (lines[i][0] != ' ' && lines[i][0] != '-' &&
                                lines[i][0] != '+') {
-                        set_error(error, error_size,
+                        snj_errorf(error, error_size,
                                   "update hunk body lines must start with space, -, or +");
                         errno = EINVAL;
                         return -1;
@@ -558,32 +548,32 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 }
                 if ((hunk->type == HUNK_START || hunk->type == HUNK_END) &&
                     hunk->new_lines.n == 0u) {
-                    set_error(error, error_size,
+                    snj_errorf(error, error_size,
                               "anchored hunks must insert at least one line");
                     errno = EINVAL;
                     return -1;
                 }
                 if (hunk->type == HUNK_NORMAL &&
                     (!hunk->changed || hunk->old_lines.n == 0u)) {
-                    set_error(error, error_size,
+                    snj_errorf(error, error_size,
                               "normal hunks need a nonempty old pattern and a change");
                     errno = EINVAL;
                     return -1;
                 }
             }
             if (op->hunk_count == 0u) {
-                set_error(error, error_size, "update-file sections need at least one hunk");
+                snj_errorf(error, error_size, "update-file sections need at least one hunk");
                 errno = EINVAL;
                 return -1;
             }
         } else {
-            set_error(error, error_size, "expected a file operation header");
+            snj_errorf(error, error_size, "expected a file operation header");
             errno = EINVAL;
             return -1;
         }
     }
     if (set->count == 0u) {
-        set_error(error, error_size, "patch contains no file operations");
+        snj_errorf(error, error_size, "patch contains no file operations");
         errno = EINVAL;
         return -1;
     }
@@ -652,7 +642,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
         if (!slash) {
             if (len > NAME_MAX) {
                 close(dir_fd);
-                set_error(error, error_size, "patch path component is too long");
+                snj_errorf(error, error_size, "patch path component is too long");
                 errno = ENAMETOOLONG;
                 return -1;
             }
@@ -662,7 +652,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
         }
         if (len > NAME_MAX) {
             close(dir_fd);
-            set_error(error, error_size, "patch path component is too long");
+            snj_errorf(error, error_size, "patch path component is too long");
             errno = ENAMETOOLONG;
             return -1;
         }
@@ -675,7 +665,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
                              O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
             if (next_fd < 0) {
                 close(dir_fd);
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "patch parent directory cannot be opened without following symlinks");
                 return -1;
             }
@@ -700,20 +690,20 @@ read_target_file(int root_fd, struct patch_op *op,
         return -1;
     fd = openat(parent_fd, leaf, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) {
-        set_error(error, error_size, "patch target %s cannot be opened", op->path);
+        snj_errorf(error, error_size, "patch target %s cannot be opened", op->path);
         goto out;
     }
     if (fstat(fd, &op->st) < 0)
         goto out;
     if (!S_ISREG(op->st.st_mode) || op->st.st_size > (off_t)PATCH_FILE_MAX) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "patch target %s is not a regular file within 16 MiB", op->path);
         errno = EINVAL;
         goto out;
     }
     op->mode = op->st.st_mode & 07777u;
     if (read_fd_all(fd, &op->old_bytes, &op->old_len) < 0) {
-        set_error(error, error_size, "patch target %s cannot be read", op->path);
+        snj_errorf(error, error_size, "patch target %s cannot be read", op->path);
         goto out;
     }
     rc = 0;
@@ -736,12 +726,12 @@ validate_add_target(int root_fd, struct patch_op *op,
     if (parent_fd < 0)
         return -1;
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-        set_error(error, error_size, "add target %s already exists", op->path);
+        snj_errorf(error, error_size, "add target %s already exists", op->path);
         errno = EEXIST;
         goto out;
     }
     if (errno != ENOENT) {
-        set_error(error, error_size, "add target %s cannot be checked", op->path);
+        snj_errorf(error, error_size, "add target %s cannot be checked", op->path);
         goto out;
     }
     rc = 0;
@@ -761,11 +751,11 @@ validate_delete_target(int root_fd, struct patch_op *op,
     if (parent_fd < 0)
         return -1;
     if (fstatat(parent_fd, leaf, &op->st, AT_SYMLINK_NOFOLLOW) < 0) {
-        set_error(error, error_size, "delete target %s cannot be checked", op->path);
+        snj_errorf(error, error_size, "delete target %s cannot be checked", op->path);
         goto out;
     }
     if (!S_ISREG(op->st.st_mode)) {
-        set_error(error, error_size, "delete target %s is not a regular file", op->path);
+        snj_errorf(error, error_size, "delete target %s is not a regular file", op->path);
         errno = EINVAL;
         goto out;
     }
@@ -783,7 +773,7 @@ parse_file_lines(const char *bytes, size_t len, struct line_vec *lines,
     size_t start = 0;
 
     if (!snj_utf8_valid((const unsigned char *)bytes, len, true)) {
-        set_error(error, error_size, "update target is not strict UTF-8 without NUL");
+        snj_errorf(error, error_size, "update target is not strict UTF-8 without NUL");
         errno = EINVAL;
         return -1;
     }
@@ -791,7 +781,7 @@ parse_file_lines(const char *bytes, size_t len, struct line_vec *lines,
     for (size_t i = 0; i < len; ++i) {
         if (bytes[i] == '\r') {
             if (i + 1u >= len || bytes[i + 1u] != '\n' || style == STYLE_LF) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "update target has mixed or bare carriage-return line endings");
                 errno = EINVAL;
                 return -1;
@@ -804,7 +794,7 @@ parse_file_lines(const char *bytes, size_t len, struct line_vec *lines,
             *final_nl = true;
         } else if (bytes[i] == '\n') {
             if (style == STYLE_CRLF) {
-                set_error(error, error_size, "update target has mixed line endings");
+                snj_errorf(error, error_size, "update target has mixed line endings");
                 errno = EINVAL;
                 return -1;
             }
@@ -854,7 +844,7 @@ find_unique_match(const struct line_vec *lines, size_t cursor,
             break;
     }
     if (matches != 1u) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   matches ? "update hunk match is ambiguous" :
                             "update hunk did not match");
         errno = EINVAL;
@@ -914,13 +904,13 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
     for (size_t i = 0; i < op->hunk_count; ++i) {
         struct patch_hunk *hunk = &op->hunks[i];
         if (end_seen) {
-            set_error(error, error_size, "hunks cannot follow an @end insertion");
+            snj_errorf(error, error_size, "hunks cannot follow an @end insertion");
             errno = EINVAL;
             goto out;
         }
         if (hunk->type == HUNK_START) {
             if (start_seen || cursor != 0u || (lines.n == 0u && end_seen)) {
-                set_error(error, error_size, "conflicting @start insertion");
+                snj_errorf(error, error_size, "conflicting @start insertion");
                 errno = EINVAL;
                 goto out;
             }
@@ -932,7 +922,7 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
         }
         if (hunk->type == HUNK_END) {
             if (end_seen || (lines.n == 0u && start_seen)) {
-                set_error(error, error_size, "conflicting @end insertion");
+                snj_errorf(error, error_size, "conflicting @end insertion");
                 errno = EINVAL;
                 goto out;
             }
@@ -997,7 +987,7 @@ validate_and_compute(struct patch_set *set, int root_fd,
                 return -1;
         }
         if (set->total_file_bytes > PATCH_TOTAL_MAX) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "patch input and output files exceed 48 MiB total");
             errno = EOVERFLOW;
             return -1;
@@ -1085,25 +1075,25 @@ install_add(int root_fd, const struct patch_op *op,
     if (parent_fd < 0)
         return -1;
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-        set_error(error, error_size, "add target %s appeared before install", op->path);
+        snj_errorf(error, error_size, "add target %s appeared before install", op->path);
         errno = EEXIST;
         goto out;
     }
     if (errno != ENOENT)
         goto out;
     if (write_temp_file(parent_fd, &op->new_bytes, add_mode_from_umask(), temp) < 0) {
-        set_error(error, error_size, "add target %s could not be staged", op->path);
+        snj_errorf(error, error_size, "add target %s could not be staged", op->path);
         goto out;
     }
     if (linkat(parent_fd, temp, parent_fd, leaf, 0) < 0) {
         saved = errno;
         (void)unlinkat(parent_fd, temp, 0);
         errno = saved;
-        set_error(error, error_size, "add target %s could not be installed", op->path);
+        snj_errorf(error, error_size, "add target %s could not be installed", op->path);
         goto out;
     }
     if (unlinkat(parent_fd, temp, 0) < 0 || snj_sync_dir(parent_fd) < 0) {
-        set_error(error, error_size, "add target %s directory sync failed", op->path);
+        snj_errorf(error, error_size, "add target %s directory sync failed", op->path);
         goto out;
     }
     rc = 0;
@@ -1127,12 +1117,12 @@ install_update(int root_fd, const struct patch_op *op,
         return -1;
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
         !same_identity(&op->st, &st)) {
-        set_error(error, error_size, "update target %s changed before install", op->path);
+        snj_errorf(error, error_size, "update target %s changed before install", op->path);
         errno = ESTALE;
         goto out;
     }
     if (write_temp_file(parent_fd, &op->new_bytes, op->mode, temp) < 0) {
-        set_error(error, error_size, "update target %s could not be staged", op->path);
+        snj_errorf(error, error_size, "update target %s could not be staged", op->path);
         goto out;
     }
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
@@ -1140,18 +1130,18 @@ install_update(int root_fd, const struct patch_op *op,
         saved = errno;
         (void)unlinkat(parent_fd, temp, 0);
         errno = saved ? saved : ESTALE;
-        set_error(error, error_size, "update target %s changed before rename", op->path);
+        snj_errorf(error, error_size, "update target %s changed before rename", op->path);
         goto out;
     }
     if (renameat(parent_fd, temp, parent_fd, leaf) < 0) {
         saved = errno;
         (void)unlinkat(parent_fd, temp, 0);
         errno = saved;
-        set_error(error, error_size, "update target %s could not be installed", op->path);
+        snj_errorf(error, error_size, "update target %s could not be installed", op->path);
         goto out;
     }
     if (snj_sync_dir(parent_fd) < 0) {
-        set_error(error, error_size, "update target %s directory sync failed", op->path);
+        snj_errorf(error, error_size, "update target %s directory sync failed", op->path);
         goto out;
     }
     rc = 0;
@@ -1173,12 +1163,12 @@ install_delete(int root_fd, const struct patch_op *op,
         return -1;
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
         !same_identity(&op->st, &st)) {
-        set_error(error, error_size, "delete target %s changed before install", op->path);
+        snj_errorf(error, error_size, "delete target %s changed before install", op->path);
         errno = ESTALE;
         goto out;
     }
     if (unlinkat(parent_fd, leaf, 0) < 0 || snj_sync_dir(parent_fd) < 0) {
-        set_error(error, error_size, "delete target %s could not be removed", op->path);
+        snj_errorf(error, error_size, "delete target %s could not be removed", op->path);
         goto out;
     }
     rc = 0;
@@ -1448,7 +1438,7 @@ workdir_valid(const char *workdir, size_t len, const char *session_workspace,
         strcmp(workdir, session_workspace) != 0 ||
         !snj_utf8_valid((const unsigned char *)workdir, len, true) ||
         stat(workdir, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "apply_patch workdir must be the session workspace directory");
         errno = EINVAL;
         return -1;
@@ -1483,7 +1473,7 @@ snj_tools_apply_patch(const struct snj_response_item *call,
                              &patch, &patch_len) ||
         !json_bounded_string(call->arguments, "workdir", SNJ_PATH_MAX_BYTES,
                              &workdir, &workdir_len)) {
-        set_error(error, error_size, "invalid apply_patch arguments");
+        snj_errorf(error, error_size, "invalid apply_patch arguments");
         if (snj_buf_printf(&summary, "Patch rejected: invalid apply_patch arguments.\n") < 0)
             goto out;
         *result = patch_result_buf("patch_rejected", &summary,
@@ -1509,7 +1499,7 @@ snj_tools_apply_patch(const struct snj_response_item *call,
     }
     root_fd = open(workdir, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
     if (root_fd < 0) {
-        set_error(error, error_size, "patch workdir cannot be opened safely");
+        snj_errorf(error, error_size, "patch workdir cannot be opened safely");
         if (snj_buf_printf(&summary, "Patch failed during I/O: %s.\n", error) < 0)
             goto out;
         *result = patch_result_buf("io_failed", &summary,

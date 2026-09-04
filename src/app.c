@@ -101,16 +101,6 @@ capture_shutdown_signal(struct app_state *app)
     return true;
 }
 
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 static int
 app_error(struct app_state *app, const char *message)
 {
@@ -343,7 +333,7 @@ snj_app_capacity_resolve(struct app_state *app,
     int cache_rc;
 
     if (!app || !provider || !model || !capacity) {
-        set_error(error, error_size, "invalid model capacity selection");
+        snj_errorf(error, error_size, "invalid model capacity selection");
         errno = EINVAL;
         return -1;
     }
@@ -372,13 +362,13 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
     const char *effort = resolve_effort(effort_preference);
     const struct snj_provider_config *provider = next_provider(app);
     if (!provider) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "selected provider is not present in the current configuration");
         errno = ENOENT;
         return -1;
     }
     if (!effort) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "reasoning effort is empty, oversized, or invalid UTF-8");
         errno = ENOTSUP;
         return -1;
@@ -407,7 +397,7 @@ snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
                            error, error_size) < 0)
         return -1;
     if (snj_render_event(&app->render, seq, type) < 0) {
-        set_error(error, error_size, "durable event output failed");
+        snj_errorf(error, error_size, "durable event output failed");
         return -1;
     }
     return 0;
@@ -693,7 +683,7 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
     struct snj_queued_turn *queued;
 
     if (number == 0u || number > app->session.pending_queue_count) {
-        set_error(error, error_size, "queue item %zu does not exist", number);
+        snj_errorf(error, error_size, "queue item %zu does not exist", number);
         return 1;
     }
     queued = &app->session.pending_queue[number - 1u];
@@ -707,7 +697,7 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
         app->queue_edit_id[0] = '\0';
         app->queue_edit_number = 0u;
         app->queue_edit_was_armed = false;
-        set_error(error, error_size, "queue editor could not be displayed");
+        snj_errorf(error, error_size, "queue editor could not be displayed");
         return -1;
     }
     return 0;
@@ -724,7 +714,7 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
 
     queued = queued_by_id(app, app->queue_edit_id, NULL);
     if (!queued) {
-        set_error(error, error_size, "the queued turn being edited no longer exists");
+        snj_errorf(error, error_size, "the queued turn being edited no longer exists");
         (void)snj_render_error_ctx(&app->render, error);
         error[0] = '\0';
         rc = 1;
@@ -732,7 +722,7 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
     }
     if (!len || len > SNJ_MAX_QUEUED_TEXT ||
         !snj_utf8_valid((const unsigned char *)text, len, true)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "queued text must be nonempty valid UTF-8 within 256 KiB");
         (void)snj_render_error_ctx(&app->render, error);
         error[0] = '\0';
@@ -751,7 +741,7 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
     }
     if (snj_render_submitted(&app->render,
             snj_term_prompt_label(&app->term), text) < 0) {
-        set_error(error, error_size, "edited turn acknowledgement could not be rendered");
+        snj_errorf(error, error_size, "edited turn acknowledgement could not be rendered");
         return -1;
     }
 clear:
@@ -773,13 +763,13 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
     const char *queued_text = text;
     size_t len;
     if (!app->session.active_turn) {
-        set_error(error, error_size, "/queue TEXT is valid only while a turn is active");
+        snj_errorf(error, error_size, "/queue TEXT is valid only while a turn is active");
         errno = EINVAL;
         return 1;
     }
     if (queued_text[0] == '/') {
         if (queued_text[1] != '/') {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "queued text starting with / must use // for a literal slash");
             errno = EINVAL;
             return 1;
@@ -789,13 +779,13 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
     len = strlen(queued_text);
     if (!len || len > SNJ_MAX_QUEUED_TEXT ||
         !snj_utf8_valid((const unsigned char *)queued_text, len, true)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "queued text must be nonempty valid UTF-8 within 256 KiB");
         errno = EINVAL;
         return 1;
     }
     if (snj_random_id(queue_id) < 0) {
-        set_error(error, error_size, "cryptographic queue id generation failed");
+        snj_errorf(error, error_size, "cryptographic queue id generation failed");
         return -1;
     }
     if (commit_event(app, "future_turn_queued",
@@ -804,7 +794,7 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
                      error, error_size) < 0)
         return -1;
     if (snj_render_submitted(&app->render, "next › ", queued_text) < 0) {
-        set_error(error, error_size, "queued turn acknowledgement could not be rendered");
+        snj_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
         return -1;
     }
     if (arm)
@@ -820,7 +810,7 @@ remove_queued_turns(struct app_state *app, size_t index, bool all,
 
     if (app->session.pending_queue_count == 0u ||
         (!all && index >= app->session.pending_queue_count)) {
-        set_error(error, error_size, "future-turn queue is empty");
+        snj_errorf(error, error_size, "future-turn queue is empty");
         return 1;
     }
     if (all) {
@@ -865,7 +855,7 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
         return 0;
     }
     if (snj_app_parse_queue_argument(argument, &kind, &number) < 0) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "queue action expects clear, pop, N delete, Nd, N edit, or Ne");
         return 1;
     }
@@ -874,14 +864,14 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
         return render_queue(app);
     case QUEUE_COMMAND_ADD:
         if (!active) {
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "/queue TEXT is active-only; submit it during a running turn");
             return 1;
         }
         return queue_future_turn(app, argument, true, error, error_size);
     case QUEUE_COMMAND_DELETE:
         if (number == 0u || number > app->session.pending_queue_count) {
-            set_error(error, error_size, "queue item %zu does not exist", number);
+            snj_errorf(error, error_size, "queue item %zu does not exist", number);
             return 1;
         }
         return remove_queued_turns(app, number - 1u, false,
@@ -892,7 +882,7 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
         return remove_queued_turns(app, 0u, true, error, error_size);
     case QUEUE_COMMAND_POP:
         if (app->session.pending_queue_count == 0u) {
-            set_error(error, error_size, "future-turn queue is empty");
+            snj_errorf(error, error_size, "future-turn queue is empty");
             return 1;
         }
         return remove_queued_turns(app,
@@ -1145,21 +1135,21 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
 
         if (snj_app_provider_models(app, provider, &models,
                                     detail, sizeof(detail)) < 0) {
-            set_error(error, error_size, "cannot refresh provider %s: %s",
+            snj_errorf(error, error_size, "cannot refresh provider %s: %s",
                       provider->name, detail[0] ? detail : strerror(errno));
             goto out;
         }
         entry = json_object();
         if (!entry) {
             json_decref(models);
-            set_error(error, error_size, "cannot assemble model cache");
+            snj_errorf(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
             goto out;
         }
         if (snj_json_set_new(entry, "models", models) < 0) {
             models = NULL;
             json_decref(entry);
-            set_error(error, error_size, "cannot assemble model cache");
+            snj_errorf(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
             goto out;
         }
@@ -1170,13 +1160,13 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
             snj_json_set_new(entry, "protocol",
                 json_string(snj_provider_catalog_protocol(provider))) < 0) {
             json_decref(entry);
-            set_error(error, error_size, "cannot assemble model cache");
+            snj_errorf(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
             goto out;
         }
         if (json_array_append_new(providers, entry) < 0) {
             entry = NULL;
-            set_error(error, error_size, "cannot assemble model cache");
+            snj_errorf(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
             goto out;
         }
@@ -1200,7 +1190,7 @@ load_model_cache(struct app_state *app, bool refresh,
     rc = snj_model_cache_load(&app->store, &app->model_cache,
                               error, error_size);
     if (rc == 1) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "model cache is empty; use /model cache while idle");
         errno = ENOENT;
         return -1;
@@ -1569,13 +1559,13 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
     if (fd < 0) {
         if (errno == ENOENT)
             return 0;
-        set_error(error, error_size, "cannot open configuration %s: %s",
+        snj_errorf(error, error_size, "cannot open configuration %s: %s",
                   path, strerror(errno));
         return -1;
     }
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t)st.st_size > SNJ_CONFIG_FILE_MAX) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "configuration must be a regular file no larger than 64 KiB");
         errno = EINVAL;
         (void)close(fd);
@@ -1592,7 +1582,7 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
         if (got < 0 && errno == EINTR)
             continue;
         if (got < 0) {
-            set_error(error, error_size, "cannot read configuration: %s",
+            snj_errorf(error, error_size, "cannot read configuration: %s",
                       strerror(errno));
             (void)close(fd);
             return -1;
@@ -1600,7 +1590,7 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
         break;
     }
     if (close(fd) < 0) {
-        set_error(error, error_size, "cannot close configuration: %s",
+        snj_errorf(error, error_size, "cannot close configuration: %s",
                   strerror(errno));
         return -1;
     }
@@ -1707,7 +1697,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
 
     snj_config_init(&candidate);
     if (!candidate.shell) {
-        set_error(error, error_size, "cannot initialize configuration defaults");
+        snj_errorf(error, error_size, "cannot initialize configuration defaults");
         goto out;
     }
     if (snj_config_load(&candidate,
@@ -1716,7 +1706,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
         snj_irc_apply_cli(&candidate, app->cli, error, error_size) < 0)
         goto out;
     if (!snj_config_provider(&candidate, selected_provider)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "reloaded configuration does not define the selected provider");
         errno = EINVAL;
         goto out;
@@ -1738,14 +1728,14 @@ reload_config(struct app_state *app, char *error, size_t error_size)
                 open_configured_irc(app, app->config,
                                     rollback_error,
                                     sizeof(rollback_error)) < 0) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "%s; prior IRC configuration could not be restored: %s",
                           replacement_error,
                           rollback_error[0] ? rollback_error : "unknown error");
                 rc = -1;
                 goto out;
             }
-            set_error(error, error_size, "%s; previous configuration remains active",
+            snj_errorf(error, error_size, "%s; previous configuration remains active",
                       replacement_error);
             goto out;
         }
@@ -1787,7 +1777,7 @@ run_config_editor(struct app_state *app, int *status,
     pid_t got;
 
     if (!editor || !*editor) {
-        set_error(error, error_size, "$EDITOR is not set");
+        snj_errorf(error, error_size, "$EDITOR is not set");
         errno = ENOENT;
         return 1;
     }
@@ -1800,7 +1790,7 @@ run_config_editor(struct app_state *app, int *status,
         _exit(127);
     }
     if (child < 0) {
-        set_error(error, error_size, "cannot start $EDITOR: %s",
+        snj_errorf(error, error_size, "cannot start $EDITOR: %s",
                   strerror(errno));
         (void)snj_term_external_end(&app->term, NULL, 0u);
         return -1;
@@ -1811,7 +1801,7 @@ run_config_editor(struct app_state *app, int *status,
     if (snj_term_external_end(&app->term, error, error_size) < 0)
         return -1;
     if (got != child) {
-        set_error(error, error_size, "cannot wait for $EDITOR: %s",
+        snj_errorf(error, error_size, "cannot wait for $EDITOR: %s",
                   strerror(errno));
         return -1;
     }
@@ -2152,7 +2142,7 @@ commit_pending_result(struct app_state *app, const char *turn_id,
 {
     json_t *data = snj_app_tool_finished_data(turn_id, call_id, result);
     if (!data) {
-        set_error(error, error_size, "cannot allocate tool completion event");
+        snj_errorf(error, error_size, "cannot allocate tool completion event");
         return -1;
     }
     return commit_event(app, "tool_finished", data, error, error_size);
@@ -2197,7 +2187,7 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
 #endif
     data = snj_app_process_closed_data(turn_id, handle, cause, result);
     if (!data) {
-        set_error(error, error_size, "cannot allocate process closure event");
+        snj_errorf(error, error_size, "cannot allocate process closure event");
         return -1;
     }
     return commit_event(app, "process_closed", data, error, error_size);
@@ -2326,7 +2316,7 @@ execute_calls(struct app_state *app, const char *turn_id,
         if (call->kind != SNJ_ITEM_TOOL_CALL)
             continue;
         if (snj_tool_action_digest(call, app->session.workspace, digest) < 0) {
-            set_error(error, error_size, "cannot digest tool action");
+            snj_errorf(error, error_size, "cannot digest tool action");
             return -1;
         }
         if (commit_event(app, "tool_started",
@@ -2337,7 +2327,7 @@ execute_calls(struct app_state *app, const char *turn_id,
         if (snj_render_tool_start(&app->render, call,
                                   app->session.workspace,
                                   app->config->default_timeout_ms) < 0) {
-            set_error(error, error_size, "tool activity could not be rendered");
+            snj_errorf(error, error_size, "tool activity could not be rendered");
             return -1;
         }
         tool_error[0] = '\0';
@@ -2348,7 +2338,7 @@ execute_calls(struct app_state *app, const char *turn_id,
             if (snj_term_set_spinner_states(&app->term,
                     prompt_spinner_states(app, true)) < 0) {
                 app->tool_active = false;
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "tool status could not be displayed");
                 return -1;
             }
@@ -2359,7 +2349,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                     prompt_spinner_states(app, true)) < 0) {
                 if (result)
                     json_decref(result);
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "provider status could not be restored");
                 return -1;
             }
@@ -2379,7 +2369,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                                  snj_app_turn_interrupted_data(turn_id, "user", "cancelled"),
                                  error, error_size) < 0)
                     return -1;
-                set_error(error, error_size, "turn cancelled");
+                snj_errorf(error, error_size, "turn cancelled");
                 return 2;
             }
             if (run_rc < 0) {
@@ -2397,7 +2387,7 @@ execute_calls(struct app_state *app, const char *turn_id,
             return -1;
         if (snj_tools_attach_output_limit(call, app->config, result) < 0) {
             json_decref(result);
-            set_error(error, error_size,
+            snj_errorf(error, error_size,
                       "command output token limit could not be retained");
             return -1;
         }
@@ -2417,7 +2407,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                                        render_result,
                                        app->config->max_output_bytes) < 0) {
                 json_decref(render_result);
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "tool result could not be rendered");
                 return -1;
             }
@@ -3435,14 +3425,14 @@ resolve_workspace_path(const char *path, const char *label,
     char *resolved = realpath(path, NULL);
     struct stat st;
     if (!resolved) {
-        set_error(error, error_size, "cannot resolve %s workspace %s: %s",
+        snj_errorf(error, error_size, "cannot resolve %s workspace %s: %s",
                   label, path, strerror(errno));
         return NULL;
     }
     if (strlen(resolved) > SNJ_PATH_MAX_BYTES ||
         !snj_utf8_valid((const unsigned char *)resolved, strlen(resolved), true) ||
         stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        set_error(error, error_size, "%s workspace must be an existing UTF-8 directory",
+        snj_errorf(error, error_size, "%s workspace must be an existing UTF-8 directory",
                   label);
         free(resolved);
         errno = EINVAL;
@@ -3482,7 +3472,7 @@ resolve_dotdir(const char *override, char *error, size_t error_size)
         }
     }
     else {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "HOME is unavailable for the default dotdir; use --dotdir DIR");
         errno = EINVAL;
         return NULL;
@@ -3494,7 +3484,7 @@ resolve_dotdir(const char *override, char *error, size_t error_size)
         path[--len] = '\0';
     if (path[0] != '/' ||
         !snj_utf8_valid((const unsigned char *)path, len, true)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "dotdir must be an absolute UTF-8 path within the supported limit");
         free(path);
         errno = EINVAL;
@@ -3707,14 +3697,14 @@ pick_session(struct app_state *app, const char *workspace,
         return -1;
     if (snj_render_prompt(&app->render, "session › ") < 0 ||
         !fgets(prefix, sizeof(prefix), stdin)) {
-        set_error(error, error_size, "session selection cancelled");
+        snj_errorf(error, error_size, "session selection cancelled");
         return -1;
     }
     len = strlen(prefix);
     if (len && prefix[len - 1u] == '\n')
         prefix[--len] = '\0';
     if (len < 8u || len > SNJ_ID_HEX_LEN) {
-        set_error(error, error_size, "enter an 8..32 character session id prefix");
+        snj_errorf(error, error_size, "enter an 8..32 character session id prefix");
         return -1;
     }
     return snj_session_open(&app->store, &app->session, prefix,

@@ -5,22 +5,10 @@
 #include "snajpagent.h"
 
 #include <errno.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 void
 snj_cli_init(struct snj_cli *cli)
@@ -56,21 +44,21 @@ add_client(struct snj_cli *cli, const char *value,
     char *copy;
 
     if (cli->irc_client_count >= SNJ_CLI_IRC_CLIENT_MAX) {
-        set_error(error, error_size, "at most %u -c options are supported",
+        snj_errorf(error, error_size, "at most %u -c options are supported",
                   SNJ_CLI_IRC_CLIENT_MAX);
         errno = E2BIG;
         return -1;
     }
     copy = snj_strdup_checked(value, SNJ_CONFIG_URL_MAX);
     if (!copy) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "-c endpoint is too long or unavailable");
         return -1;
     }
     for (size_t i = 0; i < cli->irc_client_count; ++i)
         if (strcmp(cli->irc_clients[i], copy) == 0) {
             free(copy);
-            set_error(error, error_size, "duplicate -c endpoint");
+            snj_errorf(error, error_size, "duplicate -c endpoint");
             errno = EINVAL;
             return -1;
         }
@@ -83,13 +71,13 @@ set_once(char **slot, const char *value, const char *name,
          char *error, size_t error_size)
 {
     if (*slot) {
-        set_error(error, error_size, "duplicate %s option", name);
+        snj_errorf(error, error_size, "duplicate %s option", name);
         errno = EINVAL;
         return -1;
     }
     *slot = snj_strdup_checked(value, SNJ_PATH_MAX_BYTES);
     if (!*slot) {
-        set_error(error, error_size, "%s argument is too long or unavailable", name);
+        snj_errorf(error, error_size, "%s argument is too long or unavailable", name);
         return -1;
     }
     return 0;
@@ -102,7 +90,7 @@ option_argument(int argc, char **argv, int *index, const char *attached,
     if (attached && *attached)
         return attached;
     if (*index + 1 >= argc) {
-        set_error(error, error_size, "%s requires an argument", name);
+        snj_errorf(error, error_size, "%s requires an argument", name);
         errno = EINVAL;
         return NULL;
     }
@@ -128,7 +116,7 @@ set_color(struct snj_cli *cli, enum snj_cli_color_mode color,
           const char *name, char *error, size_t error_size)
 {
     if (cli->color != SNJ_CLI_COLOR_UNSET) {
-        set_error(error, error_size, "duplicate %s option", name);
+        snj_errorf(error, error_size, "duplicate %s option", name);
         errno = EINVAL;
         return -1;
     }
@@ -141,7 +129,7 @@ set_markdown(struct snj_cli *cli, enum snj_cli_markdown_mode markdown,
              const char *name, char *error, size_t error_size)
 {
     if (cli->markdown != SNJ_CLI_MARKDOWN_UNSET) {
-        set_error(error, error_size, "duplicate %s option", name);
+        snj_errorf(error, error_size, "duplicate %s option", name);
         errno = EINVAL;
         return -1;
     }
@@ -162,7 +150,7 @@ parse_color_value(struct snj_cli *cli, const char *value,
     else if (strcmp(value, "never") == 0)
         color = SNJ_CLI_COLOR_NEVER;
     else {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "%s accepts auto, always, or never", name);
         errno = EINVAL;
         return -1;
@@ -186,14 +174,14 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
             break;
         case 'e':
             if (cli->execute) {
-                set_error(error, error_size, "duplicate -e option");
+                snj_errorf(error, error_size, "duplicate -e option");
                 return -1;
             }
             cli->execute = true;
             break;
         case 'l':
             if (cli->list) {
-                set_error(error, error_size, "duplicate -l option");
+                snj_errorf(error, error_size, "duplicate -l option");
                 return -1;
             }
             cli->list = true;
@@ -237,7 +225,7 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
                 return -1;
             break;
         default:
-            set_error(error, error_size, "unknown option -%c", flag);
+            snj_errorf(error, error_size, "unknown option -%c", flag);
             errno = EINVAL;
             return -1;
         }
@@ -260,7 +248,7 @@ read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
     unsigned char chunk[4096];
 
     if (isatty(STDIN_FILENO) == 1) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "-e requires a prompt after -- or non-terminal stdin");
         errno = EINVAL;
         return -1;
@@ -271,7 +259,7 @@ read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
 
         if (got > 0) {
             if (snj_buf_append(&prompt, chunk, (size_t)got) < 0) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "stdin prompt is invalid or exceeds 1 MiB");
                 snj_buf_free(&prompt);
                 return -1;
@@ -281,7 +269,7 @@ read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
         if (got < 0 && errno == EINTR)
             continue;
         if (got < 0) {
-            set_error(error, error_size, "stdin prompt could not be read");
+            snj_errorf(error, error_size, "stdin prompt could not be read");
             snj_buf_free(&prompt);
             return -1;
         }
@@ -295,7 +283,7 @@ read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
     if (prompt.len == 0u || prompt.len > SNJ_MAX_DIRECT_PROMPT ||
         !snj_utf8_valid(prompt.data, prompt.len, true) ||
         snj_buf_terminate(&prompt) < 0) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "stdin prompt is empty, invalid, or exceeds 1 MiB");
         snj_buf_free(&prompt);
         errno = EINVAL;
@@ -325,13 +313,13 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
             break;
         }
         if (strcmp(arg, "--last") == 0) {
-            if (cli->last) { set_error(error, error_size, "duplicate --last option"); return -1; }
+            if (cli->last) { snj_errorf(error, error_size, "duplicate --last option"); return -1; }
             cli->last = true;
         } else if (strcmp(arg, "--all") == 0) {
-            if (cli->all) { set_error(error, error_size, "duplicate --all option"); return -1; }
+            if (cli->all) { snj_errorf(error, error_size, "duplicate --all option"); return -1; }
             cli->all = true;
         } else if (strcmp(arg, "--resume") == 0) {
-            if (cli->resume) { set_error(error, error_size, "duplicate --resume option"); return -1; }
+            if (cli->resume) { snj_errorf(error, error_size, "duplicate --resume option"); return -1; }
             cli->resume = true;
         } else if (strcmp(arg, "--no-color") == 0) {
             if (set_color(cli, SNJ_CLI_COLOR_NEVER, "--no-color",
@@ -365,7 +353,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                    strncmp(arg, "--client=", 9u) == 0) {
             const char *attached = arg[8] == '=' ? arg + 9u : NULL;
             if (attached && !*attached) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "--client= requires a nonempty endpoint");
                 errno = EINVAL;
                 return -1;
@@ -377,7 +365,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                    strncmp(arg, "--listen=", 9u) == 0) {
             const char *attached = arg[8] == '=' ? arg + 9u : NULL;
             if (attached && !*attached) {
-                set_error(error, error_size,
+                snj_errorf(error, error_size,
                           "--listen= requires a nonempty endpoint");
                 errno = EINVAL;
                 return -1;
@@ -440,7 +428,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                                    error, error_size) < 0)
                 return -1;
         } else if (arg[1] == '-') {
-            set_error(error, error_size, "unknown option %s", arg);
+            snj_errorf(error, error_size, "unknown option %s", arg);
             return -1;
         } else if (parse_short(cli, argc, argv, &i, error, error_size) < 0) {
             return -1;
@@ -449,7 +437,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
     if ((cli->help || cli->version) &&
         (argc != 2 ||
          (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "-V") != 0))) {
-        set_error(error, error_size, "-h and -V must stand alone");
+        snj_errorf(error, error_size, "-h and -V must stand alone");
         return -1;
     }
     if (cli->help || cli->version)
@@ -459,40 +447,40 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                       cli->irc_listen ||
                       cli->irc_client_count || cli->irc_model_nick ||
                       cli->irc_operator_nick || cli->irc_room_name)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "-l accepts only --config, --dotdir, --all, and color options");
         return -1;
     }
     if (cli->execute && (cli->irc_listen ||
                          cli->irc_client_count || cli->irc_model_nick ||
                          cli->irc_operator_nick || cli->irc_room_name)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "-e cannot be combined with network options");
         return -1;
     }
     if ((cli->irc_listen || cli->irc_client_count) &&
         positional >= 0 && !dashdash && !cli->resume) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "networked initial chat text must follow --");
         return -1;
     }
     if (cli->last && !cli->resume) {
-        set_error(error, error_size, "--last requires --resume");
+        snj_errorf(error, error_size, "--last requires --resume");
         return -1;
     }
     if (cli->all && !cli->resume && !cli->list) {
-        set_error(error, error_size, "--all requires --resume or -l");
+        snj_errorf(error, error_size, "--all requires --resume or -l");
         return -1;
     }
     if (cli->model && !bounded_preference(cli->model,
                                           SNJ_CONFIG_MODEL_MAX)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "model exceeds the supported structural bounds");
         return -1;
     }
     if (cli->effort && !bounded_preference(cli->effort,
                                            SNJ_CONFIG_EFFORT_MAX)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "reasoning effort exceeds the supported structural bounds");
         return -1;
     }
@@ -500,13 +488,13 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         if (positional >= 0 && !dashdash && !cli->last) {
             cli->resume_id = snj_strdup_checked(argv[positional], SNJ_ID_HEX_LEN);
             if (!cli->resume_id) {
-                set_error(error, error_size, "session id is too long or unavailable");
+                snj_errorf(error, error_size, "session id is too long or unavailable");
                 return -1;
             }
             ++positional;
             if (positional < argc) {
                 if (strcmp(argv[positional], "--") != 0) {
-                    set_error(error, error_size, "resume follow-up must follow --");
+                    snj_errorf(error, error_size, "resume follow-up must follow --");
                     return -1;
                 }
                 dashdash = true;
@@ -514,24 +502,24 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
             }
         }
         if (cli->last && positional >= 0 && !dashdash) {
-            set_error(error, error_size, "--last cannot be combined with a session id");
+            snj_errorf(error, error_size, "--last cannot be combined with a session id");
             return -1;
         }
         if (cli->all && cli->resume_id) {
-            set_error(error, error_size, "--all is invalid with an exact session id");
+            snj_errorf(error, error_size, "--all is invalid with an exact session id");
             return -1;
         }
         if (positional >= 0 && positional < argc) {
             cli->prompt = snj_join_words(argv + positional, (size_t)(argc - positional),
                                          SNJ_MAX_DIRECT_PROMPT);
             if (!cli->prompt) {
-                set_error(error, error_size, "prompt is invalid or exceeds 1 MiB");
+                snj_errorf(error, error_size, "prompt is invalid or exceeds 1 MiB");
                 return -1;
             }
         }
     } else if (!cli->list && positional >= 0 && positional < argc) {
         if (cli->execute && !dashdash) {
-            set_error(error, error_size, "-e requires -- before its prompt");
+            snj_errorf(error, error_size, "-e requires -- before its prompt");
             return -1;
         }
         cli->prompt = snj_join_words(argv + positional, (size_t)(argc - positional),
@@ -543,7 +531,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         read_execute_prompt(cli, error, error_size) < 0)
         return -1;
     if (cli->execute && !*cli->prompt) {
-        set_error(error, error_size, "-e requires a nonempty prompt");
+        snj_errorf(error, error_size, "-e requires a nonempty prompt");
         return -1;
     }
     cli->prompt_after_dashdash = dashdash;

@@ -1,17 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "credential.h"
+#include "base.h"
 
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static void
-set_error(char *error, size_t size, const char *message)
-{
-    if (size)
-        (void)snprintf(error, size, "%s", message);
-}
 
 void
 snj_credential_clear(struct snj_credential *credential)
@@ -37,7 +32,7 @@ snj_credential_read(struct snj_credential *credential,
 
     if (!credential) {
         errno = EINVAL;
-        set_error(error, error_size, "invalid credential destination");
+        snj_errorf(error, error_size, "invalid credential destination");
         return -1;
     }
     snj_credential_clear(credential);

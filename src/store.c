@@ -7,7 +7,6 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <pwd.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,16 +17,6 @@
 #define SNJ_LOG_RESERVE ((off_t)32 * 1024 * 1024)
 #define SNJ_EVENT_LIMIT UINT64_C(1000000)
 #define SNJ_EVENT_RESERVE UINT64_C(256)
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 static int
 set_cloexec(int fd)
 {
@@ -67,13 +56,13 @@ snj_store_verify_private_fd(int fd, bool directory, const char *name,
     struct stat st;
     bool valid;
     if (fstat(fd, &st) < 0) {
-        set_error(error, error_size, "cannot inspect %s: %s", name,
+        snj_errorf(error, error_size, "cannot inspect %s: %s", name,
                   strerror(errno));
         return -1;
     }
     valid = directory ? private_dir_stat(&st) : private_file_stat(&st);
     if (!valid) {
-        set_error(error, error_size, "%s must be private and user-owned", name);
+        snj_errorf(error, error_size, "%s must be private and user-owned", name);
         errno = EACCES;
         return -1;
     }
@@ -86,28 +75,28 @@ ensure_directory(const char *path, mode_t mode, bool require_private,
     struct stat st;
     if (lstat(path, &st) < 0) {
         if (errno != ENOENT) {
-            set_error(error, error_size, "cannot inspect %s: %s", path,
+            snj_errorf(error, error_size, "cannot inspect %s: %s", path,
                       strerror(errno));
             return -1;
         }
         if (mkdir(path, mode) < 0) {
-            set_error(error, error_size, "cannot create %s: %s", path,
+            snj_errorf(error, error_size, "cannot create %s: %s", path,
                       strerror(errno));
             return -1;
         }
         if (lstat(path, &st) < 0) {
-            set_error(error, error_size, "cannot verify %s: %s", path,
+            snj_errorf(error, error_size, "cannot verify %s: %s", path,
                       strerror(errno));
             return -1;
         }
     }
     if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-        set_error(error, error_size, "%s is not a real directory", path);
+        snj_errorf(error, error_size, "%s is not a real directory", path);
         errno = EINVAL;
         return -1;
     }
     if (require_private && !private_dir_stat(&st)) {
-        set_error(error, error_size, "%s must be private (mode 0700)", path);
+        snj_errorf(error, error_size, "%s must be private (mode 0700)", path);
         errno = EACCES;
         return -1;
     }
@@ -180,7 +169,7 @@ snj_store_open(struct snj_store *store, const char *dotdir,
     int rc = -1;
     if (!dotdir || dotdir[0] != '/' || strlen(dotdir) > SNJ_PATH_MAX_BYTES ||
         !snj_utf8_valid((const unsigned char *)dotdir, strlen(dotdir), true)) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "dotdir must be an absolute UTF-8 path within the supported limit");
         errno = EINVAL;
         return -1;
@@ -214,7 +203,7 @@ snj_store_open(struct snj_store *store, const char *dotdir,
     rc = 0;
     goto out;
 io_error:
-    set_error(error, error_size, "cannot open state directory: %s", strerror(errno));
+    snj_errorf(error, error_size, "cannot open state directory: %s", strerror(errno));
 out:
     free(sessions);
     free(trash);
@@ -284,7 +273,7 @@ lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
 #endif
     fd = openat(dir_fd, "lock", flags, 0600);
     if (fd < 0) {
-        set_error(error, error_size, "cannot open session lock: %s", strerror(errno));
+        snj_errorf(error, error_size, "cannot open session lock: %s", strerror(errno));
         return -1;
     }
     if (set_cloexec(fd) < 0 ||
@@ -296,7 +285,7 @@ lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
     lock.l_type = F_WRLCK;
     lock.l_whence = SEEK_SET;
     if (fcntl(fd, F_SETLK, &lock) < 0) {
-        set_error(error, error_size, errno == EACCES || errno == EAGAIN ?
+        snj_errorf(error, error_size, errno == EACCES || errno == EAGAIN ?
                   "session is already open" : "cannot lock session: %s",
                   strerror(errno));
         (void)close(fd);
@@ -322,7 +311,7 @@ snj_store_open_session_files(struct snj_session *session, bool create,
         return -1;
     session->log_fd = openat(session->dir_fd, "events.jsonl", flags, 0600);
     if (session->log_fd < 0) {
-        set_error(error, error_size, "cannot open event log: %s", strerror(errno));
+        snj_errorf(error, error_size, "cannot open event log: %s", strerror(errno));
         return -1;
     }
     if (set_cloexec(session->log_fd) < 0 ||
@@ -331,7 +320,7 @@ snj_store_open_session_files(struct snj_session *session, bool create,
         return -1;
     session->log_end = lseek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0) {
-        set_error(error, error_size, "cannot seek event log: %s", strerror(errno));
+        snj_errorf(error, error_size, "cannot seek event log: %s", strerror(errno));
         return -1;
     }
     return 0;
@@ -363,7 +352,7 @@ snj_session_append(struct snj_session *session, const char *type, json_t *data,
     snj_buf_init(&line, SNJ_MAX_EVENT_LINE);
     if (!data || seq > SNJ_EVENT_LIMIT - SNJ_EVENT_RESERVE ||
         session->log_end > SNJ_LOG_HARD_LIMIT - SNJ_LOG_RESERVE) {
-        set_error(error, error_size, "session log has no admission reserve");
+        snj_errorf(error, error_size, "session log has no admission reserve");
         errno = ENOSPC;
         goto out;
     }
@@ -391,19 +380,19 @@ snj_session_append(struct snj_session *session, const char *type, json_t *data,
         snj_json_canonical(event, &line) < 0 || snj_buf_putc(&line, '\n') < 0)
         goto memory_error;
     if ((off_t)line.len > SNJ_LOG_HARD_LIMIT - SNJ_LOG_RESERVE - session->log_end) {
-        set_error(error, error_size, "event would consume session closure reserve");
+        snj_errorf(error, error_size, "event would consume session closure reserve");
         errno = ENOSPC;
         goto out;
     }
     actual_end = lseek(session->log_fd, 0, SEEK_END);
     if (actual_end < 0 || actual_end != session->log_end) {
-        set_error(error, error_size, "event log end changed unexpectedly");
+        snj_errorf(error, error_size, "event log end changed unexpectedly");
         errno = EIO;
         goto out;
     }
     if (snj_write_full(session->log_fd, line.data, line.len) < 0 ||
         snj_sync_file(session->log_fd) < 0) {
-        set_error(error, error_size, "cannot durably append %s: %s", type,
+        snj_errorf(error, error_size, "cannot durably append %s: %s", type,
                   strerror(errno));
         goto out;
     }
@@ -416,7 +405,7 @@ snj_session_append(struct snj_session *session, const char *type, json_t *data,
     rc = 0;
     goto out;
 memory_error:
-    set_error(error, error_size, "cannot encode %s event", type);
+    snj_errorf(error, error_size, "cannot encode %s event", type);
 out:
     if (data)
         json_decref(data);
@@ -477,7 +466,7 @@ common_event_valid(json_t *event, struct snj_session *session, uint64_t seq,
         !snj_hex_is_lower(prev_hash, SNJ_SHA256_HEX_LEN) ||
         strcmp(prev_hash, prev) != 0 || strcmp(session_id, session->id) != 0 ||
         !json_is_object(json_object_get(event, "data"))) {
-        set_error(error, error_size, "invalid event envelope at sequence %llu",
+        snj_errorf(error, error_size, "invalid event envelope at sequence %llu",
                   (unsigned long long)seq);
         return false;
     }
@@ -486,12 +475,12 @@ common_event_valid(json_t *event, struct snj_session *session, uint64_t seq,
         snj_json_digest(copy, computed) < 0) {
         if (copy)
             json_decref(copy);
-        set_error(error, error_size, "cannot verify event digest");
+        snj_errorf(error, error_size, "cannot verify event digest");
         return false;
     }
     json_decref(copy);
     if (strcmp(event_hash, computed) != 0) {
-        set_error(error, error_size, "event digest mismatch at sequence %llu",
+        snj_errorf(error, error_size, "event digest mismatch at sequence %llu",
                   (unsigned long long)seq);
         return false;
     }
@@ -2108,14 +2097,14 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         clear_response_state(session);
         clear_pending_steering(session);
     } else {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "event type %s is not implemented by this checkpoint", type);
         errno = ENOTSUP;
         return -1;
     }
     return 0;
 invalid:
-    set_error(error, error_size, "invalid %s transition at sequence %llu", type,
+    snj_errorf(error, error_size, "invalid %s transition at sequence %llu", type,
               (unsigned long long)seq);
     errno = EINVAL;
     return -1;
@@ -2142,7 +2131,7 @@ snj_store_scan_log(struct snj_session *session,
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            set_error(error, error_size, "cannot read event log: %s", strerror(errno));
+            snj_errorf(error, error_size, "cannot read event log: %s", strerror(errno));
             goto out;
         }
         if (got == 0)
@@ -2151,13 +2140,13 @@ snj_store_scan_log(struct snj_session *session,
         for (ssize_t i = 0; i < got; ++i) {
             if (chunk[i] != '\n') {
                 if (snj_buf_putc(&line, chunk[i]) < 0) {
-                    set_error(error, error_size, "event line exceeds 16 MiB");
+                    snj_errorf(error, error_size, "event line exceeds 16 MiB");
                     goto out;
                 }
                 continue;
             }
             if (!line.len) {
-                set_error(error, error_size, "blank event line at sequence %llu",
+                snj_errorf(error, error_size, "blank event line at sequence %llu",
                           (unsigned long long)seq);
                 errno = EINVAL;
                 goto out;
@@ -2168,7 +2157,7 @@ snj_store_scan_log(struct snj_session *session,
             const char *type;
             json_t *data;
             if (!event) {
-                set_error(error, error_size, "corrupt event %llu: %s",
+                snj_errorf(error, error_size, "corrupt event %llu: %s",
                           (unsigned long long)seq, jerr);
                 goto out;
             }
@@ -2186,26 +2175,26 @@ snj_store_scan_log(struct snj_session *session,
         }
     }
     if (line.len && tail_policy == SNJ_TAIL_REJECT) {
-        set_error(error, error_size, "event log has an incomplete final suffix");
+        snj_errorf(error, error_size, "event log has an incomplete final suffix");
         errno = EINVAL;
         goto out;
     }
     if (line.len && tail_policy == SNJ_TAIL_TRUNCATE &&
         (ftruncate(session->log_fd, complete_end) < 0 ||
          snj_sync_file(session->log_fd) < 0)) {
-        set_error(error, error_size, "cannot truncate incomplete log tail: %s",
+        snj_errorf(error, error_size, "cannot truncate incomplete log tail: %s",
                   strerror(errno));
         goto out;
     }
     session->log_end = complete_end;
     session->next_seq = seq;
     if (seq == 1) {
-        set_error(error, error_size, "session event log is empty");
+        snj_errorf(error, error_size, "session event log is empty");
         errno = EINVAL;
         goto out;
     }
     if (session->active_turn && !allow_active) {
-        set_error(error, error_size,
+        snj_errorf(error, error_size,
                   "active-turn recovery is unavailable in this scan mode");
         errno = ENOTSUP;
         goto out;
@@ -2233,7 +2222,7 @@ snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
 
     if (!session || !fn || session->log_fd < 0 || session->log_end < 0 ||
         !snj_hex_is_lower(session->id, SNJ_ID_HEX_LEN)) {
-        set_error(error, error_size, "invalid session event iterator");
+        snj_errorf(error, error_size, "invalid session event iterator");
         errno = EINVAL;
         return -1;
     }
@@ -2251,11 +2240,11 @@ snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            set_error(error, error_size, "cannot read event log: %s", strerror(errno));
+            snj_errorf(error, error_size, "cannot read event log: %s", strerror(errno));
             goto out;
         }
         if (got == 0) {
-            set_error(error, error_size, "event log ended before recorded boundary");
+            snj_errorf(error, error_size, "event log ended before recorded boundary");
             errno = EIO;
             goto out;
         }
@@ -2268,13 +2257,13 @@ snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
 
             if (chunk[i] != '\n') {
                 if (snj_buf_putc(&line, chunk[i]) < 0) {
-                    set_error(error, error_size, "event line exceeds 16 MiB");
+                    snj_errorf(error, error_size, "event line exceeds 16 MiB");
                     goto out;
                 }
                 continue;
             }
             if (!line.len) {
-                set_error(error, error_size, "blank event line at sequence %llu",
+                snj_errorf(error, error_size, "blank event line at sequence %llu",
                           (unsigned long long)seq);
                 errno = EINVAL;
                 goto out;
@@ -2282,7 +2271,7 @@ snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
             event = snj_json_load_canonical(line.data, line.len,
                                             jerr, sizeof(jerr));
             if (!event) {
-                set_error(error, error_size, "corrupt event %llu: %s",
+                snj_errorf(error, error_size, "corrupt event %llu: %s",
                           (unsigned long long)seq, jerr);
                 goto out;
             }
@@ -2299,7 +2288,7 @@ snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
         }
     }
     if (line.len) {
-        set_error(error, error_size, "event log has an incomplete final suffix");
+        snj_errorf(error, error_size, "event log has an incomplete final suffix");
         errno = EINVAL;
         goto out;
     }
@@ -2453,7 +2442,7 @@ snj_session_commit(struct snj_session *session, const char *type, json_t *data,
         if (apply)
             json_decref(apply);
         free_staged_state(&staged);
-        set_error(error, error_size, "cannot stage %s event", type);
+        snj_errorf(error, error_size, "cannot stage %s event", type);
         errno = ENOMEM;
         return -1;
     }
@@ -2480,14 +2469,14 @@ canonical_workspace(const char *workspace, char *error, size_t error_size)
     struct stat st;
 
     if (!resolved) {
-        set_error(error, error_size, "cannot resolve workspace %s: %s", workspace,
+        snj_errorf(error, error_size, "cannot resolve workspace %s: %s", workspace,
                   strerror(errno));
         return NULL;
     }
     if (strlen(resolved) > SNJ_PATH_MAX_BYTES ||
         !snj_utf8_valid((const unsigned char *)resolved, strlen(resolved), true) ||
         stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        set_error(error, error_size, "workspace must be an existing UTF-8 directory");
+        snj_errorf(error, error_size, "workspace must be an existing UTF-8 directory");
         free(resolved);
         errno = EINVAL;
         return NULL;
@@ -2531,7 +2520,7 @@ snj_session_create(struct snj_store *store, struct snj_session *session,
         return -1;
     for (unsigned int attempt = 0; attempt < 32u; ++attempt) {
         if (snj_random_id(session->id) < 0) {
-            set_error(error, error_size, "cryptographic session id generation failed");
+            snj_errorf(error, error_size, "cryptographic session id generation failed");
             goto out;
         }
         if (mkdirat(store->sessions_fd, session->id, 0700) == 0) {
@@ -2539,13 +2528,13 @@ snj_session_create(struct snj_store *store, struct snj_session *session,
             break;
         }
         if (errno != EEXIST) {
-            set_error(error, error_size, "cannot create session directory: %s",
+            snj_errorf(error, error_size, "cannot create session directory: %s",
                       strerror(errno));
             goto out;
         }
     }
     if (!created) {
-        set_error(error, error_size, "could not allocate a unique session id");
+        snj_errorf(error, error_size, "could not allocate a unique session id");
         errno = EEXIST;
         goto out;
     }
@@ -2569,7 +2558,7 @@ snj_session_create(struct snj_store *store, struct snj_session *session,
 #endif
     );
     if (session->dir_fd < 0) {
-        set_error(error, error_size, "cannot open new session directory: %s",
+        snj_errorf(error, error_size, "cannot open new session directory: %s",
                   strerror(errno));
         goto out;
     }
@@ -2592,7 +2581,7 @@ snj_session_create(struct snj_store *store, struct snj_session *session,
                            NULL, error, error_size) < 0)
         goto out;
     if (snj_sync_dir(session->dir_fd) < 0 || snj_sync_dir(store->sessions_fd) < 0) {
-        set_error(error, error_size, "cannot sync new session directory: %s",
+        snj_errorf(error, error_size, "cannot sync new session directory: %s",
                   strerror(errno));
         goto out;
     }

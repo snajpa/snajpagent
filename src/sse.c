@@ -2,21 +2,9 @@
 #include "sse.h"
 
 #include <errno.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
-static void
-set_error(char *error, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-
-    if (!size)
-        return;
-    va_start(ap, fmt);
-    (void)vsnprintf(error, size, fmt, ap);
-    va_end(ap);
-}
 
 void
 snj_sse_init(struct snj_sse_parser *parser, snj_sse_record_fn record,
@@ -46,7 +34,7 @@ fail(struct snj_sse_parser *parser, char *error, size_t error_size,
      const char *message)
 {
     parser->failed = true;
-    set_error(error, error_size, "%s", message);
+    snj_errorf(error, error_size, "%s", message);
     errno = EPROTO;
     return -1;
 }
@@ -85,7 +73,7 @@ dispatch(struct snj_sse_parser *parser, char *error, size_t error_size)
     if (rc != 0) {
         parser->failed = true;
         if (error_size && !error[0])
-            set_error(error, error_size, "SSE consumer rejected an event");
+            snj_errorf(error, error_size, "SSE consumer rejected an event");
         if (!errno)
             errno = EPROTO;
         return -1;
@@ -117,7 +105,7 @@ dispatch_comment(struct snj_sse_parser *parser,
     if (rc != 0) {
         parser->failed = true;
         if (error_size && !error[0])
-            set_error(error, error_size, "SSE consumer rejected a comment");
+            snj_errorf(error, error_size, "SSE consumer rejected a comment");
         if (!errno)
             errno = EPROTO;
         return -1;
@@ -197,7 +185,7 @@ snj_sse_feed(struct snj_sse_parser *parser, const void *data, size_t len,
 
     if (parser->failed) {
         errno = EPROTO;
-        set_error(error, error_size, "SSE parser is already failed");
+        snj_errorf(error, error_size, "SSE parser is already failed");
         return -1;
     }
     if (len > SNJ_MAX_PROVIDER_WIRE - parser->wire_bytes)
@@ -235,7 +223,7 @@ snj_sse_finish(struct snj_sse_parser *parser, char *error, size_t error_size)
 {
     if (parser->failed) {
         errno = EPROTO;
-        set_error(error, error_size, "SSE parser is failed");
+        snj_errorf(error, error_size, "SSE parser is failed");
         return -1;
     }
     if (parser->pending_cr || parser->line.len || parser->data_seen ||

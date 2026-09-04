@@ -10,7 +10,7 @@
 #define SNJ_WIRE_HEADER_MAX (16u * 1024u)
 #define SNJ_WIRE_URL_MAX (16u * 1024u)
 #define SNJ_WIRE_SECRET_MAX 4096u
-#define SNJ_WIRE_SECRET_COUNT_MAX 64u
+#define SNJ_WIRE_SECRET_COUNT_MAX 81u
 
 struct snj_wire_secrets {
     const char *const *values;
