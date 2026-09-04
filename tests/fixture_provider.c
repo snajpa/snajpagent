@@ -389,6 +389,50 @@ snj_fixture_response(const char *prompt, const json_t *steering,
             goto allocation;
         return 0;
     }
+    if (strcmp(prompt, "terminal_paced_decode") == 0) {
+        static const char full[] =
+            "Paced tokens form interfragment and finish finalword";
+        static const char *const fragments[] = {
+            "Paced ", "tokens ", "form inter", "fragment ",
+            "and finish ", "finalword"
+        };
+
+        if (cycle == 1u) {
+            size_t index = graph->count;
+            size_t fragment_count = sizeof(fragments) / sizeof(fragments[0]);
+
+            if (snj_response_graph_add_public(
+                    graph, SNJ_ITEM_ASSISTANT, SNJ_PHASE_COMMENTARY,
+                    "msg_fixture_terminal_paced", full) < 0 ||
+                add_call(graph, workspace, cycle, 1u, "fixture paced") < 0)
+                goto allocation;
+            for (size_t part = 0u; part < fragment_count; ++part) {
+                if (emit(opaque, index, SNJ_ITEM_ASSISTANT,
+                         SNJ_PHASE_COMMENTARY, fragments[part],
+                         strlen(fragments[part])) < 0)
+                    goto allocation;
+                for (unsigned int wait = 0u;
+                     wait < (part + 1u == fragment_count ? 60u : 4u);
+                     ++wait) {
+                    int pump_rc = pump(opaque, 20u);
+
+                    if (pump_rc != 0)
+                        return pump_rc;
+                }
+            }
+            return 0;
+        }
+        for (unsigned int wait = 0u; wait < 60u; ++wait) {
+            int pump_rc = pump(opaque, 20u);
+
+            if (pump_rc != 0)
+                return pump_rc;
+        }
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_terminal_paced_final",
+                           "paced complete", 0);
+    }
     if (strcmp(prompt, "typing_stream") == 0) {
         static const char full[] =
             "model-output-one model-output-two model-output-three";

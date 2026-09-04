@@ -10,6 +10,11 @@ the terminal, and how users inspect and modify queued turns.
 - Public model text is soft-wrapped at word boundaries to the current terminal
   width. Explicit model newlines remain explicit, and a single word wider than
   the terminal may hard-wrap.
+- Every complete UTF-8 provider delta becomes visible before its delivery
+  callback returns. Word-wrap lookahead must not retain the newest word until
+  another delta or response completion. If a provider divides one word across
+  deltas, its already-visible prefix cannot be moved; the continuation remains
+  contiguous and may use the terminal's hard wrap if it reaches the margin.
 - Wrapping is a terminal presentation detail. Stored response text, partial
   response events, redirected output, and provider protocol data remain byte
   exact and do not gain presentation newlines.
@@ -28,6 +33,11 @@ the terminal, and how users inspect and modify queued turns.
 The pause provides display focus, not a provider-generation guarantee. Input,
 interrupts, and local active-turn commands remain responsive while output is
 paused.
+
+The `working…` activity line is shown only after an open public item has been
+closed. It follows all text already decoded for that item on a separate line;
+response completion must not release a withheld final word and paint the
+activity line as one delayed update.
 
 ## Queue Commands
 
@@ -117,6 +127,12 @@ scenario covers:
   pop, including the `edit N › ` composer and preservation of queue order;
 - prompt, status, model output, and composer redraws without leaked escape
   sequences, overwritten text, duplicate fragments, or missing fragments; and
+- API-like paced decoding through small fragments delivered roughly every
+  40--100 ms, including a word divided across deltas and a final fragment with
+  no trailing whitespace; each complete fragment must be visible at callback
+  cadence, the divided word must remain contiguous, and the final fragment
+  must be visible during a subsequent provider pause before `working…` appears
+  alone on the following line; and
 - enabled and disabled `AGENTS.md` discovery as recorded in the durable
   `turn_started` event.
 

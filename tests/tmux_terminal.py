@@ -24,6 +24,7 @@ RENDER_TEXT = (
     "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ "
     "tail control:\x1b[31m"
 )
+PACED_TEXT = "Paced tokens form interfragment and finish finalword"
 
 
 def read_events(dotdir):
@@ -275,6 +276,100 @@ def run_status_case(binary, root):
         expected = "status-first-fragment status-second-fragment"
         if len(completed) != 1 or completed[0]["data"]["items"][0]["text"] != expected:
             raise AssertionError("status scenario changed durable assistant text")
+        terminal.exit()
+    finally:
+        try:
+            screen = terminal.last_screen or terminal.capture()
+            (case / "screen.txt").write_text(screen, encoding="utf-8")
+        finally:
+            close_fixture_terminal(terminal)
+
+
+def wait_normalized(terminal, needle, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    screen = ""
+    while time.monotonic() < deadline:
+        screen = terminal.capture(join_wrapped=True)
+        if needle in normalize_space(screen):
+            return screen, time.monotonic()
+        if terminal.dead():
+            raise AssertionError(
+                f"pane exited while waiting for {needle!r}:\n{screen}"
+            )
+        time.sleep(0.01)
+    raise AssertionError(f"timeout waiting for {needle!r}:\n{screen}")
+
+
+def run_paced_decode_case(binary, root):
+    case = root / "decode"
+    workspace = case / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False)
+    dotdir = case / "state"
+    terminal = TmuxTerminal(
+        case / "terminal", binary, workspace, dotdir, config, 28, 14
+    )
+    try:
+        terminal.wait("\n›")
+        terminal.submit("terminal_paced_decode")
+        wait_normalized(terminal, "Paced")
+        wait_normalized(terminal, "Paced tokens")
+        _, split_prefix_at = wait_normalized(
+            terminal, "Paced tokens form inter"
+        )
+        _, split_word_at = wait_normalized(
+            terminal, "Paced tokens form interfragment"
+        )
+        if split_word_at - split_prefix_at < 0.03:
+            raise AssertionError(
+                "a complete split-word prefix was withheld until its suffix"
+            )
+        wait_normalized(terminal, "and finish")
+        final_screen, final_at = wait_normalized(
+            terminal, PACED_TEXT, timeout=0.35
+        )
+        if "working…" in final_screen:
+            raise AssertionError(
+                "activity appeared while the paced public item was open"
+            )
+
+        time.sleep(0.45)
+        held_screen = terminal.capture(join_wrapped=True)
+        if PACED_TEXT not in normalize_space(held_screen):
+            raise AssertionError("the visible final fragment was erased")
+        if "working…" in held_screen:
+            raise AssertionError(
+                "activity interrupted the provider's post-delta pause"
+            )
+
+        activity = terminal.wait("working…", timeout=3.0, join_wrapped=True)
+        if time.monotonic() - final_at < 0.8:
+            raise AssertionError(
+                "activity did not follow the fixture's post-delta pause"
+            )
+        if not re.search(r"finalword[ \t]*\nworking…", activity):
+            raise AssertionError(
+                f"activity did not start on the line after visible text:\n{activity}"
+            )
+
+        _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 6.0)
+        completed = event_list(events, "response_completed")
+        public = [
+            item["text"]
+            for response in completed
+            for item in response["data"]["items"]
+            if item["kind"] in {"assistant", "refusal"} and item.get("text")
+        ]
+        if public != [PACED_TEXT, "paced complete"]:
+            raise AssertionError(
+                f"paced rendered text differs from durable output: {public!r}"
+            )
+        final = normalize_space(terminal.capture(join_wrapped=True))
+        if final.count(PACED_TEXT) != 1:
+            raise AssertionError(
+                "paced text was missing, duplicated, or reordered in tmux history"
+            )
         terminal.exit()
     finally:
         try:
@@ -577,6 +672,7 @@ def run_fixture(binary, workspace, root):
     del workspace
     root.mkdir(mode=0o700, parents=True)
     run_status_case(binary, root)
+    run_paced_decode_case(binary, root)
     run_render_case(binary, root)
     run_queue_case(binary, root)
     print("tmux_terminal fixture: ok")

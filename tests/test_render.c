@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -46,6 +47,18 @@ capture(unsigned int verbosity, char *out, size_t out_size)
 }
 
 static size_t
+drain_available(int fd, char *out, size_t out_size, size_t used)
+{
+    ssize_t n;
+
+    while ((n = read(fd, out + used, out_size - used - 1u)) > 0)
+        used += (size_t)n;
+    assert(n == 0 || (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)));
+    out[used] = '\0';
+    return used;
+}
+
+static size_t
 capture_wrapped(char *out, size_t out_size, struct snj_buf *delivered)
 {
     static const char first[] = "alpha beta gamm";
@@ -58,6 +71,7 @@ capture_wrapped(char *out, size_t out_size, struct snj_buf *delivered)
     size_t used = 0u;
 
     assert(pipe(fds) == 0);
+    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
     saved = dup(STDOUT_FILENO);
     assert(saved >= 0);
     assert(dup2(fds[1], STDOUT_FILENO) >= 0);
@@ -69,7 +83,11 @@ capture_wrapped(char *out, size_t out_size, struct snj_buf *delivered)
     snj_render_attach_term(&render, &term);
     assert(snj_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snj_render_public(&render, first, sizeof(first) - 1u, delivered) == 0);
+    used = drain_available(fds[0], out, out_size, used);
+    assert(strcmp(out, "alpha beta gamm") == 0);
     assert(snj_render_public(&render, second, sizeof(second) - 1u, delivered) == 0);
+    used = drain_available(fds[0], out, out_size, used);
+    assert(strcmp(out, "alpha beta gamma\ndelta") == 0);
     assert(snj_render_public_end(&render) == 0);
     assert(dup2(saved, STDOUT_FILENO) >= 0);
     close(saved);

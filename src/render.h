@@ -24,6 +24,8 @@ struct snj_render {
     struct snj_buf wrap_pending;
     size_t public_column;
     bool wrap_has_word;
+    bool wrap_continuation;
+    bool wrap_word_open;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
 };
