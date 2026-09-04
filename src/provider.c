@@ -25,8 +25,11 @@
 struct provider_ctx {
     struct snj_sse_parser sse;
     struct snj_responses_stream stream;
+    struct snj_buf body;
     struct snj_buf error_body;
     struct snj_secret_set secrets;
+    struct curl_slist *headers;
+    CURL *curl;
     const struct snj_config *config;
     const struct snj_provider_config *provider;
     struct snj_render *render;
@@ -37,6 +40,7 @@ struct provider_ctx {
     uint32_t retry_after_ms;
     bool retry_after_present;
     bool body_failed;
+    bool curl_global;
     bool semantic_body_seen;
     bool request_may_have_been_sent;
     char error[256];
@@ -125,30 +129,31 @@ render_config_header(struct provider_ctx *ctx, struct snj_buf *redacted,
 
 static int
 render_request_headers(struct provider_ctx *ctx, const char *request_line,
-                       const char *accept)
+                       const char *accept, bool has_body)
 {
     struct snj_buf redacted;
     struct snj_buf host;
+    struct snj_buf accept_line;
     int rc = 0;
 
     if (!ctx->render || ctx->render->verbosity < 6u)
         return 0;
     snj_buf_init(&redacted, SNJ_WIRE_HEADER_MAX);
     snj_buf_init(&host, SNJ_CONFIG_URL_MAX + 8u);
-    if (append_host_header(&host, ctx->provider->base_url) < 0) {
-        snj_buf_free(&redacted);
-        snj_buf_free(&host);
-        return -1;
-    }
+    snj_buf_init(&accept_line, SNJ_WIRE_HEADER_MAX);
+    if (append_host_header(&host, ctx->provider->base_url) < 0 ||
+        snj_buf_printf(&accept_line, "accept: %s", accept) < 0)
+        goto fail;
     if (snj_render_transport(ctx->render, '>',
                              request_line, strlen(request_line)) < 0 ||
         snj_render_transport(ctx->render, '>',
                              (const char *)host.data, host.len) < 0 ||
         snj_render_transport(ctx->render, '>',
-                             accept, strlen(accept)) < 0 ||
-        snj_render_transport(ctx->render, '>',
-                             "content-type: application/json",
-                             strlen("content-type: application/json")) < 0 ||
+                             (const char *)accept_line.data,
+                             accept_line.len) < 0 ||
+        (has_body && snj_render_transport(ctx->render, '>',
+             "content-type: application/json",
+             strlen("content-type: application/json")) < 0) ||
         snj_wire_header_redact((const unsigned char *)"authorization: Bearer x",
                                23u, &ctx->secrets.wire, &redacted) < 0 ||
         snj_render_transport(ctx->render, '>', (const char *)redacted.data,
@@ -163,6 +168,11 @@ render_request_headers(struct provider_ctx *ctx, const char *request_line,
         render_config_header(ctx, &redacted, "X-OpenRouter-Title",
                              ctx->provider->openrouter_title) < 0)
         rc = -1;
+    goto out;
+fail:
+    rc = -1;
+out:
+    snj_buf_free(&accept_line);
     snj_buf_free(&redacted);
     snj_buf_free(&host);
     return rc;
@@ -1261,6 +1271,162 @@ url_request_target(const char *url)
     return target ? target : "/";
 }
 
+static void
+provider_ctx_init(struct provider_ctx *ctx, const struct snj_config *config,
+                  const struct snj_provider_config *provider,
+                  const struct snj_credential *credential,
+                  struct snj_render *render, snj_provider_pump_fn pump,
+                  void *pump_opaque, size_t body_max, size_t response_max)
+{
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->config = config;
+    ctx->provider = provider;
+    ctx->render = render;
+    ctx->pump = pump;
+    ctx->pump_opaque = pump_opaque;
+    snj_secret_set_build(&ctx->secrets, config, credential);
+    snj_buf_init(&ctx->body, body_max);
+    snj_buf_init(&ctx->error_body, response_max);
+}
+
+static void
+provider_ctx_free(struct provider_ctx *ctx)
+{
+    if (ctx->curl)
+        curl_easy_cleanup(ctx->curl);
+    curl_slist_free_all(ctx->headers);
+    if (ctx->curl_global)
+        curl_global_cleanup();
+    snj_buf_free(&ctx->body);
+    snj_buf_free(&ctx->error_body);
+    snj_sse_free(&ctx->sse);
+    snj_responses_stream_free(&ctx->stream);
+}
+
+static int
+provider_request_setup(struct provider_ctx *ctx,
+                       const struct snj_credential *credential,
+                       const char *path, const char *accept,
+                       const json_t *request, const char *body_error,
+                       size_t (*write_fn)(char *, size_t, size_t, void *),
+                       char *error, size_t error_size)
+{
+    char url[SNJ_CONFIG_URL_MAX + 64u];
+    char request_line[SNJ_CONFIG_URL_MAX + 96u];
+    const char *endpoint;
+    bool has_body = request != NULL;
+    int written;
+
+    if (has_body && snj_json_canonical(request, &ctx->body) < 0) {
+        snj_errorf(error, error_size, "%s", body_error);
+        return -1;
+    }
+    if (provider_endpoint_url(ctx->provider, path, url, sizeof(url), &endpoint,
+                              error, error_size) < 0)
+        return -1;
+    written = snprintf(request_line, sizeof(request_line), "%s %s HTTP/1.1",
+                       has_body ? "POST" : "GET",
+                       url_request_target(endpoint));
+    if (written <= 0 || (size_t)written >= sizeof(request_line)) {
+        snj_errorf(error, error_size, "provider request line is too long");
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
+        snj_errorf(error, error_size, "libcurl could not initialize");
+        errno = EIO;
+        return -1;
+    }
+    ctx->curl_global = true;
+    ctx->curl = curl_easy_init();
+    if (!ctx->curl) {
+        snj_errorf(error, error_size, "libcurl easy handle could not initialize");
+        errno = ENOMEM;
+        return -1;
+    }
+    if (append_named_header(&ctx->headers, "Accept", accept) < 0 ||
+        (has_body &&
+         append_header(&ctx->headers, "Content-Type: application/json") < 0) ||
+        append_provider_headers(&ctx->headers, ctx->provider, credential) < 0) {
+        snj_errorf(error, error_size, "provider headers could not be allocated");
+        return -1;
+    }
+    if (render_request_headers(ctx, request_line, accept, has_body) < 0) {
+        snj_errorf(error, error_size, ctx->error[0] ? ctx->error :
+                   "provider request headers could not be rendered");
+        return -1;
+    }
+    if (curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK ||
+        (has_body ?
+         (curl_easy_setopt(ctx->curl, CURLOPT_POST, 1L) != CURLE_OK ||
+          curl_easy_setopt(ctx->curl, CURLOPT_POSTFIELDS,
+                           (char *)ctx->body.data) != CURLE_OK ||
+          curl_easy_setopt(ctx->curl, CURLOPT_POSTFIELDSIZE_LARGE,
+                           (curl_off_t)ctx->body.len) != CURLE_OK) :
+         curl_easy_setopt(ctx->curl, CURLOPT_HTTPGET, 1L) != CURLE_OK) ||
+        curl_easy_setopt(ctx->curl, CURLOPT_WRITEFUNCTION, write_fn) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_WRITEDATA, ctx) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_HEADERFUNCTION, header_cb) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_HEADERDATA, ctx) != CURLE_OK ||
+        (ctx->pump &&
+         (curl_easy_setopt(ctx->curl, CURLOPT_XFERINFOFUNCTION,
+                           progress_cb) != CURLE_OK ||
+          curl_easy_setopt(ctx->curl, CURLOPT_XFERINFODATA, ctx) != CURLE_OK ||
+          curl_easy_setopt(ctx->curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK)) ||
+        curl_easy_setopt(ctx->curl, CURLOPT_CONNECTTIMEOUT_MS,
+                         (long)ctx->provider->connect_timeout_ms) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_TIMEOUT_MS,
+                         (long)ctx->provider->request_timeout_ms) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_LOW_SPEED_TIME,
+                         (long)low_speed_seconds(
+                             ctx->provider->idle_timeout_ms)) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_USERAGENT,
+                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
+        snj_errorf(error, error_size, "libcurl option setup failed");
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
+static int
+provider_request_perform(struct provider_ctx *ctx, const char *failure,
+                         char *error, size_t error_size, int *cancel_code,
+                         unsigned int *retry_count)
+{
+    unsigned int retries = 0u;
+    unsigned int *retry_out = retry_count ? retry_count : &retries;
+    CURLcode code = perform_with_retry(ctx->curl, ctx, error, error_size,
+                                       cancel_code, retry_out);
+
+    if (code == CURLE_ABORTED_BY_CALLBACK &&
+        (ctx->cancel_code == 1 || ctx->cancel_code == 2)) {
+        if (cancel_code)
+            *cancel_code = ctx->cancel_code;
+        return ctx->cancel_code;
+    }
+    if (code != CURLE_OK) {
+        snj_errorf(error, error_size, "%s%s%s",
+                   ctx->error[0] ? ctx->error : failure,
+                   ctx->error[0] ? "" : ": ",
+                   ctx->error[0] ? "" : curl_easy_strerror(code));
+        append_retry_suffix(error, error_size, *retry_out,
+                            ctx->request_may_have_been_sent);
+        errno = EIO;
+        return -1;
+    }
+    if (ctx->http_status < 200 || ctx->http_status >= 300) {
+        (void)classify_non2xx(ctx, error, error_size);
+        append_retry_suffix(error, error_size, *retry_out,
+                            ctx->request_may_have_been_sent);
+        return -1;
+    }
+    return 0;
+}
+
 int
 snj_provider_models_list(const struct snj_config *config,
                          const struct snj_provider_config *provider,
@@ -1269,12 +1435,6 @@ snj_provider_models_list(const struct snj_config *config,
                          char *error, size_t error_size)
 {
     struct provider_ctx ctx;
-    struct curl_slist *headers = NULL;
-    CURL *curl = NULL;
-    CURLcode code;
-    char url_buffer[SNJ_CONFIG_URL_MAX + 64u];
-    char request_line[SNJ_CONFIG_URL_MAX + 96u];
-    const char *url = NULL;
     const char *path;
     bool codex;
     unsigned int retry_count = 0u;
@@ -1287,99 +1447,17 @@ snj_provider_models_list(const struct snj_config *config,
         errno = EINVAL;
         return -1;
     }
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.config = config;
-    ctx.provider = provider;
-    ctx.render = render;
-    snj_secret_set_build(&ctx.secrets, config, credential);
-    snj_buf_init(&ctx.error_body, SNJ_WIRE_BODY_MAX);
+    provider_ctx_init(&ctx, config, provider, credential, render, NULL, NULL,
+                      SNJ_WIRE_BODY_MAX, SNJ_WIRE_BODY_MAX);
     codex = provider_uses_codex_catalog(provider);
     path = codex ? SNJ_CODEX_CATALOG_PATH : "/v1/models";
-    if (provider_endpoint_url(provider, path, url_buffer,
-                              sizeof(url_buffer), &url,
-                              error, error_size) < 0)
-        goto out;
-    {
-        int written = snprintf(request_line, sizeof(request_line),
-                               "GET %s HTTP/1.1",
-                               url_request_target(url));
-        if (written <= 0 || (size_t)written >= sizeof(request_line)) {
-            snj_errorf(error, error_size,
-                      "model-list request line is too long");
-            errno = ENAMETOOLONG;
-            goto out;
-        }
-    }
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
-        snj_errorf(error, error_size, "libcurl could not initialize");
-        errno = EIO;
-        goto out;
-    }
-    curl = curl_easy_init();
-    if (!curl) {
-        snj_errorf(error, error_size,
-                  "libcurl easy handle could not initialize");
-        errno = ENOMEM;
-        goto out_global;
-    }
-    if (append_header(&headers, "Accept: application/json") < 0 ||
-        append_provider_headers(&headers, provider, credential) < 0) {
-        snj_errorf(error, error_size, "provider headers could not be allocated");
-        goto out_global;
-    }
-    if (render_request_headers(&ctx, request_line,
-                               "accept: application/json") < 0) {
-        snj_errorf(error, error_size, ctx.error[0] ? ctx.error :
-                  "model-list request headers could not be rendered");
-        goto out_global;
-    }
-    if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, count_write_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-                         (long)provider->connect_timeout_ms) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
-                         (long)provider->request_timeout_ms) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
-                         (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
-        snj_errorf(error, error_size, "libcurl option setup failed");
-        errno = EIO;
-        goto out_global;
-    }
-    code = perform_with_retry(curl, &ctx, error, error_size, NULL,
-                              &retry_count);
-    if (code != CURLE_OK) {
-        (void)snprintf(error, error_size, "%s%s%s",
-                       ctx.error[0] ? ctx.error : "model discovery failed",
-                       ctx.error[0] ? "" : ": ",
-                       ctx.error[0] ? "" : curl_easy_strerror(code));
-        append_retry_suffix(error, error_size, retry_count,
-                            ctx.request_may_have_been_sent);
-        errno = EIO;
-        goto out_global;
-    }
-    if (ctx.http_status < 200 || ctx.http_status >= 300) {
-        (void)classify_non2xx(&ctx, error, error_size);
-        append_retry_suffix(error, error_size, retry_count,
-                            ctx.request_may_have_been_sent);
-        goto out_global;
-    }
-    rc = parse_models_body(&ctx, codex, models, error, error_size);
-out_global:
-    if (curl)
-        curl_easy_cleanup(curl);
-    curl_slist_free_all(headers);
-    curl_global_cleanup();
-out:
-    snj_buf_free(&ctx.error_body);
+    if (provider_request_setup(&ctx, credential, path, "application/json",
+                               NULL, NULL, count_write_cb,
+                               error, error_size) == 0 &&
+        provider_request_perform(&ctx, "model discovery failed",
+                                 error, error_size, NULL, &retry_count) == 0)
+        rc = parse_models_body(&ctx, codex, models, error, error_size);
+    provider_ctx_free(&ctx);
     return rc;
 }
 
@@ -1398,12 +1476,6 @@ snj_provider_responses_count(const json_t *count_request,
                              unsigned int *retry_count)
 {
     struct provider_ctx ctx;
-    struct snj_buf body;
-    struct curl_slist *headers = NULL;
-    CURL *curl = NULL;
-    CURLcode code;
-    char url_buffer[SNJ_CONFIG_URL_MAX + 64u];
-    const char *url = NULL;
     int rc = -1;
 
     if (cancel_code)
@@ -1418,116 +1490,22 @@ snj_provider_responses_count(const json_t *count_request,
         errno = EINVAL;
         return -1;
     }
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.config = config;
-    ctx.provider = provider;
-    ctx.render = render;
-    ctx.pump = pump;
-    ctx.pump_opaque = pump_opaque;
-    snj_secret_set_build(&ctx.secrets, config, credential);
-    snj_buf_init(&ctx.error_body, SNJ_WIRE_BODY_MAX);
-    snj_buf_init(&body, SNJ_CONTEXT_MAX_REQUEST);
-
-    if (snj_json_canonical(count_request, &body) < 0) {
-        snj_errorf(error, error_size,
-                  "input-token count request exceeds the bounded body limit");
-        goto out;
-    }
-    if (provider_endpoint_url(provider, "/v1/responses/input_tokens",
-                              url_buffer, sizeof(url_buffer), &url,
-                              error, error_size) < 0)
-        goto out;
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
-        snj_errorf(error, error_size, "libcurl could not initialize");
-        errno = EIO;
-        goto out;
-    }
-    curl = curl_easy_init();
-    if (!curl) {
-        snj_errorf(error, error_size, "libcurl easy handle could not initialize");
-        errno = ENOMEM;
-        goto out_global;
-    }
-    if (append_header(&headers, "Accept: application/json") < 0 ||
-        append_header(&headers, "Content-Type: application/json") < 0 ||
-        append_provider_headers(&headers, provider, credential) < 0) {
-        snj_errorf(error, error_size, "provider headers could not be allocated");
-        goto out_global;
-    }
-    if (render_request_headers(&ctx,
-                               "POST /v1/responses/input_tokens HTTP/1.1",
-                               "accept: application/json") < 0) {
-        snj_errorf(error, error_size, ctx.error[0] ? ctx.error :
-                  "input-token count headers could not be rendered");
-        goto out_global;
-    }
-    if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, (char *)body.data) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
-                         (curl_off_t)body.len) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, count_write_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-                         (long)provider->connect_timeout_ms) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
-                         (long)provider->request_timeout_ms) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
-                         (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
-        snj_errorf(error, error_size, "libcurl option setup failed");
-        errno = EIO;
-        goto out_global;
-    }
-    code = perform_with_retry(curl, &ctx, error, error_size, cancel_code,
-                              retry_count);
-    if (code == CURLE_ABORTED_BY_CALLBACK &&
-        (ctx.cancel_code == 1 || ctx.cancel_code == 2)) {
-        if (cancel_code)
-            *cancel_code = ctx.cancel_code;
-        rc = ctx.cancel_code;
-        goto out_global;
-    }
-    if (code != CURLE_OK) {
-        (void)snprintf(error, error_size, "%s%s%s",
-                       ctx.error[0] ? ctx.error : "input-token count failed",
-                       ctx.error[0] ? "" : ": ",
-                       ctx.error[0] ? "" : curl_easy_strerror(code));
-        append_retry_suffix(error, error_size,
-                            retry_count ? *retry_count : 0u,
-                            ctx.request_may_have_been_sent);
-        errno = EIO;
-        goto out_global;
-    }
-    if (ctx.http_status < 200 || ctx.http_status >= 300) {
-        if (endpoint_unsupported &&
-            (ctx.http_status == 405 || ctx.http_status == 501))
-            *endpoint_unsupported = true;
-        (void)classify_non2xx(&ctx, error, error_size);
-        append_retry_suffix(error, error_size,
-                            retry_count ? *retry_count : 0u,
-                            ctx.request_may_have_been_sent);
-        goto out_global;
-    }
-    rc = parse_count_body(&ctx, input_tokens, error, error_size);
-
-out_global:
-    if (curl)
-        curl_easy_cleanup(curl);
-    curl_slist_free_all(headers);
-    curl_global_cleanup();
-out:
-    snj_buf_free(&body);
-    snj_buf_free(&ctx.error_body);
+    *input_tokens = 0u;
+    provider_ctx_init(&ctx, config, provider, credential, render, pump,
+                      pump_opaque, SNJ_CONTEXT_MAX_REQUEST, SNJ_WIRE_BODY_MAX);
+    if (provider_request_setup(&ctx, credential,
+            "/v1/responses/input_tokens", "application/json", count_request,
+            "input-token count request exceeds the bounded body limit",
+            count_write_cb, error, error_size) == 0)
+        rc = provider_request_perform(&ctx, "input-token count failed",
+                                      error, error_size, cancel_code,
+                                      retry_count);
+    if (rc != 0 && endpoint_unsupported &&
+        (ctx.http_status == 405 || ctx.http_status == 501))
+        *endpoint_unsupported = true;
+    if (rc == 0)
+        rc = parse_count_body(&ctx, input_tokens, error, error_size);
+    provider_ctx_free(&ctx);
     return rc;
 }
 
@@ -1546,12 +1524,6 @@ snj_provider_responses_compact(const json_t *compact_request,
                                unsigned int *retry_count)
 {
     struct provider_ctx ctx;
-    struct snj_buf body;
-    struct curl_slist *headers = NULL;
-    CURL *curl = NULL;
-    CURLcode code;
-    char url_buffer[SNJ_CONFIG_URL_MAX + 64u];
-    const char *url = NULL;
     int rc = -1;
 
     if (cancel_code)
@@ -1569,114 +1541,19 @@ snj_provider_responses_compact(const json_t *compact_request,
         errno = EINVAL;
         return -1;
     }
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.config = config;
-    ctx.provider = provider;
-    ctx.render = render;
-    ctx.pump = pump;
-    ctx.pump_opaque = pump_opaque;
-    snj_secret_set_build(&ctx.secrets, config, credential);
-    snj_buf_init(&ctx.error_body, SNJ_CONTEXT_MAX_COMPACT);
-    snj_buf_init(&body, SNJ_CONTEXT_MAX_COMPACT);
-
-    if (snj_json_canonical(compact_request, &body) < 0) {
-        snj_errorf(error, error_size,
-                  "compact request exceeds the bounded body limit");
-        goto out;
-    }
-    if (provider_endpoint_url(provider, "/v1/responses/compact",
-                              url_buffer, sizeof(url_buffer), &url,
-                              error, error_size) < 0)
-        goto out;
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
-        snj_errorf(error, error_size, "libcurl could not initialize");
-        errno = EIO;
-        goto out;
-    }
-    curl = curl_easy_init();
-    if (!curl) {
-        snj_errorf(error, error_size, "libcurl easy handle could not initialize");
-        errno = ENOMEM;
-        goto out_global;
-    }
-    if (append_header(&headers, "Accept: application/json") < 0 ||
-        append_header(&headers, "Content-Type: application/json") < 0 ||
-        append_provider_headers(&headers, provider, credential) < 0) {
-        snj_errorf(error, error_size, "provider headers could not be allocated");
-        goto out_global;
-    }
-    if (render_request_headers(&ctx,
-                               "POST /v1/responses/compact HTTP/1.1",
-                               "accept: application/json") < 0) {
-        snj_errorf(error, error_size, ctx.error[0] ? ctx.error :
-                  "compact request headers could not be rendered");
-        goto out_global;
-    }
-    if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, (char *)body.data) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
-                         (curl_off_t)body.len) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, count_write_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-                         (long)provider->connect_timeout_ms) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
-                         (long)provider->request_timeout_ms) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
-                         (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
-        snj_errorf(error, error_size, "libcurl option setup failed");
-        errno = EIO;
-        goto out_global;
-    }
-    code = perform_with_retry(curl, &ctx, error, error_size, cancel_code,
-                              retry_count);
-    if (code == CURLE_ABORTED_BY_CALLBACK &&
-        (ctx.cancel_code == 1 || ctx.cancel_code == 2)) {
-        if (cancel_code)
-            *cancel_code = ctx.cancel_code;
-        rc = ctx.cancel_code;
-        goto out_global;
-    }
-    if (code != CURLE_OK) {
-        (void)snprintf(error, error_size, "%s%s%s",
-                       ctx.error[0] ? ctx.error : "compact request failed",
-                       ctx.error[0] ? "" : ": ",
-                       ctx.error[0] ? "" : curl_easy_strerror(code));
-        append_retry_suffix(error, error_size,
-                            retry_count ? *retry_count : 0u,
-                            ctx.request_may_have_been_sent);
-        errno = EIO;
-        goto out_global;
-    }
-    if (ctx.http_status < 200 || ctx.http_status >= 300) {
-        (void)classify_non2xx(&ctx, error, error_size);
-        append_retry_suffix(error, error_size,
-                            retry_count ? *retry_count : 0u,
-                            ctx.request_may_have_been_sent);
-        goto out_global;
-    }
-    rc = parse_compact_body(&ctx, output, output_tokens_bound,
-                            error, error_size);
-
-out_global:
-    if (curl)
-        curl_easy_cleanup(curl);
-    curl_slist_free_all(headers);
-    curl_global_cleanup();
-out:
-    snj_buf_free(&body);
-    snj_buf_free(&ctx.error_body);
+    provider_ctx_init(&ctx, config, provider, credential, render, pump,
+                      pump_opaque, SNJ_CONTEXT_MAX_COMPACT,
+                      SNJ_CONTEXT_MAX_COMPACT);
+    if (provider_request_setup(&ctx, credential, "/v1/responses/compact",
+            "application/json", compact_request,
+            "compact request exceeds the bounded body limit", count_write_cb,
+            error, error_size) == 0)
+        rc = provider_request_perform(&ctx, "compact request failed", error,
+                                      error_size, cancel_code, retry_count);
+    if (rc == 0)
+        rc = parse_compact_body(&ctx, output, output_tokens_bound,
+                                error, error_size);
+    provider_ctx_free(&ctx);
     return rc;
 }
 
@@ -1697,12 +1574,6 @@ snj_provider_responses_create(const json_t *create_request,
                               unsigned int *retry_count)
 {
     struct provider_ctx ctx;
-    struct snj_buf body;
-    struct curl_slist *headers = NULL;
-    CURL *curl = NULL;
-    CURLcode code;
-    char url_buffer[SNJ_CONFIG_URL_MAX + 64u];
-    const char *url = NULL;
     int rc = -1;
 
     if (cancel_code)
@@ -1717,121 +1588,31 @@ snj_provider_responses_create(const json_t *create_request,
         errno = EINVAL;
         return -1;
     }
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.config = config;
-    ctx.provider = provider;
-    ctx.render = render;
-    ctx.pump = pump;
-    ctx.pump_opaque = pump_opaque;
-    snj_secret_set_build(&ctx.secrets, config, credential);
+    provider_ctx_init(&ctx, config, provider, credential, render, pump,
+                      pump_opaque, SNJ_CONTEXT_MAX_REQUEST, SNJ_WIRE_BODY_MAX);
     snj_responses_stream_init(&ctx.stream, emit, emit_opaque);
     snj_sse_init(&ctx.sse, snj_responses_sse_record, &ctx.stream);
-    snj_buf_init(&ctx.error_body, SNJ_WIRE_BODY_MAX);
-    snj_buf_init(&body, SNJ_CONTEXT_MAX_REQUEST);
-
-    if (snj_json_canonical(create_request, &body) < 0) {
-        snj_errorf(error, error_size, "provider request exceeds the bounded body limit");
+    if (provider_request_setup(&ctx, credential, "/v1/responses",
+            "text/event-stream", create_request,
+            "provider request exceeds the bounded body limit", write_cb,
+            error, error_size) == 0)
+        rc = provider_request_perform(&ctx, "provider transport failed", error,
+                                      error_size, cancel_code, retry_count);
+    if (rc != 0)
         goto out;
-    }
-    if (provider_endpoint_url(provider, "/v1/responses",
-                              url_buffer, sizeof(url_buffer), &url,
-                              error, error_size) < 0)
-        goto out;
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
-        snj_errorf(error, error_size, "libcurl could not initialize");
-        errno = EIO;
-        goto out;
-    }
-    curl = curl_easy_init();
-    if (!curl) {
-        snj_errorf(error, error_size, "libcurl easy handle could not initialize");
-        errno = ENOMEM;
-        goto out_global;
-    }
-    if (append_header(&headers, "Accept: text/event-stream") < 0 ||
-        append_header(&headers, "Content-Type: application/json") < 0 ||
-        append_provider_headers(&headers, provider, credential) < 0) {
-        snj_errorf(error, error_size, "provider headers could not be allocated");
-        goto out_global;
-    }
-    if (render_request_headers(&ctx, "POST /v1/responses HTTP/1.1",
-                               "accept: text/event-stream") < 0) {
-        snj_errorf(error, error_size, ctx.error[0] ? ctx.error :
-                  "request headers could not be rendered");
-        goto out_global;
-    }
-    if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, (char *)body.data) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
-                         (curl_off_t)body.len) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_cb) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &ctx) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
-                         (long)provider->connect_timeout_ms) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
-                         (long)provider->request_timeout_ms) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
-                         (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
-        snj_errorf(error, error_size, "libcurl option setup failed");
-        errno = EIO;
-        goto out_global;
-    }
-    code = perform_with_retry(curl, &ctx, error, error_size, cancel_code,
-                              retry_count);
-    if (code == CURLE_ABORTED_BY_CALLBACK &&
-        (ctx.cancel_code == 1 || ctx.cancel_code == 2)) {
-        if (cancel_code)
-            *cancel_code = ctx.cancel_code;
-        rc = ctx.cancel_code;
-        goto out_global;
-    }
-    if (code != CURLE_OK) {
-        (void)snprintf(error, error_size, "%s%s%s",
-                       ctx.error[0] ? ctx.error : "provider transport failed",
-                       ctx.error[0] ? "" : ": ",
-                       ctx.error[0] ? "" : curl_easy_strerror(code));
-        append_retry_suffix(error, error_size,
-                            retry_count ? *retry_count : 0u,
-                            ctx.request_may_have_been_sent);
-        errno = EIO;
-        goto out_global;
-    }
-    if (ctx.http_status < 200 || ctx.http_status >= 300) {
-        (void)classify_non2xx(&ctx, error, error_size);
-        append_retry_suffix(error, error_size,
-                            retry_count ? *retry_count : 0u,
-                            ctx.request_may_have_been_sent);
-        goto out_global;
-    }
     if (snj_sse_finish(&ctx.sse, error, error_size) < 0) {
         snj_errorf(error, error_size,
                   stream_or_sse_error(&ctx, error,
                                       "invalid provider SSE stream"));
-        goto out_global;
+        goto out;
     }
     rc = snj_responses_stream_finish(&ctx.stream, graph, error, error_size);
     if (rc != 0) {
         if (rc > 0)
             rc = 3;
-        goto out_global;
+        goto out;
     }
-
-out_global:
-    if (curl)
-        curl_easy_cleanup(curl);
-    curl_slist_free_all(headers);
-    curl_global_cleanup();
+    rc = 0;
 out:
     if (failure) {
         if (ctx.stream.provider_failure.code[0])
@@ -1840,9 +1621,6 @@ out:
             *failure = ctx.provider_failure;
         failure->output_correction = ctx.stream.output_correction;
     }
-    snj_buf_free(&body);
-    snj_buf_free(&ctx.error_body);
-    snj_sse_free(&ctx.sse);
-    snj_responses_stream_free(&ctx.stream);
+    provider_ctx_free(&ctx);
     return rc;
 }

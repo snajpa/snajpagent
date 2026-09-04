@@ -482,61 +482,9 @@ format_context_meter(struct app_state *app, bool active,
 }
 
 static int
-append_prompt_body(struct snj_buf *out, const char *body, size_t len,
-                   const char *const values[7])
-{
-    static const char *const names[] = {"provider", "model", "effort",
-        "operator", "host", "context", "mode", "goal_spinner",
-        "provider_spinner", "tool_spinner"};
-
-    for (size_t i = 0u; i < len; ++i) {
-        if (body[i] == '\\') {
-            if (++i >= len || snj_buf_putc(out, (unsigned char)body[i]) < 0)
-                return -1;
-        } else if (body[i] == '{') {
-            const char *end = memchr(body + i + 1u, '}', len - i - 1u);
-            size_t field_len, field = 0u;
-
-            if (!end)
-                return -1;
-            field_len = (size_t)(end - body - i - 1u);
-            while (field < sizeof(names) / sizeof(names[0]) &&
-                   (strlen(names[field]) != field_len ||
-                    memcmp(names[field], body + i + 1u, field_len) != 0))
-                ++field;
-            if (field == sizeof(names) / sizeof(names[0]) ||
-                (field < 7u && snj_buf_append(out, values[field],
-                                              strlen(values[field])) < 0) ||
-                (field >= 7u && snj_buf_putc(out, (unsigned char)
-                    (SNJ_TERM_SPINNER_MARKER_BASE + field - 7u)) < 0))
-                return -1;
-            i = (size_t)(end - body);
-        } else if (snj_buf_putc(out, (unsigned char)body[i]) < 0) {
-            return -1;
-        }
-    }
-    return 0;
-}
-
-static const char *
-prompt_case_end(const char *body)
-{
-    unsigned int depth = 1u;
-
-    for (const char *p = body; *p; ++p) {
-        if (*p == '\\' && p[1]) ++p;
-        else if (*p == '{') ++depth;
-        else if (*p == '}' && !--depth) return p;
-    }
-    return NULL;
-}
-
-static int
 format_input_label(struct app_state *app, bool active,
                    char label[SNJ_TERM_LABEL_BYTES])
 {
-    static const char *const cases[] = {"chat:", "rollout-idle:",
-                                        "rollout-active:"};
     const struct snj_provider_config *provider = active ? app->turn_provider :
                                                         next_provider(app);
     const char *model = active ? app->turn_model : next_model(app);
@@ -546,7 +494,6 @@ format_input_label(struct app_state *app, bool active,
     const char *values[7];
     unsigned int selected = snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
                             0u : active ? 2u : 1u;
-    struct snj_buf out;
 
     if (!provider || !model || !effort ||
         format_context_meter(app, active, meter) < 0)
@@ -567,8 +514,10 @@ format_input_label(struct app_state *app, bool active,
     values[5] = meter;
     values[6] = selected == 0u ? "chat" :
                 selected == 1u ? "rollout-idle" : "rollout-active";
-    snj_buf_init(&out, SNJ_TERM_LABEL_BYTES - 1u);
     if (app->queue_edit_id[0]) {
+        struct snj_buf out;
+
+        snj_buf_init(&out, SNJ_TERM_LABEL_BYTES - 1u);
         if (snj_buf_printf(&out, "edit %zu %s", app->queue_edit_number, meter) < 0)
             goto fail;
         for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
@@ -576,38 +525,19 @@ format_input_label(struct app_state *app, bool active,
                 goto fail;
         if (snj_buf_append(&out, "›", strlen("›")) < 0)
             goto fail;
-    } else for (const char *p = app->config->prompt; *p;) {
-        if (*p == '\\') {
-            if (!p[1] || snj_buf_putc(&out, (unsigned char)p[1]) < 0)
-                goto fail;
-            p += 2u;
-        } else if (*p == '{') {
-            unsigned int mode = 0u;
-            const char *body, *end;
-
-            while (mode < 3u && strncmp(p + 1u, cases[mode],
-                                        strlen(cases[mode])) != 0)
-                ++mode;
-            if (mode == 3u)
-                goto fail;
-            body = p + 1u + strlen(cases[mode]);
-            end = prompt_case_end(body);
-            if (!end || (mode == selected &&
-                append_prompt_body(&out, body, (size_t)(end - body), values) < 0))
-                goto fail;
-            p = end + 1u;
-        } else if (snj_buf_putc(&out, (unsigned char)*p++) < 0) {
+        if (!out.len || snj_buf_putc(&out, ' ') < 0 ||
+            snj_buf_terminate(&out) < 0)
             goto fail;
-        }
-    }
-    if (!out.len || snj_buf_putc(&out, ' ') < 0 || snj_buf_terminate(&out) < 0)
-        goto fail;
-    memcpy(label, out.data, out.len + 1u);
-    snj_buf_free(&out);
-    return 0;
+        memcpy(label, out.data, out.len + 1u);
+        snj_buf_free(&out);
+        return 0;
 fail:
-    snj_buf_free(&out);
-    return -1;
+        snj_buf_free(&out);
+        return -1;
+    }
+    return snj_config_prompt_expand(app->config->prompt, selected, values,
+                                    SNJ_TERM_SPINNER_MARKER_BASE, label,
+                                    SNJ_TERM_LABEL_BYTES);
 }
 
 static unsigned int

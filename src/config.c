@@ -294,31 +294,18 @@ invalid:
     return -1;
 }
 
-static bool
-prompt_field(const char *text, size_t len, unsigned int *spinner)
-{
-    static const char *const fields[] = {
-        "provider", "model", "effort", "operator", "host", "context", "mode",
-        "goal_spinner", "provider_spinner", "tool_spinner"
-    };
-
-    for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i)
-        if (strlen(fields[i]) == len && memcmp(text, fields[i], len) == 0) {
-            *spinner = i < 7u ? 0u : 1u << (i - 7u);
-            return true;
-        }
-    return false;
-}
-
 static int
-validate_prompt_body(const char *text, size_t len)
+prompt_body(const char *text, size_t len, const char *const values[7],
+            unsigned char marker, struct snj_buf *out)
 {
+    static const char *const fields[] = {"provider", "model", "effort",
+        "operator", "host", "context", "mode", "goal_spinner",
+        "provider_spinner", "tool_spinner"};
     unsigned int spinners = 0u;
 
     for (size_t i = 0u; i < len; ++i) {
         unsigned char c = (unsigned char)text[i];
-        unsigned int spinner;
-        const char *end;
+        size_t field = 0u;
 
         if (c < 0x20u || c == 0x7fu)
             goto invalid;
@@ -326,16 +313,31 @@ validate_prompt_body(const char *text, size_t len)
             if (++i >= len || (text[i] != '\\' && text[i] != '{' &&
                               text[i] != '}'))
                 goto invalid;
+            if (out && snj_buf_putc(out, (unsigned char)text[i]) < 0)
+                return -1;
         } else if (c == '{') {
-            end = memchr(text + i + 1u, '}', len - i - 1u);
-            if (!end || !prompt_field(text + i + 1u,
-                                      (size_t)(end - text - i - 1u),
-                                      &spinner) || (spinner & spinners))
+            const char *end = memchr(text + i + 1u, '}', len - i - 1u);
+            size_t field_len = end ? (size_t)(end - text - i - 1u) : 0u;
+
+            while (field < sizeof(fields) / sizeof(fields[0]) &&
+                   (strlen(fields[field]) != field_len ||
+                    memcmp(fields[field], text + i + 1u, field_len) != 0))
+                ++field;
+            if (!end || field == sizeof(fields) / sizeof(fields[0]) ||
+                (field >= 7u && (spinners & (1u << (field - 7u)))))
                 goto invalid;
-            spinners |= spinner;
+            if (field >= 7u)
+                spinners |= 1u << (field - 7u);
+            if (out && ((field < 7u && snj_buf_append(out, values[field],
+                                                     strlen(values[field])) < 0) ||
+                        (field >= 7u &&
+                         snj_buf_putc(out, marker + field - 7u) < 0)))
+                return -1;
             i = (size_t)(end - text);
         } else if (c == '}') {
             goto invalid;
+        } else if (out && snj_buf_putc(out, c) < 0) {
+            return -1;
         }
     }
     return 0;
@@ -345,7 +347,9 @@ invalid:
 }
 
 static int
-validate_prompt(const char *text)
+parse_prompt(const char *text, unsigned int selected,
+             const char *const values[7], unsigned char marker,
+             struct snj_buf *out)
 {
     static const char *const names[] = {"chat:", "rollout-idle:",
                                         "rollout-active:"};
@@ -363,12 +367,17 @@ validate_prompt(const char *text)
             if (++i >= len || (text[i] != '\\' && text[i] != '{' &&
                               text[i] != '}'))
                 goto invalid;
+            if (out && snj_buf_putc(out, (unsigned char)text[i]) < 0)
+                return -1;
             continue;
         }
         if (c == '}')
             goto invalid;
-        if (c != '{')
+        if (c != '{') {
+            if (out && snj_buf_putc(out, c) < 0)
+                return -1;
             continue;
+        }
         for (; name < 3u; ++name)
             if (strncmp(text + i + 1u, names[name], strlen(names[name])) == 0) {
                 body = text + i + 1u + strlen(names[name]);
@@ -382,7 +391,8 @@ validate_prompt(const char *text)
             else if (text[end] == '}') --depth;
         }
         if (depth || end - 1u == (size_t)(body - text) ||
-            validate_prompt_body(body, end - 1u - (size_t)(body - text)) < 0)
+            prompt_body(body, end - 1u - (size_t)(body - text), values, marker,
+                        out && name == selected ? out : NULL) < 0)
             goto invalid;
         seen |= 1u << name;
         i = end - 1u;
@@ -392,6 +402,36 @@ validate_prompt(const char *text)
 invalid:
     errno = EINVAL;
     return -1;
+}
+
+static int
+validate_prompt(const char *text)
+{
+    return parse_prompt(text, 3u, NULL, 0u, NULL);
+}
+
+int
+snj_config_prompt_expand(const char *text, unsigned int mode,
+                         const char *const values[7], unsigned char marker,
+                         char *label, size_t label_size)
+{
+    struct snj_buf out;
+    int rc = -1;
+
+    if (!text || mode >= 3u || !values || !label || label_size < 2u ||
+        marker > 0xfdu) {
+        errno = EINVAL;
+        return -1;
+    }
+    snj_buf_init(&out, label_size - 1u);
+    if (parse_prompt(text, mode, values, marker, &out) < 0 || !out.len ||
+        snj_buf_putc(&out, ' ') < 0 || snj_buf_terminate(&out) < 0)
+        goto out;
+    memcpy(label, out.data, out.len + 1u);
+    rc = 0;
+out:
+    snj_buf_free(&out);
+    return rc;
 }
 
 static bool
