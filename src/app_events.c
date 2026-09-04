@@ -7,7 +7,11 @@
 #include "snajpagent.h"
 #include "wire.h"
 
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 json_t *
 snj_app_preference_changed_data(const char *old_key, const char *old_value,
@@ -109,6 +113,345 @@ fail:
     return NULL;
 }
 
+static const char *
+irc_kind_name(enum snj_irc_event_kind kind)
+{
+    static const char *const names[] = {
+        "connected", "disconnected", "join", "part", "quit", "nick",
+        "message", "notice", "topic", "mode", "history_ready"
+    };
+
+    return (unsigned int)kind < sizeof(names) / sizeof(names[0]) ?
+           names[kind] : "unknown";
+}
+
+static int
+irc_kind_parse(const char *name, enum snj_irc_event_kind *kind)
+{
+    for (unsigned int i = 0u; i <= (unsigned int)SNJ_IRC_HISTORY_READY; ++i)
+        if (strcmp(name, irc_kind_name((enum snj_irc_event_kind)i)) == 0) {
+            *kind = (enum snj_irc_event_kind)i;
+            return 0;
+        }
+    errno = EINVAL;
+    return -1;
+}
+
+static json_t *
+irc_event_data(const struct snj_irc_event *event)
+{
+    json_t *data = json_object();
+
+    if (!data ||
+        snj_json_set_new(data, "endpoint", json_string(event->endpoint)) < 0 ||
+        snj_json_set_new(data, "historical",
+                         json_boolean(event->historical)) < 0 ||
+        snj_json_set_new(data, "kind",
+                         json_string(irc_kind_name(event->kind))) < 0 ||
+        snj_json_set_new(data, "local", json_boolean(event->local)) < 0 ||
+        snj_json_set_new(data, "nick", json_string(event->nick)) < 0 ||
+        snj_json_set_new(data, "op", json_boolean(event->op)) < 0 ||
+        snj_json_set_new(data, "room", json_string(event->room)) < 0 ||
+        snj_json_set_new(data, "text", json_string(event->text)) < 0 ||
+        snj_json_set_new(data, "timestamp_ms",
+                         json_integer((json_int_t)event->timestamp_ms)) < 0) {
+        if (data)
+            json_decref(data);
+        return NULL;
+    }
+    return data;
+}
+
+static int
+append_pending(struct snj_buf *pending, const char *text, size_t len)
+{
+    static const char omitted[] =
+        "[older coalesced IRC entries omitted at the input bound]\n";
+
+    if (len > pending->max - sizeof(omitted)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if (pending->len > pending->max - len) {
+        snj_buf_reset(pending);
+        if (snj_buf_append(pending, omitted, sizeof(omitted) - 1u) < 0)
+            return -1;
+    }
+    return snj_buf_append(pending, text, len);
+}
+
+static int
+append_irc_projection(struct snj_buf *pending,
+                      const struct snj_irc_event *event)
+{
+    struct snj_buf line;
+    char when[32u];
+    time_t seconds = (time_t)(event->timestamp_ms / 1000u);
+    struct tm tm;
+    int rc = -1;
+
+    if (!gmtime_r(&seconds, &tm) ||
+        strftime(when, sizeof(when), "%Y-%m-%dT%H:%M:%SZ", &tm) == 0)
+        memcpy(when, "1970-01-01T00:00:00Z", 21u);
+    snj_buf_init(&line, 2048u);
+    if (snj_buf_printf(&line,
+            "[IRC endpoint=%s room=%s time=%s event=%s sender=%s operator=%s]\n%s\n",
+            event->endpoint, event->room, when, irc_kind_name(event->kind),
+            event->nick[0] ? event->nick : "server",
+            event->op ? "true" : "false", event->text) < 0 ||
+        append_pending(pending, (const char *)line.data, line.len) < 0)
+        goto out;
+    rc = 0;
+out:
+    snj_buf_free(&line);
+    return rc;
+}
+
+int
+snj_app_irc_snapshot(struct app_state *app, const char *reason,
+                     char *error, size_t error_size)
+{
+    struct snj_buf snapshot;
+    json_t *data = NULL;
+    int rc = -1;
+
+    if (!app || !app->irc || !reason) {
+        errno = EINVAL;
+        return -1;
+    }
+    snj_buf_init(&snapshot, SNJ_MAX_IRC_SNAPSHOT);
+    if (snj_irc_snapshot(app->irc, &snapshot, error, error_size) < 0 ||
+        snj_buf_terminate(&snapshot) < 0 || !(data = json_object()) ||
+        snj_json_set_new(data, "reason", json_string(reason)) < 0 ||
+        snj_json_set_new(data, "text",
+                         json_string((const char *)snapshot.data)) < 0 ||
+        snj_json_set_new(data, "timestamp_ms",
+                         json_integer((json_int_t)snj_time_ms())) < 0)
+        goto out;
+    if (snj_app_commit_event(app, "irc_snapshot", data,
+                             error, error_size) < 0) {
+        data = NULL;
+        goto out;
+    }
+    data = NULL;
+    rc = 0;
+out:
+    if (data)
+        json_decref(data);
+    snj_buf_free(&snapshot);
+    if (rc < 0 && error_size && !error[0])
+        (void)snprintf(error, error_size, "cannot retain IRC room snapshot");
+    return rc;
+}
+
+int
+snj_app_irc_event(void *opaque, const struct snj_irc_event *event)
+{
+    struct app_state *app = opaque;
+    char error[256] = {0};
+    bool chat;
+    bool own_agent;
+    bool local_operator;
+    bool urgent;
+
+    if (!app || !event)
+        return -1;
+    if (snj_app_commit_event(app, "irc_event", irc_event_data(event),
+                             error, sizeof(error)) < 0)
+        return -1;
+    if (snj_render_irc_event(&app->render, event) < 0)
+        return -1;
+    chat = event->kind == SNJ_IRC_MESSAGE || event->kind == SNJ_IRC_NOTICE;
+    own_agent = event->local &&
+        strcmp(event->nick, snj_irc_agent_name(app->irc)) == 0;
+    local_operator = event->local &&
+        strcmp(event->nick, snj_irc_operator_name(app->irc)) == 0;
+    if (own_agent) {
+        if (app->session.active_turn && event->kind == SNJ_IRC_MESSAGE)
+            app->irc_turn_replied = true;
+        return 0;
+    }
+    if (event->kind == SNJ_IRC_HISTORY_READY) {
+        if (snj_app_irc_snapshot(app, "join", error, sizeof(error)) < 0)
+            return -1;
+    }
+    if (event->historical)
+        return 0;
+    urgent = chat && (local_operator || event->op ||
+        snj_irc_mentions_agent(app->irc, event->text));
+    if (append_irc_projection(urgent ? &app->irc_urgent :
+                                      &app->irc_background, event) < 0)
+        return -1;
+    if (urgent)
+        app->irc_urgent_local_operator |= local_operator;
+    else if (!app->irc_background_since_ms)
+        app->irc_background_since_ms = snj_time_ms();
+    return 0;
+}
+
+int
+snj_app_irc_trace(void *opaque, unsigned int level, char direction,
+                  const char *endpoint, const char *text, size_t len)
+{
+    struct app_state *app = opaque;
+    struct snj_buf safe;
+    char label[384u];
+    int rc = -1;
+
+    if (!app || !endpoint || !text || (level != 5u && level != 6u) ||
+        (direction != '<' && direction != '>')) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (app->render.verbosity < level)
+        return 0;
+    snj_buf_init(&safe, 8u * 1024u);
+    for (size_t i = 0u; i < len; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        if (c < 0x20u || c == 0x7fu) {
+            if (snj_buf_printf(&safe, "\\x%02X", (unsigned int)c) < 0)
+                goto out;
+        } else if (snj_buf_putc(&safe, c) < 0) {
+            goto out;
+        }
+    }
+    if (level == 6u) {
+        struct snj_buf line;
+
+        snj_buf_init(&line, 16u * 1024u);
+        if (snj_buf_printf(&line, "IRC [%s] ", endpoint) < 0 ||
+            snj_buf_append(&line, safe.data, safe.len) < 0) {
+            snj_buf_free(&line);
+            goto out;
+        }
+        rc = snj_render_transport(&app->render, direction,
+                                  (const char *)line.data, line.len);
+        snj_buf_free(&line);
+    } else {
+        int n = snprintf(label, sizeof(label), "irc.command %c %s",
+                         direction, endpoint);
+        if (n < 0 || (size_t)n >= sizeof(label)) {
+            errno = EOVERFLOW;
+            goto out;
+        }
+        rc = snj_render_protocol(&app->render, label,
+                                 (const char *)safe.data, safe.len);
+    }
+out:
+    snj_buf_free(&safe);
+    return rc;
+}
+
+int
+snj_app_irc_flush_urgent(struct app_state *app,
+                         char *error, size_t error_size)
+{
+    char steering_id[SNJ_ID_HEX_LEN + 1u];
+    bool local_operator;
+
+    if (!app || !app->session.active_turn || !app->irc_urgent.len)
+        return 0;
+    if (snj_buf_terminate(&app->irc_urgent) < 0 ||
+        snj_random_id(steering_id) < 0)
+        return -1;
+    local_operator = app->irc_urgent_local_operator;
+    if (snj_app_commit_event(app, "steering_added",
+            snj_app_steering_added_data(app->session.active_turn_id,
+                steering_id, (const char *)app->irc_urgent.data),
+            error, error_size) < 0)
+        return -1;
+    snj_buf_reset(&app->irc_urgent);
+    app->irc_urgent_local_operator = false;
+    if (local_operator) {
+        app->irc_turn_local_operator = true;
+        app->irc_turn_replied = false;
+    }
+    return 0;
+}
+
+char *
+snj_app_irc_take_pending(struct app_state *app,
+                         bool *local_operator, bool force_background)
+{
+    struct snj_buf *source;
+    char *copy;
+
+    if (local_operator)
+        *local_operator = false;
+    if (!app)
+        return NULL;
+    if (app->irc_urgent.len) {
+        source = &app->irc_urgent;
+        if (local_operator)
+            *local_operator = app->irc_urgent_local_operator;
+    } else if (app->irc_background.len &&
+               (force_background ||
+                snj_time_ms() - app->irc_background_since_ms >= 100u)) {
+        source = &app->irc_background;
+    } else {
+        return NULL;
+    }
+    if (snj_buf_terminate(source) < 0)
+        return NULL;
+    copy = snj_strdup_checked((const char *)source->data,
+                              SNJ_MAX_STEERING_TEXT);
+    if (!copy)
+        return NULL;
+    snj_buf_reset(source);
+    if (source == &app->irc_urgent)
+        app->irc_urgent_local_operator = false;
+    else
+        app->irc_background_since_ms = 0u;
+    return copy;
+}
+
+static int
+restore_irc_event(void *opaque, uint64_t seq, const char *type,
+                  const json_t *data, char *error, size_t error_size)
+{
+    struct app_state *app = opaque;
+    struct snj_irc_event event;
+    const char *value;
+    uint64_t timestamp_ms;
+
+    (void)seq;
+    (void)error;
+    (void)error_size;
+    if (strcmp(type, "irc_event") != 0)
+        return 0;
+    memset(&event, 0, sizeof(event));
+    value = snj_json_string(data, "kind");
+    if (!value || irc_kind_parse(value, &event.kind) < 0 ||
+        snj_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0)
+        return -1;
+    event.timestamp_ms = timestamp_ms;
+#define RESTORE_FIELD(member, key) do { \
+    value = snj_json_string(data, key); \
+    if (!value || snprintf(event.member, sizeof(event.member), "%s", value) < 0 || \
+        strlen(value) >= sizeof(event.member)) return -1; \
+} while (0)
+    RESTORE_FIELD(endpoint, "endpoint");
+    RESTORE_FIELD(room, "room");
+    RESTORE_FIELD(nick, "nick");
+    RESTORE_FIELD(text, "text");
+#undef RESTORE_FIELD
+    event.historical = json_is_true(json_object_get(data, "historical"));
+    event.local = json_is_true(json_object_get(data, "local"));
+    event.op = json_is_true(json_object_get(data, "op"));
+    return snj_irc_restore_event(app->irc, &event);
+}
+
+int
+snj_app_irc_restore(struct app_state *app, char *error, size_t error_size)
+{
+    if (!app || !app->irc) {
+        errno = EINVAL;
+        return -1;
+    }
+    return snj_session_each_event(&app->session, restore_irc_event, app,
+                                  error, error_size);
+}
+
 json_t *
 snj_app_steering_snapshot(const struct snj_session *session)
 {
@@ -158,6 +501,7 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
     snj_context_projection_init(&projection);
     rc = snj_context_build(&app->session, app->turn_model, app->turn_effort,
                            cycle, steering,
+                           app->config,
                            &app->turn_instructions, &projection,
                            error, error_size);
     if (rc == 0) {

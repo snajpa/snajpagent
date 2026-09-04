@@ -752,7 +752,7 @@ main(void)
         assert(active.active_turn);
         assert(strcmp(active.compact_id, active_compact) == 0);
         assert(snj_context_build(&active, SNAJPAGENT_MODEL, "medium", 1,
-                                 active_steering, &no_instructions,
+                                 active_steering, NULL, &no_instructions,
                                  &active_projection, error, sizeof(error)) == 0);
         input = json_object_get(active_projection.create_request, "input");
         assert(json_is_array(input));
@@ -781,7 +781,7 @@ main(void)
     empty_steering = json_array();
     assert(empty_steering);
     assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-                             empty_steering, &instructions, &projection,
+                             empty_steering, NULL, &instructions, &projection,
                              error, sizeof(error)) == 0);
     assert(projection.model_input_bytes > 0);
     assert(projection.create_request_bytes > 0);
@@ -843,7 +843,7 @@ main(void)
                               goal_started_data(goal, "finish compacted work"),
                               NULL, error, sizeof(error)) == 0);
     assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
-                             empty_steering, &instructions, &projection,
+                             empty_steering, NULL, &instructions, &projection,
                              error, sizeof(error)) == 0);
     {
         json_t *tools = json_object_get(projection.create_request, "tools");
@@ -863,6 +863,41 @@ main(void)
         assert(strstr(gate_text, "only permitted tool call is write_stdin") != NULL);
         assert(strstr(gate_text, handle) != NULL);
     }
+    {
+        struct snj_config network_config;
+        json_t *tools;
+        json_t *input;
+        const char *gate_text;
+
+        snj_config_init(&network_config);
+        network_config.irc_daemon = true;
+        memcpy(network_config.irc_name, "builder", 8u);
+        memcpy(network_config.irc_operator_name, "alice", 6u);
+        assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
+                                 empty_steering, &network_config,
+                                 &instructions, &projection,
+                                 error, sizeof(error)) == 0);
+        tools = json_object_get(projection.create_request, "tools");
+        input = json_object_get(projection.create_request, "input");
+        assert(json_array_size(tools) == 4u);
+        assert(strcmp(snj_json_string(json_array_get(tools, 0), "name"),
+                      "irc_send") == 0);
+        assert(strcmp(snj_json_string(json_array_get(tools, 1), "name"),
+                      "irc_state") == 0);
+        assert(strcmp(snj_json_string(json_array_get(tools, 2), "name"),
+                      "irc_topic") == 0);
+        assert(strcmp(snj_json_string(json_array_get(tools, 3), "name"),
+                      "write_stdin") == 0);
+        assert(tool_by_name(tools, "update_goal") == NULL);
+        assert_context_tool_schemas(tools, handle);
+        gate_text = snj_json_string(
+            json_array_get(input, json_array_size(input) - 1u), "content");
+        assert(gate_text != NULL);
+        assert(strstr(gate_text, "first use IRC tools") != NULL);
+        assert(strstr(gate_text, "final tool call") != NULL);
+        assert(strstr(gate_text, handle) != NULL);
+        snj_config_free(&network_config);
+    }
     assert(snj_session_commit(&session, "process_closed",
                               process_closed_data(turn2, handle,
                                   snj_tool_result_outcome_unknown("owner_lost")),
@@ -880,7 +915,7 @@ main(void)
                               NULL, error, sizeof(error)) == 0);
     assert(session.goal_turn_count == 1u);
     assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-                             empty_steering, &instructions, &projection,
+                             empty_steering, NULL, &instructions, &projection,
                              error, sizeof(error)) == 0);
     {
         json_t *tools = json_object_get(projection.create_request, "tools");
@@ -901,6 +936,36 @@ main(void)
         assert(strstr(snj_json_string(controller, "text"),
                       "wording locked") != NULL);
         assert(item_by_kind(semantic, "native_compact_output") != NULL);
+    }
+
+    {
+        struct snj_config network_config;
+        json_t *tools;
+        json_t *semantic;
+        json_t *harness;
+
+        snj_config_init(&network_config);
+        network_config.irc_daemon = true;
+        memcpy(network_config.irc_name, "builder", 8u);
+        memcpy(network_config.irc_operator_name, "alice", 6u);
+        assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
+                                 empty_steering, &network_config,
+                                 &instructions, &projection,
+                                 error, sizeof(error)) == 0);
+        tools = json_object_get(projection.create_request, "tools");
+        semantic = json_object_get(projection.model_input, "items");
+        harness = item_by_kind(semantic, "irc_harness");
+        assert(json_array_size(tools) == 8u);
+        assert_context_tool_schemas(tools, NULL);
+        assert(tool_by_name(tools, "irc_send") != NULL);
+        assert(tool_by_name(tools, "irc_state") != NULL);
+        assert(tool_by_name(tools, "irc_topic") != NULL);
+        assert(harness != NULL);
+        assert(strstr(snj_json_string(harness, "text"),
+                      "separate local operator alice") != NULL);
+        assert(strstr(snj_json_string(harness, "text"),
+                      "do not poll or babysit") != NULL);
+        snj_config_free(&network_config);
     }
 
     json_decref(empty_steering);

@@ -83,9 +83,9 @@ class TmuxTerminal:
             "set -g default-terminal screen-256color\n",
             encoding="utf-8",
         )
-        command = [self.binary, "-d", str(dotdir)]
+        command = [self.binary, "--dotdir", str(dotdir)]
         if config is not None:
-            command.extend(["-c", str(config)])
+            command.extend(["--config", str(config)])
         env = os.environ.copy()
         env.pop("TMUX", None)
         env["LC_ALL"] = "C.utf8"

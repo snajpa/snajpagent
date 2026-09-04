@@ -12,7 +12,7 @@ dotdir = os.environ["SNAJPAGENT_DOTDIR"]
 pid, fd = pty.fork()
 if pid == 0:
     os.chdir(workspace)
-    os.execv(binary, [binary, "-d", dotdir, "-vvvv"])
+    os.execv(binary, [binary, "--dotdir", dotdir, "-vvvv"])
 
 buf = bytearray()
 def read_until(needle: bytes, timeout: float = 5.0) -> None:

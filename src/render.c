@@ -4,8 +4,23 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+
+#define COLOR_RESET "\033[0m"
+#define COLOR_META "\033[2m"
+#define COLOR_AGENT "\033[1;36m"
+#define COLOR_OPERATOR "\033[1;35m"
+#define COLOR_ACTIVITY "\033[33m"
+#define COLOR_SUCCESS "\033[32m"
+#define COLOR_WARNING "\033[1;33m"
+#define COLOR_ERROR "\033[1;31m"
+#define COLOR_DURABLE "\033[2;36m"
+#define COLOR_PROTOCOL "\033[35m"
+#define COLOR_TRANSPORT "\033[2;34m"
+#define COLOR_HOST "\033[34m"
 
 static int
 write_literal(int fd, const char *s)
@@ -23,6 +38,66 @@ static int
 output_end(struct snj_render *render)
 {
     return render->term ? snj_term_output_end(render->term) : 0;
+}
+
+static bool
+color_enabled(const struct snj_render *render, int fd)
+{
+    return fd == STDOUT_FILENO ? render->color_stdout : render->color_stderr;
+}
+
+static int
+write_role_block(struct snj_render *render, int fd, const char *color,
+                 const char *text, size_t len, size_t colored_len,
+                 bool terminal_safe, bool persistent)
+{
+    bool colored = color_enabled(render, fd) && colored_len != 0u;
+    int rc = -1;
+    int saved_errno = 0;
+
+    if (colored_len > len) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (output_begin(render, persistent) < 0)
+        return -1;
+    if (colored && write_literal(fd, color) < 0)
+        goto out;
+    if (colored_len &&
+        (terminal_safe ? snj_term_write_safe(fd, text, colored_len) :
+                         snj_write_full(fd, text, colored_len)) < 0)
+        goto out;
+    if (colored && write_literal(fd, COLOR_RESET) < 0)
+        goto out;
+    if (len > colored_len &&
+        (terminal_safe ? snj_term_write_safe(fd, text + colored_len,
+                                              len - colored_len) :
+                         snj_write_full(fd, text + colored_len,
+                                        len - colored_len)) < 0)
+        goto out;
+    if (render->term &&
+        ((fd == STDOUT_FILENO && render->stdout_terminal) ||
+         (fd == STDERR_FILENO && render->stderr_terminal)))
+        snj_term_note_output(render->term, text, len);
+    rc = 0;
+out:
+    if (rc < 0)
+        saved_errno = errno;
+    if (colored && rc < 0)
+        (void)write_literal(fd, COLOR_RESET);
+    if (output_end(render) < 0 && rc == 0)
+        rc = -1;
+    if (saved_errno)
+        errno = saved_errno;
+    return rc;
+}
+
+static size_t
+first_line_len(const char *text, size_t len)
+{
+    const char *newline = memchr(text, '\n', len);
+
+    return newline ? (size_t)(newline - text) + 1u : len;
 }
 
 static int
@@ -60,9 +135,41 @@ snj_render_init(struct snj_render *render, unsigned int verbosity)
 }
 
 void
+snj_render_set_color(struct snj_render *render, enum snj_color_mode mode)
+{
+    const char *term = getenv("TERM");
+    bool disabled = mode == SNJ_COLOR_NEVER ||
+                    (mode == SNJ_COLOR_AUTO &&
+                     (getenv("NO_COLOR") != NULL || !term ||
+                      strcmp(term, "dumb") == 0));
+
+    render->color_stdout = !disabled &&
+        (mode == SNJ_COLOR_ALWAYS || render->stdout_terminal);
+    render->color_stderr = !disabled &&
+        (mode == SNJ_COLOR_ALWAYS || render->stderr_terminal);
+    if (render->term)
+        snj_term_set_color(render->term, render->color_stderr,
+                           render->networked);
+}
+
+void
+snj_render_set_networked(struct snj_render *render, bool networked,
+                         const char *agent_name)
+{
+    render->networked = networked;
+    render->agent_name[0] = '\0';
+    if (agent_name)
+        (void)snprintf(render->agent_name, sizeof(render->agent_name), "%s",
+                       agent_name);
+    if (render->term)
+        snj_term_set_color(render->term, render->color_stderr, networked);
+}
+
+void
 snj_render_attach_term(struct snj_render *render, struct snj_term *term)
 {
     render->term = term;
+    snj_term_set_color(term, render->color_stderr, render->networked);
 }
 
 int
@@ -85,8 +192,9 @@ snj_render_orientation(struct snj_render *render,
                             session->default_model, session->workspace, session->id);
     }
     if (rc == 0)
-        rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
-                         render->stderr_terminal, true);
+        rc = write_role_block(render, STDERR_FILENO, COLOR_AGENT,
+                              (char *)line.data, line.len, line.len,
+                              render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;
 }
@@ -122,7 +230,9 @@ snj_render_history(struct snj_render *render, const struct snj_session *session)
 int
 snj_render_prompt(struct snj_render *render, const char *label)
 {
-    return write_block(render, STDERR_FILENO, label, strlen(label), false, false);
+    return write_role_block(render, STDERR_FILENO,
+                            render->networked ? COLOR_OPERATOR : COLOR_AGENT,
+                            label, strlen(label), strlen(label), false, false);
 }
 
 int
@@ -148,8 +258,10 @@ snj_render_submitted(struct snj_render *render, const char *label, const char *t
     if (rc == 0)
         rc = snj_buf_putc(&line, '\n');
     if (rc == 0)
-        rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
-                         render->stderr_terminal, true);
+        rc = write_role_block(render, STDERR_FILENO,
+                              render->networked ? COLOR_OPERATOR : COLOR_AGENT,
+                              (char *)line.data, line.len, strlen(label),
+                              render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;
 }
@@ -201,7 +313,19 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
     if (render->public_column == SIZE_MAX)
         goto fail;
     if (label_len) {
+        bool colored = color_enabled(render, fd);
+        const char *color = strncmp(label, "reason", 6u) == 0 ?
+                            COLOR_ACTIVITY : COLOR_AGENT;
+        if (colored) {
+            if (output_begin(render, true) < 0)
+                goto fail;
+            render->public_output_open = true;
+            if (write_literal(fd, color) < 0)
+                goto fail;
+        }
         if (public_write(render, label, label_len) < 0)
+            goto fail;
+        if (colored && write_literal(fd, COLOR_RESET) < 0)
             goto fail;
         if (close_public_output(render) < 0)
             goto fail;
@@ -210,6 +334,8 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
 fail:
     {
         int saved_errno = errno;
+        if (color_enabled(render, fd))
+            (void)write_literal(fd, COLOR_RESET);
         if (render->public_output_open)
             (void)output_end(render);
         render->public_output_open = false;
@@ -491,7 +617,8 @@ snj_render_public_abort(struct snj_render *render)
 }
 
 static int
-render_message(struct snj_render *render, const char *message)
+render_message(struct snj_render *render, const char *message,
+               const char *color)
 {
     struct snj_buf line;
     int rc;
@@ -499,8 +626,9 @@ render_message(struct snj_render *render, const char *message)
     snj_buf_init(&line, 16384u);
     rc = snj_buf_printf(&line, "snajpagent: %s\n", message);
     if (rc == 0)
-        rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
-                         render->stderr_terminal, true);
+        rc = write_role_block(render, STDERR_FILENO, color,
+                              (char *)line.data, line.len, line.len,
+                              render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;
 }
@@ -510,25 +638,29 @@ snj_render_error(const char *message)
 {
     struct snj_render render;
     snj_render_init(&render, 0u);
-    return render_message(&render, message);
+    snj_render_set_color(&render, SNJ_COLOR_AUTO);
+    return render_message(&render, message, COLOR_ERROR);
 }
 
 int
 snj_render_warning(const char *message)
 {
-    return snj_render_error(message);
+    struct snj_render render;
+    snj_render_init(&render, 0u);
+    snj_render_set_color(&render, SNJ_COLOR_AUTO);
+    return render_message(&render, message, COLOR_WARNING);
 }
 
 int
 snj_render_error_ctx(struct snj_render *render, const char *message)
 {
-    return render_message(render, message);
+    return render_message(render, message, COLOR_ERROR);
 }
 
 int
 snj_render_warning_ctx(struct snj_render *render, const char *message)
 {
-    return render_message(render, message);
+    return render_message(render, message, COLOR_WARNING);
 }
 
 int
@@ -549,8 +681,10 @@ snj_render_host(struct snj_render *render, const char *text)
     if (rc == 0 && (len == 0u || text[len - 1u] != '\n'))
         rc = snj_buf_putc(&line, '\n');
     if (rc == 0)
-        rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
-                         render->stderr_terminal, true);
+        rc = write_role_block(render, STDERR_FILENO, COLOR_HOST,
+                              (char *)line.data, line.len,
+                              first_line_len((char *)line.data, line.len),
+                              render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;
 }
@@ -558,9 +692,146 @@ snj_render_host(struct snj_render *render, const char *text)
 int
 snj_render_runtime(struct snj_render *render, const char *text)
 {
+    size_t len;
+    struct snj_buf line;
+    int rc;
+
     if (render->verbosity < 3u)
         return 0;
-    return snj_render_host(render, text);
+    len = strlen(text);
+    snj_buf_init(&line, 4u * 1024u * 1024u);
+    rc = snj_buf_append(&line, text, len);
+    if (rc == 0 && (!len || text[len - 1u] != '\n'))
+        rc = snj_buf_putc(&line, '\n');
+    if (rc == 0)
+        rc = write_role_block(render, STDERR_FILENO, COLOR_META,
+                              (char *)line.data, line.len,
+                              first_line_len((char *)line.data, line.len),
+                              render->stderr_terminal, true);
+    snj_buf_free(&line);
+    return rc;
+}
+
+static const char *
+irc_event_word(enum snj_irc_event_kind kind)
+{
+    switch (kind) {
+    case SNJ_IRC_CONNECTED: return "connected";
+    case SNJ_IRC_DISCONNECTED: return "disconnected";
+    case SNJ_IRC_JOIN: return "joined";
+    case SNJ_IRC_PART: return "left";
+    case SNJ_IRC_QUIT: return "quit";
+    case SNJ_IRC_NICK: return "is now known as";
+    case SNJ_IRC_TOPIC: return "set topic";
+    case SNJ_IRC_MODE: return "set mode";
+    case SNJ_IRC_HISTORY_READY: return "history synchronized";
+    case SNJ_IRC_MESSAGE: case SNJ_IRC_NOTICE: break;
+    }
+    return "event";
+}
+
+static int
+irc_piece(struct snj_render *render, const char *text, bool safe)
+{
+    size_t len = strlen(text);
+
+    if ((safe ? snj_term_write_safe(STDERR_FILENO, text, len) :
+                snj_write_full(STDERR_FILENO, text, len)) < 0)
+        return -1;
+    if (render->term && (len == 0u || text[0] != '\033'))
+        snj_term_note_output(render->term, text, len);
+    return 0;
+}
+
+int
+snj_render_irc_event(struct snj_render *render,
+                     const struct snj_irc_event *event)
+{
+    char when[16u];
+    char prefix[768u];
+    time_t seconds;
+    struct tm tm;
+    const char *name_color;
+    bool colored;
+    bool own_agent;
+    int n;
+    int rc = -1;
+
+    if (!render || !event) {
+        errno = EINVAL;
+        return -1;
+    }
+    own_agent = event->local && render->agent_name[0] &&
+                strcmp(event->nick, render->agent_name) == 0;
+    if (own_agent && render->verbosity < 1u)
+        return 0;
+    seconds = (time_t)(event->timestamp_ms / 1000u);
+    if (!localtime_r(&seconds, &tm) ||
+        strftime(when, sizeof(when), "%H:%M", &tm) == 0)
+        memcpy(when, "--:--", 6u);
+    colored = render->color_stderr;
+    name_color = event->op ? "\033[1;35m" :
+                 (render->agent_name[0] &&
+                  strcmp(event->nick, render->agent_name) == 0) ?
+                 "\033[1;36m" : "\033[1;34m";
+    if (output_begin(render, true) < 0)
+        return -1;
+    if (colored && irc_piece(render, "\033[2m", false) < 0)
+        goto out;
+    n = snprintf(prefix, sizeof(prefix), "%s%s ", when,
+                 event->historical ? " history" : "");
+    if (n < 0 || (size_t)n >= sizeof(prefix) ||
+        irc_piece(render, prefix, true) < 0)
+        goto out;
+    if (colored && (irc_piece(render, "\033[0m", false) < 0 ||
+                    irc_piece(render, name_color, false) < 0))
+        goto out;
+    if (event->kind == SNJ_IRC_MESSAGE || event->kind == SNJ_IRC_NOTICE) {
+        n = snprintf(prefix, sizeof(prefix), "%s%s%s ",
+                     event->kind == SNJ_IRC_NOTICE ? "-" : "",
+                     event->op ? "@" : "", event->nick);
+        if (n < 0 || (size_t)n >= sizeof(prefix) ||
+            irc_piece(render, prefix, true) < 0)
+            goto out;
+        if (colored && irc_piece(render, "\033[0m", false) < 0)
+            goto out;
+        if (irc_piece(render,
+                event->kind == SNJ_IRC_NOTICE ? "- " : "› ", true) < 0 ||
+            irc_piece(render, event->text, true) < 0)
+            goto out;
+    } else {
+        n = snprintf(prefix, sizeof(prefix), "· %s%s%s %s",
+                     event->op ? "@" : "", event->nick,
+                     event->nick[0] ? " " : "", irc_event_word(event->kind));
+        if (n < 0 || (size_t)n >= sizeof(prefix) ||
+            irc_piece(render, prefix, true) < 0)
+            goto out;
+        if (colored && irc_piece(render, "\033[0m", false) < 0)
+            goto out;
+        if (event->text[0] &&
+            (irc_piece(render, " · ", true) < 0 ||
+             irc_piece(render, event->text, true) < 0))
+            goto out;
+    }
+    if (render->verbosity >= 4u && event->endpoint[0] &&
+        (colored && irc_piece(render, "\033[2m", false) < 0))
+        goto out;
+    if (render->verbosity >= 4u && event->endpoint[0] &&
+        (irc_piece(render, " [", true) < 0 ||
+         irc_piece(render, event->endpoint, true) < 0 ||
+         irc_piece(render, "]", true) < 0))
+        goto out;
+    if (colored && irc_piece(render, "\033[0m", false) < 0)
+        goto out;
+    if (irc_piece(render, "\n", false) < 0)
+        goto out;
+    rc = 0;
+out:
+    if (colored)
+        (void)irc_piece(render, "\033[0m", false);
+    if (output_end(render) < 0 && rc == 0)
+        rc = -1;
+    return rc;
 }
 
 static const char *
@@ -620,7 +891,7 @@ snj_render_tool_start(struct snj_render *render,
     const char *command;
     int rc = 0;
 
-    if (render->verbosity < 1u)
+    if (render->verbosity < (render->networked ? 2u : 1u))
         return 0;
     label = tool_label(call->name);
     command = snj_json_string(call->arguments, "command");
@@ -634,7 +905,7 @@ snj_render_tool_start(struct snj_render *render,
     }
     if (rc == 0 && snj_buf_putc(&line, '\n') < 0)
         rc = -1;
-    if (rc == 0 && render->verbosity >= 2u) {
+    if (rc == 0 && render->verbosity >= (render->networked ? 3u : 2u)) {
         struct snj_buf encoded;
         snj_buf_init(&encoded, SNJ_MAX_TOOL_ARGUMENTS + 64u);
         if (snj_json_canonical(call->arguments, &encoded) < 0 ||
@@ -645,8 +916,10 @@ snj_render_tool_start(struct snj_render *render,
         snj_buf_free(&encoded);
     }
     if (rc == 0)
-        rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
-                         render->stderr_terminal, true);
+        rc = write_role_block(render, STDERR_FILENO, COLOR_ACTIVITY,
+                              (char *)line.data, line.len,
+                              first_line_len((char *)line.data, line.len),
+                              render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;
 }
@@ -660,14 +933,22 @@ snj_render_tool_finish(struct snj_render *render, const char *name,
     const char *reason;
     json_t *exit_value;
     uint64_t duration = 0u;
+    const char *color = COLOR_WARNING;
     int rc = 0;
 
-    if (render->verbosity < 1u)
+    if (render->verbosity < (render->networked ? 2u : 1u))
         return 0;
     status = snj_json_string(result, "status");
     reason = snj_json_string(result, "reason");
     exit_value = json_object_get(result, "exit_code");
     (void)snj_json_integer_u64(result, "duration_ms", &duration);
+    if ((status && strcmp(status, "succeeded") == 0) ||
+        (json_is_integer(exit_value) && json_integer_value(exit_value) == 0))
+        color = COLOR_SUCCESS;
+    else if ((status && (strcmp(status, "failed") == 0 ||
+                         strcmp(status, "outcome_unknown") == 0)) ||
+             (json_is_integer(exit_value) && json_integer_value(exit_value) != 0))
+        color = COLOR_ERROR;
     snj_buf_init(&line, 2u * 1024u * 1024u + 4096u);
     if (snj_buf_printf(&line, "← %s  ", tool_label(name)) < 0)
         rc = -1;
@@ -695,7 +976,7 @@ snj_render_tool_finish(struct snj_render *render, const char *name,
                     (unsigned long long)(duration / 1000u),
                     (unsigned long long)((duration % 1000u) / 100u));
     }
-    if (rc == 0 && render->verbosity >= 2u) {
+    if (rc == 0 && render->verbosity >= (render->networked ? 3u : 2u)) {
         struct snj_buf encoded;
         snj_buf_init(&encoded, 1024u * 1024u);
         if (snj_json_canonical(result, &encoded) < 0 ||
@@ -706,8 +987,10 @@ snj_render_tool_finish(struct snj_render *render, const char *name,
         snj_buf_free(&encoded);
     }
     if (rc == 0)
-        rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
-                         render->stderr_terminal, true);
+        rc = write_role_block(render, STDERR_FILENO, color,
+                              (char *)line.data, line.len,
+                              first_line_len((char *)line.data, line.len),
+                              render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;
 }
@@ -725,8 +1008,9 @@ snj_render_event(struct snj_render *render, uint64_t seq, const char *type)
                        (unsigned long long)seq, type) < 0)
         rc = -1;
     if (rc == 0)
-        rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
-                         render->stderr_terminal, true);
+        rc = write_role_block(render, STDERR_FILENO, COLOR_DURABLE,
+                              (char *)line.data, line.len, line.len,
+                              render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;
 }
@@ -757,8 +1041,10 @@ protocol_warning(struct snj_render *render)
 
     if (render->protocol_warning_shown)
         return 0;
-    if (write_block(render, STDERR_FILENO, warning, sizeof(warning) - 1u,
-                    render->stderr_terminal, true) < 0)
+    if (write_role_block(render, STDERR_FILENO, COLOR_WARNING,
+                         warning, sizeof(warning) - 1u,
+                         sizeof(warning) - 1u,
+                         render->stderr_terminal, true) < 0)
         return -1;
     render->protocol_warning_shown = true;
     return 0;
@@ -786,8 +1072,10 @@ snj_render_protocol(struct snj_render *render, const char *label,
         snj_buf_append(&block, text, len) < 0 ||
         (len && text[len - 1u] != '\n' && snj_buf_putc(&block, '\n') < 0))
         goto out;
-    rc = write_block(render, STDERR_FILENO, (const char *)block.data, block.len,
-                     render->stderr_terminal, true);
+    rc = write_role_block(render, STDERR_FILENO, COLOR_PROTOCOL,
+                          (const char *)block.data, block.len,
+                          first_line_len((const char *)block.data, block.len),
+                          render->stderr_terminal, true);
 out:
     snj_buf_free(&block);
     return rc;
@@ -814,8 +1102,10 @@ snj_render_transport(struct snj_render *render, char direction,
         snj_buf_putc(&line, ' ') < 0 ||
         snj_buf_append(&line, text, len) < 0 || snj_buf_putc(&line, '\n') < 0)
         goto out;
-    rc = write_block(render, STDERR_FILENO, (const char *)line.data, line.len,
-                     render->stderr_terminal, true);
+    rc = write_role_block(render, STDERR_FILENO, COLOR_TRANSPORT,
+                          (const char *)line.data, line.len,
+                          line.len > 2u ? 2u : line.len,
+                          render->stderr_terminal, true);
 out:
     snj_buf_free(&line);
     return rc;

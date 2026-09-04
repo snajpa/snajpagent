@@ -41,7 +41,7 @@ def run_case(term, cols, expect_ansi, expected_text):
         os.chdir(workspace)
         os.environ["TERM"] = term
         set_winsize(0, 24, cols)
-        os.execv(binary, [binary, "-d", dotdir, "-vvvv"])
+        os.execv(binary, [binary, "--dotdir", dotdir, "-vvvv"])
 
     buf = bytearray()
 

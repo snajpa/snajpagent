@@ -25,6 +25,7 @@ void
 snj_cli_init(struct snj_cli *cli)
 {
     memset(cli, 0, sizeof(*cli));
+    cli->color = SNJ_CLI_COLOR_UNSET;
 }
 
 void
@@ -35,9 +36,44 @@ snj_cli_free(struct snj_cli *cli)
     free(cli->model);
     free(cli->effort);
     free(cli->config_path);
+    free(cli->irc_listen);
+    for (size_t i = 0; i < cli->irc_client_count; ++i)
+        free(cli->irc_clients[i]);
+    free(cli->irc_name);
+    free(cli->irc_operator_name);
+    free(cli->irc_room_name);
     free(cli->resume_id);
     free(cli->prompt);
     snj_cli_init(cli);
+}
+
+static int
+add_client(struct snj_cli *cli, const char *value,
+           char *error, size_t error_size)
+{
+    char *copy;
+
+    if (cli->irc_client_count >= SNJ_CLI_IRC_CLIENT_MAX) {
+        set_error(error, error_size, "at most %u -c options are supported",
+                  SNJ_CLI_IRC_CLIENT_MAX);
+        errno = E2BIG;
+        return -1;
+    }
+    copy = snj_strdup_checked(value, SNJ_CONFIG_URL_MAX);
+    if (!copy) {
+        set_error(error, error_size,
+                  "-c endpoint is too long or unavailable");
+        return -1;
+    }
+    for (size_t i = 0; i < cli->irc_client_count; ++i)
+        if (strcmp(cli->irc_clients[i], copy) == 0) {
+            free(copy);
+            set_error(error, error_size, "duplicate -c endpoint");
+            errno = EINVAL;
+            return -1;
+        }
+    cli->irc_clients[cli->irc_client_count++] = copy;
+    return 0;
 }
 
 static int
@@ -72,6 +108,53 @@ option_argument(int argc, char **argv, int *index, const char *attached,
     return argv[*index];
 }
 
+static const char *
+optional_endpoint(int argc, char **argv, int *index, const char *attached)
+{
+    if (attached && *attached)
+        return attached;
+    if (*index + 1 < argc && strcmp(argv[*index + 1], "--") != 0 &&
+        argv[*index + 1][0] != '-') {
+        ++*index;
+        return argv[*index];
+    }
+    return "localhost:6667";
+}
+
+static int
+set_color(struct snj_cli *cli, enum snj_cli_color_mode color,
+          const char *name, char *error, size_t error_size)
+{
+    if (cli->color != SNJ_CLI_COLOR_UNSET) {
+        set_error(error, error_size, "duplicate %s option", name);
+        errno = EINVAL;
+        return -1;
+    }
+    cli->color = color;
+    return 0;
+}
+
+static int
+parse_color_value(struct snj_cli *cli, const char *value,
+                  const char *name, char *error, size_t error_size)
+{
+    enum snj_cli_color_mode color;
+
+    if (strcmp(value, "auto") == 0)
+        color = SNJ_CLI_COLOR_AUTO;
+    else if (strcmp(value, "always") == 0)
+        color = SNJ_CLI_COLOR_ALWAYS;
+    else if (strcmp(value, "never") == 0)
+        color = SNJ_CLI_COLOR_NEVER;
+    else {
+        set_error(error, error_size,
+                  "%s accepts auto, always, or never", name);
+        errno = EINVAL;
+        return -1;
+    }
+    return set_color(cli, color, name, error, error_size);
+}
+
 static int
 parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
             char *error, size_t error_size)
@@ -86,12 +169,12 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
             if (cli->verbosity < 6u)
                 ++cli->verbosity;
             break;
-        case 'r':
-            if (cli->resume) {
-                set_error(error, error_size, "duplicate -r option");
+        case 'd':
+            if (cli->irc_daemon) {
+                set_error(error, error_size, "duplicate -d option");
                 return -1;
             }
-            cli->resume = true;
+            cli->irc_daemon = true;
             break;
         case 'e':
             if (cli->execute) {
@@ -109,23 +192,36 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
             break;
         case 'h': cli->help = true; break;
         case 'V': cli->version = true; break;
-        case 'C': case 'd': case 'm': case 'o': case 'c':
+        case 'c':
+            arg = optional_endpoint(argc, argv, index, p);
+            p += strlen(p);
+            if (add_client(cli, arg, error, error_size) < 0)
+                return -1;
+            break;
+        case 's':
+            arg = optional_endpoint(argc, argv, index, p);
+            p += strlen(p);
+            if (set_once(&cli->irc_listen, arg, "-s", error,
+                         error_size) < 0)
+                return -1;
+            break;
+        case 'C': case 'm': case 'o': case 'n': case 'r':
             arg = option_argument(argc, argv, index, p, flag == 'C' ? "-C" :
-                                  flag == 'd' ? "-d" :
                                   flag == 'm' ? "-m" :
-                                  flag == 'o' ? "-o" : "-c", error, error_size);
+                                  flag == 'o' ? "-o" :
+                                  flag == 'n' ? "-n" : "-r", error, error_size);
             if (!arg)
                 return -1;
             p += strlen(p);
             if (flag == 'C' && set_once(&cli->workspace, arg, "-C", error, error_size) < 0)
                 return -1;
-            if (flag == 'd' && set_once(&cli->dotdir, arg, "-d", error, error_size) < 0)
-                return -1;
             if (flag == 'm' && set_once(&cli->model, arg, "-m", error, error_size) < 0)
                 return -1;
-            if (flag == 'o' && set_once(&cli->effort, arg, "-o", error, error_size) < 0)
+            if (flag == 'o' && set_once(&cli->irc_operator_name, arg, "-o", error, error_size) < 0)
                 return -1;
-            if (flag == 'c' && set_once(&cli->config_path, arg, "-c", error, error_size) < 0)
+            if (flag == 'n' && set_once(&cli->irc_name, arg, "-n", error, error_size) < 0)
+                return -1;
+            if (flag == 'r' && set_once(&cli->irc_room_name, arg, "-r", error, error_size) < 0)
                 return -1;
             break;
         default:
@@ -170,9 +266,83 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         } else if (strcmp(arg, "--all") == 0) {
             if (cli->all) { set_error(error, error_size, "duplicate --all option"); return -1; }
             cli->all = true;
+        } else if (strcmp(arg, "--daemon") == 0) {
+            if (cli->irc_daemon) { set_error(error, error_size, "duplicate --daemon option"); return -1; }
+            cli->irc_daemon = true;
+        } else if (strcmp(arg, "--resume") == 0) {
+            if (cli->resume) { set_error(error, error_size, "duplicate --resume option"); return -1; }
+            cli->resume = true;
         } else if (strcmp(arg, "--no-color") == 0) {
-            if (cli->no_color) { set_error(error, error_size, "duplicate --no-color option"); return -1; }
-            cli->no_color = true;
+            if (set_color(cli, SNJ_CLI_COLOR_NEVER, "--no-color",
+                          error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--color") == 0) {
+            if (i + 1 < argc &&
+                (strcmp(argv[i + 1], "auto") == 0 ||
+                 strcmp(argv[i + 1], "always") == 0 ||
+                 strcmp(argv[i + 1], "never") == 0)) {
+                if (parse_color_value(cli, argv[++i], "--color",
+                                      error, error_size) < 0)
+                    return -1;
+            } else if (set_color(cli, SNJ_CLI_COLOR_ALWAYS, "--color",
+                                 error, error_size) < 0) {
+                return -1;
+            }
+        } else if (strncmp(arg, "--color=", 8u) == 0) {
+            if (parse_color_value(cli, arg + 8u, "--color",
+                                  error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--client") == 0 ||
+                   strncmp(arg, "--client=", 9u) == 0) {
+            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
+            if (attached && !*attached) {
+                set_error(error, error_size,
+                          "--client= requires a nonempty endpoint");
+                errno = EINVAL;
+                return -1;
+            }
+            const char *value = optional_endpoint(argc, argv, &i, attached);
+            if (add_client(cli, value, error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--listen") == 0 ||
+                   strncmp(arg, "--listen=", 9u) == 0) {
+            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
+            if (attached && !*attached) {
+                set_error(error, error_size,
+                          "--listen= requires a nonempty endpoint");
+                errno = EINVAL;
+                return -1;
+            }
+            const char *value = optional_endpoint(argc, argv, &i, attached);
+            if (set_once(&cli->irc_listen, value, "--listen",
+                         error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--name") == 0 ||
+                   strncmp(arg, "--name=", 7u) == 0) {
+            const char *attached = arg[6] == '=' ? arg + 7u : NULL;
+            const char *value = option_argument(argc, argv, &i, attached,
+                                                "--name", error, error_size);
+            if (!value || set_once(&cli->irc_name, value, "--name",
+                                   error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--operator-name") == 0 ||
+                   strncmp(arg, "--operator-name=", 16u) == 0) {
+            const char *attached = arg[15] == '=' ? arg + 16u : NULL;
+            const char *value = option_argument(argc, argv, &i, attached,
+                                                "--operator-name", error,
+                                                error_size);
+            if (!value || set_once(&cli->irc_operator_name, value,
+                                   "--operator-name", error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--room-name") == 0 ||
+                   strncmp(arg, "--room-name=", 12u) == 0) {
+            const char *attached = arg[11] == '=' ? arg + 12u : NULL;
+            const char *value = option_argument(argc, argv, &i, attached,
+                                                "--room-name", error,
+                                                error_size);
+            if (!value || set_once(&cli->irc_room_name, value, "--room-name",
+                                   error, error_size) < 0)
+                return -1;
         } else if (strcmp(arg, "--dotdir") == 0 ||
                    strncmp(arg, "--dotdir=", 9u) == 0) {
             const char *attached = arg[8] == '=' ? arg + 9u : NULL;
@@ -187,6 +357,15 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
             const char *value = option_argument(argc, argv, &i, attached,
                                                 "--config", error, error_size);
             if (!value || set_once(&cli->config_path, value, "--config",
+                                   error, error_size) < 0)
+                return -1;
+        } else if (strcmp(arg, "--effort") == 0 ||
+                   strncmp(arg, "--effort=", 9u) == 0) {
+            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
+            const char *value = option_argument(argc, argv, &i, attached,
+                                                "--effort", error,
+                                                error_size);
+            if (!value || set_once(&cli->effort, value, "--effort",
                                    error, error_size) < 0)
                 return -1;
         } else if (arg[1] == '-') {
@@ -205,17 +384,33 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
     if (cli->help || cli->version)
         return 0;
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->workspace ||
-                      cli->model || cli->effort || cli->verbosity)) {
+                      cli->model || cli->effort || cli->verbosity ||
+                      cli->irc_daemon || cli->irc_listen ||
+                      cli->irc_client_count || cli->irc_name ||
+                      cli->irc_operator_name || cli->irc_room_name)) {
         set_error(error, error_size,
-                  "-l accepts only -c, -d, --all, and --no-color");
+                  "-l accepts only --config, --dotdir, --all, and color options");
+        return -1;
+    }
+    if (cli->execute && (cli->irc_daemon || cli->irc_listen ||
+                         cli->irc_client_count || cli->irc_name ||
+                         cli->irc_operator_name || cli->irc_room_name)) {
+        set_error(error, error_size,
+                  "-e cannot be combined with network options");
+        return -1;
+    }
+    if ((cli->irc_daemon || cli->irc_listen || cli->irc_client_count) &&
+        positional >= 0 && !dashdash) {
+        set_error(error, error_size,
+                  "networked initial chat text must follow --");
         return -1;
     }
     if (cli->last && !cli->resume) {
-        set_error(error, error_size, "--last requires -r");
+        set_error(error, error_size, "--last requires --resume");
         return -1;
     }
     if (cli->all && !cli->resume && !cli->list) {
-        set_error(error, error_size, "--all requires -r or -l");
+        set_error(error, error_size, "--all requires --resume or -l");
         return -1;
     }
     if (cli->model && !bounded_preference(cli->model,
@@ -277,6 +472,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         set_error(error, error_size, "-e requires a nonempty prompt");
         return -1;
     }
+    cli->prompt_after_dashdash = dashdash;
     return 0;
 }
 
@@ -285,10 +481,28 @@ snj_cli_usage(int fd)
 {
     static const char text[] =
         "usage: snajpagent [OPTIONS] [--] [INITIAL PROMPT...]\n"
-        "       snajpagent -r [OPTIONS] [SESSION_ID|--last] [-- FOLLOW-UP...]\n"
+        "       snajpagent --resume [OPTIONS] [SESSION_ID|--last] [-- FOLLOW-UP...]\n"
         "       snajpagent -e [OPTIONS] -- PROMPT...\n"
         "       snajpagent -l [OPTIONS]\n"
-        "  -d, --dotdir DIR   use DIR for config, sessions, and model cache\n"
-        "  -c, --config FILE  read FILE instead of DOTDIR/config.ini\n";
+        "  -d, --daemon                 host the IRC server in this process\n"
+        "  -s, --listen[=ENDPOINT]      listen address (localhost:6667)\n"
+        "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"
+        "  -n, --name NAME              required networked agent name\n"
+        "  -o, --operator-name NAME     local operator name\n"
+        "  -r, --room-name ROOM         hosted room name\n"
+        "      --dotdir DIR             private application directory\n"
+        "      --config FILE            explicit configuration file\n"
+        "      --effort LEVEL           reasoning effort override\n"
+        "      --color[=WHEN]            auto, always, or never\n"
+        "      --no-color               alias for --color=never\n"
+        "  -C DIR                       workspace (or resume relocation)\n"
+        "  -m MODEL                     next-turn model override\n"
+        "  -v                           increase verbosity; repeatable to 6\n"
+        "      --resume [ID|--last]      resume a durable session\n"
+        "      --all                    include sessions from all workspaces\n"
+        "  -e                           one-shot execution (prompt follows --)\n"
+        "  -l                           list sessions\n"
+        "  -h                           show this help\n"
+        "  -V                           show version\n";
     (void)snj_write_full(fd, text, sizeof(text) - 1u);
 }

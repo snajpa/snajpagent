@@ -11,9 +11,9 @@ LIVE_CONFIG ?= $(HOME)/.snajpagent/config.ini
 LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
-COMMON_SRC = src/base.c src/config.c src/credential.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/sse.c src/responses.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/term.c src/render.c src/cli.c src/app_events.c src/app_stream.c src/app_process.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
+COMMON_SRC = src/base.c src/config.c src/credential.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/irc.c src/sse.c src/responses.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/term.c src/render.c src/cli.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
-HEADERS = src/snajpagent.h src/base.h src/config.h src/credential.h src/secret.h src/instructions.h src/json.h src/snj_jansson.h src/snj_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h
+HEADERS = src/snajpagent.h src/base.h src/config.h src/credential.h src/secret.h src/instructions.h src/json.h src/snj_jansson.h src/snj_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/irc.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h
 DEPFLAGS = -MMD -MP
 
 all: $(BIN)
@@ -41,6 +41,10 @@ tests/test_base: src/base.c tests/test_base.c src/base.h
 
 tests/test_config: src/base.c src/config.c tests/test_config.c src/base.h src/config.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/config.c tests/test_config.c
+
+tests/test_irc: src/base.c src/config.c src/irc.c tests/test_irc.c src/base.h src/config.h src/cli.h src/irc.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ \
+		src/base.c src/config.c src/irc.c tests/test_irc.c
 
 tests/test_credential: src/credential.c tests/test_credential.c src/credential.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/credential.c tests/test_credential.c
@@ -73,9 +77,9 @@ tests/test_provider_transport: $(COMMON_SRC) tests/test_provider_transport.c $(H
 	$(CC) $(CPPFLAGS) -DSNAJPAGENT_TEST_TRANSPORT_ENDPOINTS=1 $(JANSSON_CFLAGS) $(CURL_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(COMMON_SRC) tests/test_provider_transport.c $(LDLIBS) $(CURL_LIBS)
 
-tests/test_context: src/base.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c tests/test_context.c $(HEADERS)
+tests/test_context: src/base.c src/config.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c tests/test_context.c $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c \
+		-o $@ src/base.c src/config.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c \
 		tests/test_context.c $(LDLIBS)
 
 tests/test_render: src/base.c src/json.c src/term.c src/render.c tests/test_render.c \
@@ -98,9 +102,10 @@ tests/test_store: src/base.c src/json.c src/instructions.c src/turn.c src/store.
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ src/base.c src/json.c src/instructions.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(LDLIBS)
 
-check: tests/test_base tests/test_config tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store tests/snajpagent-fixture
+check: tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store tests/snajpagent-fixture
 	./tests/test_base
 	./tests/test_config
+	./tests/test_irc
 	./tests/test_instructions
 	./tests/test_credential
 	./tests/test_sse
@@ -225,7 +230,7 @@ sizecheck:
 	test "$$prod" -le 35000 && test "$$all" -le 50000 && test "$$units" -le 30
 
 clean:
-	rm -f $(BIN) src/*.o src/*.d tests/test_base tests/test_config tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store tests/snajpagent-fixture
+	rm -f $(BIN) src/*.o src/*.d tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store tests/snajpagent-fixture
 	rm -rf tests/.fixture-obj build
 
 install: $(BIN)

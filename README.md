@@ -17,14 +17,19 @@ interactive path is usable.
 - Persistent `/goal` objectives with automatic multi-turn continuation,
   pause/resume, user-controlled wording locks, and explicit completion or
   blocking from the model.
-- `-r` resume support without a background daemon, tmux session, or socket.
+- Durable `--resume` support without a background worker or tmux session.
+- First-class single-room IRC hosting and repeatable outgoing connections for
+  agent/operator chat, with reconnects, bounded history, and operator-aware
+  model steering.
 - Interactive mode, one-shot execution mode, and session listing.
 - Terminal-width wrapping for streamed model text without changing stored or
   redirected response bytes.
 - OpenAI Responses streaming over libcurl, including hosted `web_search`.
 - Codex-style instruction discovery from `AGENTS.override.md` and `AGENTS.md`.
 - Tool support for `exec_command`, yielded process handles, `write_stdin`, and
-  strict `apply_patch`.
+  strict `apply_patch`, plus IRC chat/state/topic tools in networked mode.
+- Program-wide, terminal-aware 16-color presentation with an explicit
+  `auto`/`always`/`never` policy.
 - Secret redaction for provider credentials and configured tool environment
   variables before tool output is stored or rendered.
 
@@ -78,24 +83,36 @@ The repository vendors no third-party implementation source. See
 ./snajpagent
 ./snajpagent -- "explain this repository"
 ./snajpagent -e -- "run the tests and summarize failures"
-./snajpagent -r --last -- "continue"
+./snajpagent --resume --last -- "continue"
 ./snajpagent -l
+./snajpagent -d -n builder
+./snajpagent -c irc.example:6667 -n worker -o alice
 ```
 
 Useful options:
 
 ```text
 -C DIR      run in a specific workspace
--d DIR      use DIR as the private application directory
--c FILE     use FILE instead of DOTDIR/config.ini
+-d          host the built-in IRC server
+-s ENDPOINT choose its listen endpoint (default localhost:6667)
+-c ENDPOINT connect to IRC; repeatable (default localhost:6667)
+-n NAME     networked agent name (required in networked mode)
+-o NAME     local operator name
+-r ROOM     hosted room name
 -m MODEL    override the configured model
--o EFFORT   override reasoning effort
 -v          increase verbosity, repeatable up to six times
+--dotdir DIR
+--config FILE
+--effort LEVEL
+--color[=auto|always|never]
 --no-color  disable color
 ```
 
-`--dotdir DIR` and `--config FILE` are the long forms of `-d` and `-c`.
-The dotdir and explicit configuration paths must be absolute.
+`--daemon`, `--listen`, `--client`, `--name`, `--operator-name`, and
+`--room-name` are the long forms of the network options. Bare `-s` or `-c`
+uses `localhost:6667`. The former `-d`, `-c`, `-r`, and `-o` meanings remain
+available as `--dotdir`, `--config`, `--resume`, and `--effort`. Dotdir and
+explicit configuration paths must be absolute.
 
 The built-in help is intentionally short:
 
@@ -164,6 +181,55 @@ numbers. Queue mutations accept these short and long forms:
 an `edit N › ` prompt and saves it in the same FIFO position with Enter (or
 with Tab while another turn is active).
 
+## IRC Chat Mode
+
+`-d` hosts the bounded built-in IRC server in the normal foreground process;
+it does not detach. `-s` selects its listener and requires the server role.
+Each `-c` adds an outgoing connection, so hosting and one or more client roles
+can be combined. Networked mode requires `-n NAME`. Initial chat text in this
+mode must follow `--`:
+
+```sh
+./snajpagent -d -n builder -- "introduce yourself"
+./snajpagent -d -s 0.0.0.0:7667 -n builder -o alice -r builds
+./snajpagent -c localhost:7667 -c irc.example:6667 -n reviewer -o bob
+```
+
+Each server has one advertised room. Its default name comes from the host
+name, and its initial topic is the absolute launch workspace. snajpagent
+clients join that room automatically. Local operators and ordinary IRC
+clients receive channel operator mode `+o`; the agent identity does not.
+Operators can change the topic with normal IRC `TOPIC` or the local
+`/topic TEXT` command. `/names` shows current members, and `//TEXT` sends chat
+beginning with `/`.
+
+The timestamped terminal transcript behaves like a scrolling IRC client, not
+a windowed TUI. At the default verbosity it shows operator/room chat and room
+events, but hides the local model's response and all model/tool internals. The
+networked verbosity ladder is additive:
+
+1. `-v` reveals terminal model replies locally;
+2. `-vv` adds intermediate model commentary and compact tool activity;
+3. `-vvv` adds bounded tool details and runtime/provider-cycle state;
+4. higher levels add durable/IRC state, sanitized protocol bodies, then
+   bounded transport diagnostics.
+
+Only terminal public assistant text is posted to the room. Local operator,
+current `+o`, and direct-mention messages steer the model at the earliest safe
+boundary; in-flight generation and commands finish normally, and multiple
+urgent messages are coalesced. Other chat and membership/topic events are
+admitted when convenient and do not force a reply. First join and every
+successful compaction inject a fresh bounded room snapshot. The runtime owns
+sockets, joining, history, and reconnects; the model may use `irc_send`,
+`irc_state`, and privilege-checked `irc_topic`, but never needs to babysit the
+network.
+
+`--color` selects `always`; `--color=auto|always|never` makes the policy
+explicit, and `--no-color` selects `never`. The default `auto` mode colors only
+terminal output and honors `NO_COLOR`. Color applies to networked and ordinary
+UI roles, uses broadly supported 16-color foreground attributes, and never
+enters stored text, provider input, or IRC traffic.
+
 ## Configuration
 
 By default snajpagent keeps all private application data under:
@@ -181,8 +247,9 @@ sessions/
 trash/
 ```
 
-Use `-d DIR` to select another dotdir, or `-c FILE` to read a configuration
-file elsewhere while leaving the cache and session locations unchanged.
+Use `--dotdir DIR` to select another dotdir, or `--config FILE` to read a
+configuration file elsewhere while leaving cache and session locations
+unchanged.
 
 Minimal OpenAI configuration:
 
@@ -263,9 +330,27 @@ The optional typing pause is measured from the most recent input edit, accepts
 ```ini
 [ui]
 typing_pause_ms = 500
+color = auto
+verbosity = 0
 ```
 
-Other supported config sections are `[ui]` and `[tool]`; the parser in
+IRC settings have direct command-line equivalents. `client` may appear up to
+16 times; command-line clients replace the configured list. History accepts 1
+through 1000 lines and defaults to 200:
+
+```ini
+[irc]
+daemon = true
+listen = localhost:6667
+client = localhost:7667
+client = irc.example:6667
+name = builder
+operator_name = alice
+room_name = builds
+history_lines = 200
+```
+
+Other supported config sections are `[irc]`, `[ui]`, and `[tool]`; the parser in
 `src/config.c` is currently the source of truth for every accepted key.
 The complete cache and selector contract is recorded in
 `design/model-cache.md`.
@@ -276,8 +361,7 @@ The complete cache and selector contract is recorded in
 Design notes live in `design/`. Start with `design/architecture.md` for the
 runtime shape and durability model. The IRC server/client, operator chat,
 steering, history, compaction, and program-wide color contract is recorded in
-[`design/irc-chat.md`](design/irc-chat.md); its implementation is pending on
-the `codex/irc-chat` worktree branch.
+[`design/irc-chat.md`](design/irc-chat.md).
 
 ## License
 

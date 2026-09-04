@@ -141,8 +141,17 @@ static const struct snj_term_command commands[] = {
     {"/archive", "archive idle session and exit"},
     {"/compact", "compact the idle session context"},
     {"/delete", "delete idle session after confirmation"},
-    {"/exit", "preserve session and exit"}
+    {"/exit", "preserve session and exit"},
+    {"/topic [TEXT]", "show or change the IRC room topic"},
+    {"/names", "show IRC endpoints, room members, and operator flags"}
 };
+
+static size_t
+command_count(const struct app_state *app)
+{
+    size_t count = sizeof(commands) / sizeof(commands[0]);
+    return app->networked ? count : count - 2u;
+}
 static const char *
 effective_model(const char *model)
 {
@@ -234,10 +243,19 @@ render_queue(struct app_state *app)
 static int
 set_input_prompt(struct app_state *app, bool active)
 {
-    char label[32];
+    char label[64];
 
-    if (!app->queue_edit_id[0])
+    if (!app->queue_edit_id[0] && !app->networked)
         return snj_term_set_prompt(&app->term, active);
+    if (!app->queue_edit_id[0]) {
+        if (snprintf(label, sizeof(label), "%s %s ",
+                     snj_irc_operator_name(app->irc),
+                     active ? "↪" : "›") < 0) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        return snj_term_set_prompt_label(&app->term, active, label);
+    }
     if (snprintf(label, sizeof(label), "edit %zu › ",
                  app->queue_edit_number) < 0) {
         errno = EOVERFLOW;
@@ -529,7 +547,7 @@ render_help(struct app_state *app)
     int rc = -1;
 
     snj_buf_init(&text, 64u * 1024u);
-    for (size_t i = 0u; i < sizeof(commands) / sizeof(commands[0]); ++i)
+    for (size_t i = 0u; i < command_count(app); ++i)
         if (snj_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
                            commands[i].description) < 0)
             goto out;
@@ -940,6 +958,8 @@ static int
 handle_common_command(struct app_state *app, const char *line, bool active,
                       bool *handled)
 {
+    char error[256] = {0};
+
     *handled = true;
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0)
         return render_help(app);
@@ -961,6 +981,28 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return change_effort(app, line + 8u, active);
     if (strcmp(line, "/goal") == 0 || strncmp(line, "/goal ", 6u) == 0)
         return snj_app_goal_command(app, line, active);
+    if (app->networked &&
+        (strcmp(line, "/names") == 0 || strcmp(line, "/topic") == 0)) {
+        struct snj_buf state;
+        int rc;
+
+        snj_buf_init(&state, SNJ_MAX_IRC_SNAPSHOT);
+        rc = snj_irc_snapshot(app->irc, &state, error, sizeof(error));
+        if (rc == 0)
+            rc = snj_buf_terminate(&state);
+        if (rc == 0)
+            rc = snj_render_host(&app->render, (const char *)state.data);
+        snj_buf_free(&state);
+        return rc < 0 ? app_error(app, error[0] ? error :
+                                  "IRC state could not be displayed") : 0;
+    }
+    if (app->networked && strncmp(line, "/topic ", 7u) == 0) {
+        if (snj_irc_set_operator_topic(app->irc, line + 7u,
+                                       error, sizeof(error)) < 0)
+            return app_error(app, error[0] ? error :
+                              "IRC topic could not be changed");
+        return 0;
+    }
     *handled = false;
     return 0;
 }
@@ -972,6 +1014,16 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     char *line = NULL;
     char error[256];
     int rc;
+    if (app->networked) {
+        error[0] = '\0';
+        if (snj_irc_tick(app->irc, 0, error, sizeof(error)) < 0) {
+            (void)snj_render_error_ctx(&app->render,
+                error[0] ? error : "IRC event loop failed");
+            return -1;
+        }
+        if (timeout_ms > 25u)
+            timeout_ms = 25u;
+    }
     if (app->execute || app->input_closed)
         return 0;
     rc = snj_term_poll(&app->term, (int)timeout_ms, &action, &line);
@@ -984,6 +1036,14 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (rc == 0) {
         uint64_t now = snj_time_ms();
+        if (app->networked) {
+            error[0] = '\0';
+            if (snj_irc_tick(app->irc, 0, error, sizeof(error)) < 0) {
+                (void)snj_render_error_ctx(&app->render,
+                    error[0] ? error : "IRC event loop failed");
+                return -1;
+            }
+        }
         if (!snj_term_typing_active(&app->term) &&
             !app->stream_item_active &&
             !app->activity_shown && now >= app->active_since_ms &&
@@ -1055,6 +1115,19 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 (void)snj_render_error_ctx(&app->render,
                     "steering must be nonempty valid UTF-8 within 256 KiB");
                 rc = 0;
+            } else if (app->networked) {
+                error[0] = '\0';
+                rc = snj_irc_send_operator(app->irc, text,
+                                           error, sizeof(error));
+                if (rc < 0) {
+                    (void)snj_render_error_ctx(&app->render,
+                        error[0] ? error : "IRC message could not be queued");
+                    if (set_input_prompt(app, true) == 0)
+                        (void)snj_term_restore_draft(&app->term, line);
+                } else {
+                    (void)snj_term_history_add(&app->term, line);
+                    rc = set_input_prompt(app, true);
+                }
             } else if (snj_random_id(steering_id) < 0) {
                 rc = -1;
             } else {
@@ -1345,6 +1418,24 @@ execute_calls(struct app_state *app, const char *turn_id,
     }
     return 0;
 }
+
+static json_t *
+silent_turn_data(const char *turn_id, const char *response_id,
+                 const char *reason)
+{
+    json_t *data = json_object();
+
+    if (!data ||
+        snj_json_set_new(data, "reason", json_string(reason)) < 0 ||
+        snj_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
+        snj_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
+        if (data)
+            json_decref(data);
+        return NULL;
+    }
+    return data;
+}
+
 static int
 run_turn(struct app_state *app, const char *prompt,
          const struct snj_queued_turn *queued, bool goal_turn)
@@ -1362,6 +1453,7 @@ run_turn(struct app_state *app, const char *prompt,
     int result = 4;
     snj_credential_clear(&credential);
     app->last_turn_refused = false;
+    app->irc_turn_replied = false;
     error[0] = '\0';
     if (!*prompt || strlen(prompt) > prompt_max ||
         !snj_utf8_valid((const unsigned char *)prompt, strlen(prompt), true)) {
@@ -1435,6 +1527,13 @@ run_turn(struct app_state *app, const char *prompt,
         uint64_t response_begin_ms;
         unsigned int provider_retry_count = 0u;
         int provider_rc;
+        error[0] = '\0';
+        if (snj_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
+            (void)app_error(app, error[0] ? error :
+                            "urgent IRC input could not be admitted");
+            result = 3;
+            goto out;
+        }
         snj_response_graph_init(&graph);
         snj_buf_init(&request_body, SNJ_WIRE_BODY_MAX);
         steering = snj_app_steering_snapshot(&app->session);
@@ -1467,7 +1566,34 @@ run_turn(struct app_state *app, const char *prompt,
 #endif
             provider_rc = snj_app_provider_count(app, count_request, &credential,
                                          &input_tokens_bound, error, sizeof(error));
-            if (provider_rc < 0) {
+            if (provider_rc == 1 && app->steering_requested) {
+                snj_app_response_cycle_release(app, &graph, &steering,
+                                               &create_request, &count_request,
+                                               &request_body);
+                app->steering_requested = false;
+                --cycle;
+                continue;
+            }
+            if (provider_rc == 2 && app->interrupt_requested) {
+                snj_app_response_cycle_release(app, &graph, &steering,
+                                               &create_request, &count_request,
+                                               &request_body);
+                if (close_active_process_for_turn(app, turn_id,
+                        "user_interrupt", true, error, sizeof(error)) < 0 ||
+                    commit_event(app, "turn_interrupted",
+                        snj_app_turn_interrupted_data(turn_id, "user",
+                                                      "cancelled"),
+                        error, sizeof(error)) < 0) {
+                    (void)app_error(app, error[0] ? error :
+                                    "interruption could not be persisted");
+                    result = 3;
+                } else {
+                    (void)app_warning(app, "turn interrupted");
+                    result = app->execute ? 6 : 1;
+                }
+                goto out;
+            }
+            if (provider_rc != 0) {
                 snj_app_response_cycle_release(app, &graph, &steering,
                                                &create_request, &count_request,
                                                &request_body);
@@ -1484,6 +1610,13 @@ run_turn(struct app_state *app, const char *prompt,
                     result = 4;
                 }
                 goto out;
+            }
+            if (app->networked && app->irc_urgent.len) {
+                snj_app_response_cycle_release(app, &graph, &steering,
+                                               &create_request, &count_request,
+                                               &request_body);
+                --cycle;
+                continue;
             }
 #ifndef SNAJPAGENT_TEST_FIXTURE
             count_method = "exact";
@@ -1731,6 +1864,14 @@ run_turn(struct app_state *app, const char *prompt,
             result = 3;
             goto out;
         }
+        error[0] = '\0';
+        if (snj_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
+            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            (void)app_error(app, error[0] ? error :
+                            "urgent IRC input could not be admitted");
+            result = 3;
+            goto out;
+        }
         {
             char input_tokens[32];
             char output_tokens[32];
@@ -1834,9 +1975,56 @@ run_turn(struct app_state *app, const char *prompt,
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             continue;
         }
+        if (app->networked && decision.outcome == SNJ_GRAPH_NONPRODUCTIVE) {
+            if (app->irc_turn_local_operator && !app->irc_turn_replied &&
+                !app->session.irc_reply_reminded) {
+                char steering_id[SNJ_ID_HEX_LEN + 1u];
+
+                if (snj_random_id(steering_id) < 0 ||
+                    commit_event(app, "irc_reply_reminder",
+                        snj_app_steering_added_data(turn_id, steering_id,
+                            SNJ_IRC_REPLY_REMINDER_TEXT),
+                        error, sizeof(error)) < 0) {
+                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                                   NULL, NULL);
+                    (void)app_error(app, error[0] ? error :
+                                    "IRC reply reminder could not be persisted");
+                    result = 3;
+                    goto out;
+                }
+                snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                               NULL, NULL);
+                continue;
+            }
+            if (commit_event(app, "turn_completed_silent",
+                    silent_turn_data(turn_id, response_id,
+                        app->irc_turn_local_operator && !app->irc_turn_replied ?
+                        "reply_reminder_exhausted" : "room_update_quiet"),
+                    error, sizeof(error)) < 0) {
+                snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                               NULL, NULL);
+                (void)app_error(app, error[0] ? error :
+                                "quiet IRC turn could not be completed");
+                result = 3;
+                goto out;
+            }
+            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            result = 0;
+            goto out;
+        }
         if (decision.outcome == SNJ_GRAPH_FINAL ||
             decision.outcome == SNJ_GRAPH_REFUSAL) {
             const struct snj_response_item *final = &graph.items[decision.final_index];
+            if (app->networked &&
+                snj_irc_send_agent(app->irc, final->text,
+                                   error, sizeof(error)) < 0) {
+                snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                               NULL, NULL);
+                (void)app_error(app, error[0] ? error :
+                                "assistant reply could not be queued to IRC");
+                result = 4;
+                goto out;
+            }
             if (commit_event(app, "turn_completed",
                              snj_app_turn_completed_data(turn_id, response_id,
                                                  final->local_item_id),
@@ -2023,7 +2211,7 @@ resolve_dotdir(const char *override, char *error, size_t error_size)
     }
     else {
         set_error(error, error_size,
-                  "HOME is unavailable for the default dotdir; use -d DIR");
+                  "HOME is unavailable for the default dotdir; use --dotdir DIR");
         errno = EINVAL;
         return NULL;
     }
@@ -2093,6 +2281,23 @@ run_ready_chains(struct app_state *app)
             app->goal_armed = false;
             return 0;
         }
+        if (app->networked &&
+            (app->irc_urgent.len ||
+             ((!app->queue_armed || app->session.pending_queue_count == 0u) &&
+              app->goal_armed && app->irc_background.len))) {
+            bool local_operator = false;
+            char *prompt = snj_app_irc_take_pending(app, &local_operator,
+                                                     true);
+            if (prompt) {
+                app->irc_turn_local_operator = local_operator;
+                turn_rc = run_tracked_turn(app, prompt, NULL, false);
+                app->irc_turn_local_operator = false;
+                free(prompt);
+                if (turn_rc != 0)
+                    return turn_rc;
+                continue;
+            }
+        }
         if (app->queue_armed && app->session.pending_queue_count != 0u) {
             turn_rc = run_queued_chain(app);
             if (turn_rc != 0)
@@ -2122,8 +2327,33 @@ interactive_loop(struct app_state *app, const char *initial)
         enum snj_term_action action = SNJ_TERM_NONE;
         if (app->input_closed)
             return 0;
+        if (!prompt && app->networked) {
+            bool local_operator = false;
+            char *irc_prompt = snj_app_irc_take_pending(
+                app, &local_operator, false);
+
+            if (irc_prompt) {
+                int turn_rc;
+                app->queue_armed = false;
+                app->irc_turn_local_operator = local_operator;
+                turn_rc = run_tracked_turn(app, irc_prompt, NULL, false);
+                app->irc_turn_local_operator = false;
+                free(irc_prompt);
+                if (turn_rc == 3 || turn_rc == 6)
+                    return turn_rc;
+                if (turn_rc == 0 &&
+                    (app->queue_armed || app->goal_armed)) {
+                    int chain_rc = run_ready_chains(app);
+                    if (chain_rc == 3 || chain_rc == 6)
+                        return chain_rc;
+                }
+                continue;
+            }
+        }
         if (!prompt) {
-            int poll_rc = snj_term_poll(&app->term, -1, &action, &owned);
+            int poll_rc = snj_term_poll(&app->term,
+                                        app->networked ? 25 : -1,
+                                        &action, &owned);
             if (poll_rc < 0) {
                 (void)app_error(app,
                     errno == EOVERFLOW ? "prompt exceeds 1 MiB" :
@@ -2132,6 +2362,15 @@ interactive_loop(struct app_state *app, const char *initial)
                 if (set_input_prompt(app, false) < 0)
                     return 6;
                 continue;
+            }
+            if (app->networked) {
+                char irc_error[256] = {0};
+                if (snj_irc_tick(app->irc, 0, irc_error,
+                                 sizeof(irc_error)) < 0) {
+                    (void)app_error(app, irc_error[0] ? irc_error :
+                                    "IRC event loop failed");
+                    return 3;
+                }
             }
             if (poll_rc == 0)
                 continue;
@@ -2162,7 +2401,8 @@ interactive_loop(struct app_state *app, const char *initial)
                 return 3;
             continue;
         }
-        if (snj_render_submitted(&app->render, "› ", prompt) < 0) {
+        if (!app->networked &&
+            snj_render_submitted(&app->render, "› ", prompt) < 0) {
             free(owned);
             return 6;
         }
@@ -2213,6 +2453,15 @@ interactive_loop(struct app_state *app, const char *initial)
                 }
             } else if (single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
+            } else if (app->networked) {
+                const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
+                                     prompt + 1 : prompt;
+                char irc_error[256] = {0};
+
+                if (snj_irc_send_operator(app->irc, actual, irc_error,
+                                          sizeof(irc_error)) < 0)
+                    (void)app_error(app, irc_error[0] ? irc_error :
+                                    "IRC message could not be queued");
             } else {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
@@ -2257,15 +2506,19 @@ snj_app_run(const struct snj_cli *cli)
     bool goal_paused_on_resume = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
+    snj_buf_init(&app.irc_urgent, SNJ_MAX_STEERING_TEXT + 1u);
+    snj_buf_init(&app.irc_background, SNJ_MAX_STEERING_TEXT + 1u);
     snj_config_init(&config);
     snj_instructions_init(&app.turn_instructions);
     snj_model_cache_init(&app.model_cache);
     snj_store_init(&app.store);
     snj_session_init(&app.session);
     snj_term_init(&app.term);
-    snj_term_set_commands(&app.term, commands,
-                          sizeof(commands) / sizeof(commands[0]));
     snj_render_init(&app.render, 0u);
+    snj_render_set_color(&app.render,
+        cli->color == SNJ_CLI_COLOR_NEVER ? SNJ_COLOR_NEVER :
+        cli->color == SNJ_CLI_COLOR_ALWAYS ? SNJ_COLOR_ALWAYS :
+                                              SNJ_COLOR_AUTO);
     app.cli = cli;
     app.config = &config;
     app.execute = cli->execute;
@@ -2275,7 +2528,8 @@ snj_app_run(const struct snj_cli *cli)
         if (!locale_name || !codeset ||
             (strcasecmp(codeset, "UTF-8") != 0 &&
              strcasecmp(codeset, "UTF8") != 0)) {
-            (void)snj_render_error("a UTF-8 locale is required");
+            (void)snj_render_error_ctx(&app.render,
+                                       "a UTF-8 locale is required");
             rc = 2;
             goto out;
         }
@@ -2283,16 +2537,37 @@ snj_app_run(const struct snj_cli *cli)
     error[0] = '\0';
     dotdir = resolve_dotdir(cli->dotdir, error, sizeof(error));
     if (!dotdir) {
-        (void)snj_render_error(error[0] ? error : "dotdir is unavailable");
+        (void)snj_render_error_ctx(&app.render,
+                                   error[0] ? error : "dotdir is unavailable");
         rc = 2;
         goto out;
     }
     if (snj_config_load(&config, cli->config_path, dotdir,
                         error, sizeof(error)) < 0) {
-        (void)snj_render_error(error);
+        (void)snj_render_error_ctx(&app.render, error);
         rc = 2;
         goto out;
     }
+    {
+        enum snj_color_mode color = config.color;
+        if (cli->color == SNJ_CLI_COLOR_AUTO)
+            color = SNJ_COLOR_AUTO;
+        else if (cli->color == SNJ_CLI_COLOR_ALWAYS)
+            color = SNJ_COLOR_ALWAYS;
+        else if (cli->color == SNJ_CLI_COLOR_NEVER)
+            color = SNJ_COLOR_NEVER;
+        snj_render_set_color(&app.render, color);
+    }
+    if (!cli->execute && !cli->list &&
+        snj_irc_apply_cli(&config, cli, error, sizeof(error)) < 0) {
+        (void)snj_render_error_ctx(&app.render, error);
+        rc = 2;
+        goto out;
+    }
+    app.networked = !cli->execute && !cli->list && snj_irc_enabled(&config);
+    snj_term_set_commands(&app.term, commands, command_count(&app));
+    snj_render_set_networked(&app.render, app.networked,
+                             app.networked ? config.irc_name : NULL);
     snj_term_set_typing_pause(&app.term, config.typing_pause_ms);
     effective_verbosity = config.verbosity;
     if (effective_verbosity < 6u) {
@@ -2302,7 +2577,8 @@ snj_app_run(const struct snj_cli *cli)
     app.render.verbosity = effective_verbosity;
     if (!cli->execute && !cli->list &&
         (isatty(STDIN_FILENO) != 1 || isatty(STDERR_FILENO) != 1)) {
-        (void)snj_render_error("interactive mode requires terminal stdin and stderr; use -e for scripts");
+        (void)snj_render_error_ctx(&app.render,
+            "interactive mode requires terminal stdin and stderr; use -e for scripts");
         rc = 2;
         goto out;
     }
@@ -2310,25 +2586,25 @@ snj_app_run(const struct snj_cli *cli)
         new_model = effective_model(cli->model ? cli->model : config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
     if ((!cli->resume || cli->effort) && !resolve_effort(new_effort)) {
-        (void)snj_render_error(
+        (void)snj_render_error_ctx(&app.render,
             "reasoning effort is empty, oversized, or invalid UTF-8");
         rc = 2;
         goto out;
     }
     if (snj_store_open(&app.store, dotdir, error, sizeof(error)) < 0) {
-        (void)snj_render_error(error);
+        (void)snj_render_error_ctx(&app.render, error);
         goto out;
     }
     workspace = current_workspace(error, sizeof(error));
     if (!workspace) {
-        (void)snj_render_error(error);
+        (void)snj_render_error_ctx(&app.render, error);
         goto out;
     }
     if (cli->list) {
         rc = snj_store_list(&app.store, workspace, cli->all, STDOUT_FILENO,
                             error, sizeof(error)) < 0 ? 3 : 0;
         if (rc)
-            (void)snj_render_error(error);
+            (void)snj_render_error_ctx(&app.render, error);
         goto out;
     }
     if (cli->resume) {
@@ -2336,7 +2612,7 @@ snj_app_run(const struct snj_cli *cli)
             relocated_workspace = resolve_workspace_path(cli->workspace, "relocation",
                                                          error, sizeof(error));
             if (!relocated_workspace) {
-                (void)snj_render_error(error);
+                (void)snj_render_error_ctx(&app.render, error);
                 rc = 2;
                 goto out;
             }
@@ -2350,27 +2626,27 @@ snj_app_run(const struct snj_cli *cli)
         else
             rc = pick_session(&app, workspace, error, sizeof(error));
         if (rc == 1) {
-            (void)snj_render_warning(error);
+            (void)snj_render_warning_ctx(&app.render, error);
             rc = 0;
             goto out;
         }
         if (rc < 0) {
-            (void)snj_render_error(error);
+            (void)snj_render_error_ctx(&app.render, error);
             rc = 3;
             goto out;
         }
         if (app.session.archived && snj_session_unarchive(&app.session, NULL, error, sizeof(error)) < 0) {
-            (void)snj_render_error(error); rc = 3; goto out;
+            (void)snj_render_error_ctx(&app.render, error); rc = 3; goto out;
         }
         if (recover_session(&app, error, sizeof(error)) < 0) {
-            (void)snj_render_error(error);
+            (void)snj_render_error_ctx(&app.render, error);
             rc = 3;
             goto out;
         }
         if (app.session.goal_status == SNJ_GOAL_ACTIVE) {
             if (snj_app_goal_pause(&app, "session_resumed",
                                    error, sizeof(error)) < 0) {
-                (void)snj_render_error(error);
+                (void)snj_render_error_ctx(&app.render, error);
                 rc = 3;
                 goto out;
             }
@@ -2384,7 +2660,7 @@ snj_app_run(const struct snj_cli *cli)
                                                 "new_workspace",
                                                 relocated_workspace),
                          error, sizeof(error)) < 0) {
-            (void)snj_render_error(error);
+            (void)snj_render_error_ctx(&app.render, error);
             rc = 3;
             goto out;
         }
@@ -2398,19 +2674,32 @@ snj_app_run(const struct snj_cli *cli)
         if (snj_session_create(&app.store, &app.session, selected_workspace,
                                config.providers[0].name, new_model, new_effort,
                                error, sizeof(error)) < 0) {
-            (void)snj_render_error(error);
+            (void)snj_render_error_ctx(&app.render, error);
             goto out;
         }
         app.turn_model = app.session.default_model;
         app.turn_effort = resolve_effort(app.session.default_effort);
         app.turn_provider = &config.providers[0];
     }
+    if (app.networked) {
+        if (snj_irc_open(&app.irc, &config, app.session.workspace,
+                         snj_app_irc_event, snj_app_irc_trace, &app,
+                         error, sizeof(error)) < 0 ||
+            snj_app_irc_restore(&app, error, sizeof(error)) < 0 ||
+            (config.irc_daemon &&
+             snj_app_irc_snapshot(&app, "join", error, sizeof(error)) < 0)) {
+            (void)snj_render_error_ctx(&app.render, error[0] ? error :
+                                   "IRC startup failed");
+            rc = 3;
+            goto out;
+        }
+    }
     if (cli->execute) {
         rc = run_tracked_turn(&app, cli->prompt, NULL, false);
         goto out;
     }
     if (snj_term_open(&app.term, error, sizeof(error)) < 0) {
-        (void)snj_render_error(error);
+        (void)snj_render_error_ctx(&app.render, error);
         rc = 3;
         goto out;
     }
@@ -2419,6 +2708,7 @@ snj_app_run(const struct snj_cli *cli)
         (void)snj_term_history_add(&app.term, app.session.last_user);
     if (snj_render_orientation(&app.render, &app.session, cli->resume) < 0 ||
         (cli->resume && config.resume_history_turns != 0u &&
+         (!app.networked || app.render.verbosity >= 1u) &&
          snj_render_history(&app.render, &app.session) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u &&
          app_warning(&app,
@@ -2432,6 +2722,9 @@ snj_app_run(const struct snj_cli *cli)
     rc = interactive_loop(&app, cli->prompt);
 out:
     snj_term_close(&app.term);
+    snj_irc_close(app.irc);
+    snj_buf_free(&app.irc_urgent);
+    snj_buf_free(&app.irc_background);
     free(dotdir);
     free(relocated_workspace);
     free(workspace);

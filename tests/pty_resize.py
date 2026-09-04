@@ -35,7 +35,7 @@ before = session_ids()
 pid, fd = pty.fork()
 if pid == 0:
     os.chdir(workspace)
-    os.execv(binary, [binary, "-d", dotdir, "-vvvv"])
+    os.execv(binary, [binary, "--dotdir", dotdir, "-vvvv"])
 
 buf = bytearray()
 

@@ -30,6 +30,7 @@ void snj_context_projection_free(struct snj_context_projection *projection);
 int snj_context_build(struct snj_session *session, const char *model,
                       const char *effort, unsigned int cycle,
                       const json_t *steering,
+                      const struct snj_config *config,
                       const struct snj_instruction_set *instructions,
                       struct snj_context_projection *projection,
                       char *error, size_t error_size);

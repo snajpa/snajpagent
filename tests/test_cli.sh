@@ -26,6 +26,102 @@ set -e
 grep -q 'UTF-8 locale is required' "$root/locale.err"
 export LC_ALL=C.utf8
 
+$bin -h >"$root/help" 2>"$root/help.err"
+[ ! -s "$root/help.err" ]
+grep -q -- '-d, --daemon' "$root/help"
+grep -q -- '-c, --client\[=ENDPOINT\]' "$root/help"
+grep -q -- '--operator-name' "$root/help"
+grep -q -- '--color\[=WHEN\]' "$root/help"
+
+for args in \
+    '-d' \
+    '-s -n worker' \
+    '-r room -n worker' \
+    '-d -n worker -o WORKER' \
+    '-c localhost -c localhost:6667 -n worker' \
+    '-d -n worker initial'; do
+    set +e
+    # These arguments contain no quoting-sensitive values.
+    $bin $args >"$root/network-invalid.out" 2>"$root/network-invalid.err"
+    status=$?
+    set -e
+    [ "$status" -eq 2 ]
+    [ ! -s "$root/network-invalid.out" ]
+done
+grep -q 'networked initial chat text must follow --' \
+    "$root/network-invalid.err"
+
+cat >"$root/network-config.ini" <<'EOF'
+[irc]
+daemon = true
+name = worker
+EOF
+set +e
+$bin --config "$root/network-config.ini" initial >"$root/network-config.out" \
+    2>"$root/network-config.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+grep -q 'networked initial chat text must follow --' \
+    "$root/network-config.err"
+
+cat >"$root/listen-only.ini" <<'EOF'
+[irc]
+listen = localhost:6667
+EOF
+set +e
+$bin --config "$root/listen-only.ini" >"$root/listen-only.out" \
+    2>"$root/listen-only.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+grep -q 'require a server or client role' "$root/listen-only.err"
+
+cat >"$root/color-network-error.ini" <<'EOF'
+[ui]
+color = always
+[irc]
+daemon = true
+EOF
+set +e
+$bin --config "$root/color-network-error.ini" \
+    >"$root/color-network-error.out" 2>"$root/color-network-error.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+LC_ALL=C grep -q "$(printf '\033')" "$root/color-network-error.err"
+
+set +e
+$bin --no-color -d >"$root/no-color-error.out" 2>"$root/no-color-error.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+! LC_ALL=C grep -q "$(printf '\033')" "$root/no-color-error.err"
+
+set +e
+$bin --color -d >"$root/color-error.out" 2>"$root/color-error.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+LC_ALL=C grep -q "$(printf '\033')" "$root/color-error.err"
+
+set +e
+$bin --color=rainbow >"$root/bad-color.out" 2>"$root/bad-color.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+grep -q 'accepts auto, always, or never' "$root/bad-color.err"
+
+for option in --client= --listen=; do
+    set +e
+    $bin "$option" -d -n worker >"$root/empty-endpoint.out" \
+        2>"$root/empty-endpoint.err"
+    status=$?
+    set -e
+    [ "$status" -eq 2 ]
+    grep -q 'requires a nonempty endpoint' "$root/empty-endpoint.err"
+done
+
 out=$($bin -e -- ping 2>"$root/err")
 [ "$out" = pong ]
 [ ! -s "$root/err" ]
@@ -35,7 +131,7 @@ id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 [ ${#id} -eq 32 ]
 [ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 5 ]
 
-out=$($bin -e -r "$id" -- ping 2>"$root/err")
+out=$($bin -e --resume "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]
 [ ! -s "$root/err" ]
 [ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 9 ]
@@ -65,7 +161,7 @@ set -e
 [ "$crash_status" -eq 99 ]
 [ ! -s "$root/crash.out" ]
 crash_id=$(grep -rl '"text":"crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-$bin -e -r "$crash_id" -- ping >"$root/crash-recovered.out" 2>"$root/crash-recovered.err"
+$bin -e --resume "$crash_id" -- ping >"$root/crash-recovered.out" 2>"$root/crash-recovered.err"
 [ "$(cat "$root/crash-recovered.out")" = pong ]
 grep -q 'recovered an interrupted turn' "$root/crash-recovered.err"
 
@@ -73,12 +169,12 @@ $bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err" && exit 1
 [ ! -s "$root/fail.out" ]
 grep -q 'fixture provider failed' "$root/fail.err"
 fail_id=$(grep -rl 'fixture provider failed' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-$bin -e -r "$fail_id" -- ping >"$root/recovered.out" 2>"$root/recovered.err"
+$bin -e --resume "$fail_id" -- ping >"$root/recovered.out" 2>"$root/recovered.err"
 [ "$(cat "$root/recovered.out")" = pong ]
 [ ! -s "$root/recovered.err" ]
 
 mkdir -m 700 "$root/work2"
-out=$($bin -e -r -C "$root/work2" "$id" -- ping 2>"$root/relocate.err")
+out=$($bin -e --resume -C "$root/work2" "$id" -- ping 2>"$root/relocate.err")
 [ "$out" = pong ]
 [ ! -s "$root/relocate.err" ]
 python3 - "$dotdir/sessions/$id/events.jsonl" "$root/work2" <<'PY'
@@ -103,7 +199,7 @@ out=$($bin -e -- many_cycles 2>"$root/many-cycles.err")
 [ ! -s "$root/many-cycles.err" ]
 many_cycles_id=$(grep -rl '"text":"many_cycles"' "$dotdir/sessions" |
     sed 's|/events.jsonl$||;s|.*/||')
-out=$($bin -e -r "$many_cycles_id" -- ping 2>"$root/many-cycles-resume.err")
+out=$($bin -e --resume "$many_cycles_id" -- ping 2>"$root/many-cycles-resume.err")
 [ "$out" = pong ]
 [ ! -s "$root/many-cycles-resume.err" ]
 
@@ -197,7 +293,7 @@ status=$?
 set -e
 [ "$status" -eq 98 ]
 tool_crash_id=$(grep -rl '"text":"tool_crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-out=$($bin -e -r "$tool_crash_id" -- ping 2>"$root/tool-recovery.err")
+out=$($bin -e --resume "$tool_crash_id" -- ping 2>"$root/tool-recovery.err")
 [ "$out" = pong ]
 grep -q 'unfinished tool work' "$root/tool-recovery.err"
 grep -q '"status":"outcome_unknown"' "$dotdir/sessions/$tool_crash_id/events.jsonl"
@@ -215,7 +311,7 @@ resume_history_turns = 0
 shell = /bin/sh
 secret_env = EXTRA_TOKEN
 EOF
-out=$($bin -c "$root/config.ini" -e -v -- ping 2>"$root/config.err")
+out=$($bin --config "$root/config.ini" -e -v -- ping 2>"$root/config.err")
 [ "$out" = pong ]
 grep -q '^turn › .* effort=high ' "$root/config.err"
 grep -q '^event › .* turn_completed synced$' "$root/config.err"
@@ -242,7 +338,7 @@ verbosity = 2
 EOF
 before=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
 set +e
-$bin -c "$root/bad-config.ini" -e -- ping >"$root/bad-config.out" 2>"$root/bad-config.err"
+$bin --config "$root/bad-config.ini" -e -- ping >"$root/bad-config.out" 2>"$root/bad-config.err"
 status=$?
 set -e
 [ "$status" -eq 2 ]
@@ -254,10 +350,10 @@ after=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
 # Resume command-line settings are consumed by one admitted turn only.
 override_state="$root/override-state"
 mkdir -m 700 "$override_state"
-$bin -d "$override_state" -e -- ping >/dev/null 2>"$root/override.err"
+$bin --dotdir "$override_state" -e -- ping >/dev/null 2>"$root/override.err"
 override_id=$(find "$override_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-$bin -d "$override_state" -e -o low -r "$override_id" -- ping >/dev/null 2>"$root/override.err"
-$bin -d "$override_state" -e -r "$override_id" -- ping >/dev/null 2>"$root/override.err"
+$bin --dotdir "$override_state" -e --effort low --resume "$override_id" -- ping >/dev/null 2>"$root/override.err"
+$bin --dotdir "$override_state" -e --resume "$override_id" -- ping >/dev/null 2>"$root/override.err"
 python3 - "$override_state/sessions/$override_id/events.jsonl" <<'PY'
 import json
 import sys
@@ -276,7 +372,7 @@ cat >"$root/auto-compact.ini" <<'EOF'
 [provider]
 auto_compact_input_tokens = 1
 EOF
-$bin -d "$auto_state" -c "$root/auto-compact.ini" -e -vvvv -- ping >"$root/auto-compact.out" 2>"$root/auto-compact.err"
+$bin --dotdir "$auto_state" --config "$root/auto-compact.ini" -e -vvvv -- ping >"$root/auto-compact.out" 2>"$root/auto-compact.err"
 [ "$(cat "$root/auto-compact.out")" = pong ]
 auto_id=$(find "$auto_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 python3 - "$auto_state/sessions/$auto_id/events.jsonl" <<'PY'
@@ -302,7 +398,7 @@ cat >"$root/responses-compact.ini" <<'EOF'
 auto_compact_input_tokens = 1
 native_compaction = false
 EOF
-$bin -d "$responses_compact_state" -c "$root/responses-compact.ini" -e -vvvv -- ping >"$root/responses-compact.out" 2>"$root/responses-compact.err"
+$bin --dotdir "$responses_compact_state" --config "$root/responses-compact.ini" -e -vvvv -- ping >"$root/responses-compact.out" 2>"$root/responses-compact.err"
 [ "$(cat "$root/responses-compact.out")" = pong ]
 responses_compact_id=$(find "$responses_compact_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 python3 - "$responses_compact_state/sessions/$responses_compact_id/events.jsonl" <<'PY'
@@ -321,10 +417,10 @@ PY
 # resumed turn's response, then post-turn compaction can compact that new turn.
 pre_state="$root/pre-response-compact-state"
 mkdir -m 700 "$pre_state"
-$bin -d "$pre_state" -e -- ping >"$root/pre-first.out" 2>"$root/pre-first.err"
+$bin --dotdir "$pre_state" -e -- ping >"$root/pre-first.out" 2>"$root/pre-first.err"
 [ "$(cat "$root/pre-first.out")" = pong ]
 pre_id=$(find "$pre_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-$bin -d "$pre_state" -c "$root/auto-compact.ini" -e -r "$pre_id" -- ping >"$root/pre-second.out" 2>"$root/pre-second.err"
+$bin --dotdir "$pre_state" --config "$root/auto-compact.ini" -e --resume "$pre_id" -- ping >"$root/pre-second.out" 2>"$root/pre-second.err"
 [ "$(cat "$root/pre-second.out")" = pong ]
 python3 - "$pre_state/sessions/$pre_id/events.jsonl" <<'PY'
 import json

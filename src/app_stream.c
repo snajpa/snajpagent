@@ -185,14 +185,23 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
         app->stream_item_hidden = false;
 
         if (kind == SNJ_ITEM_REASONING_SUMMARY) {
-            if (app->render.verbosity == 0u)
+            if (app->render.verbosity < (app->networked ? 3u : 1u))
                 app->stream_item_hidden = true;
             else {
                 fd = STDERR_FILENO;
                 label = "reason › ";
             }
         } else if (kind == SNJ_ITEM_ASSISTANT || kind == SNJ_ITEM_REFUSAL) {
-            if (app->execute && phase == SNJ_PHASE_FINAL_ANSWER)
+            if (app->networked) {
+                if (phase == SNJ_PHASE_FINAL_ANSWER ||
+                    app->render.verbosity < 2u)
+                    app->stream_item_hidden = true;
+                else {
+                    fd = STDERR_FILENO;
+                    label = "agent › ";
+                }
+            }
+            else if (app->execute && phase == SNJ_PHASE_FINAL_ANSWER)
                 app->stream_item_hidden = true;
             else if (app->execute)
                 fd = STDERR_FILENO;

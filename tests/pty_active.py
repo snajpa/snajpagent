@@ -7,6 +7,7 @@ import os
 import pty
 import select
 import signal
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -24,7 +25,7 @@ class Child:
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(WORKSPACE)
-            os.execv(BINARY, [BINARY, "-d", DOTDIR, *args])
+            os.execv(BINARY, [BINARY, "--dotdir", DOTDIR, *args])
         self.buf = bytearray()
 
     def read_once(self, timeout):
@@ -76,6 +77,56 @@ class Child:
         os.kill(self.pid, signal.SIGKILL)
         os.waitpid(self.pid, 0)
         os.close(self.fd)
+
+
+class IRCClient:
+    def __init__(self, port, nick, agent=False):
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=4.0)
+        self.buf = bytearray()
+        role = b" snajpagent/agent" if agent else b""
+        registration = (
+            b"CAP LS 302\r\nCAP REQ :batch server-time draft/chathistory" +
+            role + b"\r\nCAP END\r\nNICK " + nick.encode() +
+            b"\r\nUSER " + nick.encode() + b" 0 * :PTY peer\r\nJOIN #lab\r\n"
+        )
+        self.sock.sendall(registration)
+        self.sock.setblocking(False)
+        self.wait(b" 366 " + nick.encode() + b" #lab ")
+
+    def wait(self, needle, start=0, timeout=8.0):
+        end = time.monotonic() + timeout
+        while needle not in self.buf[start:]:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError(
+                    f"timeout waiting for IRC {needle!r}; got {bytes(self.buf)!r}"
+                )
+            ready, _, _ = select.select([self.sock], [], [], remaining)
+            if not ready:
+                continue
+            try:
+                chunk = self.sock.recv(65536)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                raise AssertionError(
+                    f"IRC socket closed waiting for {needle!r}; "
+                    f"got {bytes(self.buf)!r}"
+                )
+            self.buf.extend(chunk)
+        return self.buf.find(needle, start) + len(needle)
+
+    def message(self, text):
+        self.sock.sendall(b"PRIVMSG #lab :" + text.encode() + b"\r\n")
+
+    def close(self):
+        self.sock.close()
+
+
+def free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 def session_ids():
@@ -157,7 +208,7 @@ def test_typing_pause_and_stream_snapshots():
         "typing-pause.ini"
     config.write_text("[ui]\ntyping_pause_ms = 300\n", encoding="utf-8")
     before = session_ids()
-    child = Child(["-c", str(config)])
+    child = Child(["--config", str(config)])
     child.wait(PROMPT)
     child.send(b"typing_stream\r")
     first_end = child.wait(b"model-output-one")
@@ -233,7 +284,7 @@ def test_agents_md_config():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["-c", str(enabled_config), "-C", str(workspace)])
+    child = Child(["--config", str(enabled_config), "-C", str(workspace)])
     child.wait(PROMPT)
     child.send(b"ping\r")
     answer_end = child.wait(b"pong")
@@ -253,7 +304,7 @@ def test_agents_md_config():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["-c", str(disabled_config), "-C", str(workspace)])
+    child = Child(["--config", str(disabled_config), "-C", str(workspace)])
     child.wait(PROMPT)
     child.send(b"ping\r")
     answer_end = child.wait(b"pong")
@@ -308,7 +359,7 @@ def test_resume_pauses_fifo():
     session_id = new_session(before)
     child.kill()
 
-    resumed = Child(["-r", session_id])
+    resumed = Child(["--resume", session_id])
     resumed.wait(b"1 queued paused")
     resumed.wait(b"queued future turns are paused; use /next")
     resumed.wait(PROMPT)
@@ -376,7 +427,7 @@ def test_goal_configured_wording_limit():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["-c", str(config)])
+    child = Child(["--config", str(config)])
     child.wait(PROMPT)
     child.send(b"/goal abcde\r")
     error_end = child.wait(b"goal wording must contain 1..4 UTF-8 bytes")
@@ -536,7 +587,7 @@ def test_goal_refusal_failure_block_and_restart_pause():
     child.wait(b"working on goal")
     session_id = new_session(before)
     child.kill()
-    resumed = Child(["-r", session_id])
+    resumed = Child(["--resume", session_id])
     paused_end = resumed.wait(
         b"active goal was paused on resume; use /goal resume to continue"
     )
@@ -595,7 +646,7 @@ def test_queue_mutation_commands():
     assert os.waitstatus_to_exitcode(status) == 0
 
     session_id = new_session(before)
-    resumed = Child(["-r", session_id])
+    resumed = Child(["--resume", session_id])
     resumed.wait(b"2 queued paused")
     resumed.wait(PROMPT)
     start = len(resumed.buf)
@@ -828,7 +879,7 @@ def test_model_cache_and_selection():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["-c", str(config)])
+    child = Child(["--config", str(config)])
     child.wait(PROMPT)
 
     # A first plain listing imports the local Codex cache without provider work.
@@ -929,7 +980,7 @@ def test_model_cache_and_selection():
     assert turn["data"]["config"]["effort"] == "max"
 
     # Provider/model/effort selection survives a process restart and resume.
-    resumed = Child(["-c", str(config), "-r", session_id])
+    resumed = Child(["--config", str(config), "--resume", session_id])
     resumed.wait(PROMPT)
     resumed.send(b"/status\r")
     status_end = resumed.wait(b"provider: second")
@@ -950,7 +1001,7 @@ def test_model_cache_and_selection():
     complete_inode = cache_path.stat().st_ino
     os.environ["SNAJPAGENT_FIXTURE_MODEL_FAILURE"] = "second"
     try:
-        failing = Child(["-c", str(config)])
+        failing = Child(["--config", str(config)])
         failing.wait(PROMPT)
         failing.send(b"/model cache\r")
         failed_end = failing.wait(
@@ -977,7 +1028,7 @@ def test_config_and_cli_model_passthrough():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["-c", str(config)])
+    child = Child(["--config", str(config)])
     child.wait(PROMPT)
 
     child.send(b"/status\r")
@@ -995,8 +1046,8 @@ def test_config_and_cli_model_passthrough():
     assert turn["data"]["config"]["effort"] == "medium"
 
     resumed = Child([
-        "-c", str(config), "-m", "vendor/future-model", "-o", "custom-effort",
-        "-r", session_id
+        "--config", str(config), "-m", "vendor/future-model",
+        "--effort", "custom-effort", "--resume", session_id
     ])
     resumed.wait(PROMPT)
     start = len(resumed.buf)
@@ -1013,6 +1064,217 @@ def test_config_and_cli_model_passthrough():
                      if event["type"] == "turn_started"]
     assert resumed_turns[-1]["data"]["config"]["model"] == "vendor/future-model"
     assert resumed_turns[-1]["data"]["config"]["effort"] == "custom-effort"
+
+
+def test_network_chat_and_managed_mention():
+    before = session_ids()
+    port = free_port()
+    endpoint = f"127.0.0.1:{port}"
+    network_workspace = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "network-workspace"
+    network_workspace.mkdir()
+    child = Child([
+        "-d", "-s", endpoint, "-n", "agent", "-o", "localop",
+        "-r", "lab", "-C", str(network_workspace), "--no-color",
+    ])
+    human = None
+    peer_agent = None
+    exited = False
+    try:
+        child.wait(PROMPT)
+        session_id = new_session(before)
+        human = IRCClient(port, "remoteop")
+        assert (b" 332 remoteop #lab :" + str(network_workspace).encode() +
+                b"\r\n") in human.buf
+        peer_agent = IRCClient(port, "peerbot", agent=True)
+
+        terminal_start = len(child.buf)
+        wire_start = len(human.buf)
+        child.send(b"network_zero\r")
+        human.wait(b"PRIVMSG #lab :network zero reply\r\n", start=wire_start)
+        child.drain()
+        assert b"network zero reply" not in child.buf[terminal_start:]
+
+        child.send(b"/verbose 1\r")
+        verbose_end = child.wait(b"verbosity: 1", start=terminal_start)
+        child.wait(PROMPT, start=verbose_end)
+        wire_start = len(human.buf)
+        child.send(b"network_one\r")
+        human.wait(b"PRIVMSG #lab :network one reply\r\n", start=wire_start)
+        child.wait(b"network one reply", start=verbose_end)
+
+        wire_start = len(human.buf)
+        human.message("network_operator")
+        human.wait(b"PRIVMSG #lab :network operator reply\r\n", start=wire_start)
+
+        wire_start = len(human.buf)
+        peer_agent.message("agent: network_mention")
+        human.wait(b"PRIVMSG #lab :network mention reply\r\n", start=wire_start)
+
+        child.send(b"network_count_wait\r")
+        deadline = time.monotonic() + 4.0
+        while True:
+            try:
+                count_started = any(
+                    event["type"] == "turn_started" and
+                    "network_count_wait" in event["data"]["text"]
+                    for event in events(session_id)
+                )
+            except json.JSONDecodeError:
+                count_started = False
+            if count_started:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("network count turn did not start")
+            time.sleep(0.01)
+        wire_start = len(human.buf)
+        peer_agent.message("agent: network count mention")
+        human.wait(b"PRIVMSG #lab :network count mention reply\r\n",
+                   start=wire_start)
+
+        wire_start = len(human.buf)
+        child.send(b"network_reminder\r")
+        human.wait(b"PRIVMSG #lab :network reminder reply\r\n", start=wire_start)
+
+        child.send(b"/verbose 2\r")
+        verbose_end = child.wait(b"verbosity: 2", start=verbose_end)
+        child.wait(PROMPT, start=verbose_end)
+        wire_start = len(human.buf)
+        child.send(b"network_commentary\r")
+        human.wait(b"PRIVMSG #lab :network commentary reply\r\n",
+                   start=wire_start)
+        child.wait(b"agent \xe2\x80\xba network local planning",
+                   start=verbose_end)
+
+        wire_start = len(human.buf)
+        child.send(b"network_managed\r")
+        child.wait(b"working\xe2\x80\xa6", start=verbose_end)
+        peer_agent.message("agent: network managed mention")
+        try:
+            human.wait(b"PRIVMSG #lab :network managed reaction\r\n",
+                       start=wire_start)
+        except AssertionError as exc:
+            child.drain()
+            raise AssertionError(
+                f"{exc}; terminal={bytes(child.buf[verbose_end:])!r}"
+            ) from exc
+        managed_end = human.wait(
+            b"PRIVMSG #lab :network managed complete\r\n", start=wire_start
+        )
+        child.wait(b"network managed complete", start=verbose_end)
+        assert managed_end > wire_start
+
+        child.send(b"/compact\r")
+        compact_end = child.wait(
+            b"compaction completed and installed for future turns",
+            start=verbose_end,
+        )
+        child.wait(PROMPT, start=compact_end)
+        wire_start = len(human.buf)
+        child.send(b"network_one\r")
+        human.wait(b"PRIVMSG #lab :network one reply\r\n", start=wire_start)
+
+        child.exit_now()
+        exited = True
+    finally:
+        if peer_agent is not None:
+            peer_agent.close()
+        if human is not None:
+            human.close()
+        if not exited:
+            child.kill()
+
+    log = events(session_id)
+    turns = [event for event in log if event["type"] == "turn_started"]
+    snapshots = [event for event in log if event["type"] == "irc_snapshot"]
+    join_snapshot = next(
+        event for event in snapshots if event["data"]["reason"] == "join"
+    )
+    assert join_snapshot["seq"] < turns[0]["seq"]
+    assert "room: #lab" in join_snapshot["data"]["text"]
+    compact_completed = next(
+        event for event in log if event["type"] == "compaction_completed"
+    )
+    compact_snapshot = next(
+        event for event in snapshots
+        if event["data"]["reason"] == "compaction" and
+        event["seq"] > compact_completed["seq"]
+    )
+    assert compact_snapshot["seq"] == compact_completed["seq"] + 1
+    assert next(
+        event for event in log
+        if event["type"] == "response_started" and
+        event["seq"] > compact_snapshot["seq"]
+    )
+
+    count_turn = next(
+        event for event in turns if "network_count_wait" in event["data"]["text"]
+    )
+    count_steering = next(
+        event for event in log
+        if event["type"] == "steering_added" and
+        event["data"]["turn_id"] == count_turn["data"]["turn_id"]
+    )
+    count_start = next(
+        event for event in log
+        if event["type"] == "response_started" and
+        event["data"]["turn_id"] == count_turn["data"]["turn_id"]
+    )
+    assert count_start["data"]["steering_ids"] == [
+        count_steering["data"]["steering_id"]
+    ]
+    reminder_turn = next(
+        event for event in turns if "network_reminder" in event["data"]["text"]
+    )
+    reminders = [
+        event for event in log
+        if event["type"] == "irc_reply_reminder" and
+        event["data"]["turn_id"] == reminder_turn["data"]["turn_id"]
+    ]
+    assert len(reminders) == 1
+    reminder_responses = [
+        event for event in log
+        if event["type"] == "response_started" and
+        event["data"]["turn_id"] == reminder_turn["data"]["turn_id"]
+    ]
+    assert len(reminder_responses) == 2
+
+    managed_turn = next(
+        event for event in turns if "network_managed" in event["data"]["text"]
+    )
+    turn_id = managed_turn["data"]["turn_id"]
+    steering = [
+        event for event in log
+        if event["type"] == "steering_added" and
+        event["data"]["turn_id"] == turn_id
+    ]
+    assert len(steering) == 1
+    assert "network managed mention" in steering[0]["data"]["text"]
+    completed = [
+        event for event in log
+        if event["type"] == "response_completed" and
+        event["data"]["turn_id"] == turn_id
+    ]
+    assert [event["data"]["cycle"] for event in completed] == [1, 2, 3, 4]
+    cycle2_call = completed[1]["data"]["items"][0]["call_id"]
+    assert [item["name"] for item in completed[2]["data"]["items"]] == [
+        "irc_send", "write_stdin"
+    ]
+    superseded = next(
+        event for event in log
+        if event["type"] == "tool_finished" and
+        event["data"]["call_id"] == cycle2_call
+    )
+    assert superseded["data"]["result"]["status"] == "not_run"
+    assert superseded["data"]["result"]["reason"] == "superseded_by_steering"
+    cycle3_ids = [item["call_id"] for item in completed[2]["data"]["items"]]
+    cycle3_finished = [
+        event for event in log
+        if event["type"] == "tool_finished" and
+        event["data"]["call_id"] in cycle3_ids
+    ]
+    assert [event["data"]["call_id"] for event in cycle3_finished] == cycle3_ids
+    assert all(event["data"]["result"]["status"] == "succeeded"
+               for event in cycle3_finished)
 
 test_utf8_prompt_cursor_column()
 test_steering()
@@ -1036,4 +1298,5 @@ test_command_name_completion()
 test_uncached_typed_model_selection()
 test_model_cache_and_selection()
 test_config_and_cli_model_passthrough()
+test_network_chat_and_managed_mention()
 print("pty_active: ok")

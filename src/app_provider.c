@@ -4,6 +4,7 @@
 #include "context.h"
 #include "json.h"
 #include "tools.h"
+#include "wire.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -27,6 +28,45 @@ int snj_fixture_response(const char *prompt, const json_t *steering,
 int snj_fixture_tool(const struct snj_response_item *call, json_t **result,
                      char *error, size_t error_size);
 #endif
+
+enum snj_managed_continuation
+snj_app_managed_continuation_classify(const struct app_state *app,
+                                      const struct snj_response_graph *graph,
+                                      const struct snj_graph_decision *decision)
+{
+    const char *handle = app->session.active_process_handle;
+    bool continuation = false;
+    bool mismatch = false;
+
+    if (!handle[0])
+        return SNJ_MANAGED_CONTINUATION_NONE;
+    if (decision->outcome != SNJ_GRAPH_CALLS)
+        return SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION;
+    for (size_t i = 0; i < graph->count; ++i) {
+        const struct snj_response_item *call = &graph->items[i];
+        const char *arg_handle;
+
+        if (call->kind != SNJ_ITEM_TOOL_CALL)
+            continue;
+        if (call->name && strcmp(call->name, "write_stdin") == 0) {
+            if (continuation)
+                return SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION;
+            continuation = true;
+            arg_handle = snj_json_string(call->arguments, "handle");
+            mismatch = !arg_handle || strcmp(arg_handle, handle) != 0;
+            continue;
+        }
+        if (continuation || !app->networked || !call->name ||
+            (strcmp(call->name, "irc_send") != 0 &&
+             strcmp(call->name, "irc_state") != 0 &&
+             strcmp(call->name, "irc_topic") != 0))
+            return SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION;
+    }
+    if (!continuation)
+        return SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION;
+    return mismatch ? SNJ_MANAGED_CONTINUATION_HANDLE_MISMATCH :
+                      SNJ_MANAGED_CONTINUATION_MATCHED;
+}
 
 int
 snj_app_provider_models(struct app_state *app,
@@ -116,18 +156,40 @@ snj_app_provider_count(struct app_state *app, const json_t *count_request,
                        uint64_t *input_tokens, char *error, size_t error_size)
 {
 #ifdef SNAJPAGENT_TEST_FIXTURE
-    (void)app;
-    (void)count_request;
     (void)credential;
     (void)input_tokens;
-    (void)error;
-    (void)error_size;
+    {
+        struct snj_buf encoded;
+        bool wait_for_mention;
+
+        snj_buf_init(&encoded, SNJ_WIRE_BODY_MAX);
+        if (snj_json_canonical(count_request, &encoded) < 0 ||
+            snj_buf_terminate(&encoded) < 0) {
+            if (error_size)
+                (void)snprintf(error, error_size,
+                               "fixture count request could not be encoded");
+            snj_buf_free(&encoded);
+            return -1;
+        }
+        wait_for_mention = strstr((const char *)encoded.data,
+                                  "network_count_wait") != NULL &&
+            strstr((const char *)encoded.data, "network count mention") == NULL;
+        snj_buf_free(&encoded);
+        if (wait_for_mention)
+            for (unsigned int i = 0u; i < 100u; ++i) {
+                int pump_rc = snj_app_active_input_pump(app, 20u);
+
+                if (pump_rc != 0)
+                    return pump_rc;
+            }
+    }
     return 0;
 #else
     int cancel_code = 0;
     int rc = snj_provider_responses_count(count_request, app->config,
                                           app->turn_provider, credential,
-                                          &app->render, NULL, NULL,
+                                          &app->render,
+                                          snj_app_active_input_pump, app,
                                           input_tokens, error, error_size,
                                           &cancel_code, NULL);
     if (rc == 1 || rc == 2)
@@ -226,13 +288,91 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
 #endif
 }
 
+#ifndef SNAJPAGENT_TEST_FIXTURE
+static int
+tool_input_pump(void *opaque, unsigned int timeout_ms)
+{
+    struct app_state *app = opaque;
+    int rc = snj_app_active_input_pump(opaque, timeout_ms);
+
+    if (rc == 0 && app->networked && app->irc_urgent.len)
+        return 1;
+    return rc;
+}
+#endif
+
 int
 snj_app_tool_run(struct app_state *app, const struct snj_response_item *call,
                  const struct snj_credential *credential, json_t **result,
                  char *error, size_t error_size)
 {
+    static const char *const send_keys[] = {"notice", "text"};
+    static const char *const topic_keys[] = {"topic"};
+
     if (call && call->name && strcmp(call->name, "update_goal") == 0)
         return snj_app_goal_tool(app, call, result, error, error_size);
+    if (call && call->name && strcmp(call->name, "irc_state") == 0) {
+        struct snj_buf state;
+        int rc;
+
+        *result = NULL;
+        if (!app->irc || !snj_json_exact_keys(call->arguments, NULL, 0u)) {
+            *result = snj_tool_result_terminal(false,
+                                                "irc_state arguments are invalid");
+            return *result ? 0 : -1;
+        }
+        snj_buf_init(&state, SNJ_MAX_IRC_SNAPSHOT);
+        rc = snj_irc_snapshot(app->irc, &state, error, error_size);
+        if (rc == 0)
+            rc = snj_buf_terminate(&state);
+        if (rc == 0)
+            *result = snj_tool_result_terminal(true,
+                                                (const char *)state.data);
+        snj_buf_free(&state);
+        return rc < 0 || !*result ? -1 : 0;
+    }
+    if (call && call->name && strcmp(call->name, "irc_send") == 0) {
+        const char *text = snj_json_string(call->arguments, "text");
+        json_t *notice_value = json_object_get(call->arguments, "notice");
+        bool notice;
+        int rc;
+
+        *result = NULL;
+        if (!app->irc ||
+            !snj_json_exact_keys(call->arguments, send_keys, 2u) ||
+            !text || !*text || strlen(text) > SNJ_MAX_PUBLIC_ITEM ||
+            !snj_utf8_valid((const unsigned char *)text, strlen(text), true) ||
+            (!json_is_null(notice_value) &&
+             !json_is_true(notice_value) && !json_is_false(notice_value))) {
+            *result = snj_tool_result_terminal(false,
+                                                "irc_send arguments are invalid");
+            return *result ? 0 : -1;
+        }
+        notice = json_is_true(notice_value);
+        rc = notice ? snj_irc_send_agent_notice(app->irc, text, error, error_size) :
+                      snj_irc_send_agent(app->irc, text, error, error_size);
+        *result = snj_tool_result_terminal(rc == 0,
+            rc == 0 ? (notice ? "IRC notice sent" : "IRC message sent") :
+            (error[0] ? error : "IRC message could not be sent"));
+        return *result ? 0 : -1;
+    }
+    if (call && call->name && strcmp(call->name, "irc_topic") == 0) {
+        const char *topic = snj_json_string(call->arguments, "topic");
+        int rc;
+
+        *result = NULL;
+        if (!app->irc ||
+            !snj_json_exact_keys(call->arguments, topic_keys, 1u) || !topic) {
+            *result = snj_tool_result_terminal(false,
+                                                "irc_topic arguments are invalid");
+            return *result ? 0 : -1;
+        }
+        rc = snj_irc_set_agent_topic(app->irc, topic, error, error_size);
+        *result = snj_tool_result_terminal(rc == 0,
+            rc == 0 ? "IRC topic changed" :
+            (error[0] ? error : "IRC topic could not be changed"));
+        return *result ? 0 : -1;
+    }
 #ifdef SNAJPAGENT_TEST_FIXTURE
     (void)app;
     (void)credential;
@@ -240,7 +380,7 @@ snj_app_tool_run(struct app_state *app, const struct snj_response_item *call,
 #else
     return snj_tools_run(call, app->config, credential,
                          app->session.workspace,
-                         snj_app_active_input_pump, app,
+                         tool_input_pump, app,
                          result, error, error_size);
 #endif
 }

@@ -15,9 +15,14 @@
 #define SNJ_CONFIG_ENV_NAME_MAX 255u
 #define SNJ_CONFIG_PROVIDER_MAX 16u
 #define SNJ_CONFIG_PROVIDER_NAME_MAX 63u
+#define SNJ_CONFIG_IRC_CLIENT_MAX 16u
+#define SNJ_CONFIG_IRC_ENDPOINT_MAX 255u
+#define SNJ_CONFIG_IRC_NAME_MAX 30u
+#define SNJ_CONFIG_IRC_ROOM_MAX 50u
 
 enum snj_color_mode {
     SNJ_COLOR_AUTO,
+    SNJ_COLOR_ALWAYS,
     SNJ_COLOR_NEVER
 };
 
@@ -46,6 +51,16 @@ struct snj_config {
     enum snj_color_mode color;
     unsigned int resume_history_turns;
     uint32_t typing_pause_ms;
+    bool irc_daemon;
+    bool irc_listen_explicit;
+    char irc_listen[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    char irc_clients[SNJ_CONFIG_IRC_CLIENT_MAX]
+                    [SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    size_t irc_client_count;
+    char irc_name[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char irc_operator_name[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char irc_room_name[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
+    uint32_t irc_history_lines;
     char *shell;
     uint32_t default_yield_ms;
     uint32_t default_timeout_ms;

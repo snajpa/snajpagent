@@ -200,7 +200,8 @@ hidden local reply and keeps IRC debugging behind the more useful agent/tool
 detail. Its local-only ladder is:
 
 - verbosity 1: terminal model replies shown once as agent chat lines;
-- verbosity 2: compact agent/tool activity names and completion state;
+- verbosity 2: intermediate local model commentary plus compact agent/tool
+  activity names and completion state;
 - verbosity 3: bounded tool arguments/results and runtime/provider-cycle state;
 - verbosity 4: durable app events and compact IRC connection/event state;
 - verbosity 5: sanitized prompt/protocol bodies and parsed IRC commands, with

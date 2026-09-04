@@ -2,6 +2,8 @@
 #ifndef SNAJPAGENT_RENDER_H
 #define SNAJPAGENT_RENDER_H
 
+#include "config.h"
+#include "irc.h"
 #include "store.h"
 #include "term.h"
 
@@ -20,6 +22,10 @@ struct snj_render {
     bool stdout_item_seen;
     bool stdout_item_ended_lf;
     bool protocol_warning_shown;
+    bool color_stdout;
+    bool color_stderr;
+    bool networked;
+    char agent_name[SNJ_CONFIG_IRC_NAME_MAX + 1u];
     struct snj_term *term;
     struct snj_buf wrap_pending;
     size_t public_column;
@@ -31,6 +37,9 @@ struct snj_render {
 };
 
 void snj_render_init(struct snj_render *render, unsigned int verbosity);
+void snj_render_set_color(struct snj_render *render, enum snj_color_mode mode);
+void snj_render_set_networked(struct snj_render *render, bool networked,
+                              const char *agent_name);
 void snj_render_attach_term(struct snj_render *render, struct snj_term *term);
 int snj_render_orientation(struct snj_render *render,
                            const struct snj_session *session, bool resumed);
@@ -52,6 +61,8 @@ int snj_render_warning_ctx(struct snj_render *render, const char *message);
 int snj_render_activity(struct snj_render *render, const char *message);
 int snj_render_host(struct snj_render *render, const char *text);
 int snj_render_runtime(struct snj_render *render, const char *text);
+int snj_render_irc_event(struct snj_render *render,
+                         const struct snj_irc_event *event);
 int snj_render_tool_start(struct snj_render *render,
                           const struct snj_response_item *call,
                           const char *workdir);

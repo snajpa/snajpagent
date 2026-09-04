@@ -69,6 +69,8 @@ struct snj_term {
     bool typing_active;
     bool output_seen;
     bool output_ended_lf;
+    bool color;
+    bool networked;
     bool rendered_end_at_margin;
 };
 
@@ -92,6 +94,7 @@ int snj_term_poll(struct snj_term *term, int timeout_ms,
 int snj_term_history_add(struct snj_term *term, const char *text);
 int snj_term_restore_draft(struct snj_term *term, const char *text);
 void snj_term_set_typing_pause(struct snj_term *term, uint32_t pause_ms);
+void snj_term_set_color(struct snj_term *term, bool enabled, bool networked);
 uint32_t snj_term_typing_pause_remaining(const struct snj_term *term,
                                          uint64_t now_ms);
 bool snj_term_typing_active(const struct snj_term *term);

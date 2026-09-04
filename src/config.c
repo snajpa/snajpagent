@@ -24,6 +24,7 @@ enum section {
     SECTION_AGENT,
     SECTION_PROVIDER,
     SECTION_UI,
+    SECTION_IRC,
     SECTION_TOOL,
     SECTION_COUNT
 };
@@ -108,6 +109,9 @@ snj_config_init(struct snj_config *config)
     config->color = SNJ_COLOR_AUTO;
     config->resume_history_turns = 2u;
     config->typing_pause_ms = 500u;
+    config->irc_daemon = false;
+    memcpy(config->irc_listen, "localhost:6667", 15u);
+    config->irc_history_lines = 200u;
     config->shell = snj_strdup_checked("/bin/sh", SNJ_CONFIG_PATH_MAX);
     config->default_yield_ms = 10000u;
     config->default_timeout_ms = 1800000u;
@@ -319,6 +323,8 @@ set_section(struct parse_state *state, char *name)
         return set_provider_section(state, trim(name + 9u));
     else if (strcmp(name, "ui") == 0)
         section = SECTION_UI;
+    else if (strcmp(name, "irc") == 0)
+        section = SECTION_IRC;
     else if (strcmp(name, "tool") == 0)
         section = SECTION_TOOL;
     else {
@@ -442,6 +448,8 @@ parse_ui(struct parse_state *state, const char *key, const char *value)
             return -1;
         if (strcmp(value, "auto") == 0)
             config->color = SNJ_COLOR_AUTO;
+        else if (strcmp(value, "always") == 0)
+            config->color = SNJ_COLOR_ALWAYS;
         else if (strcmp(value, "never") == 0)
             config->color = SNJ_COLOR_NEVER;
         else {
@@ -460,6 +468,53 @@ parse_ui(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "typing_pause_ms") == 0)
         return claim_key(state, 3u) < 0 ? -1 :
                parse_u32(value, 0u, 5000u, &config->typing_pause_ms);
+    errno = EINVAL;
+    return -1;
+}
+
+static int
+parse_irc(struct parse_state *state, const char *key, const char *value)
+{
+    struct snj_config *config = state->config;
+
+    if (strcmp(key, "daemon") == 0)
+        return claim_key(state, 0u) < 0 ? -1 :
+               parse_bool(value, &config->irc_daemon);
+    if (strcmp(key, "listen") == 0) {
+        if (claim_key(state, 1u) < 0 ||
+            copy_value(config->irc_listen, sizeof(config->irc_listen),
+                       value) < 0)
+            return -1;
+        config->irc_listen_explicit = true;
+        return 0;
+    }
+    if (strcmp(key, "client") == 0) {
+        if (config->irc_client_count >= SNJ_CONFIG_IRC_CLIENT_MAX)
+            goto invalid;
+        for (size_t i = 0; i < config->irc_client_count; ++i)
+            if (strcmp(config->irc_clients[i], value) == 0)
+                goto invalid;
+        if (copy_value(config->irc_clients[config->irc_client_count],
+                       sizeof(config->irc_clients[0]), value) < 0)
+            return -1;
+        ++config->irc_client_count;
+        return 0;
+    }
+    if (strcmp(key, "name") == 0)
+        return claim_key(state, 2u) < 0 ? -1 :
+               copy_value(config->irc_name, sizeof(config->irc_name), value);
+    if (strcmp(key, "operator_name") == 0)
+        return claim_key(state, 3u) < 0 ? -1 :
+               copy_value(config->irc_operator_name,
+                          sizeof(config->irc_operator_name), value);
+    if (strcmp(key, "room_name") == 0)
+        return claim_key(state, 4u) < 0 ? -1 :
+               copy_value(config->irc_room_name,
+                          sizeof(config->irc_room_name), value);
+    if (strcmp(key, "history_lines") == 0)
+        return claim_key(state, 5u) < 0 ? -1 :
+               parse_u32(value, 1u, 1000u, &config->irc_history_lines);
+invalid:
     errno = EINVAL;
     return -1;
 }
@@ -516,6 +571,7 @@ parse_assignment(struct parse_state *state, char *line)
     case SECTION_AGENT: return parse_agent(state, key, value);
     case SECTION_PROVIDER: return parse_provider(state, key, value);
     case SECTION_UI: return parse_ui(state, key, value);
+    case SECTION_IRC: return parse_irc(state, key, value);
     case SECTION_TOOL: return parse_tool(state, key, value);
     case SECTION_NONE: case SECTION_COUNT: break;
     }
@@ -699,7 +755,7 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
     if (explicit_path && (explicit_path[0] != '/' ||
                           strlen(explicit_path) > SNJ_CONFIG_PATH_MAX)) {
         set_error(error, error_size,
-                  "-c requires an absolute path within the supported limit");
+                  "--config requires an absolute path within the supported limit");
         errno = EINVAL;
         return -1;
     }

@@ -17,6 +17,7 @@ struct context_builder {
     const char *effort;
     const char *active_process_handle;
     const struct snj_instruction_set *instructions;
+    const struct snj_config *config;
     unsigned int cycle;
     const json_t *steering;
     json_t *semantic_items;
@@ -25,6 +26,7 @@ struct context_builder {
     char active_turn_id[SNJ_ID_HEX_LEN + 1u];
     char target_turn_id[SNJ_ID_HEX_LEN + 1u];
     bool active_turn;
+    bool networked;
     bool compact_stop_before_active;
     bool compact_stopped;
     size_t base_semantic_count;
@@ -234,13 +236,25 @@ append_host_interrupted(struct context_builder *builder, const char *origin,
 static int
 append_managed_gate(struct context_builder *builder)
 {
-    char text[384];
+    char text[640];
 
     if (!builder->active_process_handle)
         return 0;
-    (void)snprintf(text, sizeof(text),
-        "One snajpagent-managed process is unresolved. The only permitted tool call is write_stdin with handle=%s. Do not produce a final answer, refusal, zero-call response, or any other tool call until write_stdin returns a non-running status.",
-        builder->active_process_handle);
+    if (builder->networked)
+        (void)snprintf(text, sizeof(text),
+            "One snajpagent-managed process is unresolved. You may first use "
+            "IRC tools to react to new chat, but the final tool call in this "
+            "response must be exactly one write_stdin with handle=%s. No "
+            "other tool is permitted. Do not produce a final answer, refusal, "
+            "or zero-call response until write_stdin returns a non-running "
+            "status.", builder->active_process_handle);
+    else
+        (void)snprintf(text, sizeof(text),
+            "One snajpagent-managed process is unresolved. The only permitted "
+            "tool call is write_stdin with handle=%s. Do not produce a final "
+            "answer, refusal, zero-call response, or any other tool call until "
+            "write_stdin returns a non-running status.",
+            builder->active_process_handle);
     return append_message(builder, "managed_process_gate", "developer", text);
 }
 
@@ -558,7 +572,6 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
               char *error, size_t error_size)
 {
     struct context_builder *builder = opaque;
-    (void)seq;
 
     if (strcmp(type, "compaction_completed") == 0) {
         const char *compact_id = snj_json_string(data, "compact_id");
@@ -575,6 +588,15 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         }
         return install_compact_output_active(builder, compact_id, output,
                                              error, error_size);
+    }
+    if (strcmp(type, "irc_snapshot") == 0) {
+        const char *text = snj_json_string(data, "text");
+        if (!text) {
+            set_error(error, error_size, "invalid IRC snapshot context");
+            errno = EINVAL;
+            return -1;
+        }
+        return append_message(builder, "irc_snapshot", "user", text);
     }
     if (strcmp(type, "turn_started") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -598,19 +620,29 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                               goal_turn ? "goal_continuation" : "user_request",
                               goal_turn ? "developer" : "user", text);
     }
-    if (strcmp(type, "steering_added") == 0) {
+    if (strcmp(type, "steering_added") == 0 ||
+        strcmp(type, "irc_reply_reminder") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
         const char *steering_id = snj_json_string(data, "steering_id");
+        bool pending = builder->steering_seen <
+                       builder->session->pending_steering_count &&
+                       builder->session->pending_steering[
+                           builder->steering_seen].seq == seq;
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !text ||
             !steering_id ||
-            !steering_matches_snapshot(builder, steering_id, text)) {
+            (pending &&
+             !steering_matches_snapshot(builder, steering_id, text))) {
             set_error(error, error_size, "invalid steering context transition");
             errno = EINVAL;
             return -1;
         }
-        return append_message(builder, "user_steering", "user", text);
+        return append_message(builder,
+            strcmp(type, "irc_reply_reminder") == 0 ?
+                "irc_reply_reminder" : "user_steering",
+            strcmp(type, "irc_reply_reminder") == 0 ? "developer" : "user",
+            text);
     }
     if (strcmp(type, "response_completed") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -651,7 +683,8 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         }
         return append_process_closed(builder, cause, result);
     }
-    if (strcmp(type, "turn_completed") == 0) {
+    if (strcmp(type, "turn_completed") == 0 ||
+        strcmp(type, "turn_completed_silent") == 0) {
         if (!builder->active_turn) {
             set_error(error, error_size, "invalid completed turn context");
             errno = EINVAL;
@@ -993,14 +1026,66 @@ web_search_tool_schema(void)
 }
 
 static json_t *
-tool_schemas(const char *active_handle, bool goal_active)
+irc_send_tool_schema(void)
+{
+    static const char *const required[] = {"notice", "text"};
+    json_t *properties = json_object();
+
+    if (!properties ||
+        json_set_new(properties, "notice", nullable_bool_schema()) < 0 ||
+        json_set_new(properties, "text", string_schema()) < 0) {
+        if (properties)
+            json_decref(properties);
+        return NULL;
+    }
+    return tool_schema("irc_send",
+        "Send bounded room chat as the agent identity. Set notice true only "
+        "for a non-reply informational notice. Connection, join, and retry "
+        "work is owned by the runtime.", properties,
+        required_array(required, sizeof(required) / sizeof(required[0])));
+}
+
+static json_t *
+irc_state_tool_schema(void)
+{
+    return tool_schema("irc_state",
+        "Read the already-maintained room, topic, endpoint, membership, and "
+        "operator state without polling or changing connections.",
+        json_object(), json_array());
+}
+
+static json_t *
+irc_topic_tool_schema(void)
+{
+    static const char *const required[] = {"topic"};
+    json_t *properties = json_object();
+
+    if (!properties ||
+        json_set_new(properties, "topic", string_schema()) < 0) {
+        if (properties)
+            json_decref(properties);
+        return NULL;
+    }
+    return tool_schema("irc_topic",
+        "Change the room topic as the agent identity; this succeeds only "
+        "where that identity currently has channel operator mode.",
+        properties,
+        required_array(required, sizeof(required) / sizeof(required[0])));
+}
+
+static json_t *
+tool_schemas(const char *active_handle, bool goal_active, bool networked)
 {
     json_t *tools = json_array();
 
     if (!tools)
         return NULL;
     if (active_handle) {
-        if (json_array_append_new(tools,
+        if ((networked &&
+             (json_array_append_new(tools, irc_send_tool_schema()) < 0 ||
+              json_array_append_new(tools, irc_state_tool_schema()) < 0 ||
+              json_array_append_new(tools, irc_topic_tool_schema()) < 0)) ||
+            json_array_append_new(tools,
                                   stdin_tool_schema(active_handle)) < 0) {
             json_decref(tools);
             return NULL;
@@ -1011,6 +1096,10 @@ tool_schemas(const char *active_handle, bool goal_active)
         json_array_append_new(tools, stdin_tool_schema(NULL)) < 0 ||
         json_array_append_new(tools, patch_tool_schema()) < 0 ||
         json_array_append_new(tools, web_search_tool_schema()) < 0 ||
+        (networked &&
+         (json_array_append_new(tools, irc_send_tool_schema()) < 0 ||
+          json_array_append_new(tools, irc_state_tool_schema()) < 0 ||
+          json_array_append_new(tools, irc_topic_tool_schema()) < 0)) ||
         (goal_active &&
          json_array_append_new(tools, goal_tool_schema()) < 0)) {
         json_decref(tools);
@@ -1071,7 +1160,7 @@ model_input_object(struct context_builder *builder)
         json_set_new(input, "tool_schema", json_integer(1)) < 0 ||
         json_set_new(input, "tools",
                      tool_schemas(builder->active_process_handle,
-                                  goal_active)) < 0) {
+                                  goal_active, builder->networked)) < 0) {
         if (input)
             json_decref(input);
         return NULL;
@@ -1098,7 +1187,7 @@ create_request_object(struct context_builder *builder)
         json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
         json_set_new(request, "tools",
                      tool_schemas(builder->active_process_handle,
-                                  goal_active)) < 0 ||
+                                  goal_active, builder->networked)) < 0 ||
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)
             json_decref(request);
@@ -1122,7 +1211,7 @@ count_request_object(struct context_builder *builder)
         json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
         json_set_new(request, "tools",
                      tool_schemas(builder->active_process_handle,
-                                  goal_active)) < 0 ||
+                                  goal_active, builder->networked)) < 0 ||
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)
             json_decref(request);
@@ -1187,6 +1276,20 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             0u;
         return 0;
     }
+    if (strcmp(type, "irc_snapshot") == 0) {
+        const char *text = snj_json_string(data, "text");
+        if (!text) {
+            set_error(error, error_size, "invalid compact IRC snapshot");
+            errno = EINVAL;
+            return -1;
+        }
+        before = json_array_size(builder->request_input);
+        if (append_message(builder, "irc_snapshot", "user", text) < 0)
+            return -1;
+        builder->compact_new_items +=
+            json_array_size(builder->request_input) - before;
+        return 0;
+    }
     if (strcmp(type, "turn_started") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
@@ -1209,7 +1312,8 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         return 0;
     }
-    if (strcmp(type, "steering_added") == 0) {
+    if (strcmp(type, "steering_added") == 0 ||
+        strcmp(type, "irc_reply_reminder") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
         if (!builder->active_turn || !turn_id ||
@@ -1219,7 +1323,11 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             return -1;
         }
         before = json_array_size(builder->request_input);
-        if (append_message(builder, "user_steering", "user", text) < 0)
+        if (append_message(builder,
+                strcmp(type, "irc_reply_reminder") == 0 ?
+                    "irc_reply_reminder" : "user_steering",
+                strcmp(type, "irc_reply_reminder") == 0 ?
+                    "developer" : "user", text) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         return 0;
@@ -1275,7 +1383,8 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         return 0;
     }
-    if (strcmp(type, "turn_completed") == 0) {
+    if (strcmp(type, "turn_completed") == 0 ||
+        strcmp(type, "turn_completed_silent") == 0) {
         if (!builder->active_turn) {
             set_error(error, error_size, "invalid compact completed turn");
             errno = EINVAL;
@@ -1534,6 +1643,7 @@ int
 snj_context_build(struct snj_session *session, const char *model,
                   const char *effort, unsigned int cycle,
                   const json_t *steering,
+                  const struct snj_config *config,
                   const struct snj_instruction_set *instructions,
                   struct snj_context_projection *projection,
                   char *error, size_t error_size)
@@ -1541,6 +1651,7 @@ snj_context_build(struct snj_session *session, const char *model,
     static const char harness[] =
         "You are snajpagent, a local coding agent. Be concise, preserve user-visible progress, inspect before destructive changes, and use only declared tools.";
     struct context_builder builder;
+    struct snj_buf network_harness;
     int rc = -1;
 
     snj_context_projection_free(projection);
@@ -1551,6 +1662,9 @@ snj_context_build(struct snj_session *session, const char *model,
     builder.active_process_handle = session && session->active_process_handle[0] ?
                                     session->active_process_handle : NULL;
     builder.instructions = instructions;
+    builder.config = config;
+    builder.networked = config &&
+        (config->irc_daemon || config->irc_client_count != 0u);
     if (session && session->active_turn_id[0])
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
@@ -1558,9 +1672,30 @@ snj_context_build(struct snj_session *session, const char *model,
     builder.steering = steering;
     builder.semantic_items = json_array();
     builder.request_input = json_array();
+    snj_buf_init(&network_harness, 16u * 1024u);
     if (!session || !model || !effort || !steering ||
         !builder.semantic_items || !builder.request_input ||
         append_message(&builder, "fixed_harness", "developer", harness) < 0 ||
+        (builder.networked &&
+         (snj_buf_printf(&network_harness,
+            "IRC chat mode is active. This process is agent %s with a "
+            "separate local operator %s and participates in views of one "
+            "room. User-role IRC entries include endpoint, room, time, event, "
+            "sender, and current channel-operator status; @/+o messages are "
+            "operator instructions. Direct mentions of %s require immediate "
+            "attention. Unprivileged chat and membership/topic notifications "
+            "are conversational context and may be left unanswered. Terminal "
+            "assistant speech is posted to IRC, while tool activity stays "
+            "local at normal verbosity. Coding tools act only on the local "
+            "workspace. The runtime owns sockets, joining, history, and "
+            "reconnect: do not poll or babysit them. Use irc_send only for an "
+            "intentional mid-turn room message, irc_state for cached state, "
+            "and irc_topic only when the agent has +o. A local operator turn "
+            "requires one room-facing reply; peer/background traffic does not.",
+            config->irc_name, config->irc_operator_name, config->irc_name) < 0 ||
+          snj_buf_terminate(&network_harness) < 0 ||
+          append_message(&builder, "irc_harness", "developer",
+                         (const char *)network_harness.data) < 0)) ||
         append_instruction_messages(&builder) < 0) {
         set_error(error, error_size, "cannot initialize response projection");
         goto out;
@@ -1606,6 +1741,7 @@ snj_context_build(struct snj_session *session, const char *model,
     projection->input_tokens_bound = (uint64_t)projection->model_input_bytes;
     rc = 0;
 out:
+    snj_buf_free(&network_harness);
     if (rc < 0)
         snj_context_projection_free(projection);
     if (builder.semantic_items)

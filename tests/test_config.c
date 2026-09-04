@@ -59,6 +59,15 @@ main(void)
         "color = never\n"
         "resume_history_turns = 0\n"
         "typing_pause_ms = 750\n"
+        "\n[irc]\n"
+        "daemon = true\n"
+        "listen = 127.0.0.1:7667\n"
+        "client = irc-a.example\n"
+        "client = [2001:db8::20]:7667\n"
+        "name = builder\n"
+        "operator_name = alice\n"
+        "room_name = build-host\n"
+        "history_lines = 321\n"
         "\n[tool]\n"
         "shell = /bin/sh\n"
         "default_yield_ms = 0\n"
@@ -87,6 +96,11 @@ main(void)
     assert(config.verbosity == 0u);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
+    assert(!config.irc_daemon);
+    assert(!config.irc_listen_explicit);
+    assert(strcmp(config.irc_listen, "localhost:6667") == 0);
+    assert(config.irc_client_count == 0u);
+    assert(config.irc_history_lines == 200u);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(config.providers[0].auto_compact_input_tokens == 120000u);
@@ -137,6 +151,16 @@ main(void)
     assert(config.color == SNJ_COLOR_NEVER);
     assert(config.resume_history_turns == 0u);
     assert(config.typing_pause_ms == 750u);
+    assert(config.irc_daemon);
+    assert(config.irc_listen_explicit);
+    assert(strcmp(config.irc_listen, "127.0.0.1:7667") == 0);
+    assert(config.irc_client_count == 2u);
+    assert(strcmp(config.irc_clients[0], "irc-a.example") == 0);
+    assert(strcmp(config.irc_clients[1], "[2001:db8::20]:7667") == 0);
+    assert(strcmp(config.irc_name, "builder") == 0);
+    assert(strcmp(config.irc_operator_name, "alice") == 0);
+    assert(strcmp(config.irc_room_name, "build-host") == 0);
+    assert(config.irc_history_lines == 321u);
     assert(config.default_yield_ms == 0u);
     assert(config.default_timeout_ms == 4000u);
     assert(config.max_timeout_ms == 5000u);
@@ -172,6 +196,15 @@ main(void)
     expect_invalid(path);
     write_bytes(path, "[ui]\ntyping_pause_ms=5001\n",
                 sizeof("[ui]\ntyping_pause_ms=5001\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[ui]\ncolor=sometimes\n",
+                sizeof("[ui]\ncolor=sometimes\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[irc]\nhistory_lines=0\n",
+                sizeof("[irc]\nhistory_lines=0\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[irc]\nclient=localhost\nclient=localhost\n",
+                sizeof("[irc]\nclient=localhost\nclient=localhost\n") - 1u);
     expect_invalid(path);
     write_bytes(path,
                 "[ui]\ntyping_pause_ms=1\ntyping_pause_ms=2\n",

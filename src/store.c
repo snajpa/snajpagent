@@ -650,6 +650,33 @@ preference_text_valid(const char *value, size_t size)
            snj_utf8_valid((const unsigned char *)value, len, true);
 }
 
+static bool
+irc_field_valid(const char *value, size_t max, bool allow_empty)
+{
+    size_t len;
+
+    if (!value || (!(len = strlen(value)) && !allow_empty) || len > max ||
+        !snj_utf8_valid((const unsigned char *)value, len, true))
+        return false;
+    for (size_t i = 0; i < len; ++i) {
+        unsigned char c = (unsigned char)value[i];
+        if (c < 0x20u || c == 0x7fu)
+            return false;
+    }
+    return true;
+}
+
+static bool
+irc_kind_valid(const char *kind)
+{
+    static const char *const kinds[] = {
+        "connected", "disconnected", "join", "part", "quit", "nick",
+        "message", "notice", "topic", "mode", "history_ready"
+    };
+
+    return string_in(kind, kinds, sizeof(kinds) / sizeof(kinds[0]));
+}
+
 const char *
 snj_goal_status_name(enum snj_goal_status status)
 {
@@ -730,6 +757,46 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             goto invalid;
     } else if (session->delete_requested) {
         goto invalid;
+    } else if (strcmp(type, "irc_event") == 0) {
+        static const char *const keys[] = {
+            "endpoint", "historical", "kind", "local", "nick", "op",
+            "room", "text", "timestamp_ms"
+        };
+        const char *endpoint = snj_json_string(data, "endpoint");
+        const char *kind = snj_json_string(data, "kind");
+        const char *room = snj_json_string(data, "room");
+        const char *nick = snj_json_string(data, "nick");
+        const char *text = snj_json_string(data, "text");
+        json_t *historical = json_object_get(data, "historical");
+        json_t *local = json_object_get(data, "local");
+        json_t *op = json_object_get(data, "op");
+        uint64_t timestamp_ms;
+
+        if (!snj_json_exact_keys(data, keys, sizeof(keys) / sizeof(keys[0])) ||
+            !irc_field_valid(endpoint, SNJ_CONFIG_IRC_ENDPOINT_MAX, false) ||
+            !irc_kind_valid(kind) ||
+            !irc_field_valid(room, SNJ_CONFIG_IRC_ROOM_MAX + 1u, true) ||
+            !irc_field_valid(nick, SNJ_CONFIG_IRC_NAME_MAX, true) ||
+            !irc_field_valid(text, 512u, true) ||
+            !json_is_boolean(historical) || !json_is_boolean(local) ||
+            !json_is_boolean(op) ||
+            snj_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 ||
+            timestamp_ms == 0u)
+            goto invalid;
+    } else if (strcmp(type, "irc_snapshot") == 0) {
+        static const char *const keys[] = {"reason", "text", "timestamp_ms"};
+        const char *reason = snj_json_string(data, "reason");
+        const char *text = snj_json_string(data, "text");
+        uint64_t timestamp_ms;
+
+        if (!snj_json_exact_keys(data, keys, 3u) || !reason ||
+            (strcmp(reason, "join") != 0 &&
+             strcmp(reason, "compaction") != 0) ||
+            !text || !*text || strlen(text) > SNJ_MAX_IRC_SNAPSHOT ||
+            !snj_utf8_valid((const unsigned char *)text, strlen(text), true) ||
+            snj_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 ||
+            timestamp_ms == 0u)
+            goto invalid;
     } else if (strcmp(type, "workspace_changed") == 0) {
         static const char *const keys[] = {"new_workspace", "old_workspace"};
         const char *old_workspace = snj_json_string(data, "old_workspace");
@@ -1059,7 +1126,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !copy_small(session->default_effort,
                         sizeof(session->default_effort), new_effort))
             goto invalid;
-    } else if (strcmp(type, "steering_added") == 0) {
+    } else if (strcmp(type, "steering_added") == 0 ||
+               strcmp(type, "irc_reply_reminder") == 0) {
         static const char *const keys[] = {"steering_id", "text", "turn_id"};
         const char *steering_id = snj_json_string(data, "steering_id");
         const char *text = snj_json_string(data, "text");
@@ -1067,6 +1135,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         size_t len;
         char *copy;
         struct snj_pending_steering *pending;
+        bool reminder = strcmp(type, "irc_reply_reminder") == 0;
 
         if (!snj_json_exact_keys(data, keys, 3u) || !session->active_turn ||
             session->response_terminal == SNJ_RESPONSE_TERMINAL_FAILED ||
@@ -1077,7 +1146,12 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             (len = strlen(text)) > SNJ_MAX_STEERING_TEXT ||
             session->pending_steering_count >= SNJ_MAX_STEERING_PER_TURN ||
             session->pending_steering_bytes >
-                SNJ_MAX_STEERING_PER_TURN * SNJ_MAX_STEERING_TEXT - len)
+                SNJ_MAX_STEERING_PER_TURN * SNJ_MAX_STEERING_TEXT - len ||
+            (reminder && (!session->response_complete ||
+                          session->response_outcome != SNJ_GRAPH_NONPRODUCTIVE ||
+                          session->irc_reply_reminded ||
+                          session->pending_steering_count != 0u ||
+                          strcmp(text, SNJ_IRC_REPLY_REMINDER_TEXT) != 0)))
             goto invalid;
         copy = snj_strdup_checked(text, SNJ_MAX_STEERING_TEXT);
         if (!copy)
@@ -1088,6 +1162,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         pending->seq = seq;
         pending->text = copy;
         session->pending_steering_bytes += len;
+        if (reminder)
+            session->irc_reply_reminded = true;
     } else if (strcmp(type, "future_turn_queued") == 0) {
         static const char *const keys[] = {"queue_id", "text", "while_turn_id"};
         const char *queue_id = snj_json_string(data, "queue_id");
@@ -1264,6 +1340,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         if (goal)
             ++session->goal_turn_count;
         session->active_cycle = 0;
+        session->irc_reply_reminded = false;
         clear_response_state(session);
         if (!goal && ((!session->first_user &&
              replace_text(&session->first_user, text, SNJ_MAX_DIRECT_PROMPT) < 0) ||
@@ -1605,6 +1682,33 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 || !item_id ||
             strcmp(item_id, session->final_item_id) != 0 || !response_id ||
             strcmp(response_id, session->final_response_id) != 0 ||
+            session->active_process_handle[0] != '\0' ||
+            session->pending_call_count != 0u ||
+            session->pending_steering_count != 0u)
+            goto invalid;
+        session->active_turn = false;
+        session->active_turn_id[0] = '\0';
+        session->active_turn_model[0] = '\0';
+        clear_response_state(session);
+    } else if (strcmp(type, "turn_completed_silent") == 0) {
+        static const char *const keys[] = {"reason", "response_id", "turn_id"};
+        static const char *const reasons[] = {
+            "room_update_quiet", "reply_reminder_exhausted"
+        };
+        const char *turn_id = snj_json_string(data, "turn_id");
+        const char *response_id = snj_json_string(data, "response_id");
+        const char *reason = snj_json_string(data, "reason");
+
+        if (!snj_json_exact_keys(data, keys, 3u) || !session->active_turn ||
+            !session->response_complete ||
+            session->response_outcome != SNJ_GRAPH_NONPRODUCTIVE ||
+            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
+            !response_id || strcmp(response_id,
+                                   session->active_response_id) != 0 ||
+            !string_in(reason, reasons,
+                       sizeof(reasons) / sizeof(reasons[0])) ||
+            (strcmp(reason, "reply_reminder_exhausted") == 0 &&
+             !session->irc_reply_reminded) ||
             session->active_process_handle[0] != '\0' ||
             session->pending_call_count != 0u ||
             session->pending_steering_count != 0u)

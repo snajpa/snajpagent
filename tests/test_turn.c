@@ -125,6 +125,41 @@ main(void)
     snj_response_graph_free(&graph);
 
     snj_response_graph_init(&graph);
+    assert(snj_response_graph_set_provider_id(&graph, "resp_irc") == 0);
+    {
+        static const char *const names[] = {
+            "irc_send", "irc_state", "irc_topic"
+        };
+
+        for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
+            json_t *arguments = json_object();
+            char item[32];
+            char call[32];
+
+            assert(arguments);
+            assert(snprintf(item, sizeof(item), "item_irc_%zu", i) > 0);
+            assert(snprintf(call, sizeof(call), "call_irc_%zu", i) > 0);
+            assert(snj_response_graph_add_call(&graph, item, call, names[i],
+                                                arguments) == 0);
+        }
+    }
+    assert(snj_response_graph_classify(&graph, &decision,
+                                       error, sizeof(error)) == 0);
+    assert(decision.outcome == SNJ_GRAPH_CALLS && decision.call_count == 3u);
+    encoded = snj_response_graph_json(&graph);
+    assert(encoded);
+    snj_response_graph_init(&copy);
+    assert(snj_response_graph_set_provider_id(&copy, "resp_irc") == 0);
+    assert(snj_response_graph_from_json(&copy, encoded,
+                                        error, sizeof(error)) == 0);
+    assert(strcmp(copy.items[0].name, "irc_send") == 0);
+    assert(strcmp(copy.items[1].name, "irc_state") == 0);
+    assert(strcmp(copy.items[2].name, "irc_topic") == 0);
+    json_decref(encoded);
+    snj_response_graph_free(&copy);
+    snj_response_graph_free(&graph);
+
+    snj_response_graph_init(&graph);
     assert(snj_response_graph_set_provider_id(&graph, "resp_empty") == 0);
     assert(snj_response_graph_classify(&graph, &decision,
                                        error, sizeof(error)) == 0);

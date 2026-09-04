@@ -146,7 +146,8 @@ run_pty_command(const char *command, int timeout_ms)
 }
 
 static json_t *
-run_tool_with_args(const char *name, json_t *args)
+run_tool_with_args_pump(const char *name, json_t *args,
+                        snj_tool_pump_fn pump, void *pump_opaque)
 {
     char cwd[4096];
     struct snj_config config;
@@ -168,7 +169,7 @@ run_tool_with_args(const char *name, json_t *args)
                                        "call_managed_test", name, args) == 0);
     error[0] = '\0';
     rc = snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                       NULL, NULL, &result, error, sizeof(error));
+                       pump, pump_opaque, &result, error, sizeof(error));
     if (rc != 0)
         fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
     assert(rc == 0);
@@ -177,6 +178,12 @@ run_tool_with_args(const char *name, json_t *args)
     snj_response_graph_free(&graph);
     snj_config_free(&config);
     return result;
+}
+
+static json_t *
+run_tool_with_args(const char *name, json_t *args)
+{
+    return run_tool_with_args_pump(name, args, NULL, NULL);
 }
 
 static json_t *
@@ -343,6 +350,47 @@ delay_once_pump(void *opaque, unsigned int timeout_ms)
         ;
     *delayed = true;
     return 0;
+}
+
+static int
+handoff_once_pump(void *opaque, unsigned int timeout_ms)
+{
+    bool *requested = opaque;
+
+    (void)timeout_ms;
+    if (*requested)
+        return 0;
+    *requested = true;
+    return 1;
+}
+
+static void
+test_managed_process_hands_off_on_steering(void)
+{
+    char cwd[4096];
+    json_t *args;
+    json_t *result;
+    json_t *closed = NULL;
+    const char *handle;
+    char error[256] = {0};
+    uint64_t started = snj_time_ms();
+    bool requested = false;
+
+    assert(getcwd(cwd, sizeof(cwd)) != NULL);
+    args = call_args_yield("sleep 2", cwd, 4000, 3000, NULL);
+    assert(snj_json_set_new(args, "pty", json_false()) == 0);
+    result = run_tool_with_args_pump("exec_command", args,
+                                     handoff_once_pump, &requested);
+    assert(requested);
+    assert(snj_time_ms() - started < 1000u);
+    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    handle = snj_json_string(result, "handle");
+    assert(handle != NULL);
+    assert(snj_tools_close_managed(handle, false, NULL, NULL,
+                                   &closed, error, sizeof(error)) == 0);
+    assert(closed != NULL && snj_tool_result_valid(closed) == 0);
+    json_decref(closed);
+    json_decref(result);
 }
 
 static void
@@ -949,6 +997,7 @@ main(void)
     test_managed_process_write_stdin_completes();
     test_managed_process_accepts_repeated_write_stdin();
     test_managed_process_poll_consumes_exit();
+    test_managed_process_hands_off_on_steering();
     test_write_stdin_rejects_unknown_handle();
     test_wrong_handle_does_not_touch_active_process();
     test_malformed_interaction_preserves_active_process();

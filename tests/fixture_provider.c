@@ -156,6 +156,43 @@ add_stdin_call(struct snj_response_graph *graph, unsigned int cycle,
 }
 
 static int
+add_irc_send_call(struct snj_response_graph *graph, unsigned int cycle,
+                  unsigned int index, const char *text)
+{
+    char item_id[128];
+    char call_id[128];
+    json_t *args = json_object();
+
+    if (!args ||
+        snj_json_set_new(args, "notice", json_false()) < 0 ||
+        snj_json_set_new(args, "text", json_string(text)) < 0 ||
+        snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
+                 index) < 0 ||
+        snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle,
+                 index) < 0) {
+        if (args)
+            json_decref(args);
+        return -1;
+    }
+    return snj_response_graph_add_call(graph, item_id, call_id,
+                                       "irc_send", args);
+}
+
+static bool
+steering_contains(const json_t *steering, const char *needle)
+{
+    if (!json_is_array(steering))
+        return false;
+    for (size_t i = 0u; i < json_array_size(steering); ++i) {
+        const char *text = snj_json_string(json_array_get(steering, i), "text");
+
+        if (text && strstr(text, needle))
+            return true;
+    }
+    return false;
+}
+
+static int
 add_goal_call(struct snj_response_graph *graph, unsigned int cycle,
               const char *action, const char *text)
 {
@@ -274,6 +311,87 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_goal_done", "goal done", 0);
+    }
+    if (strstr(prompt, "network_zero"))
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER, "msg_fixture_network_zero",
+                           "network zero reply", 0);
+    if (strstr(prompt, "network_one"))
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER, "msg_fixture_network_one",
+                           "network one reply", 0);
+    if (strstr(prompt, "network_commentary")) {
+        if (emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                        SNJ_PHASE_COMMENTARY,
+                        "msg_fixture_network_commentary_local",
+                        "network local planning", 0) < 0)
+            return -1;
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_network_commentary_final",
+                           "network commentary reply", 0);
+    }
+    if (strstr(prompt, "network_operator"))
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_network_operator",
+                           "network operator reply", 0);
+    if (strstr(prompt, "network_mention"))
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_network_mention",
+                           "network mention reply", 0);
+    if (strstr(prompt, "network_count_wait")) {
+        if (!steering_contains(steering, "network count mention")) {
+            if (error_size)
+                (void)snprintf(error, error_size,
+                               "fixture count request was not rebuilt for IRC mention");
+            return -1;
+        }
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_network_count",
+                           "network count mention reply", 0);
+    }
+    if (strstr(prompt, "network_reminder")) {
+        if (cycle == 1u)
+            return 0;
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_network_reminder",
+                           "network reminder reply", 0);
+    }
+    if (strstr(prompt, "network_managed")) {
+        if (cycle == 1u)
+            return add_call(graph, workspace, cycle, 0u,
+                            "fixture managed start");
+        if (cycle == 2u) {
+            for (unsigned int i = 0u; i < 100u; ++i) {
+                int pump_rc = pump(opaque, 20u);
+
+                if (pump_rc != 0)
+                    return pump_rc;
+            }
+            return add_stdin_call(graph, cycle, 0u, managed_handle, false);
+        }
+        if (cycle == 3u) {
+            if (!steering_contains(steering, "network managed mention")) {
+                if (error_size)
+                    (void)snprintf(error, error_size,
+                                   "fixture did not receive managed IRC mention");
+                return -1;
+            }
+            if (add_irc_send_call(graph, cycle, 0u,
+                                  "network managed reaction") < 0 ||
+                add_stdin_call(graph, cycle, 1u,
+                               managed_handle, false) < 0)
+                goto allocation;
+            return 0;
+        }
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_network_managed",
+                           "network managed complete", 0);
     }
     if (managed_prompt(prompt)) {
         if (cycle == 1u)

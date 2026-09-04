@@ -89,8 +89,11 @@ continuation. A blocked goal can later be changed, unlocked, or resumed by the
 user.
 
 The model tool is not exposed when no goal is active or while an unresolved
-managed process restricts the tool surface to `write_stdin`. snajpagent never
-parses completion claims or magic phrases from assistant prose.
+managed process restricts the coding-tool surface to the exact final
+`write_stdin` continuation. In networked mode IRC tools may precede that
+continuation so urgent chat can be handled without abandoning the process.
+snajpagent never parses completion claims or magic phrases from assistant
+prose.
 
 ## Turn Boundaries And Continuation
 

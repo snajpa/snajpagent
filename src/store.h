@@ -17,6 +17,9 @@
 #define SNJ_MAX_QUEUED_TEXT (256u * 1024u)
 #define SNJ_MAX_PENDING_TURNS 128u
 #define SNJ_MAX_PENDING_QUEUE_TEXT (16u * 1024u * 1024u)
+#define SNJ_MAX_IRC_SNAPSHOT (2u * 1024u * 1024u)
+#define SNJ_IRC_REPLY_REMINDER_TEXT \
+    "Reply to the local operator in the IRC room before ending this turn."
 #define SNJ_MAX_GOAL_PROMPT (1024u * 1024u)
 #define SNJ_MAX_GOAL_BLOCKER (64u * 1024u)
 #define SNJ_GOAL_CONTINUATION_TEXT "Continue the active goal from its durable state."
@@ -116,6 +119,7 @@ struct snj_session {
     bool delete_requested;
     bool response_open;
     bool response_complete;
+    bool irc_reply_reminded;
     enum snj_response_terminal response_terminal;
     enum snj_goal_status goal_status;
     bool goal_locked;

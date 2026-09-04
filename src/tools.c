@@ -1214,6 +1214,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
     uint64_t yield_deadline = yield_ms ? saturating_deadline(snj_time_ms(), yield_ms) : UINT64_MAX;
     size_t input_written = 0u;
     bool yield_enabled = yield_ms > 0u;
+    bool handoff_requested = false;
     bool pty_eof_sent = !close_after_input;
 
     if (input_supplied && input_len == 0u && close_after_input &&
@@ -1249,12 +1250,16 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
                     proc->kill_sent = true;
                     kill_child_group(proc->pid, SIGKILL);
                 }
-            }
+            } else if (pump_rc == 1)
+                handoff_requested = true;
         }
         if (managed_reap_once(proc, error, error_size) < 0)
             return -1;
         if (proc->child_done && !proc->stdout_open && !proc->stderr_open)
             return managed_return_terminal(proc, result, error, error_size);
+        if (handoff_requested && input_done && !proc->child_done &&
+            !proc->timed_out && !proc->cancelled && !proc->kill_sent)
+            return managed_return_running(proc, result, error, error_size);
         if (yield_enabled && now >= yield_deadline && input_done &&
             !proc->child_done && !proc->timed_out && !proc->cancelled)
             return managed_return_running(proc, result, error, error_size);

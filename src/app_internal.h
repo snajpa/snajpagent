@@ -8,6 +8,7 @@
 #include "config.h"
 #include "credential.h"
 #include "instructions.h"
+#include "irc.h"
 #include "model_cache.h"
 #include "render.h"
 #include "store.h"
@@ -33,6 +34,9 @@ struct app_state {
     struct snj_session session;
     struct snj_render render;
     struct snj_term term;
+    struct snj_irc *irc;
+    struct snj_buf irc_urgent;
+    struct snj_buf irc_background;
     struct snj_instruction_set turn_instructions;
     struct snj_model_cache model_cache;
     const struct snj_cli *cli;
@@ -62,6 +66,11 @@ struct app_state {
     bool queue_edit_was_armed;
     bool input_closed;
     bool execute;
+    bool networked;
+    bool irc_urgent_local_operator;
+    bool irc_turn_local_operator;
+    bool irc_turn_replied;
+    uint64_t irc_background_since_ms;
     char queue_edit_id[SNJ_ID_HEX_LEN + 1u];
     size_t queue_edit_number;
     uint64_t active_since_ms;
@@ -201,6 +210,16 @@ int snj_app_parse_queue_argument(const char *argument,
                                  size_t *number);
 
 int snj_app_active_input_pump(void *opaque, unsigned int timeout_ms);
+int snj_app_irc_event(void *opaque, const struct snj_irc_event *event);
+int snj_app_irc_trace(void *opaque, unsigned int level, char direction,
+                      const char *endpoint, const char *text, size_t len);
+int snj_app_irc_restore(struct app_state *app, char *error, size_t error_size);
+int snj_app_irc_flush_urgent(struct app_state *app,
+                             char *error, size_t error_size);
+char *snj_app_irc_take_pending(struct app_state *app,
+                               bool *local_operator, bool force_background);
+int snj_app_irc_snapshot(struct app_state *app, const char *reason,
+                         char *error, size_t error_size);
 int snj_app_provider_count(struct app_state *app, const json_t *count_request,
                            const struct snj_credential *credential,
                            uint64_t *input_tokens,

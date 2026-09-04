@@ -284,6 +284,15 @@ snj_term_set_typing_pause(struct snj_term *term, uint32_t pause_ms)
         term->typing_pause_ms = pause_ms;
 }
 
+void
+snj_term_set_color(struct snj_term *term, bool enabled, bool networked)
+{
+    if (!term)
+        return;
+    term->color = enabled;
+    term->networked = networked;
+}
+
 uint32_t
 snj_term_typing_pause_remaining(const struct snj_term *term, uint64_t now_ms)
 {
@@ -587,14 +596,27 @@ redraw(struct snj_term *term)
 
         if (term->prompt_visible)
             return 0;
-        if (term->status[0] &&
+        if (term->status[0] && term->color &&
+            snj_write_full(STDERR_FILENO, "\033[33m", 5u) < 0)
+            fallback_rc = -1;
+        if (fallback_rc == 0 && term->status[0] &&
             (snj_term_write_safe(STDERR_FILENO, term->status,
                                  strlen(term->status)) < 0 ||
+             (term->color &&
+              snj_write_full(STDERR_FILENO, "\033[0m", 4u) < 0) ||
              snj_write_full(STDERR_FILENO, "\n", 1u) < 0))
+            fallback_rc = -1;
+        if (fallback_rc == 0 && term->color &&
+            snj_write_full(STDERR_FILENO,
+                           term->networked ? "\033[1;35m" : "\033[1;36m",
+                           7u) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 &&
             snj_write_full(STDERR_FILENO, term->label,
                            strlen(term->label)) < 0)
+            fallback_rc = -1;
+        if (fallback_rc == 0 && term->color &&
+            snj_write_full(STDERR_FILENO, "\033[0m", 4u) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 && term->draft.len &&
             snj_term_write_safe(STDERR_FILENO, (char *)term->draft.data,
@@ -613,12 +635,18 @@ redraw(struct snj_term *term)
     max = term->draft.len * 8u + 1024u;
     snj_buf_init(&out, max);
     if (term->status[0]) {
-        if (snj_buf_append(&out, term->status, strlen(term->status)) < 0 ||
+        if ((term->color && snj_buf_append(&out, "\033[33m", 5u) < 0) ||
+            snj_buf_append(&out, term->status, strlen(term->status)) < 0 ||
+            (term->color && snj_buf_append(&out, "\033[0m", 4u) < 0) ||
             snj_buf_append(&out, "\r\n", 2u) < 0)
             goto out;
     }
     if (label_cols == SIZE_MAX ||
+        (term->color &&
+         snj_buf_append(&out, term->networked ? "\033[1;35m" : "\033[1;36m",
+                        7u) < 0) ||
         snj_buf_append(&out, term->label, label_len) < 0 ||
+        (term->color && snj_buf_append(&out, "\033[0m", 4u) < 0) ||
         append_safe(&out, term->draft.data, term->draft.len, true, label_cols,
                     term->columns, term->cursor,
                     &cursor_row, &cursor_col, &end_row, &end_col) < 0)

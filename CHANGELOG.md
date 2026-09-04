@@ -4,6 +4,30 @@
 
 ## 0.9.0-wip
 
+- Added first-class IRC agent/operator chat: `-d`/`--daemon` hosts one bounded
+  room, `-s`/`--listen` selects its endpoint, repeatable `-c`/`--client`
+  connections join advertised rooms and reconnect autonomously, and combined
+  roles share one durable session and timestamped non-windowed chat UI.
+  Networked mode requires `-n`/`--name`; `-o`/`--operator-name` and
+  `-r`/`--room-name` select the local operator and hosted room identities.
+
+- Added durable room events and bounded first-join/post-compaction snapshots,
+  `+o`- and mention-aware coalesced steering, managed-command IRC handoff, a
+  one-shot local-operator reply reminder, and native `irc_send`, `irc_state`,
+  and privilege-checked `irc_topic` tools. Socket, join, history, and reconnect
+  work remains runtime-owned rather than model-polled.
+
+- Added program-wide `--color[=auto|always|never]` and `--no-color` behavior
+  with a terminal-safe 16-color semantic palette. Network verbosity 0 now
+  presents room/operator traffic without local model or tool traces; `-v`
+  reveals terminal model replies, `-vv` adds commentary and compact tool
+  activity, and higher levels add lower-priority runtime/IRC diagnostics.
+
+- Reassigned the `-d`, `-c`, `-r`, and `-o` short options to daemon, client,
+  room name, and operator name. Their former dotdir, config, resume, and effort
+  functions remain available as `--dotdir`, `--config`, `--resume`, and
+  `--effort`.
+
 - Added permanent narrow-tmux rendered-screen regression coverage plus an
   explicit serialized live terminal target that compares the configured
   provider run with durable response and `AGENTS.md` metadata.
@@ -19,7 +43,7 @@
 
 - Added a configurable `$HOME/.snajpagent` application directory containing
   default configuration, sessions, trash, and an atomically replaced model
-  cache; `-d`/`--dotdir` and `-c`/`--config` override those defaults.
+  cache; `--dotdir` and `--config` override those defaults.
 
 - Added ordered named provider configurations and authenticated all-provider
   model/reasoning discovery. `/model`, `/model list`, and `/model cache` expose
@@ -170,7 +194,7 @@
   `AGENTS.override.md`/`AGENTS.md` files, with strict path/UTF-8/size/symlink
   rejection, `turn_started` path/byte/SHA-256 metadata, frozen active-turn
   instruction projection, and focused regression coverage.
-- Added durable resume-time workspace relocation for explicit `-r -C NEW`
+- Added durable resume-time workspace relocation for explicit `--resume -C NEW`
   follow-up execution, including `workspace_changed` replay validation and CLI
   coverage that the next `turn_started` uses the relocated workspace.
 - Added local lifecycle closure for `/archive`, `/delete`, archived-session

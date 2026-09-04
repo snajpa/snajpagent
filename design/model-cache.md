@@ -12,11 +12,10 @@ the selected provider even when it is absent from the cache.
 snajpagent has one private application directory, called the **dotdir**:
 
 - the default is `$HOME/.snajpagent`;
-- `-d DIR` (with `--dotdir DIR` as its long spelling) selects another absolute
-  directory;
+- `--dotdir DIR` selects another absolute directory;
 - the default configuration path is `DOTDIR/config.ini`;
-- `-c FILE` (with `--config FILE` as its long spelling) selects a different
-  configuration file without changing the dotdir;
+- `--config FILE` selects a different configuration file without changing the
+  dotdir;
 - sessions and trash live below the dotdir, alongside the model cache; and
 - the model cache is `DOTDIR/models.json`.
 
