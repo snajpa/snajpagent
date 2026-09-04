@@ -452,15 +452,16 @@ outbound chat is bounded rather than allowed to grow without limit.
 ## Source-Size Discipline
 
 This feature remains subject to the repository's existing `make sizecheck`
-limits: no more than 35,000 production C/header lines, 50,000 shipped C/header
-lines, and 30 production translation units. The 30,000-production-line level
-and 2,000-line-file level remain review triggers rather than excuses to raise a
-limit. Implementation should reuse the session, event-loop, tool, rendering,
-and managed-process abstractions, consolidate a genuinely trivial unit where
-needed, and omit duplication. Every retained line must serve a contract item,
-failure bound, portability requirement, or focused validation; source-budget
-pressure must not remove required IRC, color, durability, reconnect, steering,
-or UI behavior.
+limits: production C has a 32,768-line soft limit and 49,152-line hard limit;
+production headers have 16,384-line soft and 65,536-line hard limits; test C
+has 16,384-line soft and 32,768-line hard limits; and
+production remains capped at 30 translation units. The 2,000-line-file level
+remains a review trigger. Implementation should reuse the session, event-loop,
+tool, rendering, and managed-process abstractions, consolidate a genuinely
+trivial unit where needed, and omit duplication. Every retained line must
+serve a contract item, failure bound, portability requirement, or focused
+validation; source-budget pressure must not remove required IRC, color,
+durability, reconnect, steering, or UI behavior.
 
 ## Acceptance
 
