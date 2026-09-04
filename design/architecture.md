@@ -138,10 +138,14 @@ append and replay; append occurs before transcript rendering or provider
 projection.
 
 After any exit with a resumable open session, common cleanup restores the
-terminal, closes IRC, and writes one exact `resume:\nCOMMAND\n` block to stderr
-without changing the original status if that best-effort write fails. The
-label and command each begin at column zero with no intervening blank line. The
-command
+terminal, closes IRC, and writes one exact
+`• You can resume this session with the following command:\nCOMMAND\n` block
+to stderr without changing the original status if that best-effort write
+fails. The bullet header and command each begin at column zero with no
+intervening blank line. With color enabled, the complete header has the same
+bold-green lifecycle role as `• Compacted`, and the ANSI reset precedes the
+header newline so the command line begins directly with uncolored command
+bytes. The command
 reuses the resolved dotdir and explicit config source, exact session ID,
 explicit presentation settings, unconsumed one-turn preferences, and effective
 IRC settings. Thus process-local IRC launch configuration does not enter the

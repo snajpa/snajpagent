@@ -2314,6 +2314,52 @@ snj_render_event(struct snj_render *render, uint64_t seq, const char *type)
     return rc;
 }
 
+int
+snj_render_resume_hint(const struct snj_render *render, const char *command,
+                       size_t command_len)
+{
+    static const char header[] =
+        "• You can resume this session with the following command:";
+    struct snj_buf block;
+    size_t max = command_len;
+    bool colored;
+    int rc = -1;
+
+    if (!render || !command || !command_len) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!snj_size_add(max, sizeof(header) + 1u, &max)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    colored = render->color_stderr;
+    if (colored &&
+        (!snj_size_add(max, sizeof(COLOR_LIFECYCLE) - 1u, &max) ||
+         !snj_size_add(max, sizeof(COLOR_RESET) - 1u, &max))) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    snj_buf_init(&block, max);
+    if (colored &&
+        snj_buf_append(&block, COLOR_LIFECYCLE,
+                       sizeof(COLOR_LIFECYCLE) - 1u) < 0)
+        goto out;
+    if (snj_buf_append(&block, header, sizeof(header) - 1u) < 0)
+        goto out;
+    if (colored &&
+        snj_buf_append(&block, COLOR_RESET, sizeof(COLOR_RESET) - 1u) < 0)
+        goto out;
+    if (snj_buf_putc(&block, '\n') < 0 ||
+        snj_buf_append(&block, command, command_len) < 0 ||
+        snj_buf_putc(&block, '\n') < 0)
+        goto out;
+    rc = snj_write_full(STDERR_FILENO, block.data, block.len);
+out:
+    snj_buf_free(&block);
+    return rc;
+}
+
 
 static bool
 diagnostic_text_valid(const char *text, size_t len, bool multiline)

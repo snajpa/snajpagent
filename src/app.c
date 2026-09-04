@@ -3445,19 +3445,14 @@ write_resume_command(const struct app_state *app, const char *program,
                      const char *dotdir)
 {
     struct snj_buf command;
-    struct snj_buf line;
 
     if (!dotdir || !app->session.id[0] || app->session.delete_requested)
         return;
-    snj_buf_init(&command, RESUME_COMMAND_MAX - 9u);
-    snj_buf_init(&line, RESUME_COMMAND_MAX);
-    if (build_resume_command(app, program, dotdir, &command) == 0 &&
-        snj_buf_append(&line, "resume:\n", 8u) == 0 &&
-        snj_buf_append(&line, command.data, command.len) == 0 &&
-        snj_buf_putc(&line, '\n') == 0)
-        (void)snj_write_full(STDERR_FILENO, line.data, line.len);
+    snj_buf_init(&command, RESUME_COMMAND_MAX);
+    if (build_resume_command(app, program, dotdir, &command) == 0)
+        (void)snj_render_resume_hint(&app->render, (char *)command.data,
+                                     command.len);
     snj_buf_free(&command);
-    snj_buf_free(&line);
 }
 
 static int

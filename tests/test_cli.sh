@@ -21,14 +21,16 @@ export SNAJPAGENT_DOTDIR="$dotdir"
 export SNAJPAGENT_TEST_ROOT="$root"
 cd "$root/work"
 
+resume_header='• You can resume this session with the following command:'
+
 resume_count() {
-    grep -c '^resume:$' "$1" || true
+    grep -F -c "$resume_header" "$1" || true
 }
 
 only_resume() {
     [ "$(resume_count "$1")" -eq 1 ]
     [ "$(wc -l < "$1")" -eq 2 ]
-    [ "$(sed -n '1p' "$1")" = 'resume:' ]
+    [ "$(sed -n '1p' "$1")" = "$resume_header" ]
     resume_command_line=$(sed -n '2p' "$1")
     [ -n "$resume_command_line" ]
     case "$resume_command_line" in
@@ -38,7 +40,8 @@ only_resume() {
 }
 
 strip_resume() {
-    awk 'skip { skip = 0; next } /^resume:$/ { skip = 1; next } { print }' \
+    awk -v header="$resume_header" \
+        'skip { skip = 0; next } $0 == header { skip = 1; next } { print }' \
         "$1" >"$1.without-resume"
 }
 
@@ -239,8 +242,9 @@ id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 [ ${#id} -eq 32 ]
 [ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 5 ]
 
-# The writer owns exactly "resume:\nCOMMAND\n"; the command starts at column
-# zero, dynamic arguments are POSIX-shell safe,
+# The writer owns the exact two-line header and framing; the builder owns only
+# the command, which starts at column zero. Dynamic arguments are POSIX-shell
+# safe,
 # prompts and credentials are absent, and the printed command really resumes.
 quoted_dotdir="$root/quoted ' state"
 quoted_config="$root/config/quoted ' config.ini"
@@ -256,7 +260,8 @@ out=$($bin --dotdir "$quoted_dotdir" --config "$quoted_config" \
 [ "$(resume_count "$root/quoted.err")" -eq 1 ]
 ! grep -q 'must-not-appear\| -- ping\| -e ' "$root/quoted.err"
 grep -Fq "'\\''" "$root/quoted.err"
-resume_command=$(sed -n '/^resume:$/ { n; p; }' "$root/quoted.err")
+resume_command=$(awk -v header="$resume_header" \
+    '$0 == header { getline; print; exit }' "$root/quoted.err")
 resume_prefix=${resume_command% --resume *}
 resume_id=${resume_command##* --resume }
 eval "$resume_prefix -e --resume $resume_id -- ping" \
@@ -264,6 +269,27 @@ eval "$resume_prefix -e --resume $resume_id -- ping" \
 [ "$(cat "$root/quoted-resumed.out")" = pong ]
 [ "$(resume_count "$root/quoted-resumed.err")" -eq 1 ]
 unset RESUME_COMMAND_SECRET
+
+# Forced color styles only the complete lifecycle header. Its reset precedes
+# the newline, leaving the copy/paste command as the first uncolored bytes of
+# the second physical line.
+color_resume_dotdir="$root/color-resume-state"
+out=$($bin --dotdir "$color_resume_dotdir" --color=always -e -- ping \
+    2>"$root/color-resume.err")
+[ "$out" = pong ]
+python3 - "$root/color-resume.err" <<'PY'
+import pathlib
+import sys
+
+header = "• You can resume this session with the following command:".encode()
+lines = pathlib.Path(sys.argv[1]).read_bytes().splitlines(keepends=True)
+assert lines[0] == b"\x1b[1;32m" + header + b"\x1b[0m\n", lines
+assert len(lines) == 2, lines
+assert lines[1].startswith(b"'"), lines
+assert not lines[1][:1].isspace(), lines
+assert b"\x1b" not in lines[1], lines
+assert lines[1].endswith(b"\n"), lines
+PY
 
 out=$($bin -e --resume "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]

@@ -16,6 +16,11 @@
   Bytes and token bounds remain distinct, and rollout composers end in
   `context=N% ›|»` or `context=?% ›|»`.
 
+- Replaced the terse exit `resume:` label with the capitalized bullet header
+  `• You can resume this session with the following command:`. It uses the
+  same bold-green lifecycle role as `• Compacted`, while the command remains
+  uncolored on its own next line with no leading bytes.
+
 ## 0.98
 
 - Added a two-field `META` as the sole compiled product-name/base-version

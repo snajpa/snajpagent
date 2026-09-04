@@ -26,6 +26,8 @@ DEFAULT_ACTIVE_PROMPT = f"{DEFAULT_MODEL}/medium context=?% » ".encode()
 GOAL_SET = "• Goal set".encode()
 GOAL_CLEARED = "• Goal cleared".encode()
 COMPACTED = "• Compacted".encode()
+RESUME_HEADER = \
+    "• You can resume this session with the following command:".encode()
 
 
 class Child:
@@ -114,17 +116,19 @@ class Child:
         commands = []
         lines = bytes(self.buf).splitlines()
         for index, line in enumerate(lines):
-            marker = line.find(b"resume:")
+            marker = line.find(RESUME_HEADER)
             if marker >= 0:
-                if line[marker:] != b"resume:" or index + 1 >= len(lines):
+                suffix = line[marker + len(RESUME_HEADER):]
+                if suffix not in (b"", b"\x1b[0m") or index + 1 >= len(lines):
                     raise AssertionError(
-                        f"resume label is not on its own line; "
+                        f"resume header is not on its own line; "
                         f"output={bytes(self.buf)!r}"
                     )
                 command = lines[index + 1]
-                if not command or command[:1].isspace():
+                if (not command or command[:1].isspace() or
+                        b"\x1b" in command):
                     raise AssertionError(
-                        f"resume command does not start at column zero; "
+                        f"resume command is not uncolored at column zero; "
                         f"output={bytes(self.buf)!r}"
                     )
                 commands.append(command.decode("ascii"))

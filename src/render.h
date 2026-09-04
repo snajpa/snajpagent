@@ -139,6 +139,8 @@ int snj_render_tool_finish(struct snj_render *render, const char *name,
                            const json_t *result, uint32_t max_output_bytes);
 int snj_render_event(struct snj_render *render, uint64_t seq,
                      const char *type);
+int snj_render_resume_hint(const struct snj_render *render,
+                           const char *command, size_t command_len);
 int snj_render_protocol(struct snj_render *render, const char *label,
                         const char *text, size_t len);
 int snj_render_transport(struct snj_render *render, char direction,

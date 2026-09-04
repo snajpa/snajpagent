@@ -517,6 +517,34 @@ capture_lifecycle(unsigned int verbosity, enum snj_color_mode color,
     return used;
 }
 
+static size_t
+capture_resume_hint(enum snj_color_mode color, char *out, size_t out_size)
+{
+    static const char command[] = "'snajpagent' --resume '0123'";
+    struct snj_render render;
+    size_t used = 0u;
+    ssize_t n;
+    int fds[2];
+    int saved;
+
+    assert(pipe(fds) == 0);
+    saved = dup(STDERR_FILENO);
+    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
+    close(fds[1]);
+    snj_render_init(&render, 0u);
+    snj_render_set_color(&render, color);
+    assert(snj_render_resume_hint(&render, command, sizeof(command) - 1u) == 0);
+    snj_render_free(&render);
+    assert(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
+        used += (size_t)n;
+    assert(n == 0);
+    close(fds[0]);
+    out[used] = '\0';
+    return used;
+}
+
 static void
 test_append_only_views(void)
 {
@@ -716,6 +744,16 @@ main(void)
                              output, sizeof(output)) > 0u);
     assert(count_text(output, "\033[1;32m• ") == 5u);
     assert(count_text(output, "\n\033[0m") == 5u);
+    assert(capture_resume_hint(SNJ_COLOR_NEVER,
+                               output, sizeof(output)) > 0u);
+    assert(strcmp(output,
+        "• You can resume this session with the following command:\n"
+        "'snajpagent' --resume '0123'\n") == 0);
+    assert(capture_resume_hint(SNJ_COLOR_ALWAYS,
+                               output, sizeof(output)) > 0u);
+    assert(strcmp(output,
+        "\033[1;32m• You can resume this session with the following command:"
+        "\033[0m\n'snajpagent' --resume '0123'\n") == 0);
 
     snj_render_init(&render, 6u);
     errno = 0;

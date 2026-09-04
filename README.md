@@ -18,7 +18,7 @@ path is usable.
   pause/resume, user-controlled wording locks, and explicit completion or
   blocking from the model.
 - Durable `--resume` support without a background worker or tmux session.
-- A copy/paste-safe two-line `resume:` block on every resumable session exit,
+- A copy/paste-safe two-line resume hint on every resumable session exit,
   including commands that restore outgoing IRC clients or the built-in server.
 - First-class single-room IRC hosting and repeatable outgoing connections for
   agent/operator chat, with reconnects, bounded history, and operator-aware
@@ -113,18 +113,20 @@ When a process has opened or created a durable session, normal shutdown prints
 exactly one two-line block to stderr after restoring the terminal:
 
 ```text
-resume:
+• You can resume this session with the following command:
 COMMAND
 ```
 
-Both lines begin at column zero, with no blank line between them. This
-includes `/exit`, idle Ctrl-C, Ctrl-D or terminal EOF, `/archive`, one-shot
-completion, runtime failure, and graceful SIGHUP/SIGTERM shutdown. Ctrl-C
-first clears a nonempty composer without affecting the turn or session. On an
-already-empty composer it interrupts the active turn or exits while idle; the
-command is printed only when the process actually exits. `/delete`, help,
-version, listing, command-line errors, and failures before a session exists
-print no command.
+Both lines begin at column zero, with no blank line between them. When color is
+enabled, the bullet header uses the same bold-green lifecycle role as
+`• Compacted`; its color resets before the newline, so the command remains
+uncolored and begins with its own first byte. This includes `/exit`, idle
+Ctrl-C, Ctrl-D or terminal EOF, `/archive`, one-shot completion, runtime
+failure, and graceful SIGHUP/SIGTERM shutdown. Ctrl-C first clears a nonempty
+composer without affecting the turn or session. On an already-empty composer
+it interrupts the active turn or exits while idle; the command is printed only
+when the process actually exits. `/delete`, help, version, listing,
+command-line errors, and failures before a session exists print no command.
 
 The displayed command names the exact session, dotdir, explicit configuration
 path when one was used, presentation overrides, and any unconsumed one-turn
