@@ -404,6 +404,7 @@ capture_color(enum snj_color_mode mode, bool networked,
     assert(snj_render_warning_ctx(&render, "careful") == 0);
     assert(snj_render_error_ctx(&render, "broken") == 0);
     assert(snj_render_host(&render, "status") == 0);
+    assert(snj_render_event(&render, 7u, "compaction_completed") == 0);
     memset(&call, 0, sizeof(call));
     arguments = json_object();
     assert(arguments != NULL);
@@ -448,6 +449,39 @@ capture_color(enum snj_color_mode mode, bool networked,
     return used;
 }
 
+static size_t
+capture_lifecycle(unsigned int verbosity, enum snj_color_mode color,
+                  char *out, size_t out_size)
+{
+    static const char *const events[] = {
+        "compaction_completed", "goal_started", "goal_reworded",
+        "goal_completed", "goal_cancelled", "turn_completed"
+    };
+    struct snj_render render;
+    size_t used = 0u;
+    ssize_t n;
+    int fds[2];
+    int saved;
+
+    assert(pipe(fds) == 0);
+    saved = dup(STDERR_FILENO);
+    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
+    close(fds[1]);
+    snj_render_init(&render, verbosity);
+    snj_render_set_color(&render, color);
+    for (size_t i = 0u; i < sizeof(events) / sizeof(events[0]); ++i)
+        assert(snj_render_event(&render, i + 1u, events[i]) == 0);
+    snj_render_free(&render);
+    assert(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
+        used += (size_t)n;
+    assert(n == 0);
+    close(fds[0]);
+    out[used] = '\0';
+    return used;
+}
+
 static void
 test_append_only_views(void)
 {
@@ -472,11 +506,15 @@ test_append_only_views(void)
     memcpy(event.nick, "peer", 5u);
     memcpy(event.text, "chat-one", 9u);
     assert(snj_render_irc_event(&render, &event) == 0);
+    assert(snj_render_event(&render, 1u, "goal_started") == 0);
+    assert(snj_render_event(&render, 2u, "compaction_completed") == 0);
     snj_buf_init(&delivered, 1024u);
     assert(snj_render_rollout_begin(&render, STDERR_FILENO, "agent › ") == 0);
     assert(snj_render_rollout(&render, "hidden-prefix ", 14u, &delivered) == 0);
     used = drain_available(fds[0], output, sizeof(output), used);
     assert(strstr(output, "chat-one") != NULL);
+    assert(strstr(output, "Goal set") == NULL);
+    assert(strstr(output, "Compacted") == NULL);
     assert(strstr(output, "hidden-prefix") == NULL);
 
     assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
@@ -486,7 +524,9 @@ test_append_only_views(void)
     memcpy(event.text, "chat-two", 9u);
     assert(snj_render_irc_event(&render, &event) == 0);
     used = drain_available(fds[0], output, sizeof(output), used);
-    assert(strstr(output, "── rollout ──\nagent › hidden-prefix live-suffix ") != NULL);
+    assert(strstr(output,
+                  "── rollout ──\n• Goal set\n• Compacted\n"
+                  "agent › hidden-prefix live-suffix ") != NULL);
     assert(strstr(output, "queued-runtime") == NULL);
     assert(strstr(output, "chat-two") == NULL);
 
@@ -503,6 +543,8 @@ test_append_only_views(void)
     assert(count_text(output, "live-suffix") == 1u);
     assert(count_text(output, "hidden-tail") == 1u);
     assert(count_text(output, "chat-two") == 1u);
+    assert(count_text(output, "• Goal set") == 1u);
+    assert(count_text(output, "• Compacted") == 1u);
     assert(count_text(output, "── rollout ──") == 2u);
     assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
     used = drain_available(fds[0], output, sizeof(output), used);
@@ -608,6 +650,26 @@ main(void)
     test_markdown_streaming();
     test_append_only_views();
 
+    assert(capture_lifecycle(0u, SNJ_COLOR_NEVER,
+                             output, sizeof(output)) > 0u);
+    assert(strcmp(output,
+        "• Compacted\n"
+        "• Goal set\n"
+        "• Goal set\n"
+        "• Goal cleared\n"
+        "• Goal cleared\n") == 0);
+    assert(capture_lifecycle(4u, SNJ_COLOR_NEVER,
+                             output, sizeof(output)) > 0u);
+    assert(strstr(output,
+                  "• Compacted · event › 1 compaction_completed synced\n"));
+    assert(strstr(output,
+                  "• Goal cleared · event › 5 goal_cancelled synced\n"));
+    assert(strstr(output, "event › 6 turn_completed synced\n"));
+    assert(capture_lifecycle(0u, SNJ_COLOR_ALWAYS,
+                             output, sizeof(output)) > 0u);
+    assert(count_text(output, "\033[1;32m• ") == 5u);
+    assert(count_text(output, "\n\033[0m") == 5u);
+
     snj_render_init(&render, 6u);
     errno = 0;
     assert(snj_render_transport(&render, '>', "bad\rline", 8u) < 0);
@@ -619,6 +681,9 @@ main(void)
     assert(strstr(output, "\033[1;33msnajpagent: careful\n\033[0m") != NULL);
     assert(strstr(output, "\033[1;31msnajpagent: broken\n\033[0m") != NULL);
     assert(strstr(output, "\033[34mstatus\n\033[0m") != NULL);
+    assert(strstr(output,
+                  "\033[1;32m• Compacted · event › 7 "
+                  "compaction_completed synced\n\033[0m") != NULL);
     assert(strstr(output,
                   "\033[33m→ exec\033[0m  timeout=2500ms  'printf plain'\n") != NULL);
     assert(strstr(output, "\033[1;36magent \033[0m› answer") != NULL);

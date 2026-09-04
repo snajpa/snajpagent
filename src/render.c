@@ -18,6 +18,7 @@
 #define COLOR_SUCCESS "\033[32m"
 #define COLOR_WARNING "\033[1;33m"
 #define COLOR_ERROR "\033[1;31m"
+#define COLOR_LIFECYCLE "\033[1;32m"
 #define COLOR_DURABLE "\033[2;36m"
 #define COLOR_PROTOCOL "\033[35m"
 #define COLOR_TRANSPORT "\033[2;34m"
@@ -2275,18 +2276,36 @@ snj_render_tool_finish(struct snj_render *render, const char *name,
 int
 snj_render_event(struct snj_render *render, uint64_t seq, const char *type)
 {
+    const char *notice = NULL;
     struct snj_buf line;
     int rc = 0;
 
-    if (render->verbosity < 4u)
+    if (strcmp(type, "compaction_completed") == 0)
+        notice = "Compacted";
+    else if (strcmp(type, "goal_started") == 0 ||
+             strcmp(type, "goal_reworded") == 0)
+        notice = "Goal set";
+    else if (strcmp(type, "goal_completed") == 0 ||
+             strcmp(type, "goal_cancelled") == 0)
+        notice = "Goal cleared";
+    if (!notice && render->verbosity < 4u)
         return 0;
     snj_buf_init(&line, 1024u);
-    if (snj_buf_printf(&line, "event › %llu %s synced\n",
-                       (unsigned long long)seq, type) < 0)
+    if (notice && render->verbosity < 4u) {
+        if (snj_buf_printf(&line, "• %s\n", notice) < 0)
+            rc = -1;
+    } else if (notice) {
+        if (snj_buf_printf(&line, "• %s · event › %llu %s synced\n",
+                           notice, (unsigned long long)seq, type) < 0)
+            rc = -1;
+    } else if (snj_buf_printf(&line, "event › %llu %s synced\n",
+                              (unsigned long long)seq, type) < 0) {
         rc = -1;
+    }
     if (rc == 0)
         rc = view_block(render, SNJ_RENDER_ROLLOUT, STDERR_FILENO,
-                        COLOR_DURABLE, (char *)line.data, line.len, line.len,
+                        notice ? COLOR_LIFECYCLE : COLOR_DURABLE,
+                        (char *)line.data, line.len, line.len,
                         render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;

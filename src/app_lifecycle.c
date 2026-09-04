@@ -408,13 +408,13 @@ set_goal_prompt(struct app_state *app, const char *argument)
         free(prompt);
         if (rc < 0)
             return goal_error(app, error);
-        return snj_render_host(&app->render, "goal wording updated by user");
+        return 0;
     }
     rc = start_goal(app, prompt, error, sizeof(error));
     free(prompt);
     if (rc < 0)
         return goal_error(app, error);
-    return snj_render_host(&app->render, "goal started");
+    return 0;
 }
 
 int
@@ -447,7 +447,6 @@ goal_simple_command(struct app_state *app, const char *command)
     char error[256] = {0};
     json_t *data;
     const char *type;
-    const char *message;
 
     if (strcmp(command, "pause") == 0) {
         if (app->session.goal_status != SNJ_GOAL_ACTIVE)
@@ -495,18 +494,16 @@ goal_simple_command(struct app_state *app, const char *command)
             return goal_error(app, "no unfinished goal can be completed");
         type = "goal_completed";
         data = goal_actor_data(&app->session, "user");
-        message = "goal completed by user";
     } else {
         if (!goal_unfinished(&app->session))
             return goal_error(app, "no unfinished goal can be cancelled");
         type = "goal_cancelled";
         data = goal_id_data(&app->session);
-        message = "goal cancelled";
     }
     if (commit_goal_event(app, type, data, error, sizeof(error)) < 0)
         return goal_error(app, error);
     app->goal_armed = false;
-    return snj_render_host(&app->render, message);
+    return 0;
 }
 
 int
@@ -590,8 +587,6 @@ snj_app_goal_tool(struct app_state *app,
                 result);
         if (start_goal(app, objective, error, error_size) < 0)
             return -1;
-        if (snj_render_host(&app->render, "goal started by model") < 0)
-            return -1;
         (void)snprintf(message, sizeof(message),
                        "goal %.8s started; automatic continuation is active",
                        app->session.goal_id);
@@ -623,9 +618,6 @@ snj_app_goal_tool(struct app_state *app,
                               goal_text_data(&app->session, "model", text),
                               error, error_size) < 0)
             return -1;
-        if (snj_render_host(&app->render,
-                            "goal wording updated by model") < 0)
-            return -1;
         return tool_result(true, "goal wording updated", result);
     }
     if (strcmp(action, "complete") == 0) {
@@ -637,8 +629,6 @@ snj_app_goal_tool(struct app_state *app,
                               error, error_size) < 0)
             return -1;
         app->goal_armed = false;
-        if (snj_render_host(&app->render, "goal completed by model") < 0)
-            return -1;
         return tool_result(true, "goal marked complete", result);
     }
     if (strcmp(action, "block") == 0) {

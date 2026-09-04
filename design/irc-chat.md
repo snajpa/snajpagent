@@ -205,6 +205,15 @@ summaries, runtime state, protocol, and transport detail through the existing
 single verbosity ladder. Actionable errors and direct local-command results
 remain immediately visible in either view.
 
+Successful durable lifecycle milestones are also first-class rollout records
+at verbosity 0. They use exact terse bullet lines: `• Compacted` after
+`compaction_completed`, `• Goal set` after `goal_started` or `goal_reworded`,
+and `• Goal cleared` after `goal_completed` or `goal_cancelled`. No IDs, actors,
+reasons, hashes, counts, or other detail appears at baseline verbosity. At
+durable-event verbosity the same line may append its sequence and event type.
+In chat view these records wait in the existing rollout queue and appear once,
+in order, when rollout is entered; they never become IRC messages.
+
 `/chat` and `/rollout` select a view from either an idle or active composer and
 are not sent to IRC or admitted to the model. Selecting the current view is
 idempotent. Empty Tab toggles the two views; a nonempty draft never switches
@@ -272,6 +281,8 @@ and transport diagnostics have stable roles. Red is reserved for errors,
 yellow for warnings/activity, cyan/blue for agent and prompt identity,
 magenta for operator identity, and dim/default text for metadata. Attributes
 are always reset at field boundaries so user/model text cannot inherit them.
+Terse lifecycle milestone lines have their own bold-green role spanning the
+bullet and text, plus any high-verbosity durable suffix.
 On a compact tool-start line, color covers only the arrow and tool label; an
 `exec` command payload uses the default foreground, matching the uncolored
 workdir, arguments, and captured command-output lines that follow it.

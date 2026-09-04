@@ -568,8 +568,10 @@ cat >"$root/auto-compact.ini" <<'EOF'
 [provider]
 auto_compact_input_tokens = 1
 EOF
-$bin --dotdir "$auto_state" --config "$root/auto-compact.ini" -e -vvvv -- ping >"$root/auto-compact.out" 2>"$root/auto-compact.err"
+$bin --dotdir "$auto_state" --config "$root/auto-compact.ini" -e -- ping >"$root/auto-compact.out" 2>"$root/auto-compact.err"
 [ "$(cat "$root/auto-compact.out")" = pong ]
+grep -Fx '• Compacted' "$root/auto-compact.err"
+! grep -q 'event ›' "$root/auto-compact.err"
 auto_id=$(find "$auto_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 python3 - "$auto_state/sessions/$auto_id/events.jsonl" <<'PY'
 import json

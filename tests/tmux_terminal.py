@@ -1067,6 +1067,85 @@ def run_tool_case(binary, root):
             close_fixture_terminal(terminal)
 
 
+def wait_idle_prompt_at_bottom(terminal, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    screen = ""
+    while time.monotonic() < deadline:
+        screen = terminal.capture()
+        if screen.rstrip().endswith(DEFAULT_IDLE_PROMPT.rstrip()):
+            return screen
+        if terminal.dead():
+            raise AssertionError(
+                f"pane exited while waiting for the idle prompt:\n{screen}"
+            )
+        time.sleep(0.02)
+    raise AssertionError(f"idle prompt is not at the bottom:\n{screen}")
+
+
+def run_lifecycle_case(binary, root):
+    case = root / "lifecycle"
+    workspace = case / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False)
+    dotdir = case / "state"
+    terminal = TmuxTerminal(
+        case / "terminal", binary, workspace, dotdir, config, 60, 18,
+        args=("--color=always",),
+    )
+    try:
+        terminal.wait(DEFAULT_IDLE_PROMPT)
+        terminal.submit("/goal slow goal")
+        terminal.wait("• Goal set")
+        terminal.wait("working on goal")
+        terminal.submit("/goal cancel")
+        terminal.wait("• Goal cleared")
+        terminal.wait("goal checkpoint")
+        wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+        wait_idle_prompt_at_bottom(terminal)
+
+        terminal.submit("/compact")
+        terminal.wait("• Compacted")
+        wait_idle_prompt_at_bottom(terminal)
+        screen = terminal.capture(join_wrapped=True)
+        assert_order(screen, ["• Goal set", "• Goal cleared", "• Compacted"])
+        for notice in ("• Goal set", "• Goal cleared", "• Compacted"):
+            if screen.count(notice) != 1:
+                raise AssertionError(
+                    f"lifecycle notice was missing or duplicated: {notice!r}\n"
+                    f"{screen}"
+                )
+        for obsolete in (
+            "goal started", "goal cancelled",
+            "compaction completed and installed for future turns",
+        ):
+            if obsolete in screen:
+                raise AssertionError(
+                    f"obsolete lifecycle detail remained visible: {obsolete!r}\n"
+                    f"{screen}"
+                )
+        styled = terminal.capture_styled()
+        for notice in ("• Goal set", "• Goal cleared", "• Compacted"):
+            pattern = (r"\x1b\[[0-9;]*32m(?:\x1b\[[0-9;]*m)*" +
+                       re.escape(notice))
+            if re.search(pattern, styled) is None:
+                raise AssertionError(
+                    f"lifecycle notice lacks its green role: {notice!r}"
+                )
+        _, events = read_events(dotdir)
+        if len(event_list(events, "goal_started")) != 1 or \
+                len(event_list(events, "goal_cancelled")) != 1 or \
+                len(event_list(events, "compaction_completed")) != 1:
+            raise AssertionError("lifecycle presentation changed durable events")
+        terminal.exit()
+    finally:
+        try:
+            screen = terminal.last_screen or terminal.capture()
+            (case / "screen.txt").write_text(screen, encoding="utf-8")
+        finally:
+            close_fixture_terminal(terminal)
+
+
 def wait_for_terminal_event(dotdir, terminal_types, timeout):
     deadline = time.monotonic() + timeout
     path = None
@@ -1091,6 +1170,7 @@ def run_fixture(binary, workspace, root):
     run_render_case(binary, root)
     run_queue_case(binary, root)
     run_tool_case(binary, root)
+    run_lifecycle_case(binary, root)
     print("tmux_terminal fixture: ok")
 
 

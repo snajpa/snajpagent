@@ -569,10 +569,6 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         snj_app_irc_snapshot(app, "compaction", error, error_size) < 0)
         goto out;
     started = false;
-    if (!active_prefix && strcmp(reason, "manual") == 0 &&
-        snj_render_host(&app->render,
-                        "compaction completed and installed for future turns") < 0)
-        goto out;
     if (compacted)
         *compacted = true;
     rc = 0;

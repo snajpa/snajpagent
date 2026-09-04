@@ -199,10 +199,17 @@ and higher levels progressively add runtime, durable, protocol, and transport
 detail. Ordinary mode uses the same single-`-v` tool visibility. Only terminal
 public assistant speech is sent to IRC.
 
+Committed compaction and goal set/clear milestones are terse bullet-prefixed
+semantic rollout records even at verbosity 0. Networked chat queues them for
+exact-once rollout catch-up; ordinary rollout displays them immediately.
+Durable-event verbosity may add event identity without changing the baseline
+wording.
+
 One semantic 16-color foreground palette serves networked and ordinary modes.
 `auto` emits attributes only on terminals and honors `NO_COLOR`; `always` and
 `never` are explicit overrides. Escape sequences are presentation-only and
-never enter durable events, model input, or IRC frames.
+never enter durable events, model input, or IRC frames. Successfully installed
+lifecycle milestones use a dedicated bold-green role.
 
 The public-item renderer incrementally recognizes a bounded Markdown subset
 across provider and UTF-8 delta boundaries. It shares the existing wrapping,

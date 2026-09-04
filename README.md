@@ -283,6 +283,12 @@ verbosity 0. `/chat` and `/rollout` select either view, and empty Tab toggles
 between them without changing where operator input is sent. A nonempty draft
 never switches views.
 
+Rollout also shows terse durable lifecycle milestones at verbosity 0:
+`• Compacted`, `• Goal set`, and `• Goal cleared`. Goal creation/rewording maps
+to “set,” while completion/cancellation maps to “cleared.” In chat view these
+records wait for exact-once rollout catch-up and never enter IRC. Verbosity 4
+may append the durable sequence/type to the same line.
+
 The interface remains a scrolling, append-only IRC client rather than a
 windowed TUI. Switching appends a short view boundary and then prints unseen
 content for the entered view once, in order, before continuing live output;
@@ -321,7 +327,9 @@ terminal output and honors `NO_COLOR`. Color applies to networked and ordinary
 UI roles, uses broadly supported 16-color foreground attributes, and never
 enters stored text, provider input, or IRC traffic. Compact tool-start lines
 color the arrow and tool name, while an `exec` command itself remains in the
-default foreground like its output. At `-v` in either mode, the first `exec`
+default foreground like its output. Lifecycle milestone bullet lines use a
+dedicated bold-green role and reset before subsequent output. At `-v` in either
+mode, the first `exec`
 line shows its effective `timeout=none` or `timeout=Nms` before the command.
 
 Markdown presentation is enabled by default. `--no-markdown` disables it and

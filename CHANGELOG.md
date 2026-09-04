@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Added bullet-prefixed rollout lifecycle milestones at baseline verbosity:
+  `Compacted`, `Goal set`, and `Goal cleared`, with exact-once view catch-up,
+  durable detail only at higher verbosity, and a dedicated semantic color.
+
 - Put the exit resume command on the line immediately below a standalone
   `resume:` label. Both lines now begin at column zero for direct line
   selection and copying.

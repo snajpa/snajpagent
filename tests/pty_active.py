@@ -23,6 +23,9 @@ PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
 DEFAULT_IDLE_PROMPT = f"{DEFAULT_MODEL}/medium › ".encode()
 DEFAULT_ACTIVE_PROMPT = f"{DEFAULT_MODEL}/medium » ".encode()
+GOAL_SET = "• Goal set".encode()
+GOAL_CLEARED = "• Goal cleared".encode()
+COMPACTED = "• Compacted".encode()
 
 
 class Child:
@@ -794,9 +797,10 @@ def test_model_created_goal_continuation():
     child = Child([])
     child.wait(PROMPT)
     child.send(b"please create a persistent goal\r")
-    started_end = child.wait(b"goal started by model")
+    started_end = child.wait(GOAL_SET)
     checkpoint_end = child.wait(b"model-created checkpoint", start=started_end)
-    answer_end = child.wait(b"goal done", start=checkpoint_end)
+    cleared_end = child.wait(GOAL_CLEARED, start=checkpoint_end)
+    answer_end = child.wait(b"goal done", start=cleared_end)
     child.exit_cleanly(answer_end)
 
     log = events(new_session(before))
@@ -835,8 +839,10 @@ def test_goal_model_rewrite_and_lock():
     child = Child([])
     child.wait(PROMPT)
     child.send(b"/goal rewrite goal\r")
-    child.wait(b"goal wording updated by model")
-    answer_end = child.wait(b"goal done")
+    set_end = child.wait(GOAL_SET)
+    rewritten_end = child.wait(GOAL_SET, start=set_end)
+    cleared_end = child.wait(GOAL_CLEARED, start=rewritten_end)
+    answer_end = child.wait(b"goal done", start=cleared_end)
     child.exit_cleanly(answer_end)
     log = events(new_session(before))
     reworded = one(log, "goal_reworded")
@@ -905,20 +911,25 @@ def test_goal_user_terminal_commands_and_unlock():
     child = Child([])
     child.wait(PROMPT)
     child.send(b"/goal slow goal\r")
-    child.wait(b"working on goal")
+    set_end = child.wait(GOAL_SET)
+    child.wait(b"working on goal", start=set_end)
+    child.send(b"/goal set retitled goal\r")
+    reworded_end = child.wait(GOAL_SET, start=set_end)
     child.send(b"/goal lock\r")
-    child.wait(b"goal wording locked against model changes")
+    child.wait(b"goal wording locked against model changes",
+               start=reworded_end)
     child.send(b"/goal unlock\r")
     child.wait(b"goal wording unlocked for model changes")
     child.send(b"/goal complete\r")
-    complete_end = child.wait(b"goal completed by user")
+    complete_end = child.wait(GOAL_CLEARED, start=reworded_end)
     checkpoint_end = child.wait(b"goal checkpoint", start=complete_end)
     child.wait(PROMPT, start=checkpoint_end)
 
     child.send(b"/goal slow goal\r")
-    child.wait(b"working on goal", start=checkpoint_end)
+    set_end = child.wait(GOAL_SET, start=checkpoint_end)
+    child.wait(b"working on goal", start=set_end)
     child.send(b"/goal cancel\r")
-    cancel_end = child.wait(b"goal cancelled", start=checkpoint_end)
+    cancel_end = child.wait(GOAL_CLEARED, start=set_end)
     checkpoint_end = child.wait(b"goal checkpoint", start=cancel_end)
     child.exit_cleanly(checkpoint_end)
 
@@ -926,6 +937,7 @@ def test_goal_user_terminal_commands_and_unlock():
     completed = one(log, "goal_completed")
     assert completed["data"]["actor"] == "user"
     one(log, "goal_cancelled")
+    assert one(log, "goal_reworded")["data"]["prompt"] == "retitled goal"
     locks = [item["data"]["locked"] for item in log
              if item["type"] == "goal_lock_changed"]
     assert locks == [True, False]
@@ -1851,12 +1863,18 @@ def test_network_chat_and_managed_mention():
         child.send(b"/chat\r")
         child.wait("── chat ──".encode(), start=managed_view)
 
+        compact_start = len(child.buf)
         child.send(b"/compact\r")
-        compact_end = child.wait(
-            b"compaction completed and installed for future turns",
-            start=verbose_end,
-        )
+        compact_prompt = child.wait(PROMPT, start=compact_start)
+        child.drain()
+        assert COMPACTED not in child.buf[compact_start:]
+        child.send(b"/rollout\r")
+        compact_end = child.wait(COMPACTED, start=compact_prompt)
         child.wait(PROMPT, start=compact_end)
+        child.send(b"/chat\r")
+        chat_end = child.wait("── chat ──".encode(), start=compact_end)
+        assert child.buf[compact_prompt:chat_end].count(COMPACTED) == 1
+        child.wait(PROMPT, start=chat_end)
         wire_start = len(human.buf)
         child.send(b"network_one\r")
         human.wait(b"PRIVMSG #lab :network one reply\r\n", start=wire_start)
