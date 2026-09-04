@@ -8,6 +8,9 @@
 
 #define SNJ_CONFIG_MODEL_MAX 256u
 #define SNJ_CONFIG_EFFORT_MAX 64u
+#define SNJ_CONFIG_PROMPT_MAX 1024u
+#define SNJ_CONFIG_SPINNER_MAX 69u
+#define SNJ_CONFIG_SPINNER_FRAMES_MAX 16u
 #define SNJ_CONFIG_PATH_MAX (16u * 1024u)
 #define SNJ_CONFIG_FILE_MAX (64u * 1024u)
 #define SNJ_CONFIG_URL_MAX 2048u
@@ -75,6 +78,11 @@ struct snj_config {
     bool markdown;
     unsigned int resume_history_turns;
     uint32_t typing_pause_ms;
+    char prompt[SNJ_CONFIG_PROMPT_MAX + 1u];
+    char prompt_spinner_goal[SNJ_CONFIG_SPINNER_MAX];
+    char prompt_spinner_provider[SNJ_CONFIG_SPINNER_MAX];
+    char prompt_spinner_tool[SNJ_CONFIG_SPINNER_MAX];
+    uint32_t prompt_spinner_per_second;
     bool irc_listen_explicit;
     char irc_listen[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char irc_clients[SNJ_CONFIG_IRC_CLIENT_MAX]

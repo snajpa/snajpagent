@@ -73,6 +73,7 @@ struct app_state {
     bool input_closed;
     bool execute;
     bool networked;
+    bool tool_active;
     bool irc_urgent_local_operator;
     bool irc_turn_local_operator;
     bool irc_turn_replied;
@@ -80,8 +81,6 @@ struct app_state {
     uint64_t irc_background_since_ms;
     char queue_edit_id[SNJ_ID_HEX_LEN + 1u];
     size_t queue_edit_number;
-    uint64_t active_since_ms;
-    bool activity_shown;
     char capacity_cache_error[256];
 };
 

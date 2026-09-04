@@ -2399,30 +2399,6 @@ snj_render_warning_ctx(struct snj_render *render, const char *message)
 }
 
 int
-snj_render_activity(struct snj_render *render, const char *message)
-{
-    size_t len = message ? strlen(message) : 0u;
-
-    if (len >= sizeof(render->activity)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    if (message)
-        memcpy(render->activity, message, len + 1u);
-    else
-        render->activity[0] = '\0';
-    if (!render->term)
-        return 0;
-    if (!message || (render->networked && render->view == SNJ_RENDER_CHAT)) {
-        snj_term_clear_status(render->term);
-        return 0;
-    }
-    if (snj_render_before_prompt(render) < 0)
-        return -1;
-    return snj_term_set_status(render->term, message);
-}
-
-int
 snj_render_host(struct snj_render *render, const char *text)
 {
     size_t len = strlen(text);
@@ -2800,15 +2776,11 @@ snj_render_set_view(struct snj_render *render, enum snj_render_view view)
         open->physical_open = false;
     }
     render->view = view;
-    if (render->term)
-        snj_term_clear_status(render->term);
     if (write_role_block(render, STDERR_FILENO, COLOR_HOST, boundaries[view],
                          strlen(boundaries[view]), strlen(boundaries[view]),
                          render->stderr_terminal, true) < 0 ||
         flush_view(render, view) < 0)
         return -1;
-    if (view == SNJ_RENDER_ROLLOUT && render->activity[0] && render->term)
-        return snj_term_set_status(render->term, render->activity);
     return 0;
 }
 

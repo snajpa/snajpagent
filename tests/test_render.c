@@ -259,7 +259,7 @@ capture_markdown_width(const char *text, bool enabled, bool split,
 
 static size_t
 capture_prompt_boundary(const char *text, bool markdown,
-                        bool activity, char *out, size_t out_size)
+                        char *out, size_t out_size)
 {
     struct snj_render render;
     struct snj_term term;
@@ -287,8 +287,6 @@ capture_prompt_boundary(const char *text, bool markdown,
     assert(snj_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snj_render_public(&render, text, strlen(text), NULL) == 0);
     assert(snj_render_public_end(&render) == 0);
-    if (activity)
-        assert(snj_render_activity(&render, "working…") == 0);
     assert(snj_render_before_prompt(&render) == 0);
     assert(snj_render_before_prompt(&render) == 0);
     assert(snj_render_prompt(&render, "model/low › ") == 0);
@@ -332,17 +330,13 @@ test_model_prompt_boundaries(void)
 
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         for (size_t j = 0u; j < sizeof(suffixes) / sizeof(suffixes[0]); ++j) {
-            for (size_t activity = 0u; activity < 2u; ++activity) {
-                assert(snprintf(source, sizeof(source), "%s%s",
-                                cases[i].source, suffixes[j]) > 0);
-                assert(snprintf(expected, sizeof(expected),
-                                "%s\n\nmodel/low › ",
-                                cases[i].rendered) > 0);
-                assert(capture_prompt_boundary(source, cases[i].markdown,
-                                               activity != 0u, output,
-                                               sizeof(output)) > 0u);
-                assert(strcmp(output, expected) == 0);
-            }
+            assert(snprintf(source, sizeof(source), "%s%s",
+                            cases[i].source, suffixes[j]) > 0);
+            assert(snprintf(expected, sizeof(expected),
+                            "%s\n\nmodel/low › ", cases[i].rendered) > 0);
+            assert(capture_prompt_boundary(source, cases[i].markdown, output,
+                                           sizeof(output)) > 0u);
+            assert(strcmp(output, expected) == 0);
         }
     }
 }

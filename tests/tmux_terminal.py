@@ -39,9 +39,9 @@ MARKDOWN_TEXT = (
     "second paragraph\n\n"
     "> final quoted boundary"
 )
-DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium 0% ›"
-DEFAULT_ACCOUNTED_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium ?% ›"
-DEFAULT_ACTIVE_PROMPT = "gpt-5.5-2026-04-23/medium ?% »"
+DEFAULT_IDLE_PROMPT = "default/gpt-5.5-2026-04-23/medium 0%   ›"
+DEFAULT_ACCOUNTED_IDLE_PROMPT = "default/gpt-5.5-2026-04-23/medium ?%   ›"
+DEFAULT_ACTIVE_PROMPT = "default/gpt-5.5-2026-04-23/medium ?% ◴ »"
 MACHINE_HOSTNAME = socket.gethostname()
 EMPTY_OUTPUT_CORRECTION = (
     "You tried to send an empty assistant message. "
@@ -669,14 +669,15 @@ def run_status_case(binary, root):
     try:
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("terminal_status")
-        terminal.wait("working…", timeout=3.0)
+        terminal.wait(DEFAULT_ACTIVE_PROMPT, timeout=3.0,
+                      join_wrapped=True)
         terminal.wait("status-first-fragment", timeout=3.0)
         time.sleep(0.85)
         middle = terminal.capture(join_wrapped=True)
         if "status-first-fragment" not in middle:
-            raise AssertionError(f"activity redraw erased streamed text:\n{middle}")
+            raise AssertionError(f"prompt redraw erased streamed text:\n{middle}")
         if "working…" in middle:
-            raise AssertionError(f"activity status interrupted a public item:\n{middle}")
+            raise AssertionError(f"removed activity row reappeared:\n{middle}")
         final = terminal.wait("status-second-\n  fragment", timeout=3.0,
                               join_wrapped=True)
         assert_order(final, ["status-first-fragment", "status-second-",
@@ -753,15 +754,9 @@ def run_paced_decode_case(binary, root):
                 "activity interrupted the provider's post-delta pause"
             )
 
-        activity = terminal.wait("working…", timeout=3.0, join_wrapped=True)
+        terminal.wait("paced complete", timeout=3.0, join_wrapped=True)
         if time.monotonic() - final_at < 0.8:
-            raise AssertionError(
-                "activity did not follow the fixture's post-delta pause"
-            )
-        if not re.search(r"finalword[ \t]*\n\nworking…", activity):
-            raise AssertionError(
-                f"activity did not follow the model block's empty row:\n{activity}"
-            )
+            raise AssertionError("the fixture's post-delta pause was lost")
 
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 6.0)
         completed = event_list(events, "response_completed")
@@ -1169,7 +1164,7 @@ def run_queue_case(binary, root):
         terminal.submit("/queue 1 delete")
         wait_event_count(dotdir, "future_turn_cancelled", 3)
         terminal.submit("/q 1e")
-        terminal.wait("edit 1 ?% › second")
+        terminal.wait("edit 1 ?% ◴ › second")
         terminal.send_text(" active")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 1)
@@ -1184,7 +1179,7 @@ def run_queue_case(binary, root):
         terminal.wait("turn interrupted")
         terminal.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
         terminal.submit("/queue 1 edit")
-        terminal.wait("edit 1 ?% › second active")
+        terminal.wait("edit 1 ?%   › second active")
         terminal.send_text(" idle")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 2)
@@ -1200,9 +1195,9 @@ def run_queue_case(binary, root):
                 "next › second",
                 "next › third",
                 "next › fourth",
-                "edit 1 ?% › second active",
+                "edit 1 ?% ◴ › second active",
                 "next › fifth",
-                "edit 1 ?% › second active idle",
+                "edit 1 ?%   › second active idle",
                 "future-turn queue is empty",
             ],
         )
@@ -1451,7 +1446,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         100, 24, environment=environment,
     )
     try:
-        terminal.wait("uncached-start/low 0% ›")
+        terminal.wait("ordinary/uncached-start/low 0%   ›")
         before = provider.catalog_paths()
         terminal.submit("/model cache")
         screen = terminal.wait("4. codex / codex-late / ultra",
@@ -1524,8 +1519,8 @@ def run_model_catalog_case(binary, root, provider, environment):
 
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
-    expected = (f"{operator}@{MACHINE_HOSTNAME} ›" if operator else
-                "uncached-start/low 0% ›")
+    expected = (f"{operator}@{MACHINE_HOSTNAME}   :" if operator else
+                "ordinary/uncached-start/low 0%   ›")
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture()
@@ -1733,7 +1728,7 @@ def run_irc_case(binary, root):
                 100, 24, args=args, environment=environment,
             )
             terminals[name] = terminal
-            terminal.wait(f"{operator}@{MACHINE_HOSTNAME} ›")
+            terminal.wait(f"{operator}@{MACHINE_HOSTNAME}   :")
 
         ordered = [terminals[name] for name in ("host", "one", "two")]
         terminals["host"].wait("@twoop  joined")

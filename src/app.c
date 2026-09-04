@@ -121,6 +121,18 @@ app_warning(struct app_state *app, const char *message)
 {
     return snj_render_warning_ctx(&app->render, message);
 }
+static void
+history_warning(struct app_state *app)
+{
+    if (snj_term_take_history_warning(&app->term))
+        (void)app_warning(app, "prompt history is unavailable or contained damaged records");
+}
+static void
+remember_input(struct app_state *app, const char *text)
+{
+    (void)snj_term_history_add(&app->term, text);
+    history_warning(app);
+}
 static int
 app_hostf(struct app_state *app, const char *fmt, ...)
 {
@@ -436,8 +448,6 @@ format_context_meter(struct app_state *app, bool active,
     unsigned int percent;
     int n;
 
-    if (snj_render_view(&app->render) != SNJ_RENDER_ROLLOUT)
-        return 0;
     if (!provider || !model || !effort) {
         errno = EINVAL;
         return -1;
@@ -459,11 +469,11 @@ format_context_meter(struct app_state *app, bool active,
                provider_source_hash) != 0 ||
         strcmp(app->session.context_meter_compact_id,
                app->session.compact_id) != 0) {
-        memcpy(meter, " 0%", sizeof(" 0%"));
+        memcpy(meter, "0%", sizeof("0%"));
         return 0;
     }
     if (!capacity->hard_input_known) {
-        memcpy(meter, " ?%", sizeof(" ?%"));
+        memcpy(meter, "?%", sizeof("?%"));
         return 0;
     }
     used = app->session.context_meter_input_tokens;
@@ -473,7 +483,7 @@ format_context_meter(struct app_state *app, bool active,
     } else {
         percent = (unsigned int)((used * 100u + hard - 1u) / hard);
     }
-    n = snprintf(meter, 32u, " %u%%", percent);
+    n = snprintf(meter, 32u, "%u%%", percent);
     if (n < 0 || n >= 32) {
         errno = EOVERFLOW;
         return -1;
@@ -482,62 +492,160 @@ format_context_meter(struct app_state *app, bool active,
 }
 
 static int
+append_prompt_body(struct snj_buf *out, const char *body, size_t len,
+                   const char *const values[7])
+{
+    static const char *const names[] = {"provider", "model", "effort",
+        "operator", "host", "context", "mode", "goal_spinner",
+        "provider_spinner", "tool_spinner"};
+
+    for (size_t i = 0u; i < len; ++i) {
+        if (body[i] == '\\') {
+            if (++i >= len || snj_buf_putc(out, (unsigned char)body[i]) < 0)
+                return -1;
+        } else if (body[i] == '{') {
+            const char *end = memchr(body + i + 1u, '}', len - i - 1u);
+            size_t field_len, field = 0u;
+
+            if (!end)
+                return -1;
+            field_len = (size_t)(end - body - i - 1u);
+            while (field < sizeof(names) / sizeof(names[0]) &&
+                   (strlen(names[field]) != field_len ||
+                    memcmp(names[field], body + i + 1u, field_len) != 0))
+                ++field;
+            if (field == sizeof(names) / sizeof(names[0]) ||
+                (field < 7u && snj_buf_append(out, values[field],
+                                              strlen(values[field])) < 0) ||
+                (field >= 7u && snj_buf_putc(out, (unsigned char)
+                    (SNJ_TERM_SPINNER_MARKER_BASE + field - 7u)) < 0))
+                return -1;
+            i = (size_t)(end - body);
+        } else if (snj_buf_putc(out, (unsigned char)body[i]) < 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static const char *
+prompt_case_end(const char *body)
+{
+    unsigned int depth = 1u;
+
+    for (const char *p = body; *p; ++p) {
+        if (*p == '\\' && p[1]) ++p;
+        else if (*p == '{') ++depth;
+        else if (*p == '}' && !--depth) return p;
+    }
+    return NULL;
+}
+
+static int
 format_input_label(struct app_state *app, bool active,
                    char label[SNJ_TERM_LABEL_BYTES])
 {
-    char hostname[256u];
-    char meter[32u] = {0};
-    const char *model;
-    const char *effort;
-    int n;
+    static const char *const cases[] = {"chat:", "rollout-idle:",
+                                        "rollout-active:"};
+    const struct snj_provider_config *provider = active ? app->turn_provider :
+                                                        next_provider(app);
+    const char *model = active ? app->turn_model : next_model(app);
+    const char *effort = active ? app->turn_effort :
+                                  resolve_effort(next_effort(app));
+    char hostname[256u], meter[32u];
+    const char *values[7];
+    unsigned int selected = snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
+                            0u : active ? 2u : 1u;
+    struct snj_buf out;
 
-    if (format_context_meter(app, active, meter) < 0)
+    if (!provider || !model || !effort ||
+        format_context_meter(app, active, meter) < 0)
         return -1;
+    if (gethostname(hostname, sizeof(hostname)) < 0)
+        memcpy(hostname, "localhost", sizeof("localhost"));
+    hostname[sizeof(hostname) - 1u] = '\0';
+    if (!snj_utf8_valid((const unsigned char *)hostname, strlen(hostname), true))
+        memcpy(hostname, "localhost", sizeof("localhost"));
+    for (size_t i = 0u; hostname[i]; ++i)
+        if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
+            hostname[i] = '_';
+    values[0] = provider->name;
+    values[1] = model;
+    values[2] = effort;
+    values[3] = app->networked ? snj_irc_operator_nick(app->irc) : "";
+    values[4] = hostname;
+    values[5] = meter;
+    values[6] = selected == 0u ? "chat" :
+                selected == 1u ? "rollout-idle" : "rollout-active";
+    snj_buf_init(&out, SNJ_TERM_LABEL_BYTES - 1u);
     if (app->queue_edit_id[0]) {
-        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "edit %zu%s › ",
-                     app->queue_edit_number, meter);
-    } else if (app->networked) {
-        if (gethostname(hostname, sizeof(hostname)) < 0)
-            memcpy(hostname, "localhost", 10u);
-        hostname[sizeof(hostname) - 1u] = '\0';
-        if (!snj_utf8_valid((const unsigned char *)hostname,
-                            strlen(hostname), true))
-            memcpy(hostname, "localhost", 10u);
-        for (size_t i = 0u; hostname[i]; ++i) {
-            unsigned char c = (unsigned char)hostname[i];
-            if (c <= 0x20u || c == 0x7fu)
-                hostname[i] = '_';
+        if (snj_buf_printf(&out, "edit %zu %s", app->queue_edit_number, meter) < 0)
+            goto fail;
+        for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
+            if (snj_buf_putc(&out, SNJ_TERM_SPINNER_MARKER_BASE + i) < 0)
+                goto fail;
+        if (snj_buf_append(&out, "›", strlen("›")) < 0)
+            goto fail;
+    } else for (const char *p = app->config->prompt; *p;) {
+        if (*p == '\\') {
+            if (!p[1] || snj_buf_putc(&out, (unsigned char)p[1]) < 0)
+                goto fail;
+            p += 2u;
+        } else if (*p == '{') {
+            unsigned int mode = 0u;
+            const char *body, *end;
+
+            while (mode < 3u && strncmp(p + 1u, cases[mode],
+                                        strlen(cases[mode])) != 0)
+                ++mode;
+            if (mode == 3u)
+                goto fail;
+            body = p + 1u + strlen(cases[mode]);
+            end = prompt_case_end(body);
+            if (!end || (mode == selected &&
+                append_prompt_body(&out, body, (size_t)(end - body), values) < 0))
+                goto fail;
+            p = end + 1u;
+        } else if (snj_buf_putc(&out, (unsigned char)*p++) < 0) {
+            goto fail;
         }
-        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "%s@%s%s %s ",
-                     snj_irc_operator_nick(app->irc), hostname, meter,
-                     active ? "»" : "›");
-    } else {
-        model = active ? app->turn_model : next_model(app);
-        effort = active ? app->turn_effort : resolve_effort(next_effort(app));
-        if (!effort) {
-            errno = EINVAL;
-            return -1;
-        }
-        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "%s/%s%s %s ",
-                     model, effort, meter,
-                     active ? "»" : "›");
     }
-    if (n < 0 || (size_t)n >= SNJ_TERM_LABEL_BYTES) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (!out.len || snj_buf_putc(&out, ' ') < 0 || snj_buf_terminate(&out) < 0)
+        goto fail;
+    memcpy(label, out.data, out.len + 1u);
+    snj_buf_free(&out);
     return 0;
+fail:
+    snj_buf_free(&out);
+    return -1;
+}
+
+static unsigned int
+prompt_spinner_states(const struct app_state *app, bool active)
+{
+    return (app->session.goal_status == SNJ_GOAL_ACTIVE ?
+            1u << SNJ_TERM_SPINNER_GOAL : 0u) |
+           (active && !app->tool_active ?
+            1u << SNJ_TERM_SPINNER_PROVIDER : 0u) |
+           (app->tool_active ? 1u << SNJ_TERM_SPINNER_TOOL : 0u);
 }
 
 static int
 set_input_prompt(struct app_state *app, bool active)
 {
     char label[SNJ_TERM_LABEL_BYTES];
+    const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
+        app->config->prompt_spinner_goal,
+        app->config->prompt_spinner_provider,
+        app->config->prompt_spinner_tool
+    };
+    unsigned int states = prompt_spinner_states(app, active);
 
     if (format_input_label(app, active, label) < 0 ||
         snj_render_before_prompt(&app->render) < 0)
         return -1;
-    return snj_term_set_prompt_label(&app->term, active, label);
+    return snj_term_set_prompt_template(&app->term, active, label, spinners,
+        app->config->prompt_spinner_per_second, states);
 }
 
 static int
@@ -610,7 +718,6 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
                   char *error, size_t error_size)
 {
     struct snj_queued_turn *queued;
-    char label[SNJ_TERM_LABEL_BYTES];
     size_t len = strlen(text);
     bool restore_armed = app->queue_edit_was_armed;
     int rc = 0;
@@ -642,12 +749,11 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
             (void)snj_term_restore_draft(&app->term, text);
         return -1;
     }
-    if (format_input_label(app, active, label) < 0 ||
-        snj_render_submitted(&app->render, label, text) < 0) {
+    if (snj_render_submitted(&app->render,
+            snj_term_prompt_label(&app->term), text) < 0) {
         set_error(error, error_size, "edited turn acknowledgement could not be rendered");
         return -1;
     }
-    (void)snj_term_history_add(&app->term, text);
 clear:
     app->queue_edit_id[0] = '\0';
     app->queue_edit_number = 0u;
@@ -993,10 +1099,10 @@ render_help(struct app_state *app)
 {
     static const char ordinary_keys[] =
         "Enter submit/add to active turn · Empty Tab no-op · "
-        "Tab complete/indent/queue · Ctrl-C clear/interrupt · 5× Ctrl-C exit · Ctrl-J newline";
+        "Tab complete/indent/queue · Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
     static const char network_keys[] =
         "Enter submit/add to active turn · Empty Tab switch view · "
-        "Tab complete/indent/queue · Ctrl-C clear/interrupt · 5× Ctrl-C exit · Ctrl-J newline";
+        "Tab complete/indent/queue · Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
     const char *keys = app->networked ? network_keys : ordinary_keys;
     struct snj_buf text;
     int rc = -1;
@@ -1898,6 +2004,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     if (app->execute || app->input_closed)
         return 0;
     rc = snj_term_poll(&app->term, (int)timeout_ms, &action, &line);
+    history_warning(app);
     if (rc < 0) {
         if (capture_shutdown_signal(app)) {
             app->interrupt_requested = true;
@@ -1911,7 +2018,6 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         return 0;
     }
     if (rc == 0) {
-        uint64_t now = snj_time_ms();
         if (app->networked) {
             error[0] = '\0';
             if (tick_irc(app, error, sizeof(error)) < 0) {
@@ -1920,28 +2026,26 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 return -1;
             }
         }
-        if (!snj_term_typing_active(&app->term) &&
-            !app->stream_item_active &&
-            !app->activity_shown && now >= app->active_since_ms &&
-            now - app->active_since_ms >= 750u) {
-            if (snj_render_activity(&app->render, "working…") < 0)
-                return -1;
-            app->activity_shown = true;
-        }
         return 0;
     }
-    if (action == SNJ_TERM_FORCE_EXIT) {
-        app->input_closed = true;
-        action = SNJ_TERM_INTERRUPT;
-    } else if (action == SNJ_TERM_EXIT) {
+    if (action == SNJ_TERM_EXIT) {
         app->input_closed = true;
         free(line);
         return 0;
     }
+    if (action == SNJ_TERM_CANCEL) {
+        if (app->queue_edit_id[0]) {
+            app->queue_armed = app->queue_edit_was_armed;
+            app->queue_edit_id[0] = '\0';
+            app->queue_edit_number = 0u;
+            app->queue_edit_was_armed = false;
+            if (set_input_prompt(app, true) < 0)
+                return -1;
+        }
+        return 0;
+    }
     if (action == SNJ_TERM_INTERRUPT) {
         app->interrupt_requested = true;
-        if (snj_render_activity(&app->render, "interrupting…") < 0)
-            return -1;
         free(line);
         return 2;
     }
@@ -1955,6 +2059,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (!line)
         return 0;
+    remember_input(app, line);
     error[0] = '\0';
     if (app->queue_edit_id[0]) {
         rc = finish_queue_edit(app, line, true, error, sizeof(error));
@@ -1967,10 +2072,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
             if (set_input_prompt(app, true) < 0 ||
                 snj_term_restore_draft(&app->term, line) < 0)
                 rc = -1;
-        } else {
-            (void)snj_term_history_add(&app->term, line);
-            rc = set_input_prompt(app, true);
-        }
+        } else rc = set_input_prompt(app, true);
     } else {
         bool single_line = strchr(line, '\n') == NULL;
         bool handled = false;
@@ -1997,7 +2099,6 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         } else {
             const char *text = line[0] == '/' && line[1] == '/' ? line + 1 : line;
             char steering_id[SNJ_ID_HEX_LEN + 1u];
-            char label[SNJ_TERM_LABEL_BYTES];
             size_t len = strlen(text);
             if (!len || len > SNJ_MAX_STEERING_TEXT) {
                 (void)snj_render_error_ctx(&app->render,
@@ -2012,10 +2113,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                         error[0] ? error : "IRC message could not be queued");
                     if (set_input_prompt(app, true) == 0)
                         (void)snj_term_restore_draft(&app->term, line);
-                } else {
-                    (void)snj_term_history_add(&app->term, line);
-                    rc = set_input_prompt(app, true);
-                }
+                } else rc = set_input_prompt(app, true);
             } else if (snj_random_id(steering_id) < 0) {
                 rc = -1;
             } else {
@@ -2023,9 +2121,8 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                         snj_app_steering_added_data(app->session.active_turn_id,
                                             steering_id, text),
                         error, sizeof(error));
-                if (rc == 0 &&
-                    (format_input_label(app, true, label) < 0 ||
-                     snj_render_input_submitted(&app->render, label, text) < 0))
+                if (rc == 0 && snj_render_input_submitted(&app->render,
+                        snj_term_prompt_label(&app->term), text) < 0)
                     rc = -1;
                 if (rc < 0) {
                     (void)snj_render_error_ctx(&app->render, error[0] ? error :
@@ -2033,7 +2130,6 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                     if (set_input_prompt(app, true) == 0)
                         (void)snj_term_restore_draft(&app->term, line);
                 } else {
-                    (void)snj_term_history_add(&app->term, line);
                     app->steering_requested = true;
                     rc = set_input_prompt(app, true);
                 }
@@ -2246,8 +2342,27 @@ execute_calls(struct app_state *app, const char *turn_id,
         }
         tool_error[0] = '\0';
         {
-            int run_rc = snj_app_tool_run(app, call, credential, &result, tool_error,
-                                  sizeof(tool_error));
+            int run_rc;
+
+            app->tool_active = true;
+            if (snj_term_set_spinner_states(&app->term,
+                    prompt_spinner_states(app, true)) < 0) {
+                app->tool_active = false;
+                set_error(error, error_size,
+                          "tool status could not be displayed");
+                return -1;
+            }
+            run_rc = snj_app_tool_run(app, call, credential, &result, tool_error,
+                                      sizeof(tool_error));
+            app->tool_active = false;
+            if (snj_term_set_spinner_states(&app->term,
+                    prompt_spinner_states(app, true)) < 0) {
+                if (result)
+                    json_decref(result);
+                set_error(error, error_size,
+                          "provider status could not be restored");
+                return -1;
+            }
             if (run_rc == 2) {
                 if (!result)
                     result = snj_tool_result_not_run("turn_cancelled");
@@ -2736,9 +2851,6 @@ run_turn(struct app_state *app, const char *prompt,
         app->stream_graph = &graph;
         snj_app_reset_stream(app);
         response_begin_ms = snj_time_ms();
-        app->active_since_ms = response_begin_ms;
-        app->activity_shown = false;
-        (void)snj_render_activity(&app->render, NULL);
         error[0] = '\0';
         provider_rc = snj_app_provider_run(app, turn_prompt, steering, cycle,
                                    create_request, &credential, &graph,
@@ -3276,7 +3388,6 @@ run_turn(struct app_state *app, const char *prompt,
 out:
     app->stream_graph = NULL;
     snj_app_clear_partial_public(app);
-    (void)snj_render_activity(&app->render, NULL);
     if (!app->execute && result != 6 &&
         set_input_prompt(app, false) < 0)
         result = 6;
@@ -3711,6 +3822,7 @@ interactive_loop(struct app_state *app, const char *initial)
             int poll_rc = snj_term_poll(&app->term,
                                         app->networked ? 25 : -1,
                                         &action, &owned);
+            history_warning(app);
             if (poll_rc < 0) {
                 if (capture_shutdown_signal(app)) {
                     free(owned);
@@ -3734,9 +3846,20 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             if (poll_rc == 0)
                 continue;
-            if (action == SNJ_TERM_EXIT || action == SNJ_TERM_FORCE_EXIT) {
+            if (action == SNJ_TERM_EXIT) {
                 free(owned);
                 return 0;
+            }
+            if (action == SNJ_TERM_CANCEL) {
+                if (app->queue_edit_id[0]) {
+                    app->queue_armed = app->queue_edit_was_armed;
+                    app->queue_edit_id[0] = '\0';
+                    app->queue_edit_number = 0u;
+                    app->queue_edit_was_armed = false;
+                    if (set_input_prompt(app, false) < 0)
+                        return 6;
+                }
+                continue;
             }
             if (action == SNJ_TERM_VIEW) {
                 if (app->queue_edit_id[0])
@@ -3754,6 +3877,8 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             prompt = owned;
         }
+        if (owned)
+            remember_input(app, prompt);
         if (app->queue_edit_id[0]) {
             char edit_error[256] = {0};
             int edit_rc = finish_queue_edit(app, prompt, false,
@@ -3769,16 +3894,12 @@ interactive_loop(struct app_state *app, const char *initial)
             continue;
         }
         if (!app->networked) {
-            char label[SNJ_TERM_LABEL_BYTES];
-
-            if (format_input_label(app, false, label) < 0 ||
-                snj_render_input_submitted(&app->render, label, prompt) < 0) {
+            if (snj_render_input_submitted(&app->render,
+                    snj_term_prompt_label(&app->term), prompt) < 0) {
                 free(owned);
                 return 6;
             }
         }
-        if (snj_term_history_add(&app->term, prompt) < 0)
-            (void)app_warning(app, "submission was accepted but history retention failed");
         {
             bool single_line = strchr(prompt, '\n') == NULL;
             bool handled = false;
@@ -4098,8 +4219,8 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         goto out;
     }
     snj_render_attach_term(&app.render, &app.term);
-    if (app.session.last_user)
-        (void)snj_term_history_add(&app.term, app.session.last_user);
+    (void)snj_term_history_open(&app.term, dotdir);
+    history_warning(&app);
     if (snj_render_orientation(&app.render, &app.session, cli->resume) < 0 ||
         (cli->resume && config.resume_history_turns != 0u &&
          (!app.networked || app.render.verbosity >= 1u) &&

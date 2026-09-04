@@ -29,8 +29,8 @@ def read_until(needle: bytes, timeout: float = 5.0) -> None:
             raise SystemExit(f"unexpected EOF; got {bytes(buf)!r}")
         buf.extend(chunk)
 
-fresh_prompt = b"gpt-5.5-2026-04-23/medium 0% \xe2\x80\xba "
-accounted_prompt = b"gpt-5.5-2026-04-23/medium ?% \xe2\x80\xba "
+fresh_prompt = b"default/gpt-5.5-2026-04-23/medium 0%   \xe2\x80\xba "
+accounted_prompt = b"default/gpt-5.5-2026-04-23/medium ?%   \xe2\x80\xba "
 read_until(fresh_prompt)
 os.write(fd, b"ping\r")
 read_until(b"pong")
@@ -53,16 +53,29 @@ os.write(fd, b"slow\r")
 read_until(b"working slowly")
 os.write(fd, b"\x03")
 read_until(b"turn interrupted")
-for _ in range(3):
+interrupt_end = buf.find(b"turn interrupted") + len(b"turn interrupted")
+while accounted_prompt not in buf[interrupt_end:]:
+    ready, _, _ = select.select([fd], [], [], 5.0)
+    if not ready:
+        raise SystemExit(f"no post-interrupt prompt: {bytes(buf)!r}")
+    buf.extend(os.read(fd, 65536))
+cancel_start = len(buf)
+for count in range(1, 9):
     os.write(fd, b"\x03")
-    time.sleep(0.05)
-time.sleep(0.1)
+    end = time.monotonic() + 5.0
+    while bytes(buf[cancel_start:]).count(b"^C\r\n") < count:
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise SystemExit(f"missing Ctrl-C cancellations: {bytes(buf)!r}")
+        ready, _, _ = select.select([fd], [], [], remaining)
+        if ready:
+            buf.extend(os.read(fd, 65536))
 if os.waitpid(pid, os.WNOHANG) != (0, 0):
-    raise SystemExit(f"exited before fifth Ctrl-C: {bytes(buf)!r}")
-os.write(fd, b"\x03")
+    raise SystemExit(f"Ctrl-C exited the process: {bytes(buf)!r}")
+os.write(fd, b"/exit\r")
 read_until(b"You can resume this session")
 _, status = os.waitpid(pid, 0)
 if os.waitstatus_to_exitcode(status) != 0:
-    raise SystemExit(f"five-Ctrl-C exit status {status}: {bytes(buf)!r}")
+    raise SystemExit(f"explicit exit status {status}: {bytes(buf)!r}")
 if os.environ.get("TERM") == "dumb" and b"\x1b" in buf:
     raise SystemExit(f"TERM=dumb received ANSI: {bytes(buf)!r}")

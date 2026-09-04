@@ -88,7 +88,6 @@ struct snj_render {
     bool networked;
     enum snj_render_view view;
     char model_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
-    char activity[64];
     struct snj_term *term;
     struct snj_render_record *view_head[SNJ_RENDER_VIEW_COUNT];
     struct snj_render_record *view_tail[SNJ_RENDER_VIEW_COUNT];
@@ -140,7 +139,6 @@ int snj_render_error(const char *message);
 int snj_render_warning(const char *message);
 int snj_render_error_ctx(struct snj_render *render, const char *message);
 int snj_render_warning_ctx(struct snj_render *render, const char *message);
-int snj_render_activity(struct snj_render *render, const char *message);
 int snj_render_host(struct snj_render *render, const char *text);
 int snj_render_runtime(struct snj_render *render, const char *text);
 int snj_render_irc_event(struct snj_render *render,

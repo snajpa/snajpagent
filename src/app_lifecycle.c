@@ -104,7 +104,8 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
         snprintf(error, error_size, "delete confirmation input could not be read");
         return -1;
     }
-    if (action == SNJ_TERM_INTERRUPT || action == SNJ_TERM_EXIT || !line) {
+    if (action == SNJ_TERM_CANCEL || action == SNJ_TERM_INTERRUPT ||
+        action == SNJ_TERM_EXIT || !line) {
         free(line);
         snprintf(error, error_size, "delete cancelled");
         return 1;

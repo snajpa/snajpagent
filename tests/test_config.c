@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,6 +70,11 @@ main(void)
         "markdown = false\n"
         "resume_history_turns = 0\n"
         "typing_pause_ms = 750\n"
+        "prompt = pre{chat:{operator}{goal_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{provider_spinner}›}{rollout-active:{mode}{tool_spinner}»}\n"
+        "prompt_spinner_goal = \"\\0◆\"\n"
+        "prompt_spinner_provider = \" \\|/-\"\n"
+        "prompt_spinner_tool = \" \"\n"
+        "prompt_spinner_per_second = 60\n"
         "\n[irc]\n"
         "listen = 127.0.0.1:7667\n"
         "client = irc-a.example\n"
@@ -93,6 +99,7 @@ main(void)
     struct snj_config config;
     char *shell;
 
+    assert(setlocale(LC_CTYPE, "") != NULL);
     assert(mkdtemp(temp));
     assert(snprintf(dotdir, sizeof(dotdir), "%s/dotdir", temp) > 0);
     assert(mkdir(dotdir, 0700) == 0);
@@ -109,6 +116,11 @@ main(void)
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
+    assert(strstr(config.prompt, "{goal_spinner}") != NULL);
+    assert(strcmp(config.prompt_spinner_goal, " ◆") == 0);
+    assert(strcmp(config.prompt_spinner_provider, " ◴◷◶◵") == 0);
+    assert(strcmp(config.prompt_spinner_tool, " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") == 0);
+    assert(config.prompt_spinner_per_second == 8u);
     assert(!config.irc_listen_explicit);
     assert(strcmp(config.irc_listen, "localhost:6667") == 0);
     assert(config.irc_client_count == 0u);
@@ -193,6 +205,11 @@ main(void)
     assert(!config.markdown);
     assert(config.resume_history_turns == 0u);
     assert(config.typing_pause_ms == 750u);
+    assert(strncmp(config.prompt, "pre{chat:", 9u) == 0);
+    assert(strcmp(config.prompt_spinner_goal, "\\0◆") == 0);
+    assert(strcmp(config.prompt_spinner_provider, " \\|/-") == 0);
+    assert(strcmp(config.prompt_spinner_tool, " ") == 0);
+    assert(config.prompt_spinner_per_second == 60u);
     assert(config.irc_listen_explicit);
     assert(strcmp(config.irc_listen, "127.0.0.1:7667") == 0);
     assert(config.irc_client_count == 2u);

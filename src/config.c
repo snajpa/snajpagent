@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <wchar.h>
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -118,6 +119,22 @@ snj_config_init(struct snj_config *config)
     config->markdown = true;
     config->resume_history_turns = 2u;
     config->typing_pause_ms = 500u;
+    memcpy(config->prompt,
+        "{chat:{operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}"
+        "{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}"
+        "{provider_spinner}{tool_spinner}›}"
+        "{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}"
+        "{provider_spinner}{tool_spinner}»}",
+        sizeof("{chat:{operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}"
+        "{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}"
+        "{provider_spinner}{tool_spinner}›}"
+        "{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}"
+        "{provider_spinner}{tool_spinner}»}"));
+    memcpy(config->prompt_spinner_goal, " ◆", sizeof(" ◆"));
+    memcpy(config->prompt_spinner_provider, " ◴◷◶◵", sizeof(" ◴◷◶◵"));
+    memcpy(config->prompt_spinner_tool, " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
+           sizeof(" ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"));
+    config->prompt_spinner_per_second = 8u;
     memcpy(config->irc_listen, "localhost:6667", 15u);
     config->irc_history_lines = 200u;
     config->shell = snj_strdup_checked("/bin/sh", SNJ_CONFIG_PATH_MAX);
@@ -225,6 +242,168 @@ parse_token_count(const char *text, enum snj_token_count_mode *out)
     else
         *out = enabled ? SNJ_TOKEN_COUNT_STRICT : SNJ_TOKEN_COUNT_OFF;
     return 0;
+}
+
+static size_t
+utf8_char_len(const unsigned char *s, size_t len)
+{
+    size_t n = s[0] < 0x80u ? 1u : s[0] < 0xe0u ? 2u :
+               s[0] < 0xf0u ? 3u : 4u;
+    return n <= len && snj_utf8_valid(s, n, true) ? n : 0u;
+}
+
+static bool
+unsafe_prompt_cp(wchar_t cp)
+{
+    return cp == 0x00ad || cp == 0x061c || cp == 0x200b ||
+           cp == 0x200e || cp == 0x200f ||
+           (cp >= 0x202a && cp <= 0x202e) || cp == 0x2060 ||
+           (cp >= 0x2066 && cp <= 0x206f) || cp == 0xfeff ||
+           (cp >= 0xfff9 && cp <= 0xfffb);
+}
+
+static int
+parse_spinner(char dst[SNJ_CONFIG_SPINNER_MAX], const char *value)
+{
+    size_t len = strlen(value), pos, frames = 0u, previous = SIZE_MAX;
+
+    if (len < 3u || value[0] != '"' || value[len - 1u] != '"' ||
+        len - 2u >= SNJ_CONFIG_SPINNER_MAX ||
+        memchr(value + 1u, '"', len - 2u))
+        goto invalid;
+    --len;
+    pos = value[1] == '\\' && value[2] == '0' ? 3u : 1u;
+    if (pos == 1u) {
+        size_t n = utf8_char_len((const unsigned char *)value + 1u, len - 1u);
+        mbstate_t state = {0};
+        wchar_t cp;
+
+        if (!n || mbrtowc(&cp, value + 1u, n, &state) != n ||
+            wcwidth(cp) != 1 || unsafe_prompt_cp(cp))
+            goto invalid;
+        pos += n;
+    }
+    while (pos < len) {
+        size_t n = utf8_char_len((const unsigned char *)value + pos, len - pos);
+        mbstate_t state = {0};
+        wchar_t cp;
+
+        if (!n || ++frames > SNJ_CONFIG_SPINNER_FRAMES_MAX ||
+            mbrtowc(&cp, value + pos, n, &state) != n || wcwidth(cp) != 1 ||
+            unsafe_prompt_cp(cp) || (previous != SIZE_MAX &&
+            n == utf8_char_len((const unsigned char *)value + previous,
+                               len - previous) &&
+            memcmp(value + previous, value + pos, n) == 0))
+            goto invalid;
+        previous = pos;
+        pos += n;
+    }
+    memcpy(dst, value + 1u, len - 1u);
+    dst[len - 1u] = '\0';
+    return 0;
+invalid:
+    errno = EINVAL;
+    return -1;
+}
+
+static bool
+prompt_field(const char *text, size_t len, unsigned int *spinner)
+{
+    static const char *const fields[] = {
+        "provider", "model", "effort", "operator", "host", "context", "mode",
+        "goal_spinner", "provider_spinner", "tool_spinner"
+    };
+
+    for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i)
+        if (strlen(fields[i]) == len && memcmp(text, fields[i], len) == 0) {
+            *spinner = i < 7u ? 0u : 1u << (i - 7u);
+            return true;
+        }
+    return false;
+}
+
+static int
+validate_prompt_body(const char *text, size_t len)
+{
+    unsigned int spinners = 0u;
+
+    for (size_t i = 0u; i < len; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        unsigned int spinner;
+        const char *end;
+
+        if (c < 0x20u || c == 0x7fu)
+            goto invalid;
+        if (c == '\\') {
+            if (++i >= len || (text[i] != '\\' && text[i] != '{' &&
+                              text[i] != '}'))
+                goto invalid;
+        } else if (c == '{') {
+            end = memchr(text + i + 1u, '}', len - i - 1u);
+            if (!end || !prompt_field(text + i + 1u,
+                                      (size_t)(end - text - i - 1u),
+                                      &spinner) || (spinner & spinners))
+                goto invalid;
+            spinners |= spinner;
+            i = (size_t)(end - text);
+        } else if (c == '}') {
+            goto invalid;
+        }
+    }
+    return 0;
+invalid:
+    errno = EINVAL;
+    return -1;
+}
+
+static int
+validate_prompt(const char *text)
+{
+    static const char *const names[] = {"chat:", "rollout-idle:",
+                                        "rollout-active:"};
+    unsigned int seen = 0u;
+    size_t len = strlen(text);
+
+    for (size_t i = 0u; i < len; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        const char *body = NULL;
+        size_t name = 0u, depth = 1u, end;
+
+        if (c < 0x20u || c == 0x7fu)
+            goto invalid;
+        if (c == '\\') {
+            if (++i >= len || (text[i] != '\\' && text[i] != '{' &&
+                              text[i] != '}'))
+                goto invalid;
+            continue;
+        }
+        if (c == '}')
+            goto invalid;
+        if (c != '{')
+            continue;
+        for (; name < 3u; ++name)
+            if (strncmp(text + i + 1u, names[name], strlen(names[name])) == 0) {
+                body = text + i + 1u + strlen(names[name]);
+                break;
+            }
+        if (!body || (seen & (1u << name)))
+            goto invalid;
+        for (end = (size_t)(body - text); end < len && depth; ++end) {
+            if (text[end] == '\\') ++end;
+            else if (text[end] == '{') ++depth;
+            else if (text[end] == '}') --depth;
+        }
+        if (depth || end - 1u == (size_t)(body - text) ||
+            validate_prompt_body(body, end - 1u - (size_t)(body - text)) < 0)
+            goto invalid;
+        seen |= 1u << name;
+        i = end - 1u;
+    }
+    if (seen == 7u)
+        return 0;
+invalid:
+    errno = EINVAL;
+    return -1;
 }
 
 static bool
@@ -615,6 +794,23 @@ parse_ui(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "markdown") == 0)
         return claim_key(state, 4u) < 0 ? -1 :
                parse_bool(value, &config->markdown);
+    if (strcmp(key, "prompt") == 0)
+        return claim_key(state, 5u) < 0 ||
+               copy_value(config->prompt, sizeof(config->prompt), value) < 0 ?
+               -1 : validate_prompt(config->prompt);
+    if (strcmp(key, "prompt_spinner_goal") == 0)
+        return claim_key(state, 6u) < 0 ? -1 :
+               parse_spinner(config->prompt_spinner_goal, value);
+    if (strcmp(key, "prompt_spinner_provider") == 0)
+        return claim_key(state, 7u) < 0 ? -1 :
+               parse_spinner(config->prompt_spinner_provider, value);
+    if (strcmp(key, "prompt_spinner_tool") == 0)
+        return claim_key(state, 8u) < 0 ? -1 :
+               parse_spinner(config->prompt_spinner_tool, value);
+    if (strcmp(key, "prompt_spinner_per_second") == 0)
+        return claim_key(state, 9u) < 0 ? -1 :
+               parse_u32(value, 1u, 60u,
+                         &config->prompt_spinner_per_second);
     errno = EINVAL;
     return -1;
 }

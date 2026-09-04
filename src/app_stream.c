@@ -176,12 +176,6 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     }
     if (app->steering_requested || app->interrupt_requested)
         return 0;
-    if (len) {
-        app->active_since_ms = snj_time_ms();
-        app->activity_shown = false;
-        (void)snj_render_activity(&app->render, NULL);
-    }
-
     if (!app->stream_item_seen || item_index != app->stream_item_index) {
         if (app->stream_item_seen && item_index <= app->stream_item_index)
             return stream_fail(app, EPROTO,

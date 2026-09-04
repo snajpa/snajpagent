@@ -21,14 +21,21 @@ DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
-DEFAULT_IDLE_PROMPT = f"{DEFAULT_MODEL}/medium 0% › ".encode()
-DEFAULT_ACCOUNTED_IDLE_PROMPT = f"{DEFAULT_MODEL}/medium ?% › ".encode()
-DEFAULT_ACTIVE_PROMPT = f"{DEFAULT_MODEL}/medium ?% » ".encode()
+DEFAULT_IDLE_PROMPT = f"default/{DEFAULT_MODEL}/medium 0%   › ".encode()
+DEFAULT_ACCOUNTED_IDLE_PROMPT = f"default/{DEFAULT_MODEL}/medium ?%   › ".encode()
+DEFAULT_ACTIVE_PROMPT = f"default/{DEFAULT_MODEL}/medium ?% ◴ » ".encode()
+DEFAULT_TOOL_PROMPT = f"default/{DEFAULT_MODEL}/medium ?%  ⠋» ".encode()
+QUEUE_EDIT_ACTIVE_PROMPT = "edit 1 ?% ◴ › ".encode()
+QUEUE_EDIT_IDLE_PROMPT = "edit 1 ?%   › ".encode()
 GOAL_SET = "• Goal set".encode()
 GOAL_CLEARED = "• Goal cleared".encode()
 COMPACTED = "• Compacted".encode()
 RESUME_HEADER = \
     "• You can resume this session with the following command:".encode()
+
+
+def chat_prompt(operator):
+    return f"{operator}@{socket.gethostname()}   : ".encode()
 
 
 class Child:
@@ -294,7 +301,7 @@ def test_incremental_active_prompt_keeps_status_stable():
     try:
         child.wait(DEFAULT_IDLE_PROMPT)
         child.send(b"terminal_status\r")
-        child.wait(b"working\xe2\x80\xa6")
+        child.wait(DEFAULT_ACTIVE_PROMPT)
         child.drain(0.05)
 
         start = len(child.buf)
@@ -332,7 +339,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
-    prompt = f"{model}/medium 0% › ".encode()
+    prompt = f"default/{model}/medium 0%   › ".encode()
     child = Child(["-m", model])
     try:
         child.wait(prompt)
@@ -526,8 +533,8 @@ def test_managed_command_steering_and_tab_queue():
     child.send(b"managed_command_steer\r")
     child.wait(b"fixture managed steering wait")
     child.send(b"terminate it\r")
-    steering_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"terminate it")
-    child.wait(DEFAULT_ACTIVE_PROMPT, start=steering_ack)
+    steering_ack = child.wait(DEFAULT_TOOL_PROMPT + b"terminate it")
+    child.wait(DEFAULT_TOOL_PROMPT, start=steering_ack)
     answer_end = child.wait(b"managed command steering complete")
     child.exit_cleanly(answer_end)
 
@@ -691,7 +698,7 @@ def test_steering_during_capacity_recovery_compaction():
     mismatched = Child([
         "--config", str(mismatch_config), "--resume", session_id
     ])
-    prompt_end = mismatched.wait(b" 0% \xe2\x80\xba ")
+    prompt_end = mismatched.wait(b" 0%   \xe2\x80\xba ")
     mismatched.send(b"/status\r")
     status_end = mismatched.wait(b"context: source=unknown", start=prompt_end)
     status_end = mismatched.wait(
@@ -750,13 +757,17 @@ def test_interrupt():
     child.wait(PROMPT)
     child.send(b"slow\r")
     child.wait(b"working slowly")
-    child.send(b"\x03" * 4)
+    child.send(b"\x03")
     interrupted_end = child.wait(b"turn interrupted")
     child.drain(0.1)
     assert os.waitpid(child.pid, os.WNOHANG) == (0, 0), bytes(child.buf)
-    child.send(b"\x03")
-    child.wait(RESUME_HEADER, start=interrupted_end)
-    child.finish()
+    idle_cancel = len(child.buf)
+    child.send(b"\x03" * 5)
+    child.wait(b"^C\r\n", start=idle_cancel)
+    child.drain(0.2)
+    assert os.waitpid(child.pid, os.WNOHANG) == (0, 0), bytes(child.buf)
+    assert bytes(child.buf[idle_cancel:]).count(b"^C\r\n") == 5
+    child.exit_now()
 
     log = events(new_session(before))
     response = one(log, "response_interrupted")
@@ -779,9 +790,10 @@ def test_active_ctrl_c_clears_draft():
     child.wait(b"t\x1b[Kh\x1b[Ki\x1b[Ks\x1b[K", start=edit_start)
     clear_start = len(child.buf)
     child.send(b"\x03")
-    clear_end = child.wait(b"\x1b[K", start=clear_start)
+    clear_end = child.wait(b"^C\r\n", start=clear_start)
     cleared = bytes(child.buf[clear_start:clear_end])
     assert b"interrupting" not in cleared
+    assert b"\x1b[2K" not in cleared
 
     child.send(b"replacement\r")
     answer_end = child.wait(b"steered: replacement", start=clear_end)
@@ -793,6 +805,39 @@ def test_active_ctrl_c_clears_draft():
     assert steering["data"]["text"] == "replacement"
     assert response["data"]["origin"] == "steering"
     assert not [item for item in log if item["type"] == "turn_interrupted"]
+
+
+def test_prompt_history_and_reverse_search():
+    history = Path(DOTDIR) / "prompt_history"
+    first = Child([])
+    first.wait(DEFAULT_IDLE_PROMPT)
+    first.send(b"history-alpha-unique\r")
+    answer = first.wait(b"fixture answer")
+    first.exit_cleanly(answer)
+
+    second = Child([])
+    second.wait(DEFAULT_IDLE_PROMPT)
+    second.send(b"draft-restore")
+    second.send(b"\x12")
+    second.wait(b"(failed reverse-i-search)`draft-restore': ")
+    second.send(b"\x07")
+    cancel = len(second.buf)
+    second.send(b"\x03")
+    cancel_end = second.wait(b"^C\r\n", start=cancel)
+    cancelled = bytes(second.buf[cancel:cancel_end])
+    assert b"draft-restore" in cancelled
+    search = len(second.buf)
+    second.send(b"\x12history-alpha")
+    second.wait(b"(reverse-i-search)`history-alpha': history-alpha-unique",
+                start=search)
+    second.send(b"\r")
+    answer = second.wait(b"fixture answer", start=search)
+    second.exit_cleanly(answer)
+
+    assert history.stat().st_mode & 0o777 == 0o600
+    records = history.read_text(encoding="utf-8").splitlines()
+    assert records.count("history-alpha-unique") == 2
+    assert "draft-restore" not in records
 
 
 def test_multiline_and_paste():
@@ -1115,9 +1160,9 @@ def test_queue_mutation_commands():
     child.wait(b"1 future turn cancelled")
 
     child.send(b"/q 1e\r")
-    child.wait(b"edit 1 ?% " + PROMPT + b"second")
+    child.wait(QUEUE_EDIT_ACTIVE_PROMPT + b"second")
     child.send(b" active\r")
-    child.wait(b"edit 1 ?% " + PROMPT + b"second active")
+    child.wait(QUEUE_EDIT_ACTIVE_PROMPT + b"second active")
 
     child.send(b"fourth\t")
     child.wait(b"next " + PROMPT + b"fourth")
@@ -1126,9 +1171,9 @@ def test_queue_mutation_commands():
     child.wait(b"\r" + DEFAULT_ACCOUNTED_IDLE_PROMPT, start=interrupted_end)
 
     child.send(b"/queue 1 edit\r")
-    child.wait(b"edit 1 ?% " + PROMPT + b"second active")
+    child.wait(QUEUE_EDIT_IDLE_PROMPT + b"second active")
     child.send(b" idle\r")
-    child.wait(b"edit 1 ?% " + PROMPT + b"second active idle")
+    child.wait(QUEUE_EDIT_IDLE_PROMPT + b"second active idle")
 
     child.send(b"/exit\r")
     _, status = os.waitpid(child.pid, 0)
@@ -1366,7 +1411,7 @@ def test_uncached_typed_model_selection():
 
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
-    initial_prompt = b"uncached-start/low 0% \xe2\x80\xba "
+    initial_prompt = b"first/uncached-start/low 0%   \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     config.write_text(
@@ -1749,7 +1794,7 @@ def test_config_editor_reload():
         plan.write_text(str(network), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
-        child.wait(PROMPT, start=end)
+        child.wait(f"reloadop@{socket.gethostname()}   : ".encode(), start=end)
         peer = IRCClient(network_port, "reloadpeer")
         peer.close()
         # Membership notifications start a turn; /config is idle-only.
@@ -1809,12 +1854,12 @@ def test_known_context_meter():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"uncached-start/low 0% \xe2\x80\xba ")
+    child.wait(b"first/uncached-start/low 0%   \xe2\x80\xba ")
     child.send(b"/model gpt-5.6-luna / high\r")
     selected = child.wait(
         b"model for next turn: first / gpt-5.6-luna / high"
     )
-    child.wait(b"gpt-5.6-luna/high 0% \xe2\x80\xba ", start=selected)
+    child.wait(b"first/gpt-5.6-luna/high 0%   \xe2\x80\xba ", start=selected)
     session_id = new_session(before)
     start = len(child.buf)
     child.send(b"slow\r")
@@ -1834,7 +1879,7 @@ def test_known_context_meter():
     assert isinstance(used, int) and used > 0
     percent = min(100, (used * 100 + hard - 1) // hard)
     assert percent > 0
-    expected = f"gpt-5.6-luna/high {percent}% » ".encode()
+    expected = f"first/gpt-5.6-luna/high {percent}% ◴ » ".encode()
     child.wait(expected, start=start)
     child.send(b"\x03")
     interrupted = child.wait(b"turn interrupted", start=start)
@@ -1849,7 +1894,7 @@ def test_config_and_cli_model_passthrough():
     )
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"openai/gpt-5.6/medium 0% \xe2\x80\xba ")
+    child.wait(b"default/openai/gpt-5.6/medium 0%   \xe2\x80\xba ")
 
     child.send(b"/status\r")
     end = child.wait(b"model: openai/gpt-5.6")
@@ -1869,7 +1914,7 @@ def test_config_and_cli_model_passthrough():
         "--config", str(config), "-m", "vendor/future-model",
         "--effort", "custom-effort", "--resume", session_id
     ])
-    resumed.wait(b"vendor/future-model/custom-effort 0% \xe2\x80\xba ")
+    resumed.wait(b"default/vendor/future-model/custom-effort 0%   \xe2\x80\xba ")
     start = len(resumed.buf)
     resumed.send(b"/status\r")
     end = resumed.wait(
@@ -1877,11 +1922,11 @@ def test_config_and_cli_model_passthrough():
     )
     resumed.wait(PROMPT, start=end)
     resumed.send(b"ping\r")
-    resumed.wait(b"vendor/future-model/custom-effort ?% \xc2\xbb ",
+    resumed.wait(b"default/vendor/future-model/custom-effort ?% \xe2\x97\xb4 \xc2\xbb ",
                  start=end)
     answer_end = resumed.wait(b"pong", start=end)
     idle_end = resumed.wait(
-        b"openai/gpt-5.6/medium 0% \xe2\x80\xba ", start=answer_end
+        b"default/openai/gpt-5.6/medium 0%   \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -1895,7 +1940,7 @@ def test_config_and_cli_model_passthrough():
 
 
 def test_exit_resume_matrix():
-    for exit_input in (b"/exit\r", b"\x03", b"\x04"):
+    for exit_input in (b"/exit\r", b"\x04"):
         before = session_ids()
         child = Child(["--no-color"])
         child.wait(PROMPT)
@@ -1905,6 +1950,21 @@ def test_exit_resume_matrix():
         arguments = command_arguments(command)
         assert arguments[-2:] == ["--resume", session_id], arguments
         assert arguments[arguments.index("--dotdir") + 1] == DOTDIR
+
+    before = session_ids()
+    cancelled = Child(["--no-color"])
+    cancelled.wait(DEFAULT_IDLE_PROMPT)
+    cancelled_id = new_session(before)
+    start = len(cancelled.buf)
+    cancelled.send(b"\x03" * 8)
+    deadline = time.monotonic() + 8.0
+    while bytes(cancelled.buf[start:]).count(b"^C\r\n") < 8:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not cancelled.read_once(remaining):
+            raise AssertionError(f"missing Ctrl-C cancellations: {cancelled.buf!r}")
+    assert os.waitpid(cancelled.pid, os.WNOHANG) == (0, 0)
+    command = cancelled.exit_now()
+    assert command_arguments(command)[-2:] == ["--resume", cancelled_id]
 
     for signal_number in (signal.SIGHUP, signal.SIGTERM):
         before = session_ids()
@@ -1996,7 +2056,7 @@ def test_network_resume_roles():
         "--no-color", "-c", upstream_endpoint,
         "-n", "clientagent", "-o", "clientop",
     ])
-    client.wait(PROMPT)
+    client.wait(chat_prompt("clientop"))
     client_id = new_session(before)
     first_links = accept_connections(upstream, 2)
     client_command = client.exit_now()
@@ -2009,7 +2069,7 @@ def test_network_resume_roles():
         upstream_endpoint
     resumed_client = Child.from_command(client_command)
     resumed_client.wait(b"session id " + client_id[:8].encode())
-    resumed_client.wait(PROMPT)
+    resumed_client.wait(chat_prompt("clientop"))
     resumed_links = accept_connections(upstream, 2)
     resumed_client.exit_now()
     for connection in resumed_links:
@@ -2022,7 +2082,7 @@ def test_network_resume_roles():
         "--no-color", "-s", server_endpoint,
         "-n", "serveragent", "-o", "serverop", "-r", "lab",
     ])
-    server.wait(PROMPT)
+    server.wait(chat_prompt("serverop"))
     server_id = new_session(before)
     peer = IRCClient(server_port, "firstpeer")
     peer.close()
@@ -2035,7 +2095,7 @@ def test_network_resume_roles():
         "#lab"
     resumed_server = Child.from_command(server_command)
     resumed_server.wait(b"session id " + server_id[:8].encode())
-    resumed_server.wait(PROMPT)
+    resumed_server.wait(chat_prompt("serverop"))
     peer = IRCClient(server_port, "secondpeer")
     peer.close()
     resumed_server.exit_now()
@@ -2048,7 +2108,7 @@ def test_network_resume_roles():
         "-c", upstream_endpoint,
         "-n", "combinedagent", "-o", "combinedop", "-r", "lab",
     ])
-    combined.wait(PROMPT)
+    combined.wait(chat_prompt("combinedop"))
     combined_id = new_session(before)
     first_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "combinedpeer")
@@ -2063,7 +2123,7 @@ def test_network_resume_roles():
         upstream_endpoint
     resumed_combined = Child.from_command(combined_command)
     resumed_combined.wait(b"session id " + combined_id[:8].encode())
-    resumed_combined.wait(PROMPT)
+    resumed_combined.wait(chat_prompt("combinedop"))
     resumed_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "resumedpeer")
     peer.close()
@@ -2216,11 +2276,11 @@ def test_prompt_identity_is_terminal_safe():
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(visible + b" 0% \xe2\x80\xba ")
+    child.wait(b"default/" + visible + b" 0%   \xe2\x80\xba ")
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send(b"ping\r")
-    child.wait(visible + b" ?% \xc2\xbb ")
+    child.wait(b"default/" + visible + b" ?% \xe2\x97\xb4 \xc2\xbb ")
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
 
@@ -2283,10 +2343,10 @@ def test_network_chat_and_managed_mention():
     human = None
     peer_agent = None
     exited = False
-    network_idle = f"localop@{socket.gethostname()} › ".encode()
-    network_active = f"localop@{socket.gethostname()} ?% » ".encode()
+    network_idle = f"localop@{socket.gethostname()}   : ".encode()
+    network_active = f"localop@{socket.gethostname()} ◴ : ".encode()
     network_rollout_idle = (
-        f"localop@{socket.gethostname()} 0% › ".encode()
+        f"default/{DEFAULT_MODEL}/medium 0%   › ".encode()
     )
     try:
         child.wait(network_idle)
@@ -2376,12 +2436,12 @@ def test_network_chat_and_managed_mention():
 
         child.send(b"/verbose 1\r")
         verbose_end = child.wait(b"verbosity: 1", start=terminal_start)
-        child.wait(PROMPT, start=verbose_end)
+        child.wait(network_idle, start=verbose_end)
         wire_start = len(human.buf)
         child.send(b"network_one\r")
         human.wait(b"PRIVMSG #lab :network one reply\r\n", start=wire_start)
         verbose_end = child.wait(b"network one reply", start=verbose_end)
-        child.wait(PROMPT, start=verbose_end)
+        child.wait(network_idle, start=verbose_end)
 
         wire_start = len(human.buf)
         tool_start = len(child.buf)
@@ -2439,7 +2499,7 @@ def test_network_chat_and_managed_mention():
 
         child.send(b"/verbose 2\r")
         verbose_end = child.wait(b"verbosity: 2", start=verbose_end)
-        child.wait(PROMPT, start=verbose_end)
+        child.wait(network_idle, start=verbose_end)
         commentary_start = len(child.buf)
         wire_start = len(human.buf)
         child.send(b"network_commentary\r")
@@ -2454,7 +2514,7 @@ def test_network_chat_and_managed_mention():
         wire_start = len(human.buf)
         child.send(b"network_managed\r\t")
         managed_view = child.wait("── rollout ──".encode(), start=verbose_end)
-        child.wait(b"working\xe2\x80\xa6", start=managed_view)
+        child.wait(b"fixture process is still running", start=managed_view)
         peer_agent.message("agent: network managed mention")
         try:
             managed_end = human.wait(
@@ -2477,7 +2537,7 @@ def test_network_chat_and_managed_mention():
 
         compact_start = len(child.buf)
         child.send(b"/compact\r")
-        compact_prompt = child.wait(PROMPT, start=compact_start)
+        compact_prompt = child.wait(network_idle, start=compact_start)
         child.drain()
         assert COMPACTED not in child.buf[compact_start:]
         child.send(b"/rollout\r")
@@ -2486,7 +2546,7 @@ def test_network_chat_and_managed_mention():
         child.send(b"/chat\r")
         chat_end = child.wait("── chat ──".encode(), start=compact_end)
         assert child.buf[compact_prompt:chat_end].count(COMPACTED) == 1
-        child.wait(PROMPT, start=chat_end)
+        child.wait(network_idle, start=chat_end)
         wire_start = len(human.buf)
         child.send(b"network_one\r")
         human.wait(b"PRIVMSG #lab :network one reply\r\n", start=wire_start)
@@ -2642,6 +2702,7 @@ test_steering_during_capacity_recovery_compaction()
 test_agents_md_config()
 test_active_ctrl_c_clears_draft()
 test_interrupt()
+test_prompt_history_and_reverse_search()
 test_multiline_and_paste()
 test_resume_pauses_fifo()
 test_goal_quoted_reserved_wording()
