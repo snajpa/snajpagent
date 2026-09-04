@@ -23,9 +23,12 @@ struct snj_render_record;
 struct snj_markdown_state {
     char prefix[16];
     char fence_info[64];
+    struct snj_buf table;
     size_t prefix_len;
     size_t fence_info_len;
     size_t delimiter_len;
+    size_t table_header_len;
+    size_t table_line_start;
     unsigned int fence_len;
     unsigned int code_ticks;
     char fence;
@@ -38,6 +41,7 @@ struct snj_markdown_state {
     bool emphasis;
     bool strike;
     bool inline_code;
+    bool table_header;
     bool link_url;
     bool link_after_label;
     bool escape;
@@ -45,6 +49,10 @@ struct snj_markdown_state {
     bool delimiter_previous_word;
     bool style_painted;
     bool prose;
+    bool table_line;
+    bool table_pending;
+    bool table_active;
+    bool table_disabled;
 };
 
 struct snj_irc_markdown_state {
@@ -74,6 +82,7 @@ struct snj_render {
     bool color_stderr;
     bool markdown;
     bool markdown_rendering;
+    bool markdown_measuring;
     bool markdown_preserve_fence;
     bool networked;
     enum snj_render_view view;

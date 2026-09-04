@@ -24,6 +24,18 @@
 #define COLOR_PROTOCOL "\033[35m"
 #define COLOR_TRANSPORT "\033[2;34m"
 #define COLOR_HOST "\033[34m"
+#define MARKDOWN_TABLE_COLUMNS 16u
+
+enum markdown_table_alignment {
+    TABLE_LEFT,
+    TABLE_CENTER,
+    TABLE_RIGHT
+};
+
+struct markdown_table_cell {
+    const unsigned char *text;
+    size_t len;
+};
 
 enum snj_render_record_kind {
     SNJ_RENDER_RECORD_BLOCK,
@@ -415,6 +427,10 @@ utf8_sequence_size(unsigned char first)
 static int public_write(struct snj_render *render, const char *text, size_t len);
 static int close_public_output(struct snj_render *render);
 static int markdown_finish(struct snj_render *render);
+static int markdown_abort(struct snj_render *render);
+static int markdown_write(struct snj_render *render,
+                          const unsigned char *text, size_t len);
+static int markdown_table_finish(struct snj_render *render);
 static bool public_terminal(const struct snj_render *render);
 
 static bool
@@ -423,7 +439,8 @@ markdown_has_style(const struct snj_render *render)
     const struct snj_markdown_state *md = &render->markdown_state;
 
     return md->heading || md->quote || md->strong || md->emphasis ||
-           md->strike || md->inline_code || md->fence != '\0' || md->link_url;
+           md->strike || md->inline_code || md->table_header ||
+           md->fence != '\0' || md->link_url;
 }
 
 static int
@@ -445,7 +462,7 @@ markdown_paint_style(struct snj_render *render)
     } while (0)
     if (md->heading) ADD_STYLE(";1;36");
     if (md->quote) ADD_STYLE(";34");
-    if (md->strong && !md->heading) ADD_STYLE(";1");
+    if ((md->strong && !md->heading) || md->table_header) ADD_STYLE(";1");
     if (md->emphasis) ADD_STYLE(";3");
     if (md->strike) ADD_STYLE(";2");
     if (md->inline_code || md->fence) ADD_STYLE(";33");
@@ -510,6 +527,7 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
     render->wrap_word_open = false;
     render->wrap_break_open = false;
     memset(&render->markdown_state, 0, sizeof(render->markdown_state));
+    snj_buf_init(&render->markdown_state.table, SNJ_MAX_PUBLIC_ITEM);
     if (render->public_column == SIZE_MAX)
         goto fail;
     if (label_len) {
@@ -547,6 +565,7 @@ fail:
         render->public_trailing_newlines = 0u;
         render->markdown_rendering = false;
         render->public_fd = -1;
+        snj_buf_free(&render->markdown_state.table);
         snj_buf_free(&render->wrap_pending);
         errno = saved_errno;
         return -1;
@@ -567,6 +586,8 @@ public_write(struct snj_render *render, const char *text, size_t len)
     size_t trailing = 0u;
 
     if (!len)
+        return 0;
+    if (render->markdown_measuring)
         return 0;
     if (!render->public_output_open) {
         if (output_begin(render, true) < 0)
@@ -647,7 +668,8 @@ flush_wrap_pending(struct snj_render *render)
         }
     }
     width = snj_term_text_width(text, len);
-    columns = snj_term_columns(render->term);
+    columns = render->markdown_measuring ? UINT_MAX :
+                                           snj_term_columns(render->term);
     if (width == SIZE_MAX)
         return -1;
     if (render->wrap_has_word && !render->wrap_continuation &&
@@ -947,6 +969,569 @@ markdown_inline(struct snj_render *render, const unsigned char *text, size_t len
     return 0;
 }
 
+static void
+markdown_table_trim(struct markdown_table_cell *cell)
+{
+    while (cell->len && (cell->text[0] == ' ' || cell->text[0] == '\t')) {
+        ++cell->text;
+        --cell->len;
+    }
+    while (cell->len && (cell->text[cell->len - 1u] == ' ' ||
+                         cell->text[cell->len - 1u] == '\t'))
+        --cell->len;
+}
+
+static bool
+markdown_table_cells(const unsigned char *text, size_t len,
+                     struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS],
+                     size_t *cell_count)
+{
+    size_t first = 0u;
+    size_t start;
+    size_t end = len;
+    size_t count = 0u;
+    unsigned int code_ticks = 0u;
+    bool escape = false;
+
+    while (first < len && first < 3u && text[first] == ' ')
+        ++first;
+    if (first >= len || text[first] != '|')
+        return false;
+    while (end > first && (text[end - 1u] == ' ' || text[end - 1u] == '\t'))
+        --end;
+    start = first + 1u;
+    for (size_t i = start; i < end;) {
+        if (escape) {
+            escape = false;
+            ++i;
+            continue;
+        }
+        if (!code_ticks && text[i] == '\\') {
+            escape = true;
+            ++i;
+            continue;
+        }
+        if (text[i] == '`') {
+            size_t ticks = 1u;
+
+            while (i + ticks < len && text[i + ticks] == '`')
+                ++ticks;
+            if (!code_ticks)
+                code_ticks = ticks > UINT_MAX ? UINT_MAX :
+                                                   (unsigned int)ticks;
+            else if (ticks == code_ticks)
+                code_ticks = 0u;
+            i += ticks;
+            continue;
+        }
+        if (!code_ticks && text[i] == '|') {
+            if (count == MARKDOWN_TABLE_COLUMNS)
+                return false;
+            cells[count].text = text + start;
+            cells[count].len = i - start;
+            markdown_table_trim(&cells[count]);
+            ++count;
+            start = i + 1u;
+        }
+        ++i;
+    }
+    if (end == first + 1u || text[end - 1u] != '|') {
+        if (count == MARKDOWN_TABLE_COLUMNS)
+            return false;
+        cells[count].text = text + start;
+        cells[count].len = end - start;
+        markdown_table_trim(&cells[count]);
+        ++count;
+    }
+    if (!count)
+        return false;
+    *cell_count = count;
+    return true;
+}
+
+static bool
+markdown_table_delimiter(const struct markdown_table_cell *cells,
+                         size_t count,
+                         enum markdown_table_alignment *alignment)
+{
+    for (size_t i = 0u; i < count; ++i) {
+        const unsigned char *text = cells[i].text;
+        size_t begin = 0u;
+        size_t end = cells[i].len;
+        bool left;
+        bool right;
+
+        left = begin < end && text[begin] == ':';
+        if (left)
+            ++begin;
+        right = begin < end && text[end - 1u] == ':';
+        if (right)
+            --end;
+        if (end - begin < 3u)
+            return false;
+        for (size_t j = begin; j < end; ++j)
+            if (text[j] != '-')
+                return false;
+        alignment[i] = left && right ? TABLE_CENTER :
+                       right ? TABLE_RIGHT : TABLE_LEFT;
+    }
+    return true;
+}
+
+static int
+markdown_inline_finish(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+
+    if (markdown_flush_delimiter(render, false, true) < 0)
+        return -1;
+    if (md->escape && markdown_text(render, "\\", 1u) < 0)
+        return -1;
+    md->escape = false;
+    md->link_after_label = false;
+    if (md->link_url) {
+        md->link_url = false;
+        if (markdown_style_changed(render) < 0 ||
+            markdown_text(render, ">", 1u) < 0)
+            return -1;
+    }
+    md->strong = false;
+    md->emphasis = false;
+    md->strike = false;
+    md->inline_code = false;
+    md->code_ticks = 0u;
+    md->previous_word = false;
+    return markdown_style_changed(render);
+}
+
+static int
+markdown_table_cell_width(struct snj_render *render,
+                          const struct markdown_table_cell *cell,
+                          size_t *width)
+{
+    struct snj_render probe;
+    int rc;
+
+    memset(&probe, 0, sizeof(probe));
+    probe.public_fd = render->public_fd;
+    probe.markdown_rendering = true;
+    probe.markdown_measuring = true;
+    snj_buf_init(&probe.wrap_pending, SNJ_MAX_PUBLIC_ITEM);
+    rc = markdown_inline(&probe, cell->text, cell->len);
+    if (rc == 0)
+        rc = markdown_inline_finish(&probe);
+    if (rc == 0)
+        rc = flush_wrap_pending(&probe);
+    if (rc == 0)
+        *width = probe.public_column;
+    snj_buf_free(&probe.wrap_pending);
+    return rc;
+}
+
+static int
+markdown_table_spaces(struct snj_render *render, size_t count)
+{
+    static const char spaces[] = "                ";
+
+    while (count) {
+        size_t amount = count < sizeof(spaces) - 1u ? count :
+                                                        sizeof(spaces) - 1u;
+        if (markdown_text(render, spaces, amount) < 0)
+            return -1;
+        count -= amount;
+    }
+    return 0;
+}
+
+static int
+markdown_table_rule(struct snj_render *render, const char *left,
+                    const char *middle, const char *right,
+                    const size_t *widths, size_t count, bool newline)
+{
+    if (markdown_text(render, left, strlen(left)) < 0)
+        return -1;
+    for (size_t i = 0u; i < count; ++i) {
+        for (size_t j = 0u; j < widths[i] + 2u; ++j)
+            if (markdown_text(render, "─", strlen("─")) < 0)
+                return -1;
+        if (i + 1u < count &&
+            markdown_text(render, middle, strlen(middle)) < 0)
+            return -1;
+    }
+    if (markdown_text(render, right, strlen(right)) < 0 ||
+        (newline && markdown_text(render, "\n", 1u) < 0))
+        return -1;
+    return 0;
+}
+
+static int
+markdown_table_cell(struct snj_render *render,
+                    const struct markdown_table_cell *cell, bool strong)
+{
+    render->markdown_state.previous_word = false;
+    render->markdown_state.table_header = strong;
+    if (markdown_style_changed(render) < 0)
+        return -1;
+    if (markdown_inline(render, cell->text, cell->len) < 0)
+        return -1;
+    if (markdown_inline_finish(render) < 0)
+        return -1;
+    render->markdown_state.table_header = false;
+    return markdown_style_changed(render);
+}
+
+static int
+markdown_table_grid_row(struct snj_render *render,
+                        const struct markdown_table_cell *cells,
+                        size_t cell_count, const size_t *widths,
+                        const enum markdown_table_alignment *alignment,
+                        size_t columns, bool header)
+{
+    if (markdown_text(render, "│ ", strlen("│ ")) < 0)
+        return -1;
+    for (size_t i = 0u; i < columns; ++i) {
+        struct markdown_table_cell empty = {0};
+        const struct markdown_table_cell *cell = i < cell_count ?
+                                                  &cells[i] : &empty;
+        size_t width;
+        size_t before;
+        size_t after;
+
+        if (markdown_table_cell_width(render, cell, &width) < 0 ||
+            width > widths[i]) {
+            errno = EINVAL;
+            return -1;
+        }
+        if (alignment[i] == TABLE_RIGHT) {
+            before = widths[i] - width;
+        } else if (alignment[i] == TABLE_CENTER) {
+            before = (widths[i] - width) / 2u;
+        } else {
+            before = 0u;
+        }
+        after = widths[i] - width - before;
+        if (markdown_table_spaces(render, before) < 0 ||
+            markdown_table_cell(render, cell, header) < 0 ||
+            markdown_table_spaces(render, after) < 0 ||
+            markdown_text(render, i + 1u < columns ? " │ " : " │\n",
+                          i + 1u < columns ? strlen(" │ ") :
+                                             strlen(" │\n")) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static bool
+markdown_table_next_line(const unsigned char *text, size_t len,
+                         size_t *offset, const unsigned char **line,
+                         size_t *line_len)
+{
+    size_t start;
+    size_t end;
+
+    if (*offset >= len)
+        return false;
+    start = *offset;
+    end = start;
+    while (end < len && text[end] != '\n')
+        ++end;
+    *line = text + start;
+    *line_len = end - start;
+    *offset = end < len ? end + 1u : end;
+    return true;
+}
+
+static int
+markdown_table_render(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    const unsigned char *text = md->table.data;
+    struct markdown_table_cell header[MARKDOWN_TABLE_COLUMNS];
+    struct markdown_table_cell delimiter[MARKDOWN_TABLE_COLUMNS];
+    enum markdown_table_alignment alignment[MARKDOWN_TABLE_COLUMNS];
+    size_t widths[MARKDOWN_TABLE_COLUMNS] = {0};
+    const unsigned char *line;
+    size_t line_len;
+    size_t header_count;
+    size_t delimiter_count;
+    size_t offset = 0u;
+    size_t body_offset;
+    size_t total;
+    unsigned int terminal_columns = snj_term_columns(render->term);
+    bool ended_lf = md->table.len && text[md->table.len - 1u] == '\n';
+    bool grid;
+
+    if (!markdown_table_next_line(text, md->table.len, &offset, &line,
+                                  &line_len) ||
+        !markdown_table_cells(line, line_len, header, &header_count) ||
+        !markdown_table_next_line(text, md->table.len, &offset, &line,
+                                  &line_len) ||
+        !markdown_table_cells(line, line_len, delimiter, &delimiter_count) ||
+        delimiter_count != header_count ||
+        !markdown_table_delimiter(delimiter, delimiter_count, alignment)) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (size_t i = 0u; i < header_count; ++i) {
+        if (markdown_table_cell_width(render, &header[i], &widths[i]) < 0)
+            return -1;
+        if (!widths[i])
+            widths[i] = 1u;
+    }
+    body_offset = offset;
+    while (markdown_table_next_line(text, md->table.len, &offset, &line,
+                                    &line_len)) {
+        struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+        size_t count;
+
+        if (!markdown_table_cells(line, line_len, cells, &count)) {
+            errno = EINVAL;
+            return -1;
+        }
+        for (size_t i = 0u; i < count && i < header_count; ++i) {
+            size_t width;
+
+            if (markdown_table_cell_width(render, &cells[i], &width) < 0)
+                return -1;
+            if (width > widths[i])
+                widths[i] = width;
+        }
+    }
+    total = 1u;
+    for (size_t i = 0u; i < header_count; ++i) {
+        if (widths[i] > SIZE_MAX - total - 3u) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        total += widths[i] + 3u;
+    }
+    grid = terminal_columns >= 10u && total < terminal_columns;
+    if (render->public_column) {
+        if (markdown_text(render, "\n", 1u) < 0)
+            return -1;
+        render->public_column = 0u;
+    }
+    md->prose = false;
+    if (grid) {
+        if (markdown_table_rule(render, "┌", "┬", "┐", widths,
+                                header_count, true) < 0 ||
+            markdown_table_grid_row(render, header, header_count, widths,
+                                    alignment, header_count, true) < 0 ||
+            markdown_table_rule(render, "├", "┼", "┤", widths,
+                                header_count, true) < 0)
+            return -1;
+        offset = body_offset;
+        while (markdown_table_next_line(text, md->table.len, &offset, &line,
+                                        &line_len)) {
+            struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+            size_t count;
+
+            if (!markdown_table_cells(line, line_len, cells, &count) ||
+                markdown_table_grid_row(render, cells, count, widths,
+                                        alignment, header_count, false) < 0)
+                return -1;
+        }
+        if (markdown_table_rule(render, "└", "┴", "┘", widths,
+                                header_count, ended_lf) < 0)
+            return -1;
+    } else {
+        size_t row = 0u;
+
+        if (markdown_text(render, "┌─ table\n", strlen("┌─ table\n")) < 0)
+            return -1;
+        offset = body_offset;
+        while (markdown_table_next_line(text, md->table.len, &offset, &line,
+                                        &line_len)) {
+            struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+            size_t count;
+
+            if (!markdown_table_cells(line, line_len, cells, &count) ||
+                markdown_text(render, "├─ row\n", strlen("├─ row\n")) < 0)
+                return -1;
+            for (size_t i = 0u; i < header_count; ++i) {
+                struct markdown_table_cell empty = {0};
+                const struct markdown_table_cell *cell = i < count ?
+                                                          &cells[i] : &empty;
+
+                if (markdown_text(render, "│ ", strlen("│ ")) < 0 ||
+                    markdown_table_cell(render, &header[i], true) < 0 ||
+                    markdown_text(render, ": ", 2u) < 0 ||
+                    markdown_table_cell(render, cell, false) < 0 ||
+                    markdown_text(render, "\n", 1u) < 0)
+                    return -1;
+            }
+            ++row;
+        }
+        if (!row) {
+            for (size_t i = 0u; i < header_count; ++i)
+                if (markdown_text(render, "│ ", strlen("│ ")) < 0 ||
+                    markdown_table_cell(render, &header[i], true) < 0 ||
+                    markdown_text(render, "\n", 1u) < 0)
+                    return -1;
+        }
+        if (markdown_text(render, ended_lf ? "└─\n" : "└─",
+                          ended_lf ? strlen("└─\n") : strlen("└─")) < 0)
+            return -1;
+    }
+    md->line_start = ended_lf;
+    md->previous_word = false;
+    return 0;
+}
+
+static void
+markdown_table_reset(struct snj_markdown_state *md)
+{
+    snj_buf_reset(&md->table);
+    md->table_header_len = 0u;
+    md->table_line_start = 0u;
+    md->table_line = false;
+    md->table_pending = false;
+    md->table_active = false;
+}
+
+static int
+markdown_table_replay(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    struct snj_buf saved = md->table;
+    int rc;
+
+    snj_buf_init(&md->table, SNJ_MAX_PUBLIC_ITEM);
+    md->table_header_len = 0u;
+    md->table_line_start = 0u;
+    md->table_line = false;
+    md->table_pending = false;
+    md->table_active = false;
+    md->line_start = true;
+    md->table_disabled = true;
+    rc = markdown_write(render, saved.data, saved.len);
+    md->table_disabled = false;
+    snj_buf_free(&saved);
+    return rc;
+}
+
+static int
+markdown_table_finish(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    int rc;
+
+    if (md->table_line) {
+        struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+        size_t count;
+
+        md->table_line = false;
+        if (!markdown_table_cells(md->table.data + md->table_line_start,
+                                  md->table.len - md->table_line_start,
+                                  cells, &count)) {
+            if (md->table_active) {
+                struct snj_buf row;
+
+                snj_buf_init(&row, SNJ_MAX_PUBLIC_ITEM);
+                if (snj_buf_append(&row,
+                                   md->table.data + md->table_line_start,
+                                   md->table.len - md->table_line_start) < 0) {
+                    snj_buf_free(&row);
+                    return -1;
+                }
+                md->table.len = md->table_line_start;
+                rc = markdown_table_render(render);
+                markdown_table_reset(md);
+                if (rc == 0) {
+                    md->table_disabled = true;
+                    rc = markdown_write(render, row.data, row.len);
+                    md->table_disabled = false;
+                }
+                snj_buf_free(&row);
+                return rc;
+            }
+            return markdown_table_replay(render);
+        }
+        if (!md->table_header_len) {
+            md->table_header_len = md->table.len;
+            md->table_pending = true;
+        } else if (md->table_pending) {
+            struct markdown_table_cell header[MARKDOWN_TABLE_COLUMNS];
+            enum markdown_table_alignment alignment[MARKDOWN_TABLE_COLUMNS];
+            size_t header_len = md->table_header_len;
+            size_t header_count;
+
+            if (header_len && md->table.data[header_len - 1u] == '\n')
+                --header_len;
+            if (!markdown_table_cells(md->table.data, header_len, header,
+                                      &header_count) ||
+                header_count != count ||
+                !markdown_table_delimiter(cells, count, alignment))
+                return markdown_table_replay(render);
+            md->table_pending = false;
+            md->table_active = true;
+        }
+    }
+    if (md->table_active) {
+        rc = markdown_table_render(render);
+        markdown_table_reset(md);
+        return rc;
+    }
+    if (md->table.len)
+        return markdown_table_replay(render);
+    return 0;
+}
+
+static int
+markdown_table_line_end(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+    struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+    size_t line_len = md->table.len - md->table_line_start;
+    size_t count;
+
+    if (line_len && md->table.data[md->table.len - 1u] == '\n')
+        --line_len;
+    md->table_line = false;
+    md->line_start = true;
+    if (!markdown_table_cells(md->table.data + md->table_line_start,
+                              line_len, cells, &count)) {
+        md->table_line = true;
+        return markdown_table_finish(render);
+    }
+    if (!md->table_header_len) {
+        md->table_header_len = md->table.len;
+        md->table_pending = true;
+        return 0;
+    }
+    if (md->table_pending) {
+        struct markdown_table_cell header[MARKDOWN_TABLE_COLUMNS];
+        enum markdown_table_alignment alignment[MARKDOWN_TABLE_COLUMNS];
+        size_t header_len = md->table_header_len;
+        size_t header_count;
+
+        if (header_len && md->table.data[header_len - 1u] == '\n')
+            --header_len;
+        if (!markdown_table_cells(md->table.data, header_len, header,
+                                  &header_count) ||
+            header_count != count ||
+            !markdown_table_delimiter(cells, count, alignment))
+            return markdown_table_replay(render);
+        md->table_pending = false;
+        md->table_active = true;
+    }
+    return 0;
+}
+
+static int
+markdown_table_start_line(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+
+    md->table_line_start = md->table.len;
+    if (snj_buf_append(&md->table, md->prefix, md->prefix_len) < 0)
+        return -1;
+    md->prefix_len = 0u;
+    md->table_line = true;
+    md->line_start = false;
+    return 0;
+}
+
 static size_t
 markdown_prefix_spaces(const struct snj_markdown_state *md)
 {
@@ -1050,8 +1635,29 @@ markdown_line_prefix(struct snj_render *render,
     spaces = markdown_prefix_spaces(md);
     body = md->prefix + spaces;
     body_len = md->prefix_len - spaces;
+    if ((md->table_pending || md->table_active) &&
+        !(body_len && body[0] == '|')) {
+        size_t pending = md->prefix_len;
+        char prefix[sizeof(md->prefix)];
+
+        if (spaces == md->prefix_len && spaces <= 3u)
+            return 0;
+        memcpy(prefix, md->prefix, pending);
+        md->prefix_len = 0u;
+        if (markdown_table_finish(render) < 0)
+            return -1;
+        md->line_start = true;
+        for (size_t i = 0u; i < pending; ++i)
+            if (markdown_line_prefix(render,
+                                     (const unsigned char *)prefix + i,
+                                     1u) < 0)
+                return -1;
+        return 0;
+    }
     if (spaces == md->prefix_len)
         return spaces <= 3u ? 0 : markdown_prefix_literal(render);
+    if (!md->table_disabled && body[0] == '|')
+        return markdown_table_start_line(render);
     if (md->fence) {
         size_t marks = 0u;
         while (marks < body_len && body[marks] == md->fence)
@@ -1141,6 +1747,13 @@ markdown_newline(struct snj_render *render)
     bool blank = md->line_start && !md->fence &&
                  markdown_prefix_spaces(md) == md->prefix_len;
 
+    if (!md->fence && (md->table_pending || md->table_active)) {
+        if (markdown_table_finish(render) < 0)
+            return -1;
+        md->line_start = true;
+        md->prefix_len = 0u;
+        return markdown_text(render, "\n", 1u);
+    }
     if (blank)
         md->prose = false;
 
@@ -1194,7 +1807,15 @@ markdown_write(struct snj_render *render, const unsigned char *text, size_t len)
             return -1;
         }
         if (text[i] == '\n') {
-            if (markdown_newline(render) < 0)
+            if (md->table_line) {
+                if (snj_buf_putc(&md->table, '\n') < 0 ||
+                    markdown_table_line_end(render) < 0)
+                    return -1;
+            } else if (markdown_newline(render) < 0) {
+                return -1;
+            }
+        } else if (md->table_line) {
+            if (snj_buf_append(&md->table, text + i, n) < 0)
                 return -1;
         } else if (md->fence_header) {
             if (n == 1u && text[i] == (unsigned char)md->fence &&
@@ -1243,6 +1864,9 @@ markdown_finish(struct snj_render *render)
 
     if (!render->markdown_rendering)
         return 0;
+    if ((md->table_line || md->table_pending || md->table_active) &&
+        markdown_table_finish(render) < 0)
+        return -1;
     if (md->fence_header) {
         if (markdown_open_fence(render, false) < 0)
             return -1;
@@ -1287,6 +1911,17 @@ markdown_finish(struct snj_render *render)
     md->link_after_label = false;
     md->code_ticks = 0u;
     if (flush_wrap_pending(render) < 0)
+        return -1;
+    return markdown_clear_style(render);
+}
+
+static int
+markdown_abort(struct snj_render *render)
+{
+    struct snj_markdown_state *md = &render->markdown_state;
+
+    if ((md->table_line || md->table_pending || md->table_active) &&
+        markdown_table_finish(render) < 0)
         return -1;
     return markdown_clear_style(render);
 }
@@ -1377,7 +2012,7 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
         return 0;
     }
     if (render->markdown_rendering &&
-        (discard_incomplete ? markdown_clear_style(render) :
+        (discard_incomplete ? markdown_abort(render) :
                               markdown_finish(render)) < 0) {
         rc = -1;
         saved_errno = errno;
@@ -1408,6 +2043,7 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     render->wrap_continuation = false;
     render->wrap_word_open = false;
     render->wrap_break_open = false;
+    snj_buf_free(&render->markdown_state.table);
     snj_buf_free(&render->wrap_pending);
     if (fd == STDOUT_FILENO && had_bytes) {
         render->stdout_item_seen = true;

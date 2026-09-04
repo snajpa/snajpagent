@@ -693,11 +693,17 @@ snj_fixture_response(const char *prompt, const json_t *steering,
             "# Stream **ready**\n"
             "- split `code` and [docs](https://example.test)\n"
             "```c\nint value = 1;\n```\n\n"
-            "First prose line\ncontinued prose\n\nsecond paragraph";
+            "First prose line\ncontinued prose\n\n"
+            "| Item | State | Count |\n"
+            "| :--- | :---: | ---: |\n"
+            "| alpha | `ready` | 7 |\n\n"
+            "second paragraph";
         static const char *const fragments[] = {
             "# Stream **rea", "dy**\n- split `co", "de` and [docs](",
             "https://example.test)\n```", "c\nint value ",
-            "= 1;\n```\n\nFirst prose", " line\ncontinued prose\n\nsecond paragraph"
+            "= 1;\n```\n\nFirst prose", " line\ncontinued prose\n\n| Item |",
+            " State | Count |\n| :--- | :---: |", " ---: |\n| alpha | `rea",
+            "dy` | 7 |\n\nsecond paragraph"
         };
         size_t index = graph->count;
 

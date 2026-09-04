@@ -198,10 +198,25 @@ test_punctuation_wrapping(void)
     }
 }
 
+static size_t capture_markdown_width(const char *text, bool enabled,
+                                     bool split, enum snj_color_mode color,
+                                     unsigned int columns, char *out,
+                                     size_t out_size,
+                                     struct snj_buf *delivered);
+
 static size_t
 capture_markdown(const char *text, bool enabled, bool split,
                  enum snj_color_mode color, char *out, size_t out_size,
                  struct snj_buf *delivered)
+{
+    return capture_markdown_width(text, enabled, split, color, 120u, out,
+                                  out_size, delivered);
+}
+
+static size_t
+capture_markdown_width(const char *text, bool enabled, bool split,
+                       enum snj_color_mode color, unsigned int columns,
+                       char *out, size_t out_size, struct snj_buf *delivered)
 {
     struct snj_render render;
     struct snj_term term;
@@ -216,7 +231,7 @@ capture_markdown(const char *text, bool enabled, bool split,
     assert(saved >= 0 && dup2(fds[1], STDOUT_FILENO) >= 0);
     close(fds[1]);
     snj_term_init(&term);
-    term.columns = 120u;
+    term.columns = columns;
     snj_render_init(&render, 0u);
     render.stdout_terminal = true;
     snj_render_set_color(&render, color);
@@ -410,6 +425,81 @@ test_markdown_streaming(void)
         ;
     close(fds[0]);
     snj_term_close(&term);
+}
+
+static void
+test_markdown_tables(void)
+{
+    static const char markdown[] =
+        "| Name | State | Count\n"
+        "| :--- | :---: | ---:\n"
+        "| **alpha** | `ready` | 7\n"
+        "| escaped \\| pipe | [docs](https://example.test) | 42 |\n"
+        "after table\n";
+    static const char rendered[] =
+        "┌────────────────┬───────────────────────────────┬───────┐\n"
+        "│ Name           │             State             │ Count │\n"
+        "├────────────────┼───────────────────────────────┼───────┤\n"
+        "│ alpha          │             ready             │     7 │\n"
+        "│ escaped | pipe │ [docs] <https://example.test> │    42 │\n"
+        "└────────────────┴───────────────────────────────┴───────┘\n"
+        "• after table\n";
+    static const char narrow[] =
+        "┌─ table\n"
+        "├─ row\n"
+        "│ Name: alpha\n"
+        "│ State: ready\n"
+        "│ Count: 7\n"
+        "├─ row\n"
+        "│ Name: escaped | pipe\n"
+        "│ State: [docs] <https://example.test>\n"
+        "│ Count: 42\n"
+        "└─\n"
+        "• after table\n";
+    static const char malformed[] =
+        "| Name | State |\n"
+        "| -- | nope |\n"
+        "after\n";
+    static const char code_pipe[] =
+        "| Code | Other\n"
+        "| --- | ---\n"
+        "| `a|b` | tail\n";
+    static const char code_pipe_rendered[] =
+        "┌──────┬───────┐\n"
+        "│ Code │ Other │\n"
+        "├──────┼───────┤\n"
+        "│ a|b  │ tail  │\n"
+        "└──────┴───────┘\n";
+    char output[8192];
+    struct snj_buf delivered;
+
+    snj_buf_init(&delivered, sizeof(markdown));
+    assert(capture_markdown(markdown, true, true, SNJ_COLOR_NEVER,
+                            output, sizeof(output), &delivered) > 0u);
+    assert(strcmp(output, rendered) == 0);
+    assert(snj_buf_terminate(&delivered) == 0);
+    assert(strcmp((const char *)delivered.data, markdown) == 0);
+    snj_buf_free(&delivered);
+    assert(capture_markdown(markdown, true, false, SNJ_COLOR_ALWAYS,
+                            output, sizeof(output), NULL) > 0u);
+    assert(strstr(output, "\033[0;1mName") != NULL);
+    assert(strstr(output, "\033[0;1malpha") != NULL);
+    assert(strstr(output, "\033[0;33mready") != NULL);
+    assert(strstr(output, "\033[0;4;34mhttps://example.test") != NULL);
+
+    assert(capture_markdown_width(markdown, true, true, SNJ_COLOR_NEVER,
+                                  28u, output, sizeof(output), NULL) > 0u);
+    assert(strcmp(output, narrow) == 0);
+
+    assert(capture_markdown(malformed, true, true, SNJ_COLOR_NEVER,
+                            output, sizeof(output), NULL) > 0u);
+    assert(strcmp(output, "• | Name | State |\n| -- | nope |\nafter\n") == 0);
+    assert(capture_markdown(code_pipe, true, true, SNJ_COLOR_NEVER,
+                            output, sizeof(output), NULL) > 0u);
+    assert(strcmp(output, code_pipe_rendered) == 0);
+    assert(capture_markdown(markdown, false, false, SNJ_COLOR_NEVER,
+                            output, sizeof(output), NULL) > 0u);
+    assert(strcmp(output, markdown) == 0);
 }
 
 static size_t
@@ -723,6 +813,7 @@ main(void)
     assert(strstr(output, "assistant: ## Literal assistant\n") != NULL);
     test_history_failure();
     test_markdown_streaming();
+    test_markdown_tables();
     test_append_only_views();
 
     assert(capture_lifecycle(0u, SNJ_COLOR_NEVER,

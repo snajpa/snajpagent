@@ -357,15 +357,22 @@ line shows its effective `timeout=none` or `timeout=Nms` before the command.
 
 Markdown presentation is enabled by default. `--no-markdown` disables it and
 `--markdown` explicitly enables it, overriding configuration. Headings, lists,
-quotes, fenced code, inline code, emphasis, strikethrough, and links receive a
-compact terminal rendering; link destinations remain visible. This is a
-presentation layer only: redirected output, provider input, durable events,
-and IRC frames retain the model's exact bytes. Disabling color keeps Markdown's
-structural rendering while removing its attributes. Prose paragraphs receive a
-`• ` prefix and an empty row between paragraphs; wrapped continuation lines
-start at the left margin without a hanging indent. Terminal wrapping keeps
-trailing punctuation with the preceding text and breaks after hyphens, dashes,
-periods, commas, and similar closing punctuation in both Markdown modes.
+quotes, fenced code, pipe tables, inline code, emphasis, strikethrough, and
+links receive a compact terminal rendering; link destinations remain visible.
+A conventional pipe table whose header and rows begin with `|` is displayed as
+an aligned grid when it fits. `:---`, `:---:`, and `---:` select left, center,
+and right alignment. On a narrow terminal, the same cells become labeled rows
+so their relationships remain readable instead of producing an over-wide
+grid. Escaped pipes and pipes inside code spans stay within their cells.
+
+This is a presentation layer only: redirected output, provider input, durable
+events, and IRC frames retain the model's exact bytes. Disabling color keeps
+Markdown's structural rendering while removing its attributes. Prose
+paragraphs receive a `• ` prefix and an empty row between paragraphs; wrapped
+continuation lines start at the left margin without a hanging indent. Terminal
+wrapping keeps trailing punctuation with the preceding text and breaks after
+hyphens, dashes, periods, commas, and similar closing punctuation in both
+Markdown modes.
 
 ## Configuration
 

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Render conventional leading-pipe Markdown tables as aligned terminal grids,
+  including inline styling, escaped/code-span pipes, and delimiter-selected
+  alignment. Tables that do not fit become labeled vertical rows; malformed
+  candidates remain readable literal Markdown and durable bytes stay exact.
+
 - Added source-bound provider/model context capacity throughout discovery,
   cache display, configuration, request accounting, compaction, status, and
   rollout prompts. The strict pre-release cache is now unversioned and retains

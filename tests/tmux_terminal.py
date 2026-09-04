@@ -32,7 +32,11 @@ MARKDOWN_TEXT = (
     "# Stream **ready**\n"
     "- split `code` and [docs](https://example.test)\n"
     "```c\nint value = 1;\n```\n\n"
-    "First prose line\ncontinued prose\n\nsecond paragraph"
+    "First prose line\ncontinued prose\n\n"
+    "| Item | State | Count |\n"
+    "| :--- | :---: | ---: |\n"
+    "| alpha | `ready` | 7 |\n\n"
+    "second paragraph"
 )
 DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium context=?% ›"
 DEFAULT_ACTIVE_PROMPT = "gpt-5.5-2026-04-23/medium context=?% »"
@@ -691,6 +695,8 @@ def run_markdown_case(binary, root):
                     )
                 terminal.wait("• second paragraph", timeout=2.0,
                               join_wrapped=True)
+                terminal.wait("│ alpha │ ready │     7 │", timeout=2.0,
+                              join_wrapped=True)
                 styled = terminal.capture_styled()
                 if re.search(
                         r"(?m)^(?:\x1b\[[0-9;]*m)+Stream", styled) is None:
@@ -719,10 +725,15 @@ def run_markdown_case(binary, root):
                     "└─",
                     "• First prose line",
                     "continued prose",
+                    "┌───────┬───────┬───────┐",
+                    "│ Item  │ State │ Count │",
+                    "│ alpha │ ready │     7 │",
+                    "└───────┴───────┴───────┘",
                     "• second paragraph",
                 ])
                 raw = terminal.capture()
-                if "• First prose line\ncontinued prose\n\n• second paragraph" not in raw:
+                if ("• First prose line\ncontinued prose\n\n┌" not in raw or
+                        "┘\n\n• second paragraph" not in raw):
                     raise AssertionError(
                         f"prose bullets or paragraph spacing are wrong:\n{raw}"
                     )
@@ -735,6 +746,43 @@ def run_markdown_case(binary, root):
                 (case / "screen.txt").write_text(screen, encoding="utf-8")
             finally:
                 close_fixture_terminal(terminal)
+
+
+def run_narrow_markdown_table_case(binary, root):
+    case = root / "markdown-narrow-table"
+    workspace = case / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False, markdown=True)
+    dotdir = case / "state"
+    terminal = TmuxTerminal(
+        case / "terminal", binary, workspace, dotdir, config, 22, 24,
+        args=("--color=never",),
+    )
+    try:
+        terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
+        terminal.submit("terminal_markdown")
+        terminal.wait("┌─ table", timeout=3.0, join_wrapped=True)
+        terminal.wait("│ Item: alpha", timeout=3.0, join_wrapped=True)
+        terminal.wait("│ State: ready", timeout=3.0, join_wrapped=True)
+        terminal.wait("│ Count: 7", timeout=3.0, join_wrapped=True)
+        _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+        completed = event_list(events, "response_completed")
+        if (len(completed) != 1 or
+                completed[0]["data"]["items"][0]["text"] != MARKDOWN_TEXT):
+            raise AssertionError("narrow table rendering changed durable text")
+        screen = terminal.capture(join_wrapped=True)
+        if "| :--- | :---: | ---: |" in screen:
+            raise AssertionError(f"narrow table retained delimiter syntax:\n{screen}")
+        if any(len(line) > terminal.cols for line in terminal.capture().splitlines()):
+            raise AssertionError("narrow Markdown table exceeded terminal width")
+        terminal.exit()
+    finally:
+        try:
+            screen = terminal.last_screen or terminal.capture()
+            (case / "screen.txt").write_text(screen, encoding="utf-8")
+        finally:
+            close_fixture_terminal(terminal)
 
 
 def run_render_case(binary, root):
@@ -1167,6 +1215,7 @@ def run_fixture(binary, workspace, root):
     run_status_case(binary, root)
     run_paced_decode_case(binary, root)
     run_markdown_case(binary, root)
+    run_narrow_markdown_table_case(binary, root)
     run_render_case(binary, root)
     run_queue_case(binary, root)
     run_tool_case(binary, root)
