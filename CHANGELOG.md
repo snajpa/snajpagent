@@ -2,6 +2,12 @@
 
 # Changelog
 
+## Unreleased
+
+- Track the compiler and linker inputs behind every generated binary so a
+  normal parallel build automatically replaces artifacts left by an ASan/UBSan
+  build instead of linking instrumented objects without sanitizer runtimes.
+
 ## 0.9.0-wip
 
 - Added strict support for streamed output-text annotations and reconciled them

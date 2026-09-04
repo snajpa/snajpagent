@@ -15,6 +15,8 @@ COMMON_SRC = src/base.c src/config.c src/credential.c src/secret.c src/instructi
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
 HEADERS = src/snajpagent.h src/base.h src/config.h src/credential.h src/secret.h src/instructions.h src/json.h src/snj_jansson.h src/snj_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/irc.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h
 DEPFLAGS = -MMD -MP
+TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store tests/snajpagent-fixture
+BUILD_INPUTS = build/.build-inputs
 
 all: $(BIN)
 
@@ -23,6 +25,32 @@ all: $(BIN)
 
 $(BIN): $(COMMON_OBJ) src/main.o
 	$(CC) $(LDFLAGS) -o $@ $(COMMON_OBJ) src/main.o $(LDLIBS) $(CURL_LIBS)
+
+$(COMMON_OBJ) src/main.o $(TEST_BIN): $(BUILD_INPUTS)
+
+$(BUILD_INPUTS): FORCE
+	@mkdir -p build
+	@tmp='$@.tmp'; \
+	trap 'rm -f "$$tmp"' 0 1 2 3 15; \
+	{ \
+		printf '%s\n' 'CC=$(CC)'; \
+		printf '%s\n' 'CPPFLAGS=$(CPPFLAGS)'; \
+		printf '%s\n' 'JANSSON_CFLAGS=$(JANSSON_CFLAGS)'; \
+		printf '%s\n' 'CURL_CFLAGS=$(CURL_CFLAGS)'; \
+		printf '%s\n' 'CFLAGS=$(CFLAGS)'; \
+		printf '%s\n' 'DEPFLAGS=$(DEPFLAGS)'; \
+		printf '%s\n' 'LDFLAGS=$(LDFLAGS)'; \
+		printf '%s\n' 'LDLIBS=$(LDLIBS)'; \
+		printf '%s\n' 'CURL_LIBS=$(CURL_LIBS)'; \
+		cksum Makefile config.mk; \
+	} >"$$tmp"; \
+	if test -r '$@' && cmp -s "$$tmp" '$@'; then \
+		:; \
+	else \
+		rm -f $(BIN) $(COMMON_OBJ) src/main.o $(TEST_BIN); \
+		rm -rf tests/.fixture-obj; \
+		mv -f "$$tmp" '$@'; \
+	fi
 
 tests/snajpagent-fixture: $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS)
 	rm -rf tests/.fixture-obj
@@ -97,12 +125,11 @@ tests/test_tools: src/base.c src/json.c src/credential.c src/secret.c src/config
 		-o $@ src/base.c src/json.c src/credential.c src/secret.c \
 		src/config.c src/turn.c src/tools.c src/tools_patch.c tests/test_tools.c $(LDLIBS)
 
-tests/test_store: CPPFLAGS += -DSNAJPAGENT_TEST_FIXTURE=1
 tests/test_store: src/base.c src/json.c src/instructions.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(HEADERS)
-	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+	$(CC) $(CPPFLAGS) -DSNAJPAGENT_TEST_FIXTURE=1 $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ src/base.c src/json.c src/instructions.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(LDLIBS)
 
-check: tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store tests/snajpagent-fixture
+check: $(TEST_BIN)
 	./tests/test_base
 	./tests/test_config
 	./tests/test_irc
@@ -233,7 +260,7 @@ sizecheck:
 	test "$$prod" -le 35000 && test "$$all" -le 50000 && test "$$units" -le 30
 
 clean:
-	rm -f $(BIN) src/*.o src/*.d tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store tests/snajpagent-fixture
+	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN)
 	rm -rf tests/.fixture-obj build
 
 install: $(BIN)
@@ -241,6 +268,8 @@ install: $(BIN)
 	cp $(BIN) $(DESTDIR)$(PREFIX)/bin/$(BIN)
 	chmod 0755 $(DESTDIR)$(PREFIX)/bin/$(BIN)
 
-.PHONY: all check statuscheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install
+FORCE:
+
+.PHONY: all check statuscheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d
