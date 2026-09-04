@@ -193,7 +193,6 @@ init_server_config(struct snj_config *config, unsigned short port)
 
     snj_config_init(config);
     endpoint(address, port);
-    config->irc_daemon = true;
     config->irc_listen_explicit = true;
     assert(snprintf(config->irc_listen, sizeof(config->irc_listen),
                     "%s", address) > 0);
@@ -231,12 +230,6 @@ test_validation(void)
     snj_config_free(&config);
 
     snj_config_init(&config);
-    config.irc_daemon = true;
-    error[0] = '\0';
-    assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
-    snj_config_free(&config);
-
-    snj_config_init(&config);
     config.irc_client_count = 2u;
     memcpy(config.irc_clients[0], "localhost", 10u);
     memcpy(config.irc_clients[1], "localhost:6667", 15u);
@@ -256,7 +249,7 @@ test_validation(void)
     snj_config_free(&config);
 
     snj_config_init(&config);
-    config.irc_daemon = true;
+    config.irc_listen_explicit = true;
     memcpy(config.irc_model_nick, "worker", 7u);
     memcpy(config.irc_operator_nick, "WORKER", 7u);
     error[0] = '\0';
@@ -264,7 +257,7 @@ test_validation(void)
     snj_config_free(&config);
 
     snj_config_init(&config);
-    config.irc_daemon = true;
+    config.irc_listen_explicit = true;
     memcpy(config.irc_model_nick, "b\xc3\xb6t", 5u);
     memcpy(config.irc_operator_nick, "alice", 6u);
     error[0] = '\0';
@@ -272,7 +265,7 @@ test_validation(void)
     snj_config_free(&config);
 
     snj_config_init(&config);
-    config.irc_daemon = true;
+    config.irc_listen_explicit = true;
     memcpy(config.irc_model_nick, "bad\xc2\x85", 6u);
     memcpy(config.irc_operator_nick, "alice", 6u);
     error[0] = '\0';
@@ -280,7 +273,7 @@ test_validation(void)
     snj_config_free(&config);
 
     snj_config_init(&config);
-    config.irc_daemon = true;
+    config.irc_listen_explicit = true;
     memcpy(config.irc_model_nick, "bad\xc2\xa0nick", 10u);
     memcpy(config.irc_operator_nick, "alice", 6u);
     error[0] = '\0';
@@ -288,7 +281,7 @@ test_validation(void)
     snj_config_free(&config);
 
     snj_config_init(&config);
-    config.irc_daemon = true;
+    config.irc_listen_explicit = true;
     memcpy(config.irc_model_nick, "worker", 7u);
     memcpy(config.irc_operator_nick, "alice", 6u);
     memcpy(config.irc_room_name, "bad\xe2\x80\x8broom", 11u);
@@ -310,14 +303,12 @@ test_cli_network_roles(void)
     cli.irc_operator_nick = "operator";
     snj_config_init(&config);
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
-    assert(!config.irc_daemon);
-    assert(!config.irc_listen_explicit);
-    assert(config.irc_client_count == 1u);
-    assert(strcmp(config.irc_clients[0], "irc.example:7667") == 0);
+    assert(config.irc_listen_explicit);
+    assert(strcmp(config.irc_listen, "irc.example:7667") == 0);
+    assert(config.irc_client_count == 0u);
     snj_config_free(&config);
 
     memset(&cli, 0, sizeof(cli));
-    cli.irc_daemon = true;
     cli.irc_listen = "127.0.0.1:7667";
     cli.irc_clients[0] = "upstream.example:6667";
     cli.irc_client_count = 1u;
@@ -326,7 +317,6 @@ test_cli_network_roles(void)
     snj_config_init(&config);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
-    assert(config.irc_daemon);
     assert(config.irc_listen_explicit);
     assert(strcmp(config.irc_listen, "127.0.0.1:7667") == 0);
     assert(config.irc_client_count == 1u);

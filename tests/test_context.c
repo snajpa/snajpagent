@@ -1511,7 +1511,7 @@ main(void)
         const char *gate_text;
 
         snj_config_init(&network_config);
-        network_config.irc_daemon = true;
+        network_config.irc_listen_explicit = true;
         memcpy(network_config.irc_model_nick, "builder", 8u);
         memcpy(network_config.irc_operator_nick, "alice", 6u);
         assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
@@ -1615,7 +1615,7 @@ main(void)
 
         snj_config_init(&network_config);
         network_config.max_timeout_ms = 7654321u;
-        network_config.irc_daemon = true;
+        network_config.irc_listen_explicit = true;
         memcpy(network_config.irc_model_nick, "builder", 8u);
         memcpy(network_config.irc_operator_nick, "alice", 6u);
         assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,

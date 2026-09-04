@@ -135,9 +135,8 @@
   provider, durable, redirected, or IRC bytes; no-color mode retains readable
   structural rendering.
 
-- Added first-class IRC agent/operator chat: `-d`/`--daemon` hosts one bounded
-  room, `-s`/`--listen` connects like `-c` unless daemon mode makes it the
-  listener, repeatable `-c`/`--client` connections join advertised rooms and
+- Added first-class IRC agent/operator chat: `-s`/`--listen` hosts one bounded
+  room, repeatable `-c`/`--client` connections join advertised rooms and
   reconnect autonomously, and combined roles share one durable session and
   timestamped non-windowed chat UI.
   Networked mode requires `-n`/`--model-nick`; `-o`/`--operator-nick` and
@@ -155,10 +154,9 @@
   reveals terminal model replies and complete tool activity, `-vv` adds
   commentary, and higher levels add lower-priority runtime/IRC diagnostics.
 
-- Reassigned the `-d`, `-c`, `-r`, and `-o` short options to daemon, client,
-  room name, and operator nick. Their former dotdir, config, resume, and effort
-  functions remain available as `--dotdir`, `--config`, `--resume`, and
-  `--effort`.
+- Reassigned the `-c`, `-r`, and `-o` short options to client, room name, and
+  operator nick. Their former config, resume, and effort functions remain
+  available as `--config`, `--resume`, and `--effort`.
 
 - Added permanent narrow-tmux rendered-screen regression coverage, including
   one production IRC server and two production clients using loopback fake

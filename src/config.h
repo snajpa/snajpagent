@@ -68,7 +68,6 @@ struct snj_config {
     bool markdown;
     unsigned int resume_history_turns;
     uint32_t typing_pause_ms;
-    bool irc_daemon;
     bool irc_listen_explicit;
     char irc_listen[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char irc_clients[SNJ_CONFIG_IRC_CLIENT_MAX]

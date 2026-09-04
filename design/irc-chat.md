@@ -8,15 +8,14 @@ agent/session and presents its terminal as an operator-facing chat client. It
 may host one local IRC room, connect to one or more snajpagent IRC servers, or
 do both in the same foreground process. IRC is a first-class input, output,
 tool, event-loop, durability, context, and rendering path inside snajpagent;
-it is not a wrapper script, helper daemon, or terminal-only adapter.
+it is not a wrapper script, helper service, or terminal-only adapter.
 
 ## Command Line Contract
 
 The network options are:
 
 ```text
--d, --daemon                 host the built-in IRC server
--s, --listen[=ENDPOINT]      connect, or select the listener with -d
+-s, --listen[=ENDPOINT]      host the built-in IRC server
 -c, --client[=ENDPOINT]      connect to a server; repeatable
 -n, --model-nick NICK        model IRC nick
 -o, --operator-nick NICK     local operator IRC nick
@@ -25,14 +24,12 @@ The network options are:
     --no-color               alias for --color=never
 ```
 
-`-d` adds the IRC server to the normal foreground snajpagent process; it does
-not fork, detach, or hide the operator UI. Without daemon mode, `-s` adds one
-outgoing connection like `-c`; with daemon mode, it selects the endpoint used
-by the built-in server. `-c` always adds an outgoing server connection and may
-be given more than once. Server and client roles are deliberately composable,
-including `-d -s ENDPOINT -c ENDPOINT`. Incoming traffic is presented to the
-one local agent and operator, but is not blindly bridged from one server to
-another.
+`-s` adds the IRC server to the normal foreground snajpagent process and
+selects its endpoint. The server never forks, detaches, or hides the operator
+UI. `-c` adds an outgoing server connection and may be given more than once.
+Server and client roles are deliberately composable, including
+`-s ENDPOINT -c ENDPOINT`. Incoming traffic is presented to the one local
+agent and operator, but is not blindly bridged from one server to another.
 
 The default endpoint is `localhost:6667`. A bare `-s`, `--listen`, `-c`, or
 `--client` uses it. An explicit endpoint accepts `HOST`, `HOST:PORT`,
@@ -47,11 +44,11 @@ separate nick used for text typed in the local UI. Its default is the current
 login identifier when that is a valid IRC nick, then `operator`. The two local
 nicks must differ under IRC case folding.
 
-`-r`/`--room-name` applies to the hosted room and requires `-d`. A leading `#`
+`-r`/`--room-name` applies to the hosted room and requires `-s`. A leading `#`
 is optional on input and is present on the wire and in the UI.
 
-The requested short options replace four older short aliases. The displaced
-local features remain available, without ambiguity, through their existing
+`-c`, `-r`, and `-o` replace older short aliases. Their displaced local
+features, and dotdir selection, remain available without ambiguity through
 long forms:
 
 ```text
@@ -70,12 +67,11 @@ precede it; only a follow-up chat prompt requires `--`.
 Examples:
 
 ```sh
-snajpagent -d -n builder
-snajpagent -d -s 0.0.0.0:6667 -n builder -o alice
-snajpagent -s irc-a.example:6667 -n worker -o bob
+snajpagent -s -n builder
+snajpagent -s 0.0.0.0:6667 -n builder -o alice
 snajpagent -c -n worker -o bob
 snajpagent -c irc-a.example:6667 -c '[2001:db8::20]:6667' -n worker
-snajpagent -d -s localhost:7667 -c upstream.example -n relay-worker
+snajpagent -s localhost:7667 -c upstream.example -n relay-worker
 ```
 
 ## Configuration And Precedence
@@ -84,7 +80,6 @@ Every network command-line setting has a configuration equivalent:
 
 ```ini
 [irc]
-daemon = true
 listen = localhost:6667
 client = localhost:6667
 client = irc.example:6667
@@ -98,11 +93,10 @@ color = auto
 ```
 
 `client` is the one intentionally repeatable configuration key. There may be
-at most 16 distinct outgoing endpoints. Any command-line `-c` occurrences, or
-a standalone `-s`, replace the configured client list; repeated `-c`
-occurrences retain their order. Command-line scalar values override configured
-values. `-d` enables a configured-off daemon, while `listen`, `model_nick`,
-`operator_nick`, and `room_name` otherwise supply their documented defaults.
+at most 16 distinct outgoing endpoints. Command-line `-c` occurrences replace
+the configured client list and retain their order. `-s` overrides the
+configured listener, while `listen` in configuration enables the built-in
+server directly. Other command-line scalar values override configured values.
 
 `history_lines` bounds both the server's in-memory room history and the fresh
 history snapshot projected after compaction. It accepts 1 through 1000 and
@@ -411,8 +405,8 @@ events can become model input.
 On every resumable exit, the process prints a POSIX-shell-quoted command whose
 effective network arguments reconstruct that process configuration. A
 client-only command carries every outgoing endpoint; a server command carries
-daemon mode, its listener, room, and local nicks; a combined command carries
-both sets. It also reuses the same dotdir and explicit config path and resumes
+its listener, room, and local nicks; a combined command carries both sets. It
+also reuses the same dotdir and explicit config path and resumes
 the exact durable session. The output contains no credentials or chat text.
 SIGHUP and SIGTERM unwind through this path; SIGKILL and machine loss cannot.
 

@@ -69,7 +69,6 @@ main(void)
         "resume_history_turns = 0\n"
         "typing_pause_ms = 750\n"
         "\n[irc]\n"
-        "daemon = true\n"
         "listen = 127.0.0.1:7667\n"
         "client = irc-a.example\n"
         "client = [2001:db8::20]:7667\n"
@@ -108,7 +107,6 @@ main(void)
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
-    assert(!config.irc_daemon);
     assert(!config.irc_listen_explicit);
     assert(strcmp(config.irc_listen, "localhost:6667") == 0);
     assert(config.irc_client_count == 0u);
@@ -191,7 +189,6 @@ main(void)
     assert(!config.markdown);
     assert(config.resume_history_turns == 0u);
     assert(config.typing_pause_ms == 750u);
-    assert(config.irc_daemon);
     assert(config.irc_listen_explicit);
     assert(strcmp(config.irc_listen, "127.0.0.1:7667") == 0);
     assert(config.irc_client_count == 2u);

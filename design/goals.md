@@ -4,7 +4,7 @@
 
 `/goal` runs one user objective across as many ordinary model turns as the
 objective needs. Goals belong to the current durable session and run only in
-the foreground snajpagent process. There is no daemon or background worker.
+the foreground snajpagent process, with no background worker.
 
 ## Command Grammar
 

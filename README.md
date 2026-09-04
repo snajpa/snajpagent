@@ -104,8 +104,8 @@ The repository vendors no third-party implementation source. See
 printf 'run the tests and summarize failures\n' | ./snajpagent -e
 ./snajpagent --resume --last -- "continue"
 ./snajpagent -l
-./snajpagent -d -n builder
-./snajpagent -s irc.example:6667 -n worker -o alice
+./snajpagent -s -n builder
+./snajpagent -s 0.0.0.0:6667 -n builder -o alice
 ./snajpagent -c irc.example:6667 -n worker -o alice
 ```
 
@@ -145,8 +145,7 @@ Useful options:
 
 ```text
 -C DIR      run in a specific workspace
--d          host the built-in IRC server
--s ENDPOINT connect to IRC, or choose the listener with -d
+-s ENDPOINT host the built-in IRC server (default localhost:6667)
 -c ENDPOINT connect to IRC; repeatable (default localhost:6667)
 -n NICK     networked model nick (required in networked mode)
 -o NICK     local operator nick
@@ -162,13 +161,12 @@ Useful options:
 --no-markdown  show model Markdown literally
 ```
 
-`--daemon`, `--listen`, `--client`, `--model-nick`, `--operator-nick`, and
-`--room-name` are the long forms of the network options. Without daemon mode,
-`-s`/`--listen` adds an outgoing connection like `-c`/`--client`; with daemon
-mode, it selects the listener while any `-c` connections remain outgoing.
-Bare `-s` or `-c` uses `localhost:6667`. The former `-d`, `-c`, `-r`, and `-o`
-meanings remain available as `--dotdir`, `--config`, `--resume`, and
-`--effort`. Dotdir and explicit configuration paths must be absolute.
+`--listen`, `--client`, `--model-nick`, `--operator-nick`, and `--room-name`
+are the long forms of the network options. `-s`/`--listen` hosts the built-in
+server; only `-c`/`--client` creates an outgoing connection. Bare `-s` or `-c`
+uses `localhost:6667`. The former `-c`, `-r`, and `-o` meanings remain
+available as `--config`, `--resume`, and `--effort`. Dotdir and explicit
+configuration paths must be absolute.
 
 The built-in help is intentionally short:
 
@@ -277,16 +275,14 @@ FIFO position with Enter (or with Tab while another turn is active).
 
 ## IRC Chat Mode
 
-`-d` hosts the bounded built-in IRC server in the normal foreground process;
-it does not detach. Without `-d`, `-s` adds an outgoing connection just like
-`-c`; with `-d`, `-s` selects the listener. Each `-c` always adds an outgoing
+`-s` hosts the bounded built-in IRC server in the normal foreground process
+and selects its listener. It never detaches. Each `-c` adds an outgoing
 connection, so hosting and one or more client roles can be combined. Networked
 mode requires `-n NICK`. Initial chat text in this mode must follow `--`:
 
 ```sh
-./snajpagent -d -n builder -- "introduce yourself"
-./snajpagent -d -s 0.0.0.0:7667 -n builder -o alice -r builds
-./snajpagent -s localhost:7667 -n reviewer -o bob
+./snajpagent -s -n builder -- "introduce yourself"
+./snajpagent -s 0.0.0.0:7667 -n builder -o alice -r builds
 ./snajpagent -c localhost:7667 -c irc.example:6667 -n reviewer -o bob
 ```
 
@@ -549,7 +545,6 @@ through 1000 lines and defaults to 200:
 
 ```ini
 [irc]
-daemon = true
 listen = localhost:6667
 client = localhost:7667
 client = irc.example:6667

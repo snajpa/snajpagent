@@ -111,7 +111,6 @@ struct snj_irc {
     snj_irc_event_fn event_fn;
     snj_irc_trace_fn trace_fn;
     void *event_opaque;
-    bool daemon;
     bool agent_op;
     bool operator_op;
     bool callback_failed;
@@ -438,59 +437,36 @@ config_copy(char *dst, size_t size, const char *src, const char *what,
 bool
 snj_irc_enabled(const struct snj_config *config)
 {
-    return config && (config->irc_daemon || config->irc_client_count != 0u);
+    return config &&
+        (config->irc_listen_explicit || config->irc_client_count != 0u);
 }
 
 int
 snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
                   char *error, size_t error_size)
 {
-    bool listen_as_client;
     const char *login;
 
     if (!config || !cli) {
         errno = EINVAL;
         return -1;
     }
-    if (cli->irc_daemon)
-        config->irc_daemon = true;
-    listen_as_client = cli->irc_listen && !config->irc_daemon;
-    if (cli->irc_listen && !listen_as_client &&
+    if (cli->irc_listen &&
         config_copy(config->irc_listen, sizeof(config->irc_listen),
                     cli->irc_listen, "IRC listen endpoint", error,
                     error_size) < 0)
         return -1;
-    if (cli->irc_listen && !listen_as_client)
+    if (cli->irc_listen)
         config->irc_listen_explicit = true;
-    if (listen_as_client || cli->irc_client_count) {
-        size_t next = 0u;
-
-        if (listen_as_client &&
-            cli->irc_client_count >= SNJ_CONFIG_IRC_CLIENT_MAX) {
-            set_error(error, error_size,
-                      "at most %u outgoing IRC endpoints are supported",
-                      SNJ_CONFIG_IRC_CLIENT_MAX);
-            errno = EINVAL;
-            return -1;
-        }
+    if (cli->irc_client_count) {
         memset(config->irc_clients, 0, sizeof(config->irc_clients));
         config->irc_client_count = 0u;
-        if (listen_as_client) {
-            if (config_copy(config->irc_clients[next],
-                            sizeof(config->irc_clients[next]),
-                            cli->irc_listen, "IRC client endpoint",
-                            error, error_size) < 0)
-                return -1;
-            ++next;
-            ++config->irc_client_count;
-        }
         for (size_t i = 0; i < cli->irc_client_count; ++i) {
-            if (config_copy(config->irc_clients[next],
-                            sizeof(config->irc_clients[next]),
+            if (config_copy(config->irc_clients[i],
+                            sizeof(config->irc_clients[i]),
                             cli->irc_clients[i], "IRC client endpoint",
                             error, error_size) < 0)
                 return -1;
-            ++next;
             ++config->irc_client_count;
         }
     }
@@ -509,8 +485,8 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
                     cli->irc_room_name, "IRC room name", error,
                     error_size) < 0)
         return -1;
-    if (cli->irc_room_name && !config->irc_daemon) {
-        set_error(error, error_size, "-r/--room-name requires -d/--daemon");
+    if (cli->irc_room_name && !config->irc_listen_explicit) {
+        set_error(error, error_size, "-r/--room-name requires -s/--listen");
         errno = EINVAL;
         return -1;
     }
@@ -531,10 +507,8 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
         errno = EINVAL;
         return -1;
     }
-    if (!config->irc_daemon &&
-        (config->irc_room_name[0] || config->irc_listen_explicit)) {
-        set_error(error, error_size,
-                  "IRC listen and room_name settings require daemon mode");
+    if (!config->irc_listen_explicit && config->irc_room_name[0]) {
+        set_error(error, error_size, "IRC room_name requires a listener");
         errno = EINVAL;
         return -1;
     }
@@ -2130,7 +2104,6 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     if (!irc)
         return -1;
     irc->listener = -1;
-    irc->daemon = config->irc_daemon;
     irc->event_fn = event_fn;
     irc->trace_fn = trace_fn;
     irc->event_opaque = event_opaque;
@@ -2163,7 +2136,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     for (size_t i = 0; i < IRC_SERVER_PEERS; ++i)
         irc->peers[i].fd = -1;
     for (size_t i = 0; i < config->irc_client_count; ++i) {
-        if (irc->daemon &&
+        if (config->irc_listen_explicit &&
             endpoint_equal(config->irc_clients[i], config->irc_listen))
             continue;
         for (size_t role = 0; role < 2u; ++role) {
@@ -2179,7 +2152,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
                               role == 0u ? irc->model_nick : irc->operator_nick);
         }
     }
-    if (irc->daemon) {
+    if (config->irc_listen_explicit) {
         irc->listener = open_listener(irc->listen, error, error_size);
         if (irc->listener < 0)
             goto fail;
@@ -2335,7 +2308,7 @@ utf8_chunk(const char *text, size_t len, size_t max)
 static bool
 role_is_op(const struct snj_irc *irc, enum link_role role)
 {
-    if (irc->daemon &&
+    if (irc->listener >= 0 &&
         (role == LINK_AGENT ? irc->agent_op : irc->operator_op))
         return true;
     for (size_t i = 0u; i < irc->link_count; ++i)
@@ -2352,7 +2325,7 @@ send_chat_line(struct snj_irc *irc, const char *nick, enum link_role role,
 {
     char clean[IRC_TEXT_CHUNK + 1u];
     struct snj_irc_event event;
-    const char *room = irc->daemon ? irc->room : "";
+    const char *room = irc->listener >= 0 ? irc->room : "";
 
     if (!len || len > IRC_TEXT_CHUNK)
         return 0;
@@ -2365,7 +2338,7 @@ send_chat_line(struct snj_irc *irc, const char *nick, enum link_role role,
     }
     if (!clean[0])
         return 0;
-    if (irc->daemon &&
+    if (irc->listener >= 0 &&
         server_broadcast(irc, ":%s!local@%s %s %s :%s", nick,
                          irc->server_name,
                          kind == SNJ_IRC_NOTICE ? "NOTICE" : "PRIVMSG",
@@ -2470,7 +2443,7 @@ set_topic_as(struct snj_irc *irc, const char *topic, enum link_role role,
         set_error(error, error_size, "IRC topic is invalid or too long");
         return -1;
     }
-    if (irc->daemon &&
+    if (irc->listener >= 0 &&
         (role == LINK_AGENT ? irc->agent_op : irc->operator_op)) {
         memcpy(irc->topic, clean, strlen(clean) + 1u);
         if (server_broadcast(irc, ":%s!local@%s TOPIC %s :%s",
@@ -2533,12 +2506,12 @@ snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
             "[IRC room snapshot; @ marks a channel operator]\n"
             "model nick: %s\noperator nick: %s\nhosted: %s\n",
             irc->model_nick, irc->operator_nick,
-            irc->daemon ? irc->listen : "no") < 0 ||
-        (irc->daemon &&
+            irc->listener >= 0 ? irc->listen : "no") < 0 ||
+        (irc->listener >= 0 &&
          snj_buf_printf(out, "room: %s\ntopic: %s\n",
                         irc->room, irc->topic) < 0))
         goto fail;
-    if (irc->daemon) {
+    if (irc->listener >= 0) {
         if (snj_buf_printf(out, "members[%s]: %s%s %s%s", irc->listen,
                            irc->agent_op ? "@" : "", irc->model_nick,
                            irc->operator_op ? "@" : "",

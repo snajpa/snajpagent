@@ -1660,7 +1660,7 @@ def test_config_editor_reload():
     network.write_text(
         "[agent]\nmodel = network-default\nreasoning_effort = medium\n"
         "[provider]\napi_key_env = OPENAI_API_KEY\n"
-        "[irc]\ndaemon = true\n"
+        "[irc]\n"
         f"listen = 127.0.0.1:{network_port}\n"
         "model_nick = reloadagent\noperator_nick = reloadop\n"
         "room_name = lab\n",
@@ -1945,14 +1945,15 @@ def test_exit_resume_matrix():
     occupied_endpoint = f"127.0.0.1:{occupied.getsockname()[1]}"
     before = session_ids()
     failed = Child([
-        "--no-color", "-d", "-s", occupied_endpoint,
+        "--no-color", "-s", occupied_endpoint,
         "-n", "agent", "-o", "localop", "-r", "lab",
     ])
     failed_command = failed.finish(expected=3)
     failed_arguments = command_arguments(failed_command)
     failed_id = new_session(before)
     assert failed_arguments[-2:] == ["--resume", failed_id]
-    assert "--daemon" in failed_arguments
+    assert failed_arguments[failed_arguments.index("--listen") + 1] == \
+        occupied_endpoint
     occupied.close()
 
 
@@ -1975,7 +1976,6 @@ def test_network_resume_roles():
     for connection in first_links:
         connection.close()
     client_arguments = command_arguments(client_command)
-    assert "--daemon" not in client_arguments
     assert "--listen" not in client_arguments
     assert client_arguments.count("--client") == 1
     assert client_arguments[client_arguments.index("--client") + 1] == \
@@ -1992,7 +1992,7 @@ def test_network_resume_roles():
     server_endpoint = f"127.0.0.1:{server_port}"
     before = session_ids()
     server = Child([
-        "--no-color", "-d", "-s", server_endpoint,
+        "--no-color", "-s", server_endpoint,
         "-n", "serveragent", "-o", "serverop", "-r", "lab",
     ])
     server.wait(PROMPT)
@@ -2001,7 +2001,6 @@ def test_network_resume_roles():
     peer.close()
     server_command = server.exit_now()
     server_arguments = command_arguments(server_command)
-    assert "--daemon" in server_arguments
     assert server_arguments[server_arguments.index("--listen") + 1] == \
         server_endpoint
     assert "--client" not in server_arguments
@@ -2018,7 +2017,7 @@ def test_network_resume_roles():
     combined_endpoint = f"127.0.0.1:{combined_port}"
     before = session_ids()
     combined = Child([
-        "--no-color", "-d", "-s", combined_endpoint,
+        "--no-color", "-s", combined_endpoint,
         "-c", upstream_endpoint,
         "-n", "combinedagent", "-o", "combinedop", "-r", "lab",
     ])
@@ -2031,7 +2030,6 @@ def test_network_resume_roles():
     for connection in first_links:
         connection.close()
     combined_arguments = command_arguments(combined_command)
-    assert "--daemon" in combined_arguments
     assert combined_arguments[combined_arguments.index("--listen") + 1] == \
         combined_endpoint
     assert combined_arguments[combined_arguments.index("--client") + 1] == \
@@ -2074,7 +2072,7 @@ def test_network_chat_and_managed_mention():
     network_workspace = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "network-workspace"
     network_workspace.mkdir()
     child = Child([
-        "-d", "-s", endpoint, "-n", "agent", "-o", "localop",
+        "-s", endpoint, "-n", "agent", "-o", "localop",
         "-r", "lab", "-C", str(network_workspace), "--no-color",
     ])
     human = None

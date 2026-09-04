@@ -184,13 +184,6 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
             if (cli->verbosity < 6u)
                 ++cli->verbosity;
             break;
-        case 'd':
-            if (cli->irc_daemon) {
-                set_error(error, error_size, "duplicate -d option");
-                return -1;
-            }
-            cli->irc_daemon = true;
-            break;
         case 'e':
             if (cli->execute) {
                 set_error(error, error_size, "duplicate -e option");
@@ -337,9 +330,6 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         } else if (strcmp(arg, "--all") == 0) {
             if (cli->all) { set_error(error, error_size, "duplicate --all option"); return -1; }
             cli->all = true;
-        } else if (strcmp(arg, "--daemon") == 0) {
-            if (cli->irc_daemon) { set_error(error, error_size, "duplicate --daemon option"); return -1; }
-            cli->irc_daemon = true;
         } else if (strcmp(arg, "--resume") == 0) {
             if (cli->resume) { set_error(error, error_size, "duplicate --resume option"); return -1; }
             cli->resume = true;
@@ -466,21 +456,21 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         return 0;
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->workspace ||
                       cli->model || cli->effort || cli->verbosity ||
-                      cli->irc_daemon || cli->irc_listen ||
+                      cli->irc_listen ||
                       cli->irc_client_count || cli->irc_model_nick ||
                       cli->irc_operator_nick || cli->irc_room_name)) {
         set_error(error, error_size,
                   "-l accepts only --config, --dotdir, --all, and color options");
         return -1;
     }
-    if (cli->execute && (cli->irc_daemon || cli->irc_listen ||
+    if (cli->execute && (cli->irc_listen ||
                          cli->irc_client_count || cli->irc_model_nick ||
                          cli->irc_operator_nick || cli->irc_room_name)) {
         set_error(error, error_size,
                   "-e cannot be combined with network options");
         return -1;
     }
-    if ((cli->irc_daemon || cli->irc_listen || cli->irc_client_count) &&
+    if ((cli->irc_listen || cli->irc_client_count) &&
         positional >= 0 && !dashdash && !cli->resume) {
         set_error(error, error_size,
                   "networked initial chat text must follow --");
@@ -568,8 +558,7 @@ snj_cli_usage(int fd)
         "       " SNAJPAGENT_NAME " --resume [OPTIONS] [SESSION_ID|--last] [-- FOLLOW-UP...]\n"
         "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n"
         "       " SNAJPAGENT_NAME " -l [OPTIONS]\n"
-        "  -d, --daemon                 host the IRC server in this process\n"
-        "  -s, --listen[=ENDPOINT]      connect, or listen with -d\n"
+        "  -s, --listen[=ENDPOINT]      host the IRC server on ENDPOINT\n"
         "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"
         "  -n, --model-nick NICK        required networked model nick\n"
         "  -o, --operator-nick NICK     local operator nick\n"

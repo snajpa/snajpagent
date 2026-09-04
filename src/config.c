@@ -118,7 +118,6 @@ snj_config_init(struct snj_config *config)
     config->markdown = true;
     config->resume_history_turns = 2u;
     config->typing_pause_ms = 500u;
-    config->irc_daemon = false;
     memcpy(config->irc_listen, "localhost:6667", 15u);
     config->irc_history_lines = 200u;
     config->shell = snj_strdup_checked("/bin/sh", SNJ_CONFIG_PATH_MAX);
@@ -610,11 +609,8 @@ parse_irc(struct parse_state *state, const char *key, const char *value)
 {
     struct snj_config *config = state->config;
 
-    if (strcmp(key, "daemon") == 0)
-        return claim_key(state, 0u) < 0 ? -1 :
-               parse_bool(value, &config->irc_daemon);
     if (strcmp(key, "listen") == 0) {
-        if (claim_key(state, 1u) < 0 ||
+        if (claim_key(state, 0u) < 0 ||
             copy_value(config->irc_listen, sizeof(config->irc_listen),
                        value) < 0)
             return -1;
@@ -634,19 +630,19 @@ parse_irc(struct parse_state *state, const char *key, const char *value)
         return 0;
     }
     if (strcmp(key, "model_nick") == 0)
-        return claim_key(state, 2u) < 0 ? -1 :
+        return claim_key(state, 1u) < 0 ? -1 :
                copy_value(config->irc_model_nick,
                           sizeof(config->irc_model_nick), value);
     if (strcmp(key, "operator_nick") == 0)
-        return claim_key(state, 3u) < 0 ? -1 :
+        return claim_key(state, 2u) < 0 ? -1 :
                copy_value(config->irc_operator_nick,
                           sizeof(config->irc_operator_nick), value);
     if (strcmp(key, "room_name") == 0)
-        return claim_key(state, 4u) < 0 ? -1 :
+        return claim_key(state, 3u) < 0 ? -1 :
                copy_value(config->irc_room_name,
                           sizeof(config->irc_room_name), value);
     if (strcmp(key, "history_lines") == 0)
-        return claim_key(state, 5u) < 0 ? -1 :
+        return claim_key(state, 4u) < 0 ? -1 :
                parse_u32(value, 1u, 1000u, &config->irc_history_lines);
 invalid:
     errno = EINVAL;

@@ -26,7 +26,6 @@ struct snj_cli {
     bool list;
     bool last;
     bool all;
-    bool irc_daemon;
     bool prompt_after_dashdash;
     bool help;
     bool version;

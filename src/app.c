@@ -1484,8 +1484,7 @@ static bool
 irc_config_equal(const struct snj_config *left,
                  const struct snj_config *right)
 {
-    if (left->irc_daemon != right->irc_daemon ||
-        left->irc_listen_explicit != right->irc_listen_explicit ||
+    if (left->irc_listen_explicit != right->irc_listen_explicit ||
         strcmp(left->irc_listen, right->irc_listen) != 0 ||
         left->irc_client_count != right->irc_client_count ||
         strcmp(left->irc_model_nick, right->irc_model_nick) != 0 ||
@@ -1592,7 +1591,8 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     snj_term_set_commands(&app->term, commands, command_count(app));
     snj_term_set_typing_pause(&app->term, app->config->typing_pause_ms);
     snj_config_free(&previous);
-    if (replace_irc && app->networked && app->config->irc_daemon &&
+    if (replace_irc && app->networked &&
+        app->config->irc_listen_explicit &&
         snj_app_irc_snapshot(app, "join", error, error_size) < 0) {
         rc = -1;
         goto out;
@@ -3412,10 +3412,9 @@ build_resume_command(const struct app_state *app, const char *program,
         append_command_option(command, "--effort", app->staged_effort) < 0)
         goto out;
     if (app->networked) {
-        if (config->irc_daemon &&
-            (append_command_literal(command, "--daemon") < 0 ||
-             append_command_option(command, "--listen",
-                                   config->irc_listen) < 0))
+        if (config->irc_listen_explicit &&
+            append_command_option(command, "--listen",
+                                  config->irc_listen) < 0)
             goto out;
         for (size_t i = 0u; i < config->irc_client_count; ++i)
             if (append_command_option(command, "--client",
@@ -3426,7 +3425,7 @@ build_resume_command(const struct app_state *app, const char *program,
             append_command_option(command, "--operator-nick",
                                   config->irc_operator_nick) < 0)
             goto out;
-        if (config->irc_daemon && config->irc_room_name[0] &&
+        if (config->irc_listen_explicit && config->irc_room_name[0] &&
             append_command_option(command, "--room-name",
                                   config->irc_room_name) < 0)
             goto out;
@@ -3949,7 +3948,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
                          snj_app_irc_event, snj_app_irc_trace, &app,
                          error, sizeof(error)) < 0 ||
             snj_app_irc_restore(&app, error, sizeof(error)) < 0 ||
-            (config.irc_daemon &&
+            (config.irc_listen_explicit &&
              snj_app_irc_snapshot(&app, "join", error, sizeof(error)) < 0)) {
             (void)snj_render_error_ctx(&app.render, error[0] ? error :
                                    "IRC startup failed");

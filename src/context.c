@@ -2008,7 +2008,7 @@ snj_context_build(struct snj_session *session, const char *model,
     builder.max_output_tokens = max_output_tokens;
     builder.max_output_known = max_output_known;
     builder.networked = config &&
-        (config->irc_daemon || config->irc_client_count != 0u);
+        (config->irc_listen_explicit || config->irc_client_count != 0u);
     if (session && session->active_turn_id[0])
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));

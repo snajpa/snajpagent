@@ -58,7 +58,7 @@ version=$($bin -V)
 
 $bin -h >"$root/help" 2>"$root/help.err"
 [ ! -s "$root/help.err" ]
-grep -q -- '-d, --daemon' "$root/help"
+grep -q -- '-s, --listen\[=ENDPOINT\]' "$root/help"
 grep -q -- '-c, --client\[=ENDPOINT\]' "$root/help"
 grep -q -- '--model-nick NICK' "$root/help"
 grep -q -- '--operator-nick NICK' "$root/help"
@@ -69,11 +69,10 @@ grep -q -- '--no-markdown' "$root/help"
 grep -q "^usage: $SNAJPAGENT_TEST_NAME " "$root/help"
 
 for args in \
-    '-d' \
     '-r room -n worker' \
-    '-d -n worker -o WORKER' \
+    '-s -n worker -o WORKER' \
     '-c localhost -c localhost:6667 -n worker' \
-    '-d -n worker initial'; do
+    '-s -n worker initial'; do
     set +e
     # These arguments contain no quoting-sensitive values.
     $bin $args >"$root/network-invalid.out" 2>"$root/network-invalid.err"
@@ -105,7 +104,7 @@ done
 
 cat >"$root/network-config.ini" <<'EOF'
 [irc]
-daemon = true
+listen = localhost:6667
 model_nick = worker
 EOF
 set +e
@@ -127,13 +126,13 @@ $bin --config "$root/listen-only.ini" >"$root/listen-only.out" \
 status=$?
 set -e
 [ "$status" -eq 2 ]
-grep -q 'require a server or client role' "$root/listen-only.err"
+grep -q 'requires a valid -n/--model-nick' "$root/listen-only.err"
 
 cat >"$root/color-network-error.ini" <<'EOF'
 [ui]
 color = always
 [irc]
-daemon = true
+listen = localhost:6667
 EOF
 set +e
 $bin --config "$root/color-network-error.ini" \
@@ -144,14 +143,14 @@ set -e
 LC_ALL=C grep -q "$(printf '\033')" "$root/color-network-error.err"
 
 set +e
-$bin --no-color -d >"$root/no-color-error.out" 2>"$root/no-color-error.err"
+$bin --no-color -s >"$root/no-color-error.out" 2>"$root/no-color-error.err"
 status=$?
 set -e
 [ "$status" -eq 2 ]
 ! LC_ALL=C grep -q "$(printf '\033')" "$root/no-color-error.err"
 
 set +e
-$bin --color -d >"$root/color-error.out" 2>"$root/color-error.err"
+$bin --color -s >"$root/color-error.out" 2>"$root/color-error.err"
 status=$?
 set -e
 [ "$status" -eq 2 ]
@@ -177,7 +176,7 @@ done
 
 for option in --client= --listen=; do
     set +e
-    $bin "$option" -d -n worker >"$root/empty-endpoint.out" \
+    $bin "$option" -n worker >"$root/empty-endpoint.out" \
         2>"$root/empty-endpoint.err"
     status=$?
     set -e

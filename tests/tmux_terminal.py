@@ -1434,13 +1434,13 @@ def run_irc_case(binary, root):
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
     specs = [
         ("host", "host-model", "hostbot", "hostop",
-         ["-d", "-s", endpoint, "-n", "hostbot", "-o", "hostop",
+         ["-s", endpoint, "-n", "hostbot", "-o", "hostop",
           "-r", "lab", "--color=always"]),
         ("one", "one-model", "onebot", "oneop",
          ["-c", endpoint, "-n", "onebot", "-o", "oneop",
           "--color=always"]),
         ("two", "two-model", "twobot", "twoop",
-         ["-s", endpoint, "-n", "twobot", "-o", "twoop",
+         ["-c", endpoint, "-n", "twobot", "-o", "twoop",
           "--color=always"]),
     ]
     terminals = {}
