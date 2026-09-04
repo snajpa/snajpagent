@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -654,6 +655,25 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                 goto allocation;
         }
         return 0;
+    }
+    if (strcmp(prompt, "one_shot_signal_wait") == 0) {
+        if (emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                        SNJ_PHASE_COMMENTARY,
+                        "msg_fixture_one_shot_signal_wait",
+                        "waiting for shutdown\n", 0) < 0)
+            goto allocation;
+        for (unsigned int i = 0u; i < 100u; ++i) {
+            int pump_rc;
+
+            (void)poll(NULL, 0u, 20);
+            pump_rc = pump(opaque, 0u);
+            if (pump_rc != 0)
+                return pump_rc;
+        }
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_one_shot_signal_final",
+                           "shutdown was not requested", 0);
     }
     if (strcmp(prompt, "slow") == 0 || strcmp(prompt, "slow_utf8") == 0 ||
         strcmp(prompt, "queue_slow") == 0) {

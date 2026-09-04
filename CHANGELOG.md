@@ -8,6 +8,15 @@
   use hyphens, dashes, periods, commas, and similar closing punctuation as the
   following wrap opportunity through one shared Markdown/literal code path.
 
+- Added exactly one copy/paste-safe resume command after every eligible
+  session exit, including `/exit`, Ctrl-D/EOF, idle Ctrl-C, `/archive`,
+  one-shot completion, post-session errors, and graceful SIGHUP/SIGTERM
+  shutdown. It preserves config/dotdir provenance, pending one-turn and
+  presentation overrides, and effective standalone or combined IRC roles
+  without including prompts or secrets; `/delete` and pre-session exits do not
+  print one. Network options can now precede an exact `--resume SESSION_ID`
+  without misclassifying the ID as initial chat text.
+
 - Added Codex-style bullets and visible separation to terminal model prose.
   Each paragraph starts with `• `, while wrapped continuation lines stay
   flush-left and stored, provider, redirected, and IRC bytes remain unchanged.

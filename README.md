@@ -18,6 +18,8 @@ interactive path is usable.
   pause/resume, user-controlled wording locks, and explicit completion or
   blocking from the model.
 - Durable `--resume` support without a background worker or tmux session.
+- A copy/paste-safe `resume: ...` command on every resumable session exit,
+  including commands that restore outgoing IRC clients or the built-in server.
 - First-class single-room IRC hosting and repeatable outgoing connections for
   agent/operator chat, with reconnects, bounded history, and operator-aware
   model steering.
@@ -96,6 +98,23 @@ printf 'run the tests and summarize failures\n' | ./snajpagent -e
 ./snajpagent -s irc.example:6667 -n worker -o alice
 ./snajpagent -c irc.example:6667 -n worker -o alice
 ```
+
+When a process has opened or created a durable session, normal shutdown prints
+exactly one `resume: COMMAND` line to stderr after restoring the terminal. This
+includes `/exit`, idle Ctrl-C, Ctrl-D or terminal EOF, `/archive`, one-shot
+completion, runtime failure, and graceful SIGHUP/SIGTERM shutdown. Ctrl-C
+during a turn keeps its immediate interrupt meaning; the command is printed
+only when the process later exits. `/delete`, help, version, listing, command
+line errors, and failures before a session exists print no command.
+
+The displayed command names the exact session, dotdir, explicit configuration
+path when one was used, presentation overrides, and any unconsumed one-turn
+model/effort override. In networked mode it spells out the effective client,
+server, or combined role so clients reconnect and a hosted listener restarts.
+Arguments are POSIX-shell quoted. Prompts, credentials, credential values,
+tool output, and configured secret environment values are never included.
+SIGKILL, power loss, and fatal process corruption cannot reliably run cleanup
+and therefore cannot promise this output.
 
 With `-e`, omit the argument prompt to read it from non-terminal stdin. One
 final LF or CRLF line terminator is removed; internal newlines are preserved.

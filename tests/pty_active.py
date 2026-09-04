@@ -6,6 +6,7 @@ import json
 import os
 import pty
 import select
+import shlex
 import signal
 import socket
 import sys
@@ -27,6 +28,16 @@ class Child:
             os.chdir(WORKSPACE)
             os.execv(BINARY, [BINARY, "--dotdir", DOTDIR, *args])
         self.buf = bytearray()
+
+    @classmethod
+    def from_command(cls, command):
+        child = cls.__new__(cls)
+        child.pid, child.fd = pty.fork()
+        if child.pid == 0:
+            os.chdir(WORKSPACE)
+            os.execl("/bin/sh", "sh", "-c", "exec " + command)
+        child.buf = bytearray()
+        return child
 
     def read_once(self, timeout):
         ready, _, _ = select.select([self.fd], [], [], timeout)
@@ -67,11 +78,37 @@ class Child:
 
     def exit_now(self):
         self.send(b"/exit\r")
+        return self.finish()
+
+    def finish(self, expected=0, expect_resume=True):
         _, status = os.waitpid(self.pid, 0)
+        while self.read_once(0.05):
+            pass
         os.close(self.fd)
         code = os.waitstatus_to_exitcode(status)
-        if code != 0:
-            raise AssertionError(f"exit status {code}; got {bytes(self.buf)!r}")
+        if code != expected:
+            raise AssertionError(
+                f"exit status {code}, expected {expected}; "
+                f"got {bytes(self.buf)!r}"
+            )
+        commands = []
+        for line in bytes(self.buf).splitlines():
+            marker = line.find(b"resume: ")
+            if marker >= 0:
+                commands.append(line[marker + len(b"resume: "):].decode("ascii"))
+        if expect_resume:
+            if len(commands) != 1:
+                raise AssertionError(
+                    f"expected one resume command, got {commands!r}; "
+                    f"output={bytes(self.buf)!r}"
+                )
+            return commands[0]
+        if commands:
+            raise AssertionError(
+                f"unexpected resume command {commands!r}; "
+                f"output={bytes(self.buf)!r}"
+            )
+        return None
 
     def kill(self):
         os.kill(self.pid, signal.SIGKILL)
@@ -127,6 +164,28 @@ def free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def accept_connections(listener, count):
+    accepted = []
+    deadline = time.monotonic() + 8.0
+    while len(accepted) < count:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(
+                f"expected {count} outgoing connections, got {len(accepted)}"
+            )
+        ready, _, _ = select.select([listener], [], [], remaining)
+        if ready:
+            connection, _ = listener.accept()
+            accepted.append(connection)
+    return accepted
+
+
+def command_arguments(command):
+    arguments = shlex.split(command)
+    assert arguments[0] == BINARY, arguments
+    return arguments
 
 
 def session_ids():
@@ -1084,6 +1143,187 @@ def test_config_and_cli_model_passthrough():
     assert resumed_turns[-1]["data"]["config"]["effort"] == "custom-effort"
 
 
+def test_exit_resume_matrix():
+    for exit_input in (b"/exit\r", b"\x03", b"\x04"):
+        before = session_ids()
+        child = Child(["--no-color"])
+        child.wait(PROMPT)
+        session_id = new_session(before)
+        child.send(exit_input)
+        command = child.finish()
+        arguments = command_arguments(command)
+        assert arguments[-2:] == ["--resume", session_id], arguments
+        assert arguments[arguments.index("--dotdir") + 1] == DOTDIR
+
+    for signal_number in (signal.SIGHUP, signal.SIGTERM):
+        before = session_ids()
+        child = Child(["--no-color"])
+        child.wait(PROMPT)
+        session_id = new_session(before)
+        os.kill(child.pid, signal_number)
+        command = child.finish(expected=128 + signal_number)
+        assert command_arguments(command)[-2:] == ["--resume", session_id]
+
+    before = session_ids()
+    active_eof = Child(["--no-color"])
+    active_eof.wait(PROMPT)
+    active_eof.send(b"slow\r")
+    active_eof.wait(b"working slowly")
+    active_eof.send(b"\x04")
+    active_eof_command = active_eof.finish()
+    active_eof_id = new_session(before)
+    assert command_arguments(active_eof_command)[-2:] == [
+        "--resume", active_eof_id
+    ]
+    assert one(events(active_eof_id), "turn_completed")
+
+    before = session_ids()
+    archived = Child(["--no-color"])
+    archived.wait(PROMPT)
+    archived_id = new_session(before)
+    archived.send(b"/archive\r")
+    archived_command = archived.finish()
+    assert command_arguments(archived_command)[-2:] == [
+        "--resume", archived_id
+    ]
+    assert one(events(archived_id), "session_archived")
+
+    before = session_ids()
+    deleted = Child(["--no-color"])
+    deleted.wait(PROMPT)
+    deleted_id = new_session(before)
+    deleted.send(b"/delete\r")
+    deleted.wait(b"type the displayed 8-character id prefix to confirm")
+    deleted.send(deleted_id[:8].encode() + b"\r")
+    deleted.finish(expect_resume=False)
+    assert not (STATE_ROOT / deleted_id).exists()
+
+    before = session_ids()
+    original = Child(["--no-color"])
+    original.wait(PROMPT)
+    staged_id = new_session(before)
+    original_command = original.exit_now()
+    assert command_arguments(original_command)[-2:] == ["--resume", staged_id]
+    staged = Child([
+        "--no-color", "-m", "future/model", "--effort", "xhigh",
+        "--resume", staged_id,
+    ])
+    staged.wait(PROMPT)
+    staged_command = staged.exit_now()
+    staged_arguments = command_arguments(staged_command)
+    assert staged_arguments[staged_arguments.index("-m") + 1] == "future/model"
+    assert staged_arguments[staged_arguments.index("--effort") + 1] == "xhigh"
+
+    occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    occupied.bind(("127.0.0.1", 0))
+    occupied.listen()
+    occupied_endpoint = f"127.0.0.1:{occupied.getsockname()[1]}"
+    before = session_ids()
+    failed = Child([
+        "--no-color", "-d", "-s", occupied_endpoint,
+        "-n", "agent", "-o", "localop", "-r", "lab",
+    ])
+    failed_command = failed.finish(expected=3)
+    failed_arguments = command_arguments(failed_command)
+    failed_id = new_session(before)
+    assert failed_arguments[-2:] == ["--resume", failed_id]
+    assert "--daemon" in failed_arguments
+    occupied.close()
+
+
+def test_network_resume_roles():
+    upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    upstream.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(8)
+    upstream_endpoint = f"127.0.0.1:{upstream.getsockname()[1]}"
+
+    before = session_ids()
+    client = Child([
+        "--no-color", "-c", upstream_endpoint,
+        "-n", "clientagent", "-o", "clientop",
+    ])
+    client.wait(PROMPT)
+    client_id = new_session(before)
+    first_links = accept_connections(upstream, 2)
+    client_command = client.exit_now()
+    for connection in first_links:
+        connection.close()
+    client_arguments = command_arguments(client_command)
+    assert "--daemon" not in client_arguments
+    assert "--listen" not in client_arguments
+    assert client_arguments.count("--client") == 1
+    assert client_arguments[client_arguments.index("--client") + 1] == \
+        upstream_endpoint
+    resumed_client = Child.from_command(client_command)
+    resumed_client.wait(b"resumed " + client_id[:8].encode())
+    resumed_client.wait(PROMPT)
+    resumed_links = accept_connections(upstream, 2)
+    resumed_client.exit_now()
+    for connection in resumed_links:
+        connection.close()
+
+    server_port = free_port()
+    server_endpoint = f"127.0.0.1:{server_port}"
+    before = session_ids()
+    server = Child([
+        "--no-color", "-d", "-s", server_endpoint,
+        "-n", "serveragent", "-o", "serverop", "-r", "lab",
+    ])
+    server.wait(PROMPT)
+    server_id = new_session(before)
+    peer = IRCClient(server_port, "firstpeer")
+    peer.close()
+    server_command = server.exit_now()
+    server_arguments = command_arguments(server_command)
+    assert "--daemon" in server_arguments
+    assert server_arguments[server_arguments.index("--listen") + 1] == \
+        server_endpoint
+    assert "--client" not in server_arguments
+    assert server_arguments[server_arguments.index("--room-name") + 1] == \
+        "#lab"
+    resumed_server = Child.from_command(server_command)
+    resumed_server.wait(b"resumed " + server_id[:8].encode())
+    resumed_server.wait(PROMPT)
+    peer = IRCClient(server_port, "secondpeer")
+    peer.close()
+    resumed_server.exit_now()
+
+    combined_port = free_port()
+    combined_endpoint = f"127.0.0.1:{combined_port}"
+    before = session_ids()
+    combined = Child([
+        "--no-color", "-d", "-s", combined_endpoint,
+        "-c", upstream_endpoint,
+        "-n", "combinedagent", "-o", "combinedop", "-r", "lab",
+    ])
+    combined.wait(PROMPT)
+    combined_id = new_session(before)
+    first_links = accept_connections(upstream, 2)
+    peer = IRCClient(combined_port, "combinedpeer")
+    peer.close()
+    combined_command = combined.exit_now()
+    for connection in first_links:
+        connection.close()
+    combined_arguments = command_arguments(combined_command)
+    assert "--daemon" in combined_arguments
+    assert combined_arguments[combined_arguments.index("--listen") + 1] == \
+        combined_endpoint
+    assert combined_arguments[combined_arguments.index("--client") + 1] == \
+        upstream_endpoint
+    resumed_combined = Child.from_command(combined_command)
+    resumed_combined.wait(b"resumed " + combined_id[:8].encode())
+    resumed_combined.wait(PROMPT)
+    resumed_links = accept_connections(upstream, 2)
+    peer = IRCClient(combined_port, "resumedpeer")
+    peer.close()
+    resumed_combined.exit_now()
+    for connection in resumed_links:
+        connection.close()
+    upstream.close()
+
+
 def test_network_chat_and_managed_mention():
     before = session_ids()
     port = free_port()
@@ -1328,5 +1568,7 @@ test_command_name_completion()
 test_uncached_typed_model_selection()
 test_model_cache_and_selection()
 test_config_and_cli_model_passthrough()
+test_exit_resume_matrix()
+test_network_resume_roles()
 test_network_chat_and_managed_mention()
 print("pty_active: ok")

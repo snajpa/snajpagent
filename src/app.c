@@ -29,6 +29,77 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+#define RESUME_COMMAND_MAX (4u * 1024u * 1024u)
+
+struct app_signal_handlers {
+    struct sigaction saved_sigint;
+    struct sigaction saved_sighup;
+    struct sigaction saved_sigterm;
+    bool sigint_installed;
+    bool sighup_installed;
+    bool sigterm_installed;
+};
+
+static volatile sig_atomic_t pending_shutdown_signal;
+
+static void
+mark_shutdown_signal(int signal_number)
+{
+    if (!pending_shutdown_signal)
+        pending_shutdown_signal = signal_number;
+}
+
+static void
+restore_shutdown_handlers(struct app_signal_handlers *handlers)
+{
+    if (handlers->sigterm_installed)
+        (void)sigaction(SIGTERM, &handlers->saved_sigterm, NULL);
+    if (handlers->sighup_installed)
+        (void)sigaction(SIGHUP, &handlers->saved_sighup, NULL);
+    if (handlers->sigint_installed)
+        (void)sigaction(SIGINT, &handlers->saved_sigint, NULL);
+    memset(handlers, 0, sizeof(*handlers));
+}
+
+static int
+install_shutdown_handlers(struct app_signal_handlers *handlers)
+{
+    struct sigaction action;
+
+    memset(handlers, 0, sizeof(*handlers));
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = mark_shutdown_signal;
+    sigemptyset(&action.sa_mask);
+    pending_shutdown_signal = 0;
+    if (sigaction(SIGINT, &action, &handlers->saved_sigint) < 0)
+        return -1;
+    handlers->sigint_installed = true;
+    if (sigaction(SIGHUP, &action, &handlers->saved_sighup) < 0)
+        goto fail;
+    handlers->sighup_installed = true;
+    if (sigaction(SIGTERM, &action, &handlers->saved_sigterm) < 0)
+        goto fail;
+    handlers->sigterm_installed = true;
+    return 0;
+fail:
+    restore_shutdown_handlers(handlers);
+    return -1;
+}
+
+static bool
+capture_shutdown_signal(struct app_state *app)
+{
+    sig_atomic_t signal_number = pending_shutdown_signal;
+
+    if (!signal_number)
+        return false;
+    if (!app->shutdown_signal)
+        app->shutdown_signal = (int)signal_number;
+    app->input_closed = true;
+    return true;
+}
+
 static void
 set_error(char *error, size_t size, const char *fmt, ...)
 {
@@ -1014,6 +1085,10 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     char *line = NULL;
     char error[256];
     int rc;
+    if (capture_shutdown_signal(app)) {
+        app->interrupt_requested = true;
+        return 2;
+    }
     if (app->networked) {
         error[0] = '\0';
         if (snj_irc_tick(app->irc, 0, error, sizeof(error)) < 0) {
@@ -1028,6 +1103,11 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         return 0;
     rc = snj_term_poll(&app->term, (int)timeout_ms, &action, &line);
     if (rc < 0) {
+        if (capture_shutdown_signal(app)) {
+            app->interrupt_requested = true;
+            free(line);
+            return 2;
+        }
         (void)snj_render_error_ctx(&app->render,
             errno == EOVERFLOW ? "active submission exceeds 1 MiB" :
             errno == EILSEQ ? "active submission contains invalid UTF-8" :
@@ -2232,6 +2312,206 @@ resolve_dotdir(const char *override, char *error, size_t error_size)
     }
     return path;
 }
+
+static char *
+resolved_program_path(const char *program)
+{
+    const char *path;
+    size_t program_len;
+
+    if (!program || !*program)
+        program = "snajpagent";
+    program_len = strlen(program);
+    if (strchr(program, '/')) {
+        char *resolved = realpath(program, NULL);
+
+        if (resolved && strlen(resolved) <= SNJ_PATH_MAX_BYTES &&
+            snj_utf8_valid((const unsigned char *)resolved,
+                           strlen(resolved), true))
+            return resolved;
+        free(resolved);
+        return snj_strdup_checked(program, SNJ_PATH_MAX_BYTES);
+    }
+    path = getenv("PATH");
+    if (path) {
+        const char *start = path;
+
+        for (;;) {
+            const char *end = strchr(start, ':');
+            size_t dir_len = end ? (size_t)(end - start) : strlen(start);
+            const char *dir = dir_len ? start : ".";
+            size_t actual_dir_len = dir_len ? dir_len : 1u;
+
+            if (actual_dir_len <= SNJ_PATH_MAX_BYTES &&
+                program_len <= SNJ_PATH_MAX_BYTES - actual_dir_len - 1u) {
+                size_t size = actual_dir_len + 1u + program_len + 1u;
+                char *candidate = malloc(size);
+
+                if (candidate) {
+                    char *resolved;
+
+                    memcpy(candidate, dir, actual_dir_len);
+                    candidate[actual_dir_len] = '/';
+                    memcpy(candidate + actual_dir_len + 1u, program,
+                           program_len + 1u);
+                    resolved = access(candidate, X_OK) == 0 ?
+                               realpath(candidate, NULL) : NULL;
+                    free(candidate);
+                    if (resolved && strlen(resolved) <= SNJ_PATH_MAX_BYTES &&
+                        snj_utf8_valid((const unsigned char *)resolved,
+                                       strlen(resolved), true))
+                        return resolved;
+                    free(resolved);
+                }
+            }
+            if (!end)
+                break;
+            start = end + 1u;
+        }
+    }
+    return snj_strdup_checked(program, SNJ_PATH_MAX_BYTES);
+}
+
+static int
+append_command_literal(struct snj_buf *command, const char *word)
+{
+    if (command->len && snj_buf_putc(command, ' ') < 0)
+        return -1;
+    return snj_buf_append(command, word, strlen(word));
+}
+
+static int
+append_command_argument(struct snj_buf *command, const char *argument)
+{
+    const unsigned char *p = (const unsigned char *)argument;
+
+    if (command->len && snj_buf_putc(command, ' ') < 0)
+        return -1;
+    if (snj_buf_putc(command, '\'') < 0)
+        return -1;
+    while (*p) {
+        if (*p == '\'') {
+            if (snj_buf_append(command, "'\\''", 4u) < 0)
+                return -1;
+        } else if (*p == '\n' || (*p >= 0x20u && *p <= 0x7eu)) {
+            if (snj_buf_putc(command, *p) < 0)
+                return -1;
+        } else {
+            if (snj_buf_putc(command, '\'') < 0 ||
+                snj_buf_printf(command, "\"$(printf '\\%03o')\"",
+                               (unsigned int)*p) < 0 ||
+                snj_buf_putc(command, '\'') < 0)
+                return -1;
+        }
+        ++p;
+    }
+    return snj_buf_putc(command, '\'');
+}
+
+static int
+append_command_option(struct snj_buf *command, const char *option,
+                      const char *argument)
+{
+    return append_command_literal(command, option) < 0 ||
+           append_command_argument(command, argument) < 0 ? -1 : 0;
+}
+
+static int
+build_resume_command(const struct app_state *app, const char *program,
+                     const char *dotdir, struct snj_buf *command)
+{
+    char *resolved = resolved_program_path(program);
+    const struct snj_cli *cli = app->cli;
+    const struct snj_config *config = app->config;
+    int rc = -1;
+
+    if (!resolved)
+        return -1;
+    if (append_command_argument(command, resolved) < 0 ||
+        append_command_option(command, "--dotdir", dotdir) < 0)
+        goto out;
+    if (cli->config_path &&
+        append_command_option(command, "--config", cli->config_path) < 0)
+        goto out;
+    switch (cli->color) {
+    case SNJ_CLI_COLOR_UNSET: break;
+    case SNJ_CLI_COLOR_AUTO:
+        if (append_command_literal(command, "--color=auto") < 0)
+            goto out;
+        break;
+    case SNJ_CLI_COLOR_ALWAYS:
+        if (append_command_literal(command, "--color=always") < 0)
+            goto out;
+        break;
+    case SNJ_CLI_COLOR_NEVER:
+        if (append_command_literal(command, "--color=never") < 0)
+            goto out;
+        break;
+    }
+    if (cli->markdown == SNJ_CLI_MARKDOWN_ENABLED &&
+        append_command_literal(command, "--markdown") < 0)
+        goto out;
+    if (cli->markdown == SNJ_CLI_MARKDOWN_DISABLED &&
+        append_command_literal(command, "--no-markdown") < 0)
+        goto out;
+    for (unsigned int i = 0u; i < cli->verbosity; ++i)
+        if (append_command_literal(command, "-v") < 0)
+            goto out;
+    if (app->staged_model &&
+        append_command_option(command, "-m", app->staged_model) < 0)
+        goto out;
+    if (app->staged_effort &&
+        append_command_option(command, "--effort", app->staged_effort) < 0)
+        goto out;
+    if (app->networked) {
+        if (config->irc_daemon &&
+            (append_command_literal(command, "--daemon") < 0 ||
+             append_command_option(command, "--listen",
+                                   config->irc_listen) < 0))
+            goto out;
+        for (size_t i = 0u; i < config->irc_client_count; ++i)
+            if (append_command_option(command, "--client",
+                                      config->irc_clients[i]) < 0)
+                goto out;
+        if (append_command_option(command, "--model-nick",
+                                  config->irc_model_nick) < 0 ||
+            append_command_option(command, "--operator-nick",
+                                  config->irc_operator_nick) < 0)
+            goto out;
+        if (config->irc_daemon && config->irc_room_name[0] &&
+            append_command_option(command, "--room-name",
+                                  config->irc_room_name) < 0)
+            goto out;
+    }
+    if (append_command_literal(command, "--resume") < 0 ||
+        append_command_argument(command, app->session.id) < 0)
+        goto out;
+    rc = 0;
+out:
+    free(resolved);
+    return rc;
+}
+
+static void
+write_resume_command(const struct app_state *app, const char *program,
+                     const char *dotdir)
+{
+    struct snj_buf command;
+    struct snj_buf line;
+
+    if (!dotdir || !app->session.id[0] || app->session.delete_requested)
+        return;
+    snj_buf_init(&command, RESUME_COMMAND_MAX - 9u);
+    snj_buf_init(&line, RESUME_COMMAND_MAX);
+    if (build_resume_command(app, program, dotdir, &command) == 0 &&
+        snj_buf_append(&line, "resume: ", 8u) == 0 &&
+        snj_buf_append(&line, command.data, command.len) == 0 &&
+        snj_buf_putc(&line, '\n') == 0)
+        (void)snj_write_full(STDERR_FILENO, line.data, line.len);
+    snj_buf_free(&command);
+    snj_buf_free(&line);
+}
+
 static int
 pick_session(struct app_state *app, const char *workspace,
              char *error, size_t error_size)
@@ -2327,6 +2607,8 @@ interactive_loop(struct app_state *app, const char *initial)
         return 6;
     for (;;) {
         enum snj_term_action action = SNJ_TERM_NONE;
+        if (capture_shutdown_signal(app))
+            return 0;
         if (app->input_closed)
             return 0;
         if (!prompt && app->networked) {
@@ -2357,6 +2639,10 @@ interactive_loop(struct app_state *app, const char *initial)
                                         app->networked ? 25 : -1,
                                         &action, &owned);
             if (poll_rc < 0) {
+                if (capture_shutdown_signal(app)) {
+                    free(owned);
+                    return 0;
+                }
                 (void)app_error(app,
                     errno == EOVERFLOW ? "prompt exceeds 1 MiB" :
                     errno == EILSEQ ? "terminal input contains invalid UTF-8" :
@@ -2494,9 +2780,10 @@ interactive_loop(struct app_state *app, const char *initial)
     }
 }
 int
-snj_app_run(const struct snj_cli *cli)
+snj_app_run(const struct snj_cli *cli, const char *program)
 {
     struct app_state app;
+    struct app_signal_handlers signal_handlers;
     struct snj_config config;
     char error[256];
     char *dotdir = NULL;
@@ -2506,6 +2793,7 @@ snj_app_run(const struct snj_cli *cli)
     const char *new_effort;
     unsigned int effective_verbosity;
     bool goal_paused_on_resume = false;
+    bool signal_handlers_installed = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
     snj_buf_init(&app.irc_urgent, SNJ_MAX_STEERING_TEXT + 1u);
@@ -2524,6 +2812,13 @@ snj_app_run(const struct snj_cli *cli)
     app.cli = cli;
     app.config = &config;
     app.execute = cli->execute;
+    if (install_shutdown_handlers(&signal_handlers) < 0) {
+        (void)snj_render_error_ctx(&app.render,
+                                   "cannot install shutdown signal handlers");
+        rc = 2;
+        goto out;
+    }
+    signal_handlers_installed = true;
     {
         const char *locale_name = setlocale(LC_CTYPE, "");
         const char *codeset = locale_name ? nl_langinfo(CODESET) : NULL;
@@ -2728,8 +3023,13 @@ snj_app_run(const struct snj_cli *cli)
     }
     rc = interactive_loop(&app, cli->prompt);
 out:
+    (void)capture_shutdown_signal(&app);
     snj_term_close(&app.term);
     snj_irc_close(app.irc);
+    write_resume_command(&app, program, dotdir);
+    (void)capture_shutdown_signal(&app);
+    if (signal_handlers_installed)
+        restore_shutdown_handlers(&signal_handlers);
     snj_buf_free(&app.irc_urgent);
     snj_buf_free(&app.irc_background);
     free(dotdir);
@@ -2740,5 +3040,7 @@ out:
     snj_session_close(&app.session);
     snj_store_close(&app.store);
     snj_config_free(&config);
+    if (app.shutdown_signal > 0 && app.shutdown_signal < 128)
+        rc = 128 + app.shutdown_signal;
     return rc;
 }

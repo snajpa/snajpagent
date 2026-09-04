@@ -73,6 +73,22 @@ history, and model-input snapshot transitions. They are validated before
 append and replay; append occurs before transcript rendering or provider
 projection.
 
+After any exit with a resumable open session, common cleanup restores the
+terminal, closes IRC, and writes one `resume: COMMAND` line to stderr without
+changing the original status if that best-effort write fails. The command
+reuses the resolved dotdir and explicit config source, exact session ID,
+explicit presentation settings, unconsumed one-turn preferences, and effective
+IRC settings. Thus process-local IRC launch configuration does not enter the
+event log but the operator can immediately recreate a client, server, or
+combined process. The command contains neither prompts nor secret values.
+
+SIGHUP and SIGTERM set signal-safe shutdown state, as does SIGINT outside the
+interactive terminal handler. Idle and active provider/tool/network pumps
+observe that state and unwind through common cleanup. Active terminal Ctrl-C
+continues to interrupt only the current turn, while an empty Ctrl-D closes
+input. Uncatchable SIGKILL, power loss, and fatal corruption cannot execute
+this path.
+
 ## IRC Runtime
 
 The integrated nonblocking IRC runtime can own one bounded single-room server,

@@ -70,6 +70,7 @@ struct app_state {
     bool irc_urgent_local_operator;
     bool irc_turn_local_operator;
     bool irc_turn_replied;
+    int shutdown_signal;
     uint64_t irc_background_since_ms;
     char queue_edit_id[SNJ_ID_HEX_LEN + 1u];
     size_t queue_edit_number;

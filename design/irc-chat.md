@@ -63,7 +63,9 @@ long forms:
 
 `-C`, `-e`, `-l`, `-m`, `-v`, `-h`, and `-V` retain their meanings. Session
 listing and one-shot execution do not run network roles. A durable session can
-be resumed into networked mode with `--resume`.
+be resumed into networked mode with `--resume`. A session ID after `--resume`
+is session identity rather than initial chat text even when network options
+precede it; only a follow-up chat prompt requires `--`.
 
 Examples:
 
@@ -358,6 +360,14 @@ messages, nick/mode/topic changes, outbound model/operator chat, delivered
 history, and projected snapshots. Replay validates sequence, UTF-8, line and
 history bounds, source identity, and operator-state transitions before those
 events can become model input.
+
+On every resumable exit, the process prints a POSIX-shell-quoted command whose
+effective network arguments reconstruct that process configuration. A
+client-only command carries every outgoing endpoint; a server command carries
+daemon mode, its listener, room, and local nicks; a combined command carries
+both sets. It also reuses the same dotdir and explicit config path and resumes
+the exact durable session. The output contains no credentials or chat text.
+SIGHUP and SIGTERM unwind through this path; SIGKILL and machine loss cannot.
 
 The server stores no provider credential and never transports tool arguments
 or results. Existing secret redaction remains in force at higher verbosity.

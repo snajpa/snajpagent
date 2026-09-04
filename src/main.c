@@ -43,7 +43,7 @@ main(int argc, char **argv)
         snj_cli_free(&cli);
         return 0;
     }
-    rc = snj_app_run(&cli);
+    rc = snj_app_run(&cli, argv[0]);
     snj_cli_free(&cli);
     return rc;
 }

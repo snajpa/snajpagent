@@ -480,7 +480,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         return -1;
     }
     if ((cli->irc_daemon || cli->irc_listen || cli->irc_client_count) &&
-        positional >= 0 && !dashdash) {
+        positional >= 0 && !dashdash && !cli->resume) {
         set_error(error, error_size,
                   "networked initial chat text must follow --");
         return -1;

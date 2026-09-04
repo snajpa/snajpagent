@@ -4,6 +4,6 @@
 
 #include "cli.h"
 
-int snj_app_run(const struct snj_cli *cli);
+int snj_app_run(const struct snj_cli *cli, const char *program);
 
 #endif

@@ -3,6 +3,7 @@
 set -eu
 bin=$1
 case "$bin" in /*) ;; *) bin=$(pwd)/$bin ;; esac
+bin=$(cd "$(dirname "$bin")" && pwd -P)/$(basename "$bin")
 root=$(mktemp -d "${TMPDIR:-/tmp}/snajpagent-cli-XXXXXX")
 cleanup() {
     rm -rf "$root"
@@ -17,6 +18,19 @@ dotdir="$HOME/.snajpagent"
 export SNAJPAGENT_DOTDIR="$dotdir"
 export SNAJPAGENT_TEST_ROOT="$root"
 cd "$root/work"
+
+resume_count() {
+    grep -c '^resume: ' "$1" || true
+}
+
+only_resume() {
+    [ "$(resume_count "$1")" -eq 1 ]
+    [ ! -s "$1.without-resume" ] || return 1
+}
+
+strip_resume() {
+    grep -v '^resume: ' "$1" >"$1.without-resume" || true
+}
 
 set +e
 LC_ALL=C $bin -l >"$root/locale.out" 2>"$root/locale.err"
@@ -158,7 +172,8 @@ stdin_dotdir="$root/stdin-state"
 out=$(printf 'ping\n' | $bin --dotdir "$stdin_dotdir" -e \
     2>"$root/stdin.err")
 [ "$out" = pong ]
-[ ! -s "$root/stdin.err" ]
+strip_resume "$root/stdin.err"
+only_resume "$root/stdin.err"
 stdin_log=$(find "$stdin_dotdir/sessions" -name events.jsonl -print)
 python3 - "$stdin_log" <<'PY'
 import json
@@ -200,16 +215,47 @@ grep -q 'stdin prompt is empty' "$root/empty-stdin.err"
 # The established explicit argument form remains supported alongside stdin.
 out=$($bin -e -- ping 2>"$root/err")
 [ "$out" = pong ]
-[ ! -s "$root/err" ]
+strip_resume "$root/err"
+only_resume "$root/err"
+grep -q "^resume: '$bin' --dotdir '$dotdir' --resume '[0-9a-f]\\{32\\}'$" \
+    "$root/err"
+! grep -q '^resume:  ' "$root/err"
 [ -d "$dotdir/sessions" ]
 [ -d "$dotdir/trash" ]
 id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 [ ${#id} -eq 32 ]
 [ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 5 ]
 
+# The writer owns exactly "resume: "; dynamic arguments are POSIX-shell safe,
+# prompts and credentials are absent, and the printed command really resumes.
+quoted_dotdir="$root/quoted ' state"
+quoted_config="$root/config/quoted ' config.ini"
+mkdir -m 700 "$quoted_dotdir"
+cat >"$quoted_config" <<'EOF'
+[provider]
+api_key_env = RESUME_COMMAND_SECRET
+EOF
+export RESUME_COMMAND_SECRET='must-not-appear-in-the-resume-command'
+out=$($bin --dotdir "$quoted_dotdir" --config "$quoted_config" \
+    --color=never --markdown -e -- ping 2>"$root/quoted.err")
+[ "$out" = pong ]
+[ "$(resume_count "$root/quoted.err")" -eq 1 ]
+! grep -q '^resume:  ' "$root/quoted.err"
+! grep -q 'must-not-appear\| -- ping\| -e ' "$root/quoted.err"
+grep -Fq "'\\''" "$root/quoted.err"
+resume_command=$(sed -n 's/^resume: //p' "$root/quoted.err")
+resume_prefix=${resume_command% --resume *}
+resume_id=${resume_command##* --resume }
+eval "$resume_prefix -e --resume $resume_id -- ping" \
+    >"$root/quoted-resumed.out" 2>"$root/quoted-resumed.err"
+[ "$(cat "$root/quoted-resumed.out")" = pong ]
+[ "$(resume_count "$root/quoted-resumed.err")" -eq 1 ]
+unset RESUME_COMMAND_SECRET
+
 out=$($bin -e --resume "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]
-[ ! -s "$root/err" ]
+strip_resume "$root/err"
+only_resume "$root/err"
 [ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 9 ]
 $bin -l >"$root/list" 2>"$root/err"
 grep -q "^$(printf %.8s "$id").*2" "$root/list"
@@ -221,6 +267,7 @@ set -e
 [ "$status" -eq 4 ]
 [ ! -s "$root/empty.out" ]
 grep -q 'provider completed without a final answer' "$root/empty.err"
+[ "$(resume_count "$root/empty.err")" -eq 1 ]
 
 $bin -e -vvvv -- repeat >"$root/repeat.out" 2>"$root/repeat.err"
 [ "$(cat "$root/repeat.out")" = haha ]
@@ -228,7 +275,8 @@ grep -q 'event .* turn_completed synced' "$root/repeat.err"
 
 $bin -e -- utf8 >"$root/utf8.out" 2>"$root/utf8.err"
 [ "$(cat "$root/utf8.out")" = "€" ]
-[ ! -s "$root/utf8.err" ]
+strip_resume "$root/utf8.err"
+only_resume "$root/utf8.err"
 
 set +e
 $bin -e -- crash >"$root/crash.out" 2>"$root/crash.err"
@@ -244,15 +292,18 @@ grep -q 'recovered an interrupted turn' "$root/crash-recovered.err"
 $bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err" && exit 1
 [ ! -s "$root/fail.out" ]
 grep -q 'fixture provider failed' "$root/fail.err"
+[ "$(resume_count "$root/fail.err")" -eq 1 ]
 fail_id=$(grep -rl 'fixture provider failed' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
 $bin -e --resume "$fail_id" -- ping >"$root/recovered.out" 2>"$root/recovered.err"
 [ "$(cat "$root/recovered.out")" = pong ]
-[ ! -s "$root/recovered.err" ]
+strip_resume "$root/recovered.err"
+only_resume "$root/recovered.err"
 
 mkdir -m 700 "$root/work2"
 out=$($bin -e --resume -C "$root/work2" "$id" -- ping 2>"$root/relocate.err")
 [ "$out" = pong ]
-[ ! -s "$root/relocate.err" ]
+strip_resume "$root/relocate.err"
+only_resume "$root/relocate.err"
 python3 - "$dotdir/sessions/$id/events.jsonl" "$root/work2" <<'PY'
 import json
 import sys
@@ -268,21 +319,25 @@ grep -q "^$(printf %.8s "$id")" "$root/list2"
 
 out=$($bin -e -- tool_only 2>"$root/tool.err")
 [ "$out" = "tool complete" ]
-[ ! -s "$root/tool.err" ]
+strip_resume "$root/tool.err"
+only_resume "$root/tool.err"
 
 out=$($bin -e -- many_cycles 2>"$root/many-cycles.err")
 [ "$out" = "130th cycle complete" ]
-[ ! -s "$root/many-cycles.err" ]
+strip_resume "$root/many-cycles.err"
+only_resume "$root/many-cycles.err"
 many_cycles_id=$(grep -rl '"text":"many_cycles"' "$dotdir/sessions" |
     sed 's|/events.jsonl$||;s|.*/||')
 out=$($bin -e --resume "$many_cycles_id" -- ping 2>"$root/many-cycles-resume.err")
 [ "$out" = pong ]
-[ ! -s "$root/many-cycles-resume.err" ]
+strip_resume "$root/many-cycles-resume.err"
+only_resume "$root/many-cycles-resume.err"
 
 for prompt in managed_wrong_handle managed_malformed; do
     out=$($bin -e -- "$prompt" 2>"$root/$prompt.err")
     [ "$out" = "managed process recovered" ]
-    [ ! -s "$root/$prompt.err" ]
+    strip_resume "$root/$prompt.err"
+    only_resume "$root/$prompt.err"
     managed_id=$(grep -rl "\"text\":\"$prompt\"" \
         "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
     python3 - "$dotdir/sessions/$managed_id/events.jsonl" \
@@ -450,8 +505,36 @@ set -e
 [ "$status" -eq 2 ]
 [ ! -s "$root/bad-config.out" ]
 grep -q 'invalid configuration at line 3' "$root/bad-config.err"
+[ "$(resume_count "$root/bad-config.err")" -eq 0 ]
 after=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
 [ "$before" -eq "$after" ]
+
+# Catchable shutdown signals unwind one-shot work through normal cleanup and
+# preserve conventional 128+signal exit statuses.
+for signal_case in 'INT 130' 'HUP 129' 'TERM 143'; do
+    set -- $signal_case
+    signal_name=$1
+    expected_status=$2
+    signal_state="$root/signal-$signal_name"
+    $bin --dotdir "$signal_state" -e -- one_shot_signal_wait \
+        >"$root/signal-$signal_name.out" \
+        2>"$root/signal-$signal_name.err" &
+    signal_pid=$!
+    attempt=0
+    while ! grep -q 'waiting for shutdown' "$root/signal-$signal_name.err"; do
+        kill -0 "$signal_pid"
+        attempt=$((attempt + 1))
+        [ "$attempt" -lt 200 ]
+        sleep 0.01
+    done
+    kill -s "$signal_name" "$signal_pid"
+    set +e
+    wait "$signal_pid"
+    signal_status=$?
+    set -e
+    [ "$signal_status" -eq "$expected_status" ]
+    [ "$(resume_count "$root/signal-$signal_name.err")" -eq 1 ]
+done
 
 # Resume command-line settings are consumed by one admitted turn only.
 override_state="$root/override-state"

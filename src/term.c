@@ -1305,7 +1305,7 @@ feed_byte(struct snj_term *term, unsigned char byte,
         *action = SNJ_TERM_EXIT;
         return 1;
     case 0x04u:
-        if (!term->active && !term->draft.len) {
+        if (!term->draft.len) {
             if (snj_term_hide(term) < 0)
                 return -1;
             term->prompt_wanted = false;
@@ -1398,10 +1398,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms,
         pfd.fd = STDIN_FILENO;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        do {
-            rc = poll(&pfd, 1u, timeout_ms);
-        } while (rc < 0 && errno == EINTR && !sigint_pending &&
-                 !sigwinch_pending);
+        rc = poll(&pfd, 1u, timeout_ms);
         if (sigint_pending) {
             sigint_pending = 0;
             return feed_byte(term, 0x03u, action, text);
@@ -1421,10 +1418,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms,
             }
             return 0;
         }
-        do {
-            count = read(STDIN_FILENO, term->input, sizeof(term->input));
-        } while (count < 0 && errno == EINTR && !sigint_pending &&
-                 !sigwinch_pending);
+        count = read(STDIN_FILENO, term->input, sizeof(term->input));
         if (sigint_pending) {
             sigint_pending = 0;
             return feed_byte(term, 0x03u, action, text);
