@@ -7,8 +7,8 @@ Responses API endpoint, keeps durable local sessions, can resume previous
 conversations, and exposes a small set of tools for command execution, process
 continuation, file patching, and hosted web search.
 
-The project is written in C and is still marked `0.9.0-wip`, but the normal
-interactive path is usable.
+The project is written in C and is still pre-1.0, but the normal interactive
+path is usable.
 
 ## Features
 
@@ -57,6 +57,13 @@ Build and test:
 make
 make check
 ```
+
+The top-level `META` is the sole source for the compiled product name and base
+version. A clean build at the matching version tag reports that version
+directly; other builds append Git's abbreviated `HEAD`, for example
+`0.98-abcdef`, and dirty builds say so. Version changes and matching tags are
+operator decisions. Until the operator releases `1.0`, unreleased formats may
+change in place without compatibility ladders or legacy fallbacks.
 
 When tmux is installed, `make check` also runs `make tmuxcheck`. That target
 starts the fixture binary in isolated 32–48 column tmux panes and validates the
@@ -227,6 +234,11 @@ shows the effective next-turn selection; the active prompt keeps the model and
 effort frozen for that turn even if `/model` or `/effort` stages a different
 next-turn value. Terminal-unsafe characters in those trusted selectors are
 escaped for display without changing the values sent to the provider.
+
+At startup the orientation identifies the product build, workspace, and
+abbreviated session explicitly, for example
+`snajpagent 0.98 · /workspace · session id a1b2c3d4`. Resumed sessions
+add their resume, turn, and queue state; the model is not repeated there.
 
 While a response is streaming, typing opens the active-turn composer on a new
 line and briefly pauses visible model output. With a nonempty draft, Tab keeps

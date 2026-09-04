@@ -204,7 +204,7 @@ def write_fake_bundle(root: Path, *, source_ref: str = "source_audit.json",
         commands.append(command_record("live"))
     write_json(root / "release_evidence.json", {
         "schema": "snajpagent.release_evidence.v1",
-        "version": "0.9.0-wip",
+        "version": "fixture-version",
         "platform_id": "linux-x86_64",
         "binary": {"sha256": "0" * 64},
         "records": records,

@@ -1151,7 +1151,7 @@ snj_provider_models_list(const struct snj_config *config,
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
                          (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                         "snajpagent/" SNAJPAGENT_VERSION) != CURLE_OK ||
+                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
         set_error(error, error_size, "libcurl option setup failed");
         errno = EIO;
@@ -1283,7 +1283,7 @@ snj_provider_responses_count(const json_t *count_request,
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
                          (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                         "snajpagent/" SNAJPAGENT_VERSION) != CURLE_OK ||
+                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
         set_error(error, error_size, "libcurl option setup failed");
         errno = EIO;
@@ -1431,7 +1431,7 @@ snj_provider_responses_compact(const json_t *compact_request,
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
                          (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                         "snajpagent/" SNAJPAGENT_VERSION) != CURLE_OK ||
+                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
         set_error(error, error_size, "libcurl option setup failed");
         errno = EIO;
@@ -1576,7 +1576,7 @@ snj_provider_responses_create(const json_t *create_request,
         curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
                          (long)low_speed_seconds(provider->idle_timeout_ms)) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_USERAGENT,
-                         "snajpagent/" SNAJPAGENT_VERSION) != CURLE_OK ||
+                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
         set_error(error, error_size, "libcurl option setup failed");
         errno = EIO;

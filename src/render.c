@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "render.h"
 #include "base.h"
+#include "snajpagent.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -301,14 +302,16 @@ snj_render_orientation(struct snj_render *render,
     snj_buf_init(&line, 32768u);
     if (resumed) {
         rc = snj_buf_printf(&line,
-            "snajpagent · resumed %.8s · %s · %s · %llu turns · %zu queued%s\n",
-            session->id, session->default_model, session->workspace,
+            SNAJPAGENT_IDENTITY " · resumed · %s · session id %.8s "
+            "· %llu turns · %zu queued%s\n",
+            session->workspace, session->id,
             (unsigned long long)session->turn_count,
             session->pending_queue_count,
             session->pending_queue_count ? " paused" : "");
     } else {
-        rc = snj_buf_printf(&line, "snajpagent · %s · %s · %.8s\n",
-                            session->default_model, session->workspace, session->id);
+        rc = snj_buf_printf(&line, SNAJPAGENT_IDENTITY
+                            " · %s · session id %.8s\n",
+                            session->workspace, session->id);
     }
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO, COLOR_AGENT,
@@ -1633,7 +1636,7 @@ render_message(struct snj_render *render, const char *message,
     int rc;
 
     snj_buf_init(&line, 16384u);
-    rc = snj_buf_printf(&line, "snajpagent: %s\n", message);
+    rc = snj_buf_printf(&line, SNAJPAGENT_NAME ": %s\n", message);
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO, color,
                               (char *)line.data, line.len, line.len,
@@ -2333,7 +2336,8 @@ static int
 protocol_warning(struct snj_render *render)
 {
     static const char warning[] =
-        "snajpagent: verbosity 5 exposes prompts, source code, tool output, and model content\n";
+        SNAJPAGENT_NAME
+        ": verbosity 5 exposes prompts, source code, tool output, and model content\n";
 
     if (render->protocol_warning_shown)
         return 0;

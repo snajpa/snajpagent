@@ -39,7 +39,7 @@ main(int argc, char **argv)
         return 0;
     }
     if (cli.version) {
-        (void)printf("snajpagent %s\n", SNAJPAGENT_VERSION);
+        (void)printf("%s\n", SNAJPAGENT_IDENTITY);
         snj_cli_free(&cli);
         return 0;
     }

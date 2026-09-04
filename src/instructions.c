@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "instructions.h"
 #include "json.h"
+#include "snajpagent.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -249,7 +250,7 @@ config_instruction_root(char *error, size_t error_size)
     }
     if (!base)
         return NULL;
-    root = join_path(base, "snajpagent");
+    root = join_path(base, SNAJPAGENT_NAME);
     free(base);
     return root;
 }

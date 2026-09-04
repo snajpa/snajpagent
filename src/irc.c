@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "irc.h"
+#include "snajpagent.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -1202,7 +1203,7 @@ server_welcome(struct snj_irc *irc, struct irc_conn *peer)
         (peer->cap_active && !peer->cap_end))
         return 0;
     peer->registered = true;
-    if (queue_line(peer, ":%s 001 %s :Welcome to snajpagent IRC",
+    if (queue_line(peer, ":%s 001 %s :Welcome to " SNAJPAGENT_NAME " IRC",
                    irc->server_name, peer->nick) < 0 ||
         queue_line(peer, ":%s 005 %s CHANTYPES=# PREFIX=(o)@ SAJROOM=%s :are supported",
                    irc->server_name, peer->nick, irc->room) < 0 ||
@@ -1383,7 +1384,8 @@ server_mode(struct snj_irc *irc, struct irc_conn *peer,
 static int
 server_who(struct snj_irc *irc, struct irc_conn *peer)
 {
-    if (queue_line(peer, ":%s 352 %s %s agent %s %s %s H%s :0 snajpagent",
+    if (queue_line(peer, ":%s 352 %s %s agent %s %s %s H%s :0 "
+                   SNAJPAGENT_NAME,
                    irc->server_name, peer->nick, irc->room,
                    irc->server_name, irc->server_name, irc->model_nick,
                    irc->agent_op ? "@" : "") < 0 ||
@@ -1430,13 +1432,14 @@ server_dispatch(struct snj_irc *irc, struct irc_conn *peer, char *line)
         if (strcmp(sub, "LS") == 0) {
             peer->cap_active = true;
             return queue_line(peer,
-                ":%s CAP * LS :batch server-time draft/chathistory snajpagent/agent",
+                ":%s CAP * LS :batch server-time draft/chathistory "
+                SNAJPAGENT_NAME "/agent",
                 irc->server_name);
         }
         if (strcmp(sub, "REQ") == 0) {
             peer->cap_batch = cap_has(caps, "batch");
             peer->cap_server_time = cap_has(caps, "server-time");
-            peer->agent_role = cap_has(caps, "snajpagent/agent");
+            peer->agent_role = cap_has(caps, SNAJPAGENT_NAME "/agent");
             return queue_line(peer, ":%s CAP * ACK :%s", irc->server_name,
                               caps);
         }
@@ -1472,7 +1475,7 @@ server_dispatch(struct snj_irc *irc, struct irc_conn *peer, char *line)
                               irc->server_name);
         (void)copy_string(peer->user, sizeof(peer->user), message.params[0]);
         if (message.param_count >= 4u &&
-            strcmp(message.params[3], "snajpagent agent") == 0)
+            strcmp(message.params[3], SNAJPAGENT_NAME " agent") == 0)
             peer->agent_role = true;
         return server_welcome(irc, peer);
     }
@@ -1555,7 +1558,8 @@ server_drop_peer(struct snj_irc *irc, struct irc_conn *peer,
 static int
 client_handshake(struct snj_irc *irc, struct irc_conn *link)
 {
-    const char *role_cap = link->role == LINK_AGENT ? " snajpagent/agent" : "";
+    const char *role_cap = link->role == LINK_AGENT ?
+                           " " SNAJPAGENT_NAME "/agent" : "";
     const char *role_text = link->role == LINK_AGENT ? "agent" : "operator";
 
     (void)irc;
@@ -1571,7 +1575,7 @@ client_handshake(struct snj_irc *irc, struct irc_conn *link)
         queue_line(link, "CAP REQ :batch server-time draft/chathistory%s",
                    role_cap) < 0 ||
         queue_line(link, "NICK %s", link->nick) < 0 ||
-        queue_line(link, "USER %s 0 * :snajpagent %s", link->nick,
+        queue_line(link, "USER %s 0 * :" SNAJPAGENT_NAME " %s", link->nick,
                    role_text) < 0 ||
         queue_line(link, "CAP END") < 0)
         return -1;
@@ -1730,7 +1734,8 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
     }
     if (strcmp(message.command, "PING") == 0)
         return queue_line(link, "PONG :%s",
-                          message.param_count ? message.params[0] : "snajpagent");
+                          message.param_count ? message.params[0] :
+                                                SNAJPAGENT_NAME);
     if (strcmp(message.command, "001") == 0) {
         link->registered = true;
         return 0;

@@ -5,6 +5,7 @@
 #include "json.h"
 #include "model_cache.h"
 #include "provider.h"
+#include "snajpagent.h"
 #include "turn.h"
 
 #include <assert.h>
@@ -158,6 +159,10 @@ read_request(int fd, struct http_request *request)
     if (!header_contains(request->headers,
                          "X-OpenRouter-Title: snajpagent"))
         server_fail("OpenRouter title header missing");
+    if (!header_contains(request->headers,
+                         "User-Agent: " SNAJPAGENT_NAME "/"
+                         SNAJPAGENT_VERSION))
+        server_fail("product user agent missing or stale");
     cl = content_length(request->headers);
     if (strcmp(request->method, "GET") == 0 && cl < 0)
         cl = 0;

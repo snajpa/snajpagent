@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "render.h"
+#include "snajpagent.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -38,6 +39,39 @@ capture(unsigned int verbosity, char *out, size_t out_size)
     assert(snj_render_protocol(&render, "request JSON", "{\"x\":1}", 7u) == 0);
     assert(snj_render_protocol(&render, "response JSON", "{}", 2u) == 0);
     assert(snj_render_transport(&render, '>', "POST https://example.test", 25u) == 0);
+    assert(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
+        used += (size_t)n;
+    assert(n == 0);
+    close(fds[0]);
+    out[used] = '\0';
+    return used;
+}
+
+static size_t
+capture_orientation(bool resumed, char *out, size_t out_size)
+{
+    struct snj_render render;
+    struct snj_session session = {0};
+    int fds[2];
+    int saved;
+    ssize_t n;
+    size_t used = 0u;
+
+    assert(pipe(fds) == 0);
+    saved = dup(STDERR_FILENO);
+    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
+    close(fds[1]);
+    snj_render_init(&render, 0u);
+    memcpy(session.id, "0123456789abcdef0123456789abcdef",
+           sizeof(session.id));
+    assert(snprintf(session.default_model, sizeof(session.default_model),
+                    "model-must-not-appear") > 0);
+    session.workspace = "/work/tree";
+    session.turn_count = 3u;
+    session.pending_queue_count = 2u;
+    assert(snj_render_orientation(&render, &session, resumed) == 0);
     assert(dup2(saved, STDERR_FILENO) >= 0);
     close(saved);
     while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
@@ -591,6 +625,15 @@ main(void)
     struct snj_buf delivered;
 
     assert(setlocale(LC_ALL, "") != NULL);
+    assert(capture_orientation(false, output, sizeof(output)) > 0u);
+    assert(strcmp(output, SNAJPAGENT_IDENTITY
+                  " · /work/tree · session id 01234567\n") == 0);
+    assert(strstr(output, "model-must-not-appear") == NULL);
+    assert(capture_orientation(true, output, sizeof(output)) > 0u);
+    assert(strcmp(output, SNAJPAGENT_IDENTITY
+                  " · resumed · /work/tree · session id 01234567"
+                  " · 3 turns · 2 queued paused\n") == 0);
+    assert(strstr(output, "model-must-not-appear") == NULL);
     assert(capture(4u, output, sizeof(output)) == 0u);
     assert(capture(5u, output, sizeof(output)) > 0u);
     assert(count_text(output, "verbosity 5 exposes") == 1u);
@@ -678,8 +721,10 @@ main(void)
     assert(capture_color(SNJ_COLOR_ALWAYS, false, 6u, 2500, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[1;36m› \033[0mplain\n") != NULL);
-    assert(strstr(output, "\033[1;33msnajpagent: careful\n\033[0m") != NULL);
-    assert(strstr(output, "\033[1;31msnajpagent: broken\n\033[0m") != NULL);
+    assert(strstr(output, "\033[1;33m" SNAJPAGENT_NAME
+                  ": careful\n\033[0m") != NULL);
+    assert(strstr(output, "\033[1;31m" SNAJPAGENT_NAME
+                  ": broken\n\033[0m") != NULL);
     assert(strstr(output, "\033[34mstatus\n\033[0m") != NULL);
     assert(strstr(output,
                   "\033[1;32m• Compacted · event › 7 "

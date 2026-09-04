@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -eu
 bin=$1
+: "${SNAJPAGENT_TEST_NAME:?missing product name}"
+: "${SNAJPAGENT_TEST_VERSION:?missing product version}"
 case "$bin" in /*) ;; *) bin=$(pwd)/$bin ;; esac
 bin=$(cd "$(dirname "$bin")" && pwd -P)/$(basename "$bin")
 root=$(mktemp -d "${TMPDIR:-/tmp}/snajpagent-cli-XXXXXX")
@@ -14,7 +16,7 @@ mkdir -m 700 "$root/home" "$root/work" "$root/config"
 export HOME="$root/home"
 unset CODEX_HOME
 unset OPENAI_API_KEY
-dotdir="$HOME/.snajpagent"
+dotdir="$HOME/.$SNAJPAGENT_TEST_NAME"
 export SNAJPAGENT_DOTDIR="$dotdir"
 export SNAJPAGENT_TEST_ROOT="$root"
 cd "$root/work"
@@ -48,6 +50,9 @@ set -e
 grep -q 'UTF-8 locale is required' "$root/locale.err"
 export LC_ALL=C.utf8
 
+version=$($bin -V)
+[ "$version" = "$SNAJPAGENT_TEST_NAME $SNAJPAGENT_TEST_VERSION" ]
+
 $bin -h >"$root/help" 2>"$root/help.err"
 [ ! -s "$root/help.err" ]
 grep -q -- '-d, --daemon' "$root/help"
@@ -58,6 +63,7 @@ grep -q -- '--operator-nick NICK' "$root/help"
 grep -q -- '--color\[=WHEN\]' "$root/help"
 grep -q -- '--markdown' "$root/help"
 grep -q -- '--no-markdown' "$root/help"
+grep -q "^usage: $SNAJPAGENT_TEST_NAME " "$root/help"
 
 for args in \
     '-d' \

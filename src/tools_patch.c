@@ -3,6 +3,7 @@
 
 #include "base.h"
 #include "json.h"
+#include "snajpagent.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -1022,7 +1023,8 @@ make_temp_file(int parent_fd, char temp[NAME_MAX + 1u])
     for (unsigned int attempt = 0; attempt < 32u; ++attempt) {
         if (snj_random_id(id) < 0)
             return -1;
-        (void)snprintf(temp, NAME_MAX + 1u, ".snajpagent-patch-%s.tmp", id);
+        (void)snprintf(temp, NAME_MAX + 1u,
+                       "." SNAJPAGENT_NAME "-patch-%s.tmp", id);
         fd = openat(parent_fd, temp,
                     O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
                     0600);

@@ -3,6 +3,7 @@
 #include "cli.h"
 #include "config.h"
 #include "irc.h"
+#include "snajpagent.h"
 #include "store.h"
 
 #include <arpa/inet.h>
@@ -176,8 +177,8 @@ register_peer(struct snj_irc *server, int fd, const char *nick,
     int n = snprintf(input, sizeof(input),
         "CAP LS 302\r\nCAP REQ :batch server-time draft/chathistory%s\r\n"
         "CAP END\r\nNICK %s\r\nUSER %s 0 * :%s\r\nJOIN #lab\r\n",
-        agent ? " snajpagent/agent" : "", nick, nick,
-        agent ? "snajpagent agent" : "human");
+        agent ? " " SNAJPAGENT_NAME "/agent" : "", nick, nick,
+        agent ? SNAJPAGENT_NAME " agent" : "human");
 
     assert(n > 0 && (size_t)n < sizeof(input));
     send_text(fd, input);

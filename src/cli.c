@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "base.h"
 #include "config.h"
+#include "snajpagent.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -563,10 +564,10 @@ void
 snj_cli_usage(int fd)
 {
     static const char text[] =
-        "usage: snajpagent [OPTIONS] [--] [INITIAL PROMPT...]\n"
-        "       snajpagent --resume [OPTIONS] [SESSION_ID|--last] [-- FOLLOW-UP...]\n"
-        "       snajpagent -e [OPTIONS] [-- PROMPT...]\n"
-        "       snajpagent -l [OPTIONS]\n"
+        "usage: " SNAJPAGENT_NAME " [OPTIONS] [--] [INITIAL PROMPT...]\n"
+        "       " SNAJPAGENT_NAME " --resume [OPTIONS] [SESSION_ID|--last] [-- FOLLOW-UP...]\n"
+        "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n"
+        "       " SNAJPAGENT_NAME " -l [OPTIONS]\n"
         "  -d, --daemon                 host the IRC server in this process\n"
         "  -s, --listen[=ENDPOINT]      connect, or listen with -d\n"
         "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"

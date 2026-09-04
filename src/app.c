@@ -2369,7 +2369,8 @@ resolve_dotdir(const char *override, char *error, size_t error_size)
     else if (home && home[0] == '/') {
         size_t home_len = strlen(home);
         bool slash = home_len != 0u && home[home_len - 1u] == '/';
-        const char *suffix = slash ? ".snajpagent" : "/.snajpagent";
+        const char *suffix = slash ? "." SNAJPAGENT_NAME :
+                                     "/." SNAJPAGENT_NAME;
         size_t suffix_len = strlen(suffix);
         if (home_len > SNJ_PATH_MAX_BYTES - suffix_len) {
             errno = ENAMETOOLONG;
@@ -2411,7 +2412,7 @@ resolved_program_path(const char *program)
     size_t program_len;
 
     if (!program || !*program)
-        program = "snajpagent";
+        program = SNAJPAGENT_NAME;
     program_len = strlen(program);
     if (strchr(program, '/')) {
         char *resolved = realpath(program, NULL);

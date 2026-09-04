@@ -117,7 +117,8 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def write_fake_bundle(root: Path, platform_id: str, version: str = "0.9.0-wip") -> Path:
+def write_fake_bundle(root: Path, platform_id: str,
+                      version: str = "fixture-version") -> Path:
     out = root / platform_id
     source_commands = [
         command_record("statuscheck"),
@@ -199,7 +200,7 @@ def self_test() -> int:
         linux = write_fake_bundle(root, "linux-x86_64")
         macos = write_fake_bundle(root, "macos-arm64")
         version, seen = validate_matrix([linux, macos], **base_kwargs)
-        if version != "0.9.0-wip" or set(seen) != {"linux-x86_64", "macos-arm64"}:
+        if version != "fixture-version" or set(seen) != {"linux-x86_64", "macos-arm64"}:
             raise MatrixError("self-test positive case produced wrong coverage")
 
         expect_matrix_failure([linux], "macos-arm64", **base_kwargs)

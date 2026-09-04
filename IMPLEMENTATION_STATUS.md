@@ -2,10 +2,10 @@
 
 # Implementation status
 
-## 0.9.0-wip
+## 0.98
 
-snajpagent is usable as an interactive terminal agent, but it is still marked
-work-in-progress until the remaining release checks are finished. The
+snajpagent is usable as an interactive terminal agent, but it remains pre-1.0
+until the remaining release checks are finished. The
 `design/` directory contains the current architecture notes for this codebase.
 
 Release blockers are limited to external qualification work: live-provider

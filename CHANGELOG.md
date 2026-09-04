@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+## 0.98
+
+- Added a two-field `META` as the sole compiled product-name/base-version
+  source. Exact version-tag builds show `0.98`; other builds append Git's
+  abbreviated source commit, and dirty builds are labeled. Startup orientation
+  now omits the redundant model and labels its abbreviated session ID.
+
 - Added bullet-prefixed rollout lifecycle milestones at baseline verbosity:
   `Compacted`, `Goal set`, and `Goal cleared`, with exact-once view catch-up,
   durable detail only at higher verbosity, and a dedicated semantic color.

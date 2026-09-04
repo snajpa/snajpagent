@@ -1590,7 +1590,7 @@ def test_network_resume_roles():
     assert client_arguments[client_arguments.index("--client") + 1] == \
         upstream_endpoint
     resumed_client = Child.from_command(client_command)
-    resumed_client.wait(b"resumed " + client_id[:8].encode())
+    resumed_client.wait(b"session id " + client_id[:8].encode())
     resumed_client.wait(PROMPT)
     resumed_links = accept_connections(upstream, 2)
     resumed_client.exit_now()
@@ -1617,7 +1617,7 @@ def test_network_resume_roles():
     assert server_arguments[server_arguments.index("--room-name") + 1] == \
         "#lab"
     resumed_server = Child.from_command(server_command)
-    resumed_server.wait(b"resumed " + server_id[:8].encode())
+    resumed_server.wait(b"session id " + server_id[:8].encode())
     resumed_server.wait(PROMPT)
     peer = IRCClient(server_port, "secondpeer")
     peer.close()
@@ -1646,7 +1646,7 @@ def test_network_resume_roles():
     assert combined_arguments[combined_arguments.index("--client") + 1] == \
         upstream_endpoint
     resumed_combined = Child.from_command(combined_command)
-    resumed_combined.wait(b"resumed " + combined_id[:8].encode())
+    resumed_combined.wait(b"session id " + combined_id[:8].encode())
     resumed_combined.wait(PROMPT)
     resumed_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "resumedpeer")

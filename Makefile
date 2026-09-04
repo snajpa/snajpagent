@@ -2,12 +2,27 @@
 .POSIX:
 
 include config.mk
+include META
 
-BIN = snajpagent
+GIT_HEAD := $(shell git rev-parse --verify HEAD 2>/dev/null)
+GIT_REVISION := $(shell git rev-parse --short HEAD 2>/dev/null)
+GIT_VERSION_TAG := $(shell git rev-parse -q --verify 'refs/tags/$(VERSION)^{commit}' 2>/dev/null)
+GIT_DIRTY := $(shell test -z "$$(git status --porcelain 2>/dev/null)" || printf '%s' '-dirty')
+ifeq ($(GIT_HEAD),)
+$(error a Git HEAD is required to derive the build version)
+endif
+ifeq ($(GIT_HEAD)$(GIT_DIRTY),$(GIT_VERSION_TAG))
+BUILD_VERSION := $(VERSION)
+else
+BUILD_VERSION := $(VERSION)-$(GIT_REVISION)$(GIT_DIRTY)
+endif
+override CPPFLAGS += -DSNAJPAGENT_NAME='"$(NAME)"' -DSNAJPAGENT_VERSION='"$(BUILD_VERSION)"'
+
+BIN = $(NAME)
 EVIDENCE_DIR ?= build/release-evidence/current-host
 RELEASE_PLATFORMS ?= linux-x86_64 linux-aarch64 macos-x86_64 macos-arm64
 RELEASE_EVIDENCE_DIRS ?=
-LIVE_CONFIG ?= $(HOME)/.snajpagent/config.ini
+LIVE_CONFIG ?= $(HOME)/.$(NAME)/config.ini
 LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
@@ -15,7 +30,8 @@ COMMON_SRC = src/base.c src/config.c src/credential.c src/secret.c src/instructi
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
 HEADERS = src/snajpagent.h src/base.h src/config.h src/credential.h src/secret.h src/instructions.h src/json.h src/snj_jansson.h src/snj_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/irc.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h
 DEPFLAGS = -MMD -MP
-TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store tests/snajpagent-fixture
+FIXTURE_BIN = tests/$(NAME)-fixture
+TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store $(FIXTURE_BIN)
 BUILD_INPUTS = build/.build-inputs
 
 all: $(BIN)
@@ -42,7 +58,7 @@ $(BUILD_INPUTS): FORCE
 		printf '%s\n' 'LDFLAGS=$(LDFLAGS)'; \
 		printf '%s\n' 'LDLIBS=$(LDLIBS)'; \
 		printf '%s\n' 'CURL_LIBS=$(CURL_LIBS)'; \
-		cksum Makefile config.mk; \
+		cksum Makefile config.mk META; \
 	} >"$$tmp"; \
 	if test -r '$@' && cmp -s "$$tmp" '$@'; then \
 		:; \
@@ -52,7 +68,7 @@ $(BUILD_INPUTS): FORCE
 		mv -f "$$tmp" '$@'; \
 	fi
 
-tests/snajpagent-fixture: $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS)
+$(FIXTURE_BIN): $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS)
 	rm -rf tests/.fixture-obj
 	mkdir -p tests/.fixture-obj/src tests/.fixture-obj/tests
 	for f in $(COMMON_SRC) src/main.c tests/fixture_provider.c; do \
@@ -70,7 +86,7 @@ tests/test_base: src/base.c tests/test_base.c src/base.h
 tests/test_config: src/base.c src/config.c tests/test_config.c src/base.h src/config.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/config.c tests/test_config.c
 
-tests/test_irc: src/base.c src/config.c src/irc.c tests/test_irc.c src/base.h src/config.h src/cli.h src/irc.h
+tests/test_irc: src/base.c src/config.c src/irc.c tests/test_irc.c src/base.h src/config.h src/cli.h src/irc.h src/snajpagent.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ \
 		src/base.c src/config.c src/irc.c tests/test_irc.c
 
@@ -111,7 +127,7 @@ tests/test_context: src/base.c src/config.c src/json.c src/instructions.c src/co
 		tests/test_context.c $(LDLIBS)
 
 tests/test_render: src/base.c src/json.c src/term.c src/render.c tests/test_render.c \
-		src/base.h src/json.h src/term.h src/render.h
+		src/base.h src/json.h src/term.h src/render.h src/snajpagent.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ src/base.c src/json.c src/term.c src/render.c tests/test_render.c $(LDLIBS)
 
@@ -146,7 +162,8 @@ check: $(TEST_BIN)
 	./tests/test_turn
 	./tests/test_tools
 	./tests/test_store
-	./tests/test_cli.sh ./tests/snajpagent-fixture
+	SNAJPAGENT_TEST_NAME='$(NAME)' SNAJPAGENT_TEST_VERSION='$(BUILD_VERSION)' \
+		./tests/test_cli.sh ./$(FIXTURE_BIN)
 	@if command -v tmux >/dev/null 2>&1; then \
 		$(MAKE) tmuxcheck; \
 	else \
@@ -189,7 +206,7 @@ releasecheck:
 livecheck: $(BIN)
 	python3 ./tools/live_provider_check.py ./$(BIN)
 
-tmuxcheck: $(BIN) tests/snajpagent-fixture
+tmuxcheck: $(BIN) $(FIXTURE_BIN)
 	@command -v tmux >/dev/null 2>&1 || { \
 		printf '%s\n' 'tmuxcheck: tmux is required' >&2; exit 2; \
 	}
@@ -203,7 +220,7 @@ tmuxcheck: $(BIN) tests/snajpagent-fixture
 	mkdir -p -m 700 "$(TMUX_TEST_ROOT)/home" "$(TMUX_TEST_ROOT)/work"
 	HOME="$(TMUX_TEST_ROOT)/home" LC_ALL=C.utf8 \
 		python3 ./tests/tmux_terminal.py fixture \
-		./tests/snajpagent-fixture "$(TMUX_TEST_ROOT)/work" \
+		./$(FIXTURE_BIN) "$(TMUX_TEST_ROOT)/work" \
 		"$(TMUX_TEST_ROOT)/run"
 	HOME="$(TMUX_TEST_ROOT)/home" LC_ALL=C.utf8 \
 		python3 ./tests/tmux_terminal.py irc ./$(BIN) \
@@ -219,9 +236,9 @@ terminallivecheck: $(BIN)
 	python3 ./tests/tmux_terminal.py live ./$(BIN) \
 		"$(LIVE_WORKSPACE)" "$(LIVE_CONFIG)" "$(LIVE_RESULT_ROOT)"
 
-evidencebundle: $(BIN) tests/snajpagent-fixture
+evidencebundle: $(BIN) $(FIXTURE_BIN)
 	rm -rf $(EVIDENCE_DIR)
-	python3 ./tools/collect_release_evidence.py ./$(BIN) $(EVIDENCE_DIR) --fixture ./tests/snajpagent-fixture --skip-live
+	python3 ./tools/collect_release_evidence.py ./$(BIN) $(EVIDENCE_DIR) --fixture ./$(FIXTURE_BIN) --skip-live
 
 evidencecheck:
 	python3 ./tools/check_release_evidence.py $(EVIDENCE_DIR)
@@ -235,9 +252,9 @@ evidencematrixcheck:
 	set --; for p in $(RELEASE_PLATFORMS); do set -- "$$@" --require-platform "$$p"; done; \
 		python3 ./tools/check_release_matrix.py --require-terminal --require-live "$$@" $(RELEASE_EVIDENCE_DIRS)
 
-releaseevidence: $(BIN) tests/snajpagent-fixture
+releaseevidence: $(BIN) $(FIXTURE_BIN)
 	rm -rf $(EVIDENCE_DIR)
-	python3 ./tools/collect_release_evidence.py ./$(BIN) $(EVIDENCE_DIR) --fixture ./tests/snajpagent-fixture --require-live
+	python3 ./tools/collect_release_evidence.py ./$(BIN) $(EVIDENCE_DIR) --fixture ./$(FIXTURE_BIN) --require-live
 	python3 ./tools/check_release_evidence.py $(EVIDENCE_DIR) --require-terminal --require-live
 
 sizecheck:

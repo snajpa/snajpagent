@@ -39,11 +39,14 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def read_version() -> str:
-    version_path = ROOT / "VERSION"
-    if not version_path.is_file():
-        return ""
-    return version_path.read_text(encoding="utf-8").strip()
+def read_version(binary: Path) -> str:
+    result = subprocess.run([str(binary), "-V"], cwd=ROOT, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=10, check=False)
+    fields = result.stdout.strip().split(maxsplit=1)
+    if result.returncode != 0 or len(fields) != 2 or result.stderr:
+        die("binary version could not be read")
+    return fields[1]
 
 
 def command_record(name: str, argv: list[str], *, cwd: Path = ROOT,
@@ -247,7 +250,7 @@ def main(argv: list[str]) -> int:
     summary = {
         "schema": "snajpagent.release_evidence.v1",
         "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "version": read_version(),
+        "version": read_version(binary),
         "platform_id": args.platform_id or default_platform_id(),
         "platform": platform_payload(),
         "binary": {
