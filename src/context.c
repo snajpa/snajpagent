@@ -1730,11 +1730,12 @@ snj_context_build(struct snj_session *session, const char *model,
         append_message(&builder, "fixed_harness", "developer", harness) < 0 ||
         (builder.networked &&
          (snj_buf_printf(&network_harness,
-            "IRC chat mode is active. This process is agent %s with a "
-            "separate local operator %s and participates in views of one "
+            "IRC chat mode is active. This process has model nick %s and "
+            "separate local operator nick %s, and participates in views of one "
             "room. User-role IRC entries include endpoint, room, time, event, "
             "sender, and current channel-operator status; @/+o messages are "
-            "operator instructions. Direct mentions of %s require immediate "
+            "operator instructions. Direct mentions of nick %s require "
+            "immediate "
             "attention. Unprivileged chat and membership/topic notifications "
             "are conversational context and may be left unanswered. Terminal "
             "assistant speech is posted to IRC, while tool activity stays "
@@ -1744,7 +1745,8 @@ snj_context_build(struct snj_session *session, const char *model,
             "intentional mid-turn room message, irc_state for cached state, "
             "and irc_topic only when the agent has +o. A local operator turn "
             "requires one room-facing reply; peer/background traffic does not.",
-            config->irc_name, config->irc_operator_name, config->irc_name) < 0 ||
+            config->irc_model_nick, config->irc_operator_nick,
+            config->irc_model_nick) < 0 ||
           snj_buf_terminate(&network_harness) < 0 ||
           append_message(&builder, "irc_harness", "developer",
                          (const char *)network_harness.data) < 0)) ||

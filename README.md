@@ -108,8 +108,8 @@ Useful options:
 -d          host the built-in IRC server
 -s ENDPOINT connect to IRC, or choose the listener with -d
 -c ENDPOINT connect to IRC; repeatable (default localhost:6667)
--n NAME     networked agent name (required in networked mode)
--o NAME     local operator name
+-n NICK     networked model nick (required in networked mode)
+-o NICK     local operator nick
 -r ROOM     hosted room name
 -m MODEL    override the configured model
 -v          increase verbosity, repeatable up to six times
@@ -122,7 +122,7 @@ Useful options:
 --no-markdown  show model Markdown literally
 ```
 
-`--daemon`, `--listen`, `--client`, `--name`, `--operator-name`, and
+`--daemon`, `--listen`, `--client`, `--model-nick`, `--operator-nick`, and
 `--room-name` are the long forms of the network options. Without daemon mode,
 `-s`/`--listen` adds an outgoing connection like `-c`/`--client`; with daemon
 mode, it selects the listener while any `-c` connections remain outgoing.
@@ -203,7 +203,7 @@ with Tab while another turn is active).
 it does not detach. Without `-d`, `-s` adds an outgoing connection just like
 `-c`; with `-d`, `-s` selects the listener. Each `-c` always adds an outgoing
 connection, so hosting and one or more client roles can be combined. Networked
-mode requires `-n NAME`. Initial chat text in this mode must follow `--`:
+mode requires `-n NICK`. Initial chat text in this mode must follow `--`:
 
 ```sh
 ./snajpagent -d -n builder -- "introduce yourself"
@@ -403,8 +403,8 @@ daemon = true
 listen = localhost:6667
 client = localhost:7667
 client = irc.example:6667
-name = builder
-operator_name = alice
+model_nick = builder
+operator_nick = alice
 room_name = builds
 history_lines = 200
 ```

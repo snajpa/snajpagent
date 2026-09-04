@@ -18,8 +18,8 @@ The network options are:
 -d, --daemon                 host the built-in IRC server
 -s, --listen[=ENDPOINT]      connect, or select the listener with -d
 -c, --client[=ENDPOINT]      connect to a server; repeatable
--n, --name NAME              agent IRC name
--o, --operator-name NAME     local operator IRC name
+-n, --model-nick NICK        model IRC nick
+-o, --operator-nick NICK     local operator IRC nick
 -r, --room-name ROOM         hosted room name
     --color[=WHEN]           color: auto, always, or never
     --no-color               alias for --color=never
@@ -41,11 +41,11 @@ separate arguments, and long `=ENDPOINT` arguments are accepted. In networked
 mode any initial chat text must follow `--`, which removes the only ambiguity
 between an optional endpoint and positional text.
 
-`-n`/`--name` is required whenever a server or client role is enabled. It is
-the identity used for model-authored chat. `-o`/`--operator-name` controls the
-separate identity used for text typed in the local UI. Its default is the
-current login name when that is a valid IRC name, then `operator`. The two
-local names must differ under IRC case folding.
+`-n`/`--model-nick` is required whenever a server or client role is enabled. It
+is the nick used for model-authored chat. `-o`/`--operator-nick` controls the
+separate nick used for text typed in the local UI. Its default is the current
+login identifier when that is a valid IRC nick, then `operator`. The two local
+nicks must differ under IRC case folding.
 
 `-r`/`--room-name` applies to the hosted room and requires `-d`. A leading `#`
 is optional on input and is present on the wire and in the UI.
@@ -86,8 +86,8 @@ daemon = true
 listen = localhost:6667
 client = localhost:6667
 client = irc.example:6667
-name = builder
-operator_name = alice
+model_nick = builder
+operator_nick = alice
 room_name = build-host
 history_lines = 200
 
@@ -99,18 +99,18 @@ color = auto
 at most 16 distinct outgoing endpoints. Any command-line `-c` occurrences, or
 a standalone `-s`, replace the configured client list; repeated `-c`
 occurrences retain their order. Command-line scalar values override configured
-values. `-d` enables a configured-off daemon, while `listen`, `name`,
-`operator_name`, and `room_name` otherwise supply their documented defaults.
+values. `-d` enables a configured-off daemon, while `listen`, `model_nick`,
+`operator_nick`, and `room_name` otherwise supply their documented defaults.
 
 `history_lines` bounds both the server's in-memory room history and the fresh
 history snapshot projected after compaction. It accepts 1 through 1000 and
 defaults to 200. IRC's 512-byte wire-line limit and the configured line count
 jointly bound retained history memory.
 
-Names are nonempty IRC nicks of at most 30 bytes and room names are at most 50
+Nicks are nonempty and at most 30 bytes, while room names are at most 50
 bytes, valid UTF-8, free of spaces, commas, controls, and IRC separators. The
 parser rejects duplicate endpoints, duplicate scalar keys, invalid ports,
-invalid names, a client count over the bound, and options whose required mode
+invalid nicks, a client count over the bound, and options whose required mode
 is absent.
 
 ## One Server, One Room
@@ -133,7 +133,7 @@ The local operator and ordinary human IRC clients enter the room with channel
 operator mode `+o`. The agent identity does not. Channel operators may read
 and change the topic with standard `TOPIC`; the resulting topic and actor are
 broadcast and retained in history. The model is told that current `+o` status,
-not a name pattern or connection origin, marks operator input it must respect.
+not a nick pattern or connection origin, marks operator input it must respect.
 
 The default listener is local-only in practical effect through the
 `localhost` default. The initial implementation deliberately provides neither
@@ -152,7 +152,7 @@ IRC clients:
 - room participation: `JOIN`, `PART`, `NAMES`, `WHO`;
 - chat: `PRIVMSG`, `NOTICE`;
 - room state: `TOPIC`, `MODE` for membership/operator reporting; and
-- standard welcome, room, names, topic, and error numerics.
+- standard welcome, room, `NAMES`, topic, and error numerics.
 
 The snajpagent agent connection identifies its role during capability
 negotiation and is not granted `+o`. Its UI operator connection is distinct
@@ -162,12 +162,13 @@ messages to another room, and commands used before registration or join are
 rejected without disturbing other clients.
 
 The server supports IRCv3 `batch`, `server-time`, and a bounded channel-history
-capability. On join it sends the current topic, names and modes, followed by up
-to `history_lines` cached room events in one history batch. A client without
-batch support receives the same bounded history as server notices. The cache
-contains timestamped chat, joins, parts, quits, nick changes, topic changes,
-and operator-mode changes. It is memory-bounded and reconstructed from the
-resumed local session when that session contains retained IRC events.
+capability. On join it sends the current topic, member nicks and modes,
+followed by up to `history_lines` cached room events in one history batch. A
+client without batch support receives the same bounded history as server
+notices. The cache contains timestamped chat, joins, parts, quits, nick
+changes, topic changes, and operator-mode changes. It is memory-bounded and
+reconstructed from the resumed local session when that session contains
+retained IRC events.
 
 Outgoing clients reconnect with bounded fixed backoff while the foreground
 process remains alive. Disconnection is a visible room notification and does
@@ -183,13 +184,13 @@ sender or event marker, and readable IRC-client-style spacing; the composer
 remains at the bottom while output is safely redrawn around it. At verbosity 0
 it shows only:
 
-- timestamped operator and remote-room messages with the sender name;
-- a visible `@` marker on names that currently carry `+o`;
+- timestamped operator and remote-room messages with the sender nick;
+- a visible `@` marker on nicks that currently carry `+o`;
 - joins, leaves, reconnects, topic changes, and other room notifications; and
 - the local operator composer and actionable errors.
 
 Model text is buffered during generation. Only terminal public assistant text
-is sent to IRC as a message from the agent name. This process's own model text
+is sent to IRC as a message from the model nick. This process's own model text
 is not rendered in its local verbosity-0 UI; it becomes locally visible only
 after verbosity is raised. Public text emitted on an intermediate tool cycle,
 raw tool calls, tool results, provider traffic, request bodies, and internal
@@ -235,8 +236,8 @@ text.
 - `never` emits no SGR sequences and is selected by `--no-color`.
 
 The palette uses only broadly supported 16-color ANSI foreground attributes,
-no background fills and no true-color assumptions. Names and symbols carry
-the meaning even without color. Agent names, operator names, local prompts,
+no background fills and no true-color assumptions. Nicks and symbols carry
+the meaning even without color. Model nicks, operator nicks, local prompts,
 room events, tool activity, success, warning, error, durable events, protocol,
 and transport diagnostics have stable roles. Red is reserved for errors,
 yellow for warnings/activity, cyan/blue for agent and prompt identity,
@@ -252,7 +253,7 @@ When any network role is enabled, the fixed developer harness sent before the
 conversation explains:
 
 - that this process participates in one or more views of a single IRC room;
-- the separate agent and operator identities and the current agent name;
+- the separate model and operator identities and their current nicks;
 - that chat entries marked `+o` are operator instructions;
 - that a direct mention of the agent requires immediate attention;
 - that unprivileged agent/room traffic and membership notifications are
@@ -276,7 +277,7 @@ Admission priority is:
 1. local operator text is urgent and starts an immediate user turn while idle;
 2. a room message from a member currently carrying `+o` is urgent in the same
    way;
-3. a room message that mentions the agent name, using IRC case folding and a
+3. a room message that mentions the model nick, using IRC case folding and a
    nick boundary, is urgent regardless of the sender; and
 4. other chat and room notifications are coalesced into a bounded user-role
    room update at a convenient provider boundary.
@@ -314,7 +315,7 @@ provider cycle. The turn is then considered finished, whether the model speaks
 or remains quiet. This reminder is never looped and is never applied to peer
 messages, membership traffic, history snapshots, or other background updates.
 
-On the first successful room join, the received topic, names and server
+On the first successful room join, the received topic, member nicks and server
 history are immediately admitted together as a user-role room snapshot. If a
 snapshot would make the active context cross its normal compaction threshold,
 normal compaction runs first and the fresh bounded snapshot is admitted
@@ -333,8 +334,8 @@ Networked requests expose native bounded IRC tools alongside the existing
 coding tools:
 
 - `irc_send` sends a room message or notice as the agent identity;
-- `irc_state` returns the current endpoints, joins, room, topic, names and
-  operator flags from already-maintained runtime state; and
+- `irc_state` returns the current endpoints, joins, room, topic, member nicks
+  and operator flags from already-maintained runtime state; and
 - `irc_topic` requests a topic change as the agent identity and succeeds only
   where that identity currently has the required channel mode.
 
@@ -406,7 +407,7 @@ Implementation is complete when the existing build and validation commands
 pass and focused local smoke checks demonstrate all of the following:
 
 1. the new short/long forms, compatibility long forms, config equivalents,
-   defaults, required name, repeated clients, combined roles, and invalid
+   defaults, required model nick, repeated clients, combined roles, and invalid
    combinations;
 2. localhost server startup on port 6667, one advertised/default room, default
    path topic, automatic client joins, operator `+o`, agent non-op membership,
@@ -417,12 +418,12 @@ pass and focused local smoke checks demonstrate all of the following:
    rendering, and `auto`/`always`/`never` color behavior in networked and
    non-networked modes;
 4. earliest-safe, coalesced urgent admission for local operator, current
-   channel operator, and agent mentions without truncating active generation or
-   tools; asynchronous managed-command handoff; coalesced background events;
-   socket servicing during provider and tool work; first-join history
-   projection; and fresh post-compaction history projection; one non-looping
-   reply reminder for otherwise-silent local operator turns; and no forced
-   response to other traffic;
+   channel operator, and model-nick mentions without truncating active
+   generation or tools; asynchronous managed-command handoff; coalesced
+   background events; socket servicing during provider and tool work;
+   first-join history projection; and fresh post-compaction history projection;
+   one non-looping reply reminder for otherwise-silent local operator turns;
+   and no forced response to other traffic;
 5. `irc_send`, `irc_state`, and privilege-correct `irc_topic` behavior without
    model-driven polling, joining, or reconnection; and
 6. autonomous reconnect/disconnect behavior, slow/malformed peer isolation, bounded

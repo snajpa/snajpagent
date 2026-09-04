@@ -38,14 +38,14 @@ enum link_role {
 struct snj_irc;
 
 struct irc_member {
-    char nick[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     bool op;
 };
 
 struct irc_replay_member {
     char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
-    char nick[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     bool op;
 };
 
@@ -59,8 +59,8 @@ struct irc_conn {
     unsigned char input[IRC_INPUT_MAX];
     size_t input_len;
     char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    char nick[SNJ_CONFIG_IRC_NAME_MAX + 1u];
-    char user[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    char user[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char room[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
     char topic[513u];
     struct irc_member members[IRC_MEMBERS_MAX];
@@ -93,9 +93,9 @@ struct irc_message {
 struct snj_irc {
     int listener;
     char listen[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    char server_name[SNJ_CONFIG_IRC_NAME_MAX + 1u];
-    char agent_name[SNJ_CONFIG_IRC_NAME_MAX + 1u];
-    char operator_name[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char server_name[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    char model_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    char operator_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char room[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
     char topic[513u];
     struct irc_conn peers[IRC_SERVER_PEERS];
@@ -284,7 +284,7 @@ nick_valid(const char *nick)
 {
     size_t len = strlen(nick);
 
-    if (!len || len > SNJ_CONFIG_IRC_NAME_MAX ||
+    if (!len || len > SNJ_CONFIG_IRC_NICK_MAX ||
         ((nick[0] >= '0' && nick[0] <= '9') || nick[0] == '-') ||
         !snj_utf8_valid((const unsigned char *)nick, len, true) ||
         identifier_unicode_unsafe(nick))
@@ -493,14 +493,15 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
             ++config->irc_client_count;
         }
     }
-    if (cli->irc_name &&
-        config_copy(config->irc_name, sizeof(config->irc_name), cli->irc_name,
-                    "IRC agent name", error, error_size) < 0)
+    if (cli->irc_model_nick &&
+        config_copy(config->irc_model_nick, sizeof(config->irc_model_nick),
+                    cli->irc_model_nick, "IRC model nick", error,
+                    error_size) < 0)
         return -1;
-    if (cli->irc_operator_name &&
-        config_copy(config->irc_operator_name,
-                    sizeof(config->irc_operator_name), cli->irc_operator_name,
-                    "IRC operator name", error, error_size) < 0)
+    if (cli->irc_operator_nick &&
+        config_copy(config->irc_operator_nick,
+                    sizeof(config->irc_operator_nick), cli->irc_operator_nick,
+                    "IRC operator nick", error, error_size) < 0)
         return -1;
     if (cli->irc_room_name &&
         config_copy(config->irc_room_name, sizeof(config->irc_room_name),
@@ -513,11 +514,11 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
         return -1;
     }
     if (!snj_irc_enabled(config)) {
-        if (config->irc_name[0] || config->irc_operator_name[0] ||
+        if (config->irc_model_nick[0] || config->irc_operator_nick[0] ||
             config->irc_room_name[0] ||
             config->irc_listen_explicit) {
             set_error(error, error_size,
-                      "IRC names, room, and listen settings require a server or client role");
+                      "IRC nicks, room, and listen settings require a server or client role");
             errno = EINVAL;
             return -1;
         }
@@ -536,9 +537,9 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
         errno = EINVAL;
         return -1;
     }
-    if (!nick_valid(config->irc_name)) {
+    if (!nick_valid(config->irc_model_nick)) {
         set_error(error, error_size,
-                  "networked mode requires a valid -n/--name IRC nick");
+                  "networked mode requires a valid -n/--model-nick IRC nick");
         errno = EINVAL;
         return -1;
     }
@@ -562,20 +563,20 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
                 return -1;
             }
     }
-    if (!config->irc_operator_name[0]) {
+    if (!config->irc_operator_nick[0]) {
         login = getenv("USER");
         if (!login || !nick_valid(login) ||
-            irc_casecmp(login, config->irc_name) == 0)
+            irc_casecmp(login, config->irc_model_nick) == 0)
             login = "operator";
-        if (irc_casecmp(login, config->irc_name) == 0)
+        if (irc_casecmp(login, config->irc_model_nick) == 0)
             login = "localop";
-        (void)copy_string(config->irc_operator_name,
-                          sizeof(config->irc_operator_name), login);
+        (void)copy_string(config->irc_operator_nick,
+                          sizeof(config->irc_operator_nick), login);
     }
-    if (!nick_valid(config->irc_operator_name) ||
-        irc_casecmp(config->irc_operator_name, config->irc_name) == 0) {
+    if (!nick_valid(config->irc_operator_nick) ||
+        irc_casecmp(config->irc_operator_nick, config->irc_model_nick) == 0) {
         set_error(error, error_size,
-                  "IRC operator and agent names must be valid and distinct");
+                  "IRC operator and model nicks must be valid and distinct");
         errno = EINVAL;
         return -1;
     }
@@ -975,7 +976,7 @@ server_time_tag(const char *tags)
 }
 
 static const char *
-prefix_nick(const char *prefix, char out[SNJ_CONFIG_IRC_NAME_MAX + 1u])
+prefix_nick(const char *prefix, char out[SNJ_CONFIG_IRC_NICK_MAX + 1u])
 {
     const char *end;
     size_t len;
@@ -984,7 +985,7 @@ prefix_nick(const char *prefix, char out[SNJ_CONFIG_IRC_NAME_MAX + 1u])
         return NULL;
     end = strpbrk(prefix, "!@");
     len = end ? (size_t)(end - prefix) : strlen(prefix);
-    if (!len || len > SNJ_CONFIG_IRC_NAME_MAX)
+    if (!len || len > SNJ_CONFIG_IRC_NICK_MAX)
         return NULL;
     memcpy(out, prefix, len);
     out[len] = '\0';
@@ -1035,8 +1036,8 @@ static bool
 server_nick_used(const struct snj_irc *irc, const char *nick,
                  const struct irc_conn *except)
 {
-    if (irc_casecmp(irc->agent_name, nick) == 0 ||
-        irc_casecmp(irc->operator_name, nick) == 0)
+    if (irc_casecmp(irc->model_nick, nick) == 0 ||
+        irc_casecmp(irc->operator_nick, nick) == 0)
         return true;
     for (size_t i = 0; i < IRC_SERVER_PEERS; ++i)
         if (irc->peers[i].used && &irc->peers[i] != except &&
@@ -1089,10 +1090,10 @@ server_send_names(struct snj_irc *irc, struct irc_conn *peer)
 {
     if (queue_line(peer, ":%s 353 %s = %s :%s%s", irc->server_name,
                    peer->nick, irc->room, irc->agent_op ? "@" : "",
-                   irc->agent_name) < 0 ||
+                   irc->model_nick) < 0 ||
         queue_line(peer, ":%s 353 %s = %s :%s%s", irc->server_name,
                    peer->nick, irc->room, irc->operator_op ? "@" : "",
-                   irc->operator_name) < 0)
+                   irc->operator_nick) < 0)
         return -1;
     for (size_t i = 0; i < IRC_SERVER_PEERS; ++i) {
         struct irc_conn *it = &irc->peers[i];
@@ -1337,7 +1338,7 @@ server_mode(struct snj_irc *irc, struct irc_conn *peer,
     struct irc_conn *target;
     bool *local_target = NULL;
     bool add;
-    char mode_text[SNJ_CONFIG_IRC_NAME_MAX + 4u];
+    char mode_text[SNJ_CONFIG_IRC_NICK_MAX + 4u];
 
     if (message->param_count < 1u ||
         irc_casecmp(message->params[0], irc->room) != 0)
@@ -1355,9 +1356,9 @@ server_mode(struct snj_irc *irc, struct irc_conn *peer,
         return queue_line(peer, ":%s 472 %s :Only +o and -o are supported",
                           irc->server_name, peer->nick);
     target = server_peer_by_nick(irc, message->params[2]);
-    if (irc_casecmp(message->params[2], irc->agent_name) == 0)
+    if (irc_casecmp(message->params[2], irc->model_nick) == 0)
         local_target = &irc->agent_op;
-    else if (irc_casecmp(message->params[2], irc->operator_name) == 0)
+    else if (irc_casecmp(message->params[2], irc->operator_nick) == 0)
         local_target = &irc->operator_op;
     if ((!target || !target->joined) && !local_target)
         return queue_line(peer, ":%s 441 %s %s %s :They aren't on that channel",
@@ -1384,11 +1385,11 @@ server_who(struct snj_irc *irc, struct irc_conn *peer)
 {
     if (queue_line(peer, ":%s 352 %s %s agent %s %s %s H%s :0 snajpagent",
                    irc->server_name, peer->nick, irc->room,
-                   irc->server_name, irc->server_name, irc->agent_name,
+                   irc->server_name, irc->server_name, irc->model_nick,
                    irc->agent_op ? "@" : "") < 0 ||
         queue_line(peer, ":%s 352 %s %s operator %s %s %s H%s :0 operator",
                    irc->server_name, peer->nick, irc->room,
-                   irc->server_name, irc->server_name, irc->operator_name,
+                   irc->server_name, irc->server_name, irc->operator_nick,
                    irc->operator_op ? "@" : "") < 0)
         return -1;
     for (size_t i = 0u; i < IRC_SERVER_PEERS; ++i) {
@@ -1709,7 +1710,7 @@ static int
 client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
 {
     struct irc_message message;
-    char nick[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char trace[96u];
     const char *sender;
     uint64_t timestamp_ms;
@@ -1861,7 +1862,7 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
          strcmp(message.params[1], "-o") == 0)) {
         struct irc_member *target = member_add(link, message.params[2], false);
         struct irc_member *actor = member_find(link, sender);
-        char mode_text[SNJ_CONFIG_IRC_NAME_MAX + 4u];
+        char mode_text[SNJ_CONFIG_IRC_NICK_MAX + 4u];
         if (target)
             target->op = message.params[1][0] == '+';
         if (irc_casecmp(message.params[2], link->nick) == 0)
@@ -1884,8 +1885,8 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
         message.param_count >= 2u && link->joined && link->room[0] &&
         irc_casecmp(message.params[0], link->room) == 0) {
         struct irc_member *member;
-        if (irc_casecmp(sender, irc->agent_name) == 0 ||
-            irc_casecmp(sender, irc->operator_name) == 0)
+        if (irc_casecmp(sender, irc->model_nick) == 0 ||
+            irc_casecmp(sender, irc->operator_nick) == 0)
             return 0;
         member = member_find(link, sender);
         return link_emit(irc, link,
@@ -2066,7 +2067,7 @@ start_due_links(struct snj_irc *irc)
 }
 
 static void
-derive_server_name(char out[SNJ_CONFIG_IRC_NAME_MAX + 1u])
+derive_server_name(char out[SNJ_CONFIG_IRC_NICK_MAX + 1u])
 {
     char host[256u];
     size_t used = 0u;
@@ -2074,7 +2075,7 @@ derive_server_name(char out[SNJ_CONFIG_IRC_NAME_MAX + 1u])
     if (gethostname(host, sizeof(host)) < 0)
         memcpy(host, "localhost", 10u);
     host[sizeof(host) - 1u] = '\0';
-    for (size_t i = 0; host[i] && used < SNJ_CONFIG_IRC_NAME_MAX; ++i) {
+    for (size_t i = 0; host[i] && used < SNJ_CONFIG_IRC_NICK_MAX; ++i) {
         unsigned char c = (unsigned char)host[i];
         out[used++] = nick_char(c) ? (char)c : '_';
     }
@@ -2135,10 +2136,10 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
                                  sizeof(*irc->replay_members));
     if (!irc->history || !irc->replay_members ||
         copy_string(irc->listen, sizeof(irc->listen), config->irc_listen) < 0 ||
-        copy_string(irc->agent_name, sizeof(irc->agent_name),
-                    config->irc_name) < 0 ||
-        copy_string(irc->operator_name, sizeof(irc->operator_name),
-                    config->irc_operator_name) < 0)
+        copy_string(irc->model_nick, sizeof(irc->model_nick),
+                    config->irc_model_nick) < 0 ||
+        copy_string(irc->operator_nick, sizeof(irc->operator_nick),
+                    config->irc_operator_nick) < 0)
         goto fail;
     derive_server_name(irc->server_name);
     if (config->irc_room_name[0]) {
@@ -2170,7 +2171,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
             (void)copy_string(link->endpoint, sizeof(link->endpoint),
                               config->irc_clients[i]);
             (void)copy_string(link->nick, sizeof(link->nick),
-                              role == 0u ? irc->agent_name : irc->operator_name);
+                              role == 0u ? irc->model_nick : irc->operator_nick);
         }
     }
     if (irc->daemon) {
@@ -2426,7 +2427,7 @@ int
 snj_irc_send_operator(struct snj_irc *irc, const char *text,
                       char *error, size_t error_size)
 {
-    return send_chat(irc, irc ? irc->operator_name : "", LINK_OPERATOR,
+    return send_chat(irc, irc ? irc->operator_nick : "", LINK_OPERATOR,
                      SNJ_IRC_MESSAGE, text, error, error_size);
 }
 
@@ -2434,7 +2435,7 @@ int
 snj_irc_send_agent(struct snj_irc *irc, const char *text,
                    char *error, size_t error_size)
 {
-    return send_chat(irc, irc ? irc->agent_name : "", LINK_AGENT,
+    return send_chat(irc, irc ? irc->model_nick : "", LINK_AGENT,
                      SNJ_IRC_MESSAGE, text, error, error_size);
 }
 
@@ -2442,7 +2443,7 @@ int
 snj_irc_send_agent_notice(struct snj_irc *irc, const char *text,
                           char *error, size_t error_size)
 {
-    return send_chat(irc, irc ? irc->agent_name : "", LINK_AGENT,
+    return send_chat(irc, irc ? irc->model_nick : "", LINK_AGENT,
                      SNJ_IRC_NOTICE, text, error, error_size);
 }
 
@@ -2468,13 +2469,13 @@ set_topic_as(struct snj_irc *irc, const char *topic, enum link_role role,
         (role == LINK_AGENT ? irc->agent_op : irc->operator_op)) {
         memcpy(irc->topic, clean, strlen(clean) + 1u);
         if (server_broadcast(irc, ":%s!local@%s TOPIC %s :%s",
-                             role == LINK_AGENT ? irc->agent_name :
-                                                  irc->operator_name,
+                             role == LINK_AGENT ? irc->model_nick :
+                                                  irc->operator_nick,
                              irc->server_name,
                              irc->room, clean) < 0 ||
             server_emit(irc, SNJ_IRC_TOPIC,
-                        role == LINK_AGENT ? irc->agent_name :
-                                             irc->operator_name, clean,
+                        role == LINK_AGENT ? irc->model_nick :
+                                             irc->operator_nick, clean,
                         true, true) < 0)
             goto fail;
         ++destinations;
@@ -2525,8 +2526,8 @@ snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
     }
     if (snj_buf_printf(out,
             "[IRC room snapshot; @ marks a channel operator]\n"
-            "agent: %s\noperator: %s\nhosted: %s\n",
-            irc->agent_name, irc->operator_name,
+            "model nick: %s\noperator nick: %s\nhosted: %s\n",
+            irc->model_nick, irc->operator_nick,
             irc->daemon ? irc->listen : "no") < 0 ||
         (irc->daemon &&
          snj_buf_printf(out, "room: %s\ntopic: %s\n",
@@ -2534,9 +2535,9 @@ snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
         goto fail;
     if (irc->daemon) {
         if (snj_buf_printf(out, "members[%s]: %s%s %s%s", irc->listen,
-                           irc->agent_op ? "@" : "", irc->agent_name,
+                           irc->agent_op ? "@" : "", irc->model_nick,
                            irc->operator_op ? "@" : "",
-                           irc->operator_name) < 0)
+                           irc->operator_nick) < 0)
             goto fail;
         for (size_t i = 0; i < IRC_SERVER_PEERS; ++i) {
             const struct irc_conn *peer = &irc->peers[i];
@@ -2796,15 +2797,15 @@ snj_irc_restore_event(struct snj_irc *irc,
 }
 
 const char *
-snj_irc_agent_name(const struct snj_irc *irc)
+snj_irc_model_nick(const struct snj_irc *irc)
 {
-    return irc ? irc->agent_name : NULL;
+    return irc ? irc->model_nick : NULL;
 }
 
 const char *
-snj_irc_operator_name(const struct snj_irc *irc)
+snj_irc_operator_nick(const struct snj_irc *irc)
 {
-    return irc ? irc->operator_name : NULL;
+    return irc ? irc->operator_nick : NULL;
 }
 
 const char *
@@ -2816,23 +2817,23 @@ snj_irc_room_name(const struct snj_irc *irc)
 bool
 snj_irc_mentions_agent(const struct snj_irc *irc, const char *text)
 {
-    size_t name_len;
+    size_t nick_len;
 
     if (!irc || !text)
         return false;
-    name_len = strlen(irc->agent_name);
+    nick_len = strlen(irc->model_nick);
     for (size_t i = 0; text[i]; ++i) {
         size_t j;
 
         if (i != 0u && ((unsigned char)text[i - 1u] >= 0x80u ||
                         nick_char((unsigned char)text[i - 1u])))
             continue;
-        for (j = 0u; j < name_len && text[i + j]; ++j)
+        for (j = 0u; j < nick_len && text[i + j]; ++j)
             if (irc_fold((unsigned char)text[i + j]) !=
-                irc_fold((unsigned char)irc->agent_name[j]))
+                irc_fold((unsigned char)irc->model_nick[j]))
                 break;
-        if (j == name_len && (unsigned char)text[i + name_len] < 0x80u &&
-            !nick_char((unsigned char)text[i + name_len]))
+        if (j == nick_len && (unsigned char)text[i + nick_len] < 0x80u &&
+            !nick_char((unsigned char)text[i + nick_len]))
             return true;
     }
     return false;

@@ -505,13 +505,14 @@ parse_irc(struct parse_state *state, const char *key, const char *value)
         ++config->irc_client_count;
         return 0;
     }
-    if (strcmp(key, "name") == 0)
+    if (strcmp(key, "model_nick") == 0)
         return claim_key(state, 2u) < 0 ? -1 :
-               copy_value(config->irc_name, sizeof(config->irc_name), value);
-    if (strcmp(key, "operator_name") == 0)
+               copy_value(config->irc_model_nick,
+                          sizeof(config->irc_model_nick), value);
+    if (strcmp(key, "operator_nick") == 0)
         return claim_key(state, 3u) < 0 ? -1 :
-               copy_value(config->irc_operator_name,
-                          sizeof(config->irc_operator_name), value);
+               copy_value(config->irc_operator_nick,
+                          sizeof(config->irc_operator_nick), value);
     if (strcmp(key, "room_name") == 0)
         return claim_key(state, 4u) < 0 ? -1 :
                copy_value(config->irc_room_name,

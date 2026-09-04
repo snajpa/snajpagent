@@ -30,7 +30,9 @@ $bin -h >"$root/help" 2>"$root/help.err"
 [ ! -s "$root/help.err" ]
 grep -q -- '-d, --daemon' "$root/help"
 grep -q -- '-c, --client\[=ENDPOINT\]' "$root/help"
-grep -q -- '--operator-name' "$root/help"
+grep -q -- '--model-nick NICK' "$root/help"
+grep -q -- '--operator-nick NICK' "$root/help"
+! grep -q -- '--operator-name' "$root/help"
 grep -q -- '--color\[=WHEN\]' "$root/help"
 grep -q -- '--markdown' "$root/help"
 grep -q -- '--no-markdown' "$root/help"
@@ -52,10 +54,28 @@ done
 grep -q 'networked initial chat text must follow --' \
     "$root/network-invalid.err"
 
+set +e
+$bin -e --model-nick=worker --operator-nick alice -- ping \
+    >"$root/network-long.out" 2>"$root/network-long.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+grep -q -- '-e cannot be combined with network options' "$root/network-long.err"
+
+for option in --name --operator-name; do
+    set +e
+    $bin "$option" stale -l >"$root/old-nick-option.out" \
+        2>"$root/old-nick-option.err"
+    status=$?
+    set -e
+    [ "$status" -eq 2 ]
+    grep -q "unknown option $option" "$root/old-nick-option.err"
+done
+
 cat >"$root/network-config.ini" <<'EOF'
 [irc]
 daemon = true
-name = worker
+model_nick = worker
 EOF
 set +e
 $bin --config "$root/network-config.ini" initial >"$root/network-config.out" \

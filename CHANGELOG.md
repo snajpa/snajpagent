@@ -4,6 +4,10 @@
 
 ## 0.9.0-wip
 
+- Renamed IRC identity terminology consistently to nick: `-n` now has long
+  form `--model-nick`, `-o` has `--operator-nick`, and their `[irc]` keys are
+  `model_nick` and `operator_nick`. The superseded forms are not aliases.
+
 - Added a post-compaction developer notice containing the current session's
   absolute `events.jsonl` rollout-log path. It is rebuilt for future provider
   requests and resume without altering the provider-produced compact output or
@@ -47,7 +51,7 @@
   listener, repeatable `-c`/`--client` connections join advertised rooms and
   reconnect autonomously, and combined roles share one durable session and
   timestamped non-windowed chat UI.
-  Networked mode requires `-n`/`--name`; `-o`/`--operator-name` and
+  Networked mode requires `-n`/`--model-nick`; `-o`/`--operator-nick` and
   `-r`/`--room-name` select the local operator and hosted room identities.
 
 - Added durable room events and bounded first-join/post-compaction snapshots,
@@ -63,7 +67,7 @@
   commentary, and higher levels add lower-priority runtime/IRC diagnostics.
 
 - Reassigned the `-d`, `-c`, `-r`, and `-o` short options to daemon, client,
-  room name, and operator name. Their former dotdir, config, resume, and effort
+  room name, and operator nick. Their former dotdir, config, resume, and effort
   functions remain available as `--dotdir`, `--config`, `--resume`, and
   `--effort`.
 

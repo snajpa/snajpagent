@@ -921,8 +921,8 @@ main(void)
 
         snj_config_init(&network_config);
         network_config.irc_daemon = true;
-        memcpy(network_config.irc_name, "builder", 8u);
-        memcpy(network_config.irc_operator_name, "alice", 6u);
+        memcpy(network_config.irc_model_nick, "builder", 8u);
+        memcpy(network_config.irc_operator_nick, "alice", 6u);
         assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
                                  empty_steering, &network_config,
                                  &instructions, &projection,
@@ -1007,8 +1007,8 @@ main(void)
         snj_config_init(&network_config);
         network_config.max_timeout_ms = 7654321u;
         network_config.irc_daemon = true;
-        memcpy(network_config.irc_name, "builder", 8u);
-        memcpy(network_config.irc_operator_name, "alice", 6u);
+        memcpy(network_config.irc_model_nick, "builder", 8u);
+        memcpy(network_config.irc_operator_nick, "alice", 6u);
         assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
                                  empty_steering, &network_config,
                                  &instructions, &projection,
@@ -1023,7 +1023,9 @@ main(void)
         assert(tool_by_name(tools, "irc_topic") != NULL);
         assert(harness != NULL);
         assert(strstr(snj_json_string(harness, "text"),
-                      "separate local operator alice") != NULL);
+                      "model nick builder") != NULL);
+        assert(strstr(snj_json_string(harness, "text"),
+                      "operator nick alice") != NULL);
         assert(strstr(snj_json_string(harness, "text"),
                       "do not poll or babysit") != NULL);
         snj_config_free(&network_config);

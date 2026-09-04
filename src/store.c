@@ -776,7 +776,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !irc_field_valid(endpoint, SNJ_CONFIG_IRC_ENDPOINT_MAX, false) ||
             !irc_kind_valid(kind) ||
             !irc_field_valid(room, SNJ_CONFIG_IRC_ROOM_MAX + 1u, true) ||
-            !irc_field_valid(nick, SNJ_CONFIG_IRC_NAME_MAX, true) ||
+            !irc_field_valid(nick, SNJ_CONFIG_IRC_NICK_MAX, true) ||
             !irc_field_valid(text, 512u, true) ||
             !json_is_boolean(historical) || !json_is_boolean(local) ||
             !json_is_boolean(op) ||

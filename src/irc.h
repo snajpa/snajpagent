@@ -29,7 +29,7 @@ struct snj_irc_event {
     uint64_t timestamp_ms;
     char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
-    char nick[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char text[513u];
     bool op;
     bool historical;
@@ -68,8 +68,8 @@ int snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
                      char *error, size_t error_size);
 int snj_irc_restore_event(struct snj_irc *irc,
                           const struct snj_irc_event *event);
-const char *snj_irc_agent_name(const struct snj_irc *irc);
-const char *snj_irc_operator_name(const struct snj_irc *irc);
+const char *snj_irc_model_nick(const struct snj_irc *irc);
+const char *snj_irc_operator_nick(const struct snj_irc *irc);
 const char *snj_irc_room_name(const struct snj_irc *irc);
 bool snj_irc_mentions_agent(const struct snj_irc *irc, const char *text);
 

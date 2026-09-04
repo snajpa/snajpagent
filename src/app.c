@@ -249,7 +249,7 @@ set_input_prompt(struct app_state *app, bool active)
         return snj_term_set_prompt(&app->term, active);
     if (!app->queue_edit_id[0]) {
         if (snprintf(label, sizeof(label), "%s %s ",
-                     snj_irc_operator_name(app->irc),
+                     snj_irc_operator_nick(app->irc),
                      active ? "↪" : "›") < 0) {
             errno = EOVERFLOW;
             return -1;
@@ -2572,7 +2572,7 @@ snj_app_run(const struct snj_cli *cli)
     app.networked = !cli->execute && !cli->list && snj_irc_enabled(&config);
     snj_term_set_commands(&app.term, commands, command_count(&app));
     snj_render_set_networked(&app.render, app.networked,
-                             app.networked ? config.irc_name : NULL);
+                             app.networked ? config.irc_model_nick : NULL);
     snj_term_set_typing_pause(&app.term, config.typing_pause_ms);
     effective_verbosity = config.verbosity;
     if (effective_verbosity < 6u) {

@@ -40,7 +40,7 @@ struct snj_markdown_state {
 
 struct snj_irc_markdown_state {
     char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    char nick[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char fence;
     unsigned int fence_len;
 };
@@ -63,7 +63,7 @@ struct snj_render {
     bool markdown_rendering;
     bool markdown_preserve_fence;
     bool networked;
-    char agent_name[SNJ_CONFIG_IRC_NAME_MAX + 1u];
+    char model_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     struct snj_term *term;
     struct snj_buf wrap_pending;
     size_t public_column;
@@ -80,7 +80,7 @@ void snj_render_init(struct snj_render *render, unsigned int verbosity);
 void snj_render_set_color(struct snj_render *render, enum snj_color_mode mode);
 void snj_render_set_markdown(struct snj_render *render, bool enabled);
 void snj_render_set_networked(struct snj_render *render, bool networked,
-                              const char *agent_name);
+                              const char *model_nick);
 void snj_render_attach_term(struct snj_render *render, struct snj_term *term);
 int snj_render_orientation(struct snj_render *render,
                            const struct snj_session *session, bool resumed);

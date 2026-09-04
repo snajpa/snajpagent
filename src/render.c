@@ -162,13 +162,13 @@ snj_render_set_color(struct snj_render *render, enum snj_color_mode mode)
 
 void
 snj_render_set_networked(struct snj_render *render, bool networked,
-                         const char *agent_name)
+                         const char *model_nick)
 {
     render->networked = networked;
-    render->agent_name[0] = '\0';
-    if (agent_name)
-        (void)snprintf(render->agent_name, sizeof(render->agent_name), "%s",
-                       agent_name);
+    render->model_nick[0] = '\0';
+    if (model_nick)
+        (void)snprintf(render->model_nick, sizeof(render->model_nick), "%s",
+                       model_nick);
     if (render->term)
         snj_term_set_color(render->term, render->color_stderr, networked);
 }
@@ -1480,7 +1480,7 @@ snj_render_irc_event(struct snj_render *render,
     char suffix[384u] = {0};
     time_t seconds;
     struct tm tm;
-    const char *name_color;
+    const char *nick_color;
     bool colored;
     bool own_agent;
     bool markdown_body;
@@ -1492,8 +1492,8 @@ snj_render_irc_event(struct snj_render *render,
         return -1;
     }
     irc_markdown_lifecycle(render, event);
-    own_agent = event->local && render->agent_name[0] &&
-                strcmp(event->nick, render->agent_name) == 0;
+    own_agent = event->local && render->model_nick[0] &&
+                strcmp(event->nick, render->model_nick) == 0;
     if (own_agent && render->verbosity < 1u)
         return 0;
     seconds = (time_t)(event->timestamp_ms / 1000u);
@@ -1501,9 +1501,9 @@ snj_render_irc_event(struct snj_render *render,
         strftime(when, sizeof(when), "%H:%M", &tm) == 0)
         memcpy(when, "--:--", 6u);
     colored = render->color_stderr;
-    name_color = event->op ? "\033[1;35m" :
-                 (render->agent_name[0] &&
-                  strcmp(event->nick, render->agent_name) == 0) ?
+    nick_color = event->op ? "\033[1;35m" :
+                 (render->model_nick[0] &&
+                  strcmp(event->nick, render->model_nick) == 0) ?
                  "\033[1;36m" : "\033[1;34m";
     if (output_begin(render, true) < 0)
         return -1;
@@ -1515,7 +1515,7 @@ snj_render_irc_event(struct snj_render *render,
         irc_piece(render, prefix, true) < 0)
         goto out;
     if (colored && (irc_piece(render, "\033[0m", false) < 0 ||
-                    irc_piece(render, name_color, false) < 0))
+                    irc_piece(render, nick_color, false) < 0))
         goto out;
     if (event->kind == SNJ_IRC_MESSAGE || event->kind == SNJ_IRC_NOTICE) {
         n = snprintf(prefix, sizeof(prefix), "%s%s%s ",

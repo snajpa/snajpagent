@@ -263,9 +263,9 @@ snj_app_irc_event(void *opaque, const struct snj_irc_event *event)
         return -1;
     chat = event->kind == SNJ_IRC_MESSAGE || event->kind == SNJ_IRC_NOTICE;
     own_agent = event->local &&
-        strcmp(event->nick, snj_irc_agent_name(app->irc)) == 0;
+        strcmp(event->nick, snj_irc_model_nick(app->irc)) == 0;
     local_operator = event->local &&
-        strcmp(event->nick, snj_irc_operator_name(app->irc)) == 0;
+        strcmp(event->nick, snj_irc_operator_nick(app->irc)) == 0;
     if (own_agent) {
         if (app->session.active_turn && event->kind == SNJ_IRC_MESSAGE)
             app->irc_turn_replied = true;

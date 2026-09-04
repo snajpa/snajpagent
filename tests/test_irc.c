@@ -196,8 +196,8 @@ init_server_config(struct snj_config *config, unsigned short port)
     config->irc_listen_explicit = true;
     assert(snprintf(config->irc_listen, sizeof(config->irc_listen),
                     "%s", address) > 0);
-    memcpy(config->irc_name, "agent", 6u);
-    memcpy(config->irc_operator_name, "operator", 9u);
+    memcpy(config->irc_model_nick, "agent", 6u);
+    memcpy(config->irc_operator_nick, "operator", 9u);
     memcpy(config->irc_room_name, "#lab", 5u);
     config->irc_history_lines = 4u;
 }
@@ -239,7 +239,7 @@ test_validation(void)
     config.irc_client_count = 2u;
     memcpy(config.irc_clients[0], "localhost", 10u);
     memcpy(config.irc_clients[1], "localhost:6667", 15u);
-    memcpy(config.irc_name, "worker", 7u);
+    memcpy(config.irc_model_nick, "worker", 7u);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
     assert(strstr(error, "duplicate") != NULL);
@@ -248,7 +248,7 @@ test_validation(void)
     snj_config_init(&config);
     config.irc_client_count = 1u;
     memcpy(config.irc_clients[0], "bad\xc3\x28", 6u);
-    memcpy(config.irc_name, "worker", 7u);
+    memcpy(config.irc_model_nick, "worker", 7u);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
     assert(strstr(error, "invalid IRC client endpoint") != NULL);
@@ -256,40 +256,40 @@ test_validation(void)
 
     snj_config_init(&config);
     config.irc_daemon = true;
-    memcpy(config.irc_name, "worker", 7u);
-    memcpy(config.irc_operator_name, "WORKER", 7u);
+    memcpy(config.irc_model_nick, "worker", 7u);
+    memcpy(config.irc_operator_nick, "WORKER", 7u);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
     snj_config_free(&config);
 
     snj_config_init(&config);
     config.irc_daemon = true;
-    memcpy(config.irc_name, "b\xc3\xb6t", 5u);
-    memcpy(config.irc_operator_name, "alice", 6u);
+    memcpy(config.irc_model_nick, "b\xc3\xb6t", 5u);
+    memcpy(config.irc_operator_nick, "alice", 6u);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
     snj_config_free(&config);
 
     snj_config_init(&config);
     config.irc_daemon = true;
-    memcpy(config.irc_name, "bad\xc2\x85", 6u);
-    memcpy(config.irc_operator_name, "alice", 6u);
+    memcpy(config.irc_model_nick, "bad\xc2\x85", 6u);
+    memcpy(config.irc_operator_nick, "alice", 6u);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
     snj_config_free(&config);
 
     snj_config_init(&config);
     config.irc_daemon = true;
-    memcpy(config.irc_name, "bad\xc2\xa0nick", 10u);
-    memcpy(config.irc_operator_name, "alice", 6u);
+    memcpy(config.irc_model_nick, "bad\xc2\xa0nick", 10u);
+    memcpy(config.irc_operator_nick, "alice", 6u);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
     snj_config_free(&config);
 
     snj_config_init(&config);
     config.irc_daemon = true;
-    memcpy(config.irc_name, "worker", 7u);
-    memcpy(config.irc_operator_name, "alice", 6u);
+    memcpy(config.irc_model_nick, "worker", 7u);
+    memcpy(config.irc_operator_nick, "alice", 6u);
     memcpy(config.irc_room_name, "bad\xe2\x80\x8broom", 11u);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
@@ -305,8 +305,8 @@ test_cli_network_roles(void)
 
     memset(&cli, 0, sizeof(cli));
     cli.irc_listen = "irc.example:7667";
-    cli.irc_name = "worker";
-    cli.irc_operator_name = "operator";
+    cli.irc_model_nick = "worker";
+    cli.irc_operator_nick = "operator";
     snj_config_init(&config);
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
     assert(!config.irc_daemon);
@@ -320,8 +320,8 @@ test_cli_network_roles(void)
     cli.irc_listen = "127.0.0.1:7667";
     cli.irc_clients[0] = "upstream.example:6667";
     cli.irc_client_count = 1u;
-    cli.irc_name = "worker";
-    cli.irc_operator_name = "operator";
+    cli.irc_model_nick = "worker";
+    cli.irc_operator_nick = "operator";
     snj_config_init(&config);
     error[0] = '\0';
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
@@ -526,8 +526,8 @@ test_client_reconnect(void)
     client_config.irc_client_count = 1u;
     assert(snprintf(client_config.irc_clients[0],
                     sizeof(client_config.irc_clients[0]), "%s", address) > 0);
-    memcpy(client_config.irc_name, "remoteagent", 12u);
-    memcpy(client_config.irc_operator_name, "remoteop", 9u);
+    memcpy(client_config.irc_model_nick, "remoteagent", 12u);
+    memcpy(client_config.irc_operator_nick, "remoteop", 9u);
     assert(snj_irc_apply_cli(&client_config, &cli,
                              error, sizeof(error)) == 0);
     assert(snj_irc_open(&client, &client_config, "/client", capture_event,
@@ -598,8 +598,8 @@ test_client_ignores_direct_messages(void)
     config.irc_client_count = 1u;
     assert(snprintf(config.irc_clients[0], sizeof(config.irc_clients[0]),
                     "%s", address) > 0);
-    memcpy(config.irc_name, "remoteagent", 12u);
-    memcpy(config.irc_operator_name, "remoteop", 9u);
+    memcpy(config.irc_model_nick, "remoteagent", 12u);
+    memcpy(config.irc_operator_nick, "remoteop", 9u);
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
     assert(snj_irc_open(&client, &config, "/client", capture_event,
                         capture_trace, &capture, error, sizeof(error)) == 0);

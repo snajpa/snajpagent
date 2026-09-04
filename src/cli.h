@@ -41,8 +41,8 @@ struct snj_cli {
     char *irc_listen;
     char *irc_clients[SNJ_CLI_IRC_CLIENT_MAX];
     size_t irc_client_count;
-    char *irc_name;
-    char *irc_operator_name;
+    char *irc_model_nick;
+    char *irc_operator_nick;
     char *irc_room_name;
     char *resume_id;
     char *prompt;

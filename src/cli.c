@@ -40,8 +40,8 @@ snj_cli_free(struct snj_cli *cli)
     free(cli->irc_listen);
     for (size_t i = 0; i < cli->irc_client_count; ++i)
         free(cli->irc_clients[i]);
-    free(cli->irc_name);
-    free(cli->irc_operator_name);
+    free(cli->irc_model_nick);
+    free(cli->irc_operator_nick);
     free(cli->irc_room_name);
     free(cli->resume_id);
     free(cli->prompt);
@@ -231,9 +231,13 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
                 return -1;
             if (flag == 'm' && set_once(&cli->model, arg, "-m", error, error_size) < 0)
                 return -1;
-            if (flag == 'o' && set_once(&cli->irc_operator_name, arg, "-o", error, error_size) < 0)
+            if (flag == 'o' &&
+                set_once(&cli->irc_operator_nick, arg, "-o", error,
+                         error_size) < 0)
                 return -1;
-            if (flag == 'n' && set_once(&cli->irc_name, arg, "-n", error, error_size) < 0)
+            if (flag == 'n' &&
+                set_once(&cli->irc_model_nick, arg, "-n", error,
+                         error_size) < 0)
                 return -1;
             if (flag == 'r' && set_once(&cli->irc_room_name, arg, "-r", error, error_size) < 0)
                 return -1;
@@ -391,22 +395,24 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
             if (set_once(&cli->irc_listen, value, "--listen",
                          error, error_size) < 0)
                 return -1;
-        } else if (strcmp(arg, "--name") == 0 ||
-                   strncmp(arg, "--name=", 7u) == 0) {
-            const char *attached = arg[6] == '=' ? arg + 7u : NULL;
+        } else if (strcmp(arg, "--model-nick") == 0 ||
+                   strncmp(arg, "--model-nick=", 13u) == 0) {
+            const char *attached = arg[12] == '=' ? arg + 13u : NULL;
             const char *value = option_argument(argc, argv, &i, attached,
-                                                "--name", error, error_size);
-            if (!value || set_once(&cli->irc_name, value, "--name",
-                                   error, error_size) < 0)
+                                                "--model-nick", error,
+                                                error_size);
+            if (!value ||
+                set_once(&cli->irc_model_nick, value, "--model-nick",
+                         error, error_size) < 0)
                 return -1;
-        } else if (strcmp(arg, "--operator-name") == 0 ||
-                   strncmp(arg, "--operator-name=", 16u) == 0) {
+        } else if (strcmp(arg, "--operator-nick") == 0 ||
+                   strncmp(arg, "--operator-nick=", 16u) == 0) {
             const char *attached = arg[15] == '=' ? arg + 16u : NULL;
             const char *value = option_argument(argc, argv, &i, attached,
-                                                "--operator-name", error,
+                                                "--operator-nick", error,
                                                 error_size);
-            if (!value || set_once(&cli->irc_operator_name, value,
-                                   "--operator-name", error, error_size) < 0)
+            if (!value || set_once(&cli->irc_operator_nick, value,
+                                   "--operator-nick", error, error_size) < 0)
                 return -1;
         } else if (strcmp(arg, "--room-name") == 0 ||
                    strncmp(arg, "--room-name=", 12u) == 0) {
@@ -460,15 +466,15 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->workspace ||
                       cli->model || cli->effort || cli->verbosity ||
                       cli->irc_daemon || cli->irc_listen ||
-                      cli->irc_client_count || cli->irc_name ||
-                      cli->irc_operator_name || cli->irc_room_name)) {
+                      cli->irc_client_count || cli->irc_model_nick ||
+                      cli->irc_operator_nick || cli->irc_room_name)) {
         set_error(error, error_size,
                   "-l accepts only --config, --dotdir, --all, and color options");
         return -1;
     }
     if (cli->execute && (cli->irc_daemon || cli->irc_listen ||
-                         cli->irc_client_count || cli->irc_name ||
-                         cli->irc_operator_name || cli->irc_room_name)) {
+                         cli->irc_client_count || cli->irc_model_nick ||
+                         cli->irc_operator_nick || cli->irc_room_name)) {
         set_error(error, error_size,
                   "-e cannot be combined with network options");
         return -1;
@@ -564,8 +570,8 @@ snj_cli_usage(int fd)
         "  -d, --daemon                 host the IRC server in this process\n"
         "  -s, --listen[=ENDPOINT]      connect, or listen with -d\n"
         "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"
-        "  -n, --name NAME              required networked agent name\n"
-        "  -o, --operator-name NAME     local operator name\n"
+        "  -n, --model-nick NICK        required networked model nick\n"
+        "  -o, --operator-nick NICK     local operator nick\n"
         "  -r, --room-name ROOM         hosted room name\n"
         "      --dotdir DIR             private application directory\n"
         "      --config FILE            explicit configuration file\n"
