@@ -584,7 +584,7 @@ def run_paced_decode_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 28, 14
     )
     try:
-        terminal.wait(DEFAULT_IDLE_PROMPT)
+        terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit("terminal_paced_decode")
         wait_normalized(terminal, "Paced")
         wait_normalized(terminal, "Paced tokens")
@@ -751,7 +751,7 @@ def run_render_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 32, 18
     )
     try:
-        terminal.wait(DEFAULT_IDLE_PROMPT)
+        terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit("terminal_render")
         terminal.wait("alpha beta gamma delta-")
         terminal.send_text("draft")
