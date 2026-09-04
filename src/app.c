@@ -121,15 +121,6 @@ app_warning(struct app_state *app, const char *message)
 {
     return snj_render_warning_ctx(&app->render, message);
 }
-static const char *
-model_correction_for_failure(const char *failure)
-{
-    if (failure && strcmp(failure, SNJ_RESPONSE_EMPTY_MESSAGE_ERROR) == 0)
-        return SNJ_EMPTY_ASSISTANT_CORRECTION;
-    if (failure && strcmp(failure, SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR) == 0)
-        return SNJ_OVERSIZED_ASSISTANT_CORRECTION;
-    return NULL;
-}
 static int
 app_hostf(struct app_state *app, const char *fmt, ...)
 {
@@ -2702,7 +2693,9 @@ run_turn(struct app_state *app, const char *prompt,
         json_decref(create_request);
         json_decref(steering);
         if ((provider_rc == 1 && app->steering_requested) ||
-            (provider_rc == 2 && app->interrupt_requested)) {
+            (provider_rc == 2 && app->interrupt_requested) ||
+            provider_failure.output_correction !=
+                SNJ_OUTPUT_CORRECTION_NONE) {
             if (snj_app_abort_stream_item(app) < 0)
                 app->stream_failed = true;
         } else if (snj_app_finish_stream_item(app) < 0) {
@@ -2747,6 +2740,47 @@ run_turn(struct app_state *app, const char *prompt,
             result = app->execute ? 6 : 1;
             goto out;
         }
+        if (provider_failure.output_correction !=
+                SNJ_OUTPUT_CORRECTION_NONE && !app->stream_failed) {
+            static const char repeated[] =
+                "assistant output remained invalid after one model-facing correction";
+            const char *correction =
+                provider_failure.output_correction ==
+                    SNJ_OUTPUT_CORRECTION_EMPTY ?
+                    SNJ_EMPTY_OUTPUT_CORRECTION :
+                    SNJ_OVERSIZED_OUTPUT_CORRECTION;
+            char correction_id[SNJ_ID_HEX_LEN + 1u];
+
+            if (app->session.output_correction_used) {
+                app->stream_failed = true;
+                app->stream_errno = EPROTO;
+                (void)snprintf(app->stream_error,
+                               sizeof(app->stream_error), "%s", repeated);
+            } else {
+                json_t *partial;
+
+                if (snj_random_id(correction_id) < 0)
+                    partial = NULL;
+                else
+                    partial = snj_app_partial_public_json(app);
+                if (!partial ||
+                    commit_event(app, "response_output_correction",
+                        snj_app_response_output_correction_data(
+                            turn_id, response_id, cycle, correction_id,
+                            correction, partial),
+                        error, sizeof(error)) < 0) {
+                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                                   NULL, NULL);
+                    (void)app_error(app, error[0] ? error :
+                        "assistant output correction could not be persisted");
+                    result = 3;
+                    goto out;
+                }
+                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
+                                               NULL);
+                continue;
+            }
+        }
         if (provider_rc < 0 || app->stream_failed) {
             bool capacity_failure = provider_rc < 0 &&
                 snj_provider_failure_is_capacity(&provider_failure);
@@ -2760,14 +2794,12 @@ run_turn(struct app_state *app, const char *prompt,
             int exit_status = app->stream_failed &&
                 strcmp(class_name, "output") == 0 ? 6 : 4;
             char failure[256];
-            const char *model_correction;
             json_t *partial;
             (void)snprintf(failure, sizeof(failure), "%s",
                            app->stream_failed ?
                            (app->stream_error[0] ? app->stream_error :
                             "assistant output could not be delivered") :
                            (error[0] ? error : "provider response failed"));
-            model_correction = model_correction_for_failure(failure);
             if (replay_safe && !capacity_recovery_used) {
                 bool compacted = false;
                 char provider_source_hash[SNJ_SHA256_HEX_LEN + 1u];
@@ -2856,32 +2888,6 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
-            if (model_correction) {
-                char correction_id[SNJ_ID_HEX_LEN + 1u];
-
-                if (snj_random_id(correction_id) < 0) {
-                    json_decref(partial);
-                    (void)app_error(app,
-                                    "model correction id could not be generated");
-                    result = 3;
-                    goto out;
-                }
-                if (commit_event(app, "response_failed",
-                        snj_app_response_failed_data(
-                            turn_id, response_id, cycle, class_name, failure,
-                            partial, provider_retry_count),
-                        error, sizeof(error)) < 0 ||
-                    commit_event(app, "model_correction",
-                        snj_app_steering_added_data(
-                            turn_id, correction_id, model_correction),
-                        error, sizeof(error)) < 0) {
-                    (void)app_error(app, error[0] ? error :
-                                    "model correction could not be persisted");
-                    result = 3;
-                    goto out;
-                }
-                continue;
-            }
             if (commit_event(app, "response_failed",
                              snj_app_response_failed_data(turn_id, response_id, cycle,
                                                   class_name, failure, partial,

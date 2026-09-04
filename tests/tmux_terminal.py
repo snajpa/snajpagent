@@ -43,6 +43,10 @@ DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium 0% ›"
 DEFAULT_ACCOUNTED_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium ?% ›"
 DEFAULT_ACTIVE_PROMPT = "gpt-5.5-2026-04-23/medium ?% »"
 MACHINE_HOSTNAME = socket.gethostname()
+EMPTY_OUTPUT_CORRECTION = (
+    "You tried to send an empty assistant message. "
+    "Send nonempty text or take another action."
+)
 
 
 def read_events(dotdir):
@@ -120,13 +124,21 @@ class FakeResponses:
         return ""
 
     @staticmethod
+    def has_output_correction(request):
+        return any(
+            item.get("role") == "developer" and
+            item.get("content") == EMPTY_OUTPUT_CORRECTION
+            for item in request.get("input", [])
+        )
+
+    @staticmethod
     def event(kind, data):
         return (
             f"event: {kind}\n"
             f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
         )
 
-    def response_body(self, sequence, text):
+    def response_body(self, sequence, text, explicit_empty=False):
         response_id = f"resp_irc_ui_{sequence}"
         created = {
             "type": "response.created",
@@ -143,7 +155,7 @@ class FakeResponses:
             },
         }
         body = self.event("response.created", created)
-        if not text:
+        if not text and not explicit_empty:
             return body + self.event("response.completed", completed)
         item_id = f"msg_irc_ui_{sequence}"
         added_item = {
@@ -169,10 +181,13 @@ class FakeResponses:
                 "part": {"type": "output_text", "text": "",
                          "annotations": []},
             }),
-            ("response.output_text.delta", {
+        ]
+        if text:
+            events.append(("response.output_text.delta", {
                 "type": "response.output_text.delta", "item_id": item_id,
                 "output_index": 0, "content_index": 0, "delta": text,
-            }),
+            }))
+        events.extend([
             ("response.output_text.done", {
                 "type": "response.output_text.done", "item_id": item_id,
                 "output_index": 0, "content_index": 0, "text": text,
@@ -182,7 +197,7 @@ class FakeResponses:
                 "item": done_item,
             }),
             ("response.completed", completed),
-        ]
+        ])
         return body + "".join(self.event(kind, data) for kind, data in events)
 
     def function_body(self, sequence, call_id, name, arguments):
@@ -243,12 +258,17 @@ class FakeResponses:
             request = json.loads(handler.rfile.read(length))
             model = request.get("model")
             latest = self.latest_user(request)
+            corrected = self.has_output_correction(request)
             if model not in self.AGENTS:
                 raise AssertionError(f"unexpected fake model {model!r}")
             with self.lock:
                 self.sequence += 1
                 sequence = self.sequence
-                self.requests.append({"model": model, "latest": latest})
+                self.requests.append({
+                    "corrected": corrected,
+                    "model": model,
+                    "latest": latest,
+                })
             marker = None
             if "integration one from oneop" in latest:
                 marker = "one"
@@ -275,9 +295,12 @@ class FakeResponses:
                         "text": sent_text,
                     },
                 ).encode()
+            elif not marker:
+                body = self.response_body(
+                    sequence, "", explicit_empty=not corrected
+                ).encode()
             else:
-                text = (f"{self.AGENTS[model]} local completion {marker}"
-                        if marker else "")
+                text = f"{self.AGENTS[model]} local completion {marker}"
                 body = self.response_body(sequence, text).encode()
             handler.send_response(200)
             handler.send_header("Content-Type", "text/event-stream")
@@ -368,6 +391,13 @@ class FakeResponses:
                 raise AssertionError(f"fake endpoint failed: {self.failure}")
             return [request for request in self.requests
                     if marker in request["latest"]]
+
+    def corrected_requests(self):
+        with self.lock:
+            if self.failure:
+                raise AssertionError(f"fake endpoint failed: {self.failure}")
+            return [request for request in self.requests
+                    if request["corrected"]]
 
     def wait_models(self, marker, timeout=10.0):
         deadline = time.monotonic() + timeout
@@ -1620,6 +1650,33 @@ def validate_irc_events(dotdir):
         raise AssertionError(
             f"expected two explicit IRC sends, got {len(explicit_calls)}"
         )
+    if event_list(events, "response_failed"):
+        raise AssertionError("IRC output correction became a failed response")
+    corrections = event_list(events, "response_output_correction")
+    if not corrections or any(
+            event["data"]["text"] != EMPTY_OUTPUT_CORRECTION
+            for event in corrections):
+        raise AssertionError("IRC empty output was not corrected exactly")
+    starts = event_list(events, "response_started")
+    for correction in corrections:
+        correction_id = correction["data"]["correction_id"]
+        if sum(correction_id in event["data"]["steering_ids"]
+               for event in starts) != 1:
+            raise AssertionError(
+                "IRC output correction was not consumed by one next response"
+            )
+    quiet = [event for event in event_list(events, "turn_completed_silent")
+             if event["data"]["reason"] == "room_update_quiet"]
+    if not quiet:
+        raise AssertionError("IRC peer chatter did not complete silently")
+    responses = {event["data"]["response_id"]: event
+                 for event in event_list(events, "response_completed")}
+    for event in quiet:
+        response = responses.get(event["data"]["response_id"])
+        if response is None or response["data"]["items"]:
+            raise AssertionError(
+                "quiet IRC turn did not retain an empty completed response"
+            )
 
 
 def validate_irc_styles(terminal, remote_agent, local_agent=None):
@@ -1738,6 +1795,10 @@ def run_irc_case(binary, root):
                         assert_chat_line(screen, agent, f"{agent} heard {suffix}")
             if "**hostbot**" in screen or "`one`" in screen or "`two`" in screen:
                 raise AssertionError(f"{name} retained model Markdown markers:\n{screen}")
+            if EMPTY_OUTPUT_CORRECTION in screen:
+                raise AssertionError(
+                    f"{name} rendered a model-facing output correction:\n{screen}"
+                )
             if screen.count("@twoop  set topic · shared integration topic") != 1:
                 raise AssertionError(f"{name} did not render the topic change once")
             validate_irc_events(terminal.dotdir)
@@ -1753,6 +1814,14 @@ def run_irc_case(binary, root):
                 raise AssertionError(
                     f"operator message did not run send and final cycles: {counts!r}"
                 )
+        corrected_models = {
+            request["model"] for request in provider.corrected_requests()
+        }
+        if corrected_models != set(FakeResponses.AGENTS):
+            raise AssertionError(
+                "output correction did not reach every model as developer input: "
+                f"{corrected_models!r}"
+            )
 
         terminals["two"].exit()
         wait_irc_quits(terminals["host"], ("twobot", "twoop"))

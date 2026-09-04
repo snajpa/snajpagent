@@ -21,12 +21,6 @@
 #define SNJ_IRC_REPLY_REMINDER_TEXT \
     "Use irc_send to reply to the local operator in the IRC room before " \
     "ending this turn."
-#define SNJ_EMPTY_ASSISTANT_CORRECTION \
-    "You tried to send an empty assistant message. Send nonempty text or " \
-    "take another action."
-#define SNJ_OVERSIZED_ASSISTANT_CORRECTION \
-    "You tried to send an oversized assistant message. Send a shorter " \
-    "message or take another action."
 #define SNJ_MAX_GOAL_PROMPT (1024u * 1024u)
 #define SNJ_MAX_GOAL_BLOCKER (64u * 1024u)
 #define SNJ_GOAL_CONTINUATION_TEXT "Continue the active goal from its durable state."
@@ -159,7 +153,7 @@ struct snj_session {
     bool response_open;
     bool response_complete;
     bool irc_reply_reminded;
-    bool model_correction_pending;
+    bool output_correction_used;
     enum snj_response_terminal response_terminal;
     enum snj_goal_status goal_status;
     bool goal_locked;

@@ -1824,9 +1824,12 @@ snj_provider_responses_create(const json_t *create_request,
                                       "invalid provider SSE stream"));
         goto out_global;
     }
-    if (snj_responses_stream_finish(&ctx.stream, graph, error, error_size) < 0)
+    rc = snj_responses_stream_finish(&ctx.stream, graph, error, error_size);
+    if (rc != 0) {
+        if (rc > 0)
+            rc = 3;
         goto out_global;
-    rc = 0;
+    }
 
 out_global:
     if (curl)
@@ -1839,6 +1842,7 @@ out:
             *failure = ctx.stream.provider_failure;
         else
             *failure = ctx.provider_failure;
+        failure->output_correction = ctx.stream.output_correction;
     }
     snj_buf_free(&body);
     snj_buf_free(&ctx.error_body);

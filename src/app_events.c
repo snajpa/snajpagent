@@ -765,6 +765,43 @@ fail:
 }
 
 json_t *
+snj_app_response_output_correction_data(const char *turn_id,
+                                        const char *response_id,
+                                        unsigned int cycle,
+                                        const char *correction_id,
+                                        const char *text,
+                                        json_t *partial_public)
+{
+    json_t *data = json_object();
+    json_t *partial = partial_public;
+
+    if (!data || !partial ||
+        snj_json_set_new(data, "correction_id",
+                         json_string(correction_id)) < 0 ||
+        snj_json_set_new(data, "cycle",
+                         json_integer((json_int_t)cycle)) < 0)
+        goto fail;
+    {
+        int rc = snj_json_set_new(data, "partial_public", partial);
+        partial = NULL;
+        if (rc < 0)
+            goto fail;
+    }
+    if (
+        snj_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
+        snj_json_set_new(data, "text", json_string(text)) < 0 ||
+        snj_json_set_new(data, "turn_id", json_string(turn_id)) < 0)
+        goto fail;
+    return data;
+fail:
+    if (partial)
+        json_decref(partial);
+    if (data)
+        json_decref(data);
+    return NULL;
+}
+
+json_t *
 snj_app_turn_completed_data(const char *turn_id, const char *response_id,
                     const char *item_id)
 {

@@ -14,6 +14,16 @@
 #define SNJ_MAX_PROVIDER_ID 512u
 #define SNJ_MAX_TOOL_ARGUMENTS (2u * 1024u * 1024u)
 #define SNJ_MAX_RESPONSE_GRAPH (8u * 1024u * 1024u)
+#define SNJ_EMPTY_OUTPUT_CORRECTION \
+    "You tried to send an empty assistant message. Send nonempty text or take another action."
+#define SNJ_OVERSIZED_OUTPUT_CORRECTION \
+    "You tried to send an oversized assistant message. Send a shorter message or take another action."
+
+enum snj_output_correction {
+    SNJ_OUTPUT_CORRECTION_NONE,
+    SNJ_OUTPUT_CORRECTION_EMPTY,
+    SNJ_OUTPUT_CORRECTION_OVERSIZED
+};
 
 /* These are semantic response items, not a provider plug-in interface. */
 enum snj_item_kind {

@@ -178,6 +178,13 @@ json_t *snj_app_response_completed_data(const char *turn_id,
                                         const char *response_id,
                                         unsigned int cycle,
                                         const struct snj_response_graph *graph);
+json_t *snj_app_response_output_correction_data(
+                                        const char *turn_id,
+                                        const char *response_id,
+                                        unsigned int cycle,
+                                        const char *correction_id,
+                                        const char *text,
+                                        json_t *partial_public);
 json_t *snj_app_turn_completed_data(const char *turn_id,
                                     const char *response_id,
                                     const char *item_id);

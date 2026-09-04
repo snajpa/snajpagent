@@ -49,6 +49,7 @@ int snj_fixture_response(const char *prompt, const json_t *steering,
                          const char *goal_prompt, uint64_t goal_turn_count,
                          fixture_emit_fn emit, fixture_pump_fn pump, void *opaque,
                          struct snj_response_graph *graph,
+                         struct snj_provider_failure *failure,
                          char *error, size_t error_size);
 int snj_fixture_tool(const struct snj_response_item *call,
                      fixture_pump_fn pump, void *pump_opaque,
@@ -332,7 +333,7 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
                                 app->session.goal_prompt,
                                 app->session.goal_turn_count,
                                 snj_app_stream_public, snj_app_active_input_pump,
-                                app, graph, error, error_size);
+                                app, graph, failure, error, error_size);
 #else
     int cancel_code = 0;
     (void)prompt;

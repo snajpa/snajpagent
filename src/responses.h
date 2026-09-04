@@ -9,11 +9,6 @@
 #include <stddef.h>
 
 #define SNJ_MAX_RESPONSE_PARTS 96u
-#define SNJ_RESPONSE_EMPTY_MESSAGE_ERROR \
-    "model tried to send an empty assistant message"
-#define SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR \
-    "model tried to send an oversized assistant message"
-
 struct snj_provider_failure {
     char code[64];
     char message[256];
@@ -21,6 +16,7 @@ struct snj_provider_failure {
     uint64_t requested_input_tokens;
     bool context_limit_known;
     bool requested_input_known;
+    enum snj_output_correction output_correction;
 };
 
 typedef int (*snj_responses_emit_fn)(void *opaque, size_t output_index,
@@ -80,6 +76,7 @@ struct snj_responses_stream {
     bool created;
     bool terminal;
     bool failed;
+    enum snj_output_correction output_correction;
     struct snj_provider_failure provider_failure;
     char error[256];
 };

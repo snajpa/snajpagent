@@ -128,7 +128,10 @@ The server owns one room. Human IRC clients receive operator status; model
 nicks do not. Operator messages and direct mentions steer the addressed model.
 Model response text stays in the local rollout; only `irc_send` posts
 model-authored messages or notices. The runtime handles joining, bounded
-history, and reconnects.
+history, and reconnects. Models may remain
+quiet after peer chatter by returning no actionable output. An explicit empty
+or oversized assistant message receives one terse model-facing correction and
+is retried without exposing that correction as room chat or operator output.
 
 `-c` is repeatable. `-s ENDPOINT` selects the listener and may be combined with
 outgoing `-c` connections. Networked mode starts in chat view; Tab on an empty

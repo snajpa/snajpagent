@@ -393,14 +393,15 @@ append_part_delta(struct snj_responses_stream *stream, size_t output_index,
         return -1;
     if (part->complete)
         return stream_fail(stream, EPROTO, "public delta follows completion");
-    if (len > part->text.max - part->text.len)
+    if (len > SNJ_MAX_PUBLIC_ITEM - part->text.len) {
+        stream->output_correction = SNJ_OUTPUT_CORRECTION_OVERSIZED;
         return stream_fail(stream, EOVERFLOW,
-                           SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR);
-    if (account_bytes(stream, len) < 0)
-        return -1;
-    if (snj_buf_append(&part->text, delta, len) < 0)
-        return stream_fail(stream, errno ? errno : EIO,
-                           "cannot retain public response item");
+                           SNJ_OVERSIZED_OUTPUT_CORRECTION);
+    }
+    if (account_bytes(stream, len) < 0 ||
+        snj_buf_append(&part->text, delta, len) < 0)
+        return stream_fail(stream, EOVERFLOW,
+                           "public response item exceeds its limit");
     part->value_seen = true;
     return emit_text(stream, output_index, item, kind, delta, len);
 }
@@ -417,14 +418,16 @@ reconcile_part(struct snj_responses_stream *stream, size_t output_index,
     if (!text)
         return stream_fail(stream, EPROTO, "public snapshot has no text");
     len = strlen(text);
-    if (len > SNJ_MAX_PUBLIC_ITEM)
-        return stream_fail(stream, EOVERFLOW,
-                           SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR);
     if (!snj_utf8_valid((const unsigned char *)text, len, true))
         return stream_fail(stream, EPROTO, "invalid public snapshot text");
     part = part_at(stream, item, content_index, kind, true);
     if (!part)
         return -1;
+    if (len > SNJ_MAX_PUBLIC_ITEM) {
+        stream->output_correction = SNJ_OUTPUT_CORRECTION_OVERSIZED;
+        return stream_fail(stream, EOVERFLOW,
+                           SNJ_OVERSIZED_OUTPUT_CORRECTION);
+    }
     if (part->value_seen) {
         if (!text_equal(&part->text, text, len))
             return stream_fail(stream, EPROTO,
@@ -1008,29 +1011,33 @@ build_message(struct snj_responses_stream *stream,
                                "assistant message has mixed or invalid content");
         }
         if (part->text.len > SNJ_MAX_PUBLIC_ITEM - text.len) {
+            stream->output_correction = SNJ_OUTPUT_CORRECTION_OVERSIZED;
             snj_buf_free(&text);
-            return stream_fail(stream, EOVERFLOW,
-                               SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR);
+            return 1;
         }
         if (snj_buf_append(&text, part->text.data, part->text.len) < 0) {
             snj_buf_free(&text);
-            return stream_fail(stream, errno ? errno : EIO,
+            return stream_fail(stream, errno ? errno : ENOMEM,
                                "cannot retain assistant message");
         }
         ++public_parts;
     }
     if (kind == SNJ_WIRE_PART_NONE) {
         snj_buf_free(&text);
+        if (!item->part_count) {
+            stream->output_correction = SNJ_OUTPUT_CORRECTION_EMPTY;
+            return 1;
+        }
         return 0;
     }
     if (!text.len) {
+        stream->output_correction = SNJ_OUTPUT_CORRECTION_EMPTY;
         snj_buf_free(&text);
-        return stream_fail(stream, EPROTO,
-                           SNJ_RESPONSE_EMPTY_MESSAGE_ERROR);
+        return 1;
     }
     if (snj_buf_terminate(&text) < 0) {
         snj_buf_free(&text);
-        return stream_fail(stream, errno ? errno : EIO,
+        return stream_fail(stream, errno ? errno : ENOMEM,
                            "cannot terminate assistant message");
     }
     if (kind == SNJ_WIRE_PART_REFUSAL) {
@@ -1137,7 +1144,8 @@ snj_responses_stream_finish(struct snj_responses_stream *stream,
             goto staged_out;
         }
         if (item->kind == SNJ_WIRE_ITEM_MESSAGE) {
-            if (build_message(stream, &staged, item) < 0)
+            rc = build_message(stream, &staged, item);
+            if (rc != 0)
                 goto staged_out;
         } else if (item->kind == SNJ_WIRE_ITEM_FUNCTION_CALL) {
             if (build_call(stream, &staged, item) < 0)
@@ -1156,7 +1164,12 @@ snj_responses_stream_finish(struct snj_responses_stream *stream,
 staged_out:
     snj_response_graph_free(&staged);
 out:
-    if (rc < 0 && error_size)
+    if (rc > 0 && error_size)
+        (void)snprintf(error, error_size, "%s",
+            stream->output_correction == SNJ_OUTPUT_CORRECTION_EMPTY ?
+                SNJ_EMPTY_OUTPUT_CORRECTION :
+                SNJ_OVERSIZED_OUTPUT_CORRECTION);
+    else if (rc < 0 && error_size)
         (void)snprintf(error, error_size, "%s",
                        snj_responses_stream_error(stream));
     return rc;

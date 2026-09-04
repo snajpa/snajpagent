@@ -305,6 +305,7 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                      const char *goal_prompt, uint64_t goal_turn_count,
                      fixture_emit_fn emit, fixture_pump_fn pump, void *opaque,
                      struct snj_response_graph *graph,
+                     struct snj_provider_failure *failure,
                      char *error, size_t error_size)
 {
     if (strcmp(prompt, "crash") == 0 && cycle == 1u)
@@ -315,21 +316,25 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         return -1;
     }
     if (strcmp(prompt, "empty_message_recovery") == 0 && cycle == 1u) {
+        if (failure)
+            failure->output_correction = SNJ_OUTPUT_CORRECTION_EMPTY;
         if (error_size)
             (void)snprintf(error, error_size, "%s",
-                           SNJ_RESPONSE_EMPTY_MESSAGE_ERROR);
+                           SNJ_EMPTY_OUTPUT_CORRECTION);
         return -1;
     }
     if (strcmp(prompt, "oversized_message_recovery") == 0 && cycle == 1u) {
+        if (failure)
+            failure->output_correction = SNJ_OUTPUT_CORRECTION_OVERSIZED;
         if (error_size)
             (void)snprintf(error, error_size, "%s",
-                           SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR);
+                           SNJ_OVERSIZED_OUTPUT_CORRECTION);
         return -1;
     }
     if (set_response_id(graph, cycle, "complete") < 0)
         goto allocation;
     if (strcmp(prompt, "empty_message_recovery") == 0) {
-        if (!steering_contains(steering, SNJ_EMPTY_ASSISTANT_CORRECTION)) {
+        if (!steering_contains(steering, SNJ_EMPTY_OUTPUT_CORRECTION)) {
             if (error_size)
                 (void)snprintf(error, error_size,
                                "fixture did not receive empty correction");
@@ -341,7 +346,7 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "empty message recovered", 0);
     }
     if (strcmp(prompt, "oversized_message_recovery") == 0) {
-        if (!steering_contains(steering, SNJ_OVERSIZED_ASSISTANT_CORRECTION)) {
+        if (!steering_contains(steering, SNJ_OVERSIZED_OUTPUT_CORRECTION)) {
             if (error_size)
                 (void)snprintf(error, error_size,
                                "fixture did not receive oversized correction");

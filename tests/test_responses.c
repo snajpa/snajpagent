@@ -139,14 +139,25 @@ test_terminal_snapshot_can_supply_unseen_items(void)
 }
 
 static void
-test_empty_assistant_message_is_distinct(void)
+test_empty_public_items_get_specific_correction(void)
 {
-    static const char *const wires[] = {
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_text\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_text\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty_text\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}]}]}}\n\n",
+    static const char streamed[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_stream\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_empty_stream\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_empty_stream\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
+        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_empty_stream\",\"output_index\":0,\"content_index\":0,\"text\":\"\"}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_empty_stream\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_stream\",\"status\":\"completed\",\"output\":[]}}\n\n";
+    static const char snapshot[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_snapshot\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_snapshot\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty_snapshot\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}]}]}}\n\n";
+    static const char refusal[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty_refusal\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"\"}]}]}}\n\n"
-    };
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_refusal\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty_refusal\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"\"}]}]}}\n\n";
+    static const char no_content[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty_message\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty_message\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_empty\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}]}}\n\n";
+    const char *const wires[] = {streamed, snapshot, refusal, no_content};
 
     for (size_t i = 0; i < sizeof(wires) / sizeof(wires[0]); ++i) {
         struct snj_response_graph graph;
@@ -156,10 +167,11 @@ test_empty_assistant_message_is_distinct(void)
         snj_response_graph_init(&graph);
         memset(&emitted, 0, sizeof(emitted));
         snj_buf_init(&emitted.text, 1024u);
-        assert(parse_stream(wires[i], 3u, &graph, &emitted,
-                            error, sizeof(error)) < 0);
-        assert(strcmp(error, SNJ_RESPONSE_EMPTY_MESSAGE_ERROR) == 0);
+        assert(parse_stream(wires[i], 1u, &graph, &emitted,
+                            error, sizeof(error)) == 1);
+        assert(strcmp(error, SNJ_EMPTY_OUTPUT_CORRECTION) == 0);
         assert(graph.count == 0u);
+        assert(graph.provider_response_id == NULL);
         assert(emitted.calls == 0u);
         assert(emitted.text.len == 0u);
         snj_buf_free(&emitted.text);
@@ -168,49 +180,51 @@ test_empty_assistant_message_is_distinct(void)
 }
 
 static void
-test_oversized_assistant_message_is_distinct(void)
+test_oversized_public_items_get_specific_correction(void)
 {
-    static const char header[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_oversized\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_oversized\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_oversized\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n";
-    static const char delta_prefix[] =
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_oversized\",\"output_index\":0,\"content_index\":0,\"delta\":\"";
-    static const char delta_suffix[] = "\"}\n\n";
-    size_t chunk_len = 700u * 1024u;
-    size_t wire_len = sizeof(header) - 1u + 3u *
-        (sizeof(delta_prefix) - 1u + chunk_len + sizeof(delta_suffix) - 1u);
-    char *wire = malloc(wire_len + 1u);
-    char *cursor = wire;
-    struct snj_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    static const char *const event_types[] = {
+        "response.output_text.delta", "response.refusal.delta"
+    };
+    static const char *const delta_keys[] = {"delta", "delta"};
+    static const char *const part_types[] = {"output_text", "refusal"};
+    const size_t delta_len = 700u * 1024u;
+    char *delta = malloc(delta_len + 1u);
 
-    assert(wire != NULL);
-    memcpy(cursor, header, sizeof(header) - 1u);
-    cursor += sizeof(header) - 1u;
-    for (size_t i = 0u; i < 3u; ++i) {
-        memcpy(cursor, delta_prefix, sizeof(delta_prefix) - 1u);
-        cursor += sizeof(delta_prefix) - 1u;
-        memset(cursor, 'x', chunk_len);
-        cursor += chunk_len;
-        memcpy(cursor, delta_suffix, sizeof(delta_suffix) - 1u);
-        cursor += sizeof(delta_suffix) - 1u;
+    assert(delta);
+    memset(delta, 'x', delta_len);
+    delta[delta_len] = '\0';
+    for (size_t kind = 0; kind < 2u; ++kind) {
+        struct snj_response_graph graph;
+        struct emitted emitted;
+        struct snj_buf wire;
+        char error[256] = {0};
+
+        snj_buf_init(&wire, SNJ_MAX_RESPONSE_GRAPH);
+        assert(snj_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_large\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_large\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+            "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"%s\",\"%s\":\"\"}}\n\n",
+            part_types[kind],
+            kind == 0u ? "text" : "refusal") == 0);
+        for (size_t i = 0; i < 3u; ++i)
+            assert(snj_buf_printf(&wire,
+                "data: {\"type\":\"%s\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"%s\":\"%s\"}\n\n",
+                event_types[kind], delta_keys[kind], delta) == 0);
+        assert(snj_buf_terminate(&wire) == 0);
+        snj_response_graph_init(&graph);
+        memset(&emitted, 0, sizeof(emitted));
+        snj_buf_init(&emitted.text, SNJ_MAX_PUBLIC_ITEM);
+        assert(parse_stream((const char *)wire.data, 8191u, &graph, &emitted,
+                            error, sizeof(error)) < 0);
+        assert(strcmp(error, SNJ_OVERSIZED_OUTPUT_CORRECTION) == 0);
+        assert(graph.count == 0u);
+        assert(emitted.calls == 2u);
+        assert(emitted.text.len == 2u * delta_len);
+        snj_buf_free(&emitted.text);
+        snj_response_graph_free(&graph);
+        snj_buf_free(&wire);
     }
-    assert((size_t)(cursor - wire) == wire_len);
-    *cursor = '\0';
-    snj_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, SNJ_MAX_PUBLIC_ITEM + 1u);
-    assert(parse_stream(wire, wire_len, &graph, &emitted,
-                        error, sizeof(error)) < 0);
-    assert(strcmp(error, SNJ_RESPONSE_OVERSIZED_MESSAGE_ERROR) == 0);
-    assert(graph.count == 0u);
-    assert(emitted.calls == 2u);
-    assert(emitted.text.len == 2u * chunk_len);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
-    free(wire);
+    free(delta);
 }
 
 static void
@@ -750,8 +764,8 @@ main(void)
 {
     test_deltas_survive_empty_terminal_output();
     test_terminal_snapshot_can_supply_unseen_items();
-    test_empty_assistant_message_is_distinct();
-    test_oversized_assistant_message_is_distinct();
+    test_empty_public_items_get_specific_correction();
+    test_oversized_public_items_get_specific_correction();
     test_structured_keepalives_do_not_end_response();
     test_unused_response_events_are_ignored();
     test_terminal_snapshot_ignores_unused_text_metadata();

@@ -2074,20 +2074,18 @@ def test_model_message_corrections_are_private_and_specific():
     cases = [
         (
             "empty_message_recovery",
-            "model tried to send an empty assistant message",
             "You tried to send an empty assistant message. "
             "Send nonempty text or take another action.",
             b"empty message recovered",
         ),
         (
             "oversized_message_recovery",
-            "model tried to send an oversized assistant message",
             "You tried to send an oversized assistant message. "
             "Send a shorter message or take another action.",
             b"oversized message recovered",
         ),
     ]
-    for prompt, failure, correction, recovered in cases:
+    for prompt, correction, recovered in cases:
         before = session_ids()
         child = Child([])
         child.wait(DEFAULT_IDLE_PROMPT)
@@ -2096,17 +2094,15 @@ def test_model_message_corrections_are_private_and_specific():
         recovered_end = child.wait(recovered, start=start)
         child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=recovered_end)
         visible = bytes(child.buf[start:])
-        assert failure.encode() not in visible
         assert correction.encode() not in visible
         child.exit_cleanly(recovered_end)
 
         log = events(new_session(before))
-        failed = [event for event in log if event["type"] == "response_failed"]
         corrections = [
-            event for event in log if event["type"] == "model_correction"
+            event for event in log
+            if event["type"] == "response_output_correction"
         ]
-        assert len(failed) == 1
-        assert failed[0]["data"]["message"] == failure
+        assert not [event for event in log if event["type"] == "response_failed"]
         assert len(corrections) == 1
         assert corrections[0]["data"]["text"] == correction
         assert len([event for event in log

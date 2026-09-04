@@ -844,8 +844,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         return 0;
     }
     if (strcmp(type, "steering_added") == 0 ||
-        strcmp(type, "irc_reply_reminder") == 0 ||
-        strcmp(type, "model_correction") == 0) {
+        strcmp(type, "irc_reply_reminder") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
         const char *steering_id = snj_json_string(data, "steering_id");
@@ -865,6 +864,29 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (strcmp(type, "steering_added") != 0)
             return append_message(builder, type, "developer", text);
         return defer_steering(builder, text);
+    }
+    if (strcmp(type, "response_output_correction") == 0) {
+        const char *correction_id = snj_json_string(data, "correction_id");
+        const char *turn_id = snj_json_string(data, "turn_id");
+        const char *text = snj_json_string(data, "text");
+        bool pending = builder->steering_seen <
+                       builder->session->pending_steering_count &&
+                       builder->session->pending_steering[
+                           builder->steering_seen].seq == seq;
+
+        if (!builder->active_turn || !turn_id ||
+            strcmp(turn_id, builder->active_turn_id) != 0 ||
+            !correction_id || !text ||
+            (pending &&
+             !steering_matches_snapshot(builder, correction_id, text)) ||
+            append_interrupted_prefix(builder, data, error, error_size) < 0) {
+            set_error(error, error_size,
+                      "invalid response-output correction context");
+            errno = EINVAL;
+            return -1;
+        }
+        return append_message(builder, "response_output_correction",
+                              "developer", text);
     }
     if (strcmp(type, "response_interrupted") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -1722,6 +1744,26 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         return 0;
     }
+    if (strcmp(type, "response_output_correction") == 0) {
+        const char *turn_id = snj_json_string(data, "turn_id");
+        const char *text = snj_json_string(data, "text");
+
+        before = json_array_size(builder->request_input);
+        if (!builder->active_turn || !turn_id ||
+            strcmp(turn_id, builder->active_turn_id) != 0 || !text ||
+            append_interrupted_prefix(builder, data, error, error_size) < 0) {
+            set_error(error, error_size,
+                      "invalid compact response-output correction");
+            errno = EINVAL;
+            return -1;
+        }
+        if (append_message(builder, "response_output_correction",
+                           "developer", text) < 0)
+            return -1;
+        builder->compact_new_items +=
+            json_array_size(builder->request_input) - before;
+        return 0;
+    }
     if (strcmp(type, "response_started") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
 
@@ -1740,8 +1782,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         return 0;
     }
     if (strcmp(type, "steering_added") == 0 ||
-        strcmp(type, "irc_reply_reminder") == 0 ||
-        strcmp(type, "model_correction") == 0) {
+        strcmp(type, "irc_reply_reminder") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
         const char *text = snj_json_string(data, "text");
         if (!builder->active_turn || !turn_id ||
