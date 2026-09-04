@@ -349,6 +349,75 @@ def test_steering():
     assert starts[1]["data"]["steering_ids"] == [steering["data"]["steering_id"]]
 
 
+def test_repeated_steering_rearms_composer():
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"slow_resteer\r")
+    child.wait(b"working slowly")
+
+    child.send(b"first steer\r")
+    first_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"first steer")
+    child.wait(b"first steer\r\n" + DEFAULT_ACTIVE_PROMPT,
+               start=first_ack - len(b"first steer"))
+    child.send(b"second steer\r")
+    second_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"second steer",
+                            start=first_ack)
+    child.wait(b"second steer\r\n" + DEFAULT_ACTIVE_PROMPT,
+               start=second_ack - len(b"second steer"))
+    answer_end = child.wait(b"repeated steering complete")
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    steering = [item for item in log if item["type"] == "steering_added"]
+    starts = [item for item in log if item["type"] == "response_started"]
+    interrupted = [item for item in log
+                   if item["type"] == "response_interrupted"]
+    assert [item["data"]["text"] for item in steering] == [
+        "first steer", "second steer"
+    ]
+    projected = [steering_id for item in starts
+                 for steering_id in item["data"]["steering_ids"]]
+    assert projected == [item["data"]["steering_id"] for item in steering]
+    assert all(item["data"]["origin"] == "steering" for item in interrupted)
+
+
+def test_public_index_gap():
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"public_index_gap\r")
+    commentary_end = child.wait(b"Checking hidden work.")
+    answer_end = child.wait(b"Gap-safe final.", start=commentary_end)
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    completed = one(log, "response_completed")
+    assert [item["kind"] for item in completed["data"]["items"]] == [
+        "assistant", "opaque", "assistant"
+    ]
+    assert not [item for item in log if item["type"] == "response_failed"]
+    assert not [item for item in log if item["type"] == "turn_failed"]
+
+
+def test_public_index_diagnostic():
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"public_index_decrease\r")
+    child.wait(b"index one")
+    failure_end = child.wait(b"public output indexes did not increase")
+    child.exit_cleanly(failure_end)
+
+    log = events(new_session(before))
+    failed = one(log, "response_failed")
+    assert failed["data"]["class"] == "protocol"
+    assert failed["data"]["message"] == (
+        "public output indexes did not increase"
+    )
+    assert one(log, "turn_failed")["data"]["class"] == "protocol"
+
+
 def test_split_utf8_steering():
     before = session_ids()
     child = Child([])
@@ -428,6 +497,107 @@ def test_armed_fifo():
     assert turns[1]["data"]["queue_id"] == queued["data"]["queue_id"]
     assert turns[1]["data"]["queue_seq"] == queued["seq"]
     assert turns[1]["data"]["text"] == "ping"
+
+
+def test_managed_command_steering_and_tab_queue():
+    before = session_ids()
+    child = Child(["-v"])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"managed_command_steer\r")
+    child.wait(b"fixture managed steering wait")
+    child.send(b"terminate it\r")
+    steering_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"terminate it")
+    child.wait(DEFAULT_ACTIVE_PROMPT, start=steering_ack)
+    answer_end = child.wait(b"managed command steering complete")
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    steering = one(log, "steering_added")
+    running = next(
+        item for item in log
+        if item["type"] == "tool_finished" and
+        item["data"]["result"]["status"] == "running"
+    )
+    assert running["data"]["result"]["reason"] == "steering_handoff"
+    assert running["seq"] > steering["seq"]
+    assert running["data"]["result"]["handle"] is not None
+    assert not [item for item in log if item["type"] == "process_closed"]
+
+    before = session_ids()
+    child = Child(["-v"])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"managed_command_queue\r")
+    child.wait(b"fixture managed queue wait")
+    child.send(b"ping\t")
+    child.wait(b"next " + PROMPT + b"ping")
+    command_end = child.wait(b"managed command queue complete")
+    answer_end = child.wait(b"pong", start=command_end)
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    queued = one(log, "future_turn_queued")
+    turns = [item for item in log if item["type"] == "turn_started"]
+    first_turn_id = turns[0]["data"]["turn_id"]
+    assert not [item for item in log
+                if item["type"] == "steering_added" and
+                item["data"]["turn_id"] == first_turn_id]
+    assert not [item for item in log
+                if item["type"] == "response_interrupted" and
+                item["data"]["turn_id"] == first_turn_id]
+    first_results = [item["data"]["result"] for item in log
+                     if item["type"] == "tool_finished" and
+                     item["data"]["turn_id"] == first_turn_id]
+    assert first_results and all(result["status"] != "running"
+                                 for result in first_results)
+    assert turns[1]["data"]["input_kind"] == "queued"
+    assert turns[1]["data"]["queue_id"] == queued["data"]["queue_id"]
+    assert turns[1]["data"]["text"] == "ping"
+
+
+def test_steering_during_pre_response_compaction():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    config = root / "config" / "steering-compaction.ini"
+    config.write_text(
+        "[provider]\nauto_compact_input_tokens = 1\n",
+        encoding="utf-8",
+    )
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"ping\r")
+    answer_end = child.wait(b"pong")
+    child.exit_cleanly(answer_end)
+    session_id = new_session(before)
+
+    child = Child(["--config", str(config), "--resume", session_id])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"compaction_steer\rchange plan\r")
+    steer_end = child.wait(DEFAULT_ACTIVE_PROMPT + b"change plan")
+    child.wait(DEFAULT_ACTIVE_PROMPT, start=steer_end)
+    answer_end = child.wait(b"fixture answer", start=steer_end)
+    child.exit_cleanly(answer_end)
+
+    log = events(session_id)
+    interrupted = [item for item in log
+                   if item["type"] == "compaction_interrupted"]
+    assert len(interrupted) == 1
+    assert interrupted[0]["data"]["reason"] == "steering"
+    steering = one([item for item in log
+                    if item["type"] == "steering_added"],
+                   "steering_added")
+    turns = [item for item in log if item["type"] == "turn_started"]
+    turn_id = turns[-1]["data"]["turn_id"]
+    starts = [item for item in log
+              if item["type"] == "response_started" and
+              item["data"]["turn_id"] == turn_id]
+    assert len(starts) == 1
+    assert starts[0]["data"]["steering_ids"] == [
+        steering["data"]["steering_id"]
+    ]
+
+    resumed = Child(["--config", str(config), "--resume", session_id])
+    resumed.wait(PROMPT)
+    resumed.exit_now()
 
 
 def test_agents_md_config():
@@ -1759,9 +1929,14 @@ test_incremental_active_prompt_keeps_status_stable()
 test_incremental_multiline_delete_clears_old_tail()
 test_incremental_wrapped_long_prompt_multiline_indent()
 test_steering()
+test_repeated_steering_rearms_composer()
+test_public_index_gap()
+test_public_index_diagnostic()
 test_split_utf8_steering()
 test_typing_pause_and_stream_snapshots()
 test_armed_fifo()
+test_managed_command_steering_and_tab_queue()
+test_steering_during_pre_response_compaction()
 test_agents_md_config()
 test_interrupt()
 test_multiline_and_paste()

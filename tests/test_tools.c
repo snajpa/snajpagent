@@ -216,7 +216,21 @@ run_write_stdin_call(const char *handle, const char *data, bool eof,
     assert(snj_json_set_new(args, "handle", json_string(handle)) == 0);
     assert(snj_json_set_new(args, "data", json_string(data)) == 0);
     assert(snj_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
+    assert(snj_json_set_new(args, "terminate", json_false()) == 0);
     assert(snj_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
+    return run_tool_with_args("write_stdin", args);
+}
+
+static json_t *
+run_terminate_call(const char *handle, const char *data, bool eof)
+{
+    json_t *args = json_object();
+    assert(args != NULL);
+    assert(snj_json_set_new(args, "handle", json_string(handle)) == 0);
+    assert(snj_json_set_new(args, "data", json_string(data)) == 0);
+    assert(snj_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
+    assert(snj_json_set_new(args, "terminate", json_true()) == 0);
+    assert(snj_json_set_new(args, "yield_ms", json_integer(0)) == 0);
     return run_tool_with_args("write_stdin", args);
 }
 
@@ -228,6 +242,7 @@ run_malformed_write_stdin_call(const char *handle)
     assert(args != NULL);
     assert(snj_json_set_new(args, "handle", json_string(handle)) == 0);
     assert(snj_json_set_new(args, "eof", json_false()) == 0);
+    assert(snj_json_set_new(args, "terminate", json_false()) == 0);
     assert(snj_json_set_new(args, "yield_ms", json_integer(0)) == 0);
     return run_tool_with_args("write_stdin", args);
 }
@@ -386,6 +401,10 @@ test_managed_process_hands_off_on_steering(void)
     assert(requested);
     assert(snj_time_ms() - started < 1000u);
     assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    assert(strcmp(snj_json_string(result, "reason"),
+                  "steering_handoff") == 0);
+    assert(strstr(snj_json_string(result, "model_text"),
+                  "steering arrived") != NULL);
     handle = snj_json_string(result, "handle");
     assert(handle != NULL);
     assert(snj_tools_close_managed(handle, false, NULL, NULL,
@@ -671,6 +690,52 @@ test_malformed_interaction_preserves_active_process(void)
                                   "retained"), "got:right") != NULL);
     json_decref(done);
     json_decref(rejected);
+    json_decref(result);
+}
+
+static void
+test_write_stdin_terminates_managed_process(void)
+{
+    json_t *result = run_managed_exec("sleep 5", 5000, 50);
+    const char *handle;
+    json_t *terminated;
+    const char *status;
+
+    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    handle = snj_json_string(result, "handle");
+    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    terminated = run_terminate_call(handle, "", false);
+    status = snj_json_string(terminated, "status");
+    assert(status != NULL && strcmp(status, "running") != 0);
+    assert(json_is_null(json_object_get(terminated, "handle")));
+    json_decref(terminated);
+    json_decref(result);
+}
+
+static void
+test_invalid_termination_preserves_managed_process(void)
+{
+    json_t *result = run_managed_exec("sleep 5", 5000, 50);
+    const char *handle;
+    json_t *rejected;
+    json_t *terminated;
+
+    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    handle = snj_json_string(result, "handle");
+    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    rejected = run_terminate_call(handle, "must not be written", false);
+    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
+    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
+    assert(strstr(snj_json_string(rejected, "model_text"),
+                  "not modified") != NULL);
+    json_decref(rejected);
+    rejected = run_terminate_call(handle, "", true);
+    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
+    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
+    json_decref(rejected);
+    terminated = run_terminate_call(handle, "", false);
+    assert(strcmp(snj_json_string(terminated, "status"), "running") != 0);
+    json_decref(terminated);
     json_decref(result);
 }
 
@@ -1054,6 +1119,8 @@ main(void)
     test_write_stdin_rejects_unknown_handle();
     test_wrong_handle_does_not_touch_active_process();
     test_malformed_interaction_preserves_active_process();
+    test_write_stdin_terminates_managed_process();
+    test_invalid_termination_preserves_managed_process();
     test_managed_process_close_returns_terminal_result();
     test_managed_close_kills_process_family();
     test_provider_secret_removed_from_environment();

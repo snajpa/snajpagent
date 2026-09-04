@@ -487,9 +487,14 @@ model_text_for(const char *status, const char *reason, int exit_code,
         if (snj_buf_append(&text, msg, strlen(msg)) < 0)
             goto done;
     } else if (strcmp(status, "running") == 0) {
-        const char *msg = reason && strcmp(reason, "timeout_handoff") == 0 ?
-            "Command timeout elapsed; the process continues in the background. Use write_stdin with the active handle to wait for or interact with it.\n" :
-            "Process is still running.\n";
+        const char *msg;
+
+        if (reason && strcmp(reason, "timeout_handoff") == 0)
+            msg = "Command timeout elapsed; the process continues in the background. Use write_stdin with the active handle to wait for, interact with, or terminate it.\n";
+        else if (reason && strcmp(reason, "steering_handoff") == 0)
+            msg = "Command is still running because steering arrived. Use write_stdin with the active handle to wait for, interact with, or terminate it after considering the steer.\n";
+        else
+            msg = "Process is still running.\n";
         if (snj_buf_append(&text, msg, strlen(msg)) < 0)
             goto done;
     } else if (strcmp(status, "io_failed") == 0) {
@@ -1164,8 +1169,10 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
                     proc->kill_sent = true;
                     kill_child_group(proc->pid, SIGKILL);
                 }
-            } else if (pump_rc == 1)
+            } else if (pump_rc == 1) {
                 handoff_requested = true;
+                handoff_reason = "steering_handoff";
+            }
         }
         if (managed_reap_once(proc, error, error_size) < 0)
             return -1;
@@ -1445,8 +1452,12 @@ run_write_stdin(const struct snj_response_item *call,
     const char *data = snj_json_string(call->arguments, "data");
     uint32_t yield_ms;
     bool eof;
+    bool terminate;
     struct managed_process *proc = &managed_process;
     size_t len;
+    static const char *const keys[] = {
+        "data", "eof", "handle", "terminate", "yield_ms"
+    };
 
     if (!handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN)) {
         set_error(error, error_size, "invalid write_stdin arguments");
@@ -1463,8 +1474,10 @@ run_write_stdin(const struct snj_response_item *call,
         }
         return 0;
     }
-    if (!text_arg_valid(data, SNJ_TOOL_STDIN_MAX) ||
+    if (!snj_json_exact_keys(call->arguments, keys, 5u) ||
+        !text_arg_valid(data, SNJ_TOOL_STDIN_MAX) ||
         !json_bool_member(call->arguments, "eof", false, &eof) ||
+        !json_bool_member(call->arguments, "terminate", false, &terminate) ||
         !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
                          0u, SNJ_TOOL_YIELD_MAX_MS, &yield_ms)) {
         *result = simple_result("running", NULL,
@@ -1478,6 +1491,20 @@ run_write_stdin(const struct snj_response_item *call,
         return 0;
     }
     len = strlen(data);
+    if (terminate && (len != 0u || eof)) {
+        *result = simple_result("running", NULL,
+            "The write_stdin termination was rejected because terminate=true requires empty data and eof=false/null; the managed process was not modified.",
+            -1, proc->handle);
+        if (!*result) {
+            managed_cleanup();
+            set_error(error, error_size, "cannot allocate tool result");
+            return -1;
+        }
+        return 0;
+    }
+    if (terminate)
+        return snj_tools_close_managed(handle, false, pump, pump_opaque,
+                                       result, error, error_size);
     {
         int rc;
 

@@ -1279,6 +1279,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 } else {
                     (void)snj_term_history_add(&app->term, line);
                     app->steering_requested = true;
+                    rc = set_input_prompt(app, true);
                 }
             }
             if (!app->steering_requested && rc >= 0 &&
@@ -1760,9 +1761,37 @@ run_turn(struct app_state *app, const char *prompt,
 #endif
         {
             bool compacted = false;
-            if (snj_app_compact_before_response(app, &credential,
+            int compact_rc = snj_app_compact_before_response(app, &credential,
                     input_tokens_bound, count_method, &compacted,
-                    error, sizeof(error)) < 0) {
+                    error, sizeof(error));
+            if (compact_rc == 1 && app->steering_requested) {
+                snj_app_response_cycle_release(app, &graph, &steering,
+                                               &create_request, &count_request,
+                                               &request_body);
+                app->steering_requested = false;
+                --cycle;
+                continue;
+            }
+            if (compact_rc == 2 && app->interrupt_requested) {
+                snj_app_response_cycle_release(app, &graph, &steering,
+                                               &create_request, &count_request,
+                                               &request_body);
+                if (close_active_process_for_turn(app, turn_id,
+                        "user_interrupt", true, error, sizeof(error)) < 0 ||
+                    commit_event(app, "turn_interrupted",
+                        snj_app_turn_interrupted_data(turn_id, "user",
+                                                      "cancelled"),
+                        error, sizeof(error)) < 0) {
+                    (void)app_error(app, error[0] ? error :
+                                    "interruption could not be persisted");
+                    result = 3;
+                } else {
+                    (void)app_warning(app, "turn interrupted");
+                    result = app->execute ? 6 : 1;
+                }
+                goto out;
+            }
+            if (compact_rc != 0) {
                 snj_app_response_cycle_release(app, &graph, &steering,
                                                &create_request, &count_request,
                                                &request_body);
@@ -1915,13 +1944,18 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (provider_rc < 0 || app->stream_failed) {
-            const char *class_name = app->stream_failed ? "output" : "provider";
-            int exit_status = app->stream_failed ? 6 : 4;
+            const char *class_name = app->stream_failed ?
+                (app->stream_errno == EPROTO ? "protocol" :
+                 app->stream_errno == EOVERFLOW ? "resource" : "output") :
+                "provider";
+            int exit_status = app->stream_failed &&
+                strcmp(class_name, "output") == 0 ? 6 : 4;
             char failure[256];
             json_t *partial;
             (void)snprintf(failure, sizeof(failure), "%s",
                            app->stream_failed ?
-                           "assistant output could not be delivered" :
+                           (app->stream_error[0] ? app->stream_error :
+                            "assistant output could not be delivered") :
                            (error[0] ? error : "provider response failed"));
             partial = snj_app_partial_public_json(app);
             if (!partial) {
@@ -1938,7 +1972,10 @@ run_turn(struct app_state *app, const char *prompt,
                              error, sizeof(error)) < 0 ||
                 close_active_process_for_turn(app, turn_id,
                                               app->stream_failed ?
-                                              "output_failure" : "provider_failure",
+                                              (app->stream_errno == EPROTO ?
+                                               "protocol_failure" :
+                                               "output_failure") :
+                                              "provider_failure",
                                               false, error, sizeof(error)) < 0 ||
                 commit_event(app, "turn_failed",
                              snj_app_turn_failed_data(turn_id, class_name, failure),

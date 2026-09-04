@@ -25,8 +25,9 @@ int snj_fixture_response(const char *prompt, const json_t *steering,
                          fixture_emit_fn emit, fixture_pump_fn pump, void *opaque,
                          struct snj_response_graph *graph,
                          char *error, size_t error_size);
-int snj_fixture_tool(const struct snj_response_item *call, json_t **result,
-                     char *error, size_t error_size);
+int snj_fixture_tool(const struct snj_response_item *call,
+                     fixture_pump_fn pump, void *pump_opaque,
+                     json_t **result, char *error, size_t error_size);
 #endif
 
 enum snj_managed_continuation
@@ -211,9 +212,19 @@ snj_app_provider_compact(struct app_state *app, const json_t *compact_request,
     char hash[SNJ_SHA256_HEX_LEN + 1u];
     size_t bytes = 0u;
 
-    (void)app;
     (void)compact_request;
     (void)credential;
+    if (app && app->session.last_user &&
+        strcmp(app->session.last_user, "compaction_steer") == 0)
+        for (unsigned int i = 0u; i < 100u; ++i) {
+            int pump_rc = snj_app_active_input_pump(app, 20u);
+
+            if (pump_rc != 0) {
+                json_decref(item);
+                json_decref(fixture_output);
+                return pump_rc;
+            }
+        }
     if (output)
         *output = NULL;
     if (output_tokens_bound)
@@ -376,9 +387,9 @@ snj_app_tool_run(struct app_state *app, const struct snj_response_item *call,
         return *result ? 0 : -1;
     }
 #ifdef SNAJPAGENT_TEST_FIXTURE
-    (void)app;
     (void)credential;
-    return snj_fixture_tool(call, result, error, error_size);
+    return snj_fixture_tool(call, snj_app_active_input_pump, app,
+                            result, error, error_size);
 #else
     return snj_tools_run(call, app->config, credential,
                          app->session.workspace,

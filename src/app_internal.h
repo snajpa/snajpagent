@@ -58,6 +58,8 @@ struct app_state {
     bool stream_item_seen;
     bool stream_item_hidden;
     bool stream_failed;
+    int stream_errno;
+    char stream_error[256];
     bool steering_requested;
     bool interrupt_requested;
     bool queue_armed;

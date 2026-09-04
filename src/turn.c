@@ -1019,7 +1019,8 @@ snj_tool_result_valid(const json_t *result)
         return json_is_string(handle) &&
                snj_hex_is_lower(json_string_value(handle), SNJ_ID_HEX_LEN) &&
                (json_is_null(reason_value) ||
-                (reason && strcmp(reason, "timeout_handoff") == 0)) ? 0 : -1;
+                (reason && (strcmp(reason, "timeout_handoff") == 0 ||
+                            strcmp(reason, "steering_handoff") == 0))) ? 0 : -1;
     if (!json_is_null(reason_value) || !json_is_null(handle))
         return -1;
     if (strcmp(status, "succeeded") == 0 || strcmp(status, "failed") == 0)

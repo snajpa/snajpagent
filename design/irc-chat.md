@@ -331,10 +331,12 @@ if it expires while the command is still live, the same handoff used for local
 steering and urgent IRC mentions returns a live handle without signaling the
 process. The next model cycle receives the timeout notice or coalesced urgent
 IRC batch and the exact `write_stdin` surface for that handle. The model can
-react immediately, wait for command completion, or continue the command;
-neither the IRC runtime nor the model babysits the socket or process. Ordinary
-terminal interrupt remains an explicit cancellation and is not changed by
-this rule.
+react immediately, wait for command completion, continue the command, or use
+the handle-bound explicit termination option. A steering-triggered result is
+distinguished as `reason=steering_handoff`; neither handoff itself signals the
+process. The IRC runtime does not require the model to babysit the socket or
+process. Ordinary terminal interrupt remains an explicit cancellation and is
+not changed by this rule.
 
 For a turn started by the local operator, snajpagent tracks whether terminal
 public assistant text was posted to the room. If the model reaches an otherwise

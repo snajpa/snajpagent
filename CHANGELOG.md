@@ -7,6 +7,16 @@
 - Added strict support for streamed output-text annotations and reconciled them
   with response snapshots without changing public assistant text bytes.
 
+- Repaired immediate Enter steering across provider output and managed
+  commands. Interrupted visible prefixes now precede an explicit steer
+  boundary and exact ordered user steer in the next request, the empty active
+  composer is available again immediately, and public provider indexes may
+  contain gaps for hidden items while malformed ordering retains a specific
+  diagnostic. Managed commands are handed off alive with
+  `reason=steering_handoff`; strict `write_stdin.terminate` lets the model use
+  the existing bounded closure path. Tab remains non-steering future-turn FIFO
+  queueing with explicit PTY and tmux regression coverage.
+
 - Replaced the ordinary input label with stateful typographic prompts:
   `MODEL/EFFORT › ` starts a non-networked turn and `MODEL/EFFORT » ` adds to
   the active turn, while networked prompts use

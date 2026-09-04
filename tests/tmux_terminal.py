@@ -984,6 +984,14 @@ def run_queue_case(binary, root):
         queued = event_list(events, "future_turn_queued")
         edited = event_list(events, "future_turn_edited")
         cancelled = event_list(events, "future_turn_cancelled")
+        queue_turn = event_list(events, "turn_started")[0]["data"]["turn_id"]
+        if [event for event in event_list(events, "steering_added")
+                if event["data"]["turn_id"] == queue_turn]:
+            raise AssertionError("Tab queueing was admitted as steering")
+        if [event for event in event_list(events, "response_interrupted")
+                if event["data"]["turn_id"] == queue_turn and
+                event["data"]["origin"] == "steering"]:
+            raise AssertionError("Tab queueing interrupted the active response")
         if [event["data"]["text"] for event in queued] != [
             "first", "second", "third", "fourth", "fifth"
         ]:

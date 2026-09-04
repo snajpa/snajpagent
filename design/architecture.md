@@ -31,11 +31,20 @@ durable start event. After the tool finishes, snajpagent records the bounded
 result and sends that result into the next provider cycle.
 
 The active input pump services terminal input and IRC sockets during provider
-streams and tool execution. Local-operator, current channel-operator, and
-direct-mention messages are durably coalesced as urgent steering and admitted
-at the earliest safe response/tool boundary. They do not truncate a generation
-or cancel a command. Other room traffic is coalesced for a convenient boundary
-and does not compel a model reply.
+streams and tool execution. Local Enter submits immediate steering: it
+interrupts a provider response or returns a running command with a live handle,
+then re-arms the empty active composer before the next model cycle. Local Tab
+instead appends a future FIFO turn and changes neither the active response nor
+the managed command. Current channel-operator and direct-mention IRC messages
+remain durably coalesced for their documented urgent boundary. Other room
+traffic is coalesced for a convenient boundary and does not compel a model
+reply.
+
+A steered provider response durably records its byte-exact public prefix. The
+next request projects that prefix as prior assistant output followed by an
+explicit developer boundary and each exact user-role steer in arrival order.
+Public response indexes are strictly increasing but need not be consecutive,
+because non-public provider items occupy indexes too.
 
 There is no default count ceiling on response cycles or tool invocations in a
 turn. A turn continues until it completes, is explicitly interrupted, or hits
@@ -52,7 +61,10 @@ bounded provider cycle. Invalid interaction arguments likewise leave the
 matching process durably active. Terminal speech, refusal, an empty response,
 or invalid call ordering closes the process before the turn fails. The active
 handle is cleared only by a terminal result for that exact process or an
-explicit durable closure event.
+explicit durable closure event. A local steer returns a running result with
+`reason=steering_handoff` and does not signal the process. The matching
+`write_stdin` can explicitly terminate it through the same bounded
+managed-process closure used by required turn/session cleanup.
 
 ## Storage
 
@@ -130,7 +142,8 @@ retain the IRC tools before that required continuation.
 The first-party tool surface is deliberately small:
 
 - `exec_command` for shell commands, including yielded long-running processes.
-- `write_stdin` for continuing a yielded process.
+- `write_stdin` for waiting on, interacting with, or explicitly terminating a
+  yielded process.
 - `apply_patch` for strict file edits using the patch grammar.
 - `update_goal` while a persistent goal is active.
 - `irc_send`, `irc_state`, and privilege-checked `irc_topic` in networked mode.
@@ -151,9 +164,10 @@ in the first tool call. If its timeout expires, or urgent local steering or an
 IRC mention arrives, that same path returns a live handle and continues the
 command in the background. The next model cycle receives the elapsed-timeout
 notice or coalesced urgent input plus the exact `write_stdin` continuation; it
-may react immediately or wait for completion. Timeout expiry never signals or
-kills the command. Explicit user interruption and required turn/session
-closure retain their existing cancellation behavior.
+may react immediately, wait for completion, interact, or explicitly terminate
+the process. Timeout expiry and steering handoff never signal or kill the
+command. Explicit user interruption and required turn/session closure retain
+their existing cancellation behavior.
 
 Tool stdout and stderr are redacted before capture, retained without a
 tool-specific length cutoff, and supplied completely to the next model cycle.

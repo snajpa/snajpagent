@@ -40,7 +40,7 @@ empty_excerpt(void)
 }
 
 static json_t *
-running_result(const char *text)
+running_result_reason(const char *text, const char *reason)
 {
     json_t *result = json_object();
 
@@ -49,7 +49,8 @@ running_result(const char *text)
         snj_json_set_new(result, "exit_code", json_null()) < 0 ||
         snj_json_set_new(result, "handle", json_string(managed_handle)) < 0 ||
         snj_json_set_new(result, "model_text", json_string(text)) < 0 ||
-        snj_json_set_new(result, "reason", json_null()) < 0 ||
+        snj_json_set_new(result, "reason",
+                         reason ? json_string(reason) : json_null()) < 0 ||
         snj_json_set_new(result, "signal", json_null()) < 0 ||
         snj_json_set_new(result, "status", json_string("running")) < 0 ||
         snj_json_set_new(result, "stderr", empty_excerpt()) < 0 ||
@@ -59,6 +60,12 @@ running_result(const char *text)
         return NULL;
     }
     return result;
+}
+
+static json_t *
+running_result(const char *text)
+{
+    return running_result_reason(text, NULL);
 }
 
 static int
@@ -143,6 +150,33 @@ add_stdin_call(struct snj_response_graph *graph, unsigned int cycle,
         (!malformed &&
          snj_json_set_new(args, "data", json_string("")) < 0) ||
         snj_json_set_new(args, "eof", json_null()) < 0 ||
+        snj_json_set_new(args, "terminate", json_false()) < 0 ||
+        snj_json_set_new(args, "yield_ms", json_integer(0)) < 0 ||
+        snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
+                 index) < 0 ||
+        snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle,
+                 index) < 0) {
+        if (args)
+            json_decref(args);
+        return -1;
+    }
+    return snj_response_graph_add_call(graph, item_id, call_id,
+                                       "write_stdin", args);
+}
+
+static int
+add_terminate_call(struct snj_response_graph *graph, unsigned int cycle,
+                   unsigned int index, const char *handle)
+{
+    char item_id[128];
+    char call_id[128];
+    json_t *args = json_object();
+
+    if (!args ||
+        snj_json_set_new(args, "handle", json_string(handle)) < 0 ||
+        snj_json_set_new(args, "data", json_string("")) < 0 ||
+        snj_json_set_new(args, "eof", json_null()) < 0 ||
+        snj_json_set_new(args, "terminate", json_true()) < 0 ||
         snj_json_set_new(args, "yield_ms", json_integer(0)) < 0 ||
         snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
                  index) < 0 ||
@@ -432,6 +466,33 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "msg_fixture_network_managed",
                            "network managed complete", 0);
     }
+    if (strcmp(prompt, "managed_command_steer") == 0) {
+        if (cycle == 1u)
+            return add_call(graph, workspace, cycle, 0u,
+                            "fixture managed steering wait");
+        if (cycle == 2u) {
+            if (!steering_contains(steering, "terminate it")) {
+                if (error_size)
+                    (void)snprintf(error, error_size,
+                                   "fixture did not receive command steering");
+                return -1;
+            }
+            return add_terminate_call(graph, cycle, 0u, managed_handle);
+        }
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_managed_steered",
+                           "managed command steering complete", 0);
+    }
+    if (strcmp(prompt, "managed_command_queue") == 0) {
+        if (cycle == 1u)
+            return add_call(graph, workspace, cycle, 0u,
+                            "fixture managed queue wait");
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_managed_queued",
+                           "managed command queue complete", 0);
+    }
     if (managed_prompt(prompt)) {
         if (cycle == 1u)
             return add_call(graph, workspace, cycle, 0u,
@@ -543,6 +604,43 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         }
         if (emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
                  second, sizeof(second) - 1u) < 0)
+            goto allocation;
+        return 0;
+    }
+    if (strcmp(prompt, "public_index_gap") == 0) {
+        json_t *payload;
+
+        if (emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                        SNJ_PHASE_COMMENTARY,
+                        "msg_fixture_gap_commentary",
+                        "Checking hidden work.\n", 0) < 0)
+            goto allocation;
+        payload = json_object();
+        if (!payload ||
+            snj_json_set_new(payload, "encrypted_content",
+                             json_string("fixture-hidden-reasoning")) < 0) {
+            if (payload)
+                json_decref(payload);
+            goto allocation;
+        }
+        if (snj_response_graph_add_opaque(graph, "rs_fixture_gap",
+                                          "reasoning", payload) < 0)
+            goto allocation;
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER, "msg_fixture_gap_final",
+                           "Gap-safe final.", 0);
+    }
+    if (strcmp(prompt, "public_index_decrease") == 0) {
+        if (snj_response_graph_add_public(
+                graph, SNJ_ITEM_ASSISTANT, SNJ_PHASE_COMMENTARY,
+                "msg_fixture_index_zero", "index zero") < 0 ||
+            snj_response_graph_add_public(
+                graph, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                "msg_fixture_index_one", "index one") < 0 ||
+            emit(opaque, 1u, SNJ_ITEM_ASSISTANT,
+                 SNJ_PHASE_FINAL_ANSWER, "index one", 9u) < 0 ||
+            emit(opaque, 0u, SNJ_ITEM_ASSISTANT,
+                 SNJ_PHASE_COMMENTARY, "index zero", 10u) < 0)
             goto allocation;
         return 0;
     }
@@ -677,7 +775,8 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "shutdown was not requested", 0);
     }
     if (strcmp(prompt, "slow") == 0 || strcmp(prompt, "slow_utf8") == 0 ||
-        strcmp(prompt, "queue_slow") == 0) {
+        strcmp(prompt, "queue_slow") == 0 ||
+        strcmp(prompt, "slow_resteer") == 0) {
         if (cycle == 1u) {
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";
@@ -711,6 +810,19 @@ snj_fixture_response(const char *prompt, const json_t *steering,
             return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                                SNJ_PHASE_FINAL_ANSWER, "msg_fixture_slow_final",
                                "slow complete", 0);
+        }
+        if (strcmp(prompt, "slow_resteer") == 0) {
+            if (cycle == 2u)
+                for (unsigned int i = 0u; i < 100u; ++i) {
+                    int pump_rc = pump(opaque, 20u);
+
+                    if (pump_rc != 0)
+                        return pump_rc;
+                }
+            return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                               SNJ_PHASE_FINAL_ANSWER,
+                               "msg_fixture_resteered_final",
+                               "repeated steering complete", 0);
         }
         if (json_is_array(steering) && json_array_size(steering) != 0u) {
             json_t *last = json_array_get(steering,
@@ -832,8 +944,9 @@ allocation:
 }
 
 int
-snj_fixture_tool(const struct snj_response_item *call, json_t **result,
-                 char *error, size_t error_size)
+snj_fixture_tool(const struct snj_response_item *call,
+                 fixture_pump_fn pump, void *pump_opaque,
+                 json_t **result, char *error, size_t error_size)
 {
     const char *command;
     const char *handle;
@@ -867,6 +980,24 @@ snj_fixture_tool(const struct snj_response_item *call, json_t **result,
     }
     if (strstr(command, "crash"))
         _exit(98);
+    if (strstr(command, "managed steering wait") ||
+        strstr(command, "managed queue wait")) {
+        for (unsigned int i = 0u; i < 100u; ++i) {
+            int pump_rc = pump ? pump(pump_opaque, 20u) : 0;
+
+            if (pump_rc == 1) {
+                *result = running_result_reason(
+                    "Command is still running because steering arrived.",
+                    "steering_handoff");
+                return *result ? 0 : -1;
+            }
+            if (pump_rc != 0)
+                return pump_rc;
+        }
+        *result = snj_tool_result_terminal(true,
+                                           "fixture managed wait completed");
+        return *result ? 0 : -1;
+    }
     if (strstr(command, "managed start")) {
         *result = running_result("fixture process is still running");
         if (!*result)

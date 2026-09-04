@@ -43,6 +43,32 @@ The pause provides display focus, not a provider-generation guarantee. Input,
 interrupts, and local active-turn commands remain responsive while output is
 paused.
 
+Enter and Tab have distinct active-turn meanings. Enter durably submits the
+draft as immediate steering and interrupts the current provider response at
+the next input-pump boundary. Tab durably appends the draft to the future-turn
+FIFO and does not interrupt the response, yield a managed command, or expose
+the text to the current model cycle. After every accepted Enter steer, an empty
+`MODEL/EFFORT » ` composer is armed immediately, before provider cancellation
+or the next response cycle completes, so another steer can be entered at once.
+
+When Enter interrupts visible model output, `response_interrupted` retains its
+byte-exact public prefix. The next request places that prefix in assistant role,
+then an explicit developer steering-boundary notice, then the exact steer in
+user role. Multiple steers are projected exactly once in durable arrival order.
+Provider output indexes for public items need only increase: hidden reasoning,
+search, or tool items can create gaps. Duplicate or decreasing indexes and
+identity, kind, or phase changes remain protocol errors. Output and protocol
+failures retain a bounded specific diagnostic instead of being collapsed into
+a generic delivery error.
+
+Enter during `exec_command` or `write_stdin` returns the live managed-process
+handle without signaling it, with `reason=steering_handoff`, and starts the
+next model cycle with the command result and steering boundary. The handle-bound
+`write_stdin` tool can then wait or interact as before, or set `terminate=true`
+with empty data and no EOF request to use the existing TERM-then-bounded-KILL
+closure and return the terminal result. A rejected termination combination does
+not modify the process.
+
 The `working…` activity line is shown only after an open public item has been
 closed. It follows all text already decoded for that item on a separate line;
 response completion must not release a withheld final word and paint the
@@ -122,7 +148,8 @@ saving restores the prior armed state when the current turn is still active.
 During an active turn, `/queue TEXT` continues to append a future turn. Text
 that is identical to a reserved manipulation expression can still be queued by
 typing it directly and pressing Tab. The draft must be nonempty; empty Tab has
-the view-cycle meaning defined above.
+the view-cycle meaning defined above. Direct Tab queueing has the same strict
+non-steering behavior as `/queue TEXT`.
 
 ## Durability And Failure Behavior
 
@@ -149,6 +176,17 @@ the view-cycle meaning defined above.
   and clear events.
 - Configuration coverage checks the default, bounds, duplicate-key handling,
   and explicit `typing_pause_ms` values.
+- Response/context coverage demonstrates nonconsecutive public output indexes,
+  interrupted-prefix replay, an explicit steering boundary, and exact ordered
+  steering content. PTY coverage demonstrates that the empty active composer is
+  available after each rapid Enter steer.
+- Managed-process coverage demonstrates a steering handoff without a signal,
+  continued waiting or interaction, explicit termination, and rejection of
+  conflicting termination arguments without touching the process.
+- PTY and real-terminal queue coverage assert that Tab creates only
+  `future_turn_queued`, creates no steering or response interruption, leaves the
+  active response or command running, and drains queued turns later in FIFO
+  order.
 
 ### Real-terminal regression
 

@@ -22,6 +22,7 @@ struct context_builder {
     const json_t *steering;
     json_t *semantic_items;
     json_t *request_input;
+    json_t *deferred_steering;
     size_t steering_seen;
     char active_turn_id[SNJ_ID_HEX_LEN + 1u];
     char target_turn_id[SNJ_ID_HEX_LEN + 1u];
@@ -612,6 +613,52 @@ out:
 }
 
 static int
+defer_steering(struct context_builder *builder, const char *text)
+{
+    if (!builder->deferred_steering ||
+        json_array_append_new(builder->deferred_steering,
+                              json_string(text)) < 0)
+        return -1;
+    return 0;
+}
+
+static int
+append_deferred_steering(struct context_builder *builder)
+{
+    static const char boundary[] =
+        "The following user message is an immediate steer submitted while the active response or managed command was in progress. Reassess the current response and any running command before deciding what to do next.";
+
+    while (json_array_size(builder->deferred_steering) != 0u) {
+        json_t *value = json_array_get(builder->deferred_steering, 0u);
+        const char *text = json_is_string(value) ? json_string_value(value) : NULL;
+
+        if (!text ||
+            append_message(builder, "steering_boundary", "developer",
+                           boundary) < 0 ||
+            append_message(builder, "user_steering", "user", text) < 0 ||
+            json_array_remove(builder->deferred_steering, 0u) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int
+append_interrupted_prefix(struct context_builder *builder, const json_t *data,
+                          char *error, size_t error_size)
+{
+    json_t *partial = json_object_get(data, "partial_public");
+
+    if (!json_is_array(partial) ||
+        append_response_items(builder, partial, error, error_size) < 0) {
+        set_error(error, error_size,
+                  "invalid interrupted public response context");
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+static int
 steering_matches_snapshot(struct context_builder *builder, const char *id,
                           const char *text)
 {
@@ -684,6 +731,19 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                               goal_turn ? "goal_continuation" : "user_request",
                               goal_turn ? "developer" : "user", text);
     }
+    if (strcmp(type, "response_started") == 0) {
+        const char *turn_id = snj_json_string(data, "turn_id");
+
+        if (!builder->active_turn || !turn_id ||
+            strcmp(turn_id, builder->active_turn_id) != 0 ||
+            append_deferred_steering(builder) < 0) {
+            set_error(error, error_size,
+                      "invalid response-start steering context");
+            errno = EINVAL;
+            return -1;
+        }
+        return 0;
+    }
     if (strcmp(type, "steering_added") == 0 ||
         strcmp(type, "irc_reply_reminder") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -702,11 +762,22 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
-        return append_message(builder,
-            strcmp(type, "irc_reply_reminder") == 0 ?
-                "irc_reply_reminder" : "user_steering",
-            strcmp(type, "irc_reply_reminder") == 0 ? "developer" : "user",
-            text);
+        if (strcmp(type, "irc_reply_reminder") == 0)
+            return append_message(builder, "irc_reply_reminder", "developer",
+                                  text);
+        return defer_steering(builder, text);
+    }
+    if (strcmp(type, "response_interrupted") == 0) {
+        const char *turn_id = snj_json_string(data, "turn_id");
+
+        if (!builder->active_turn || !turn_id ||
+            strcmp(turn_id, builder->active_turn_id) != 0)
+            goto invalid_interrupted;
+        return append_interrupted_prefix(builder, data, error, error_size);
+invalid_interrupted:
+        set_error(error, error_size, "invalid interrupted response context");
+        errno = EINVAL;
+        return -1;
     }
     if (strcmp(type, "response_completed") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -754,6 +825,8 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
+        if (append_deferred_steering(builder) < 0)
+            return -1;
         builder->active_turn = false;
         builder->active_turn_id[0] = '\0';
         return 0;
@@ -765,7 +838,8 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
-        if (append_host_failed(builder, class_name) < 0)
+        if (append_deferred_steering(builder) < 0 ||
+            append_host_failed(builder, class_name) < 0)
             return -1;
         builder->active_turn = false;
         builder->active_turn_id[0] = '\0';
@@ -779,7 +853,8 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
-        if (append_host_interrupted(builder, origin, reason) < 0)
+        if (append_deferred_steering(builder) < 0 ||
+            append_host_interrupted(builder, origin, reason) < 0)
             return -1;
         builder->active_turn = false;
         builder->active_turn_id[0] = '\0';
@@ -1024,7 +1099,7 @@ static json_t *
 stdin_tool_schema(const char *active_handle)
 {
     static const char *const required[] = {
-        "handle", "data", "eof", "yield_ms"
+        "handle", "data", "eof", "terminate", "yield_ms"
     };
     json_t *properties = json_object();
     if (!properties ||
@@ -1033,12 +1108,13 @@ stdin_tool_schema(const char *active_handle)
         json_set_new(properties, "handle",
                      active_handle ? exact_string_schema(active_handle) :
                                      string_schema()) < 0 ||
+        json_set_new(properties, "terminate", nullable_bool_schema()) < 0 ||
         json_set_new(properties, "yield_ms", integer_schema(0, 600000, true)) < 0) {
         if (properties)
             json_decref(properties);
         return NULL;
     }
-    return tool_schema("write_stdin", "Write bounded UTF-8 data to an existing managed process.",
+    return tool_schema("write_stdin", "Wait for or write bounded UTF-8 data to an existing managed process. Set terminate=true only with empty data and eof=false/null to terminate it and receive its terminal result.",
                        properties, required_array(required, sizeof(required) / sizeof(required[0])));
 }
 
@@ -1413,6 +1489,23 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         return 0;
     }
+    if (strcmp(type, "response_started") == 0) {
+        const char *turn_id = snj_json_string(data, "turn_id");
+
+        if (!builder->active_turn || !turn_id ||
+            strcmp(turn_id, builder->active_turn_id) != 0) {
+            set_error(error, error_size,
+                      "invalid compact response-start transition");
+            errno = EINVAL;
+            return -1;
+        }
+        before = json_array_size(builder->request_input);
+        if (append_deferred_steering(builder) < 0)
+            return -1;
+        builder->compact_new_items +=
+            json_array_size(builder->request_input) - before;
+        return 0;
+    }
     if (strcmp(type, "steering_added") == 0 ||
         strcmp(type, "irc_reply_reminder") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -1423,14 +1516,30 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
+        if (strcmp(type, "steering_added") == 0)
+            return defer_steering(builder, text);
         before = json_array_size(builder->request_input);
-        if (append_message(builder,
-                strcmp(type, "irc_reply_reminder") == 0 ?
-                    "irc_reply_reminder" : "user_steering",
-                strcmp(type, "irc_reply_reminder") == 0 ?
-                    "developer" : "user", text) < 0)
+        if (append_message(builder, "irc_reply_reminder", "developer",
+                           text) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
+        return 0;
+    }
+    if (strcmp(type, "response_interrupted") == 0) {
+        const char *turn_id = snj_json_string(data, "turn_id");
+
+        if (!builder->active_turn || !turn_id ||
+            strcmp(turn_id, builder->active_turn_id) != 0) {
+            set_error(error, error_size,
+                      "invalid compact interrupted-response transition");
+            errno = EINVAL;
+            return -1;
+        }
+        before = json_array_size(builder->request_input);
+        if (append_interrupted_prefix(builder, data, error, error_size) < 0)
+            return -1;
+        builder->compact_new_items +=
+            json_array_size(builder->request_input) - before;
         return 0;
     }
     if (strcmp(type, "response_completed") == 0) {
@@ -1491,6 +1600,11 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
+        before = json_array_size(builder->request_input);
+        if (append_deferred_steering(builder) < 0)
+            return -1;
+        builder->compact_new_items +=
+            json_array_size(builder->request_input) - before;
         builder->active_turn = false;
         builder->active_turn_id[0] = '\0';
         return 0;
@@ -1503,7 +1617,8 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             return -1;
         }
         before = json_array_size(builder->request_input);
-        if (append_host_failed(builder, class_name) < 0)
+        if (append_deferred_steering(builder) < 0 ||
+            append_host_failed(builder, class_name) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         builder->active_turn = false;
@@ -1519,7 +1634,8 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             return -1;
         }
         before = json_array_size(builder->request_input);
-        if (append_host_interrupted(builder, origin, reason) < 0)
+        if (append_deferred_steering(builder) < 0 ||
+            append_host_interrupted(builder, origin, reason) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         builder->active_turn = false;
@@ -1598,12 +1714,14 @@ compact_request_build(struct snj_session *session,
     builder.effort = effort;
     builder.semantic_items = json_array();
     builder.request_input = json_array();
+    builder.deferred_steering = json_array();
     builder.compact_stop_before_active = active_prefix;
     if (session && session->active_turn_id[0])
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
     if (!session || !model || !effort || !request || !count_request ||
         !source_seq || !builder.semantic_items || !builder.request_input ||
+        !builder.deferred_steering ||
         session->response_open || session->active_process_handle[0] != '\0' ||
         session->active_compact_id[0] != '\0' ||
         (active_prefix ? !session->active_turn : session->active_turn)) {
@@ -1615,6 +1733,8 @@ compact_request_build(struct snj_session *session,
     }
     if (snj_session_each_event(session, compact_event, &builder,
                                error, error_size) < 0)
+        goto out;
+    if (append_deferred_steering(&builder) < 0)
         goto out;
     if (active_prefix && !builder.compact_stopped) {
         set_error(error, error_size,
@@ -1662,6 +1782,8 @@ out:
         json_decref(builder.semantic_items);
     if (builder.request_input)
         json_decref(builder.request_input);
+    if (builder.deferred_steering)
+        json_decref(builder.deferred_steering);
     return rc;
 }
 
@@ -1773,9 +1895,11 @@ snj_context_build(struct snj_session *session, const char *model,
     builder.steering = steering;
     builder.semantic_items = json_array();
     builder.request_input = json_array();
+    builder.deferred_steering = json_array();
     snj_buf_init(&network_harness, 16u * 1024u);
     if (!session || !model || !effort || !steering ||
         !builder.semantic_items || !builder.request_input ||
+        !builder.deferred_steering ||
         append_message(&builder, "fixed_harness", "developer", harness) < 0 ||
         (builder.networked &&
          (snj_buf_printf(&network_harness,
@@ -1814,7 +1938,8 @@ snj_context_build(struct snj_session *session, const char *model,
         errno = EINVAL;
         goto out;
     }
-    if (append_goal_controller(&builder) < 0 ||
+    if (append_deferred_steering(&builder) < 0 ||
+        append_goal_controller(&builder) < 0 ||
         append_managed_gate(&builder) < 0) {
         set_error(error, error_size, "cannot append active controller state");
         goto out;
@@ -1851,5 +1976,7 @@ out:
         json_decref(builder.semantic_items);
     if (builder.request_input)
         json_decref(builder.request_input);
+    if (builder.deferred_steering)
+        json_decref(builder.deferred_steering);
     return rc;
 }

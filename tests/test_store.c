@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store.h"
 #include "instructions.h"
+#include "snajpagent.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -131,6 +132,46 @@ goal_reason_data(const char *goal_id, const char *actor,
     if (!actor)
         assert(snj_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
     assert(snj_json_set_new(data, key, json_string(reason)) == 0);
+    return data;
+}
+
+static json_t *
+compaction_started_data(const struct snj_session *session,
+                        const char *compact_id)
+{
+    static const char hash[] =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    json_t *data = json_object();
+
+    assert(data);
+    assert(snj_json_set_new(data, "capability_version",
+                            json_string(SNAJPAGENT_CAPABILITY_VERSION)) == 0);
+    assert(snj_json_set_new(data, "compact_id", json_string(compact_id)) == 0);
+    assert(snj_json_set_new(data, "count_method",
+                            json_string("qualified_upper_bound")) == 0);
+    assert(snj_json_set_new(data, "count_request_sha256",
+                            json_string(hash)) == 0);
+    assert(snj_json_set_new(data, "input_tokens_bound", json_integer(1)) == 0);
+    assert(snj_json_set_new(data, "model",
+                            json_string(session->default_model)) == 0);
+    assert(snj_json_set_new(data, "predecessor_compact_id", json_null()) == 0);
+    assert(snj_json_set_new(data, "profile_id",
+                            json_string(SNAJPAGENT_PROFILE_ID)) == 0);
+    assert(snj_json_set_new(data, "reason", json_string("manual")) == 0);
+    assert(snj_json_set_new(data, "request_sha256", json_string(hash)) == 0);
+    assert(snj_json_set_new(data, "source_seq", json_integer(1)) == 0);
+    assert(snj_json_set_new(data, "source_sha256", json_string(hash)) == 0);
+    return data;
+}
+
+static json_t *
+compaction_interrupted_data(const char *compact_id, const char *reason)
+{
+    json_t *data = json_object();
+
+    assert(data);
+    assert(snj_json_set_new(data, "compact_id", json_string(compact_id)) == 0);
+    assert(snj_json_set_new(data, "reason", json_string(reason)) == 0);
     return data;
 }
 
@@ -342,6 +383,46 @@ main(void)
     snj_session_init(&session);
     assert(snj_session_open(&store, &session, id, error, sizeof(error)) < 0);
     snj_session_close(&session);
+
+    {
+        static const char compact_id[] =
+            "55555555555555555555555555555555";
+
+        snj_session_init(&session);
+        assert(snj_session_create(&store, &session, workspace,
+                                  "default", "gpt-5.5-2026-04-23", "default",
+                                  error, sizeof(error)) == 0);
+        memcpy(id, session.id, sizeof(id));
+        assert(snj_session_commit(&session, "compaction_started",
+                                  compaction_started_data(&session, compact_id),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(strcmp(session.active_compact_id, compact_id) == 0);
+        durable_end = session.log_end;
+        durable_seq = session.next_seq;
+        assert(snj_session_commit(&session, "compaction_interrupted",
+                                  compaction_interrupted_data(compact_id,
+                                                              "invalid"),
+                                  NULL, error, sizeof(error)) < 0);
+        assert(session.log_end == durable_end);
+        assert(session.next_seq == durable_seq);
+        assert(strcmp(session.active_compact_id, compact_id) == 0);
+        assert(snj_session_commit(&session, "compaction_interrupted",
+                                  compaction_interrupted_data(compact_id,
+                                                              "steering"),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(session.active_compact_id[0] == '\0');
+        assert(session.active_compact_source_sha256[0] == '\0');
+        assert(session.active_compact_source_seq == 0u);
+        snj_session_close(&session);
+
+        snj_session_init(&session);
+        assert(snj_session_open(&store, &session, id,
+                                error, sizeof(error)) == 0);
+        assert(session.active_compact_id[0] == '\0');
+        assert(session.active_compact_source_sha256[0] == '\0');
+        assert(session.active_compact_source_seq == 0u);
+        snj_session_close(&session);
+    }
 
     snj_session_init(&session);
     assert(snj_session_create(&store, &session, workspace,

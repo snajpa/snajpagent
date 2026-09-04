@@ -120,6 +120,21 @@ compaction_completed_data(const char *compact_id,
     return data;
 }
 
+static json_t *
+compaction_interrupted_data(const char *compact_id, const char *reason)
+{
+    json_t *data = json_object();
+
+    if (!data ||
+        snj_json_set_new(data, "compact_id", json_string(compact_id)) < 0 ||
+        snj_json_set_new(data, "reason", json_string(reason)) < 0) {
+        if (data)
+            json_decref(data);
+        return NULL;
+    }
+    return data;
+}
+
 static int
 commit_rendered(struct app_state *app, const char *type, json_t *data,
                 char *error, size_t error_size)
@@ -324,6 +339,7 @@ run_responses_compaction(struct app_state *app, const json_t *compact_request,
     struct snj_graph_decision decision;
     json_t *create_request = NULL;
     int cancel_code = 0;
+    int provider_rc;
     int rc = -1;
 
     create_request = responses_compact_create_request(compact_request,
@@ -334,12 +350,14 @@ run_responses_compaction(struct app_state *app, const json_t *compact_request,
         return -1;
     }
     snj_response_graph_init(&graph);
-    if (snj_provider_responses_create(create_request, app->config,
-                                      app->turn_provider, credential,
-                                      &app->render, NULL, NULL,
-                                      snj_app_active_input_pump, app, &graph,
-                                      error, error_size, &cancel_code, NULL) != 0)
+    provider_rc = snj_provider_responses_create(
+        create_request, app->config, app->turn_provider, credential,
+        &app->render, NULL, NULL, snj_app_active_input_pump, app, &graph,
+        error, error_size, &cancel_code, NULL);
+    if (provider_rc != 0) {
+        rc = provider_rc;
         goto out;
+    }
     if (snj_response_graph_classify(&graph, &decision,
                                     error, error_size) < 0)
         goto out;
@@ -403,6 +421,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
     uint64_t source_seq;
     bool started = false;
     int build_rc;
+    int stage_rc;
     int rc = -1;
 
     snj_credential_clear(&owned_credential);
@@ -461,9 +480,13 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         credential = &owned_credential;
     }
     if (app->turn_provider->exact_token_count) {
-        if (snj_app_provider_count(app, count_request, credential,
-                                   &input_tokens_bound, error, error_size) != 0)
+        stage_rc = snj_app_provider_count(app, count_request, credential,
+                                          &input_tokens_bound,
+                                          error, error_size);
+        if (stage_rc != 0) {
+            rc = stage_rc;
             goto out;
+        }
         count_method = "exact";
     }
 #endif
@@ -491,15 +514,22 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         goto out;
     started = true;
     if (app->turn_provider->native_compaction) {
-        if (snj_app_provider_compact(app, request, credential, &output,
-                                     &output_tokens_bound,
-                                     error, error_size) != 0)
+        stage_rc = snj_app_provider_compact(app, request, credential, &output,
+                                            &output_tokens_bound,
+                                            error, error_size);
+        if (stage_rc != 0) {
+            rc = stage_rc;
             goto out;
+        }
     } else {
-        if (run_responses_compaction(app, request, credential, model, effort,
-                                     &output, &output_tokens_bound,
-                                     error, error_size) != 0)
+        stage_rc = run_responses_compaction(app, request, credential,
+                                            model, effort, &output,
+                                            &output_tokens_bound,
+                                            error, error_size);
+        if (stage_rc != 0) {
+            rc = stage_rc;
             goto out;
+        }
     }
     if (snj_context_compact_output_valid(output, output_hash, &output_bytes,
                                          error, error_size) < 0)
@@ -512,9 +542,13 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         goto out;
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (app->turn_provider->exact_token_count) {
-        if (snj_app_provider_count(app, output_count_request, credential,
-                                   &output_tokens_bound, error, error_size) != 0)
+        stage_rc = snj_app_provider_count(app, output_count_request,
+                                          credential, &output_tokens_bound,
+                                          error, error_size);
+        if (stage_rc != 0) {
+            rc = stage_rc;
             goto out;
+        }
         output_count_method = "exact";
     }
 #endif
@@ -543,6 +577,15 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         *compacted = true;
     rc = 0;
 out:
+    if ((rc == 1 || rc == 2) && started) {
+        if (commit_rendered(app, "compaction_interrupted",
+                compaction_interrupted_data(compact_id,
+                    rc == 1 ? "steering" : "user"),
+                error, error_size) < 0)
+            rc = -1;
+        else
+            started = false;
+    }
     if (rc < 0 && started)
         clear_active_compaction(&app->session);
     if (output)

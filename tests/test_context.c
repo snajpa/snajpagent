@@ -184,6 +184,36 @@ turn_completed(const char *turn_id, const char *response_id)
     return data;
 }
 
+static json_t *
+steering_added(const char *turn_id, const char *steering_id, const char *text)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "steering_id",
+                            json_string(steering_id)) == 0);
+    assert(snj_json_set_new(data, "text", json_string(text)) == 0);
+    assert(snj_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
+    return data;
+}
+
+static json_t *
+response_interrupted(const char *turn_id, const char *response_id,
+                     const char *prefix)
+{
+    json_t *data = json_object();
+    json_t *partial = json_array();
+    assert(data && partial);
+    assert(json_array_append_new(partial, assistant_item(prefix)) == 0);
+    assert(snj_json_set_new(data, "cycle", json_integer(1)) == 0);
+    assert(snj_json_set_new(data, "origin", json_string("steering")) == 0);
+    assert(snj_json_set_new(data, "partial_public", partial) == 0);
+    assert(snj_json_set_new(data, "reason", json_string("steered")) == 0);
+    assert(snj_json_set_new(data, "response_id",
+                            json_string(response_id)) == 0);
+    assert(snj_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
+    return data;
+}
+
 
 
 static json_t *
@@ -277,7 +307,7 @@ empty_excerpt(void)
 }
 
 static json_t *
-running_result(const char *handle, const char *model_text)
+running_result(const char *handle, const char *model_text, const char *reason)
 {
     json_t *result = json_object();
     assert(result);
@@ -285,7 +315,8 @@ running_result(const char *handle, const char *model_text)
     assert(snj_json_set_new(result, "exit_code", json_null()) == 0);
     assert(snj_json_set_new(result, "handle", json_string(handle)) == 0);
     assert(snj_json_set_new(result, "model_text", json_string(model_text)) == 0);
-    assert(snj_json_set_new(result, "reason", json_null()) == 0);
+    assert(snj_json_set_new(result, "reason",
+                            reason ? json_string(reason) : json_null()) == 0);
     assert(snj_json_set_new(result, "signal", json_null()) == 0);
     assert(snj_json_set_new(result, "status", json_string("running")) == 0);
     assert(snj_json_set_new(result, "stderr", empty_excerpt()) == 0);
@@ -561,6 +592,7 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
     }
     assert_schema_type(json_object_get(properties, "data"), "string", 0);
     assert_schema_type(json_object_get(properties, "eof"), "boolean", 1);
+    assert_schema_type(json_object_get(properties, "terminate"), "boolean", 1);
     assert_schema_type(json_object_get(properties, "yield_ms"), "integer", 1);
 
     tool = tool_by_name(tools, "apply_patch");
@@ -816,6 +848,165 @@ main(void)
         snj_instructions_free(&no_instructions);
         snj_session_close(&active);
     }
+    {
+        const char *steer_turn = "10101010101010101010101010101010";
+        const char *steer_response = "11111111111111111111111111111111";
+        const char *steer_id = "12121212121212121212121212121212";
+        const char *steer_id2 = "13131313131313131313131313131313";
+        struct snj_session steered;
+        struct snj_context_projection steered_projection;
+        struct snj_instruction_set no_instructions;
+        json_t *snapshot = json_array();
+        json_t *snapshot_item = json_object();
+        json_t *snapshot_item2 = json_object();
+        json_t *input;
+
+        snj_session_init(&steered);
+        snj_context_projection_init(&steered_projection);
+        snj_instructions_init(&no_instructions);
+        assert(snapshot && snapshot_item && snapshot_item2);
+        assert(snj_json_set_new(snapshot_item, "id",
+                                json_string(steer_id)) == 0);
+        assert(snj_json_set_new(snapshot_item, "text",
+                                json_string("change direction")) == 0);
+        assert(json_array_append_new(snapshot, snapshot_item) == 0);
+        assert(snj_json_set_new(snapshot_item2, "id",
+                                json_string(steer_id2)) == 0);
+        assert(snj_json_set_new(snapshot_item2, "text",
+                                json_string("and preserve order")) == 0);
+        assert(json_array_append_new(snapshot, snapshot_item2) == 0);
+        assert(snj_session_create(&store, &steered, workspace, "default",
+                                  SNAJPAGENT_MODEL, "default",
+                                  error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "turn_started",
+                                  turn_started(steer_turn, 1, "start",
+                                               workspace, NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "response_started",
+                                  response_started(steer_turn, steer_response,
+                                                   NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "steering_added",
+                                  steering_added(steer_turn, steer_id,
+                                                 "change direction"),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "response_interrupted",
+                                  response_interrupted(steer_turn,
+                                                       steer_response,
+                                                       "visible prefix"),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "steering_added",
+                                  steering_added(steer_turn, steer_id2,
+                                                 "and preserve order"),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_context_build(&steered, SNAJPAGENT_MODEL, "medium", 2,
+                                 snapshot, NULL, &no_instructions,
+                                 &steered_projection,
+                                 error, sizeof(error)) == 0);
+        input = json_object_get(steered_projection.create_request, "input");
+        assert(json_array_size(input) >= 6u);
+        assert(strcmp(snj_json_string(json_array_get(input, 2), "role"),
+                      "assistant") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 2), "content"),
+                      "visible prefix") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 3), "role"),
+                      "developer") == 0);
+        assert(strstr(snj_json_string(json_array_get(input, 3), "content"),
+                      "immediate steer") != NULL);
+        assert(strcmp(snj_json_string(json_array_get(input, 4), "role"),
+                      "user") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 4), "content"),
+                      "change direction") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 5), "role"),
+                      "developer") == 0);
+        assert(strstr(snj_json_string(json_array_get(input, 5), "content"),
+                      "immediate steer") != NULL);
+        assert(strcmp(snj_json_string(json_array_get(input, 6), "role"),
+                      "user") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 6), "content"),
+                      "and preserve order") == 0);
+        json_decref(snapshot);
+        snj_context_projection_free(&steered_projection);
+        snj_instructions_free(&no_instructions);
+        snj_session_close(&steered);
+    }
+    {
+        const char *command_turn = "14141414141414141414141414141414";
+        const char *command_response = "15151515151515151515151515151515";
+        const char *command_call = "16161616161616161616161616161616";
+        const char *command_handle = "17171717171717171717171717171717";
+        const char *command_steer = "18181818181818181818181818181818";
+        struct snj_session steered;
+        struct snj_context_projection steered_projection;
+        struct snj_instruction_set no_instructions;
+        json_t *snapshot = json_array();
+        json_t *snapshot_item = json_object();
+        json_t *input;
+
+        snj_session_init(&steered);
+        snj_context_projection_init(&steered_projection);
+        snj_instructions_init(&no_instructions);
+        assert(snapshot && snapshot_item);
+        assert(snj_json_set_new(snapshot_item, "id",
+                                json_string(command_steer)) == 0);
+        assert(snj_json_set_new(snapshot_item, "text",
+                                json_string("stop or wait")) == 0);
+        assert(json_array_append_new(snapshot, snapshot_item) == 0);
+        assert(snj_session_create(&store, &steered, workspace, "default",
+                                  SNAJPAGENT_MODEL, "default",
+                                  error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "turn_started",
+                                  turn_started(command_turn, 1, "run",
+                                               workspace, NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "response_started",
+                                  response_started(command_turn,
+                                                   command_response, NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "response_completed",
+                                  response_completed_call(command_turn,
+                                      command_response, command_call,
+                                      workspace),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "tool_started",
+                                  tool_started_data(command_turn, command_call,
+                                      steered.pending_calls[0].action_sha256,
+                                      workspace),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "steering_added",
+                                  steering_added(command_turn, command_steer,
+                                                 "stop or wait"),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&steered, "tool_finished",
+                                  tool_finished_data(command_turn, command_call,
+                                      running_result(command_handle,
+                                          "still running after steer",
+                                          "steering_handoff")),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_context_build(&steered, SNAJPAGENT_MODEL, "medium", 2,
+                                 snapshot, NULL, &no_instructions,
+                                 &steered_projection,
+                                 error, sizeof(error)) == 0);
+        input = json_object_get(steered_projection.create_request, "input");
+        assert(strcmp(snj_json_string(json_array_get(input, 2), "type"),
+                      "function_call") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 3), "type"),
+                      "function_call_output") == 0);
+        assert(strstr(snj_json_string(json_array_get(input, 3), "output"),
+                      "still running after steer") != NULL);
+        assert(strcmp(snj_json_string(json_array_get(input, 4), "role"),
+                      "developer") == 0);
+        assert(strstr(snj_json_string(json_array_get(input, 4), "content"),
+                      "immediate steer") != NULL);
+        assert(strcmp(snj_json_string(json_array_get(input, 5), "content"),
+                      "stop or wait") == 0);
+        assert(strstr(snj_json_string(json_array_get(input, 6), "content"),
+                      command_handle) != NULL);
+        json_decref(snapshot);
+        snj_context_projection_free(&steered_projection);
+        snj_instructions_free(&no_instructions);
+        snj_session_close(&steered);
+    }
 
     assert(snj_instructions_discover(&instructions, workspace,
                                      error, sizeof(error)) == 0);
@@ -913,7 +1104,8 @@ main(void)
     large_tool_output[1024u * 1024u] = '\0';
     assert(snj_session_commit(&session, "tool_finished",
                               tool_finished_data(turn2, call2,
-                                  running_result(handle, large_tool_output)),
+                                  running_result(handle, large_tool_output,
+                                                 NULL)),
                               NULL, error, sizeof(error)) == 0);
     free(large_tool_output);
     assert(strcmp(session.active_process_handle, handle) == 0);

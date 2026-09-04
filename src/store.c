@@ -1024,6 +1024,21 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         memcpy(session->active_compact_source_sha256, source_hash,
                sizeof(session->active_compact_source_sha256));
         session->active_compact_source_seq = source_seq;
+    } else if (strcmp(type, "compaction_interrupted") == 0) {
+        static const char *const keys[] = {"compact_id", "reason"};
+        static const char *const reasons[] = {"steering", "user"};
+        const char *compact_id = snj_json_string(data, "compact_id");
+        const char *reason = snj_json_string(data, "reason");
+
+        if (!snj_json_exact_keys(data, keys, 2u) ||
+            session->active_compact_id[0] == '\0' || !compact_id ||
+            strcmp(compact_id, session->active_compact_id) != 0 ||
+            !string_in(reason, reasons,
+                       sizeof(reasons) / sizeof(reasons[0])))
+            goto invalid;
+        session->active_compact_id[0] = '\0';
+        session->active_compact_source_sha256[0] = '\0';
+        session->active_compact_source_seq = 0u;
     } else if (strcmp(type, "compaction_completed") == 0) {
         static const char *const keys[] = {
             "compact_id", "count_method", "input_tokens_bound", "output",

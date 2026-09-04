@@ -8,6 +8,16 @@
 #include <string.h>
 #include <unistd.h>
 
+static int
+stream_fail(struct app_state *app, int error_number, const char *message)
+{
+    app->stream_failed = true;
+    app->stream_errno = error_number ? error_number : EIO;
+    (void)snprintf(app->stream_error, sizeof(app->stream_error), "%s", message);
+    errno = app->stream_errno;
+    return -1;
+}
+
 void
 snj_app_clear_partial_public(struct app_state *app)
 {
@@ -114,8 +124,8 @@ snj_app_finish_stream_item(struct app_state *app)
     app->stream_item_active = false;
     if ((app->networked ? snj_render_rollout_end(&app->render) :
                           snj_render_public_end(&app->render)) < 0) {
-        app->stream_failed = true;
-        return -1;
+        return stream_fail(app, errno,
+                           "public output item could not be finished");
     }
     return 0;
 }
@@ -128,8 +138,8 @@ snj_app_abort_stream_item(struct app_state *app)
     app->stream_item_active = false;
     if ((app->networked ? snj_render_rollout_abort(&app->render) :
                           snj_render_public_abort(&app->render)) < 0) {
-        app->stream_failed = true;
-        return -1;
+        return stream_fail(app, errno,
+                           "steered public output item could not be closed");
     }
     return 0;
 }
@@ -158,8 +168,8 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
         input_rc = snj_app_active_input_pump(
             app, remaining > 20u ? 20u : remaining);
         if (input_rc < 0) {
-            app->stream_failed = true;
-            return -1;
+            return stream_fail(app, errno,
+                               "active input failed during public output");
         }
         if (input_rc == 1 || input_rc == 2)
             break;
@@ -173,11 +183,9 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     }
 
     if (!app->stream_item_seen || item_index != app->stream_item_index) {
-        if (app->stream_item_seen && item_index != app->stream_item_index + 1u) {
-            app->stream_failed = true;
-            errno = EPROTO;
-            return -1;
-        }
+        if (app->stream_item_seen && item_index <= app->stream_item_index)
+            return stream_fail(app, EPROTO,
+                               "public output indexes did not increase");
         if (snj_app_finish_stream_item(app) < 0)
             return -1;
         app->stream_item_seen = true;
@@ -205,28 +213,28 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
             if ((app->networked ?
                  snj_render_rollout_begin(&app->render, fd, label) :
                  snj_render_public_begin(&app->render, fd, label)) < 0) {
-                app->stream_failed = true;
-                return -1;
+                return stream_fail(app, errno,
+                                   "public output item could not be started");
             }
             app->stream_item_active = true;
         }
     } else if (kind != app->stream_kind || phase != app->stream_phase) {
-        app->stream_failed = true;
-        errno = EPROTO;
-        return -1;
+        return stream_fail(app, EPROTO,
+                           "public output item kind or phase changed");
     }
     if (app->stream_item_hidden)
         return 0;
     if (app->partial_bytes > SNJ_MAX_RESPONSE_GRAPH) {
-        app->stream_failed = true;
-        errno = EOVERFLOW;
-        return -1;
+        return stream_fail(app, EOVERFLOW,
+                           "partial public output exceeds its bound");
     }
     partial = partial_public_target(app, item_index, kind, phase, provider_item_id,
                                     &partial_created);
     if (!partial) {
-        app->stream_failed = true;
-        return -1;
+        return stream_fail(app, errno,
+                           errno == EPROTO ?
+                           "public output item identity changed" :
+                           "partial public output could not be retained");
     }
     partial_before = partial->text.len;
     partial_max = partial->text.max;
@@ -257,10 +265,10 @@ fail_partial:
         memset(partial, 0, sizeof(*partial));
         --app->partial_count;
     }
-    {
-        app->stream_failed = true;
-        return -1;
-    }
+    return stream_fail(app, errno,
+                       errno == EOVERFLOW ?
+                       "partial public output exceeds its bound" :
+                       "public output could not be rendered");
 }
 
 
@@ -330,6 +338,8 @@ snj_app_reset_stream(struct app_state *app)
     app->stream_item_seen = false;
     app->stream_item_hidden = false;
     app->stream_failed = false;
+    app->stream_errno = 0;
+    app->stream_error[0] = '\0';
     app->steering_requested = false;
     app->interrupt_requested = false;
 }

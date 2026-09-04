@@ -26,12 +26,15 @@ interactive path is usable.
 - Interactive mode, one-shot execution mode, and session listing.
 - Terminal-width wrapping for streamed model text without changing stored or
   redirected response bytes.
+- Immediate Enter steering with byte-exact interrupted-prefix replay and an
+  immediately reusable active composer; Tab remains future-turn FIFO queueing.
 - Default-on terminal Markdown presentation for streamed model text, resumed
   assistant history, and non-operator model messages in the IRC transcript.
 - OpenAI Responses streaming over libcurl, including hosted `web_search`.
 - Codex-style instruction discovery from `AGENTS.override.md` and `AGENTS.md`.
-- Tool support for `exec_command`, yielded process handles, `write_stdin`, and
-  strict `apply_patch`, plus IRC chat/state/topic tools in networked mode.
+- Tool support for `exec_command`, yielded process handles, `write_stdin`
+  waiting/interaction/termination, and strict `apply_patch`, plus IRC
+  chat/state/topic tools in networked mode.
 - Program-wide, terminal-aware 16-color presentation with an explicit
   `auto`/`always`/`never` policy.
 - Secret redaction for provider credentials and configured tool environment
