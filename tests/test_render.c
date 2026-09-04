@@ -108,6 +108,8 @@ capture_color(enum snj_color_mode mode, bool networked,
 {
     struct snj_render render;
     struct snj_irc_event event;
+    struct snj_response_item call;
+    json_t *arguments;
     int fds[2];
     int saved;
     ssize_t n;
@@ -124,6 +126,15 @@ capture_color(enum snj_color_mode mode, bool networked,
     assert(snj_render_warning_ctx(&render, "careful") == 0);
     assert(snj_render_error_ctx(&render, "broken") == 0);
     assert(snj_render_host(&render, "status") == 0);
+    memset(&call, 0, sizeof(call));
+    arguments = json_object();
+    assert(arguments != NULL);
+    assert(json_object_set_new(arguments, "command",
+                               json_string("printf plain")) == 0);
+    call.name = "exec_command";
+    call.arguments = arguments;
+    assert(snj_render_tool_start(&render, &call, "/tmp") == 0);
+    json_decref(arguments);
     memset(&event, 0, sizeof(event));
     event.kind = SNJ_IRC_MESSAGE;
     event.timestamp_ms = 1000u;
@@ -179,6 +190,8 @@ main(void)
     assert(strstr(output, "\033[1;33msnajpagent: careful\n\033[0m") != NULL);
     assert(strstr(output, "\033[1;31msnajpagent: broken\n\033[0m") != NULL);
     assert(strstr(output, "\033[34mstatus\n\033[0m") != NULL);
+    assert(strstr(output,
+                  "\033[33m→ exec\033[0m  'printf plain'\n") != NULL);
     assert(strstr(output, "\033[1;36magent \033[0m› answer") != NULL);
     assert(capture_color(SNJ_COLOR_NEVER, true,
                          output, sizeof(output)) > 0u);

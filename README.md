@@ -232,7 +232,9 @@ network.
 explicit, and `--no-color` selects `never`. The default `auto` mode colors only
 terminal output and honors `NO_COLOR`. Color applies to networked and ordinary
 UI roles, uses broadly supported 16-color foreground attributes, and never
-enters stored text, provider input, or IRC traffic.
+enters stored text, provider input, or IRC traffic. Compact tool-start lines
+color the arrow and tool name, while an `exec` command itself remains in the
+default foreground like its output.
 
 ## Configuration
 

@@ -889,6 +889,7 @@ snj_render_tool_start(struct snj_render *render,
     struct snj_buf line;
     const char *label;
     const char *command;
+    size_t prefix_len = 0u;
     int rc = 0;
 
     if (render->verbosity < (render->networked ? 2u : 1u))
@@ -899,6 +900,7 @@ snj_render_tool_start(struct snj_render *render,
     if (snj_buf_printf(&line, "→ %s", label) < 0)
         rc = -1;
     else if (command) {
+        prefix_len = line.len;
         if (snj_buf_append(&line, "  ", 2u) < 0 ||
             append_shell_quoted(&line, command) < 0)
             rc = -1;
@@ -918,7 +920,8 @@ snj_render_tool_start(struct snj_render *render,
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO, COLOR_ACTIVITY,
                               (char *)line.data, line.len,
-                              first_line_len((char *)line.data, line.len),
+                              command ? prefix_len :
+                                  first_line_len((char *)line.data, line.len),
                               render->stderr_terminal, true);
     snj_buf_free(&line);
     return rc;

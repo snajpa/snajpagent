@@ -239,6 +239,9 @@ and transport diagnostics have stable roles. Red is reserved for errors,
 yellow for warnings/activity, cyan/blue for agent and prompt identity,
 magenta for operator identity, and dim/default text for metadata. Attributes
 are always reset at field boundaries so user/model text cannot inherit them.
+On a compact tool-start line, color covers only the arrow and tool label; an
+`exec` command payload uses the default foreground, matching the uncolored
+workdir, arguments, and captured command-output lines that follow it.
 
 ## Model Input And Steering
 
