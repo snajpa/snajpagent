@@ -81,8 +81,8 @@ not modify the process.
 
 There is no textual activity row: interactive operation emits neither
 `working…` nor `interrupting…` and reserves no extra status row. Idle,
-provider, and synchronous tool work appear only in the fixed-width prompt
-status cell described below.
+goal, provider, and synchronous tool state appear only in the prompt spinner
+fields described below.
 
 Interactive submitted input and the first visible model block have exactly one
 empty row between them. The final visible model block and the next input prompt
@@ -97,14 +97,15 @@ does not alter submitted text, model text, events, or provider traffic.
 `[ui] prompt` is one data-only template with exactly one `{chat:TEXT}`, one
 `{rollout-idle:TEXT}`, and one `{rollout-active:TEXT}` case. It supports
 separate `{provider}`, `{model}`, `{effort}`, `{operator}`, `{host}`,
-`{context}`, `{mode}`, and required `{status_char}` fields plus escaped literal
+`{context}`, and `{mode}` fields plus optional `{goal_spinner}`,
+`{provider_spinner}`, and `{tool_spinner}` fields and escaped literal
 braces/backslash; it performs no shell or environment expansion. The default
-rollout prompt is `PROVIDER/MODEL/EFFORT N% › ` while idle and uses `»` while
-active. The default chat prompt is `OPERATOR@HOST : `. Snajpagent appends one
+rollout prompt is `PROVIDER/MODEL/EFFORT N%   › ` while idle and uses `»` while
+active. The default chat prompt is `OPERATOR@HOST   : `. Snajpagent appends one
 space after the expanded template.
 
-The context meter is the final rollout data field before the one-column status
-cell and state glyph. `N` is the rounded-up percentage of the
+The context meter is the final rollout data field before the adjacent optional
+spinner fields and state glyph. `N` is the rounded-up percentage of the
 latest durable token-domain input bound against the resolved hard input budget
 for the same provider source, model, effort, and compaction lineage. A fresh
 session or accounting from a different provider source, selection, or lineage
@@ -117,16 +118,23 @@ and glyph in terminal scrollback. Terminal-unsafe code points in a trusted
 model or effort selector are visibly escaped in the composer only; the
 selected value supplied to the provider remains byte-for-byte unchanged.
 
-`prompt_spinner_idle`, `prompt_spinner_provider`, and `prompt_spinner_tool`
-are quoted sequences of 1--16 safe one-column Unicode frames, defaulting to a
-single space, `◴◷◶◵`, and `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`. One frame is deliberately
-static and schedules no periodic work or cell rewrite. Multiple frames use the
-one shared `prompt_spinner_per_second` rate (1--60, default 8), monotonic phase,
-and no catch-up bursts. Only the status cell is overwritten; a search prompt,
-hidden prompt, suspended process, or non-addressable terminal does not animate.
-Tool status spans the synchronous adapter call and returns to provider after a
-managed `running` result. A fixed interruption skull blink is included only if
-its documented implementation preflight records `GO`.
+`prompt_spinner_goal`, `prompt_spinner_provider`, and `prompt_spinner_tool`
+are quoted inactive-state plus active-frame strings. The first item is either a
+safe one-column inactive code point or the leading `\0` zero-width sentinel;
+the remaining zero through 16 safe one-column code points are active frames.
+The defaults are `" ◆"`, `" ◴◷◶◵"`, and `" ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"`, reserving
+three columns so state changes do not move the marker or draft. `"\0"`
+permanently removes a present field, `" "` deliberately reserves a blank one,
+and `"\0◆"` explicitly permits the field to appear only while active. One
+active frame is static and schedules no periodic work or cell rewrite.
+Multiple active frames use the one shared `prompt_spinner_per_second` rate
+(1--60, default 8), monotonic phase, and no catch-up bursts. A tick overwrites
+only changed spinner cells; a width-changing `\0` transition performs one
+structural redraw. A search prompt, hidden prompt, suspended process, or
+non-addressable terminal does not animate. Tool status spans the synchronous
+adapter call and returns to provider after a managed `running` result. A fixed
+interruption skull blink is included only if its documented implementation
+preflight records `GO`.
 
 The networked prompt identity and its chat/rollout views are specified in
 `irc-chat.md`.
@@ -247,7 +255,7 @@ non-steering behavior as `/queue TEXT`.
   order.
 - PTY coverage asserts persistent cross-mode/cross-process history, Ctrl-R
   search controls, exact append-only `^C` cancellation, no count-based Ctrl-C
-  exit, prompt expansions, one-cell spinner updates, and no periodic refresh
+  exit, prompt expansions, exact spinner-cell updates, and no periodic refresh
   for a selected one-frame state. Separate coverage retains explicit turn
   interruption for Ctrl-C on an empty active composer.
 

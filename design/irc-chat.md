@@ -90,10 +90,10 @@ history_lines = 200
 
 [ui]
 color = auto
-prompt = {chat:{operator}@{host}{status_char}:}{rollout-idle:{provider}/{model}/{effort} {context}{status_char}›}{rollout-active:{provider}/{model}/{effort} {context}{status_char}»}
-prompt_spinner_idle = " "
-prompt_spinner_provider = "◴◷◶◵"
-prompt_spinner_tool = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+prompt = {chat:{operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
+prompt_spinner_goal = " ◆"
+prompt_spinner_provider = " ◴◷◶◵"
+prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 prompt_spinner_per_second = 8
 ```
 
@@ -215,10 +215,11 @@ single verbosity ladder. Actionable errors and direct local-command results
 remain immediately visible in either view.
 
 The rollout composer includes bare `N%` as its last data field immediately
-before the one-column status cell and `›` or `»`, using the latest comparable
-durable token bound and resolved hard input budget. A fresh session or
-accounting from a different provider source, selection, or compaction lineage
-renders `0%`; compatible accounting with an unknown hard budget renders `?%`.
+before the optional goal/provider/tool spinner fields and `›` or `»`, using the
+latest comparable durable token bound and resolved hard input budget. A fresh
+session or accounting from a different provider source, selection, or
+compaction lineage renders `0%`; compatible accounting with an unknown hard
+budget renders `?%`.
 The default chat prompt uses `OPERATOR_NICK@MACHINE_HOSTNAME` without a meter,
 so switching presentation views does not imply a token fact there.
 
@@ -264,15 +265,15 @@ Non-networked interactive and one-shot modes keep their current output model,
 with the same color roles applied to prompts, labels, status, tools, warnings,
 errors, and high-verbosity diagnostics.
 
-The default chat-view composer is `OPERATOR_NICK@MACHINE_HOSTNAME : `. The
-default rollout view uses `PROVIDER/MODEL/EFFORT N% › ` while idle and the
-double-angle `»` plus provider/tool status cell while active. The prompt and
-local chat use the accepted operator nick on the first configured server, or
-the hosted nick when serving a room. Nick changes refresh the prompt without
-losing the draft; configured nicks remain registration preferences. The
-hostname comes from the local machine, not the IRC endpoint, room, or remote
-server. Both views use the one shared dotdir prompt history and Ctrl-R search
-without changing input routing.
+The default chat-view composer is `OPERATOR_NICK@MACHINE_HOSTNAME   : `. The
+default rollout view uses `PROVIDER/MODEL/EFFORT N%   › ` while idle and the
+double-angle `»` plus goal/provider/tool spinner fields while active. The
+prompt and local chat use the accepted operator nick on the first configured
+server, or the hosted nick when serving a room. Nick changes refresh the prompt
+without losing the draft; configured nicks remain registration preferences.
+The hostname comes from the local machine, not the IRC endpoint, room, or
+remote server. Both views use the one shared dotdir prompt history and Ctrl-R
+search without changing input routing.
 
 Text entered at the network composer is sent as a room message from the local
 operator identity and also admitted once as local operator input to the model;
