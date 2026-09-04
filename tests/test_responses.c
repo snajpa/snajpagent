@@ -137,6 +137,34 @@ test_terminal_snapshot_can_supply_unseen_items(void)
     snj_response_graph_free(&graph);
 }
 
+static void
+test_structured_keepalives_do_not_end_response(void)
+{
+    static const char wire[] =
+        "event: keepalive\n"
+        "data: {\"type\":\"keepalive\"}\n\n"
+        "event: response.created\n"
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "event: keepalive\n"
+        "data: {\"type\":\"keepalive\",\"time_ms\":123}\n\n"
+        "event: response.completed\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"completed\",\"output\":[]}}\n\n";
+    struct snj_response_graph graph;
+    struct emitted emitted;
+    char error[256] = {0};
+
+    snj_response_graph_init(&graph);
+    memset(&emitted, 0, sizeof(emitted));
+    snj_buf_init(&emitted.text, 1024u);
+    assert(parse_stream(wire, 7u, &graph, &emitted,
+                        error, sizeof(error)) == 0);
+    assert(strcmp(graph.provider_response_id, "resp_keepalive") == 0);
+    assert(graph.count == 0u);
+    assert(emitted.calls == 0u);
+    snj_buf_free(&emitted.text);
+    snj_response_graph_free(&graph);
+}
+
 
 static void
 test_phase_absent_text_becomes_visible_final(void)
@@ -403,6 +431,7 @@ main(void)
 {
     test_deltas_survive_empty_terminal_output();
     test_terminal_snapshot_can_supply_unseen_items();
+    test_structured_keepalives_do_not_end_response();
     test_phase_absent_text_becomes_visible_final();
     test_phase_absent_text_before_tool_stays_commentary();
     test_empty_reasoning_item_is_internal_only();

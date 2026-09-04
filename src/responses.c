@@ -861,6 +861,8 @@ static int
 dispatch_event(struct snj_responses_stream *stream, const char *type,
                const json_t *root)
 {
+    if (strcmp(type, "keepalive") == 0)
+        return 0;
     if (strcmp(type, "response.created") == 0)
         return handle_response_created(stream, root);
     if (strcmp(type, "response.in_progress") == 0)
