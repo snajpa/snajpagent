@@ -4,6 +4,11 @@
 
 ## 0.9.0-wip
 
+- Added a post-compaction developer notice containing the current session's
+  absolute `events.jsonl` rollout-log path. It is rebuilt for future provider
+  requests and resume without altering the provider-produced compact output or
+  its durable hash and token-count metadata.
+
 - Made bare `-e` read its one-shot prompt from non-terminal stdin while
   preserving the established `-e -- PROMPT...` argument form.
 

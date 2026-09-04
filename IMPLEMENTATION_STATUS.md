@@ -108,7 +108,8 @@ unresolved managed process retains exclusive `write_stdin` control.
   and count-request SHA-256 metadata, sync `compaction_started`, call the
   native compact endpoint or Responses fallback, validate the bounded output,
   and sync `compaction_completed`; ordinary future context projection installs
-  that output exactly once before uncompacted suffix items, while the
+  that output exactly once, followed by the current session's absolute rollout
+  log location, before uncompacted suffix items, while the
   pre-response path stops the compact source before the active `turn_started`,
   installs the compact output during the active turn, then rebuilds and recounts
   the provider request before any `response_started` event;

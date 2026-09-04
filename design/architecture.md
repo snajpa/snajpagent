@@ -6,6 +6,12 @@ snajpagent is a single foreground terminal process. It can host a built-in IRC
 server and maintain outgoing IRC connections, but does not fork a background
 worker or rely on a socket to keep sessions alive. Durable state is written to
 local event logs, and resume reconstructs the active session from those logs.
+The append-only rollout for a session is
+`$DOTDIR/sessions/<session-id>/events.jsonl`. Once a manual or automatic
+compaction succeeds, context projection places a synthetic developer notice
+with that absolute path immediately after the compact output. The notice is
+rebuilt during replay and does not modify the provider-produced compact output
+or its recorded hash and token count.
 
 ## Runtime Loop
 

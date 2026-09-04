@@ -357,6 +357,49 @@ append_compact_output_raw(json_t *array, const json_t *output)
 }
 
 static int
+append_rollout_log_location(struct context_builder *builder)
+{
+    struct snj_buf path;
+    struct snj_buf text;
+    json_t *path_value = NULL;
+    char *quoted_path = NULL;
+    const size_t quoted_path_max =
+        (SNJ_PATH_MAX_BYTES + sizeof("/events.jsonl")) * 6u + 2u;
+    int rc = -1;
+
+    if (!builder->session)
+        return 0;
+    if (!builder->session->dir_path) {
+        errno = EINVAL;
+        return -1;
+    }
+    snj_buf_init(&path, SNJ_PATH_MAX_BYTES + sizeof("/events.jsonl"));
+    snj_buf_init(&text, quoted_path_max + 256u);
+    if (snj_buf_printf(&path, "%s/events.jsonl",
+                       builder->session->dir_path) < 0)
+        goto out;
+    path_value = json_string((const char *)path.data);
+    if (!path_value)
+        goto out;
+    quoted_path = canonical_string(path_value, quoted_path_max);
+    if (!quoted_path ||
+        snj_buf_printf(&text,
+            "The complete rollout log for this session is at %s. Use local "
+            "tools to inspect it when the compacted context lacks needed detail.",
+            quoted_path) < 0)
+        goto out;
+    rc = append_message(builder, "rollout_log_location", "developer",
+                        (const char *)text.data);
+out:
+    free(quoted_path);
+    if (path_value)
+        json_decref(path_value);
+    snj_buf_free(&text);
+    snj_buf_free(&path);
+    return rc;
+}
+
+static int
 install_compact_output(struct context_builder *builder, const char *compact_id,
                        const json_t *output, char *error, size_t error_size)
 {
@@ -382,7 +425,8 @@ install_compact_output(struct context_builder *builder, const char *compact_id,
         return -1;
     }
     semantic = NULL;
-    if (append_compact_output_raw(builder->request_input, output) < 0) {
+    if (append_compact_output_raw(builder->request_input, output) < 0 ||
+        append_rollout_log_location(builder) < 0) {
         set_error(error, error_size, "cannot install compact output");
         return -1;
     }

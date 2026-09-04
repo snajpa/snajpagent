@@ -282,6 +282,12 @@ sessions/
 trash/
 ```
 
+Each session's append-only rollout is stored at
+`$DOTDIR/sessions/<session-id>/events.jsonl`. After successful manual or
+automatic compaction, every subsequent provider request includes a developer
+notice with that current session's absolute rollout-log path, so the model can
+inspect the full local history when the compacted context lacks detail.
+
 Use `--dotdir DIR` to select another dotdir, or `--config FILE` to read a
 configuration file elsewhere while leaving cache and session locations
 unchanged.

@@ -731,6 +731,13 @@ main(void)
                                   turn_started(active_turn2, 2, "new",
                                                workspace, NULL),
                                   NULL, error, sizeof(error)) == 0);
+        assert(snj_context_build(&active, SNAJPAGENT_MODEL, "medium", 1,
+                                 active_steering, NULL, &no_instructions,
+                                 &active_projection, error, sizeof(error)) == 0);
+        assert(item_by_kind(json_object_get(active_projection.model_input,
+                                            "items"),
+                            "rollout_log_location") == NULL);
+        snj_context_projection_free(&active_projection);
         assert(snj_context_compact_active_prefix_request_build(&active,
                    active.default_model, active.default_effort, &compact_request,
                    &compact_count_request, source_hash, &source_bytes,
@@ -765,10 +772,17 @@ main(void)
                                  &active_projection, error, sizeof(error)) == 0);
         input = json_object_get(active_projection.create_request, "input");
         assert(json_is_array(input));
-        assert(json_array_size(input) == 3u);
+        assert(json_array_size(input) == 4u);
+        assert(active.dir_path[0] == '/');
         assert(strcmp(snj_json_string(json_array_get(input, 1), "type"),
                       "compaction") == 0);
-        assert(strcmp(snj_json_string(json_array_get(input, 2), "content"),
+        assert(strcmp(snj_json_string(json_array_get(input, 2), "role"),
+                      "developer") == 0);
+        assert(strstr(snj_json_string(json_array_get(input, 2), "content"),
+                      active.dir_path) != NULL);
+        assert(strstr(snj_json_string(json_array_get(input, 2), "content"),
+                      "/events.jsonl") != NULL);
+        assert(strcmp(snj_json_string(json_array_get(input, 3), "content"),
                       "new") == 0);
         json_decref(compact_request);
         json_decref(compact_count_request);
@@ -813,14 +827,21 @@ main(void)
     items = json_object_get(projection.model_input, "items");
     request_input = json_object_get(projection.create_request, "input");
     assert(json_is_array(items));
-    assert(json_array_size(items) == 4);
+    assert(json_array_size(items) == 5);
     assert(json_is_array(request_input));
-    assert(json_array_size(request_input) == 4);
+    assert(json_array_size(request_input) == 5);
     assert(strcmp(snj_json_string(json_array_get(request_input, 2), "type"),
                   "compaction") == 0);
+    assert(session.dir_path[0] == '/');
+    assert(strcmp(snj_json_string(json_array_get(request_input, 3), "role"),
+                  "developer") == 0);
+    assert(strstr(snj_json_string(json_array_get(request_input, 3), "content"),
+                  session.dir_path) != NULL);
+    assert(strstr(snj_json_string(json_array_get(request_input, 3), "content"),
+                  "/events.jsonl") != NULL);
     request_input = json_object_get(projection.count_request, "input");
     assert(json_is_array(request_input));
-    assert(json_array_size(request_input) == 4);
+    assert(json_array_size(request_input) == 5);
     assert(strcmp(snj_json_string(json_array_get(request_input, 2), "type"),
                   "compaction") == 0);
     assert(strstr(snj_json_string(json_array_get(items, 1), "text"),
@@ -829,7 +850,13 @@ main(void)
                   "native_compact_output") == 0);
     assert(strcmp(snj_json_string(json_array_get(items, 2), "compact_id"),
                   compact1) == 0);
-    assert(strcmp(snj_json_string(json_array_get(items, 3), "text"), "again") == 0);
+    assert(strcmp(snj_json_string(json_array_get(items, 3), "kind"),
+                  "rollout_log_location") == 0);
+    assert(strcmp(snj_json_string(json_array_get(items, 3), "role"),
+                  "developer") == 0);
+    assert(strstr(snj_json_string(json_array_get(items, 3), "text"),
+                  session.dir_path) != NULL);
+    assert(strcmp(snj_json_string(json_array_get(items, 4), "text"), "again") == 0);
     snj_context_projection_free(&projection);
 
     assert(snj_session_commit(&session, "response_started",
