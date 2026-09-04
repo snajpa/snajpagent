@@ -6,8 +6,9 @@
 
 - Split `make sizecheck` into independent production-C, production-header, and
   test-C budgets. Their soft/hard levels are 32,768/49,152,
-  16,384/65,536, and 16,384/32,768 lines respectively; the 30-production-unit
-  cap and 2,000-line per-file review trigger remain unchanged.
+  16,384/65,536, and 16,384/32,768 lines respectively. Production translation
+  units are no longer counted or constrained; the 2,000-line per-file review
+  trigger remains unchanged.
 
 - Default the IRC model nick to `agent`. Make outgoing clients resolve nickname
   collisions in-place by trying numeric suffixes, and use the accepted

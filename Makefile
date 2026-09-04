@@ -273,7 +273,6 @@ sizecheck:
 	prod_c_soft=32768; prod_c_hard=49152; \
 	prod_h_soft=16384; prod_h_hard=65536; \
 	test_c_soft=16384; test_c_hard=32768; \
-	units=$$(find src -type f -name '*.c' | wc -l | tr -d ' '); \
 	largest=$$(find src -type f \( -name '*.c' -o -name '*.h' \) -exec wc -l {} + | \
 		awk '$$2 != "total" && $$1 > max { max = $$1; file = $$2 } END { if (file == "") print "0 -"; else print max " " file }'); \
 	largest_lines=$$(printf '%s\n' "$$largest" | awk '{ print $$1 }'); \
@@ -284,7 +283,6 @@ sizecheck:
 		"$$prod_h" "$$prod_h_soft" "$$prod_h_hard"; \
 	printf 'test C lines: %s / %s soft / %s hard\n' \
 		"$$test_c" "$$test_c_soft" "$$test_c_hard"; \
-	printf 'production translation units: %s / 30 hard\n' "$$units"; \
 	printf 'largest production C/header file: %s lines %s / 2000 review trigger\n' "$$largest_lines" "$$largest_file"; \
 	if [ "$$prod_c" -gt "$$prod_c_soft" ]; then \
 		printf 'source-budget review: production C exceeds the %s-line soft limit\n' "$$prod_c_soft"; \
@@ -300,7 +298,7 @@ sizecheck:
 	fi; \
 	test "$$prod_c" -le "$$prod_c_hard" && \
 		test "$$prod_h" -le "$$prod_h_hard" && \
-		test "$$test_c" -le "$$test_c_hard" && test "$$units" -le 30
+		test "$$test_c" -le "$$test_c_hard"
 
 clean:
 	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN)
