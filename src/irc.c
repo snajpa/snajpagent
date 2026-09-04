@@ -133,19 +133,6 @@ configure_stream(int fd)
 }
 
 static int
-copy_string(char *dst, size_t size, const char *src)
-{
-    size_t len = strlen(src);
-
-    if (!len || len >= size) {
-        errno = EINVAL;
-        return -1;
-    }
-    memcpy(dst, src, len + 1u);
-    return 0;
-}
-
-static int
 sanitize_text(char *dst, size_t size, const char *src)
 {
     size_t used = 0u;
@@ -318,7 +305,7 @@ normalize_room(char *dst, size_t size, const char *room)
         return -1;
     }
     if (room[0] == '#')
-        return copy_string(dst, size, room);
+        return snj_strcpy(dst, size, room) ? 0 : -1;
     if (strlen(room) + 2u > size) {
         errno = EINVAL;
         return -1;
@@ -417,7 +404,7 @@ static int
 config_copy(char *dst, size_t size, const char *src, const char *what,
             char *error, size_t error_size)
 {
-    if (copy_string(dst, size, src) < 0) {
+    if (!src || !*src || !snj_strcpy(dst, size, src)) {
         snj_errorf(error, error_size, "%s exceeds its supported bound", what);
         return -1;
     }
@@ -536,7 +523,7 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
             login = "operator";
         if (irc_casecmp(login, config->irc_model_nick) == 0)
             login = "localop";
-        (void)copy_string(config->irc_operator_nick,
+        (void)snj_strcpy(config->irc_operator_nick,
                           sizeof(config->irc_operator_nick), login);
     }
     if (!nick_valid(config->irc_operator_nick) ||
@@ -980,7 +967,7 @@ member_add(struct irc_conn *conn, const char *nick, bool op)
         return NULL;
     member = &conn->members[conn->member_count++];
     memset(member, 0, sizeof(*member));
-    (void)copy_string(member->nick, sizeof(member->nick), nick);
+    (void)snj_strcpy(member->nick, sizeof(member->nick), nick);
     member->op = op;
     return member;
 }
@@ -1201,7 +1188,7 @@ server_join(struct snj_irc *irc, struct irc_conn *peer, const char *room)
         return 0;
     peer->joined = true;
     peer->op = !peer->agent_role;
-    (void)copy_string(peer->room, sizeof(peer->room), irc->room);
+    (void)snj_strcpy(peer->room, sizeof(peer->room), irc->room);
     if (server_broadcast(irc, ":%s!%s@%s JOIN %s", peer->nick,
                          peer->user, irc->server_name, irc->room) < 0 ||
         server_emit(irc, SNJ_IRC_JOIN, peer->nick, "", peer->op, false) < 0)
@@ -1426,7 +1413,7 @@ server_dispatch(struct snj_irc *irc, struct irc_conn *peer, char *line)
         if (strcmp(peer->nick, next) == 0)
             return 0;
         memcpy(old, peer->nick, sizeof(old));
-        (void)copy_string(peer->nick, sizeof(peer->nick), next);
+        (void)snj_strcpy(peer->nick, sizeof(peer->nick), next);
         if (old[0] && peer->joined) {
             if (server_broadcast(irc, ":%s!%s@%s NICK :%s", old,
                                  peer->user, irc->server_name, peer->nick) < 0 ||
@@ -1444,7 +1431,7 @@ server_dispatch(struct snj_irc *irc, struct irc_conn *peer, char *line)
         if (message.param_count < 1u || !nick_valid(message.params[0]))
             return queue_line(peer, ":%s 461 * USER :Not enough parameters",
                               irc->server_name);
-        (void)copy_string(peer->user, sizeof(peer->user), message.params[0]);
+        (void)snj_strcpy(peer->user, sizeof(peer->user), message.params[0]);
         if (message.param_count >= 4u &&
             strcmp(message.params[3], SNAJPAGENT_NAME " agent") == 0)
             peer->agent_role = true;
@@ -1824,7 +1811,7 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
         member = member_add(link, sender, false);
         if (self) {
             link->joined = true;
-            (void)copy_string(link->room, sizeof(link->room), room);
+            (void)snj_strcpy(link->room, sizeof(link->room), room);
             if (link_flush_pending(link) < 0)
                 return -1;
         }
@@ -1879,7 +1866,7 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
             }
         if (!member)
             return 0;
-        (void)copy_string(member->nick, sizeof(member->nick), message.params[0]);
+        (void)snj_strcpy(member->nick, sizeof(member->nick), message.params[0]);
         return link_emit(irc, link, SNJ_IRC_NICK, link->room, sender,
                          message.params[0], op, timestamp_ms);
     }
@@ -2151,11 +2138,11 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     irc->replay_members = calloc(IRC_REPLAY_MEMBERS_MAX,
                                  sizeof(*irc->replay_members));
     if (!irc->history || !irc->replay_members ||
-        copy_string(irc->listen, sizeof(irc->listen), config->irc_listen) < 0 ||
-        copy_string(irc->model_nick, sizeof(irc->model_nick),
-                    config->irc_model_nick) < 0 ||
-        copy_string(irc->operator_nick, sizeof(irc->operator_nick),
-                    config->irc_operator_nick) < 0)
+        !snj_strcpy(irc->listen, sizeof(irc->listen), config->irc_listen) ||
+        !snj_strcpy(irc->model_nick, sizeof(irc->model_nick),
+                    config->irc_model_nick) ||
+        !snj_strcpy(irc->operator_nick, sizeof(irc->operator_nick),
+                    config->irc_operator_nick))
         goto fail;
     derive_server_name(irc->server_name);
     if (config->irc_room_name[0]) {
@@ -2184,9 +2171,9 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
             link->outgoing = true;
             link->role = role == 0u ? LINK_AGENT : LINK_OPERATOR;
             link->agent_role = role == 0u;
-            (void)copy_string(link->endpoint, sizeof(link->endpoint),
+            (void)snj_strcpy(link->endpoint, sizeof(link->endpoint),
                               config->irc_clients[i]);
-            (void)copy_string(link->nick, sizeof(link->nick),
+            (void)snj_strcpy(link->nick, sizeof(link->nick),
                               role == 0u ? irc->model_nick : irc->operator_nick);
             (void)copy_string(link->accepted_nick, sizeof(link->accepted_nick),
                               link->nick);

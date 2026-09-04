@@ -332,14 +332,6 @@ append_managed_gate(struct context_builder *builder)
     return append_message(builder, "managed_process_gate", "developer", text);
 }
 
-static bool
-goal_creation_allowed(const struct snj_session *session)
-{
-    return session &&
-        (session->goal_status == SNJ_GOAL_NONE ||
-         session->goal_status == SNJ_GOAL_COMPLETED ||
-         session->goal_status == SNJ_GOAL_CANCELLED);
-}
 
 static int
 append_goal_controller(struct context_builder *builder)
@@ -351,7 +343,7 @@ append_goal_controller(struct context_builder *builder)
         return 0;
     if (builder->session->goal_status != SNJ_GOAL_ACTIVE) {
         if (builder->active_process_handle ||
-            !goal_creation_allowed(builder->session))
+            snj_goal_unfinished(builder->session->goal_status))
             return 0;
         return append_message(builder, "goal_controller", "developer",
             "No persistent goal is active. If and only if the user or "
@@ -1525,7 +1517,8 @@ model_input_object(struct context_builder *builder)
     json_t *input = json_object();
     bool goal_active = builder->session &&
                        builder->session->goal_status == SNJ_GOAL_ACTIVE;
-    bool goal_create_allowed = goal_creation_allowed(builder->session);
+    bool goal_create_allowed = builder->session &&
+        !snj_goal_unfinished(builder->session->goal_status);
 
     if (!input ||
         snj_json_set_new(input, "capability_version",
@@ -1561,7 +1554,8 @@ create_request_object(struct context_builder *builder)
     json_t *request = json_object();
     bool goal_active = builder->session &&
                        builder->session->goal_status == SNJ_GOAL_ACTIVE;
-    bool goal_create_allowed = goal_creation_allowed(builder->session);
+    bool goal_create_allowed = builder->session &&
+        !snj_goal_unfinished(builder->session->goal_status);
 
     if (!request ||
         snj_json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
@@ -1596,7 +1590,8 @@ count_request_object(struct context_builder *builder)
     json_t *request = json_object();
     bool goal_active = builder->session &&
                        builder->session->goal_status == SNJ_GOAL_ACTIVE;
-    bool goal_create_allowed = goal_creation_allowed(builder->session);
+    bool goal_create_allowed = builder->session &&
+        !snj_goal_unfinished(builder->session->goal_status);
 
     if (!request ||
         snj_json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||

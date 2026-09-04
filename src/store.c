@@ -541,9 +541,6 @@ static int
 compact_output_digest(const json_t *output,
                       char out[SNJ_SHA256_HEX_LEN + 1u], size_t *bytes)
 {
-    struct snj_buf encoded;
-    int rc = -1;
-
     if (!json_is_array(output) || json_array_size(output) == 0u ||
         json_array_size(output) > 128u) {
         errno = EINVAL;
@@ -556,15 +553,8 @@ compact_output_digest(const json_t *output,
             return -1;
         }
     }
-    snj_buf_init(&encoded, 12u * 1024u * 1024u);
-    if (snj_json_canonical(output, &encoded) == 0) {
-        snj_sha256_hex(encoded.data, encoded.len, out);
-        if (bytes)
-            *bytes = encoded.len;
-        rc = 0;
-    }
-    snj_buf_free(&encoded);
-    return rc;
+    return snj_json_digest_bounded(output, 12u * 1024u * 1024u,
+                                   out, bytes);
 }
 static bool
 valid_trash_name(const struct snj_session *session, const char *name)
@@ -711,21 +701,11 @@ snj_goal_status_name(enum snj_goal_status status)
     return "unknown";
 }
 
-static bool
-goal_unfinished(const struct snj_session *session)
+bool
+snj_goal_unfinished(enum snj_goal_status status)
 {
-    return session->goal_status == SNJ_GOAL_ACTIVE ||
-           session->goal_status == SNJ_GOAL_PAUSED ||
-           session->goal_status == SNJ_GOAL_BLOCKED;
-}
-
-static bool
-goal_text_blank(const char *text)
-{
-    for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
-        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
-            return false;
-    return true;
+    return status == SNJ_GOAL_ACTIVE || status == SNJ_GOAL_PAUSED ||
+           status == SNJ_GOAL_BLOCKED;
 }
 
 static int
@@ -867,11 +847,11 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         const char *goal_id = snj_json_string(data, "goal_id");
         const char *prompt = snj_json_string(data, "prompt");
         size_t len;
-        if (!snj_json_exact_keys(data, keys, 2u) || goal_unfinished(session) ||
+        if (!snj_json_exact_keys(data, keys, 2u) || snj_goal_unfinished(session->goal_status) ||
             !goal_id || !snj_hex_is_lower(goal_id, SNJ_ID_HEX_LEN) ||
             strcmp(goal_id, session->id) == 0 || !prompt || !*prompt ||
             (session->goal_id[0] && strcmp(goal_id, session->goal_id) == 0) ||
-            goal_text_blank(prompt) ||
+            snj_text_blank(prompt) ||
             (len = strlen(prompt)) > SNJ_MAX_GOAL_PROMPT ||
             !snj_utf8_valid((const unsigned char *)prompt, len, true) ||
             replace_text(&session->goal_prompt, prompt,
@@ -897,13 +877,13 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         const char *goal_id = snj_json_string(data, "goal_id");
         const char *prompt = snj_json_string(data, "prompt");
         size_t len;
-        if (!snj_json_exact_keys(data, keys, 3u) || !goal_unfinished(session) ||
+        if (!snj_json_exact_keys(data, keys, 3u) || !snj_goal_unfinished(session->goal_status) ||
             !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
             !string_in(actor, actors, sizeof(actors) / sizeof(actors[0])) ||
             (strcmp(actor, "model") == 0 &&
              session->goal_status != SNJ_GOAL_ACTIVE) ||
             (strcmp(actor, "model") == 0 && session->goal_locked) ||
-            !prompt || !*prompt || goal_text_blank(prompt) ||
+            !prompt || !*prompt || snj_text_blank(prompt) ||
             (len = strlen(prompt)) > SNJ_MAX_GOAL_PROMPT ||
             !snj_utf8_valid((const unsigned char *)prompt, len, true) ||
             strcmp(prompt, session->goal_prompt) == 0 ||
@@ -919,7 +899,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         static const char *const keys[] = {"goal_id", "locked"};
         const char *goal_id = snj_json_string(data, "goal_id");
         json_t *locked = json_object_get(data, "locked");
-        if (!snj_json_exact_keys(data, keys, 2u) || !goal_unfinished(session) ||
+        if (!snj_json_exact_keys(data, keys, 2u) || !snj_goal_unfinished(session->goal_status) ||
             !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
             !json_is_boolean(locked) ||
             (json_is_true(locked) == session->goal_locked))
@@ -959,7 +939,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             session->goal_status != SNJ_GOAL_ACTIVE ||
             !actor || strcmp(actor, "model") != 0 ||
             !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
-            !reason || !*reason || goal_text_blank(reason) ||
+            !reason || !*reason || snj_text_blank(reason) ||
             (len = strlen(reason)) > SNJ_MAX_GOAL_BLOCKER ||
             !snj_utf8_valid((const unsigned char *)reason, len, true) ||
             replace_text(&session->goal_blocker, reason,
@@ -971,7 +951,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         static const char *const actors[] = {"model", "user"};
         const char *actor = snj_json_string(data, "actor");
         const char *goal_id = snj_json_string(data, "goal_id");
-        if (!snj_json_exact_keys(data, keys, 2u) || !goal_unfinished(session) ||
+        if (!snj_json_exact_keys(data, keys, 2u) || !snj_goal_unfinished(session->goal_status) ||
             !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
             !string_in(actor, actors, sizeof(actors) / sizeof(actors[0])) ||
             (strcmp(actor, "model") == 0 &&
@@ -983,7 +963,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
     } else if (strcmp(type, "goal_cancelled") == 0) {
         static const char *const keys[] = {"goal_id"};
         const char *goal_id = snj_json_string(data, "goal_id");
-        if (!snj_json_exact_keys(data, keys, 1u) || !goal_unfinished(session) ||
+        if (!snj_json_exact_keys(data, keys, 1u) || !snj_goal_unfinished(session->goal_status) ||
             !goal_id || strcmp(goal_id, session->goal_id) != 0)
             goto invalid;
         free(session->goal_blocker);

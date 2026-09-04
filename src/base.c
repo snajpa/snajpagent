@@ -147,6 +147,15 @@ snj_buf_terminate(struct snj_buf *buf)
 }
 
 bool
+snj_text_blank(const char *text)
+{
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
+        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
+            return false;
+    return true;
+}
+
+bool
 snj_utf8_valid(const unsigned char *s, size_t len, bool reject_nul)
 {
     size_t i = 0;

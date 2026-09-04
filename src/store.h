@@ -164,6 +164,7 @@ struct snj_session {
 };
 
 const char *snj_goal_status_name(enum snj_goal_status status);
+bool snj_goal_unfinished(enum snj_goal_status status);
 
 void snj_store_init(struct snj_store *store);
 void snj_store_close(struct snj_store *store);

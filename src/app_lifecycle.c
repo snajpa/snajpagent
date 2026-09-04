@@ -184,22 +184,7 @@ static const char goal_help[] =
     "/goal complete|cancel         end the goal\n"
     "reserved first words: status help set pause resume lock unlock complete cancel";
 
-static bool
-goal_unfinished(const struct snj_session *session)
-{
-    return session->goal_status == SNJ_GOAL_ACTIVE ||
-           session->goal_status == SNJ_GOAL_PAUSED ||
-           session->goal_status == SNJ_GOAL_BLOCKED;
-}
 
-static bool
-blank_text(const char *text)
-{
-    for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
-        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
-            return false;
-    return true;
-}
 
 static int
 goal_error(struct app_state *app, const char *message)
@@ -336,7 +321,7 @@ copy_goal_argument(const char *argument, uint32_t limit,
         return NULL;
     memcpy(copy, start, len);
     copy[len] = '\0';
-    if (blank_text(copy) ||
+    if (snj_text_blank(copy) ||
         !snj_utf8_valid((const unsigned char *)copy, len, true)) {
         free(copy);
         (void)snprintf(error, error_size,
@@ -366,7 +351,7 @@ start_goal(struct app_state *app, const char *prompt,
 {
     char goal_id[SNJ_ID_HEX_LEN + 1u];
 
-    if (goal_unfinished(&app->session)) {
+    if (snj_goal_unfinished(app->session.goal_status)) {
         (void)snprintf(error, error_size, "an unfinished goal already exists");
         errno = EINVAL;
         return -1;
@@ -397,7 +382,7 @@ set_goal_prompt(struct app_state *app, const char *argument)
 
     if (!prompt)
         return goal_error(app, error[0] ? error : "goal wording is unavailable");
-    if (goal_unfinished(&app->session)) {
+    if (snj_goal_unfinished(app->session.goal_status)) {
         if (strcmp(prompt, app->session.goal_prompt) == 0) {
             free(prompt);
             return snj_render_warning_ctx(&app->render,
@@ -471,7 +456,7 @@ goal_simple_command(struct app_state *app, const char *command)
     }
     if (strcmp(command, "lock") == 0 || strcmp(command, "unlock") == 0) {
         bool locked = strcmp(command, "lock") == 0;
-        if (!goal_unfinished(&app->session))
+        if (!snj_goal_unfinished(app->session.goal_status))
             return goal_error(app, "no unfinished goal can be locked or unlocked");
         if (app->session.goal_locked == locked)
             return snj_render_warning_ctx(&app->render,
@@ -491,12 +476,12 @@ goal_simple_command(struct app_state *app, const char *command)
                      "goal wording unlocked for model changes");
     }
     if (strcmp(command, "complete") == 0) {
-        if (!goal_unfinished(&app->session))
+        if (!snj_goal_unfinished(app->session.goal_status))
             return goal_error(app, "no unfinished goal can be completed");
         type = "goal_completed";
         data = goal_actor_data(&app->session, "user");
     } else {
-        if (!goal_unfinished(&app->session))
+        if (!snj_goal_unfinished(app->session.goal_status))
             return goal_error(app, "no unfinished goal can be cancelled");
         type = "goal_cancelled";
         data = goal_id_data(&app->session);
@@ -577,9 +562,9 @@ snj_app_goal_tool(struct app_state *app,
         if (!snj_json_exact_keys(call->arguments, create_keys, 1u) ||
             !(objective = snj_json_string(call->arguments, "objective")))
             return tool_result(false, "create_goal arguments are invalid", result);
-        if (goal_unfinished(&app->session))
+        if (snj_goal_unfinished(app->session.goal_status))
             return tool_result(false, "an unfinished goal already exists", result);
-        if (!*objective || blank_text(objective) ||
+        if (!*objective || snj_text_blank(objective) ||
             (len = strlen(objective)) > app->config->max_goal_prompt_bytes ||
             len > SNJ_MAX_GOAL_PROMPT ||
             !snj_utf8_valid((const unsigned char *)objective, len, true))
@@ -603,7 +588,7 @@ snj_app_goal_tool(struct app_state *app,
     if (strcmp(action, "rewrite") == 0) {
         size_t len;
         text = snj_json_string(call->arguments, "text");
-        if (!text || !*text || blank_text(text) ||
+        if (!text || !*text || snj_text_blank(text) ||
             (len = strlen(text)) > app->config->max_goal_prompt_bytes ||
             len > SNJ_MAX_GOAL_PROMPT ||
             !snj_utf8_valid((const unsigned char *)text, len, true))
@@ -635,7 +620,7 @@ snj_app_goal_tool(struct app_state *app,
     if (strcmp(action, "block") == 0) {
         size_t len;
         text = snj_json_string(call->arguments, "text");
-        if (!text || !*text || blank_text(text) ||
+        if (!text || !*text || snj_text_blank(text) ||
             (len = strlen(text)) > SNJ_MAX_GOAL_BLOCKER ||
             !snj_utf8_valid((const unsigned char *)text, len, true))
             return tool_result(false,
