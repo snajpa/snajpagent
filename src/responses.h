@@ -9,7 +9,6 @@
 #include <stddef.h>
 
 #define SNJ_MAX_RESPONSE_PARTS 96u
-#define SNJ_MAX_RESPONSE_ANNOTATIONS 1024u
 
 typedef int (*snj_responses_emit_fn)(void *opaque, size_t output_index,
                                      enum snj_item_kind kind,
@@ -21,20 +20,19 @@ enum snj_wire_item_kind {
     SNJ_WIRE_ITEM_NONE,
     SNJ_WIRE_ITEM_MESSAGE,
     SNJ_WIRE_ITEM_FUNCTION_CALL,
-    SNJ_WIRE_ITEM_REASONING,
-    SNJ_WIRE_ITEM_WEB_SEARCH
+    SNJ_WIRE_ITEM_INERT
 };
 
 enum snj_wire_part_kind {
     SNJ_WIRE_PART_NONE,
     SNJ_WIRE_PART_TEXT,
-    SNJ_WIRE_PART_REFUSAL
+    SNJ_WIRE_PART_REFUSAL,
+    SNJ_WIRE_PART_INERT
 };
 
 struct snj_wire_part {
     enum snj_wire_part_kind kind;
     struct snj_buf text;
-    json_t *annotations;
     bool present;
     bool value_seen;
     bool complete;

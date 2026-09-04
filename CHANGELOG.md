@@ -10,8 +10,10 @@
 
 ## 0.9.0-wip
 
-- Added strict support for streamed output-text annotations and reconciled them
-  with response snapshots without changing public assistant text bytes.
+- Replaced per-event Responses compatibility fixes with one bounded protocol
+  rule: strictly decode text, refusals, function calls, success, and failure;
+  discard other `response.*` events and inert provider output without exposing
+  it as assistant text or local tool calls.
 
 - Repaired immediate Enter steering across provider output and managed
   commands. Interrupted visible prefixes now precede an explicit steer

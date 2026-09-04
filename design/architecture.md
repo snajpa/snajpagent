@@ -20,6 +20,15 @@ request. Streaming events update the terminal as they arrive. A final answer,
 refusal, or completed tool cycle closes the turn; it does not close the
 session.
 
+The stream decoder strictly interprets only response creation, output
+structure, public text/refusals, function arguments, and terminal success or
+failure. Other bounded `response.*` records are discarded after envelope
+validation. Unsupported provider output occupies an inert decoder-local index
+and never becomes durable response data or a local action; only exact completed
+registered function calls enter the tool graph. A known successful terminal
+snapshot remains required, while malformed envelopes and unknown non-Responses
+event types fail.
+
 An active persistent goal schedules another ordinary turn after a normal final
 answer. Durable queued user turns take precedence over that continuation.
 Goal turns carry a distinct `input_kind` and a developer continuation marker,

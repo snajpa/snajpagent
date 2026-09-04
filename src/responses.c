@@ -77,137 +77,9 @@ account_bytes(struct snj_responses_stream *stream, size_t extra)
     return 0;
 }
 
-static bool
-annotation_string(const json_t *annotation, const char *name)
-{
-    return json_is_string(json_object_get(annotation, name));
-}
-
-static bool
-annotation_integer(const json_t *annotation, const char *name,
-                   json_int_t *out)
-{
-    json_t *value = json_object_get(annotation, name);
-
-    if (!json_is_integer(value) || json_integer_value(value) < 0)
-        return false;
-    if (out)
-        *out = json_integer_value(value);
-    return true;
-}
-
-static int
-validate_annotation(struct snj_responses_stream *stream,
-                    const json_t *annotation)
-{
-    const char *type;
-    json_int_t start;
-    json_int_t end;
-    bool valid = false;
-
-    if (json_is_null(annotation))
-        return 0;
-    if (!json_is_object(annotation))
-        return stream_fail(stream, EPROTO,
-                           "invalid output text annotation");
-    type = snj_json_string(annotation, "type");
-    if (!type)
-        return stream_fail(stream, EPROTO,
-                           "invalid output text annotation");
-    if (strcmp(type, "file_citation") == 0) {
-        valid = annotation_string(annotation, "file_id") &&
-                annotation_string(annotation, "filename") &&
-                annotation_integer(annotation, "index", NULL);
-    } else if (strcmp(type, "url_citation") == 0) {
-        valid = annotation_integer(annotation, "start_index", &start) &&
-                annotation_integer(annotation, "end_index", &end) &&
-                start <= end && annotation_string(annotation, "title") &&
-                annotation_string(annotation, "url");
-    } else if (strcmp(type, "container_file_citation") == 0) {
-        valid = annotation_string(annotation, "container_id") &&
-                annotation_string(annotation, "file_id") &&
-                annotation_string(annotation, "filename") &&
-                annotation_integer(annotation, "start_index", &start) &&
-                annotation_integer(annotation, "end_index", &end) &&
-                start <= end;
-    } else if (strcmp(type, "file_path") == 0) {
-        valid = annotation_string(annotation, "file_id") &&
-                annotation_integer(annotation, "index", NULL);
-    } else {
-        return stream_fail(stream, ENOTSUP,
-                           "unsupported output text annotation type %s", type);
-    }
-    return valid ? 0 : stream_fail(stream, EPROTO,
-                                   "invalid %s output text annotation", type);
-}
-
-static int
-append_annotation(struct snj_responses_stream *stream,
-                  struct snj_wire_part *part, const json_t *annotation)
-{
-    struct snj_buf encoded;
-    json_t *copy;
-
-    snj_buf_init(&encoded, SNJ_MAX_SSE_EVENT);
-    if (snj_json_canonical(annotation, &encoded) < 0) {
-        snj_buf_free(&encoded);
-        return stream_fail(stream, EOVERFLOW,
-                           "output text annotation exceeds its limit");
-    }
-    if (account_bytes(stream, encoded.len) < 0) {
-        snj_buf_free(&encoded);
-        return -1;
-    }
-    snj_buf_free(&encoded);
-    if (!part->annotations && !(part->annotations = json_array()))
-        return stream_fail(stream, ENOMEM,
-                           "cannot retain output text annotations");
-    copy = json_deep_copy(annotation);
-    if (!copy || json_array_append_new(part->annotations, copy) < 0) {
-        if (!copy)
-            errno = ENOMEM;
-        return stream_fail(stream, ENOMEM,
-                           "cannot retain output text annotation");
-    }
-    return 0;
-}
-
-static int
-reconcile_annotations(struct snj_responses_stream *stream,
-                      struct snj_wire_part *part, const json_t *annotations)
-{
-    size_t count;
-    size_t seen = part->annotations ? json_array_size(part->annotations) : 0u;
-
-    if (!json_is_array(annotations) ||
-        (count = json_array_size(annotations)) > SNJ_MAX_RESPONSE_ANNOTATIONS)
-        return stream_fail(stream, EPROTO,
-                           "invalid output text annotations snapshot");
-    for (size_t i = 0; i < count; ++i)
-        if (validate_annotation(stream, json_array_get(annotations, i)) < 0)
-            return -1;
-    if (seen) {
-        if (seen != count)
-            return stream_fail(stream, EPROTO,
-                               "output text annotations snapshot disagrees");
-        for (size_t i = 0; i < count; ++i)
-            if (!json_equal(json_array_get(part->annotations, i),
-                            json_array_get(annotations, i)))
-                return stream_fail(stream, EPROTO,
-                                   "output text annotation snapshot disagrees");
-        return 0;
-    }
-    for (size_t i = 0; i < count; ++i)
-        if (append_annotation(stream, part,
-                              json_array_get(annotations, i)) < 0)
-            return -1;
-    return 0;
-}
-
 static void
 wire_part_free(struct snj_wire_part *part)
 {
-    json_decref(part->annotations);
     snj_buf_free(&part->text);
     memset(part, 0, sizeof(*part));
 }
@@ -267,8 +139,8 @@ new_item(struct snj_responses_stream *stream, size_t output_index,
     snj_buf_init(&item->arguments, SNJ_MAX_TOOL_ARGUMENTS);
     item->kind = kind;
     item->present = true;
-    if (copy_once(stream, &item->id, id, SNJ_MAX_PROVIDER_ID,
-                  "provider item id") < 0) {
+    if (id && copy_once(stream, &item->id, id, SNJ_MAX_PROVIDER_ID,
+                        "provider item id") < 0) {
         wire_item_free(item);
         return NULL;
     }
@@ -416,7 +288,7 @@ static int
 reconcile_part(struct snj_responses_stream *stream, size_t output_index,
                struct snj_wire_item *item, size_t content_index,
                enum snj_wire_part_kind kind, const char *text,
-               bool create, bool complete)
+               bool complete)
 {
     struct snj_wire_part *part;
     size_t len;
@@ -427,7 +299,7 @@ reconcile_part(struct snj_responses_stream *stream, size_t output_index,
     if (len > SNJ_MAX_PUBLIC_ITEM ||
         !snj_utf8_valid((const unsigned char *)text, len, true))
         return stream_fail(stream, EPROTO, "invalid public snapshot text");
-    part = part_at(stream, item, content_index, kind, create);
+    part = part_at(stream, item, content_index, kind, true);
     if (!part)
         return -1;
     if (part->value_seen) {
@@ -451,7 +323,7 @@ reconcile_part(struct snj_responses_stream *stream, size_t output_index,
 static int
 part_snapshot(struct snj_responses_stream *stream, size_t output_index,
               struct snj_wire_item *item, size_t content_index,
-              const json_t *part, bool create, bool complete)
+              const json_t *part, bool complete)
 {
     const char *type = snj_json_string(part, "type");
     const char *text;
@@ -459,30 +331,25 @@ part_snapshot(struct snj_responses_stream *stream, size_t output_index,
     if (!json_is_object(part) || !type)
         return stream_fail(stream, EPROTO, "invalid message content part");
     if (strcmp(type, "output_text") == 0) {
-        json_t *annotations = json_object_get(part, "annotations");
-        json_t *logprobs = json_object_get(part, "logprobs");
-        struct snj_wire_part *wire_part;
-
         text = snj_json_string(part, "text");
-        if (logprobs && (!json_is_array(logprobs) ||
-                         json_array_size(logprobs) != 0u))
-            return stream_fail(stream, ENOTSUP,
-                               "output text logprobs are unqualified");
-        wire_part = part_at(stream, item, content_index,
-                            SNJ_WIRE_PART_TEXT, create);
-        if (!wire_part || (annotations &&
-            reconcile_annotations(stream, wire_part, annotations) < 0))
-            return -1;
         return reconcile_part(stream, output_index, item, content_index,
-                              SNJ_WIRE_PART_TEXT, text, false, complete);
+                              SNJ_WIRE_PART_TEXT, text, complete);
     }
     if (strcmp(type, "refusal") == 0) {
         text = snj_json_string(part, "refusal");
         return reconcile_part(stream, output_index, item, content_index,
-                              SNJ_WIRE_PART_REFUSAL, text, create, complete);
+                              SNJ_WIRE_PART_REFUSAL, text, complete);
     }
-    return stream_fail(stream, ENOTSUP,
-                       "unsupported message content type %s", type);
+    {
+        struct snj_wire_part *wire_part = part_at(stream, item, content_index,
+                                                  SNJ_WIRE_PART_INERT, true);
+
+        if (!wire_part)
+            return -1;
+        if (complete)
+            wire_part->complete = true;
+        return 0;
+    }
 }
 
 static int
@@ -540,7 +407,7 @@ append_arguments_delta(struct snj_responses_stream *stream,
 
 static int
 message_snapshot(struct snj_responses_stream *stream, size_t output_index,
-                 const json_t *snapshot, bool create, bool complete)
+                 const json_t *snapshot, bool complete)
 {
     const char *id = snj_json_string(snapshot, "id");
     const char *role = snj_json_string(snapshot, "role");
@@ -556,13 +423,9 @@ message_snapshot(struct snj_responses_stream *stream, size_t output_index,
                     strcmp(status, "in_progress") != 0))
         return stream_fail(stream, EPROTO,
                            "invalid assistant message snapshot");
-    if (create) {
-        item = output_index < stream->item_count ?
-               find_item(stream, output_index, id, SNJ_WIRE_ITEM_MESSAGE) :
-               new_item(stream, output_index, SNJ_WIRE_ITEM_MESSAGE, id);
-    } else {
-        item = find_item(stream, output_index, id, SNJ_WIRE_ITEM_MESSAGE);
-    }
+    item = output_index < stream->item_count ?
+           find_item(stream, output_index, id, SNJ_WIRE_ITEM_MESSAGE) :
+           new_item(stream, output_index, SNJ_WIRE_ITEM_MESSAGE, id);
     if (!item)
         return -1;
     if (phase) {
@@ -573,7 +436,7 @@ message_snapshot(struct snj_responses_stream *stream, size_t output_index,
     }
     for (size_t i = 0; i < json_array_size(content); ++i)
         if (part_snapshot(stream, output_index, item, i,
-                          json_array_get(content, i), true, complete) < 0)
+                          json_array_get(content, i), complete) < 0)
             return -1;
     if (complete && item->part_count != json_array_size(content))
         return stream_fail(stream, EPROTO,
@@ -585,7 +448,7 @@ message_snapshot(struct snj_responses_stream *stream, size_t output_index,
 
 static int
 function_snapshot(struct snj_responses_stream *stream, size_t output_index,
-                  const json_t *snapshot, bool create, bool complete)
+                  const json_t *snapshot, bool complete)
 {
     const char *id = snj_json_string(snapshot, "id");
     const char *call_id = snj_json_string(snapshot, "call_id");
@@ -599,15 +462,9 @@ function_snapshot(struct snj_responses_stream *stream, size_t output_index,
                     (strcmp(status, "in_progress") != 0 &&
                      strcmp(status, "completed") != 0)))
         return stream_fail(stream, EPROTO, "invalid function call snapshot");
-    if (create) {
-        item = output_index < stream->item_count ?
-               find_item(stream, output_index, id,
-                         SNJ_WIRE_ITEM_FUNCTION_CALL) :
-               new_item(stream, output_index, SNJ_WIRE_ITEM_FUNCTION_CALL, id);
-    } else {
-        item = find_item(stream, output_index, id,
-                         SNJ_WIRE_ITEM_FUNCTION_CALL);
-    }
+    item = output_index < stream->item_count ?
+           find_item(stream, output_index, id, SNJ_WIRE_ITEM_FUNCTION_CALL) :
+           new_item(stream, output_index, SNJ_WIRE_ITEM_FUNCTION_CALL, id);
     if (!item ||
         copy_once(stream, &item->call_id, call_id, SNJ_MAX_PROVIDER_ID,
                   "provider call id") < 0 ||
@@ -621,96 +478,33 @@ function_snapshot(struct snj_responses_stream *stream, size_t output_index,
 }
 
 static int
-empty_array_member(struct snj_responses_stream *stream, const json_t *snapshot,
-                   const char *name)
+inert_snapshot(struct snj_responses_stream *stream, size_t output_index)
 {
-    json_t *value = json_object_get(snapshot, name);
-
-    if (!json_is_array(value) || json_array_size(value) != 0u)
-        return stream_fail(stream, ENOTSUP,
-                           "reasoning output item contains public %s", name);
-    return 0;
-}
-
-static int
-reasoning_snapshot(struct snj_responses_stream *stream, size_t output_index,
-                   const json_t *snapshot, bool create, bool complete)
-{
-    const char *id = snj_json_string(snapshot, "id");
-    const char *status = snj_json_string(snapshot, "status");
     struct snj_wire_item *item;
 
-    if (!id || (status &&
-        (complete ? strcmp(status, "completed") != 0 :
-                    strcmp(status, "in_progress") != 0)))
-        return stream_fail(stream, EPROTO, "invalid reasoning item snapshot");
-    if (empty_array_member(stream, snapshot, "content") < 0 ||
-        empty_array_member(stream, snapshot, "summary") < 0)
-        return -1;
-    if (create) {
-        item = output_index < stream->item_count ?
-               find_item(stream, output_index, id, SNJ_WIRE_ITEM_REASONING) :
-               new_item(stream, output_index, SNJ_WIRE_ITEM_REASONING, id);
-    } else {
-        item = find_item(stream, output_index, id, SNJ_WIRE_ITEM_REASONING);
+    if (output_index < stream->item_count) {
+        item = &stream->items[output_index];
+        if (!item->present || item->kind != SNJ_WIRE_ITEM_INERT)
+            return stream_fail(stream, EPROTO,
+                               "response item kind or order conflict");
+        return 0;
     }
-    if (!item)
-        return -1;
-    if (complete)
-        item->complete = true;
-    return 0;
-}
-
-static int
-web_search_snapshot(struct snj_responses_stream *stream, size_t output_index,
-                    const json_t *snapshot, bool create, bool complete)
-{
-    const char *id = snj_json_string(snapshot, "id");
-    const char *status = snj_json_string(snapshot, "status");
-    struct snj_wire_item *item;
-
-    if (!id || (status &&
-        (complete ? strcmp(status, "completed") != 0 :
-                    (strcmp(status, "in_progress") != 0 &&
-                     strcmp(status, "searching") != 0 &&
-                     strcmp(status, "completed") != 0))))
-        return stream_fail(stream, EPROTO, "invalid web search item snapshot");
-    if (create) {
-        item = output_index < stream->item_count ?
-               find_item(stream, output_index, id, SNJ_WIRE_ITEM_WEB_SEARCH) :
-               new_item(stream, output_index, SNJ_WIRE_ITEM_WEB_SEARCH, id);
-    } else {
-        item = find_item(stream, output_index, id, SNJ_WIRE_ITEM_WEB_SEARCH);
-    }
-    if (!item)
-        return -1;
-    if (complete || (status && strcmp(status, "completed") == 0))
-        item->complete = true;
-    return 0;
+    return new_item(stream, output_index, SNJ_WIRE_ITEM_INERT, NULL) ? 0 : -1;
 }
 
 static int
 item_snapshot(struct snj_responses_stream *stream, size_t output_index,
-              const json_t *snapshot, bool create, bool complete)
+              const json_t *snapshot, bool complete)
 {
     const char *type = snj_json_string(snapshot, "type");
 
     if (!json_is_object(snapshot) || !type)
         return stream_fail(stream, EPROTO, "invalid response output item");
     if (strcmp(type, "message") == 0)
-        return message_snapshot(stream, output_index, snapshot,
-                                create, complete);
+        return message_snapshot(stream, output_index, snapshot, complete);
     if (strcmp(type, "function_call") == 0)
-        return function_snapshot(stream, output_index, snapshot,
-                                 create, complete);
-    if (strcmp(type, "reasoning") == 0)
-        return reasoning_snapshot(stream, output_index, snapshot,
-                                  create, complete);
-    if (strcmp(type, "web_search_call") == 0)
-        return web_search_snapshot(stream, output_index, snapshot,
-                                   create, complete);
-    return stream_fail(stream, ENOTSUP,
-                       "unsupported response output item type %s", type);
+        return function_snapshot(stream, output_index, snapshot, complete);
+    return inert_snapshot(stream, output_index);
 }
 
 static int
@@ -748,18 +542,6 @@ handle_response_created(struct snj_responses_stream *stream, const json_t *root)
 }
 
 static int
-handle_response_in_progress(struct snj_responses_stream *stream,
-                            const json_t *root)
-{
-    json_t *response = json_object_get(root, "response");
-
-    if (!stream->created)
-        return stream_fail(stream, EPROTO,
-                           "response.in_progress precedes response.created");
-    return response_identity(stream, response, "in_progress");
-}
-
-static int
 handle_output_item(struct snj_responses_stream *stream, const json_t *root,
                    bool complete)
 {
@@ -770,7 +552,7 @@ handle_output_item(struct snj_responses_stream *stream, const json_t *root,
                                        SNJ_MAX_RESPONSE_ITEMS,
                                        &output_index) < 0)
         return -1;
-    return item_snapshot(stream, output_index, item, true, complete);
+    return item_snapshot(stream, output_index, item, complete);
 }
 
 static int
@@ -792,7 +574,7 @@ handle_content_part(struct snj_responses_stream *stream, const json_t *root,
     if (!item)
         return -1;
     return part_snapshot(stream, output_index, item, content_index,
-                         part, true, complete);
+                         part, complete);
 }
 
 static int
@@ -833,41 +615,7 @@ handle_public_done(struct snj_responses_stream *stream, const json_t *root,
         return -1;
     item = find_item(stream, output_index, item_id, SNJ_WIRE_ITEM_MESSAGE);
     return item ? reconcile_part(stream, output_index, item, content_index,
-                                 kind, text, true, true) : -1;
-}
-
-static int
-handle_annotation_added(struct snj_responses_stream *stream,
-                        const json_t *root)
-{
-    const char *item_id = snj_json_string(root, "item_id");
-    json_t *annotation = json_object_get(root, "annotation");
-    size_t output_index;
-    size_t content_index;
-    size_t annotation_index_value;
-    size_t count;
-    struct snj_wire_item *item;
-    struct snj_wire_part *part;
-
-    if (json_index(stream, root, "output_index", SNJ_MAX_RESPONSE_ITEMS,
-                   &output_index) < 0 ||
-        json_index(stream, root, "content_index", SNJ_MAX_RESPONSE_PARTS,
-                   &content_index) < 0 ||
-        json_index(stream, root, "annotation_index",
-                   SNJ_MAX_RESPONSE_ANNOTATIONS, &annotation_index_value) < 0)
-        return -1;
-    item = find_item(stream, output_index, item_id, SNJ_WIRE_ITEM_MESSAGE);
-    part = item ? part_at(stream, item, content_index,
-                          SNJ_WIRE_PART_TEXT, false) : NULL;
-    if (!part)
-        return -1;
-    count = part->annotations ? json_array_size(part->annotations) : 0u;
-    if (part->complete || annotation_index_value != count)
-        return stream_fail(stream, EPROTO,
-                           "invalid output text annotation order");
-    if (validate_annotation(stream, annotation) < 0)
-        return -1;
-    return append_annotation(stream, part, annotation);
+                                 kind, text, true) : -1;
 }
 
 static int
@@ -900,26 +648,6 @@ handle_arguments_done(struct snj_responses_stream *stream, const json_t *root)
     item = find_item(stream, output_index, item_id,
                      SNJ_WIRE_ITEM_FUNCTION_CALL);
     return item ? reconcile_arguments(stream, item, arguments, true) : -1;
-}
-
-static int
-handle_web_search_call_event(struct snj_responses_stream *stream,
-                             const json_t *root, bool complete)
-{
-    const char *item_id = snj_json_string(root, "item_id");
-    size_t output_index;
-    struct snj_wire_item *item;
-
-    if (!stream->created ||
-        json_index(stream, root, "output_index", SNJ_MAX_RESPONSE_ITEMS,
-                   &output_index) < 0)
-        return -1;
-    item = find_item(stream, output_index, item_id, SNJ_WIRE_ITEM_WEB_SEARCH);
-    if (!item)
-        return -1;
-    if (complete)
-        item->complete = true;
-    return 0;
 }
 
 static int
@@ -997,7 +725,7 @@ handle_response_completed(struct snj_responses_stream *stream,
                                "invalid terminal response output");
         for (size_t i = 0; i < json_array_size(output); ++i)
             if (item_snapshot(stream, i, json_array_get(output, i),
-                              true, true) < 0)
+                              true) < 0)
                 return -1;
     }
     stream->terminal = true;
@@ -1031,8 +759,6 @@ dispatch_event(struct snj_responses_stream *stream, const char *type,
         return 0;
     if (strcmp(type, "response.created") == 0)
         return handle_response_created(stream, root);
-    if (strcmp(type, "response.in_progress") == 0)
-        return handle_response_in_progress(stream, root);
     if (strcmp(type, "response.output_item.added") == 0)
         return handle_output_item(stream, root, false);
     if (strcmp(type, "response.output_item.done") == 0)
@@ -1045,8 +771,6 @@ dispatch_event(struct snj_responses_stream *stream, const char *type,
         return handle_public_delta(stream, root, SNJ_WIRE_PART_TEXT);
     if (strcmp(type, "response.output_text.done") == 0)
         return handle_public_done(stream, root, SNJ_WIRE_PART_TEXT);
-    if (strcmp(type, "response.output_text.annotation.added") == 0)
-        return handle_annotation_added(stream, root);
     if (strcmp(type, "response.refusal.delta") == 0)
         return handle_public_delta(stream, root, SNJ_WIRE_PART_REFUSAL);
     if (strcmp(type, "response.refusal.done") == 0)
@@ -1055,21 +779,14 @@ dispatch_event(struct snj_responses_stream *stream, const char *type,
         return handle_arguments_delta(stream, root);
     if (strcmp(type, "response.function_call_arguments.done") == 0)
         return handle_arguments_done(stream, root);
-    if (strcmp(type, "response.web_search_call.in_progress") == 0 ||
-        strcmp(type, "response.web_search_call.searching") == 0)
-        return handle_web_search_call_event(stream, root, false);
-    if (strcmp(type, "response.web_search_call.completed") == 0)
-        return handle_web_search_call_event(stream, root, true);
     if (strcmp(type, "response.completed") == 0)
         return handle_response_completed(stream, root);
     if (strcmp(type, "response.failed") == 0 ||
         strcmp(type, "response.incomplete") == 0 ||
         strcmp(type, "error") == 0)
         return handle_provider_failure(stream, root, type);
-    if (strstr(type, "reasoning") || strstr(type, "summary"))
-        return stream_fail(stream, ENOTSUP,
-                           "reasoning stream event is not yet qualified: %s",
-                           type);
+    if (strncmp(type, "response.", sizeof("response.") - 1u) == 0)
+        return 0;
     return stream_fail(stream, ENOTSUP,
                        "unknown Responses stream event: %s", type);
 }
@@ -1135,6 +852,7 @@ build_message(struct snj_responses_stream *stream,
     enum snj_wire_part_kind kind;
     enum snj_item_phase phase;
     struct snj_buf text;
+    size_t public_parts = 0u;
     int rc;
 
     phase = item->phase ? phase_value(item->phase) : SNJ_PHASE_COMMENTARY;
@@ -1142,16 +860,31 @@ build_message(struct snj_responses_stream *stream,
         phase == SNJ_PHASE_NONE)
         return stream_fail(stream, EPROTO,
                            "assistant message did not complete coherently");
-    kind = item->parts[0].kind;
+    kind = SNJ_WIRE_PART_NONE;
     snj_buf_init(&text, SNJ_MAX_PUBLIC_ITEM + 1u);
     for (size_t i = 0; i < item->part_count; ++i) {
         const struct snj_wire_part *part = &item->parts[i];
-        if (part->kind != kind || !part->complete ||
+
+        if (!part->complete) {
+            snj_buf_free(&text);
+            return stream_fail(stream, EPROTO,
+                               "assistant message has mixed or invalid content");
+        }
+        if (part->kind == SNJ_WIRE_PART_INERT)
+            continue;
+        if (kind == SNJ_WIRE_PART_NONE)
+            kind = part->kind;
+        if (part->kind != kind ||
             snj_buf_append(&text, part->text.data, part->text.len) < 0) {
             snj_buf_free(&text);
             return stream_fail(stream, EPROTO,
                                "assistant message has mixed or invalid content");
         }
+        ++public_parts;
+    }
+    if (kind == SNJ_WIRE_PART_NONE) {
+        snj_buf_free(&text);
+        return 0;
     }
     if (!text.len || snj_buf_terminate(&text) < 0) {
         snj_buf_free(&text);
@@ -1159,7 +892,7 @@ build_message(struct snj_responses_stream *stream,
                            "assistant message is empty or oversized");
     }
     if (kind == SNJ_WIRE_PART_REFUSAL) {
-        if (item->part_count != 1u ||
+        if (public_parts != 1u ||
             (item->phase && phase != SNJ_PHASE_FINAL_ANSWER)) {
             snj_buf_free(&text);
             return stream_fail(stream, EPROTO,
@@ -1267,19 +1000,7 @@ snj_responses_stream_finish(struct snj_responses_stream *stream,
         } else if (item->kind == SNJ_WIRE_ITEM_FUNCTION_CALL) {
             if (build_call(stream, &staged, item) < 0)
                 goto staged_out;
-        } else if (item->kind == SNJ_WIRE_ITEM_REASONING) {
-            if (!item->complete) {
-                (void)stream_fail(stream, EPROTO,
-                                  "reasoning item did not complete coherently");
-                goto staged_out;
-            }
-        } else if (item->kind == SNJ_WIRE_ITEM_WEB_SEARCH) {
-            if (!item->complete) {
-                (void)stream_fail(stream, EPROTO,
-                                  "web search item did not complete coherently");
-                goto staged_out;
-            }
-        } else {
+        } else if (item->kind != SNJ_WIRE_ITEM_INERT) {
             (void)stream_fail(stream, EPROTO,
                               "response output item has no recognized kind");
             goto staged_out;
