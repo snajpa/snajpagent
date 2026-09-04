@@ -46,24 +46,11 @@ mark_sigwinch(int signal_number)
 }
 
 
-static size_t
-utf8_size(unsigned char first)
-{
-    if (first < 0x80u)
-        return 1u;
-    if (first >= 0xc2u && first <= 0xdfu)
-        return 2u;
-    if (first >= 0xe0u && first <= 0xefu)
-        return 3u;
-    if (first >= 0xf0u && first <= 0xf4u)
-        return 4u;
-    return 0u;
-}
 
 static size_t
 decode_utf8(const unsigned char *s, size_t len, uint32_t *cp)
 {
-    size_t need = utf8_size(s[0]);
+    size_t need = snj_utf8_size(s[0]);
     uint32_t value;
 
     if (!need || len < need)
@@ -680,14 +667,14 @@ static int
 prepare_spinner(struct snj_term_spinner *spinner, const char *value)
 {
     size_t pos = value[0] == '\\' && value[1] == '0' ? 2u :
-                 utf8_size((unsigned char)value[0]);
+                 snj_utf8_size((unsigned char)value[0]);
 
     memset(spinner, 0, sizeof(*spinner));
     spinner->value = value;
     spinner->inactive_len = value[0] == '\\' && value[1] == '0' ? 0u :
                             (unsigned char)pos;
     while (value[pos]) {
-        size_t n = utf8_size((unsigned char)value[pos]);
+        size_t n = snj_utf8_size((unsigned char)value[pos]);
 
         if (!n || spinner->frame_count >= 16u)
             return -1;
@@ -1690,7 +1677,7 @@ next_cp(const unsigned char *s, size_t len, size_t pos)
 
     if (pos >= len)
         return len;
-    n = utf8_size(s[pos]);
+    n = snj_utf8_size(s[pos]);
     return n && n <= len - pos ? pos + n : pos + 1u;
 }
 
@@ -2070,7 +2057,7 @@ feed_text_byte(struct snj_term *term, unsigned char byte)
         return -1;
     }
     term->utf8_pending[term->utf8_pending_len++] = byte;
-    expected = utf8_size(term->utf8_pending[0]);
+    expected = snj_utf8_size(term->utf8_pending[0]);
     if (!expected || term->utf8_pending_len > expected) {
         term->utf8_pending_len = 0u;
         errno = EILSEQ;

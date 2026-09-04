@@ -129,22 +129,6 @@ key_redaction(const char *key, size_t len)
     return NULL;
 }
 
-struct key_ref {
-    const char *name;
-    size_t len;
-};
-
-static int
-key_compare(const void *left, const void *right)
-{
-    const struct key_ref *a = left;
-    const struct key_ref *b = right;
-    size_t n = a->len < b->len ? a->len : b->len;
-    int cmp = memcmp(a->name, b->name, n);
-    if (cmp)
-        return cmp;
-    return (a->len > b->len) - (a->len < b->len);
-}
 
 static int encode_value(const json_t *value,
                         const struct snj_wire_secrets *secrets,
@@ -165,7 +149,7 @@ encode_object(const json_t *value, const struct snj_wire_secrets *secrets,
               struct snj_buf *out, unsigned int depth)
 {
     size_t count = json_object_size(value);
-    struct key_ref *keys = NULL;
+    struct snj_key_ref *keys = NULL;
     void *iter;
     size_t used = 0u;
     int rc = -1;
@@ -196,7 +180,7 @@ encode_object(const json_t *value, const struct snj_wire_secrets *secrets,
     if (used != count)
         goto out;
     if (count)
-        qsort(keys, count, sizeof(*keys), key_compare);
+        qsort(keys, count, sizeof(*keys), snj_key_ref_compare);
     if (snj_buf_putc(out, '{') < 0)
         goto out;
     for (size_t i = 0; i < count; ++i) {
@@ -368,75 +352,4 @@ snj_wire_header_redact(const unsigned char *line, size_t len,
     }
     return append_redacted(out, line + value_start, len - value_start,
                            secrets, false);
-}
-
-int
-snj_wire_url_redact(const char *url, const struct snj_wire_secrets *secrets,
-                    struct snj_buf *out)
-{
-    size_t len;
-    const char *query;
-
-    if (!url || !out || secrets_valid(secrets) < 0 ||
-        (len = strlen(url)) == 0u || len > SNJ_WIRE_URL_MAX ||
-        !snj_utf8_valid((const unsigned char *)url, len, true)) {
-        errno = EINVAL;
-        return -1;
-    }
-    snj_buf_reset(out);
-    query = strchr(url, '?');
-    if (!query)
-        return append_redacted(out, (const unsigned char *)url, len,
-                               secrets, false);
-    if (append_redacted(out, (const unsigned char *)url,
-                        (size_t)(query - url + 1), secrets, false) < 0)
-        return -1;
-    for (const char *p = query + 1; *p;) {
-        const char *end = strchr(p, '&');
-        const char *eq;
-        size_t field_len;
-        if (!end)
-            end = url + len;
-        field_len = (size_t)(end - p);
-        eq = memchr(p, '=', field_len);
-        if (eq) {
-            if (append_redacted(out, (const unsigned char *)p,
-                                (size_t)(eq - p + 1), secrets, false) < 0 ||
-                snj_buf_append(out, "<redacted:query>", 16u) < 0)
-                return -1;
-        } else if (append_redacted(out, (const unsigned char *)p,
-                                   field_len, secrets, false) < 0) {
-            return -1;
-        }
-        if (*end == '&') {
-            if (snj_buf_putc(out, '&') < 0)
-                return -1;
-            p = end + 1;
-        } else {
-            break;
-        }
-    }
-    return 0;
-}
-
-int
-snj_wire_body_metadata(const char *media_type, const void *data, size_t len,
-                       struct snj_buf *out)
-{
-    char digest[SNJ_SHA256_HEX_LEN + 1u];
-    size_t media_len;
-
-    if (!media_type || !out || (!data && len) ||
-        (media_len = strlen(media_type)) == 0u || media_len > 256u) {
-        errno = EINVAL;
-        return -1;
-    }
-    snj_sha256_hex(data, len, digest);
-    snj_buf_reset(out);
-    if (snj_buf_append(out, "<non-json media-type=", 21u) < 0 ||
-        append_redacted(out, (const unsigned char *)media_type, media_len,
-                        NULL, false) < 0 ||
-        snj_buf_printf(out, " bytes=%zu sha256=%s>", len, digest) < 0)
-        return -1;
-    return 0;
 }

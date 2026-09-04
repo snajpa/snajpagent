@@ -20,6 +20,11 @@ struct snj_buf {
     size_t max;
 };
 
+struct snj_key_ref {
+    const char *name;
+    size_t len;
+};
+
 void snj_buf_init(struct snj_buf *buf, size_t max);
 void snj_buf_reset(struct snj_buf *buf);
 void snj_buf_free(struct snj_buf *buf);
@@ -32,6 +37,9 @@ int snj_buf_terminate(struct snj_buf *buf);
 void snj_errorf(char *error, size_t size, const char *fmt, ...);
 
 bool snj_size_add(size_t a, size_t b, size_t *out);
+size_t snj_utf8_size(unsigned char first);
+int snj_key_ref_compare(const void *left, const void *right);
+int snj_fd_cloexec(int fd);
 bool snj_utf8_valid(const unsigned char *s, size_t len, bool reject_nul);
 bool snj_text_blank(const char *text);
 int snj_random_id(char out[SNJ_ID_HEX_LEN + 1u]);

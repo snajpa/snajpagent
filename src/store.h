@@ -207,8 +207,5 @@ int snj_session_each_event(struct snj_session *session,
 int snj_session_commit(struct snj_session *session, const char *type,
                        json_t *data, uint64_t *written_seq,
                        char *error, size_t error_size);
-int snj_session_append(struct snj_session *session, const char *type,
-                       json_t *data, uint64_t *written_seq,
-                       char *error, size_t error_size);
 
 #endif

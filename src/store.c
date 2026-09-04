@@ -18,14 +18,6 @@
 #define SNJ_EVENT_LIMIT UINT64_C(1000000)
 #define SNJ_EVENT_RESERVE UINT64_C(256)
 static int
-set_cloexec(int fd)
-{
-    int flags = fcntl(fd, F_GETFD);
-    if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
-        return -1;
-    return 0;
-}
-static int
 open_dir_path(const char *path)
 {
     int flags = O_RDONLY | O_DIRECTORY;
@@ -276,7 +268,7 @@ lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
         snj_errorf(error, error_size, "cannot open session lock: %s", strerror(errno));
         return -1;
     }
-    if (set_cloexec(fd) < 0 ||
+    if (snj_fd_cloexec(fd) < 0 ||
         snj_store_verify_private_fd(fd, false, "session lock", error, error_size) < 0) {
         (void)close(fd);
         return -1;
@@ -314,7 +306,7 @@ snj_store_open_session_files(struct snj_session *session, bool create,
         snj_errorf(error, error_size, "cannot open event log: %s", strerror(errno));
         return -1;
     }
-    if (set_cloexec(session->log_fd) < 0 ||
+    if (snj_fd_cloexec(session->log_fd) < 0 ||
         snj_store_verify_private_fd(session->log_fd, false, "event log",
                           error, error_size) < 0)
         return -1;
@@ -325,7 +317,7 @@ snj_store_open_session_files(struct snj_session *session, bool create,
     }
     return 0;
 }
-int
+static int
 snj_session_append(struct snj_session *session, const char *type, json_t *data,
                    uint64_t *written_seq, char *error, size_t error_size)
 {

@@ -165,14 +165,6 @@ absolute_dir_arg_valid(const char *path)
            stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static int
-set_cloexec(int fd)
-{
-    int flags = fcntl(fd, F_GETFD);
-    if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
-        return -1;
-    return 0;
-}
 
 static int
 set_nonblock(int fd)
@@ -188,7 +180,7 @@ make_pipe(int p[2])
 {
     if (pipe(p) < 0)
         return -1;
-    if (set_cloexec(p[0]) < 0 || set_cloexec(p[1]) < 0) {
+    if (snj_fd_cloexec(p[0]) < 0 || snj_fd_cloexec(p[1]) < 0) {
         int saved = errno;
         (void)close(p[0]);
         (void)close(p[1]);
@@ -1321,7 +1313,7 @@ run_exec_command_managed(const char *command, const char *workdir,
                       strerror(errno));
             goto out;
         }
-        if (set_cloexec(pty_master) < 0 || set_cloexec(pty_slave) < 0 ||
+        if (snj_fd_cloexec(pty_master) < 0 || snj_fd_cloexec(pty_slave) < 0 ||
             set_nonblock(pty_master) < 0) {
             snj_errorf(error, error_size, "cannot configure tool PTY: %s",
                       strerror(errno));

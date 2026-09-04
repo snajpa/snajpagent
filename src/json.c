@@ -7,23 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct key_ref {
-    const char *name;
-    size_t len;
-};
-
-static int
-key_compare(const void *left, const void *right)
-{
-    const struct key_ref *a = left;
-    const struct key_ref *b = right;
-    size_t n = a->len < b->len ? a->len : b->len;
-    int cmp = memcmp(a->name, b->name, n);
-
-    if (cmp)
-        return cmp;
-    return (a->len > b->len) - (a->len < b->len);
-}
 
 static int
 encode_string(struct snj_buf *out, const char *s, size_t len)
@@ -58,7 +41,7 @@ static int
 encode_object(const json_t *value, struct snj_buf *out, unsigned int depth)
 {
     size_t count = json_object_size(value);
-    struct key_ref *keys = NULL;
+    struct snj_key_ref *keys = NULL;
     void *iter;
     size_t i = 0;
     int rc = -1;
@@ -88,7 +71,7 @@ encode_object(const json_t *value, struct snj_buf *out, unsigned int depth)
     if (i != count)
         goto out;
     if (count)
-        qsort(keys, count, sizeof(*keys), key_compare);
+        qsort(keys, count, sizeof(*keys), snj_key_ref_compare);
     if (snj_buf_putc(out, '{') < 0)
         goto out;
     for (i = 0; i < count; ++i) {

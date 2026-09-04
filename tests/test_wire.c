@@ -127,24 +127,6 @@ test_headers(void)
     snj_buf_free(&out);
 }
 
-static void
-test_url_and_metadata(void)
-{
-    struct snj_buf out;
-    static const char bytes[] = "not json";
-
-    snj_buf_init(&out, SNJ_WIRE_BODY_MAX);
-    assert(snj_wire_url_redact("https://example.test/x?a=one&token=two&flag",
-                               NULL, &out) == 0);
-    expect_text(&out,
-        "https://example.test/x?a=<redacted:query>&token=<redacted:query>&flag");
-    assert(snj_wire_body_metadata("application/octet-stream", bytes,
-                                  sizeof(bytes) - 1u, &out) == 0);
-    assert(contains(&out, "bytes=8", 7u));
-    assert(contains(&out, "sha256=", 7u));
-    assert(!contains(&out, bytes, sizeof(bytes) - 1u));
-    snj_buf_free(&out);
-}
 
 int
 main(void)
@@ -154,7 +136,6 @@ main(void)
     test_invalid_json();
     test_secret_object_key_fails_closed();
     test_headers();
-    test_url_and_metadata();
     puts("test_wire: ok");
     return 0;
 }

@@ -29,6 +29,7 @@ struct snj_context_projection {
     char count_request_sha256[SNJ_SHA256_HEX_LEN + 1u];
 };
 
+json_t *snj_context_reasoning_settings(const char *effort);
 void snj_context_projection_init(struct snj_context_projection *projection);
 void snj_context_projection_free(struct snj_context_projection *projection);
 int snj_context_usage_anchor_bound(

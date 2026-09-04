@@ -1391,8 +1391,8 @@ tool_schemas(const char *active_handle, bool goal_active,
     return tools;
 }
 
-static json_t *
-reasoning_settings(const char *effort)
+json_t *
+snj_context_reasoning_settings(const char *effort)
 {
     json_t *settings = json_object();
 
@@ -1561,7 +1561,7 @@ create_request_object(struct context_builder *builder)
         snj_json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
         snj_json_set_new(request, "model", json_string(builder->model)) < 0 ||
         snj_json_set_new(request, "parallel_tool_calls", json_false()) < 0 ||
-        snj_json_set_new(request, "reasoning", reasoning_settings(builder->effort)) < 0 ||
+        snj_json_set_new(request, "reasoning", snj_context_reasoning_settings(builder->effort)) < 0 ||
         snj_json_set_new(request, "store", json_false()) < 0 ||
         snj_json_set_new(request, "stream", json_true()) < 0 ||
         snj_json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
@@ -1597,7 +1597,7 @@ count_request_object(struct context_builder *builder)
         snj_json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
         snj_json_set_new(request, "model", json_string(builder->model)) < 0 ||
         snj_json_set_new(request, "parallel_tool_calls", json_false()) < 0 ||
-        snj_json_set_new(request, "reasoning", reasoning_settings(builder->effort)) < 0 ||
+        snj_json_set_new(request, "reasoning", snj_context_reasoning_settings(builder->effort)) < 0 ||
         snj_json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
         snj_json_set_new(request, "tools",
                      tool_schemas(builder->active_process_handle,

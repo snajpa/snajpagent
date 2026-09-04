@@ -23,6 +23,37 @@ snj_errorf(char *error, size_t size, const char *fmt, ...)
     va_end(ap);
 }
 
+size_t
+snj_utf8_size(unsigned char first)
+{
+    if (first < 0x80u)
+        return 1u;
+    if (first >= 0xc2u && first <= 0xdfu)
+        return 2u;
+    if (first >= 0xe0u && first <= 0xefu)
+        return 3u;
+    return first >= 0xf0u && first <= 0xf4u ? 4u : 0u;
+}
+
+int
+snj_key_ref_compare(const void *left, const void *right)
+{
+    const struct snj_key_ref *a = left;
+    const struct snj_key_ref *b = right;
+    size_t n = a->len < b->len ? a->len : b->len;
+    int cmp = memcmp(a->name, b->name, n);
+
+    return cmp ? cmp : (a->len > b->len) - (a->len < b->len);
+}
+
+int
+snj_fd_cloexec(int fd)
+{
+    int flags = fcntl(fd, F_GETFD);
+
+    return flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0 ? -1 : 0;
+}
+
 bool
 snj_size_add(size_t a, size_t b, size_t *out)
 {

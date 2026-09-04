@@ -2826,11 +2826,6 @@ snj_irc_operator_nick(const struct snj_irc *irc)
         irc->links[1].accepted_nick : irc->operator_nick;
 }
 
-const char *
-snj_irc_room_name(const struct snj_irc *irc)
-{
-    return irc ? irc->room : NULL;
-}
 
 static bool
 text_mentions_nick(const char *text, const char *nick)

@@ -23,10 +23,5 @@ int snj_wire_json_redact(const unsigned char *data, size_t len,
 int snj_wire_header_redact(const unsigned char *line, size_t len,
                            const struct snj_wire_secrets *secrets,
                            struct snj_buf *out);
-int snj_wire_url_redact(const char *url,
-                        const struct snj_wire_secrets *secrets,
-                        struct snj_buf *out);
-int snj_wire_body_metadata(const char *media_type, const void *data, size_t len,
-                           struct snj_buf *out);
 
 #endif

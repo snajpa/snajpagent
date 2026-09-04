@@ -231,20 +231,6 @@ build_compaction_request(struct app_state *app, bool active_prefix,
 }
 
 static json_t *
-reasoning_settings(const char *effort)
-{
-    json_t *settings = json_object();
-
-    if (!settings ||
-        snj_json_set_new(settings, "effort", json_string(effort)) < 0) {
-        if (settings)
-            json_decref(settings);
-        return NULL;
-    }
-    return settings;
-}
-
-static json_t *
 responses_compact_create_request(const json_t *compact_request,
                                  const char *model, const char *effort,
                                  const struct snj_model_capacity *capacity)
@@ -278,7 +264,7 @@ responses_compact_create_request(const json_t *compact_request,
     input_copy = NULL;
     if (snj_json_set_new(request, "model", json_string(model)) < 0 ||
         snj_json_set_new(request, "parallel_tool_calls", json_false()) < 0 ||
-        snj_json_set_new(request, "reasoning", reasoning_settings(effort)) < 0 ||
+        snj_json_set_new(request, "reasoning", snj_context_reasoning_settings(effort)) < 0 ||
         snj_json_set_new(request, "store", json_false()) < 0 ||
         snj_json_set_new(request, "stream", json_true()) < 0 ||
         snj_json_set_new(request, "tool_choice", json_string("none")) < 0 ||
