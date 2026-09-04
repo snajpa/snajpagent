@@ -194,6 +194,18 @@ main(void)
     result = snj_tool_result_outcome_unknown("owner_lost");
     assert(result && snj_tool_result_valid(result) == 0);
     json_decref(result);
+    result = snj_tool_result_terminal(true, "bounded");
+    assert(result);
+    assert(snj_json_set_new(result, "max_output_tokens",
+                            json_integer(1)) == 0);
+    assert(snj_tool_result_valid(result) == 0);
+    assert(json_object_set_new(result, "max_output_tokens",
+                               json_integer(0)) == 0);
+    assert(snj_tool_result_valid(result) < 0);
+    assert(json_object_set_new(result, "max_output_tokens",
+                               json_integer(4000000001LL)) == 0);
+    assert(snj_tool_result_valid(result) < 0);
+    json_decref(result);
 
     {
         struct snj_response_usage usage = {

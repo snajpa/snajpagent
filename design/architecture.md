@@ -231,12 +231,19 @@ the process. Timeout expiry and steering handoff never signal or kill the
 command. Explicit user interruption and required turn/session closure retain
 their existing cancellation behavior.
 
-Tool stdout and stderr are redacted before capture, retained without a
-tool-specific length cutoff, and supplied completely to the next model cycle.
+Tool stdout and stderr are redacted before capture and retained without a
+tool-specific length cutoff. `exec_command` and `write_stdin` require the
+model to select a positive `max_output_tokens` or explicitly use `null` for
+the configured `[tool] default_max_output_tokens` (4000 by default). The
+resolved value is recorded in the durable result so replay is independent of
+later configuration. Model-context projection preserves a valid-UTF-8 head
+and tail plus digest/provenance when the selected conservative
+one-token-per-UTF-8-byte bound permits; it does not call bytes an exact token
+count.
 `[tool] max_output_bytes` is presentation-only: it limits the number of
 model-result UTF-8 bytes shown for each tool call, while `0` (the default)
-shows the complete result. It never truncates the durable result or the output
-given to the model.
+shows the complete result. It never truncates the durable result or changes
+the independently bounded model-context projection.
 
 ## Rendering
 

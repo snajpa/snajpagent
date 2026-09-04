@@ -2189,6 +2189,8 @@ execute_calls(struct app_state *app, const char *turn_id,
                 if (!result)
                     result = snj_tool_result_not_run("turn_cancelled");
                 if (!result ||
+                    snj_tools_attach_output_limit(call, app->config,
+                                                  result) < 0 ||
                     commit_pending_result(app, turn_id, call->call_id, result,
                                           error, error_size) < 0 ||
                     terminalize_pending(app, turn_id, "turn_cancelled",
@@ -2215,6 +2217,12 @@ execute_calls(struct app_state *app, const char *turn_id,
         }
         if (!result)
             return -1;
+        if (snj_tools_attach_output_limit(call, app->config, result) < 0) {
+            json_decref(result);
+            set_error(error, error_size,
+                      "command output token limit could not be retained");
+            return -1;
+        }
         {
             const char *status = snj_json_string(result, "status");
             bool yielded = status && strcmp(status, "running") == 0;

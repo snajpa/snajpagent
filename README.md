@@ -546,13 +546,21 @@ expires, the command continues in the background and the model receives its
 live handle through the same continuation used for urgent steering and IRC
 mentions; timeout never kills the process. The configured `max_timeout_ms` is
 both the tool-schema and runtime ceiling. Tool output is captured completely
-for the model; `max_output_bytes` limits only how many result bytes each call
-displays, and defaults to unlimited with `0`:
+in the durable event log. Every `exec_command` and `write_stdin` call must
+choose a positive `max_output_tokens` context limit or use `null` for
+`default_max_output_tokens`, which defaults to 4000. Because command results
+are available before any provider token-count request, the limit is enforced
+as a conservative one-token-per-retained-UTF-8-byte upper bound and persisted
+with the result for stable replay. When the selected budget permits, truncated
+context includes the beginning, end, digest, and durable-event notice. This is
+separate from `max_output_bytes`, which limits only terminal display and
+defaults to unlimited with `0`:
 
 ```ini
 [tool]
 default_timeout_ms = 0
 max_timeout_ms = 86400000
+default_max_output_tokens = 4000
 max_output_bytes = 0
 ```
 

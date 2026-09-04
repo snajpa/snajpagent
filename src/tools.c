@@ -82,6 +82,7 @@ struct managed_process {
     int child_status;
     uint64_t started_ms;
     uint64_t deadline_ms;
+    uint32_t max_output_tokens;
     struct managed_secret_set secrets;
     struct capture_stream stdout_stream;
     struct capture_stream stderr_stream;
@@ -1047,7 +1048,13 @@ managed_make_result(struct managed_process *proc, const char *status,
 
     *result = result_json(status, reason, exit_code, signal_number, duration,
                           handle, &proc->stdout_stream, &proc->stderr_stream);
-    if (!*result) {
+    if (!*result ||
+        result_set(*result, "max_output_tokens",
+                   json_integer((json_int_t)proc->max_output_tokens)) < 0) {
+        if (*result) {
+            json_decref(*result);
+            *result = NULL;
+        }
         set_error(error, error_size, "cannot allocate tool result");
         return -1;
     }
@@ -1294,7 +1301,8 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
 static int
 run_exec_command_managed(const char *command, const char *workdir,
                          const char *stdin_text, uint32_t timeout_ms,
-                         uint32_t yield_ms, bool pty,
+                         uint32_t yield_ms, uint32_t max_output_tokens,
+                         bool pty,
                          const struct snj_config *config,
                          const struct snj_credential *credential,
                          snj_tool_pump_fn pump, void *pump_opaque,
@@ -1407,6 +1415,7 @@ run_exec_command_managed(const char *command, const char *workdir,
     proc->stderr_open = !pty;
     proc->started_ms = snj_time_ms();
     proc->deadline_ms = saturating_deadline(proc->started_ms, timeout_ms);
+    proc->max_output_tokens = max_output_tokens;
     if (snj_random_id(proc->handle) < 0) {
         set_error(error, error_size, "cannot allocate managed process handle");
         goto out_active;
@@ -1453,10 +1462,12 @@ run_write_stdin(const struct snj_response_item *call,
     uint32_t yield_ms;
     bool eof;
     bool terminate;
+    uint32_t max_output_tokens;
     struct managed_process *proc = &managed_process;
     size_t len;
     static const char *const keys[] = {
-        "data", "eof", "handle", "terminate", "yield_ms"
+        "data", "eof", "handle", "terminate", "yield_ms",
+        "max_output_tokens"
     };
 
     if (!handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN)) {
@@ -1464,27 +1475,32 @@ run_write_stdin(const struct snj_response_item *call,
         errno = EINVAL;
         return -1;
     }
-    if (!proc->active || strcmp(proc->handle, handle) != 0) {
-        *result = simple_result("failed", NULL,
-            "No active managed process matches the supplied handle.", 1,
-            NULL);
+    if (!snj_json_exact_keys(call->arguments, keys, 6u) ||
+        !text_arg_valid(data, SNJ_TOOL_STDIN_MAX) ||
+        !json_bool_member(call->arguments, "eof", false, &eof) ||
+        !json_bool_member(call->arguments, "terminate", false, &terminate) ||
+        !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
+                         0u, SNJ_TOOL_YIELD_MAX_MS, &yield_ms) ||
+        !json_u32_member(call->arguments, "max_output_tokens",
+                         config->default_max_output_tokens, 1u,
+                         (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
+                         &max_output_tokens)) {
+        *result = simple_result(proc->active ? "running" : "failed", NULL,
+            "The write_stdin interaction was rejected because its arguments "
+            "were invalid; the managed process was not modified.",
+            proc->active ? -1 : 1, proc->active ? proc->handle : NULL);
         if (!*result) {
+            managed_cleanup();
             set_error(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
     }
-    if (!snj_json_exact_keys(call->arguments, keys, 5u) ||
-        !text_arg_valid(data, SNJ_TOOL_STDIN_MAX) ||
-        !json_bool_member(call->arguments, "eof", false, &eof) ||
-        !json_bool_member(call->arguments, "terminate", false, &terminate) ||
-        !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
-                         0u, SNJ_TOOL_YIELD_MAX_MS, &yield_ms)) {
-        *result = simple_result("running", NULL,
-            "The write_stdin interaction was rejected because its arguments were invalid; the managed process was not modified.",
-            -1, proc->handle);
+    if (!proc->active || strcmp(proc->handle, handle) != 0) {
+        *result = simple_result("failed", NULL,
+            "No active managed process matches the supplied handle.", 1,
+            NULL);
         if (!*result) {
-            managed_cleanup();
             set_error(error, error_size, "cannot allocate tool result");
             return -1;
         }
@@ -1502,6 +1518,7 @@ run_write_stdin(const struct snj_response_item *call,
         }
         return 0;
     }
+    proc->max_output_tokens = max_output_tokens;
     if (terminate)
         return snj_tools_close_managed(handle, false, pump, pump_opaque,
                                        result, error, error_size);
@@ -1533,10 +1550,16 @@ run_exec_command(const struct snj_response_item *call,
     const char *stdin_text = json_nullable_string(call->arguments, "stdin");
     uint32_t timeout_ms;
     uint32_t yield_ms;
+    uint32_t max_output_tokens;
     bool pty;
+    static const char *const keys[] = {
+        "command", "max_output_tokens", "pty", "stdin", "timeout_ms",
+        "workdir", "yield_ms"
+    };
 
     (void)session_workspace;
-    if (!text_arg_valid(command, SNJ_TOOL_COMMAND_MAX) ||
+    if (!snj_json_exact_keys(call->arguments, keys, 7u) ||
+        !text_arg_valid(command, SNJ_TOOL_COMMAND_MAX) ||
         (stdin_text && !text_arg_valid(stdin_text, SNJ_TOOL_STDIN_MAX)) ||
         !absolute_dir_arg_valid(workdir) ||
         !json_bool_member(call->arguments, "pty", false, &pty) ||
@@ -1545,15 +1568,45 @@ run_exec_command(const struct snj_response_item *call,
                          config->max_timeout_ms, &timeout_ms) ||
         !json_u32_member(call->arguments, "yield_ms",
                          config->default_yield_ms, 0u,
-                         SNJ_TOOL_YIELD_MAX_MS, &yield_ms)) {
+                         SNJ_TOOL_YIELD_MAX_MS, &yield_ms) ||
+        !json_u32_member(call->arguments, "max_output_tokens",
+                         config->default_max_output_tokens, 1u,
+                         (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
+                         &max_output_tokens)) {
         set_error(error, error_size, "invalid exec_command arguments");
         errno = EINVAL;
         return -1;
     }
     return run_exec_command_managed(command, workdir, stdin_text,
-                                    timeout_ms, yield_ms, pty, config,
+                                    timeout_ms, yield_ms, max_output_tokens,
+                                    pty, config,
                                     credential, pump, pump_opaque,
                                     result, error, error_size);
+}
+
+int
+snj_tools_attach_output_limit(const struct snj_response_item *call,
+                              const struct snj_config *config,
+                              json_t *result)
+{
+    uint32_t max_output_tokens;
+
+    if (!call || !call->name || !config || !result ||
+        json_object_get(result, "max_output_tokens") ||
+        (strcmp(call->name, "exec_command") != 0 &&
+         strcmp(call->name, "write_stdin") != 0) ||
+        !json_object_get(call->arguments, "max_output_tokens"))
+        return 0;
+    if (!json_u32_member(call->arguments, "max_output_tokens",
+                         config->default_max_output_tokens, 1u,
+                         (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
+                         &max_output_tokens))
+        return 0;
+    if (result_set(result, "max_output_tokens",
+                   json_integer((json_int_t)max_output_tokens)) < 0) {
+        return -1;
+    }
+    return 0;
 }
 
 static json_t *
@@ -1625,6 +1678,8 @@ snj_tools_run(const struct snj_response_item *call,
               snj_tool_pump_fn pump, void *pump_opaque,
               json_t **result, char *error, size_t error_size)
 {
+    int rc;
+
     if (result)
         *result = NULL;
     if (!call || call->kind != SNJ_ITEM_TOOL_CALL || !config ||
@@ -1634,16 +1689,24 @@ snj_tools_run(const struct snj_response_item *call,
         return -1;
     }
     if (strcmp(call->name, "exec_command") == 0)
-        return run_exec_command(call, config, credential, session_workspace,
-                                pump, pump_opaque, result,
-                                error, error_size);
-    if (strcmp(call->name, "write_stdin") == 0)
-        return run_write_stdin(call, config, pump, pump_opaque, result,
-                               error, error_size);
-    if (strcmp(call->name, "apply_patch") == 0)
+        rc = run_exec_command(call, config, credential, session_workspace,
+                              pump, pump_opaque, result, error, error_size);
+    else if (strcmp(call->name, "write_stdin") == 0)
+        rc = run_write_stdin(call, config, pump, pump_opaque, result,
+                             error, error_size);
+    else if (strcmp(call->name, "apply_patch") == 0)
         return snj_tools_apply_patch(call, session_workspace, result,
                                      error, error_size);
-    set_error(error, error_size, "unknown tool name");
-    errno = EINVAL;
-    return -1;
+    else {
+        set_error(error, error_size, "unknown tool name");
+        errno = EINVAL;
+        return -1;
+    }
+    if (rc >= 0 && *result &&
+        snj_tools_attach_output_limit(call, config, *result) < 0) {
+        json_decref(*result);
+        *result = NULL;
+        return -1;
+    }
+    return rc;
 }

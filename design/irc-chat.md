@@ -388,7 +388,8 @@ rendering as other tools. At one `-v`, both ordinary and networked modes show
 every tool invocation, its complete arguments and completion state, and its
 result text. `[tool] max_output_bytes` can bound only that terminal
 presentation; its default `0` is unlimited, and the complete redacted output
-is always persisted and supplied to the model. IRC tools never open sockets,
+is always persisted. Command output supplied to the model is separately
+bounded by the calling command tool's `max_output_tokens`. IRC tools never open sockets,
 join, poll, reconnect, wait for traffic, or expose a manual reconnect action.
 The event loop owns those operations continuously. Ordinary terminal assistant
 text remains the simple way to reply; `irc_send` exists for an explicit

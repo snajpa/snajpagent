@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "turn.h"
+#include "config.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -979,6 +980,10 @@ snj_tool_result_valid(const json_t *result)
 {
     static const char *const keys[] = {
         "duration_ms", "exit_code", "handle", "model_text", "reason",
+        "signal", "status", "stderr", "stdout", "max_output_tokens"
+    };
+    static const char *const legacy_keys[] = {
+        "duration_ms", "exit_code", "handle", "model_text", "reason",
         "signal", "status", "stderr", "stdout"
     };
     const char *status;
@@ -989,13 +994,21 @@ snj_tool_result_valid(const json_t *result)
     json_t *handle;
     json_t *exit_value;
     json_t *signal_value;
+    json_t *limit_value;
 
-    if (!snj_json_exact_keys((json_t *)result, keys, 9u) ||
+    if ((!snj_json_exact_keys((json_t *)result, keys, 10u) &&
+         !snj_json_exact_keys((json_t *)result, legacy_keys, 9u)) ||
         snj_json_integer_u64(result, "duration_ms", &duration) < 0 ||
         !(status = snj_json_string(result, "status")) ||
         !(model_text = snj_json_string(result, "model_text")) ||
         tool_excerpt_valid(json_object_get(result, "stdout")) < 0 ||
         tool_excerpt_valid(json_object_get(result, "stderr")) < 0)
+        return -1;
+    limit_value = json_object_get(result, "max_output_tokens");
+    if (limit_value &&
+        (!json_is_integer(limit_value) || json_integer_value(limit_value) < 1 ||
+         (uint64_t)json_integer_value(limit_value) >
+             SNJ_CONFIG_TOKEN_LIMIT_MAX))
         return -1;
     (void)model_text;
     reason_value = json_object_get(result, "reason");

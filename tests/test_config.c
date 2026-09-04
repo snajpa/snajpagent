@@ -81,6 +81,7 @@ main(void)
         "default_yield_ms = 0\n"
         "default_timeout_ms = 4000\n"
         "max_timeout_ms = 5000\n"
+        "default_max_output_tokens = 7654\n"
         "max_output_bytes = 123456\n"
         "secret_env = TOKEN_ONE, TOKEN_TWO\n";
     char temp[] = "/tmp/snajpagent-config-XXXXXX";
@@ -113,6 +114,7 @@ main(void)
     assert(config.irc_history_lines == 200u);
     assert(config.default_timeout_ms == 0u);
     assert(config.max_timeout_ms == 86400000u);
+    assert(config.default_max_output_tokens == 4000u);
     assert(config.max_output_bytes == 0u);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);
@@ -201,6 +203,7 @@ main(void)
     assert(config.default_yield_ms == 0u);
     assert(config.default_timeout_ms == 4000u);
     assert(config.max_timeout_ms == 5000u);
+    assert(config.default_max_output_tokens == 7654u);
     assert(config.max_output_bytes == 123456u);
     assert(config.secret_env_count == 2u);
     assert(strcmp(config.secret_env[0], "TOKEN_ONE") == 0);
@@ -283,6 +286,17 @@ main(void)
     snj_config_free(&config);
     write_bytes(path, "[tool]\nmax_output_bytes=4294967296\n",
                 sizeof("[tool]\nmax_output_bytes=4294967296\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[tool]\ndefault_max_output_tokens=0\n",
+                sizeof("[tool]\ndefault_max_output_tokens=0\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[tool]\ndefault_max_output_tokens=4000000001\n",
+                sizeof("[tool]\ndefault_max_output_tokens=4000000001\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+        "[tool]\ndefault_max_output_tokens=1\ndefault_max_output_tokens=2\n",
+        sizeof("[tool]\ndefault_max_output_tokens=1\n"
+               "default_max_output_tokens=2\n") - 1u);
     expect_invalid(path);
     write_bytes(path, "[tool]\nsecret_env=A,A\n",
                 sizeof("[tool]\nsecret_env=A,A\n") - 1u);

@@ -30,6 +30,7 @@ call_args_yield(const char *command, const char *workdir, int timeout_ms,
                             timeout_ms < 0 ? json_null() :
                                              json_integer(timeout_ms)) == 0);
     assert(snj_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
+    assert(snj_json_set_new(args, "max_output_tokens", json_null()) == 0);
     assert(snj_json_set_new(args, "stdin",
                             stdin_text ? json_string(stdin_text) : json_null()) == 0);
     return args;
@@ -67,7 +68,8 @@ make_call(struct snj_response_graph *graph, const char *command,
 static json_t *
 run_command_full(const char *command, int timeout_ms, const char *secret,
                  const char *stdin_text, snj_tool_pump_fn pump,
-                 void *pump_opaque)
+                 void *pump_opaque, int selected_limit,
+                 uint32_t default_limit)
 {
     char cwd[4096];
     struct snj_config config;
@@ -81,6 +83,7 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
     assert(config.shell != NULL);
     config.default_timeout_ms = 0;
     config.max_timeout_ms = 5000;
+    config.default_max_output_tokens = default_limit;
     snj_credential_clear(&credential);
     if (secret) {
         credential.len = strlen(secret);
@@ -88,6 +91,9 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
         memcpy(credential.value, secret, credential.len + 1u);
     }
     make_call(&graph, command, cwd, timeout_ms, stdin_text);
+    if (selected_limit >= 0)
+        assert(json_object_set_new(graph.items[0].arguments,
+            "max_output_tokens", json_integer(selected_limit)) == 0);
     error[0] = '\0';
     {
         int rc = snj_tools_run(&graph.items[0], &config, &credential, cwd,
@@ -98,6 +104,9 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
     }
     assert(result != NULL);
     assert(snj_tool_result_valid(result) == 0);
+    assert(json_integer_value(json_object_get(result,
+               "max_output_tokens")) ==
+           (selected_limit >= 0 ? selected_limit : (json_int_t)default_limit));
     snj_response_graph_free(&graph);
     snj_config_free(&config);
     return result;
@@ -107,7 +116,8 @@ static json_t *
 run_command_with_credential(const char *command, int timeout_ms,
                             const char *secret)
 {
-    return run_command_full(command, timeout_ms, secret, NULL, NULL, NULL);
+    return run_command_full(command, timeout_ms, secret, NULL, NULL, NULL,
+                            -1, 4000u);
 }
 
 static json_t *
@@ -208,8 +218,8 @@ run_managed_exec(const char *command, int timeout_ms, int yield_ms)
 }
 
 static json_t *
-run_write_stdin_call(const char *handle, const char *data, bool eof,
-                     int yield_ms)
+run_write_stdin_call_limit(const char *handle, const char *data, bool eof,
+                           int yield_ms, int max_output_tokens)
 {
     json_t *args = json_object();
     assert(args != NULL);
@@ -218,7 +228,17 @@ run_write_stdin_call(const char *handle, const char *data, bool eof,
     assert(snj_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
     assert(snj_json_set_new(args, "terminate", json_false()) == 0);
     assert(snj_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
+    assert(snj_json_set_new(args, "max_output_tokens",
+        max_output_tokens < 0 ? json_null() :
+                                json_integer(max_output_tokens)) == 0);
     return run_tool_with_args("write_stdin", args);
+}
+
+static json_t *
+run_write_stdin_call(const char *handle, const char *data, bool eof,
+                     int yield_ms)
+{
+    return run_write_stdin_call_limit(handle, data, eof, yield_ms, -1);
 }
 
 static json_t *
@@ -231,6 +251,7 @@ run_terminate_call(const char *handle, const char *data, bool eof)
     assert(snj_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
     assert(snj_json_set_new(args, "terminate", json_true()) == 0);
     assert(snj_json_set_new(args, "yield_ms", json_integer(0)) == 0);
+    assert(snj_json_set_new(args, "max_output_tokens", json_null()) == 0);
     return run_tool_with_args("write_stdin", args);
 }
 
@@ -241,6 +262,7 @@ run_malformed_write_stdin_call(const char *handle)
 
     assert(args != NULL);
     assert(snj_json_set_new(args, "handle", json_string(handle)) == 0);
+    assert(snj_json_set_new(args, "data", json_string("")) == 0);
     assert(snj_json_set_new(args, "eof", json_false()) == 0);
     assert(snj_json_set_new(args, "terminate", json_false()) == 0);
     assert(snj_json_set_new(args, "yield_ms", json_integer(0)) == 0);
@@ -410,6 +432,8 @@ test_managed_process_hands_off_on_steering(void)
     assert(snj_tools_close_managed(handle, false, NULL, NULL,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL && snj_tool_result_valid(closed) == 0);
+    assert(json_integer_value(json_object_get(closed,
+               "max_output_tokens")) == 4000);
     json_decref(closed);
     json_decref(result);
 }
@@ -424,6 +448,52 @@ test_success_and_streams(void)
     assert(strcmp(snj_json_string(out, "retained"), "out") == 0);
     assert(strcmp(snj_json_string(err, "retained"), "err") == 0);
     json_decref(result);
+}
+
+static void
+test_command_output_limit_selection(void)
+{
+    json_t *configured = run_command_full("printf configured", 1000, NULL,
+        NULL, NULL, NULL, -1, 6789u);
+    json_t *selected = run_command_full("printf selected", 1000, NULL,
+        NULL, NULL, NULL, 123u, 6789u);
+
+    assert(json_integer_value(json_object_get(configured,
+               "max_output_tokens")) == 6789);
+    assert(json_integer_value(json_object_get(selected,
+               "max_output_tokens")) == 123);
+    assert(strcmp(snj_json_string(json_object_get(selected, "stdout"),
+                                 "retained"), "selected") == 0);
+    json_decref(selected);
+    json_decref(configured);
+}
+
+static void
+test_command_output_limit_is_required_and_positive(void)
+{
+    char cwd[4096];
+    struct snj_config config;
+    struct snj_credential credential;
+    struct snj_response_graph graph;
+    json_t *result = NULL;
+    char error[256] = {0};
+
+    assert(getcwd(cwd, sizeof(cwd)) != NULL);
+    snj_config_init(&config);
+    snj_credential_clear(&credential);
+    make_call(&graph, "printf never-run", cwd, 1000, NULL);
+    assert(json_object_del(graph.items[0].arguments,
+                           "max_output_tokens") == 0);
+    assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
+                         NULL, NULL, &result, error, sizeof(error)) < 0);
+    assert(result == NULL);
+    assert(json_object_set_new(graph.items[0].arguments,
+               "max_output_tokens", json_integer(0)) == 0);
+    assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
+                         NULL, NULL, &result, error, sizeof(error)) < 0);
+    assert(result == NULL);
+    snj_response_graph_free(&graph);
+    snj_config_free(&config);
 }
 
 static void
@@ -451,8 +521,10 @@ test_timeout_hands_off_without_killing(void)
     handle = snj_json_string(result, "handle");
     assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
     sleep_ms(250);
-    completed = run_write_stdin_call(handle, "", false, 0);
+    completed = run_write_stdin_call_limit(handle, "", false, 0, 222);
     assert(strcmp(snj_json_string(completed, "status"), "succeeded") == 0);
+    assert(json_integer_value(json_object_get(completed,
+               "max_output_tokens")) == 222);
     assert(strcmp(snj_json_string(json_object_get(completed, "stdout"),
                                   "retained"), "survived") == 0);
     json_decref(completed);
@@ -507,7 +579,7 @@ test_stdin_uses_blocking_child_fd(void)
     bool delayed = false;
     json_t *result = run_command_full(
         "cat",
-        1000, NULL, "hello", delay_once_pump, &delayed);
+        1000, NULL, "hello", delay_once_pump, &delayed, -1, 4000u);
 
     assert(delayed);
     assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
@@ -760,6 +832,8 @@ test_managed_process_close_returns_terminal_result(void)
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL);
     assert(snj_tool_result_valid(closed) == 0);
+    assert(json_integer_value(json_object_get(closed,
+               "max_output_tokens")) == 4000);
     status = snj_json_string(closed, "status");
     assert(strcmp(status, "running") != 0);
     assert(json_is_null(json_object_get(closed, "handle")));
@@ -1103,6 +1177,8 @@ int
 main(void)
 {
     test_success_and_streams();
+    test_command_output_limit_selection();
+    test_command_output_limit_is_required_and_positive();
     test_failure_status();
     test_timeout_hands_off_without_killing();
     test_no_timeout();

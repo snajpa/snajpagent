@@ -17,6 +17,7 @@
 #define SNJ_CONFIG_PROVIDER_NAME_MAX 63u
 #define SNJ_CONFIG_MODEL_LIMIT_MAX 128u
 #define SNJ_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
+#define SNJ_DEFAULT_TOOL_OUTPUT_TOKENS 4000u
 #define SNJ_CONFIG_IRC_CLIENT_MAX 16u
 #define SNJ_CONFIG_IRC_ENDPOINT_MAX 255u
 #define SNJ_CONFIG_IRC_NICK_MAX 30u
@@ -81,6 +82,7 @@ struct snj_config {
     uint32_t default_yield_ms;
     uint32_t default_timeout_ms;
     uint32_t max_timeout_ms;
+    uint32_t default_max_output_tokens;
     uint32_t max_output_bytes;
     char *secret_env[SNJ_CONFIG_SECRET_ENV_MAX];
     size_t secret_env_count;

@@ -126,9 +126,15 @@
 
 - Made single `-v` show every tool invocation, complete arguments, completion
   state, and result text in ordinary and networked modes. Tool stdout/stderr
-  is retained and supplied to the model without a tool-specific cutoff;
+  is retained durably without a tool-specific capture cutoff;
   `[tool] max_output_bytes` optionally limits terminal presentation only and
   defaults to unlimited (`0`).
+
+- Required `exec_command` and `write_stdin` to select a positive
+  `max_output_tokens` or explicitly use the configured default, which is 4000
+  when absent. Complete redacted output remains durable; replay-stable model
+  context uses a UTF-8-safe conservative token bound, independently of the
+  terminal-only `max_output_bytes` setting.
 
 - Made `[tool] max_timeout_ms` drive both the advertised `exec_command` schema
   and runtime validation. The default foreground handoff timeout remains

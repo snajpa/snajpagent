@@ -111,7 +111,8 @@ exec_arguments(const char *workspace, const char *command)
         snj_json_set_new(args, "stdin", json_null()) < 0 ||
         snj_json_set_new(args, "timeout_ms", json_integer(1000)) < 0 ||
         snj_json_set_new(args, "workdir", json_string(workspace)) < 0 ||
-        snj_json_set_new(args, "yield_ms", json_integer(1000)) < 0) {
+        snj_json_set_new(args, "yield_ms", json_integer(1000)) < 0 ||
+        snj_json_set_new(args, "max_output_tokens", json_null()) < 0) {
         if (args)
             json_decref(args);
         return NULL;
@@ -152,6 +153,7 @@ add_stdin_call(struct snj_response_graph *graph, unsigned int cycle,
         snj_json_set_new(args, "eof", json_null()) < 0 ||
         snj_json_set_new(args, "terminate", json_false()) < 0 ||
         snj_json_set_new(args, "yield_ms", json_integer(0)) < 0 ||
+        snj_json_set_new(args, "max_output_tokens", json_null()) < 0 ||
         snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
                  index) < 0 ||
         snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle,
@@ -178,6 +180,7 @@ add_terminate_call(struct snj_response_graph *graph, unsigned int cycle,
         snj_json_set_new(args, "eof", json_null()) < 0 ||
         snj_json_set_new(args, "terminate", json_true()) < 0 ||
         snj_json_set_new(args, "yield_ms", json_integer(0)) < 0 ||
+        snj_json_set_new(args, "max_output_tokens", json_null()) < 0 ||
         snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
                  index) < 0 ||
         snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle,
