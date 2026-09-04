@@ -4,12 +4,14 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #ifndef O_CLOEXEC
@@ -17,6 +19,9 @@
 #endif
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
+#endif
+#ifndef O_DIRECTORY
+#define O_DIRECTORY 0
 #endif
 
 enum section {
@@ -360,6 +365,12 @@ static int
 parse_agent(struct parse_state *state, const char *key, const char *value)
 {
     struct snj_config *config = state->config;
+    if (strcmp(key, "provider") == 0) {
+        if (claim_key(state, 4u) < 0 ||
+            strlen(value) > SNJ_CONFIG_PROVIDER_NAME_MAX)
+            goto invalid;
+        return copy_value(config->provider, sizeof(config->provider), value);
+    }
     if (strcmp(key, "model") == 0) {
         return claim_key(state, 0u) < 0 ? -1 :
                copy_value(config->model, sizeof(config->model), value);
@@ -631,12 +642,26 @@ parse_file(struct snj_config *config, char *text, char *error, size_t error_size
     return 0;
 }
 
-static char *
-default_path(const char *dotdir, char *error, size_t error_size)
+char *
+snj_config_path(const char *explicit_path, const char *dotdir,
+                char *error, size_t error_size)
 {
     struct snj_buf path;
     char *result = NULL;
 
+    if (explicit_path) {
+        if (explicit_path[0] != '/' ||
+            strlen(explicit_path) > SNJ_CONFIG_PATH_MAX) {
+            set_error(error, error_size,
+                      "--config requires an absolute path within the supported limit");
+            errno = EINVAL;
+            return NULL;
+        }
+        result = snj_strdup_checked(explicit_path, SNJ_CONFIG_PATH_MAX);
+        if (!result)
+            set_error(error, error_size, "configuration path is unavailable");
+        return result;
+    }
     snj_buf_init(&path, SNJ_CONFIG_PATH_MAX);
     if (!dotdir || dotdir[0] != '/')
         goto invalid;
@@ -661,8 +686,8 @@ unavailable:
 }
 
 static int
-read_config(const char *path, bool explicit_path, struct snj_buf *text,
-            char *error, size_t error_size)
+read_config(const char *path, bool require_file, struct snj_buf *text,
+            struct stat *file_stat, char *error, size_t error_size)
 {
     struct stat st;
     int fd;
@@ -670,7 +695,7 @@ read_config(const char *path, bool explicit_path, struct snj_buf *text,
 
     fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) {
-        if (!explicit_path && errno == ENOENT)
+        if (!require_file && errno == ENOENT)
             return 1;
         set_error(error, error_size, "cannot open configuration %s: %s",
                   path, strerror(errno));
@@ -683,6 +708,8 @@ read_config(const char *path, bool explicit_path, struct snj_buf *text,
         errno = EINVAL;
         goto out;
     }
+    if (file_stat)
+        *file_stat = st;
     for (;;) {
         unsigned char chunk[4096];
         ssize_t got = read(fd, chunk, sizeof(chunk));
@@ -761,21 +788,13 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
         errno = ENOMEM;
         return -1;
     }
-    if (explicit_path && (explicit_path[0] != '/' ||
-                          strlen(explicit_path) > SNJ_CONFIG_PATH_MAX)) {
-        set_error(error, error_size,
-                  "--config requires an absolute path within the supported limit");
-        errno = EINVAL;
+    owned_path = snj_config_path(explicit_path, dotdir, error, error_size);
+    if (!owned_path)
         return -1;
-    }
-    if (!path) {
-        owned_path = default_path(dotdir, error, error_size);
-        if (!owned_path)
-            return -1;
-        path = owned_path;
-    }
+    path = owned_path;
     snj_buf_init(&text, SNJ_CONFIG_FILE_MAX + 1u);
-    read_rc = read_config(path, explicit_path != NULL, &text, error, error_size);
+    read_rc = read_config(path, explicit_path != NULL, &text, NULL,
+                          error, error_size);
     if (read_rc < 0)
         goto out;
     if (read_rc == 0 && parse_file(config, (char *)text.data,
@@ -789,10 +808,353 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
     }
     if (validate_shell(config, error, error_size) < 0)
         goto out;
+    if (config->provider[0] && !snj_config_provider(config, config->provider)) {
+        set_error(error, error_size,
+                  "configured agent provider is not defined");
+        errno = EINVAL;
+        goto out;
+    }
     rc = 0;
 out:
     free(owned_path);
     snj_buf_free(&text);
+    return rc;
+}
+
+static void
+trim_span(const unsigned char **start, const unsigned char **end)
+{
+    while (*start < *end && (**start == ' ' || **start == '\t' ||
+                             **start == '\r'))
+        ++*start;
+    while (*end > *start && ((*end)[-1] == ' ' || (*end)[-1] == '\t' ||
+                             (*end)[-1] == '\r'))
+        --*end;
+}
+
+static bool
+line_is_section(const unsigned char *line, size_t len, const char *name)
+{
+    const unsigned char *start = line;
+    const unsigned char *end = line + len;
+    size_t name_len = strlen(name);
+
+    if (end > start && end[-1] == '\n')
+        --end;
+    trim_span(&start, &end);
+    return (size_t)(end - start) == name_len + 2u && start[0] == '[' &&
+           start[name_len + 1u] == ']' &&
+           memcmp(start + 1u, name, name_len) == 0;
+}
+
+static bool
+line_is_other_section(const unsigned char *line, size_t len)
+{
+    const unsigned char *start = line;
+    const unsigned char *end = line + len;
+
+    if (end > start && end[-1] == '\n')
+        --end;
+    trim_span(&start, &end);
+    return end > start + 1u && start[0] == '[' && end[-1] == ']';
+}
+
+static bool
+line_has_key(const unsigned char *line, size_t len, const char *key)
+{
+    const unsigned char *start = line;
+    const unsigned char *end = line + len;
+    const unsigned char *equal;
+    const unsigned char *key_end;
+    size_t key_len = strlen(key);
+
+    if (end > start && end[-1] == '\n')
+        --end;
+    trim_span(&start, &end);
+    if (start == end || *start == '#' || *start == ';')
+        return false;
+    equal = memchr(start, '=', (size_t)(end - start));
+    if (!equal)
+        return false;
+    key_end = equal;
+    while (key_end > start && (key_end[-1] == ' ' || key_end[-1] == '\t' ||
+                               key_end[-1] == '\r'))
+        --key_end;
+    return (size_t)(key_end - start) == key_len &&
+           memcmp(start, key, key_len) == 0;
+}
+
+static int
+append_assignment(struct snj_buf *out, const char *key, const char *value,
+                  const unsigned char *ending, size_t ending_len)
+{
+    return snj_buf_printf(out, "%s = %s", key, value) < 0 ||
+           snj_buf_append(out, ending, ending_len) < 0 ? -1 : 0;
+}
+
+static int
+append_missing_model_settings(struct snj_buf *out, bool seen[3],
+                              const char *provider, const char *model,
+                              const char *effort)
+{
+    static const unsigned char newline = '\n';
+    const char *keys[3] = {"provider", "model", "reasoning_effort"};
+    const char *values[3] = {provider, model, effort};
+
+    if (out->len && out->data[out->len - 1u] != '\n' &&
+        snj_buf_putc(out, '\n') < 0)
+        return -1;
+    for (size_t i = 0u; i < 3u; ++i)
+        if (!seen[i] && append_assignment(out, keys[i], values[i],
+                                          &newline, 1u) < 0)
+            return -1;
+    return 0;
+}
+
+static int
+replace_model_settings(const struct snj_buf *input, struct snj_buf *output,
+                       const char *provider, const char *model,
+                       const char *effort)
+{
+    size_t offset = 0u;
+    bool in_agent = false;
+    bool saw_agent = false;
+    bool added_missing = false;
+    bool seen[3] = {false, false, false};
+    const char *keys[3] = {"provider", "model", "reasoning_effort"};
+    const char *values[3] = {provider, model, effort};
+
+    while (offset < input->len) {
+        const unsigned char *line = input->data + offset;
+        const unsigned char *newline = memchr(line, '\n', input->len - offset);
+        size_t len = newline ? (size_t)(newline - line) + 1u :
+                               input->len - offset;
+
+        if (line_is_section(line, len, "agent")) {
+            in_agent = true;
+            saw_agent = true;
+        } else if (in_agent && line_is_other_section(line, len)) {
+            if (append_missing_model_settings(output, seen, provider,
+                                              model, effort) < 0)
+                return -1;
+            added_missing = true;
+            in_agent = false;
+        }
+        if (in_agent) {
+            size_t ending_len = len && line[len - 1u] == '\n' ? 1u : 0u;
+            if (ending_len && len >= 2u && line[len - 2u] == '\r')
+                ending_len = 2u;
+            for (size_t i = 0u; i < 3u; ++i) {
+                if (!line_has_key(line, len, keys[i]))
+                    continue;
+                if (append_assignment(output, keys[i], values[i],
+                                      line + len - ending_len,
+                                      ending_len) < 0)
+                    return -1;
+                seen[i] = true;
+                goto next_line;
+            }
+        }
+        if (snj_buf_append(output, line, len) < 0)
+            return -1;
+next_line:
+        offset += len;
+    }
+    if (saw_agent && !added_missing) {
+        if (append_missing_model_settings(output, seen, provider,
+                                          model, effort) < 0)
+            return -1;
+    } else if (!saw_agent) {
+        static const char heading[] = "[agent]\n";
+        if (output->len && output->data[output->len - 1u] != '\n' &&
+            snj_buf_putc(output, '\n') < 0)
+            return -1;
+        if (snj_buf_append(output, heading, sizeof(heading) - 1u) < 0 ||
+            append_missing_model_settings(output, seen, provider,
+                                          model, effort) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static bool
+same_file(const struct stat *left, const struct stat *right)
+{
+    return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
+           left->st_size == right->st_size && left->st_mtime == right->st_mtime &&
+           left->st_mode == right->st_mode;
+}
+
+static int
+validate_config_text(const struct snj_buf *text,
+                     char *error, size_t error_size)
+{
+    struct snj_config candidate;
+    char *copy;
+    int rc = -1;
+
+    copy = malloc(text->len + 1u);
+    if (!copy)
+        return -1;
+    memcpy(copy, text->data, text->len);
+    copy[text->len] = '\0';
+    snj_config_init(&candidate);
+    if (!candidate.shell) {
+        set_error(error, error_size, "cannot initialize configuration defaults");
+        goto out;
+    }
+    if (parse_file(&candidate, copy, error, error_size) < 0)
+        goto out;
+    if (candidate.default_timeout_ms > candidate.max_timeout_ms) {
+        set_error(error, error_size,
+                  "tool default_timeout_ms cannot exceed max_timeout_ms");
+        errno = EINVAL;
+        goto out;
+    }
+    if (validate_shell(&candidate, error, error_size) < 0)
+        goto out;
+    if (candidate.provider[0] &&
+        !snj_config_provider(&candidate, candidate.provider)) {
+        set_error(error, error_size, "configured agent provider is not defined");
+        errno = EINVAL;
+        goto out;
+    }
+    rc = 0;
+out:
+    snj_config_free(&candidate);
+    free(copy);
+    return rc;
+}
+
+int
+snj_config_save_model(const char *path, bool allow_create,
+                      const char *provider, const char *model,
+                      const char *effort,
+                      char *error, size_t error_size)
+{
+    struct snj_buf input;
+    struct snj_buf output;
+    struct stat before;
+    struct stat current;
+    char id[SNJ_ID_HEX_LEN + 1u];
+    char temp[64] = {0};
+    char leaf[NAME_MAX + 1u];
+    char *path_copy = NULL;
+    char *slash;
+    int parent_fd = -1;
+    int fd = -1;
+    int read_rc;
+    int rc = -1;
+    int saved;
+
+    memset(&before, 0, sizeof(before));
+    snj_buf_init(&input, SNJ_CONFIG_FILE_MAX + 1u);
+    snj_buf_init(&output, SNJ_CONFIG_FILE_MAX);
+    if (!path || path[0] != '/' || strlen(path) > SNJ_CONFIG_PATH_MAX ||
+        !provider || !*provider || strlen(provider) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
+        !model || !*model || strlen(model) >= SNJ_CONFIG_MODEL_MAX ||
+        !effort || !*effort || strlen(effort) >= SNJ_CONFIG_EFFORT_MAX ||
+        strchr(provider, '\n') || strchr(provider, '\r') ||
+        strchr(model, '\n') || strchr(model, '\r') ||
+        strchr(effort, '\n') || strchr(effort, '\r')) {
+        set_error(error, error_size, "refusing to save invalid model settings");
+        errno = EINVAL;
+        goto out;
+    }
+    read_rc = read_config(path, !allow_create, &input, &before,
+                          error, error_size);
+    if (read_rc < 0)
+        goto out;
+    if (replace_model_settings(&input, &output, provider, model, effort) < 0) {
+        set_error(error, error_size, "configuration update exceeds 64 KiB");
+        goto out;
+    }
+    if (validate_config_text(&output, error, error_size) < 0)
+        goto out;
+    path_copy = snj_strdup_checked(path, SNJ_CONFIG_PATH_MAX);
+    if (!path_copy)
+        goto out;
+    slash = strrchr(path_copy, '/');
+    if (!slash || !slash[1]) {
+        set_error(error, error_size, "configuration path has no file name");
+        errno = EINVAL;
+        goto out;
+    }
+    if (strlen(slash + 1u) > NAME_MAX) {
+        set_error(error, error_size, "configuration file name is too long");
+        errno = ENAMETOOLONG;
+        goto out;
+    }
+    memcpy(leaf, slash + 1u, strlen(slash + 1u) + 1u);
+    if (slash == path_copy)
+        slash[1] = '\0';
+    else
+        *slash = '\0';
+    parent_fd = open(path_copy, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (parent_fd < 0) {
+        set_error(error, error_size, "cannot open configuration directory: %s",
+                  strerror(errno));
+        goto out;
+    }
+    if (snj_random_id(id) < 0)
+        goto out;
+    (void)snprintf(temp, sizeof(temp), ".snajpagent-config-%s.tmp", id);
+    fd = openat(parent_fd, temp,
+                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0 || fchmod(fd, read_rc == 0 ? before.st_mode & 07777u : 0600u) < 0 ||
+        snj_write_full(fd, output.data, output.len) < 0 ||
+        snj_sync_file(fd) < 0) {
+        saved = errno;
+        set_error(error, error_size, "cannot write configuration: %s",
+                  strerror(saved));
+        errno = saved;
+        goto out;
+    }
+    if (close(fd) < 0) {
+        fd = -1;
+        set_error(error, error_size, "cannot close configuration: %s",
+                  strerror(errno));
+        goto out;
+    }
+    fd = -1;
+    if (read_rc == 0) {
+        if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) < 0 ||
+            !same_file(&before, &current)) {
+            set_error(error, error_size,
+                      "configuration changed while it was being saved");
+            errno = EAGAIN;
+            goto out;
+        }
+    } else if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) == 0 ||
+               errno != ENOENT) {
+        set_error(error, error_size,
+                  "configuration appeared while it was being saved");
+        errno = EAGAIN;
+        goto out;
+    }
+    if (renameat(parent_fd, temp, parent_fd, leaf) < 0 ||
+        snj_sync_dir(parent_fd) < 0) {
+        saved = errno;
+        set_error(error, error_size, "cannot install configuration: %s",
+                  strerror(saved));
+        errno = saved;
+        goto out;
+    }
+    temp[0] = '\0';
+    rc = 0;
+out:
+    saved = errno;
+    if (fd >= 0)
+        (void)close(fd);
+    if (parent_fd >= 0) {
+        if (temp[0])
+            (void)unlinkat(parent_fd, temp, 0);
+        (void)close(parent_fd);
+    }
+    free(path_copy);
+    snj_buf_free(&output);
+    snj_buf_free(&input);
+    errno = saved;
     return rc;
 }
 

@@ -470,6 +470,54 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
     return 0;
 }
 
+int
+snj_term_external_begin(struct snj_term *term,
+                        char *error, size_t error_size)
+{
+    if (!term || !term->opened) {
+        errno = EINVAL;
+        set_error(error, error_size, "terminal is not open");
+        return -1;
+    }
+    if (snj_term_hide(term) < 0)
+        goto fail;
+    if (term->bracketed_paste &&
+        snj_write_full(STDERR_FILENO, "\033[?2004l", 8u) < 0)
+        goto fail;
+    term->bracketed_paste = false;
+    if (term->raw && tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved) < 0)
+        goto fail;
+    term->raw = false;
+    return 0;
+fail:
+    set_error(error, error_size, "cannot release terminal for editor");
+    return -1;
+}
+
+int
+snj_term_external_end(struct snj_term *term,
+                      char *error, size_t error_size)
+{
+    if (!term || !term->opened) {
+        errno = EINVAL;
+        set_error(error, error_size, "terminal is not open");
+        return -1;
+    }
+    sigint_pending = 0;
+    sigwinch_pending = 0;
+    update_size(term);
+    if (term->capable && set_raw(term) < 0)
+        goto fail;
+    if (term->capable &&
+        snj_write_full(STDERR_FILENO, "\033[?2004h", 8u) < 0)
+        goto fail;
+    term->bracketed_paste = term->capable;
+    return 0;
+fail:
+    set_error(error, error_size, "cannot restore terminal after editor");
+    return -1;
+}
+
 static int
 move_cursor(size_t amount, char direction)
 {

@@ -2,6 +2,7 @@
 #include "config.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +37,7 @@ main(void)
 {
     static const char valid[] =
         "[agent]\n"
+        "provider = backup\n"
         "model = gpt-5.5\n"
         "reasoning_effort = future-effort\n"
         "max_goal_prompt_bytes = 123456\n"
@@ -92,6 +94,7 @@ main(void)
     assert(snj_config_load(&config, NULL, dotdir,
                            error, sizeof(error)) == 0);
     assert(strcmp(config.model, "default") == 0);
+    assert(config.provider[0] == '\0');
     assert(strcmp(config.reasoning_effort, "default") == 0);
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
     assert(config.read_agents_md);
@@ -129,6 +132,7 @@ main(void)
     assert(snj_config_load(&config, path, dotdir,
                            error, sizeof(error)) == 0);
     assert(strcmp(config.model, "gpt-5.5") == 0);
+    assert(strcmp(config.provider, "backup") == 0);
     assert(strcmp(config.reasoning_effort, "future-effort") == 0);
     assert(config.max_goal_prompt_bytes == 123456u);
     assert(!config.read_agents_md);
@@ -285,6 +289,10 @@ main(void)
                 "[agent]\nread_agents_md=true\nread_agents_md=false\n",
                 sizeof("[agent]\nread_agents_md=true\nread_agents_md=false\n") - 1u);
     expect_invalid(path);
+    write_bytes(path,
+                "[agent]\nprovider=missing\n[provider present]\n",
+                sizeof("[agent]\nprovider=missing\n[provider present]\n") - 1u);
+    expect_invalid(path);
     write_bytes(path, "[provider]\nopenrouter_title=\n",
                 sizeof("[provider]\nopenrouter_title=\n") - 1u);
     expect_invalid(path);
@@ -321,6 +329,100 @@ main(void)
     assert(snj_config_load(&config, "relative.ini", dotdir,
                            error, sizeof(error)) < 0);
     snj_config_free(&config);
+
+    {
+        static const char preserved[] =
+            "# keep this comment\n"
+            "[agent]\n"
+            "model = old\r\n"
+            "max_goal_prompt_bytes = 123456\n"
+            "reasoning_effort=low\n"
+            "\n"
+            "[provider first]\n"
+            "base_url = https://first.example.test\n"
+            "[provider second]\n"
+            "base_url = https://second.example.test\n";
+        static const char expected[] =
+            "# keep this comment\n"
+            "[agent]\n"
+            "model = new-model\r\n"
+            "max_goal_prompt_bytes = 123456\n"
+            "reasoning_effort = ultra\n"
+            "\n"
+            "provider = second\n"
+            "[provider first]\n"
+            "base_url = https://first.example.test\n"
+            "[provider second]\n"
+            "base_url = https://second.example.test\n";
+        char created[4096];
+        char bytes[4096];
+        struct stat st;
+        ssize_t got;
+        int fd;
+
+        assert(snprintf(path, sizeof(path), "%s/save.ini", temp) > 0);
+        write_bytes(path, preserved, sizeof(preserved) - 1u);
+        assert(chmod(path, 0640) == 0);
+        assert(snj_config_save_model(path, false, "second", "new-model",
+                                     "ultra", error, sizeof(error)) == 0);
+        assert(stat(path, &st) == 0);
+        assert((st.st_mode & 0777u) == 0640u);
+        fd = open(path, O_RDONLY);
+        assert(fd >= 0);
+        got = read(fd, bytes, sizeof(bytes) - 1u);
+        assert(got == (ssize_t)(sizeof(expected) - 1u));
+        bytes[got] = '\0';
+        assert(close(fd) == 0);
+        assert(memcmp(bytes, expected, sizeof(expected)) == 0);
+        assert(strstr(bytes, "# keep this comment\n") != NULL);
+        assert(strstr(bytes, "max_goal_prompt_bytes = 123456\n") != NULL);
+        assert(strstr(bytes, "base_url = https://first.example.test\n") != NULL);
+        assert(strstr(bytes, "provider = second\n") != NULL);
+        assert(strstr(bytes, "model = new-model\r\n") != NULL);
+        assert(strstr(bytes, "reasoning_effort = ultra\n") != NULL);
+        snj_config_init(&config);
+        assert(snj_config_load(&config, path, dotdir,
+                               error, sizeof(error)) == 0);
+        assert(strcmp(config.provider, "second") == 0);
+        assert(strcmp(config.model, "new-model") == 0);
+        assert(strcmp(config.reasoning_effort, "ultra") == 0);
+        snj_config_free(&config);
+
+        assert(snprintf(created, sizeof(created), "%s/new.ini", dotdir) > 0);
+        assert(snj_config_save_model(created, true, "default", "created-model",
+                                     "medium", error, sizeof(error)) == 0);
+        assert(stat(created, &st) == 0);
+        assert((st.st_mode & 0777u) == 0600u);
+        snj_config_init(&config);
+        assert(snj_config_load(&config, created, dotdir,
+                               error, sizeof(error)) == 0);
+        assert(strcmp(config.provider, "default") == 0);
+        assert(strcmp(config.model, "created-model") == 0);
+        snj_config_free(&config);
+
+        assert(snprintf(created, sizeof(created), "%s/absent.ini", dotdir) > 0);
+        assert(snj_config_save_model(created, false, "default", "nope",
+                                     "medium", error, sizeof(error)) < 0);
+        assert(access(created, F_OK) < 0 && errno == ENOENT);
+
+        fd = open(path, O_RDONLY);
+        assert(fd >= 0);
+        got = read(fd, bytes, sizeof(bytes));
+        assert(got > 0);
+        assert(close(fd) == 0);
+        assert(snj_config_save_model(path, false, "missing", "nope",
+                                     "medium", error, sizeof(error)) < 0);
+        {
+            char after[4096];
+            ssize_t after_got;
+            fd = open(path, O_RDONLY);
+            assert(fd >= 0);
+            after_got = read(fd, after, sizeof(after));
+            assert(after_got == got);
+            assert(memcmp(bytes, after, (size_t)got) == 0);
+            assert(close(fd) == 0);
+        }
+    }
 
     puts("test_config: ok");
     return 0;

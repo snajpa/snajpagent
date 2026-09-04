@@ -106,6 +106,16 @@ cache file that was displayed, so the selected provider/model/effort triple is
 durably saved together. An index outside the displayed cache is rejected, but
 that index check does not constrain manually entered model identifiers.
 
+Appending the separate final word `save`, or its one-letter spelling `s`, to
+any valid numbered or typed selection also writes the selected provider, model,
+and effort to the active configuration file. The active file is the explicit
+`--config FILE` when present and otherwise `DOTDIR/config.ini`. The update
+preserves every unrelated byte and the existing file mode, atomically replaces
+the file, and creates a missing default file privately. A write failure leaves
+the current session selection unchanged. A bare `/model save` or `/model s`
+continues to mean the typed model ID `save` or `s`; the suffix is special only
+when a nonempty selector precedes it.
+
 ## Typed Selector Grammar
 
 Whitespace around the selector and around `/` separators is ignored. The
@@ -144,3 +154,8 @@ complete native ID stored in that row is sent unchanged.
 
 `/effort LEVEL` remains available as the direct way to change only the current
 reasoning effort.
+
+Configuration may name `provider` alongside `model` and `reasoning_effort` in
+`[agent]`. If absent, the first configured provider remains the default. The
+named provider must exist, and it becomes the provider for a newly created
+session. This is the representation written by `/model SELECTOR save`.

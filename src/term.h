@@ -84,6 +84,10 @@ void snj_term_set_commands(struct snj_term *term,
                            size_t count);
 int snj_term_open(struct snj_term *term, char *error, size_t error_size);
 void snj_term_close(struct snj_term *term);
+int snj_term_external_begin(struct snj_term *term,
+                            char *error, size_t error_size);
+int snj_term_external_end(struct snj_term *term,
+                          char *error, size_t error_size);
 int snj_term_set_prompt(struct snj_term *term, bool active);
 int snj_term_set_prompt_label(struct snj_term *term, bool active,
                               const char *label);

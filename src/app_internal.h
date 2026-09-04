@@ -40,7 +40,9 @@ struct app_state {
     struct snj_instruction_set turn_instructions;
     struct snj_model_cache model_cache;
     const struct snj_cli *cli;
-    const struct snj_config *config;
+    struct snj_config *config;
+    const char *config_path;
+    bool config_allow_create;
     const char *turn_model;
     const char *turn_effort;
     const struct snj_provider_config *turn_provider;

@@ -41,6 +41,7 @@ struct snj_provider_config {
 };
 
 struct snj_config {
+    char provider[SNJ_CONFIG_PROVIDER_NAME_MAX + 1u];
     char model[SNJ_CONFIG_MODEL_MAX];
     char reasoning_effort[SNJ_CONFIG_EFFORT_MAX];
     uint32_t max_goal_prompt_bytes;
@@ -76,6 +77,12 @@ void snj_config_free(struct snj_config *config);
 int snj_config_load(struct snj_config *config, const char *explicit_path,
                     const char *dotdir,
                     char *error, size_t error_size);
+char *snj_config_path(const char *explicit_path, const char *dotdir,
+                      char *error, size_t error_size);
+int snj_config_save_model(const char *path, bool allow_create,
+                          const char *provider, const char *model,
+                          const char *effort,
+                          char *error, size_t error_size);
 const struct snj_provider_config *snj_config_provider(
     const struct snj_config *config, const char *name);
 

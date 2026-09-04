@@ -88,6 +88,18 @@ age never causes an implicit refresh. A missing catalog directs the operator to
 explicit `/model cache`; snajpagent neither imports nor depends on Codex CLI
 cache state.
 
+Interactive `/config` opens the exact active configuration path in `$EDITOR`.
+The terminal returns to ordinary cooked mode while the editor owns it. After
+the editor exits, snajpagent compares the file contents, transactionally parses
+and validates a changed file, reapplies command-line overrides, and replaces
+the live configuration only on success. Invalid edits stay on disk for repair
+while the previous in-memory configuration remains active. Unchanged files are
+not reloaded. Runtime presentation, tools, providers, and IRC topology consume
+the replacement without restarting the process; a changed IRC topology is
+reopened and rolled back to the prior topology if replacement initialization
+fails. Durable session provider/model/effort preferences remain session state,
+so configuration defaults do not overwrite an existing session.
+
 IRC configuration is process-local, while admitted room state is durable
 session data. Typed events cover connection, membership, message, mode, topic,
 history, and model-input snapshot transitions. They are validated before

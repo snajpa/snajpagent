@@ -1148,7 +1148,8 @@ def test_command_name_completion():
         (b"/q", b"/queue"),
         (b"/n", b"/next"),
         (b"/a", b"/archive"),
-        (b"/c", b"/compact"),
+        (b"/com", b"/compact"),
+        (b"/con", b"/config"),
         (b"/d", b"/delete"),
         (b"/ex", b"/exit"),
     ):
@@ -1199,7 +1200,12 @@ def test_command_name_completion():
     end = child.wait(DEFAULT_ACTIVE_PROMPT + b"/status", start=start)
     child.send(b"\r")
     status_end = child.wait(b"state: active", start=end)
-    answer_end = child.wait(b"slow complete", start=status_end)
+    child.wait(DEFAULT_ACTIVE_PROMPT, start=status_end)
+    child.send(b"/config\r")
+    config_end = child.wait(
+        b"/config is idle-only; interrupt or wait", start=status_end
+    )
+    answer_end = child.wait(b"slow complete", start=config_end)
     child.exit_cleanly(answer_end)
 
 
@@ -1423,6 +1429,268 @@ def test_model_cache_and_selection():
         os.environ.pop("SNAJPAGENT_FIXTURE_MODEL_FAILURE", None)
     assert cache_path.read_bytes() == complete_cache
     assert cache_path.stat().st_ino == complete_inode
+
+
+def test_model_configuration_save():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    config = root / "config" / "model-save.ini"
+    config.write_text(
+        "# unrelated comment stays byte-for-byte\n"
+        "[agent]\n"
+        "model = save-base\n"
+        "reasoning_effort = low\n"
+        "max_goal_prompt_bytes = 123456\n"
+        "[provider first]\n"
+        "api_key_env = FIRST_API_KEY\n"
+        "[provider second]\n"
+        "api_key_env = SECOND_API_KEY\n",
+        encoding="utf-8",
+    )
+    original = config.read_bytes()
+    original_mode = config.stat().st_mode & 0o777
+    before = session_ids()
+    child = Child(["--config", str(config)])
+    child.wait(PROMPT)
+
+    # Selection without a suffix remains session-only.
+    child.send(b"/model #18\r")
+    end = child.wait(
+        b"model for next turn: second / gpt-5.6-sol / max"
+    )
+    child.wait(PROMPT, start=end)
+    assert config.read_bytes() == original
+
+    # The one-letter spelling atomically persists a numbered cache row.
+    old_inode = config.stat().st_ino
+    child.send(b"/model 7 s\r")
+    end = child.wait(
+        b"model for next turn: first / gpt-5.6-terra / low", start=end
+    )
+    end = child.wait(
+        f"configuration saved: {config}".encode(), start=end
+    )
+    child.wait(PROMPT, start=end)
+    first_save = config.read_text(encoding="utf-8")
+    assert config.stat().st_ino != old_inode
+    assert config.stat().st_mode & 0o777 == original_mode
+    assert "# unrelated comment stays byte-for-byte\n" in first_save
+    assert "max_goal_prompt_bytes = 123456\n" in first_save
+    assert "provider = first\n" in first_save
+    assert "model = gpt-5.6-terra\n" in first_save
+    assert "reasoning_effort = low\n" in first_save
+
+    # The full spelling persists a typed provider/model/effort selection.
+    child.send(b"/model second / durable-new / cosmic save\r")
+    end = child.wait(
+        b"model for next turn: second / durable-new / cosmic", start=end
+    )
+    warning_end = child.wait(b"not known in the model cache", start=end)
+    end = child.wait(
+        f"configuration saved: {config}".encode(), start=warning_end
+    )
+    child.wait(PROMPT, start=end)
+    saved = config.read_bytes()
+    saved_text = saved.decode("utf-8")
+    assert "provider = second\n" in saved_text
+    assert "model = durable-new\n" in saved_text
+    assert "reasoning_effort = cosmic\n" in saved_text
+
+    # Without a preceding selector, save and s remain literal model IDs.
+    child.send(b"/model save\r")
+    end = child.wait(b"model for next turn: first / save / cosmic", start=end)
+    end = child.wait(b"not known in the model cache", start=end)
+    child.wait(PROMPT, start=end)
+    assert config.read_bytes() == saved
+    child.send(b"/model s\r")
+    end = child.wait(b"model for next turn: first / s / cosmic", start=end)
+    end = child.wait(b"not known in the model cache", start=end)
+    child.wait(PROMPT, start=end)
+    assert config.read_bytes() == saved
+
+    # A write failure does not change the selected runtime model.
+    config.unlink()
+    config.mkdir()
+    child.send(b"/model rejected-model save\r")
+    end = child.wait(
+        b"configuration must be a regular file no larger than 64 KiB",
+        start=end,
+    )
+    child.wait(PROMPT, start=end)
+    child.send(b"/status\r")
+    status_end = child.wait(b"model: s", start=end)
+    child.wait(PROMPT, start=status_end)
+    config.rmdir()
+    config.write_bytes(saved)
+    os.chmod(config, original_mode)
+    child.exit_now()
+
+    log = events(new_session(before))
+    assert not [
+        event for event in log
+        if event["type"] == "model_selection_changed" and
+        event["data"]["new_model"] == "rejected-model"
+    ]
+
+    # A new session consumes the saved provider and defaults from that path.
+    child = Child(["--config", str(config)])
+    child.wait(PROMPT)
+    child.send(b"/status\r")
+    end = child.wait(b"provider: second")
+    child.wait(b"model: durable-new", start=end)
+    end = child.wait(b"effort: cosmic", start=end)
+    child.wait(PROMPT, start=end)
+    child.exit_now()
+
+
+def test_config_editor_reload():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    config = root / "config" / "editor.ini"
+    valid_two = root / "config" / "editor-valid-two.ini"
+    valid_one = root / "config" / "editor-valid-one.ini"
+    invalid = root / "config" / "editor-invalid.ini"
+    network = root / "config" / "editor-network.ini"
+    plan = root / "config" / "editor-plan"
+    seen = root / "config" / "editor-seen"
+    editor = root / "config" / "editor"
+    config.write_text(
+        "[agent]\nmodel = editor-base\nreasoning_effort = medium\n"
+        "[provider]\napi_key_env = OPENAI_API_KEY\n"
+        "[ui]\nverbosity = 0\n",
+        encoding="utf-8",
+    )
+    valid_two.write_text(
+        "[agent]\nmodel = ignored-default\nreasoning_effort = high\n"
+        "[provider]\napi_key_env = OPENAI_API_KEY\n"
+        "[ui]\nverbosity = 2\ntyping_pause_ms = 25\n",
+        encoding="utf-8",
+    )
+    valid_one.write_text(
+        "[agent]\nmodel = another-default\nreasoning_effort = low\n"
+        "[provider]\napi_key_env = OPENAI_API_KEY\n"
+        "[ui]\nverbosity = 1\n",
+        encoding="utf-8",
+    )
+    invalid.write_text("[ui]\nverbosity = 9\n", encoding="utf-8")
+    network_port = free_port()
+    network.write_text(
+        "[agent]\nmodel = network-default\nreasoning_effort = medium\n"
+        "[provider]\napi_key_env = OPENAI_API_KEY\n"
+        "[irc]\ndaemon = true\n"
+        f"listen = 127.0.0.1:{network_port}\n"
+        "model_nick = reloadagent\noperator_nick = reloadop\n"
+        "room_name = lab\n",
+        encoding="utf-8",
+    )
+    editor.write_text(
+        "#!/bin/sh\n"
+        "choice=$(cat \"$SNAJPAGENT_EDITOR_PLAN\") || exit 2\n"
+        "printf '%s' \"$1\" >\"$SNAJPAGENT_EDITOR_SEEN\" || exit 3\n"
+        "case $choice in\n"
+        "  unchanged) exit 0 ;;\n"
+        "  nonzero:*) cp \"${choice#nonzero:}\" \"$1\" || exit 4; exit 7 ;;\n"
+        "  *) exec cp \"$choice\" \"$1\" ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    editor.chmod(0o700)
+    old_editor = os.environ.get("EDITOR")
+    old_plan = os.environ.get("SNAJPAGENT_EDITOR_PLAN")
+    old_seen = os.environ.get("SNAJPAGENT_EDITOR_SEEN")
+    os.environ["EDITOR"] = str(editor)
+    os.environ["SNAJPAGENT_EDITOR_PLAN"] = str(plan)
+    os.environ["SNAJPAGENT_EDITOR_SEEN"] = str(seen)
+    try:
+        child = Child(["--config", str(config)])
+        child.wait(PROMPT)
+
+        plan.write_text("unchanged", encoding="utf-8")
+        child.send(b"/config\r")
+        end = child.wait(
+            f"configuration unchanged: {config}".encode()
+        )
+        child.wait(PROMPT, start=end)
+        assert seen.read_text(encoding="utf-8") == str(config)
+
+        plan.write_text(str(valid_two), encoding="utf-8")
+        child.send(b"/config\r")
+        end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+        child.wait(PROMPT, start=end)
+        child.send(b"/status\r")
+        status_end = child.wait(b"verbosity: 2", start=end)
+        child.wait(b"model: editor-base", start=end)
+        child.wait(PROMPT, start=status_end)
+
+        plan.write_text(str(invalid), encoding="utf-8")
+        child.send(b"/config\r")
+        end = child.wait(b"invalid configuration at line 2", start=status_end)
+        child.wait(PROMPT, start=end)
+        child.send(b"/status\r")
+        status_end = child.wait(b"verbosity: 2", start=end)
+        child.wait(b"model: editor-base", start=end)
+        child.wait(PROMPT, start=status_end)
+
+        # File changes are checked and loaded even when the editor exits nonzero.
+        plan.write_text(f"nonzero:{valid_one}", encoding="utf-8")
+        child.send(b"/config\r")
+        warning_end = child.wait(
+            b"$EDITOR exited unsuccessfully after changing the configuration",
+            start=status_end,
+        )
+        end = child.wait(
+            f"configuration reloaded: {config}".encode(), start=warning_end
+        )
+        child.wait(PROMPT, start=end)
+        child.send(b"/status\r")
+        status_end = child.wait(b"verbosity: 1", start=end)
+        child.wait(b"model: editor-base", start=end)
+        child.wait(PROMPT, start=status_end)
+
+        # Process topology reloads too: enter and leave configured IRC mode.
+        plan.write_text(str(network), encoding="utf-8")
+        child.send(b"/config\r")
+        end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+        child.wait(PROMPT, start=end)
+        peer = IRCClient(network_port, "reloadpeer")
+        peer.close()
+        plan.write_text(str(valid_one), encoding="utf-8")
+        child.send(b"/config\r")
+        end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+        child.wait(PROMPT, start=end)
+        child.exit_now()
+
+        # The resolved default path is passed to the editor and may be created.
+        default_config = Path(DOTDIR) / "config.ini"
+        prior_default = default_config.read_bytes() if default_config.exists() else None
+        try:
+            default_config.unlink(missing_ok=True)
+            plan.write_text(str(valid_one), encoding="utf-8")
+            child = Child([])
+            child.wait(PROMPT)
+            child.send(b"/config\r")
+            end = child.wait(
+                f"configuration reloaded: {default_config}".encode()
+            )
+            child.wait(PROMPT, start=end)
+            assert seen.read_text(encoding="utf-8") == str(default_config)
+            child.exit_now()
+        finally:
+            if prior_default is None:
+                default_config.unlink(missing_ok=True)
+            else:
+                default_config.write_bytes(prior_default)
+    finally:
+        if old_editor is None:
+            os.environ.pop("EDITOR", None)
+        else:
+            os.environ["EDITOR"] = old_editor
+        if old_plan is None:
+            os.environ.pop("SNAJPAGENT_EDITOR_PLAN", None)
+        else:
+            os.environ["SNAJPAGENT_EDITOR_PLAN"] = old_plan
+        if old_seen is None:
+            os.environ.pop("SNAJPAGENT_EDITOR_SEEN", None)
+        else:
+            os.environ["SNAJPAGENT_EDITOR_SEEN"] = old_seen
 
 def test_config_and_cli_model_passthrough():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "model-passthrough.ini"
@@ -2013,6 +2281,8 @@ test_preferences_and_verbosity()
 test_command_name_completion()
 test_uncached_typed_model_selection()
 test_model_cache_and_selection()
+test_model_configuration_save()
+test_config_editor_reload()
 test_config_and_cli_model_passthrough()
 test_exit_resume_matrix()
 test_network_resume_roles()

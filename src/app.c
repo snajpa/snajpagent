@@ -27,6 +27,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -203,7 +204,8 @@ static const struct snj_term_command commands[] = {
     {"/?", "commands and keys (alias for /help)"},
     {"/status", "session and next-turn settings"},
     {"/history", "recent terminal history"},
-    {"/model [list|cache|#|SELECTOR]", "list, refresh, or select a model"},
+    {"/model [list|cache|#|SELECTOR [save|s]]", "list, refresh, or select a model"},
+    {"/config", "edit and reload the active configuration"},
     {"/effort [LEVEL]", "show or set next-turn effort"},
     {"/goal [COMMAND|TEXT]", "show, start, or control a persistent goal"},
     {"/verbose [0..6]", "show or set this process's verbosity"},
@@ -838,12 +840,17 @@ static int
 commit_model_selection(struct app_state *app,
                        const struct snj_provider_config *provider,
                        const char *model, const char *effort,
-                       bool known_in_cache)
+                       bool known_in_cache, bool save)
 {
     const char *old_provider = app->session.default_provider;
     char error[256] = {0};
     int rc;
 
+    if (save && snj_config_save_model(app->config_path,
+            app->config_allow_create, provider->name, model, effort,
+            error, sizeof(error)) < 0)
+        return app_error(app, error[0] ? error :
+                         "model settings could not be written to configuration");
     if (!old_provider[0])
         old_provider = "";
     if (strcmp(old_provider, provider->name) != 0 ||
@@ -863,15 +870,25 @@ commit_model_selection(struct app_state *app,
     app->staged_provider = NULL;
     app->staged_model = NULL;
     app->staged_effort = NULL;
+    if (save) {
+        (void)snprintf(app->config->provider, sizeof(app->config->provider),
+                       "%s", provider->name);
+        (void)snprintf(app->config->model, sizeof(app->config->model),
+                       "%s", model);
+        (void)snprintf(app->config->reasoning_effort,
+                       sizeof(app->config->reasoning_effort), "%s", effort);
+    }
     rc = app_hostf(app, "model for next turn: %s / %s / %s",
                    provider->name, model, effort);
-    if (rc < 0 || known_in_cache)
+    if (rc < 0)
         return rc;
-    return app_warning(app,
-        "model is not known in the model cache; it will still be sent unchanged");
+    if (!known_in_cache && app_warning(app,
+            "model is not known in the model cache; it will still be sent unchanged") < 0)
+        return -1;
+    return save ? app_hostf(app, "configuration saved: %s", app->config_path) : 0;
 }
 static int
-select_cached_model(struct app_state *app, const char *value)
+select_cached_model(struct app_state *app, const char *value, bool save)
 {
     const struct snj_provider_config *provider_config;
     const char *provider;
@@ -894,10 +911,11 @@ select_cached_model(struct app_state *app, const char *value)
     if (!provider_config)
         return app_error(app,
             "cached provider is not configured; use /model cache");
-    return commit_model_selection(app, provider_config, model, effort, true);
+    return commit_model_selection(app, provider_config, model, effort, true,
+                                  save);
 }
 static int
-select_typed_model(struct app_state *app, const char *value)
+select_typed_model(struct app_state *app, const char *value, bool save)
 {
     const struct snj_provider_config *provider;
     const char *model;
@@ -959,17 +977,41 @@ select_typed_model(struct app_state *app, const char *value)
         }
     }
     rc = commit_model_selection(app, provider, model, resolve_effort(effort),
-                                known_in_cache);
+                                known_in_cache, save);
 out:
     free(copy);
     return rc;
 }
+
+static bool
+strip_model_save_suffix(char *selector)
+{
+    char *end = selector + strlen(selector);
+    char *word;
+    size_t len;
+
+    while (end > selector && isspace((unsigned char)end[-1]))
+        --end;
+    word = end;
+    while (word > selector && !isspace((unsigned char)word[-1]))
+        --word;
+    len = (size_t)(end - word);
+    if (word == selector || !((len == 1u && word[0] == 's') ||
+                              (len == 4u && memcmp(word, "save", 4u) == 0)))
+        return false;
+    while (word > selector && isspace((unsigned char)word[-1]))
+        --word;
+    *word = '\0';
+    return true;
+}
+
 static int
 change_model(struct app_state *app, const char *value, bool active)
 {
     char error[256] = {0};
     char *copy = NULL;
     char *selector = NULL;
+    bool save = false;
     int rc;
 
     if (value) {
@@ -998,17 +1040,328 @@ change_model(struct app_state *app, const char *value, bool active)
         free(copy);
         return rc;
     }
+    save = strip_model_save_suffix(selector);
     if (active) {
         free(copy);
         return app_error(app,
             "/model selection is idle-only; interrupt or wait");
     }
-    rc = select_cached_model(app, selector);
+    rc = select_cached_model(app, selector, save);
     if (rc == 1)
-        rc = select_typed_model(app, selector);
+        rc = select_typed_model(app, selector, save);
     free(copy);
     return rc;
 }
+
+struct config_snapshot {
+    bool exists;
+    char sha256[SNJ_SHA256_HEX_LEN + 1u];
+};
+
+static int
+snapshot_config(const char *path, struct config_snapshot *snapshot,
+                char *error, size_t error_size)
+{
+    struct snj_sha256 digest;
+    struct stat st;
+    unsigned char hash[32];
+    int fd;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+    fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ENOENT)
+            return 0;
+        set_error(error, error_size, "cannot open configuration %s: %s",
+                  path, strerror(errno));
+        return -1;
+    }
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        (uintmax_t)st.st_size > SNJ_CONFIG_FILE_MAX) {
+        set_error(error, error_size,
+                  "configuration must be a regular file no larger than 64 KiB");
+        errno = EINVAL;
+        (void)close(fd);
+        return -1;
+    }
+    snj_sha256_init(&digest);
+    for (;;) {
+        unsigned char bytes[4096];
+        ssize_t got = read(fd, bytes, sizeof(bytes));
+        if (got > 0) {
+            snj_sha256_update(&digest, bytes, (size_t)got);
+            continue;
+        }
+        if (got < 0 && errno == EINTR)
+            continue;
+        if (got < 0) {
+            set_error(error, error_size, "cannot read configuration: %s",
+                      strerror(errno));
+            (void)close(fd);
+            return -1;
+        }
+        break;
+    }
+    if (close(fd) < 0) {
+        set_error(error, error_size, "cannot close configuration: %s",
+                  strerror(errno));
+        return -1;
+    }
+    snj_sha256_final(&digest, hash);
+    for (size_t i = 0u; i < sizeof(hash); ++i)
+        (void)snprintf(snapshot->sha256 + i * 2u, 3u, "%02x", hash[i]);
+    snapshot->exists = true;
+    return 0;
+}
+
+static bool
+same_config_snapshot(const struct config_snapshot *left,
+                     const struct config_snapshot *right)
+{
+    return left->exists == right->exists &&
+           (!left->exists || strcmp(left->sha256, right->sha256) == 0);
+}
+
+static unsigned int
+configured_verbosity(const struct app_state *app,
+                     const struct snj_config *config)
+{
+    unsigned int value = config->verbosity;
+    if (value < 6u) {
+        unsigned int room = 6u - value;
+        value += app->cli->verbosity < room ? app->cli->verbosity : room;
+    }
+    return value;
+}
+
+static enum snj_color_mode
+configured_color(const struct app_state *app,
+                 const struct snj_config *config)
+{
+    if (app->cli->color == SNJ_CLI_COLOR_AUTO)
+        return SNJ_COLOR_AUTO;
+    if (app->cli->color == SNJ_CLI_COLOR_ALWAYS)
+        return SNJ_COLOR_ALWAYS;
+    if (app->cli->color == SNJ_CLI_COLOR_NEVER)
+        return SNJ_COLOR_NEVER;
+    return config->color;
+}
+
+static bool
+configured_markdown(const struct app_state *app,
+                    const struct snj_config *config)
+{
+    if (app->cli->markdown == SNJ_CLI_MARKDOWN_ENABLED)
+        return true;
+    if (app->cli->markdown == SNJ_CLI_MARKDOWN_DISABLED)
+        return false;
+    return config->markdown;
+}
+
+static bool
+irc_config_equal(const struct snj_config *left,
+                 const struct snj_config *right)
+{
+    if (left->irc_daemon != right->irc_daemon ||
+        left->irc_listen_explicit != right->irc_listen_explicit ||
+        strcmp(left->irc_listen, right->irc_listen) != 0 ||
+        left->irc_client_count != right->irc_client_count ||
+        strcmp(left->irc_model_nick, right->irc_model_nick) != 0 ||
+        strcmp(left->irc_operator_nick, right->irc_operator_nick) != 0 ||
+        strcmp(left->irc_room_name, right->irc_room_name) != 0 ||
+        left->irc_history_lines != right->irc_history_lines)
+        return false;
+    for (size_t i = 0u; i < left->irc_client_count; ++i)
+        if (strcmp(left->irc_clients[i], right->irc_clients[i]) != 0)
+            return false;
+    return true;
+}
+
+static int
+open_configured_irc(struct app_state *app, const struct snj_config *config,
+                    char *error, size_t error_size)
+{
+    if (!snj_irc_enabled(config)) {
+        app->irc = NULL;
+        return 0;
+    }
+    if (snj_irc_open(&app->irc, config, app->session.workspace,
+                     snj_app_irc_event, snj_app_irc_trace, app,
+                     error, error_size) < 0)
+        return -1;
+    if (snj_app_irc_restore(app, error, error_size) < 0) {
+        snj_irc_close(app->irc);
+        app->irc = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+static int
+reload_config(struct app_state *app, char *error, size_t error_size)
+{
+    struct snj_config candidate;
+    struct snj_config previous;
+    const char *selected_provider = app->session.default_provider[0] ?
+        app->session.default_provider : NULL;
+    bool old_networked;
+    bool new_networked;
+    bool replace_irc;
+    int rc = 1;
+
+    snj_config_init(&candidate);
+    if (!candidate.shell) {
+        set_error(error, error_size, "cannot initialize configuration defaults");
+        goto out;
+    }
+    if (snj_config_load(&candidate,
+            app->config_allow_create ? NULL : app->config_path,
+            app->store.root_path, error, error_size) < 0 ||
+        snj_irc_apply_cli(&candidate, app->cli, error, error_size) < 0)
+        goto out;
+    if (!snj_config_provider(&candidate, selected_provider)) {
+        set_error(error, error_size,
+                  "reloaded configuration does not define the selected provider");
+        errno = EINVAL;
+        goto out;
+    }
+    old_networked = snj_irc_enabled(app->config);
+    new_networked = snj_irc_enabled(&candidate);
+    replace_irc = old_networked != new_networked ||
+                  (old_networked && !irc_config_equal(app->config, &candidate));
+    if (replace_irc) {
+        snj_irc_close(app->irc);
+        app->irc = NULL;
+        if (open_configured_irc(app, &candidate, error, error_size) < 0) {
+            char replacement_error[256];
+            char rollback_error[256] = {0};
+
+            (void)snprintf(replacement_error, sizeof(replacement_error), "%s",
+                           error[0] ? error : "IRC replacement failed");
+            if (old_networked &&
+                open_configured_irc(app, app->config,
+                                    rollback_error,
+                                    sizeof(rollback_error)) < 0) {
+                set_error(error, error_size,
+                          "%s; prior IRC configuration could not be restored: %s",
+                          replacement_error,
+                          rollback_error[0] ? rollback_error : "unknown error");
+                rc = -1;
+                goto out;
+            }
+            set_error(error, error_size, "%s; previous configuration remains active",
+                      replacement_error);
+            goto out;
+        }
+    }
+    previous = *app->config;
+    *app->config = candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    app->networked = new_networked;
+    app->turn_provider = snj_config_provider(app->config, selected_provider);
+    app->staged_provider = NULL;
+    snj_render_set_color(&app->render, configured_color(app, app->config));
+    snj_render_set_markdown(&app->render,
+                            configured_markdown(app, app->config));
+    app->render.verbosity = configured_verbosity(app, app->config);
+    snj_render_set_networked(&app->render, app->networked,
+                             app->networked ?
+                                 app->config->irc_model_nick : NULL);
+    snj_term_set_commands(&app->term, commands, command_count(app));
+    snj_term_set_typing_pause(&app->term, app->config->typing_pause_ms);
+    snj_config_free(&previous);
+    if (replace_irc && app->networked && app->config->irc_daemon &&
+        snj_app_irc_snapshot(app, "join", error, error_size) < 0) {
+        rc = -1;
+        goto out;
+    }
+    rc = 0;
+out:
+    snj_config_free(&candidate);
+    return rc;
+}
+
+static int
+run_config_editor(struct app_state *app, int *status,
+                  char *error, size_t error_size)
+{
+    const char *editor = getenv("EDITOR");
+    pid_t child;
+    pid_t got;
+
+    if (!editor || !*editor) {
+        set_error(error, error_size, "$EDITOR is not set");
+        errno = ENOENT;
+        return 1;
+    }
+    if (snj_term_external_begin(&app->term, error, error_size) < 0)
+        return -1;
+    child = fork();
+    if (child == 0) {
+        execl("/bin/sh", "sh", "-c", "exec $EDITOR \"$1\"",
+              "snajpagent-editor", app->config_path, (char *)NULL);
+        _exit(127);
+    }
+    if (child < 0) {
+        set_error(error, error_size, "cannot start $EDITOR: %s",
+                  strerror(errno));
+        (void)snj_term_external_end(&app->term, NULL, 0u);
+        return -1;
+    }
+    do {
+        got = waitpid(child, status, 0);
+    } while (got < 0 && errno == EINTR);
+    if (snj_term_external_end(&app->term, error, error_size) < 0)
+        return -1;
+    if (got != child) {
+        set_error(error, error_size, "cannot wait for $EDITOR: %s",
+                  strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+static int
+change_config(struct app_state *app, bool active)
+{
+    struct config_snapshot before;
+    struct config_snapshot after;
+    char error[256] = {0};
+    int editor_status = 0;
+    int rc;
+
+    if (active)
+        return app_error(app, "/config is idle-only; interrupt or wait");
+    if (snapshot_config(app->config_path, &before,
+                        error, sizeof(error)) < 0)
+        return app_error(app, error);
+    rc = run_config_editor(app, &editor_status, error, sizeof(error));
+    if (rc != 0)
+        return rc < 0 ? -1 : app_error(app, error);
+    error[0] = '\0';
+    if (snapshot_config(app->config_path, &after,
+                        error, sizeof(error)) < 0)
+        return app_error(app, error);
+    if (same_config_snapshot(&before, &after)) {
+        if (!WIFEXITED(editor_status) || WEXITSTATUS(editor_status) != 0)
+            return app_error(app, "$EDITOR exited unsuccessfully; configuration unchanged");
+        return app_hostf(app, "configuration unchanged: %s", app->config_path);
+    }
+    error[0] = '\0';
+    rc = reload_config(app, error, sizeof(error));
+    if (rc != 0) {
+        int render_rc = app_error(app, error[0] ? error :
+                                  "configuration reload failed");
+        return rc < 0 || render_rc < 0 ? -1 : 0;
+    }
+    if (!WIFEXITED(editor_status) || WEXITSTATUS(editor_status) != 0) {
+        if (app_warning(app,
+                "$EDITOR exited unsuccessfully after changing the configuration") < 0)
+            return -1;
+    }
+    return app_hostf(app, "configuration reloaded: %s", app->config_path);
+}
+
 static int
 change_effort(struct app_state *app, const char *value, bool active)
 {
@@ -1089,6 +1442,8 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return change_model(app, NULL, active);
     if (strncmp(line, "/model ", 7u) == 0)
         return change_model(app, line + 7u, active);
+    if (strcmp(line, "/config") == 0)
+        return change_config(app, active);
     if (strcmp(line, "/effort") == 0)
         return change_effort(app, NULL, active);
     if (strncmp(line, "/effort ", 8u) == 0)
@@ -2890,6 +3245,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     struct snj_config config;
     char error[256];
     char *dotdir = NULL;
+    char *config_path = NULL;
     char *workspace = NULL;
     char *relocated_workspace = NULL;
     const char *new_model = NULL;
@@ -2914,6 +3270,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
                                               SNJ_COLOR_AUTO);
     app.cli = cli;
     app.config = &config;
+    app.config_allow_create = cli->config_path == NULL;
     app.execute = cli->execute;
     if (install_shutdown_handlers(&signal_handlers) < 0) {
         (void)snj_render_error_ctx(&app.render,
@@ -2948,6 +3305,14 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         rc = 2;
         goto out;
     }
+    config_path = snj_config_path(cli->config_path, dotdir,
+                                  error, sizeof(error));
+    if (!config_path) {
+        (void)snj_render_error_ctx(&app.render, error);
+        rc = 2;
+        goto out;
+    }
+    app.config_path = config_path;
     {
         enum snj_color_mode color = config.color;
         if (cli->color == SNJ_CLI_COLOR_AUTO)
@@ -2972,11 +3337,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     snj_render_set_networked(&app.render, app.networked,
                              app.networked ? config.irc_model_nick : NULL);
     snj_term_set_typing_pause(&app.term, config.typing_pause_ms);
-    effective_verbosity = config.verbosity;
-    if (effective_verbosity < 6u) {
-        unsigned int room = 6u - effective_verbosity;
-        effective_verbosity += cli->verbosity < room ? cli->verbosity : room;
-    }
+    effective_verbosity = configured_verbosity(&app, &config);
     app.render.verbosity = effective_verbosity;
     if (!cli->execute && !cli->list &&
         (isatty(STDIN_FILENO) != 1 || isatty(STDERR_FILENO) != 1)) {
@@ -3074,15 +3435,18 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         app.turn_provider = next_provider(&app);
     } else {
         const char *selected_workspace = cli->workspace ? cli->workspace : workspace;
+        const struct snj_provider_config *selected_provider =
+            snj_config_provider(&config,
+                                config.provider[0] ? config.provider : NULL);
         if (snj_session_create(&app.store, &app.session, selected_workspace,
-                               config.providers[0].name, new_model, new_effort,
+                               selected_provider->name, new_model, new_effort,
                                error, sizeof(error)) < 0) {
             (void)snj_render_error_ctx(&app.render, error);
             goto out;
         }
         app.turn_model = app.session.default_model;
         app.turn_effort = resolve_effort(app.session.default_effort);
-        app.turn_provider = &config.providers[0];
+        app.turn_provider = selected_provider;
     }
     if (app.networked) {
         if (snj_irc_open(&app.irc, &config, app.session.workspace,
@@ -3136,6 +3500,7 @@ out:
         restore_shutdown_handlers(&signal_handlers);
     snj_buf_free(&app.irc_urgent);
     snj_buf_free(&app.irc_background);
+    free(config_path);
     free(dotdir);
     free(relocated_workspace);
     free(workspace);

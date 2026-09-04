@@ -183,7 +183,11 @@ provider whose normalized API path ends in `/backend-api/codex` uses the Codex
 `/models?client_version=0.146.0` catalog endpoint; other providers use
 `/v1/models`. Every catalog display ends with the cache update time.
 
-`/model NUMBER` and `/model #NUMBER` select an exact displayed row. Typed
+`/model NUMBER` and `/model #NUMBER` select an exact displayed row. Append
+`save` or `s` to a selection to also store its provider, model, and effort in
+the active configuration, for example `/model 2 save` or
+`/model codex-lb / gpt-5.6-sol / high s`. A bare `/model save` or `/model s`
+remains an ordinary typed model ID. Typed
 selection accepts `MODEL`, `MODEL / EFFORT`, or
 `PROVIDER / MODEL / EFFORT`, ignoring whitespace around `/`. A typed model is
 trusted and sent to the provider without checking whether it appears in the
@@ -383,10 +387,17 @@ Use `--dotdir DIR` to select another dotdir, or `--config FILE` to read a
 configuration file elsewhere while leaving cache and session locations
 unchanged.
 
+Interactive `/config` opens that exact active file in `$EDITOR`. If its bytes
+changed when the editor exits, snajpagent validates and reloads it; an invalid
+edit reports the error and leaves the previous runtime configuration active.
+Command-line overrides remain authoritative. Existing durable session model
+preferences are not replaced by edited defaults.
+
 Minimal OpenAI configuration:
 
 ```ini
 [agent]
+provider = openai
 model = gpt-5.5
 reasoning_effort = default
 max_goal_prompt_bytes = 262144
