@@ -29,6 +29,10 @@
   a typed pre-output context rejection gets one replay-safe compact-and-retry
   recovery. Trustworthy rejection details durably lower a source-bound
   in-session safety ceiling that survives resume and is visible in `/status`.
+  Rolling provider-usage anchors now recognize transcript growth before an
+  unchanged trailing goal/process controller suffix, so multi-cycle tool turns
+  stay in token-domain accounting instead of falling back to whole-request
+  serialized size.
   Bytes and token bounds remain distinct, and rollout composers end in `N% ›|»`,
   with `0%` before compatible accounting and `?%` when only the hard budget is
   unknown.

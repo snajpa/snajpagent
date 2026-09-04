@@ -31,6 +31,12 @@ exact `[model-limit PROVIDER/MODEL]` tuple determine the hard input budget;
 `auto_compact_input_tokens = 0` disables only proactive policy, never the hard
 guard.
 
+Response and tool-result items grow immediately before the trailing active
+goal/process controller messages. Anchor comparison reconstructs the previous
+request from its transcript prefix plus that unchanged controller suffix, so
+provider-reported token usage rolls forward across tool cycles. Any controller
+change invalidates the anchor.
+
 An over-budget request is not sent. Native Codex compaction or the existing
 Responses summary path runs first, and the rebuilt request must be recounted
 below the hard budget. Oversized historical tool/process and assistant text is

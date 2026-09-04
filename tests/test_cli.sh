@@ -704,6 +704,48 @@ assert failed[0]["data"]["class"] == "context"
 assert "hard budget 1" in failed[0]["data"]["message"]
 PY
 
+# Provider-reported token usage remains a usable rolling anchor when completed
+# tool cycles grow in front of the stable controller suffix. This reconstructs
+# the first-turn failure shape that previously fell back to one-token-per-byte
+# accounting and tried to compact a nonexistent older turn.
+anchor_state="$root/context-anchor-state"
+mkdir -m 700 "$anchor_state"
+cat >"$root/context-anchor.ini" <<'EOF'
+[agent]
+model = gpt-5.6-sol
+
+[provider]
+base_url = http://127.0.0.1:2455/backend-api/codex
+auto_compact_input_tokens = 0
+
+[model-limit default/gpt-5.6-sol]
+context_window_tokens = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+EOF
+$bin --dotdir "$anchor_state" --config "$root/context-anchor.ini" \
+    -e -- context_anchor_chain >"$root/context-anchor.out" \
+    2>"$root/context-anchor.err"
+[ "$(cat "$root/context-anchor.out")" = "context anchor complete" ]
+anchor_id=$(find "$anchor_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+python3 - "$anchor_state/sessions/$anchor_id/events.jsonl" <<'PY'
+import json
+import sys
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+starts = [event for event in events if event["type"] == "response_started"]
+assert len(starts) == 5
+assert starts[0]["data"]["count_method"] == "qualified_upper_bound"
+assert all(event["data"]["count_method"] == "anchored_upper_bound"
+           for event in starts[1:])
+assert all(event["data"]["hard_input_tokens"] == 922000
+           for event in starts)
+assert all(event["data"]["input_tokens_bound"] < 922000
+           for event in starts)
+assert not any(event["type"] == "compaction_started" for event in events)
+assert not any(event["type"] == "turn_failed" for event in events)
+assert len([event for event in events if event["type"] == "turn_completed"]) == 1
+PY
+
 # A typed capacity rejection before output closes the response, compacts one
 # complete prefix, and retries exactly one changed provider request.
 recovery_state="$root/capacity-recovery-state"

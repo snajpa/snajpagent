@@ -19,6 +19,7 @@ struct snj_context_projection {
     size_t model_input_bytes;
     size_t request_input_bytes;
     size_t request_input_count;
+    size_t request_controller_count;
     size_t create_request_bytes;
     size_t count_request_bytes;
     uint64_t input_tokens_bound;

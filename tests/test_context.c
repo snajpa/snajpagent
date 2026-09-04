@@ -820,6 +820,80 @@ test_usage_anchor(void)
     snj_context_projection_free(&projection);
 }
 
+static void
+test_usage_anchor_before_controller_suffix(void)
+{
+    struct snj_session session;
+    struct snj_context_projection projection;
+    json_t *anchor = json_array();
+    json_t *items = json_array();
+    json_t *request = json_object();
+    json_t *old = json_object();
+    json_t *added = json_object();
+    json_t *controller = json_object();
+    uint64_t bound = 0u;
+
+    assert(anchor && items && request && old && added && controller);
+    snj_session_init(&session);
+    snj_context_projection_init(&projection);
+    assert(snj_json_set_new(old, "content", json_string("old")) == 0);
+    assert(snj_json_set_new(old, "role", json_string("user")) == 0);
+    assert(snj_json_set_new(added, "content", json_string("new")) == 0);
+    assert(snj_json_set_new(added, "role", json_string("assistant")) == 0);
+    assert(snj_json_set_new(controller, "content",
+                            json_string("stable controller")) == 0);
+    assert(snj_json_set_new(controller, "role", json_string("developer")) == 0);
+    assert(json_array_append(anchor, old) == 0);
+    assert(json_array_append(anchor, controller) == 0);
+    assert(json_array_append_new(items, old) == 0);
+    old = NULL;
+    assert(json_array_append_new(items, added) == 0);
+    added = NULL;
+    assert(json_array_append_new(items, controller) == 0);
+    controller = NULL;
+    assert(snj_json_set_new(request, "input", items) == 0);
+    items = NULL;
+    assert(snj_json_set_new(request, "model", json_string("model")) == 0);
+    projection.create_request = request;
+    request = NULL;
+    projection.request_input_count = 3u;
+    projection.request_controller_count = 1u;
+    projection.request_input_bytes = canonical_size(
+        json_object_get(projection.create_request, "input"));
+    projection.create_request_bytes = canonical_size(projection.create_request);
+
+    session.usage_anchor_valid = true;
+    memcpy(session.usage_anchor_provider, "provider", 9u);
+    memcpy(session.usage_anchor_model, "model", 6u);
+    memcpy(session.usage_anchor_effort, "medium", 7u);
+    memcpy(session.usage_anchor_provider_source_sha256,
+           "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 65u);
+    session.usage_anchor_request_input_count = 2u;
+    session.usage_anchor_request_input_bytes = canonical_size(anchor);
+    session.usage_anchor_input_tokens = 100u;
+    assert(snj_json_digest(anchor,
+            session.usage_anchor_request_input_sha256) == 0);
+    assert(snj_context_usage_anchor_bound(&session, "provider", "model",
+               "medium",
+               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+               &projection, &bound) == 1);
+    assert(bound > session.usage_anchor_input_tokens);
+
+    assert(json_object_set_new(json_array_get(
+               json_object_get(projection.create_request, "input"), 2u),
+               "content", json_string("changed controller")) == 0);
+    projection.request_input_bytes = canonical_size(
+        json_object_get(projection.create_request, "input"));
+    projection.create_request_bytes = canonical_size(projection.create_request);
+    assert(snj_context_usage_anchor_bound(&session, "provider", "model",
+               "medium",
+               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+               &projection, &bound) == 0);
+
+    json_decref(anchor);
+    snj_context_projection_free(&projection);
+}
+
 int
 main(void)
 {
@@ -849,6 +923,7 @@ main(void)
     char closure_output[4097];
 
     test_usage_anchor();
+    test_usage_anchor_before_controller_suffix();
     assert(mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
     assert(snprintf(workspace, sizeof(workspace), "%s/work", temp) > 0);
@@ -1065,6 +1140,7 @@ main(void)
                                  active_steering, 0u, false, NULL,
                                  &no_instructions,
                                  &active_projection, error, sizeof(error)) == 0);
+        assert(active_projection.request_controller_count == 1u);
         input = json_object_get(active_projection.create_request, "input");
         assert(json_is_array(input));
         assert(json_array_size(input) == 5u);

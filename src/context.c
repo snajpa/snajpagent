@@ -1455,6 +1455,9 @@ snj_context_usage_anchor_bound(
     json_t *items;
     json_t *prefix = NULL;
     char prefix_hash[SNJ_SHA256_HEX_LEN + 1u];
+    size_t anchor_prefix_count;
+    size_t current_count;
+    size_t controller_count;
     uint64_t added_bytes;
     uint64_t added_count;
     uint64_t envelope;
@@ -1486,11 +1489,22 @@ snj_context_usage_anchor_bound(
     if (!json_is_array(items) || json_array_size(items) !=
         projection->request_input_count)
         return 0;
+    current_count = projection->request_input_count;
+    controller_count = projection->request_controller_count;
+    if (controller_count > current_count ||
+        controller_count > session->usage_anchor_request_input_count)
+        return 0;
+    anchor_prefix_count = session->usage_anchor_request_input_count -
+        controller_count;
     prefix = json_array();
     if (!prefix)
         return -1;
-    for (size_t i = 0;
-         i < session->usage_anchor_request_input_count; ++i) {
+    for (size_t i = 0; i < anchor_prefix_count; ++i) {
+        if (json_array_append(prefix, json_array_get(items, i)) < 0)
+            goto out;
+    }
+    for (size_t i = current_count - controller_count;
+         i < current_count; ++i) {
         if (json_array_append(prefix, json_array_get(items, i)) < 0)
             goto out;
     }
@@ -2112,6 +2126,7 @@ snj_context_build(struct snj_session *session, const char *model,
         "You are " SNAJPAGENT_NAME ", a local coding agent. Be concise, preserve user-visible progress, inspect before destructive changes, and use only declared tools.";
     struct context_builder builder;
     struct snj_buf network_harness;
+    size_t controller_start;
     int rc = -1;
 
     snj_context_projection_free(projection);
@@ -2182,8 +2197,12 @@ snj_context_build(struct snj_session *session, const char *model,
         errno = EINVAL;
         goto out;
     }
-    if (append_deferred_steering(&builder) < 0 ||
-        append_goal_controller(&builder) < 0 ||
+    if (append_deferred_steering(&builder) < 0) {
+        set_error(error, error_size, "cannot append deferred steering");
+        goto out;
+    }
+    controller_start = json_array_size(builder.request_input);
+    if (append_goal_controller(&builder) < 0 ||
         append_managed_gate(&builder) < 0) {
         set_error(error, error_size, "cannot append active controller state");
         goto out;
@@ -2211,6 +2230,8 @@ snj_context_build(struct snj_session *session, const char *model,
     }
     projection->request_input_count = json_array_size(
         json_object_get(projection->create_request, "input"));
+    projection->request_controller_count =
+        projection->request_input_count - controller_start;
     if (projection->model_input_bytes > (size_t)LLONG_MAX) {
         set_error(error, error_size, "response request projection is too large");
         errno = EOVERFLOW;

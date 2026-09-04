@@ -78,6 +78,18 @@ set_response_id(struct snj_response_graph *graph, unsigned int cycle,
     return snj_response_graph_set_provider_id(graph, id);
 }
 
+static void
+set_usage(struct snj_response_graph *graph, uint64_t input_tokens,
+          uint64_t output_tokens)
+{
+    graph->usage.input_tokens = input_tokens;
+    graph->usage.output_tokens = output_tokens;
+    graph->usage.total_tokens = input_tokens + output_tokens;
+    graph->usage.input_known = true;
+    graph->usage.output_known = true;
+    graph->usage.total_known = true;
+}
+
 static int
 emit_public(struct snj_response_graph *graph, fixture_emit_fn emit, void *opaque,
             enum snj_item_kind kind, enum snj_item_phase phase,
@@ -303,6 +315,16 @@ snj_fixture_response(const char *prompt, const json_t *steering,
     }
     if (set_response_id(graph, cycle, "complete") < 0)
         goto allocation;
+    if (strcmp(prompt, "context_anchor_chain") == 0) {
+        set_usage(graph, 8000u + (uint64_t)(cycle - 1u) * 24000u, 100u);
+        if (cycle <= 4u)
+            return add_call(graph, workspace, cycle, 0u,
+                            "fixture context anchor large output");
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_context_anchor",
+                           "context anchor complete", 0);
+    }
     if (strcmp(prompt, SNJ_GOAL_CONTINUATION_TEXT) == 0) {
         if (!goal_prompt)
             goto allocation;
@@ -1011,6 +1033,19 @@ snj_fixture_tool(const struct snj_response_item *call,
     }
     if (strstr(command, "managed start")) {
         *result = running_result("fixture process is still running");
+        if (!*result)
+            goto allocation;
+        return 0;
+    }
+    if (strstr(command, "context anchor large output")) {
+        char *text = malloc(96u * 1024u + 1u);
+
+        if (!text)
+            goto allocation;
+        memset(text, 'x', 96u * 1024u);
+        text[96u * 1024u] = '\0';
+        *result = snj_tool_result_terminal(true, text);
+        free(text);
         if (!*result)
             goto allocation;
         return 0;
