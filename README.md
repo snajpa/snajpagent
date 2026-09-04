@@ -57,7 +57,11 @@ rendered screen and scrollback, not merely the PTY byte stream. It covers
 streaming/status interaction, word and hard wrapping, UTF-8/control safety,
 steering pause/resume snapshots, resize at the right margin, every queue
 mutation, durable response/queue text, and enabled/disabled `AGENTS.md`
-admission. Call `make tmuxcheck` directly when tmux coverage is mandatory.
+admission. It then runs three production binaries against loopback fake
+Responses endpoints—one IRC server and two clients—and checks bidirectional
+chat, all three model replies, operator/topic/membership durability, verbosity,
+color, rendered timestamps, peer-leave handling, and clean shutdown. Call
+`make tmuxcheck` directly when tmux coverage is mandatory.
 
 The explicit live counterpart uses the configured default provider, the fixed
 vpsAdminOS 6.12.95 status prompt documented in `design/interactive-io.md`, and

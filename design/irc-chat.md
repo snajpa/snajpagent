@@ -418,5 +418,9 @@ pass and focused local smoke checks demonstrate all of the following:
    detail, escape-sequence, or cross-server leakage.
 
 Use the repository's existing `make`, `make check`, and `make sanitizercheck`
-flows plus narrow local multi-process smoke runs. Do not introduce a separate
-validation or evidence framework for this feature.
+flows. The permanent tmux check runs the production binary as one server and
+two clients against loopback fake Responses endpoints, exercising both client
+message directions, all three model paths, durable room attribution, and the
+rendered verbosity/color UI. It exits the clients in sequence, admits their
+durable leave notifications, then exits the server cleanly. Do not introduce a
+separate validation or evidence framework for this feature.

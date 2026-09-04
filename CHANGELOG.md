@@ -28,9 +28,11 @@
   functions remain available as `--dotdir`, `--config`, `--resume`, and
   `--effort`.
 
-- Added permanent narrow-tmux rendered-screen regression coverage plus an
-  explicit serialized live terminal target that compares the configured
-  provider run with durable response and `AGENTS.md` metadata.
+- Added permanent narrow-tmux rendered-screen regression coverage, including
+  one production IRC server and two production clients using loopback fake
+  Responses endpoints, plus an explicit serialized live terminal target that
+  compares the configured provider run with durable response and `AGENTS.md`
+  metadata.
 - Fixed exact-right-margin composer redraws so VT pending-wrap state cannot make
   a later edit or resize erase the model-output row above it.
 - Prevented the transient activity status from redrawing in the middle of an

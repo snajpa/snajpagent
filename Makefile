@@ -162,7 +162,7 @@ releasecheck:
 livecheck: $(BIN)
 	python3 ./tools/live_provider_check.py ./$(BIN)
 
-tmuxcheck: tests/snajpagent-fixture
+tmuxcheck: $(BIN) tests/snajpagent-fixture
 	@command -v tmux >/dev/null 2>&1 || { \
 		printf '%s\n' 'tmuxcheck: tmux is required' >&2; exit 2; \
 	}
@@ -178,6 +178,9 @@ tmuxcheck: tests/snajpagent-fixture
 		python3 ./tests/tmux_terminal.py fixture \
 		./tests/snajpagent-fixture "$(TMUX_TEST_ROOT)/work" \
 		"$(TMUX_TEST_ROOT)/run"
+	HOME="$(TMUX_TEST_ROOT)/home" LC_ALL=C.utf8 \
+		python3 ./tests/tmux_terminal.py irc ./$(BIN) \
+		"$(TMUX_TEST_ROOT)/irc"
 
 terminallivecheck: $(BIN)
 	@test -n "$(LIVE_RESULT_ROOT)" || { \

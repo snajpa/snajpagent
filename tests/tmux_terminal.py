@@ -3,13 +3,16 @@
 import argparse
 import fcntl
 import hashlib
+import http.server
 import json
 import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -57,8 +60,185 @@ def normalize_space(text):
     return " ".join(text.split())
 
 
+class FakeResponses:
+    AGENTS = {
+        "host-model": "hostbot",
+        "one-model": "onebot",
+        "two-model": "twobot",
+    }
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.requests = []
+        self.failure = None
+        self.sequence = 0
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                owner.handle(self)
+
+            def log_message(self, _format, *_args):
+                return
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.start()
+
+    @property
+    def port(self):
+        return self.server.server_address[1]
+
+    @staticmethod
+    def latest_user(request):
+        for item in reversed(request.get("input", [])):
+            if item.get("role") == "user" and isinstance(item.get("content"), str):
+                return item["content"]
+        return ""
+
+    @staticmethod
+    def event(kind, data):
+        return (
+            f"event: {kind}\n"
+            f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        )
+
+    def response_body(self, sequence, text):
+        response_id = f"resp_irc_ui_{sequence}"
+        created = {
+            "type": "response.created",
+            "response": {"id": response_id, "status": "in_progress", "output": []},
+        }
+        completed = {
+            "type": "response.completed",
+            "response": {
+                "id": response_id,
+                "status": "completed",
+                "usage": {"input_tokens": 1, "output_tokens": 1,
+                          "total_tokens": 2},
+                "output": [],
+            },
+        }
+        body = self.event("response.created", created)
+        if not text:
+            return body + self.event("response.completed", completed)
+        item_id = f"msg_irc_ui_{sequence}"
+        added_item = {
+            "id": item_id,
+            "type": "message",
+            "status": "in_progress",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [],
+        }
+        done_item = dict(added_item)
+        done_item["status"] = "completed"
+        done_item["content"] = [{"type": "output_text", "text": text,
+                                  "annotations": []}]
+        events = [
+            ("response.output_item.added", {
+                "type": "response.output_item.added", "output_index": 0,
+                "item": added_item,
+            }),
+            ("response.content_part.added", {
+                "type": "response.content_part.added", "item_id": item_id,
+                "output_index": 0, "content_index": 0,
+                "part": {"type": "output_text", "text": "",
+                         "annotations": []},
+            }),
+            ("response.output_text.delta", {
+                "type": "response.output_text.delta", "item_id": item_id,
+                "output_index": 0, "content_index": 0, "delta": text,
+            }),
+            ("response.output_text.done", {
+                "type": "response.output_text.done", "item_id": item_id,
+                "output_index": 0, "content_index": 0, "text": text,
+            }),
+            ("response.output_item.done", {
+                "type": "response.output_item.done", "output_index": 0,
+                "item": done_item,
+            }),
+            ("response.completed", completed),
+        ]
+        return body + "".join(self.event(kind, data) for kind, data in events)
+
+    def handle(self, handler):
+        try:
+            if handler.path != "/v1/responses":
+                raise AssertionError(f"unexpected fake endpoint {handler.path!r}")
+            if handler.headers.get("Authorization") != "Bearer irc-ui-secret":
+                raise AssertionError("fake endpoint received the wrong credential")
+            length = int(handler.headers.get("Content-Length", "-1"))
+            if length < 0 or length > 32 * 1024 * 1024:
+                raise AssertionError("fake endpoint request length is invalid")
+            request = json.loads(handler.rfile.read(length))
+            model = request.get("model")
+            latest = self.latest_user(request)
+            if model not in self.AGENTS:
+                raise AssertionError(f"unexpected fake model {model!r}")
+            with self.lock:
+                self.sequence += 1
+                sequence = self.sequence
+                self.requests.append({"model": model, "latest": latest})
+            marker = None
+            if "integration one from oneop" in latest:
+                marker = "one"
+            elif "integration two from twoop" in latest:
+                marker = "two"
+            text = f"{self.AGENTS[model]} heard {marker}" if marker else ""
+            body = self.response_body(sequence, text).encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(body)
+            handler.close_connection = True
+        except Exception as exc:
+            with self.lock:
+                if self.failure is None:
+                    self.failure = repr(exc)
+            try:
+                handler.send_error(500)
+            except OSError:
+                pass
+
+    def matching_requests(self, marker):
+        with self.lock:
+            if self.failure:
+                raise AssertionError(f"fake endpoint failed: {self.failure}")
+            return [request for request in self.requests
+                    if marker in request["latest"]]
+
+    def wait_models(self, marker, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        expected = set(self.AGENTS)
+        while time.monotonic() < deadline:
+            requests = self.matching_requests(marker)
+            if {request["model"] for request in requests} == expected:
+                return requests
+            time.sleep(0.02)
+        raise AssertionError(
+            f"fake endpoint did not receive {marker!r} from every model: "
+            f"{self.matching_requests(marker)!r}"
+        )
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5.0)
+        if self.thread.is_alive():
+            raise AssertionError("fake endpoint thread did not stop")
+        if self.failure:
+            raise AssertionError(f"fake endpoint failed: {self.failure}")
+
+
 class TmuxTerminal:
-    def __init__(self, root, binary, workspace, dotdir, config, cols, rows):
+    def __init__(self, root, binary, workspace, dotdir, config, cols, rows,
+                 args=(), environment=None):
         self.root = root
         self.binary = os.path.abspath(binary)
         self.workspace = os.path.abspath(workspace)
@@ -86,9 +266,12 @@ class TmuxTerminal:
         command = [self.binary, "--dotdir", str(dotdir)]
         if config is not None:
             command.extend(["--config", str(config)])
+        command.extend(args)
         env = os.environ.copy()
         env.pop("TMUX", None)
         env["LC_ALL"] = "C.utf8"
+        if environment:
+            env.update(environment)
         try:
             subprocess.run(
                 [
@@ -141,6 +324,11 @@ class TmuxTerminal:
         if "\x1b" in self.last_screen:
             raise AssertionError("tmux rendered pane contains a raw escape byte")
         return self.last_screen
+
+    def capture_styled(self):
+        return self.run(
+            "capture-pane", "-p", "-e", "-t", self.target, "-S", "-"
+        )
 
     def wait(self, needle, timeout=10.0, join_wrapped=False):
         deadline = time.monotonic() + timeout
@@ -678,6 +866,297 @@ def run_fixture(binary, workspace, root):
     print("tmux_terminal fixture: ok")
 
 
+def free_loopback_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def write_irc_config(path, provider_port, model):
+    path.write_text(
+        f"[agent]\nmodel = {model}\nread_agents_md = false\n"
+        f"[provider fake]\nbase_url = http://127.0.0.1:{provider_port}/v1\n"
+        "api_key_env = SNAJPAGENT_IRC_UI_KEY\n"
+        "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
+        "request_timeout_ms = 5000\nauto_compact_input_tokens = 0\n"
+        "exact_token_count = false\nnative_compaction = false\n"
+        "[ui]\ntyping_pause_ms = 50\nverbosity = 0\ncolor = never\n",
+        encoding="utf-8",
+    )
+
+
+def wait_current_prompt(terminal, operator, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    expected = f"{operator} ›"
+    screen = ""
+    while time.monotonic() < deadline:
+        screen = terminal.capture()
+        if screen.rstrip().endswith(expected):
+            return screen
+        if terminal.dead():
+            raise AssertionError(
+                f"pane exited while waiting for prompt {expected!r}:\n{screen}"
+            )
+        time.sleep(0.02)
+    raise AssertionError(f"current prompt {expected!r} is missing:\n{screen}")
+
+
+def active_turns(dotdir):
+    _, events = maybe_events(dotdir)
+    active = set()
+    terminal = {
+        "turn_completed", "turn_completed_silent", "turn_failed",
+        "turn_interrupted", "turn_refused",
+    }
+    for event in events:
+        turn_id = event.get("data", {}).get("turn_id")
+        if event["type"] == "turn_started" and turn_id:
+            active.add(turn_id)
+        elif event["type"] in terminal and turn_id:
+            active.discard(turn_id)
+    return active
+
+
+def wait_irc_idle(terminals, timeout=15.0):
+    deadline = time.monotonic() + timeout
+    stable_since = None
+    while time.monotonic() < deadline:
+        if all(not active_turns(terminal.dotdir) for terminal in terminals):
+            if stable_since is None:
+                stable_since = time.monotonic()
+            elif time.monotonic() - stable_since >= 0.3:
+                return
+        else:
+            stable_since = None
+        if any(terminal.dead() for terminal in terminals):
+            raise AssertionError("an IRC integration pane exited while active")
+        time.sleep(0.02)
+    raise AssertionError(
+        f"IRC agents did not become idle: "
+        f"{[sorted(active_turns(terminal.dotdir)) for terminal in terminals]!r}"
+    )
+
+
+def wait_irc_quits(terminal, nicks, timeout=15.0):
+    deadline = time.monotonic() + timeout
+    expected = set(nicks)
+    while time.monotonic() < deadline:
+        _, events = maybe_events(terminal.dotdir)
+        quitters = {event["data"]["nick"] for event in event_list(events, "irc_event")
+                   if event["data"]["kind"] == "quit"}
+        if expected <= quitters:
+            return
+        if terminal.dead():
+            raise AssertionError("IRC pane exited before peer quit traffic arrived")
+        time.sleep(0.02)
+    raise AssertionError(f"missing durable IRC quits: {expected - quitters!r}")
+
+
+def assert_chat_line(screen, nick, text, operator=False):
+    marker = "@" if operator else ""
+    pattern = rf"(?m)^\d{{2}}:\d{{2}} {re.escape(marker + nick)} › {re.escape(text)}$"
+    if re.search(pattern, screen) is None:
+        raise AssertionError(f"missing timestamped IRC line {nick!r}: {text!r}\n{screen}")
+
+
+def validate_irc_events(dotdir):
+    _, events = read_events(dotdir)
+    expected_messages = [
+        ("oneop", "integration one from oneop", True),
+        ("twoop", "integration two from twoop", True),
+    ]
+    for suffix in ("one", "two"):
+        expected_messages.extend(
+            (nick, f"{nick} heard {suffix}", False)
+            for nick in ("hostbot", "onebot", "twobot")
+        )
+    messages = [event for event in event_list(events, "irc_event")
+                if event["data"]["kind"] == "message"]
+    for nick, text, operator in expected_messages:
+        matches = [event for event in messages
+                   if event["data"]["nick"] == nick and
+                   event["data"]["text"] == text]
+        if len(matches) != 1 or matches[0]["data"]["op"] is not operator:
+            raise AssertionError(
+                f"IRC message attribution mismatch for {nick!r}: {text!r}"
+            )
+    joins = {event["data"]["nick"] for event in event_list(events, "irc_event")
+             if event["data"]["kind"] == "join"}
+    membership = " ".join(joins) + "\n" + "\n".join(
+        event["data"]["text"] for event in event_list(events, "irc_snapshot")
+    )
+    expected_joins = {"hostbot", "hostop", "onebot", "oneop",
+                      "twobot", "twoop"}
+    missing = {nick for nick in expected_joins if nick not in membership}
+    if missing:
+        raise AssertionError(f"missing durable IRC membership: {missing!r}")
+    topics = [event for event in event_list(events, "irc_event")
+              if event["data"]["kind"] == "topic" and
+              event["data"]["nick"] == "twoop" and
+              event["data"]["text"] == "shared integration topic"]
+    if len(topics) != 1 or not topics[0]["data"]["op"]:
+        raise AssertionError("operator topic change was not durably attributed")
+    turns = event_list(events, "turn_started")
+    for marker in ("integration one from oneop", "integration two from twoop"):
+        matching = [event for event in turns if marker in event["data"]["text"]]
+        if len(matching) != 1 or "operator=true" not in matching[0]["data"]["text"]:
+            raise AssertionError(f"operator input was not admitted once: {marker!r}")
+    failures = event_list(events, "turn_failed")
+    if failures:
+        raise AssertionError(f"IRC integration turn failed: {failures[-1]!r}")
+
+
+def validate_irc_styles(terminal, remote_agent, local_agent=None):
+    styled = terminal.capture_styled()
+    expected = [
+        (r"\x1b\[[0-9;]*35m@twoop", "operator magenta"),
+        (rf"\x1b\[[0-9;]*34m{remote_agent}", "remote-agent blue"),
+    ]
+    if local_agent:
+        expected.append(
+            (rf"\x1b\[[0-9;]*36m{local_agent}", "local-agent cyan")
+        )
+    for pattern, role in expected:
+        if re.search(pattern, styled) is None:
+            raise AssertionError(f"network UI is missing {role} styling")
+
+
+def run_irc_case(binary, root):
+    root.mkdir(mode=0o700, parents=True)
+    provider = FakeResponses()
+    irc_port = free_loopback_port()
+    endpoint = f"127.0.0.1:{irc_port}"
+    environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    specs = [
+        ("host", "host-model", "hostbot", "hostop",
+         ["-d", "-s", endpoint, "-n", "hostbot", "-o", "hostop",
+          "-r", "lab", "--color=always"]),
+        ("one", "one-model", "onebot", "oneop",
+         ["-c", endpoint, "-n", "onebot", "-o", "oneop",
+          "--color=always"]),
+        ("two", "two-model", "twobot", "twoop",
+         ["-c", endpoint, "-n", "twobot", "-o", "twoop",
+          "--color=always"]),
+    ]
+    terminals = {}
+    try:
+        for name, model, _agent, operator, args in specs:
+            case = root / name
+            workspace = case / "workspace"
+            workspace.mkdir(mode=0o700, parents=True)
+            config = case / "config.ini"
+            write_irc_config(config, provider.port, model)
+            terminal = TmuxTerminal(
+                case / "terminal", binary, workspace, case / "state", config,
+                100, 24, args=args, environment=environment,
+            )
+            terminals[name] = terminal
+            terminal.wait(f"{operator} ›")
+
+        ordered = [terminals[name] for name in ("host", "one", "two")]
+        terminals["host"].wait("@twoop  joined")
+        terminals["one"].wait("twoop  joined")
+        terminals["one"].wait("set mode · +o twoop")
+        terminals["two"].wait("history synchronized")
+        wait_irc_idle(ordered)
+        for terminal, operator in zip(ordered, ("hostop", "oneop", "twoop")):
+            wait_current_prompt(terminal, operator)
+        terminals["two"].submit("/names")
+        names = terminals["two"].wait(
+            f"members[{endpoint}]:", join_wrapped=True
+        )
+        for nick in ("hostbot", "@hostop", "onebot", "@oneop",
+                     "twobot", "@twoop"):
+            if nick not in names:
+                raise AssertionError(f"/names omitted {nick!r}:\n{names}")
+        wait_current_prompt(terminals["two"], "twoop")
+
+        first = "integration one from oneop"
+        terminals["one"].submit(first)
+        for terminal in ordered:
+            terminal.wait(first)
+        provider.wait_models(first)
+        for name, terminal in terminals.items():
+            own = {"host": "hostbot", "one": "onebot", "two": "twobot"}[name]
+            for agent in ("hostbot", "onebot", "twobot"):
+                if agent != own:
+                    terminal.wait(f"{agent} heard one")
+        wait_irc_idle(ordered)
+
+        terminals["two"].submit("/verbose 1")
+        terminals["two"].wait("verbosity: 1")
+        wait_current_prompt(terminals["two"], "twoop")
+        second = "integration two from twoop"
+        terminals["two"].submit(second)
+        for terminal in ordered:
+            terminal.wait(second)
+        provider.wait_models(second)
+        for name, terminal in terminals.items():
+            own = {"host": "hostbot", "one": "onebot", "two": "twobot"}[name]
+            for agent in ("hostbot", "onebot", "twobot"):
+                if agent != own or name == "two":
+                    terminal.wait(f"{agent} heard two")
+        wait_irc_idle(ordered)
+
+        terminals["two"].submit("/topic shared integration topic")
+        for terminal in ordered:
+            terminal.wait("@twoop  set topic · shared integration topic")
+        wait_irc_idle(ordered)
+
+        for name, _model, own, operator, _args in specs:
+            terminal = terminals[name]
+            screen = wait_current_prompt(terminal, operator)
+            assert_chat_line(screen, "oneop", first, operator=True)
+            assert_chat_line(screen, "twoop", second, operator=True)
+            for suffix in ("one", "two"):
+                for agent in ("hostbot", "onebot", "twobot"):
+                    count = screen.count(f"{agent} heard {suffix}")
+                    expected = 1 if agent != own or (name == "two" and suffix == "two") else 0
+                    if count != expected:
+                        raise AssertionError(
+                            f"{name} rendered {agent} reply {suffix} {count} times; "
+                            f"expected {expected}\n{screen}"
+                        )
+                    if expected:
+                        assert_chat_line(screen, agent, f"{agent} heard {suffix}")
+            if screen.count("@twoop  set topic · shared integration topic") != 1:
+                raise AssertionError(f"{name} did not render the topic change once")
+            validate_irc_events(terminal.dotdir)
+        validate_irc_styles(terminals["host"], "onebot")
+        validate_irc_styles(terminals["one"], "hostbot")
+        validate_irc_styles(terminals["two"], "hostbot", "twobot")
+
+        for marker in (first, second):
+            requests = provider.matching_requests(marker)
+            counts = {model: sum(request["model"] == model for request in requests)
+                      for model in FakeResponses.AGENTS}
+            if any(count != 1 for count in counts.values()):
+                raise AssertionError(
+                    f"operator message was not modeled once per agent: {counts!r}"
+                )
+
+        terminals["two"].exit()
+        wait_irc_quits(terminals["host"], ("twobot", "twoop"))
+        wait_irc_quits(terminals["one"], ("twobot", "twoop"))
+        wait_irc_idle([terminals["host"], terminals["one"]])
+        terminals["one"].exit()
+        wait_irc_quits(terminals["host"], ("onebot", "oneop"))
+        wait_irc_idle([terminals["host"]])
+        terminals["host"].exit()
+        print("tmux_terminal irc: ok")
+    finally:
+        for name, terminal in terminals.items():
+            try:
+                screen = terminal.capture()
+                (root / name / "screen.txt").write_text(screen, encoding="utf-8")
+            except Exception:
+                pass
+            terminal.close()
+            if os.path.lexists(terminal.socket):
+                raise AssertionError(f"tmux socket survived cleanup: {terminal.socket}")
+        provider.close()
+
+
 def validate_live_screen(screen, events, workspace):
     turns = event_list(events, "turn_started")
     if len(turns) != 1 or turns[0]["data"]["text"] != LIVE_PROMPT:
@@ -810,6 +1289,9 @@ def main():
     fixture.add_argument("binary")
     fixture.add_argument("workspace")
     fixture.add_argument("root", type=Path)
+    irc = subparsers.add_parser("irc")
+    irc.add_argument("binary")
+    irc.add_argument("root", type=Path)
     live = subparsers.add_parser("live")
     live.add_argument("binary")
     live.add_argument("workspace")
@@ -821,6 +1303,8 @@ def main():
         parser.error("tmux is required")
     if args.mode == "fixture":
         run_fixture(args.binary, args.workspace, args.root)
+    elif args.mode == "irc":
+        run_irc_case(args.binary, args.root)
     else:
         run_live(args.binary, args.workspace, args.config, args.root)
 
