@@ -175,7 +175,7 @@ check: $(TEST_BIN)
 	else \
 		printf '%s\n' 'tmux_terminal: skipped (tmux unavailable)'; \
 	fi
-	./tools/check_spdx.sh
+	$(MAKE) stylecheck
 	$(MAKE) depscheck
 	$(MAKE) portabilitycheck
 	$(MAKE) depclosurecheck
@@ -185,6 +185,9 @@ check: $(TEST_BIN)
 
 statuscheck:
 	python3 ./tools/check_status.py
+
+stylecheck:
+	./tools/check_style.sh
 
 depscheck:
 	python3 ./tools/check_deps.py
@@ -314,6 +317,6 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check statuscheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install FORCE
+.PHONY: all check statuscheck stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d

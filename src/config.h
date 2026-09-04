@@ -29,13 +29,19 @@ enum snj_color_mode {
     SNJ_COLOR_NEVER
 };
 
+enum snj_token_count_mode {
+    SNJ_TOKEN_COUNT_AUTO,
+    SNJ_TOKEN_COUNT_OFF,
+    SNJ_TOKEN_COUNT_STRICT
+};
+
 struct snj_provider_config {
     char name[SNJ_CONFIG_PROVIDER_NAME_MAX + 1u];
     uint32_t connect_timeout_ms;
     uint32_t idle_timeout_ms;
     uint32_t request_timeout_ms;
     uint32_t auto_compact_input_tokens;
-    bool exact_token_count;
+    enum snj_token_count_mode exact_token_count;
     bool native_compaction;
     char base_url[SNJ_CONFIG_URL_MAX];
     char api_key_env[SNJ_CONFIG_ENV_NAME_MAX + 1u];

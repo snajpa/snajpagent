@@ -1272,7 +1272,6 @@ patch_result_buf(const char *status, struct snj_buf *text,
     return patch_result(status, (const char *)text->data, duration_ms);
 }
 
-
 static int
 preview_appendn(struct snj_buf *out, size_t *used, bool *truncated,
                 const char *data, size_t len)

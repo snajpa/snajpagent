@@ -588,7 +588,6 @@ test_stdin_uses_blocking_child_fd(void)
     json_decref(result);
 }
 
-
 static void
 test_pty_merges_stdout_and_stderr(void)
 {
@@ -603,7 +602,6 @@ test_pty_merges_stdout_and_stderr(void)
                            "original_bytes") == 0);
     json_decref(result);
 }
-
 
 static void
 test_managed_pty_write_stdin_completes(void)
@@ -630,7 +628,6 @@ test_managed_pty_write_stdin_completes(void)
     json_decref(next);
     json_decref(result);
 }
-
 
 static void
 test_managed_process_write_stdin_completes(void)
@@ -811,8 +808,6 @@ test_invalid_termination_preserves_managed_process(void)
     json_decref(result);
 }
 
-
-
 static void
 test_managed_process_close_returns_terminal_result(void)
 {
@@ -914,7 +909,6 @@ test_provider_secret_redacted_from_output(void)
     assert(strstr(retained, "<redacted:secret>") != NULL);
     json_decref(result);
 }
-
 
 static void
 test_provider_secret_redacted_across_read_boundary(void)

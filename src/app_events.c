@@ -483,6 +483,19 @@ snj_app_steering_snapshot(const struct snj_session *session)
     return array;
 }
 
+static uint64_t
+statistical_input_bound(uint64_t bytes, uint64_t ratio)
+{
+    uint64_t scaled;
+
+    if (!bytes || !ratio || bytes > (UINT64_MAX - 999999u) / ratio)
+        return SNJ_CONFIG_TOKEN_LIMIT_MAX;
+    scaled = (bytes * ratio + 999999u) / UINT64_C(1000000);
+    if (scaled > (SNJ_CONFIG_TOKEN_LIMIT_MAX - 512u) * 8u / 9u)
+        return SNJ_CONFIG_TOKEN_LIMIT_MAX;
+    return scaled + scaled / 8u + 512u;
+}
+
 int
 snj_app_request_digests(struct app_state *app, const char *prompt,
                 const json_t *steering, unsigned int cycle,
@@ -549,6 +562,11 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
             } else if (anchor_rc == 1) {
                 *input_tokens_bound = anchored_bound;
                 *count_method = "anchored_upper_bound";
+            } else if (app->turn_capacity.observed_tokens_per_million_bytes) {
+                *input_tokens_bound = statistical_input_bound(
+                    *model_input_bytes,
+                    app->turn_capacity.observed_tokens_per_million_bytes);
+                *count_method = "statistical_upper_estimate";
             }
         }
         if (create_request)
@@ -590,8 +608,6 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
     snj_context_projection_free(&projection);
     return rc;
 }
-
-
 json_t *
 snj_app_response_started_data(const char *turn_id, const char *response_id,
                       unsigned int cycle, const char *compact_id,
@@ -1035,8 +1051,6 @@ fail:
     json_decref(data);
     return NULL;
 }
-
-
 /* Takes ownership of result, including on failure. */
 json_t *
 snj_app_process_closed_data(const char *turn_id, const char *handle,

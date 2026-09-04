@@ -34,7 +34,7 @@ api_key_env = OPENAI_API_KEY
 [provider codex-lb]
 base_url = http://127.0.0.1:2455/backend-api/codex
 api_key_env = CODEX_LB_API_KEY
-exact_token_count = false
+exact_token_count = auto
 native_compaction = false
 ```
 
@@ -79,10 +79,12 @@ model top level and in `metadata` or `capabilities`; aliases for the same fact
 must agree. A standard Models response that supplies only IDs is valid and
 stores unknown limits.
 
-The cache has one strict, unversioned pre-release schema. Each provider record
+The cache has one strict versioned pre-release schema. Each provider record
 binds its models to the normalized `base_url` and the `codex` or `openai`
-catalog protocol that supplied them. Each model has this fixed-shape object,
-whose absent provider facts remain JSON null:
+catalog protocol that supplied them. `schema_version` is currently `1` and
+`updated_at_ms` records the last successful discovery refresh. Each model has
+this fixed-shape data, whose absent provider facts remain JSON null and whose
+absent learned facts remain zero:
 
 ```json
 "limits": {
@@ -93,19 +95,28 @@ whose absent provider facts remain JSON null:
   "max_output_tokens": null,
   "auto_compact_input_tokens": null,
   "effective_context_window_percent": null
-}
+},
+"count_capability": "unknown",
+"observed_model_input_bytes": 0,
+"observed_input_tokens": 0,
+"observed_hard_input_tokens": 0
 ```
 
-There is no format/version member, old-shape reader, migration, or implicit
-rewrite. A non-current cache is unusable and directs the operator to run
-`/model cache`. If a configured provider's URL or catalog protocol no longer
-matches its cached source binding, its catalog remains displayable but its
-limits are ignored for runtime safety until an explicit refresh.
+There is no old-shape reader, migration, or implicit rewrite. An unversioned or
+non-current cache is unusable and directs the operator to run `/model cache`.
+If a configured provider's URL or catalog protocol no longer matches its
+cached source binding, its catalog remains displayable but its limits and
+learned facts are ignored for runtime safety until an explicit refresh.
 Refreshing is transactional across all configured providers: any discovery or
 write failure preserves the previous cache rather than publishing a partial
 replacement. Both protocols share the provider's configured credentials,
 headers, redaction, retries, timeouts, response bounds, and no-redirect policy.
-A failed Codex endpoint never falls back to `/v1/models`.
+A failed Codex endpoint never falls back to `/v1/models`. Successful refresh
+resets exact-count capability to unknown so the next `auto` turn probes the
+current endpoint. It preserves observations only when provider name, normalized
+base URL, protocol, and model ID all still match. Cache observation updates use
+the same private advisory lock and atomic replacement, with no provider I/O
+while locked; a failed observation write warns but does not fail the model turn.
 
 `/model` and its alias `/model list` read the persistent cache without
 contacting a provider and do not refresh it merely because it is old. If no
@@ -130,7 +141,9 @@ selectable row using the configured/default reasoning effort. Provider names
 are shown so duplicate model IDs from different providers remain distinct.
 Each model line also shows the advertised normal context, maximum context,
 maximum input, and maximum output when known; unknown facts remain visibly
-unknown rather than being inferred from the model name.
+unknown rather than being inferred from the model name. It also reports the
+cached exact-count capability and whether a byte/token estimate has been
+learned, without turning the picker into a diagnostics dump.
 
 `/model NUMBER` selects the exact displayed row. `/model #NUMBER` is accepted
 as an equivalent explicit-number spelling. Numbering is read from the same
@@ -220,11 +233,30 @@ derives 90-percent headroom. Derived policy is visible but is not cached or
 described as a provider promise. Unknown output capacity omits
 `max_output_tokens` from Responses requests.
 
-A typed pre-output capacity rejection may additionally establish a lower
-in-session hard-input ceiling when the provider supplies an integral context
-limit or requested-input count. This observed ceiling is durable session
-state, not provider-advertised cache data. It is bound to the exact provider,
-model, normalized base URL, and protocol that rejected the request, never
-raises a configured or advertised budget, and is ignored after a source
-mismatch. `/status` reports observed usage and the observed ceiling as
-separate facts. Without either provider token detail, no ceiling is inferred.
+## Token Accounting And Learned Facts
+
+`exact_token_count` has three modes. `auto`, the default, uses
+`POST <base>/v1/responses/input_tokens` when the selected route supports the
+documented exact response and remembers HTTP 405/501 as definitively
+unsupported. HTTP 404 remains ambiguous because it can mean an invalid model;
+it and authentication, rate-limit, transport, or malformed-body failures stay
+uncached and fail the count operation. `true` makes every count failure
+terminal; `false` disables preflight counting.
+
+Exact preflight is avoided when a compatible completed-response usage anchor
+already accounts for normal transcript growth. When neither is available, a
+matching discovered model may use one representative observation: the exact
+token count paired with the largest canonical model-input byte count seen.
+The estimate derived from that pair adds fixed framing reserve and conservative
+headroom and is labeled `statistical_upper_estimate`, never exact. The
+one-token-per-canonical-byte `qualified_upper_bound` remains the no-sample
+fallback. Neither estimate can by itself terminalize a first provider attempt
+merely because no older complete turn can be compacted.
+
+Only an exact count response, exact completed-response usage for that request,
+or a typed rejection with an integral requested-input count can update the
+pair. A typed rejection may also lower `observed_hard_input_tokens`. Learned
+facts are separate from advertised `limits`, never copied from configuration,
+never created for an uncached manually typed model, and never inferred from
+error prose. `/status` keeps configured, advertised, observed-ceiling, exact
+usage-anchor, statistical, and byte-bound meanings distinct.

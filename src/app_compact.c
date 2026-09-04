@@ -43,6 +43,7 @@ count_method_valid(const char *method)
 {
     return method && (strcmp(method, "exact") == 0 ||
                       strcmp(method, "anchored_upper_bound") == 0 ||
+                      strcmp(method, "statistical_upper_estimate") == 0 ||
                       strcmp(method, "qualified_upper_bound") == 0);
 }
 
@@ -445,6 +446,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
     uint64_t output_tokens_bound = 0u;
     uint64_t source_seq;
     uint64_t source_budget;
+    bool use_exact;
     bool started = false;
     int build_rc;
     int stage_rc;
@@ -484,13 +486,15 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         credential = &owned_credential;
     }
 #endif
-    source_budget = app->turn_capacity.hard_input_known &&
-        !app->turn_provider->exact_token_count ?
+    use_exact = snj_app_exact_count_enabled(
+        app->turn_provider->exact_token_count,
+        app->turn_capacity.count_capability);
+    source_budget = app->turn_capacity.hard_input_known && !use_exact ?
         app->turn_capacity.hard_input_tokens : 0u;
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
         build_rc = build_compaction_request(app, active_prefix, model, effort,
                                             source_budget,
-                                            app->turn_provider->exact_token_count,
+                                            use_exact,
                                             &request, &count_request,
                                             source_hash, &source_bytes,
                                             request_hash, &request_bytes,
@@ -544,12 +548,17 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         }
         input_tokens_bound = (uint64_t)count_request_bytes;
 #ifndef SNAJPAGENT_TEST_FIXTURE
-        if (app->turn_provider->exact_token_count) {
-            if (snj_app_provider_count(app, count_request, credential,
-                                       &input_tokens_bound,
-                                       error, error_size) != 0)
+        if (use_exact) {
+            stage_rc = snj_app_provider_count(app, count_request, credential, 0u,
+                &input_tokens_bound, &count_method, error, error_size);
+            if (stage_rc != 0 && stage_rc != SNJ_APP_COUNT_SKIPPED) {
+                rc = stage_rc;
                 goto out;
-            count_method = "exact";
+            }
+            if (stage_rc == SNJ_APP_COUNT_SKIPPED) {
+                use_exact = false;
+                input_tokens_bound = (uint64_t)count_request_bytes;
+            }
         }
 #endif
         if (input_tokens_bound == 0u ||
@@ -642,15 +651,15 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         output_count_request_bytes == 0u)
         goto out;
 #ifndef SNAJPAGENT_TEST_FIXTURE
-    if (app->turn_provider->exact_token_count) {
-        stage_rc = snj_app_provider_count(app, output_count_request,
-                                          credential, &output_tokens_bound,
-                                          error, error_size);
-        if (stage_rc != 0) {
+    if (use_exact) {
+        stage_rc = snj_app_provider_count(app, output_count_request, credential,
+            0u, &output_tokens_bound, &output_count_method, error, error_size);
+        if (stage_rc != 0 && stage_rc != SNJ_APP_COUNT_SKIPPED) {
             rc = stage_rc;
             goto out;
         }
-        output_count_method = "exact";
+        if (stage_rc == SNJ_APP_COUNT_SKIPPED)
+            output_tokens_bound = (uint64_t)output_bytes;
     }
 #endif
     if (output_tokens_bound > (uint64_t)INT64_MAX) {
@@ -754,7 +763,9 @@ snj_app_compact_before_response(struct app_state *app,
                             true, credential, compacted, error, error_size);
         if (rc != 0)
             return rc;
-        if (over_hard && !*compacted) {
+        if (over_hard && !*compacted &&
+            strcmp(count_method, "statistical_upper_estimate") != 0 &&
+            strcmp(count_method, "qualified_upper_bound") != 0) {
             snprintf(error, error_size,
                      "context input estimate %llu (%s) exceeds hard budget %llu; no complete older turn can be compacted",
                      (unsigned long long)input_tokens_bound, count_method,

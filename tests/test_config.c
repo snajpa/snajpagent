@@ -56,6 +56,7 @@ main(void)
         "\n[provider backup]\n"
         "base_url = https://backup.example.test/v1\n"
         "api_key_env = BACKUP_API_KEY\n"
+        "exact_token_count = true\n"
         "\n[model-limit default/gpt-5.5]\n"
         "context_window_tokens = 1050000\n"
         "max_input_tokens = 922000\n"
@@ -119,7 +120,7 @@ main(void)
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(config.providers[0].auto_compact_input_tokens == 120000u);
-    assert(config.providers[0].exact_token_count);
+    assert(config.providers[0].exact_token_count == SNJ_TOKEN_COUNT_AUTO);
     assert(config.providers[0].native_compaction);
     assert(strcmp(config.providers[0].base_url, "https://api.openai.com") == 0);
     assert(strcmp(config.providers[0].api_key_env, "OPENAI_API_KEY") == 0);
@@ -154,12 +155,13 @@ main(void)
     assert(strcmp(config.providers[0].openrouter_referer,
                   "https://github.com/snajpa/snajpagent") == 0);
     assert(strcmp(config.providers[0].openrouter_title, "snajpagent") == 0);
-    assert(!config.providers[0].exact_token_count);
+    assert(config.providers[0].exact_token_count == SNJ_TOKEN_COUNT_OFF);
     assert(!config.providers[0].native_compaction);
     assert(strcmp(config.providers[1].name, "backup") == 0);
     assert(strcmp(config.providers[1].base_url,
                   "https://backup.example.test/v1") == 0);
     assert(strcmp(config.providers[1].api_key_env, "BACKUP_API_KEY") == 0);
+    assert(config.providers[1].exact_token_count == SNJ_TOKEN_COUNT_STRICT);
     assert(config.model_limit_count == 2u);
     {
         const struct snj_model_limit_config *limit =

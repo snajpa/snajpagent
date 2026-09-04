@@ -277,8 +277,6 @@ response_interrupted(const char *turn_id, const char *response_id,
     return data;
 }
 
-
-
 static json_t *
 compact_output_fixture(void)
 {

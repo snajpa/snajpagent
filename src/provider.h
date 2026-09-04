@@ -21,6 +21,7 @@ int snj_provider_responses_count(const json_t *count_request,
                                  snj_provider_pump_fn pump,
                                  void *pump_opaque,
                                  uint64_t *input_tokens,
+                                 bool *endpoint_unsupported,
                                  char *error, size_t error_size,
                                  int *cancel_code,
                                  unsigned int *retry_count);

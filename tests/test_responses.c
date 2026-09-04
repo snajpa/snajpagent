@@ -368,7 +368,6 @@ test_unused_annotation_shapes_are_ignored(void)
     }
 }
 
-
 static void
 test_phase_absent_text_becomes_visible_final(void)
 {

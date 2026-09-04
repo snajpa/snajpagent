@@ -271,7 +271,6 @@ fail_partial:
                        "public output could not be rendered");
 }
 
-
 #ifdef SNAJPAGENT_TEST_FIXTURE
 int
 snj_app_stream_public(void *opaque, size_t item_index, enum snj_item_kind kind,

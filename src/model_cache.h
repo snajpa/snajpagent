@@ -14,6 +14,12 @@ struct snj_model_cache {
     uint64_t updated_at_ms;
 };
 
+enum snj_count_capability {
+    SNJ_COUNT_UNKNOWN,
+    SNJ_COUNT_SUPPORTED,
+    SNJ_COUNT_UNSUPPORTED
+};
+
 enum snj_capacity_source {
     SNJ_CAPACITY_UNKNOWN,
     SNJ_CAPACITY_CATALOG,
@@ -30,8 +36,10 @@ struct snj_model_capacity {
     uint64_t max_output_tokens;
     uint64_t auto_compact_input_tokens;
     uint64_t hard_input_tokens;
+    uint64_t observed_tokens_per_million_bytes;
     unsigned int effective_context_window_percent;
     enum snj_capacity_source source;
+    enum snj_count_capability count_capability;
     bool context_window_known;
     bool max_context_window_known;
     bool input_context_window_known;
@@ -58,6 +66,14 @@ int snj_model_cache_replace(struct snj_store *store,
                             uint64_t updated_at_ms,
                             struct snj_model_cache *cache,
                             char *error, size_t error_size);
+int snj_model_cache_record(struct snj_store *store,
+                           struct snj_model_cache *cache,
+                           const struct snj_provider_config *provider,
+                           const char *protocol, const char *model,
+                           enum snj_count_capability capability,
+                           uint64_t model_input_bytes, uint64_t input_tokens,
+                           uint64_t hard_input_tokens,
+                           char *error, size_t error_size);
 
 const json_t *snj_model_cache_find(const struct snj_model_cache *cache,
                                    const char *provider,

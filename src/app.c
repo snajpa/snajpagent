@@ -301,6 +301,26 @@ apply_capacity_ceiling(const struct app_state *app,
     }
 }
 
+void
+snj_app_record_model_accounting(struct app_state *app,
+                                enum snj_count_capability capability,
+                                uint64_t model_input_bytes,
+                                uint64_t input_tokens,
+                                uint64_t hard_input_tokens)
+{
+    char error[256] = {0};
+
+    if (capability != SNJ_COUNT_UNKNOWN)
+        app->turn_capacity.count_capability = capability;
+    if (snj_model_cache_record(&app->store, &app->model_cache,
+            app->turn_provider,
+            snj_provider_catalog_protocol(app->turn_provider),
+            app->turn_model, capability, model_input_bytes, input_tokens,
+            hard_input_tokens, error, sizeof(error)) < 0)
+        (void)app_warning(app, error[0] ? error :
+            "model accounting observation could not be cached");
+}
+
 int
 snj_app_capacity_resolve(struct app_state *app,
                          const struct snj_provider_config *provider,
@@ -938,9 +958,15 @@ render_status(struct app_state *app)
                               strlen("\nobserved ceiling: unknown")) < 0) {
         goto out;
     }
-    if (snj_buf_printf(&text, "\naccounting: %s",
-            provider->exact_token_count ? "exact provider token count" :
-            "provider-usage anchor, then pessimistic serialized-byte bound") < 0)
+    if (snj_buf_printf(&text,
+            "\naccounting: policy=%s · exact-count=%s · estimate=%s",
+            provider->exact_token_count == SNJ_TOKEN_COUNT_AUTO ? "auto" :
+            provider->exact_token_count == SNJ_TOKEN_COUNT_STRICT ? "exact" :
+            "off",
+            capacity.count_capability == SNJ_COUNT_SUPPORTED ? "supported" :
+            capacity.count_capability == SNJ_COUNT_UNSUPPORTED ? "unsupported" :
+            "unknown", capacity.observed_tokens_per_million_bytes ? "learned" :
+            "none") < 0)
         goto out;
     if (app->session.usage_anchor_valid) {
         if (snj_buf_printf(&text,
@@ -1079,6 +1105,8 @@ static int
 append_catalog_limits(struct snj_buf *text, const json_t *model)
 {
     const json_t *limits = model ? json_object_get(model, "limits") : NULL;
+    const char *count = model ?
+        snj_json_string(model, "count_capability") : NULL;
     static const struct {
         const char *key;
         const char *label;
@@ -1088,6 +1116,7 @@ append_catalog_limits(struct snj_buf *text, const json_t *model)
         {"max_input_tokens", "input"},
         {"max_output_tokens", "output"}
     };
+    uint64_t observed = 0u;
     bool any = false;
 
     if (!json_is_object(limits))
@@ -1102,6 +1131,12 @@ append_catalog_limits(struct snj_buf *text, const json_t *model)
             return -1;
         any = true;
     }
+    if (count)
+        (void)snj_json_integer_u64(model, "observed_model_input_bytes",
+                                   &observed);
+    if (count && snj_buf_printf(text, " · count=%s · estimate=%s", count,
+                                observed ? "learned" : "none") < 0)
+        return -1;
     return 0;
 }
 
@@ -2443,67 +2478,61 @@ run_turn(struct app_state *app, const char *prompt,
             }
             goto out;
         }
-#ifndef SNAJPAGENT_TEST_FIXTURE
-        if (app->turn_provider->exact_token_count) {
-#endif
-            provider_rc = snj_app_provider_count(app, count_request, &credential,
-                                         &input_tokens_bound, error, sizeof(error));
-            if (provider_rc == 1 && app->steering_requested) {
-                snj_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
-                app->steering_requested = false;
-                --cycle;
-                continue;
-            }
-            if (provider_rc == 2 && app->interrupt_requested) {
-                snj_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
-                if (close_active_process_for_turn(app, turn_id,
-                        "user_interrupt", true, error, sizeof(error)) < 0 ||
-                    commit_event(app, "turn_interrupted",
-                        snj_app_turn_interrupted_data(turn_id, "user",
-                                                      "cancelled"),
-                        error, sizeof(error)) < 0) {
-                    (void)app_error(app, error[0] ? error :
-                                    "interruption could not be persisted");
-                    result = 3;
-                } else {
-                    (void)app_warning(app, "turn interrupted");
-                    result = app->execute ? 6 : 1;
-                }
-                goto out;
-            }
-            if (provider_rc != 0) {
-                snj_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
-                if (commit_event(app, "turn_failed",
-                                 snj_app_turn_failed_data(turn_id, "provider",
-                                     error[0] ? error :
-                                     "input-token count failed"),
-                                 error, sizeof(error)) < 0) {
-                    (void)app_error(app, error);
-                    result = 3;
-                } else {
-                    (void)app_error(app, error[0] ? error :
-                                    "input-token count failed");
-                    result = 4;
-                }
-                goto out;
-            }
-            if (app->networked && app->irc_urgent.len) {
-                snj_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
-                --cycle;
-                continue;
-            }
-#ifndef SNAJPAGENT_TEST_FIXTURE
-            count_method = "exact";
+        provider_rc = snj_app_provider_count(app, count_request, &credential,
+            model_input_bytes, &input_tokens_bound, &count_method,
+            error, sizeof(error));
+        if (provider_rc == 1 && app->steering_requested) {
+            snj_app_response_cycle_release(app, &graph, &steering,
+                                           &create_request, &count_request,
+                                           &request_body);
+            app->steering_requested = false;
+            --cycle;
+            continue;
         }
-#endif
+        if (provider_rc == 2 && app->interrupt_requested) {
+            snj_app_response_cycle_release(app, &graph, &steering,
+                                           &create_request, &count_request,
+                                           &request_body);
+            if (close_active_process_for_turn(app, turn_id,
+                    "user_interrupt", true, error, sizeof(error)) < 0 ||
+                commit_event(app, "turn_interrupted",
+                    snj_app_turn_interrupted_data(turn_id, "user",
+                                                  "cancelled"),
+                    error, sizeof(error)) < 0) {
+                (void)app_error(app, error[0] ? error :
+                                "interruption could not be persisted");
+                result = 3;
+            } else {
+                (void)app_warning(app, "turn interrupted");
+                result = app->execute ? 6 : 1;
+            }
+            goto out;
+        }
+        if (provider_rc != 0 && provider_rc != SNJ_APP_COUNT_SKIPPED) {
+            snj_app_response_cycle_release(app, &graph, &steering,
+                                           &create_request, &count_request,
+                                           &request_body);
+            if (commit_event(app, "turn_failed",
+                             snj_app_turn_failed_data(turn_id, "provider",
+                                 error[0] ? error :
+                                 "input-token count failed"),
+                             error, sizeof(error)) < 0) {
+                (void)app_error(app, error);
+                result = 3;
+            } else {
+                (void)app_error(app, error[0] ? error :
+                                "input-token count failed");
+                result = 4;
+            }
+            goto out;
+        }
+        if (app->networked && app->irc_urgent.len) {
+            snj_app_response_cycle_release(app, &graph, &steering,
+                                           &create_request, &count_request,
+                                           &request_body);
+            --cycle;
+            continue;
+        }
         {
             bool compacted = false;
             bool over_hard = app->turn_capacity.hard_input_known &&
@@ -2848,9 +2877,22 @@ run_turn(struct app_state *app, const char *prompt,
                     goto out;
                 } else {
                     int recovery_rc;
+                    bool ceiling_matches;
 
                     memcpy(rejected_request_hash, request_hash,
                            sizeof(rejected_request_hash));
+                    ceiling_matches = capacity_ceiling_matches(
+                        app, app->turn_provider, app->turn_model);
+                    if (provider_failure.requested_input_known ||
+                        ceiling_matches)
+                        snj_app_record_model_accounting(app, SNJ_COUNT_UNKNOWN,
+                            provider_failure.requested_input_known ?
+                                model_input_bytes : 0u,
+                            provider_failure.requested_input_known ?
+                                provider_failure.requested_input_tokens : 0u,
+                            ceiling_matches ?
+                                app->session.capacity_ceiling_input_tokens :
+                                0u);
                     apply_capacity_ceiling(app, app->turn_provider,
                                            app->turn_model,
                                            &app->turn_capacity);
@@ -2985,6 +3027,10 @@ run_turn(struct app_state *app, const char *prompt,
             result = 3;
             goto out;
         }
+        if (graph.usage.input_known && graph.usage.input_tokens != 0u &&
+            strcmp(count_method, "exact") != 0)
+            snj_app_record_model_accounting(app, SNJ_COUNT_UNKNOWN,
+                model_input_bytes, graph.usage.input_tokens, 0u);
         error[0] = '\0';
         if (snj_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);

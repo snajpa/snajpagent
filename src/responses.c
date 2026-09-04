@@ -1091,7 +1091,6 @@ build_call(struct snj_responses_stream *stream,
     return 0;
 }
 
-
 static void
 normalize_implicit_message_terminal(struct snj_response_graph *graph)
 {

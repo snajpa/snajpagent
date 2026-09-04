@@ -21,15 +21,21 @@ refusal, or completed tool cycle closes the turn; it does not close the
 session.
 
 Before `response_started`, the runtime builds the exact outgoing model-input
-and request projections and accounts for them in token units. A configured
-exact count is mandatory. Otherwise a compatible provider-reported input
-usage from the same provider source, model, effort, and compaction lineage
-anchors a pessimistic growth bound; without an anchor, one token per serialized
-input byte is the deliberately conservative fallback. Serialized bytes and
-token bounds remain separate durable facts. Source-bound catalog limits or an
-exact `[model-limit PROVIDER/MODEL]` tuple determine the hard input budget;
-`auto_compact_input_tokens = 0` disables only proactive policy, never the hard
-guard.
+and request projections and accounts for them in token units. The default
+`exact_token_count = auto` prefers the provider's Responses count endpoint,
+remembers definitive endpoint absence, and falls back only for that known
+unsupported capability. Ambiguous or transient count failures fail the turn;
+`true` is strict and `false` disables preflight. A
+compatible provider-reported usage record from the same source, model, effort,
+and compaction lineage anchors later growth. Without either, the versioned
+provider/model cache can supply a conservative estimate derived from the
+largest exact canonical-byte/token pair observed, followed by one token per
+canonical byte as the no-sample bound. Exact, anchored, statistical, and byte
+methods remain distinct durable facts. An estimate alone does not reject an
+otherwise sendable first request before a provider attempt. Source-bound
+catalog limits or an exact `[model-limit PROVIDER/MODEL]` tuple determine the
+hard input budget; `auto_compact_input_tokens = 0` disables only proactive
+policy, never an authoritative hard guard.
 
 Response and tool-result items grow immediately before the trailing active
 goal/process controller messages. Anchor comparison reconstructs the previous
@@ -62,9 +68,10 @@ Structured non-2xx and SSE failures retain their bounded provider code,
 message, and integral capacity details. A pre-output
 `context_length_exceeded` closes the open response with the durable
 `response_capacity_rejected` transition. Trustworthy context-limit or
-requested-input detail lowers a durable in-session safety ceiling bound to the
-exact provider, model, base URL, and protocol; replay restores it and later
-budget resolution applies it only while that source binding still matches.
+requested-input detail lowers a durable in-session safety ceiling and updates
+the same source/model-bound cache observation; replay restores the session
+fact and later budget resolution applies either only while its source binding
+still matches.
 The runtime compacts and retries once only with a different request hash.
 Partial output, an identical request, failed compaction, or a second rejection
 terminates locally as a context-capacity failure rather than entering an

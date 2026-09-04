@@ -151,7 +151,6 @@ snj_session_complete_delete(struct snj_store *store, struct snj_session *session
     return 0;
 }
 
-
 static bool
 trash_basename_id(const char *name, char id[SNJ_ID_HEX_LEN + 1u])
 {

@@ -23,6 +23,10 @@ sudo make install
 `PREFIX` defaults to `/usr/local`. The install target adds the binary and the
 `snajpagent(1)` manual.
 
+`make check` includes `make stylecheck`: a small read-only check for source
+license headers, clean C/header whitespace, and final newlines. It does not
+rewrite code or substitute mechanical formatting for review.
+
 ## Configure
 
 snajpagent reads `$HOME/.snajpagent/config.ini` by default.
@@ -36,6 +40,7 @@ reasoning_effort = medium
 [provider openai]
 base_url = https://api.openai.com
 api_key_env = OPENAI_API_KEY
+exact_token_count = auto
 ```
 
 Set the named credential in the environment:
@@ -44,8 +49,16 @@ Set the named credential in the environment:
 export OPENAI_API_KEY='...'
 ```
 
-Additional named providers can follow in the same file. Use `--config FILE`
-for another config or `--dotdir DIR` for another private state directory.
+Additional named providers can follow in the same file; the first is used when
+a model selector omits the provider. Use `--config FILE` for another config or
+`--dotdir DIR` for another private state directory.
+
+`exact_token_count = auto` prefers the provider's Responses input-token API and
+falls back only when the endpoint is definitively unsupported. `true` makes
+exact preflight strict; `false` disables it. Completed response usage and typed
+capacity failures can teach the source-bound model cache a conservative
+byte/token estimate without treating bytes or statistical values as exact token
+counts.
 
 ## Use
 
@@ -75,6 +88,17 @@ Useful commands:
 /compact               compact model context
 /exit                  preserve the session and exit
 ```
+
+`/model` and `/model list` read `$DOTDIR/models.json` offline and show when it
+was last refreshed. `/model cache` explicitly discovers every configured
+provider and atomically updates this versioned provider/model registry,
+including advertised token capacities and source-bound learned accounting.
+There is no TTL; the user decides when to refresh it.
+
+Use `/model NUMBER` or `/model #NUMBER` to pick a displayed row. Typed selectors
+accept `MODEL`, `MODEL / EFFORT`, or `PROVIDER / MODEL / EFFORT`, ignoring
+whitespace around `/`. A typed model name is trusted and sent unchanged even
+when absent from the cache; snajpagent warns but does not validate or reject it.
 
 The terminal renders model Markdown and uses color when supported. Override
 those defaults with `--no-markdown` and `--color=auto|always|never`.
@@ -147,6 +171,7 @@ man -l ./snajpagent.1
 
 Implementation contracts live in [`design/`](design/). Start with
 [`architecture.md`](design/architecture.md), then see
+[`model-cache.md`](design/model-cache.md),
 [`interactive-io.md`](design/interactive-io.md),
 [`goals.md`](design/goals.md), and [`irc-chat.md`](design/irc-chat.md).
 The existing checks live in [`tests/`](tests/).

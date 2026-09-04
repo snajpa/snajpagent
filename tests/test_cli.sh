@@ -669,13 +669,42 @@ assert responses2[0]["data"]["count_request_sha256"]
 assert started[1]["seq"] > responses2[0]["seq"]
 PY
 
-# The always-on hard budget remains active when proactive compaction is off,
-# and irreducible current input fails before any provider response starts.
+# A source-bound statistical estimate can drive the meter and compaction, but
+# cannot terminalize a sendable first request when no older turn can compact.
+statistical_state="$root/statistical-budget-state"
+mkdir -m 700 "$statistical_state"
+cat >"$statistical_state/models.json" <<'EOF'
+{"providers":[{"base_url":"https://api.openai.com","models":[{"count_capability":"unsupported","default_effort":"medium","efforts":["low","medium","high"],"id":"gpt-5.5-2026-04-23","limits":{"auto_compact_input_tokens":null,"context_window_tokens":null,"effective_context_window_percent":null,"input_context_window_tokens":null,"max_context_window_tokens":null,"max_input_tokens":null,"max_output_tokens":null},"observed_hard_input_tokens":1,"observed_input_tokens":100,"observed_model_input_bytes":100}],"name":"default","protocol":"openai"}],"schema_version":1,"updated_at_ms":1}
+EOF
+chmod 600 "$statistical_state/models.json"
+cat >"$root/statistical-budget.ini" <<'EOF'
+[provider]
+auto_compact_input_tokens = 0
+exact_token_count = false
+EOF
+$bin --dotdir "$statistical_state" --config "$root/statistical-budget.ini" \
+    -e -- ping >"$root/statistical-budget.out" 2>"$root/statistical-budget.err"
+[ "$(cat "$root/statistical-budget.out")" = pong ]
+statistical_id=$(find "$statistical_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+python3 - "$statistical_state/sessions/$statistical_id/events.jsonl" <<'PY'
+import json
+import sys
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+started = [event for event in events if event["type"] == "response_started"]
+assert len(started) == 1
+assert started[0]["data"]["count_method"] == "statistical_upper_estimate"
+assert started[0]["data"]["input_tokens_bound"] > 1
+assert not any(event["type"] == "turn_failed" for event in events)
+assert len([event for event in events if event["type"] == "turn_completed"]) == 1
+PY
+
+# In contrast, a configured exact hard limit remains authoritative.
 hard_state="$root/hard-budget-state"
 mkdir -m 700 "$hard_state"
 cat >"$root/hard-budget.ini" <<'EOF'
 [provider]
 auto_compact_input_tokens = 0
+exact_token_count = true
 
 [model-limit default/gpt-5.5-2026-04-23]
 max_input_tokens = 1

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
+#include "app_internal.h"
 #include "config.h"
 #include "credential.h"
 #include "json.h"
@@ -51,7 +52,10 @@ enum model_fixture {
     MODEL_CODEX_FAILURE,
     MODEL_LIMIT_CONFLICT,
     MODEL_CREATE_HTTP_FAILURE,
-    MODEL_CREATE_SSE_FAILURE
+    MODEL_CREATE_SSE_FAILURE,
+    MODEL_COUNT_404,
+    MODEL_COUNT_405,
+    MODEL_COUNT_501
 };
 
 static void
@@ -270,6 +274,22 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_transport\",\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
+    if (models >= MODEL_COUNT_404) {
+        struct http_request request;
+        unsigned int status = models == MODEL_COUNT_404 ? 404u :
+                              models == MODEL_COUNT_405 ? 405u : 501u;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0)
+            server_fail("accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") != 0 ||
+            strcmp(request.path, "/v1/responses/input_tokens") != 0)
+            server_fail("unexpected failed count request");
+        send_status(fd, status, "{\"error\":{\"message\":\"not available\"}}");
+        if (close(fd) < 0)
+            server_fail("close failed count socket");
+        _exit(0);
+    }
     if (models == MODEL_CREATE_HTTP_FAILURE) {
         struct http_request request;
         int fd = accept(listen_fd, NULL, NULL);
@@ -553,7 +573,7 @@ test_local_provider_transport(void)
     request = request_with_marker("transport-count");
     assert(snj_provider_responses_count(request, &config, &config.providers[1],
                                         &credential, NULL,
-                                        NULL, NULL, &tokens, error,
+                                        NULL, NULL, &tokens, NULL, error,
                                         sizeof(error), &cancel, &retries) == 0);
     assert(tokens == 7u);
     assert(cancel == 0);
@@ -828,6 +848,134 @@ test_structured_create_failures(void)
     }
 }
 
+static void
+test_count_capability_statuses(void)
+{
+    const enum model_fixture fixtures[] = {
+        MODEL_COUNT_404, MODEL_COUNT_405, MODEL_COUNT_501
+    };
+    for (size_t i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); ++i) {
+        struct local_server server;
+        struct snj_config config;
+        struct snj_credential credential;
+        json_t *request = request_with_marker("count-status");
+        uint64_t tokens = 0u;
+        bool endpoint_unsupported = true;
+        char endpoint[128];
+        char error[256] = {0};
+
+        start_server(&server, fixtures[i], false);
+        assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
+                        (unsigned int)server.port) > 0);
+        snj_config_init(&config);
+        assert(snprintf(config.providers[0].base_url,
+                        sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+        config.providers[0].connect_timeout_ms = 1000u;
+        config.providers[0].idle_timeout_ms = 1000u;
+        config.providers[0].request_timeout_ms = 3000u;
+        assert(snprintf(config.providers[0].openrouter_referer,
+                        sizeof(config.providers[0].openrouter_referer), "%s",
+                        "https://github.com/snajpa/snajpagent") > 0);
+        assert(snprintf(config.providers[0].openrouter_title,
+                        sizeof(config.providers[0].openrouter_title), "%s",
+                        "snajpagent") > 0);
+        credential_set(&credential, "transport-secret");
+        assert(snj_provider_responses_count(request, &config,
+                   &config.providers[0], &credential, NULL, NULL, NULL,
+                   &tokens, &endpoint_unsupported,
+                   error, sizeof(error), NULL, NULL) < 0);
+        assert(endpoint_unsupported == (fixtures[i] != MODEL_COUNT_404));
+        json_decref(request);
+        snj_config_free(&config);
+        stop_server(&server);
+    }
+}
+
+static void
+test_count_modes(void)
+{
+    const struct {
+        enum model_fixture fixture;
+        enum snj_token_count_mode mode;
+        int result;
+        enum snj_count_capability capability;
+    } cases[] = {
+        {MODEL_COUNT_405, SNJ_TOKEN_COUNT_AUTO,
+         SNJ_APP_COUNT_SKIPPED, SNJ_COUNT_UNSUPPORTED},
+        {MODEL_COUNT_405, SNJ_TOKEN_COUNT_STRICT, -1, SNJ_COUNT_UNSUPPORTED},
+        {MODEL_COUNT_404, SNJ_TOKEN_COUNT_AUTO, -1, SNJ_COUNT_UNKNOWN}
+    };
+
+    assert(!snj_app_exact_count_enabled(SNJ_TOKEN_COUNT_OFF,
+                                        SNJ_COUNT_UNKNOWN));
+    assert(!snj_app_exact_count_enabled(SNJ_TOKEN_COUNT_AUTO,
+                                        SNJ_COUNT_UNSUPPORTED));
+    assert(snj_app_exact_count_enabled(SNJ_TOKEN_COUNT_AUTO,
+                                       SNJ_COUNT_SUPPORTED));
+    assert(snj_app_exact_count_enabled(SNJ_TOKEN_COUNT_STRICT,
+                                       SNJ_COUNT_UNSUPPORTED));
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct local_server server;
+        struct snj_config config;
+        struct snj_credential credential;
+        struct app_state app;
+        json_t *request = request_with_marker("count-mode");
+        const char *method = "qualified_upper_bound";
+        uint64_t tokens = 99u;
+        char endpoint[128];
+        char error[256] = {0};
+        char temp[] = "/tmp/snajpagent-count-mode-XXXXXX";
+        int rc;
+
+        assert(mkdtemp(temp));
+        start_server(&server, cases[i].fixture, false);
+        assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
+                        (unsigned int)server.port) > 0);
+        snj_config_init(&config);
+        assert(snprintf(config.providers[0].base_url,
+                        sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+        assert(snprintf(config.providers[0].openrouter_referer,
+                        sizeof(config.providers[0].openrouter_referer), "%s",
+                        "https://github.com/snajpa/snajpagent") > 0);
+        assert(snprintf(config.providers[0].openrouter_title,
+                        sizeof(config.providers[0].openrouter_title), "%s",
+                        "snajpagent") > 0);
+        config.providers[0].connect_timeout_ms = 1000u;
+        config.providers[0].idle_timeout_ms = 1000u;
+        config.providers[0].request_timeout_ms = 3000u;
+        config.providers[0].exact_token_count = cases[i].mode;
+        credential_set(&credential, "transport-secret");
+        memset(&app, 0, sizeof(app));
+        snj_store_init(&app.store);
+        assert(snj_store_open(&app.store, temp, error, sizeof(error)) == 0);
+        snj_model_cache_init(&app.model_cache);
+        snj_render_init(&app.render, 0u);
+        app.config = &config;
+        app.turn_provider = &config.providers[0];
+        app.turn_model = "gpt-transport-test";
+        rc = snj_app_provider_count(&app, request, &credential, 100u,
+                                    &tokens, &method, error, sizeof(error));
+        assert((cases[i].result < 0 && rc < 0) || rc == cases[i].result);
+        assert(app.turn_capacity.count_capability == cases[i].capability);
+        snj_model_cache_free(&app.model_cache);
+        if (unlinkat(app.store.root_fd, "models.lock", 0) < 0)
+            assert(errno == ENOENT);
+        snj_store_close(&app.store);
+        {
+            char path[512];
+            assert(snprintf(path, sizeof(path), "%s/sessions", temp) > 0);
+            assert(rmdir(path) == 0);
+            assert(snprintf(path, sizeof(path), "%s/trash", temp) > 0);
+            assert(rmdir(path) == 0);
+        }
+        assert(rmdir(temp) == 0);
+        json_decref(request);
+        snj_config_free(&config);
+        stop_server(&server);
+    }
+}
+
 int
 main(void)
 {
@@ -835,6 +983,8 @@ main(void)
     test_codex_model_list();
     test_codex_path_selection();
     test_structured_create_failures();
+    test_count_capability_statuses();
+    test_count_modes();
     puts("test_provider_transport: ok");
     return 0;
 }

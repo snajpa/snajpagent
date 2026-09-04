@@ -55,7 +55,6 @@ struct snj_response_item {
     json_t *payload;
 };
 
-
 struct snj_response_usage {
     uint64_t input_tokens;
     uint64_t output_tokens;

@@ -1391,9 +1391,17 @@ def test_model_cache_and_selection():
     child.wait(b"16. second / vendor/future-model / low", start=start)
     cache = json.loads(cache_path.read_text(encoding="utf-8"))
     assert cache_path.stat().st_mode & 0o777 == 0o600
+    assert cache["schema_version"] == 1
     assert [provider["name"] for provider in cache["providers"]] == [
         "first", "second"
     ]
+    first_model = cache["providers"][0]["models"][0]
+    assert first_model["count_capability"] == "unknown"
+    assert first_model["observed_model_input_bytes"] == 0
+    assert first_model["observed_input_tokens"] == 0
+    assert first_model["observed_hard_input_tokens"] == 0
+    child.wait(b"count=unknown", start=start)
+    child.wait(b"estimate=none", start=start)
     stamp = cached_timestamp(cache)
     end = child.wait(stamp + b"\r\n" + initial_prompt, start=start)
 

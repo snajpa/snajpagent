@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static json_t *
@@ -80,6 +81,8 @@ main(void)
     struct snj_model_cache cache;
     struct snj_model_capacity capacity;
     struct snj_config config;
+    struct stat before;
+    struct stat after;
     json_t *providers;
     int fd;
     ssize_t got;
@@ -105,6 +108,9 @@ main(void)
     encoded[got] = '\0';
     assert(close(fd) == 0);
     assert(strstr(encoded, "\"format\"") == NULL);
+    assert(strstr(encoded, "\"schema_version\":1") != NULL);
+    assert(strstr(encoded, "\"count_capability\":\"unknown\"") != NULL);
+    assert(strstr(encoded, "\"observed_input_tokens\":0") != NULL);
     assert(strstr(encoded, "\"limits\"") != NULL);
     snj_model_cache_free(&cache);
     assert(snj_model_cache_load(&store, &cache, error, sizeof(error)) == 0);
@@ -186,6 +192,62 @@ main(void)
     assert(capacity.hard_input_tokens == 1100000u);
 
     config.model_limit_count = 0u;
+    assert(snj_model_cache_record(&store, &cache, &config.providers[0],
+               "openai", "org/model", SNJ_COUNT_SUPPORTED,
+               1000u, 250u, 800000u, error, sizeof(error)) == 0);
+    assert(fstatat(store.root_fd, "models.json", &before,
+                   AT_SYMLINK_NOFOLLOW) == 0);
+    assert(snj_model_cache_record(&store, &cache, &config.providers[0],
+               "openai", "org/model", SNJ_COUNT_UNKNOWN,
+               500u, 200u, 850000u, error, sizeof(error)) == 0);
+    assert(fstatat(store.root_fd, "models.json", &after,
+                   AT_SYMLINK_NOFOLLOW) == 0);
+    assert(before.st_dev == after.st_dev && before.st_ino == after.st_ino);
+    assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.count_capability == SNJ_COUNT_SUPPORTED);
+    assert(capacity.observed_tokens_per_million_bytes == 250000u);
+    assert(capacity.hard_input_tokens == 800000u);
+    assert(capacity.source == SNJ_CAPACITY_OBSERVED);
+    assert(snj_model_cache_record(&store, &cache, &config.providers[0],
+               "openai", "org/model", SNJ_COUNT_UNKNOWN,
+               2000u, 600u, 700000u, error, sizeof(error)) == 0);
+    assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.observed_tokens_per_million_bytes == 300000u);
+    assert(capacity.hard_input_tokens == 700000u);
+    assert(snj_model_cache_record(&store, &cache, &config.providers[0],
+               "openai", "org/model", SNJ_COUNT_UNKNOWN,
+               2000u, 500u, 0u, error, sizeof(error)) == 0);
+    assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.observed_tokens_per_million_bytes == 300000u);
+    assert(snj_model_cache_record(&store, &cache, &config.providers[0],
+               "openai", "org/model", SNJ_COUNT_UNKNOWN,
+               2000u, 700u, 0u, error, sizeof(error)) == 0);
+    assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.observed_tokens_per_million_bytes == 350000u);
+    assert(snj_model_cache_record(&store, &cache, &config.providers[0],
+               "openai", "org/model", SNJ_COUNT_UNKNOWN,
+               33554432u, 4000000000u, 0u, error, sizeof(error)) == 0);
+    assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.observed_tokens_per_million_bytes == 119209290u);
+    assert(snj_model_cache_replace(&store, providers, 234567u, &cache,
+                                   error, sizeof(error)) == 0);
+    assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.count_capability == SNJ_COUNT_UNKNOWN);
+    assert(capacity.observed_tokens_per_million_bytes == 119209290u);
+    assert(capacity.hard_input_tokens == 700000u);
+
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s",
                     "https://changed.example.test/v1") > 0);
@@ -195,6 +257,19 @@ main(void)
     assert(capacity.source == SNJ_CAPACITY_STALE_CATALOG);
     assert(!capacity.source_bound);
     assert(!capacity.hard_input_known);
+    assert(snj_model_cache_record(&store, &cache, &config.providers[0],
+               "openai", "org/model", SNJ_COUNT_UNSUPPORTED,
+               0u, 0u, 0u, error, sizeof(error)) == 1);
+    assert(json_object_set_new(json_array_get(providers, 0), "base_url",
+               json_string("https://changed.example.test/v1")) == 0);
+    assert(snj_model_cache_replace(&store, providers, 345678u, &cache,
+                                   error, sizeof(error)) == 0);
+    assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.count_capability == SNJ_COUNT_UNKNOWN);
+    assert(capacity.observed_tokens_per_million_bytes == 0u);
+    assert(capacity.hard_input_tokens == 922000u);
 
     json_decref(providers);
     snj_config_free(&config);

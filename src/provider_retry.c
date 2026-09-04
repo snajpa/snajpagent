@@ -10,7 +10,7 @@ bool
 snj_provider_http_status_retryable(long status)
 {
     return status == 408 || status == 429 ||
-           (status >= 500 && status <= 599);
+           (status >= 500 && status <= 599 && status != 501);
 }
 
 int

@@ -97,7 +97,7 @@ provider_init(struct snj_provider_config *provider, const char *name)
     provider->idle_timeout_ms = 120000u;
     provider->request_timeout_ms = 1800000u;
     provider->auto_compact_input_tokens = 120000u;
-    provider->exact_token_count = true;
+    provider->exact_token_count = SNJ_TOKEN_COUNT_AUTO;
     provider->native_compaction = true;
     memcpy(provider->base_url, "https://api.openai.com", 23u);
     memcpy(provider->api_key_env, "OPENAI_API_KEY", 15u);
@@ -211,6 +211,20 @@ parse_bool(const char *text, bool *out)
     }
     errno = EINVAL;
     return -1;
+}
+
+static int
+parse_token_count(const char *text, enum snj_token_count_mode *out)
+{
+    bool enabled;
+
+    if (strcmp(text, "auto") == 0)
+        *out = SNJ_TOKEN_COUNT_AUTO;
+    else if (parse_bool(text, &enabled) < 0)
+        return -1;
+    else
+        *out = enabled ? SNJ_TOKEN_COUNT_STRICT : SNJ_TOKEN_COUNT_OFF;
+    return 0;
 }
 
 static bool
@@ -507,7 +521,7 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
     }
     if (strcmp(key, "exact_token_count") == 0)
         return claim_key(state, 6u) < 0 ? -1 :
-               parse_bool(value, &provider->exact_token_count);
+               parse_token_count(value, &provider->exact_token_count);
     if (strcmp(key, "native_compaction") == 0)
         return claim_key(state, 7u) < 0 ? -1 :
                parse_bool(value, &provider->native_compaction);

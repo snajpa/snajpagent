@@ -3085,7 +3085,6 @@ out:
     return rc;
 }
 
-
 static bool
 diagnostic_text_valid(const char *text, size_t len, bool multiline)
 {

@@ -262,7 +262,12 @@ uses
 other providers use
 .BR /v1/models .
 There is no automatic refresh or fallback between protocols.  Catalog limits
-apply only while their source URL and protocol still match.  Idle only.
+apply only while their source URL and protocol still match.  The versioned
+cache also retains exact-count capability, a source-bound byte/token
+observation, and a lower typed-failure input ceiling.  A refresh resets
+count capability to unknown so the next automatic turn probes again, and
+preserves observations only for the identical provider name, source URL,
+protocol, and model ID.  Idle only.
 .TP
 .BR /model " " number ", " /model " #" number
 Select an exact displayed provider/model/effort row.
@@ -432,8 +437,15 @@ Proactive input threshold, 0 through 4000000.  Zero disables proactive policy,
 not the hard capacity guard.  Default: 120000.
 .TP
 .B exact_token_count
-Use the provider's token-count endpoint.  Default:
-.BR true .
+Input-token preflight policy.
+.B auto
+prefers the provider's Responses count endpoint and falls back only when it is
+definitively unsupported;
+.B true
+requires exact preflight; and
+.B false
+disables it.  Default:
+.BR auto .
 .TP
 .B native_compaction
 Use the provider's native compaction endpoint.  Default:
@@ -549,7 +561,8 @@ Server and snapshot history, 1 through 1000.  Default: 200.
 Default configuration.
 .TP
 .I $HOME/.snajpagent/models.json
-Atomically replaced provider catalog.  Refresh only with
+Atomically replaced versioned provider/model registry containing advertised
+token capacities and source-bound learned accounting.  Refresh only with
 .BR /model\ cache .
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/events.jsonl

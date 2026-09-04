@@ -85,6 +85,11 @@ struct app_state {
     char capacity_cache_error[256];
 };
 
+enum {
+    /* Provider pump results already use 1 and 2. */
+    SNJ_APP_COUNT_SKIPPED = 3
+};
+
 int snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
                          char *error, size_t error_size);
 int snj_app_capacity_resolve(struct app_state *app,
@@ -92,6 +97,11 @@ int snj_app_capacity_resolve(struct app_state *app,
                              const char *model,
                              struct snj_model_capacity *capacity,
                              char *error, size_t error_size);
+void snj_app_record_model_accounting(struct app_state *app,
+                                     enum snj_count_capability capability,
+                                     uint64_t model_input_bytes,
+                                     uint64_t input_tokens,
+                                     uint64_t hard_input_tokens);
 int snj_app_goal_command(struct app_state *app, const char *line, bool active);
 int snj_app_goal_tool(struct app_state *app,
                       const struct snj_response_item *call,
@@ -268,9 +278,12 @@ char *snj_app_irc_take_pending(struct app_state *app,
                                bool *local_operator, bool force_background);
 int snj_app_irc_snapshot(struct app_state *app, const char *reason,
                          char *error, size_t error_size);
+bool snj_app_exact_count_enabled(enum snj_token_count_mode mode,
+                                 enum snj_count_capability capability);
 int snj_app_provider_count(struct app_state *app, const json_t *count_request,
                            const struct snj_credential *credential,
-                           uint64_t *input_tokens,
+                           uint64_t model_input_bytes, uint64_t *input_tokens,
+                           const char **count_method,
                            char *error, size_t error_size);
 int snj_app_provider_models(struct app_state *app,
                             const struct snj_provider_config *provider,

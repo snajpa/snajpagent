@@ -1483,8 +1483,9 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !snj_hex_is_lower(response_id, SNJ_ID_HEX_LEN) || !turn_id ||
             strcmp(turn_id, session->active_turn_id) != 0 || !method ||
             (strcmp(method, "exact") != 0 &&
-            strcmp(method, "anchored_upper_bound") != 0 &&
-            strcmp(method, "qualified_upper_bound") != 0) ||
+             strcmp(method, "anchored_upper_bound") != 0 &&
+             strcmp(method, "statistical_upper_estimate") != 0 &&
+             strcmp(method, "qualified_upper_bound") != 0) ||
             !capability || strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
             !model || strcmp(model, session->active_turn_model) != 0 ||
             !provider || strcmp(provider, session->active_turn_provider) != 0 ||
@@ -2217,7 +2218,6 @@ out:
     snj_buf_free(&line);
     return rc;
 }
-
 
 int
 snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,

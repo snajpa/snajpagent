@@ -183,14 +183,28 @@ fail:
 #endif
 }
 
+bool
+snj_app_exact_count_enabled(enum snj_token_count_mode mode,
+                            enum snj_count_capability capability)
+{
+    return mode == SNJ_TOKEN_COUNT_STRICT ||
+        (mode == SNJ_TOKEN_COUNT_AUTO &&
+         capability != SNJ_COUNT_UNSUPPORTED);
+}
+
 int
 snj_app_provider_count(struct app_state *app, const json_t *count_request,
                        const struct snj_credential *credential,
-                       uint64_t *input_tokens, char *error, size_t error_size)
+                       uint64_t model_input_bytes, uint64_t *input_tokens,
+                       const char **count_method,
+                       char *error, size_t error_size)
 {
 #ifdef SNAJPAGENT_TEST_FIXTURE
     (void)credential;
     (void)input_tokens;
+    (void)model_input_bytes;
+    if (app->turn_provider->exact_token_count == SNJ_TOKEN_COUNT_STRICT)
+        *count_method = "exact";
     {
         struct snj_buf encoded;
         bool wait_for_mention;
@@ -218,19 +232,41 @@ snj_app_provider_count(struct app_state *app, const json_t *count_request,
     }
     return 0;
 #else
+    bool endpoint_unsupported = false;
+    uint64_t sample_bytes;
     int cancel_code = 0;
-    int rc = snj_provider_responses_count(count_request, app->config,
-                                          app->turn_provider, credential,
-                                          &app->render,
-                                          snj_app_active_input_pump, app,
-                                          input_tokens, error, error_size,
-                                          &cancel_code, NULL);
-    if (rc == 1 || rc == 2)
+    int rc;
+
+    if (strcmp(*count_method, "anchored_upper_bound") == 0 ||
+        !snj_app_exact_count_enabled(
+            app->turn_provider->exact_token_count,
+            app->turn_capacity.count_capability))
+        return SNJ_APP_COUNT_SKIPPED;
+    rc = snj_provider_responses_count(count_request, app->config,
+                                      app->turn_provider, credential,
+                                      &app->render,
+                                      snj_app_active_input_pump, app,
+                                      input_tokens, &endpoint_unsupported,
+                                      error, error_size,
+                                      &cancel_code, NULL);
+    if (rc == 0) {
+        *count_method = "exact";
+        sample_bytes = *input_tokens ? model_input_bytes : 0u;
+        snj_app_record_model_accounting(app, SNJ_COUNT_SUPPORTED,
+                                        sample_bytes,
+                                        sample_bytes ? *input_tokens : 0u, 0u);
+        return 0;
+    }
+    if (!endpoint_unsupported)
         return rc;
-    return rc;
+    snj_app_record_model_accounting(app, SNJ_COUNT_UNSUPPORTED, 0u, 0u, 0u);
+    if (app->turn_provider->exact_token_count == SNJ_TOKEN_COUNT_STRICT)
+        return rc;
+    if (error_size)
+        error[0] = '\0';
+    return SNJ_APP_COUNT_SKIPPED;
 #endif
 }
-
 
 int
 snj_app_provider_compact(struct app_state *app, const json_t *compact_request,

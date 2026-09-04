@@ -407,7 +407,6 @@ append_goal_controller(struct context_builder *builder)
     return rc;
 }
 
-
 static int
 truncate_array(json_t *array, size_t keep)
 {
@@ -2152,7 +2151,6 @@ out:
         json_decref(count);
     return rc;
 }
-
 
 int
 snj_context_build(struct snj_session *session, const char *model,

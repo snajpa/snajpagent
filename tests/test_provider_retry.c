@@ -13,6 +13,7 @@ test_http_retry_classes(void)
     assert(snj_provider_http_status_retryable(408));
     assert(snj_provider_http_status_retryable(429));
     assert(snj_provider_http_status_retryable(500));
+    assert(!snj_provider_http_status_retryable(501));
     assert(snj_provider_http_status_retryable(599));
     assert(!snj_provider_http_status_retryable(600));
 }

@@ -8,6 +8,10 @@
   preserve op status, and keep mentions, echo suppression, and model context
   current. Notify channel renames once without losing the input draft.
 
+- Added a narrow `make stylecheck` to `make check` for source license headers
+  and objective C/header whitespace invariants. It is read-only and leaves
+  semantic readability to review.
+
 - Split `make sizecheck` into independent production-C, production-header, and
   test-C budgets. Their soft/hard levels are 32,768/49,152,
   16,384/65,536, and 16,384/32,768 lines respectively. Production translation
@@ -26,6 +30,19 @@
 - Keep no-output IRC responses quiet, while giving explicit empty or oversized
   assistant messages and refusals one precise, durable model-facing correction
   without exposing it in ordinary operator output.
+
+- Upgraded `models.json` to an explicit versioned provider/model registry that
+  retains advertised token capacities, exact-count capability, one coherent
+  learned canonical-byte/token pair, and lower typed-failure input ceilings.
+  Exact Responses input counting now defaults to `auto`, with strict `true`
+  and disabled `false`; definitive 405/501 endpoint absence is cached while
+  HTTP 404 and other ambiguous or transient failures remain uncached and fail
+  the count operation. Compatible response usage remains the exact rolling
+  anchor, learned estimates remain visibly statistical, and an estimate alone
+  cannot reject a sendable first request. Refresh resets count capability for
+  a fresh probe and preserves observations only for identical provider
+  source/protocol/model bindings, while uncached manually typed model names
+  remain trusted and unchanged.
 
 - Make five consecutive Ctrl-C presses within two seconds an unconditional
   interactive exit, including during an active turn, while preserving ordinary

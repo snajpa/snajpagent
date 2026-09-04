@@ -326,7 +326,6 @@ progress_cb(void *opaque, curl_off_t dltotal, curl_off_t dlnow,
     return 0;
 }
 
-
 static int
 provider_endpoint_url(const struct snj_provider_config *provider,
                       const char *path,
@@ -726,7 +725,6 @@ out:
     json_decref(root);
     return rc;
 }
-
 
 static int
 parse_compact_body(struct provider_ctx *ctx, json_t **output,
@@ -1401,6 +1399,7 @@ snj_provider_responses_count(const json_t *count_request,
                              snj_provider_pump_fn pump,
                              void *pump_opaque,
                              uint64_t *input_tokens,
+                             bool *endpoint_unsupported,
                              char *error, size_t error_size,
                              int *cancel_code,
                              unsigned int *retry_count)
@@ -1418,13 +1417,14 @@ snj_provider_responses_count(const json_t *count_request,
         *cancel_code = 0;
     if (retry_count)
         *retry_count = 0u;
+    if (endpoint_unsupported)
+        *endpoint_unsupported = false;
     if (!count_request || !config || !provider || !credential || !credential->len ||
         !input_tokens) {
         set_error(error, error_size, "invalid input-token count request");
         errno = EINVAL;
         return -1;
     }
-    *input_tokens = 0u;
     memset(&ctx, 0, sizeof(ctx));
     ctx.config = config;
     ctx.provider = provider;
@@ -1516,6 +1516,9 @@ snj_provider_responses_count(const json_t *count_request,
         goto out_global;
     }
     if (ctx.http_status < 200 || ctx.http_status >= 300) {
+        if (endpoint_unsupported &&
+            (ctx.http_status == 405 || ctx.http_status == 501))
+            *endpoint_unsupported = true;
         (void)classify_non2xx(&ctx, error, error_size);
         append_retry_suffix(error, error_size,
                             retry_count ? *retry_count : 0u,
