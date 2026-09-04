@@ -170,6 +170,25 @@ assert len(started) == 1
 assert started[0]["data"]["text"] == "ping"
 PY
 
+goal_dotdir="$root/model-goal-state"
+out=$($bin --dotdir "$goal_dotdir" -e -- \
+    'please create a persistent goal' 2>"$root/model-goal.err")
+[ "$out" = 'model-created checkpointgoal done' ]
+goal_log=$(find "$goal_dotdir/sessions" -name events.jsonl -print)
+python3 - "$goal_log" <<'PY'
+import json
+import sys
+
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+started = [event for event in events if event["type"] == "goal_started"]
+turns = [event for event in events if event["type"] == "turn_started"]
+completed = [event for event in events if event["type"] == "goal_completed"]
+assert len(started) == 1
+assert started[0]["data"]["prompt"] == "model-created goal"
+assert [event["data"]["input_kind"] for event in turns] == ["direct", "goal"]
+assert len(completed) == 1 and completed[0]["data"]["actor"] == "model"
+PY
+
 set +e
 $bin -e </dev/null >"$root/empty-stdin.out" 2>"$root/empty-stdin.err"
 status=$?

@@ -360,9 +360,34 @@ reserved_word(const char *word, size_t len)
 }
 
 static int
-set_goal_prompt(struct app_state *app, const char *argument)
+start_goal(struct app_state *app, const char *prompt,
+           char *error, size_t error_size)
 {
     char goal_id[SNJ_ID_HEX_LEN + 1u];
+
+    if (goal_unfinished(&app->session)) {
+        (void)snprintf(error, error_size, "an unfinished goal already exists");
+        errno = EINVAL;
+        return -1;
+    }
+    if (snj_random_id(goal_id) < 0) {
+        (void)snprintf(error, error_size,
+                       "cryptographic goal id generation failed");
+        return -1;
+    }
+    if (commit_goal_event(app, "goal_started",
+                          goal_started_data(goal_id, prompt),
+                          error, error_size) < 0)
+        return -1;
+    app->goal_armed = true;
+    if (app->session.pending_queue_count != 0u)
+        app->queue_armed = true;
+    return 0;
+}
+
+static int
+set_goal_prompt(struct app_state *app, const char *argument)
+{
     char error[256] = {0};
     char *prompt = copy_goal_argument(argument,
                                       app->config->max_goal_prompt_bytes,
@@ -385,19 +410,10 @@ set_goal_prompt(struct app_state *app, const char *argument)
             return goal_error(app, error);
         return snj_render_host(&app->render, "goal wording updated by user");
     }
-    if (snj_random_id(goal_id) < 0) {
-        free(prompt);
-        return goal_error(app, "cryptographic goal id generation failed");
-    }
-    rc = commit_goal_event(app, "goal_started",
-                           goal_started_data(goal_id, prompt),
-                           error, sizeof(error));
+    rc = start_goal(app, prompt, error, sizeof(error));
     free(prompt);
     if (rc < 0)
         return goal_error(app, error);
-    app->goal_armed = true;
-    if (app->session.pending_queue_count != 0u)
-        app->queue_armed = true;
     return snj_render_host(&app->render, "goal started");
 }
 
@@ -554,6 +570,33 @@ snj_app_goal_tool(struct app_state *app,
     json_t *data;
 
     *result = NULL;
+    if (call && call->name && strcmp(call->name, "create_goal") == 0) {
+        static const char *const create_keys[] = {"objective"};
+        const char *objective;
+        size_t len;
+        char message[128];
+
+        if (!snj_json_exact_keys(call->arguments, create_keys, 1u) ||
+            !(objective = snj_json_string(call->arguments, "objective")))
+            return tool_result(false, "create_goal arguments are invalid", result);
+        if (goal_unfinished(&app->session))
+            return tool_result(false, "an unfinished goal already exists", result);
+        if (!*objective || blank_text(objective) ||
+            (len = strlen(objective)) > app->config->max_goal_prompt_bytes ||
+            len > SNJ_MAX_GOAL_PROMPT ||
+            !snj_utf8_valid((const unsigned char *)objective, len, true))
+            return tool_result(false,
+                "goal objective is blank, invalid, or exceeds the configured limit",
+                result);
+        if (start_goal(app, objective, error, error_size) < 0)
+            return -1;
+        if (snj_render_host(&app->render, "goal started by model") < 0)
+            return -1;
+        (void)snprintf(message, sizeof(message),
+                       "goal %.8s started; automatic continuation is active",
+                       app->session.goal_id);
+        return tool_result(true, message, result);
+    }
     if (!call || strcmp(call->name, "update_goal") != 0 ||
         !snj_json_exact_keys(call->arguments, keys, 2u) ||
         !(action = snj_json_string(call->arguments, "action")))

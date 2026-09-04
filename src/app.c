@@ -2701,6 +2701,8 @@ snj_app_run(const struct snj_cli *cli)
     }
     if (cli->execute) {
         rc = run_tracked_turn(&app, cli->prompt, NULL, false);
+        if (rc == 0 && (app.queue_armed || app.goal_armed))
+            rc = run_ready_chains(&app);
         goto out;
     }
     if (snj_term_open(&app.term, error, sizeof(error)) < 0) {

@@ -258,15 +258,34 @@ append_managed_gate(struct context_builder *builder)
     return append_message(builder, "managed_process_gate", "developer", text);
 }
 
+static bool
+goal_creation_allowed(const struct snj_session *session)
+{
+    return session &&
+        (session->goal_status == SNJ_GOAL_NONE ||
+         session->goal_status == SNJ_GOAL_COMPLETED ||
+         session->goal_status == SNJ_GOAL_CANCELLED);
+}
+
 static int
 append_goal_controller(struct context_builder *builder)
 {
     struct snj_buf text;
     int rc;
 
-    if (!builder->session ||
-        builder->session->goal_status != SNJ_GOAL_ACTIVE)
+    if (!builder->session)
         return 0;
+    if (builder->session->goal_status != SNJ_GOAL_ACTIVE) {
+        if (builder->active_process_handle ||
+            !goal_creation_allowed(builder->session))
+            return 0;
+        return append_message(builder, "goal_controller", "developer",
+            "No persistent goal is active. If and only if the user or "
+            "system/developer instructions explicitly request starting or "
+            "setting one, call create_goal before claiming it is active. "
+            "Writing or committing Markdown does not activate continuation. "
+            "Do not infer a goal from ordinary work.");
+    }
     snj_buf_init(&text, SNJ_MAX_GOAL_PROMPT + 1024u);
     rc = snj_buf_printf(&text,
         "Persistent goal %.8s is active (revision %llu, wording %s). "
@@ -1039,7 +1058,28 @@ patch_tool_schema(void)
 }
 
 static json_t *
-goal_tool_schema(void)
+create_goal_tool_schema(void)
+{
+    static const char *const required[] = {"objective"};
+    json_t *properties = json_object();
+
+    if (!properties ||
+        json_set_new(properties, "objective", string_schema()) < 0) {
+        if (properties)
+            json_decref(properties);
+        return NULL;
+    }
+    return tool_schema("create_goal",
+        "Create a persistent goal only when the user or system/developer "
+        "instructions explicitly request it; never infer one from ordinary "
+        "work. Writing or committing goal documentation does not activate "
+        "continuation. After success, a normal final answer is a checkpoint "
+        "and snajpagent starts another goal turn.", properties,
+        required_array(required, sizeof(required) / sizeof(required[0])));
+}
+
+static json_t *
+update_goal_tool_schema(void)
 {
     static const char *const required[] = {"action", "text"};
     json_t *properties = json_object();
@@ -1120,7 +1160,8 @@ irc_topic_tool_schema(void)
 }
 
 static json_t *
-tool_schemas(const char *active_handle, bool goal_active, bool networked,
+tool_schemas(const char *active_handle, bool goal_active,
+             bool goal_create_allowed, bool networked,
              const struct snj_config *config)
 {
     json_t *tools = json_array();
@@ -1149,8 +1190,10 @@ tool_schemas(const char *active_handle, bool goal_active, bool networked,
          (json_array_append_new(tools, irc_send_tool_schema()) < 0 ||
           json_array_append_new(tools, irc_state_tool_schema()) < 0 ||
           json_array_append_new(tools, irc_topic_tool_schema()) < 0)) ||
+        (goal_create_allowed &&
+         json_array_append_new(tools, create_goal_tool_schema()) < 0) ||
         (goal_active &&
-         json_array_append_new(tools, goal_tool_schema()) < 0)) {
+         json_array_append_new(tools, update_goal_tool_schema()) < 0)) {
         json_decref(tools);
         return NULL;
     }
@@ -1194,6 +1237,7 @@ model_input_object(struct context_builder *builder)
     json_t *input = json_object();
     bool goal_active = builder->session &&
                        builder->session->goal_status == SNJ_GOAL_ACTIVE;
+    bool goal_create_allowed = goal_creation_allowed(builder->session);
 
     if (!input ||
         json_set_new(input, "capability_version",
@@ -1209,7 +1253,8 @@ model_input_object(struct context_builder *builder)
         json_set_new(input, "tool_schema", json_integer(1)) < 0 ||
         json_set_new(input, "tools",
                      tool_schemas(builder->active_process_handle,
-                                  goal_active, builder->networked,
+                                  goal_active, goal_create_allowed,
+                                  builder->networked,
                                   builder->config)) < 0) {
         if (input)
             json_decref(input);
@@ -1224,6 +1269,7 @@ create_request_object(struct context_builder *builder)
     json_t *request = json_object();
     bool goal_active = builder->session &&
                        builder->session->goal_status == SNJ_GOAL_ACTIVE;
+    bool goal_create_allowed = goal_creation_allowed(builder->session);
 
     if (!request ||
         json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
@@ -1237,7 +1283,8 @@ create_request_object(struct context_builder *builder)
         json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
         json_set_new(request, "tools",
                      tool_schemas(builder->active_process_handle,
-                                  goal_active, builder->networked,
+                                  goal_active, goal_create_allowed,
+                                  builder->networked,
                                   builder->config)) < 0 ||
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)
@@ -1253,6 +1300,7 @@ count_request_object(struct context_builder *builder)
     json_t *request = json_object();
     bool goal_active = builder->session &&
                        builder->session->goal_status == SNJ_GOAL_ACTIVE;
+    bool goal_create_allowed = goal_creation_allowed(builder->session);
 
     if (!request ||
         json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
@@ -1262,7 +1310,8 @@ count_request_object(struct context_builder *builder)
         json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
         json_set_new(request, "tools",
                      tool_schemas(builder->active_process_handle,
-                                  goal_active, builder->networked,
+                                  goal_active, goal_create_allowed,
+                                  builder->networked,
                                   builder->config)) < 0 ||
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)

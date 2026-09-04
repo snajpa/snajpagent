@@ -89,6 +89,16 @@ goal_lock_data(const char *goal_id, bool locked)
 }
 
 static json_t *
+goal_paused_data(const char *goal_id)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
+    assert(snj_json_set_new(data, "reason", json_string("user")) == 0);
+    return data;
+}
+
+static json_t *
 response_started(const char *turn_id, const char *response_id,
                  const char *compact_id)
 {
@@ -560,6 +570,15 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
         assert_schema_type(json_object_get(properties, "workdir"), "string", 0);
     }
 
+    tool = tool_by_name(tools, "create_goal");
+    if (tool) {
+        assert(strstr(snj_json_string(tool, "description"),
+                      "explicitly request") != NULL);
+        properties = assert_strict_tool_contract(tool);
+        assert_schema_type(json_object_get(properties, "objective"),
+                           "string", 0);
+    }
+
     tool = tool_by_name(tools, "update_goal");
     if (tool) {
         json_t *actions;
@@ -772,7 +791,7 @@ main(void)
                                  &active_projection, error, sizeof(error)) == 0);
         input = json_object_get(active_projection.create_request, "input");
         assert(json_is_array(input));
-        assert(json_array_size(input) == 4u);
+        assert(json_array_size(input) == 5u);
         assert(active.dir_path[0] == '/');
         assert(strcmp(snj_json_string(json_array_get(input, 1), "type"),
                       "compaction") == 0);
@@ -784,6 +803,10 @@ main(void)
                       "/events.jsonl") != NULL);
         assert(strcmp(snj_json_string(json_array_get(input, 3), "content"),
                       "new") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 4), "role"),
+                      "developer") == 0);
+        assert(strstr(snj_json_string(json_array_get(input, 4), "content"),
+                      "create_goal") != NULL);
         json_decref(compact_request);
         json_decref(compact_count_request);
         json_decref(output_count_request);
@@ -821,15 +844,17 @@ main(void)
                   SNAJPAGENT_MODEL) == 0);
     {
         json_t *tools = json_object_get(projection.create_request, "tools");
-        assert(json_array_size(tools) == 4u);
+        assert(json_array_size(tools) == 5u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX);
+        assert(tool_by_name(tools, "create_goal") != NULL);
+        assert(tool_by_name(tools, "update_goal") == NULL);
     }
     items = json_object_get(projection.model_input, "items");
     request_input = json_object_get(projection.create_request, "input");
     assert(json_is_array(items));
-    assert(json_array_size(items) == 5);
+    assert(json_array_size(items) == 6);
     assert(json_is_array(request_input));
-    assert(json_array_size(request_input) == 5);
+    assert(json_array_size(request_input) == 6);
     assert(strcmp(snj_json_string(json_array_get(request_input, 2), "type"),
                   "compaction") == 0);
     assert(session.dir_path[0] == '/');
@@ -841,7 +866,7 @@ main(void)
                   "/events.jsonl") != NULL);
     request_input = json_object_get(projection.count_request, "input");
     assert(json_is_array(request_input));
-    assert(json_array_size(request_input) == 5);
+    assert(json_array_size(request_input) == 6);
     assert(strcmp(snj_json_string(json_array_get(request_input, 2), "type"),
                   "compaction") == 0);
     assert(strstr(snj_json_string(json_array_get(items, 1), "text"),
@@ -857,6 +882,15 @@ main(void)
     assert(strstr(snj_json_string(json_array_get(items, 3), "text"),
                   session.dir_path) != NULL);
     assert(strcmp(snj_json_string(json_array_get(items, 4), "text"), "again") == 0);
+    {
+        json_t *controller = item_by_kind(items, "goal_controller");
+
+        assert(controller != NULL);
+        assert(strstr(snj_json_string(controller, "text"),
+                      "explicitly request") != NULL);
+        assert(strstr(snj_json_string(controller, "text"),
+                      "Markdown does not activate continuation") != NULL);
+    }
     snj_context_projection_free(&projection);
 
     assert(snj_session_commit(&session, "response_started",
@@ -897,6 +931,7 @@ main(void)
         const char *gate_text;
         assert(json_is_array(tools));
         assert(json_array_size(tools) == 1);
+        assert(tool_by_name(tools, "create_goal") == NULL);
         assert(tool_by_name(tools, "update_goal") == NULL);
         assert(strcmp(snj_json_string(json_array_get(tools, 0), "name"),
                       "write_stdin") == 0);
@@ -938,6 +973,7 @@ main(void)
                       "irc_topic") == 0);
         assert(strcmp(snj_json_string(json_array_get(tools, 3), "name"),
                       "write_stdin") == 0);
+        assert(tool_by_name(tools, "create_goal") == NULL);
         assert(tool_by_name(tools, "update_goal") == NULL);
         assert_context_tool_schemas(tools, handle,
                                     network_config.max_timeout_ms);
@@ -982,6 +1018,7 @@ main(void)
 
         assert(json_array_size(tools) == 5u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX);
+        assert(tool_by_name(tools, "create_goal") == NULL);
         assert(tool_by_name(tools, "update_goal") != NULL);
         assert(continuation != NULL);
         assert(strcmp(snj_json_string(continuation, "role"), "developer") == 0);
@@ -1029,6 +1066,23 @@ main(void)
         assert(strstr(snj_json_string(harness, "text"),
                       "do not poll or babysit") != NULL);
         snj_config_free(&network_config);
+    }
+
+    assert(snj_session_commit(&session, "goal_paused",
+                              goal_paused_data(goal), NULL,
+                              error, sizeof(error)) == 0);
+    assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
+                             empty_steering, NULL, &instructions, &projection,
+                             error, sizeof(error)) == 0);
+    {
+        json_t *tools = json_object_get(projection.create_request, "tools");
+        json_t *semantic = json_object_get(projection.model_input, "items");
+
+        assert(json_array_size(tools) == 4u);
+        assert_context_tool_schemas(tools, NULL, UINT32_MAX);
+        assert(tool_by_name(tools, "create_goal") == NULL);
+        assert(tool_by_name(tools, "update_goal") == NULL);
+        assert(item_by_kind(semantic, "goal_controller") == NULL);
     }
 
     json_decref(empty_steering);

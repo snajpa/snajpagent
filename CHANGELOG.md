@@ -101,12 +101,15 @@
 - Added durable persistent goals: `/goal TEXT` and quoted or explicit `set`
   forms start or reword an objective; status/help, pause/resume, lock/unlock,
   complete/cancel commands control it; `[agent] max_goal_prompt_bytes` bounds
-  new wording; and the strict active-only `update_goal` tool lets the model
-  rewrite unlocked wording, complete, or record a blocker. Normal finals now
-  continue the goal automatically after queued FIFO turns, while refusal,
-  failure, input closure, and session reopening pause it safely. Goal wording
-  is projected after replay/compaction and never weakens unresolved managed
-  process ordering.
+  new wording; a strict no-unfinished-goal `create_goal` tool lets the model
+  honor explicit goal-start requests without treating ordinary work or
+  Markdown documentation as activation; and the mutually exclusive
+  active-only `update_goal` tool lets the model rewrite unlocked wording,
+  complete, or record a blocker. Successful model creation persists and arms
+  the same continuation path as `/goal`. Normal finals continue the goal
+  automatically after queued FIFO turns, while refusal, failure, input
+  closure, and session reopening pause it safely. Goal wording is projected
+  after replay/compaction, and managed-process gates hide both lifecycle tools.
 
 - Added terminal-width word wrapping for streamed public model text while
   preserving exact stored and redirected bytes, plus a configurable

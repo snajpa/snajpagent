@@ -174,11 +174,19 @@ turn automatically. Useful lifecycle commands are:
 /goal help                    show the complete grammar
 ```
 
-The model can rewrite an unlocked active goal, mark it complete, or record a
-specific blocker through the strict `update_goal` tool. User wording changes
-remain allowed while locked. Queued user turns run in FIFO order before the
-next automatic goal turn, and refusal, turn failure, terminal input closure,
-or process restart pauses automatic continuation. See
+When no unfinished goal exists, the model also receives a strict
+`create_goal({"objective":"..."})` tool. It may use that tool only for an
+explicit user or system/developer request to start a persistent goal; ordinary
+work and Markdown goal documentation never activate continuation. Successful
+creation durably starts and arms the goal, so the current direct final is a
+checkpoint followed by another goal turn. An active goal exposes
+`update_goal`, not `create_goal`; paused and blocked goals expose neither.
+
+Through `update_goal`, the model can rewrite an unlocked active goal, mark it
+complete, or record a specific blocker. User wording changes remain allowed
+while locked. Queued user turns run in FIFO order before the next automatic
+goal turn, and refusal, turn failure, terminal input closure, or process
+restart pauses automatic continuation. See
 [`design/goals.md`](design/goals.md) for the complete lifecycle contract.
 
 While a response is streaming, typing opens the `steer › ` composer on a new

@@ -216,6 +216,28 @@ add_goal_call(struct snj_response_graph *graph, unsigned int cycle,
                                        "update_goal", args);
 }
 
+static int
+add_create_goal_call(struct snj_response_graph *graph, unsigned int cycle,
+                     const char *objective)
+{
+    char item_id[128];
+    char call_id[128];
+    json_t *args = json_object();
+
+    if (!args ||
+        snj_json_set_new(args, "objective", json_string(objective)) < 0 ||
+        snprintf(item_id, sizeof(item_id),
+                 "item_fixture_create_goal_%u", cycle) < 0 ||
+        snprintf(call_id, sizeof(call_id),
+                 "call_fixture_create_goal_%u", cycle) < 0) {
+        if (args)
+            json_decref(args);
+        return -1;
+    }
+    return snj_response_graph_add_call(graph, item_id, call_id,
+                                       "create_goal", args);
+}
+
 static bool
 managed_prompt(const char *prompt)
 {
@@ -311,6 +333,14 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER,
                            "msg_fixture_goal_done", "goal done", 0);
+    }
+    if (strcmp(prompt, "please create a persistent goal") == 0) {
+        if (cycle == 1u)
+            return add_create_goal_call(graph, cycle, "model-created goal");
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_model_goal_checkpoint",
+                           "model-created checkpoint", 0);
     }
     if (strstr(prompt, "network_zero"))
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,

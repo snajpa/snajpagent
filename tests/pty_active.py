@@ -419,6 +419,24 @@ def test_goal_automatic_continuation():
     assert one(log, "goal_completed")["data"]["actor"] == "model"
 
 
+def test_model_created_goal_continuation():
+    before = session_ids()
+    child = Child([])
+    child.wait(PROMPT)
+    child.send(b"please create a persistent goal\r")
+    started_end = child.wait(b"goal started by model")
+    checkpoint_end = child.wait(b"model-created checkpoint", start=started_end)
+    answer_end = child.wait(b"goal done", start=checkpoint_end)
+    child.exit_cleanly(answer_end)
+
+    log = events(new_session(before))
+    started = one(log, "goal_started")
+    turns = [item for item in log if item["type"] == "turn_started"]
+    assert started["data"]["prompt"] == "model-created goal"
+    assert [item["data"]["input_kind"] for item in turns] == ["direct", "goal"]
+    assert one(log, "goal_completed")["data"]["actor"] == "model"
+
+
 def test_goal_configured_wording_limit():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
         "goal-limit.ini"
@@ -1298,6 +1316,7 @@ test_multiline_and_paste()
 test_resume_pauses_fifo()
 test_goal_quoted_reserved_wording()
 test_goal_automatic_continuation()
+test_model_created_goal_continuation()
 test_goal_configured_wording_limit()
 test_goal_model_rewrite_and_lock()
 test_goal_pause_resume_and_queue_priority()

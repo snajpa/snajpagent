@@ -309,7 +309,9 @@ snj_app_tool_run(struct app_state *app, const struct snj_response_item *call,
     static const char *const send_keys[] = {"notice", "text"};
     static const char *const topic_keys[] = {"topic"};
 
-    if (call && call->name && strcmp(call->name, "update_goal") == 0)
+    if (call && call->name &&
+        (strcmp(call->name, "create_goal") == 0 ||
+         strcmp(call->name, "update_goal") == 0))
         return snj_app_goal_tool(app, call, result, error, error_size);
     if (call && call->name && strcmp(call->name, "irc_state") == 0) {
         struct snj_buf state;

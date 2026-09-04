@@ -72,6 +72,26 @@ a durable session, but any subsequent replacement must fit the current limit.
 
 ## Model Control
 
+When no unfinished goal exists, the provider receives a strict `create_goal`
+function tool with one required string argument:
+
+```json
+{"objective":"the persistent objective"}
+```
+
+The model may call it only when the user or system/developer instructions
+explicitly request starting or setting a persistent goal. It must never infer
+a goal from an ordinary task. Writing, updating, or committing a Markdown
+plan or goal document does not activate snajpagent continuation; only a
+successful `create_goal` call or the user's `/goal TEXT` command does.
+
+A successful call validates the objective under the same UTF-8 and byte-limit
+rules as `/goal`, appends the durable `goal_started` event, and arms automatic
+continuation in interactive and one-shot foreground operation. The current
+direct turn still reaches its normal final answer; that final is the first
+checkpoint, after which queued user turns run before the first synthetic goal
+turn.
+
 While a goal is active, the provider receives a strict `update_goal` function
 tool with two required arguments:
 
@@ -88,12 +108,15 @@ and leaves the goal unchanged. `complete` records successful completion.
 continuation. A blocked goal can later be changed, unlocked, or resumed by the
 user.
 
-The model tool is not exposed when no goal is active or while an unresolved
-managed process restricts the coding-tool surface to the exact final
-`write_stdin` continuation. In networked mode IRC tools may precede that
-continuation so urgent chat can be handled without abandoning the process.
-snajpagent never parses completion claims or magic phrases from assistant
-prose.
+`create_goal` and `update_goal` are mutually exclusive. An active goal exposes
+only `update_goal`; a paused or blocked unfinished goal exposes neither; a
+completed, cancelled, or never-created goal exposes only `create_goal`.
+Neither lifecycle tool is exposed while an unresolved managed process
+restricts the coding-tool surface to the exact final `write_stdin`
+continuation. In networked mode IRC tools may precede that continuation so
+urgent chat can be handled without abandoning the process. snajpagent never
+parses lifecycle requests, completion claims, documentation, or magic phrases
+from assistant prose.
 
 ## Turn Boundaries And Continuation
 

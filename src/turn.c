@@ -369,6 +369,7 @@ tool_name_valid(const char *name)
     return name && (strcmp(name, "exec_command") == 0 ||
                     strcmp(name, "write_stdin") == 0 ||
                     strcmp(name, "apply_patch") == 0 ||
+                    strcmp(name, "create_goal") == 0 ||
                     strcmp(name, "update_goal") == 0 ||
                     strcmp(name, "irc_send") == 0 ||
                     strcmp(name, "irc_state") == 0 ||
