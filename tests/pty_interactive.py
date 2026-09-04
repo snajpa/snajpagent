@@ -49,9 +49,20 @@ while accounted_prompt not in buf[terminal_end:]:
         if not chunk:
             raise SystemExit(f"unexpected EOF: {bytes(buf)!r}")
         buf.extend(chunk)
-os.write(fd, b"/exit\r")
+os.write(fd, b"slow\r")
+read_until(b"working slowly")
+os.write(fd, b"\x03")
+read_until(b"turn interrupted")
+for _ in range(3):
+    os.write(fd, b"\x03")
+    time.sleep(0.05)
+time.sleep(0.1)
+if os.waitpid(pid, os.WNOHANG) != (0, 0):
+    raise SystemExit(f"exited before fifth Ctrl-C: {bytes(buf)!r}")
+os.write(fd, b"\x03")
+read_until(b"You can resume this session")
 _, status = os.waitpid(pid, 0)
-if status != 0:
-    raise SystemExit(f"interactive exit status {status}: {bytes(buf)!r}")
+if os.waitstatus_to_exitcode(status) != 0:
+    raise SystemExit(f"five-Ctrl-C exit status {status}: {bytes(buf)!r}")
 if os.environ.get("TERM") == "dumb" and b"\x1b" in buf:
     raise SystemExit(f"TERM=dumb received ANSI: {bytes(buf)!r}")

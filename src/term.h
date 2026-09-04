@@ -20,6 +20,7 @@ enum snj_term_action {
     SNJ_TERM_QUEUE,
     SNJ_TERM_VIEW,
     SNJ_TERM_INTERRUPT,
+    SNJ_TERM_FORCE_EXIT,
     SNJ_TERM_EXIT
 };
 
@@ -48,6 +49,8 @@ struct snj_term {
     unsigned int output_depth;
     uint32_t typing_pause_ms;
     uint64_t last_input_ms;
+    uint64_t ctrl_c_started_ms;
+    unsigned int ctrl_c_count;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
     unsigned char escape[8];

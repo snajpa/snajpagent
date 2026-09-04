@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Make five consecutive Ctrl-C presses within two seconds an unconditional
+  interactive exit, including during an active turn, while preserving ordinary
+  single-press draft clearing, interruption, and idle-exit behavior.
+
 - Render conventional leading-pipe Markdown tables as aligned terminal grids,
   including inline styling, escaped/code-span pipes, and delimiter-selected
   alignment. Tables that do not fit become labeled vertical rows; malformed

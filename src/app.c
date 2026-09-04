@@ -942,10 +942,10 @@ render_help(struct app_state *app)
 {
     static const char ordinary_keys[] =
         "Enter submit/add to active turn · Empty Tab no-op · "
-        "Tab complete/indent/queue · Ctrl-C clear/interrupt · Ctrl-J newline";
+        "Tab complete/indent/queue · Ctrl-C clear/interrupt · 5× Ctrl-C exit · Ctrl-J newline";
     static const char network_keys[] =
         "Enter submit/add to active turn · Empty Tab switch view · "
-        "Tab complete/indent/queue · Ctrl-C clear/interrupt · Ctrl-J newline";
+        "Tab complete/indent/queue · Ctrl-C clear/interrupt · 5× Ctrl-C exit · Ctrl-J newline";
     const char *keys = app->networked ? network_keys : ordinary_keys;
     struct snj_buf text;
     int rc = -1;
@@ -1870,7 +1870,10 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         }
         return 0;
     }
-    if (action == SNJ_TERM_EXIT) {
+    if (action == SNJ_TERM_FORCE_EXIT) {
+        app->input_closed = true;
+        action = SNJ_TERM_INTERRUPT;
+    } else if (action == SNJ_TERM_EXIT) {
         app->input_closed = true;
         free(line);
         return 0;
@@ -3625,7 +3628,7 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             if (poll_rc == 0)
                 continue;
-            if (action == SNJ_TERM_EXIT) {
+            if (action == SNJ_TERM_EXIT || action == SNJ_TERM_FORCE_EXIT) {
                 free(owned);
                 return 0;
             }

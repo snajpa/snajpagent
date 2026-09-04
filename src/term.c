@@ -12,6 +12,9 @@
 #include <unistd.h>
 #include <wchar.h>
 
+#define CTRL_C_EXIT_COUNT 5
+#define CTRL_C_EXIT_MS 2000u
+
 static volatile sig_atomic_t sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
 
@@ -19,7 +22,8 @@ static void
 mark_sigint(int signal_number)
 {
     (void)signal_number;
-    sigint_pending = 1;
+    if (sigint_pending < CTRL_C_EXIT_COUNT)
+        ++sigint_pending;
 }
 
 static void
@@ -1538,9 +1542,22 @@ feed_paste(struct snj_term *term, unsigned char byte)
 }
 
 static int
+complete_exit(struct snj_term *term, enum snj_term_action kind,
+              enum snj_term_action *action)
+{
+    if (snj_term_hide(term) < 0)
+        return -1;
+    term->prompt_wanted = false;
+    *action = kind;
+    return 1;
+}
+
+static int
 feed_byte(struct snj_term *term, unsigned char byte,
           enum snj_term_action *action, char **text)
 {
+    if (byte != 0x03u || term->paste || term->escape_len)
+        term->ctrl_c_count = 0u;
     if (term->paste)
         return feed_paste(term, byte);
     if (term->escape_len)
@@ -1578,27 +1595,29 @@ feed_byte(struct snj_term *term, unsigned char byte,
             size_t count = 4u - (term->cursor % 4u);
             return insert_bytes(term, spaces, count);
         }
-    case 0x03u:
-        sigint_pending = 0;
+    case 0x03u: {
+        uint64_t now = snj_time_ms();
+
+        if (!term->ctrl_c_count || now < term->ctrl_c_started_ms ||
+            now - term->ctrl_c_started_ms > CTRL_C_EXIT_MS) {
+            term->ctrl_c_started_ms = now;
+            term->ctrl_c_count = 1u;
+        } else if (++term->ctrl_c_count >= CTRL_C_EXIT_COUNT) {
+            return complete_exit(term, SNJ_TERM_FORCE_EXIT, action);
+        } else {
+            return 0;
+        }
         if (term->draft.len)
             return delete_range(term, 0u, term->draft.len);
         if (term->active) {
             *action = SNJ_TERM_INTERRUPT;
             return 1;
         }
-        if (snj_term_hide(term) < 0)
-            return -1;
-        term->prompt_wanted = false;
-        *action = SNJ_TERM_EXIT;
-        return 1;
+        return complete_exit(term, SNJ_TERM_EXIT, action);
+    }
     case 0x04u:
-        if (!term->draft.len) {
-            if (snj_term_hide(term) < 0)
-                return -1;
-            term->prompt_wanted = false;
-            *action = SNJ_TERM_EXIT;
-            return 1;
-        }
+        if (!term->draft.len)
+            return complete_exit(term, SNJ_TERM_EXIT, action);
         return term->cursor < term->draft.len ?
             delete_range(term, term->cursor,
                          next_cp(term->draft.data, term->draft.len,
@@ -1674,7 +1693,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms,
     *action = SNJ_TERM_NONE;
     *text = NULL;
     if (sigint_pending) {
-        sigint_pending = 0;
+        --sigint_pending;
         return feed_byte(term, 0x03u, action, text);
     }
     if (consume_resize(term) < 0)
@@ -1687,7 +1706,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms,
         pfd.revents = 0;
         rc = poll(&pfd, 1u, timeout_ms);
         if (sigint_pending) {
-            sigint_pending = 0;
+            --sigint_pending;
             return feed_byte(term, 0x03u, action, text);
         }
         if (sigwinch_pending) {
@@ -1707,7 +1726,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms,
         }
         count = read(STDIN_FILENO, term->input, sizeof(term->input));
         if (sigint_pending) {
-            sigint_pending = 0;
+            --sigint_pending;
             return feed_byte(term, 0x03u, action, text);
         }
         if (sigwinch_pending) {

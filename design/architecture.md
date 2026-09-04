@@ -158,8 +158,10 @@ interactive terminal handler. Idle and active provider/tool/network pumps
 observe that state and unwind through common cleanup. Interactive Ctrl-C first
 clears any nonempty composer without a lifecycle transition. On an already
 empty composer it interrupts only the current turn when active and exits when
-idle. An empty Ctrl-D closes input. Uncatchable SIGKILL, power loss, and fatal
-corruption cannot execute this path.
+idle. Five consecutive Ctrl-Cs within two seconds exit from any composer state;
+an active turn is interrupted through the same durable cleanup path. An empty
+Ctrl-D closes input. Uncatchable SIGKILL, power loss, and fatal corruption
+cannot execute this path.
 
 ## IRC Runtime
 

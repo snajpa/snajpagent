@@ -53,10 +53,13 @@ future-turn FIFO and does not interrupt the response, yield a managed command,
 or expose the text to the current model cycle. Ctrl-C is composer-first in
 both idle and active states: it clears a nonempty draft without changing the
 turn or session. Only Ctrl-C on an already-empty active composer interrupts the
-turn; on an empty idle composer it exits. After every accepted Enter steer, an
-empty `MODEL/EFFORT » ` composer is armed immediately, before provider
-cancellation or the next response cycle completes, so another steer can be
-entered at once.
+turn; on an empty idle composer it exits. Five consecutive Ctrl-Cs completed
+within two seconds exit from any composer state. Presses two through four in
+such an active-turn sequence are consumed so the transition to an idle composer
+cannot exit early; the fifth interrupts the active turn and closes input. After
+every accepted Enter steer, an empty `MODEL/EFFORT » ` composer is armed
+immediately, before provider cancellation or the next response cycle completes,
+so another steer can be entered at once.
 
 When Enter interrupts visible model output, `response_interrupted` retains its
 byte-exact public prefix. The next request places that prefix in assistant role,
@@ -212,7 +215,8 @@ non-steering behavior as `/queue TEXT`.
   order.
 - PTY coverage asserts that Ctrl-C clears a nonempty active draft without
   creating steering or interruption state. Separate coverage retains explicit
-  turn interruption for Ctrl-C on an empty active composer.
+  turn interruption for Ctrl-C on an empty active composer and proves four
+  rapid presses keep the process alive while the fifth exits it.
 
 ### Real-terminal regression
 
