@@ -4,6 +4,12 @@
 
 ## 0.9.0-wip
 
+- Made `exec_command` default to no execution deadline unless the model asks
+  for a positive `timeout_ms` (or an operator configures a fallback). Ordinary
+  `-v` compact tool output now shows `timeout=none` or the effective
+  millisecond timeout before the command; networked mode shows the same line
+  at its compact-tool `-vv` level.
+
 - Added default-on, presentation-only Markdown rendering for live streamed
   model text across arbitrary delta and UTF-8 boundaries, resumed assistant
   history, and non-operator model messages in the IRC transcript. The

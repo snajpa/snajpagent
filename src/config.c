@@ -115,7 +115,7 @@ snj_config_init(struct snj_config *config)
     config->irc_history_lines = 200u;
     config->shell = snj_strdup_checked("/bin/sh", SNJ_CONFIG_PATH_MAX);
     config->default_yield_ms = 10000u;
-    config->default_timeout_ms = 1800000u;
+    config->default_timeout_ms = 0u;
     config->max_timeout_ms = 86400000u;
 }
 
@@ -543,7 +543,7 @@ parse_tool(struct parse_state *state, const char *key, const char *value)
                parse_u32(value, 0u, 600000u, &config->default_yield_ms);
     if (strcmp(key, "default_timeout_ms") == 0)
         return claim_key(state, 2u) < 0 ? -1 :
-               parse_u32(value, 1000u, 86400000u,
+               parse_u32(value, 0u, 86400000u,
                          &config->default_timeout_ms);
     if (strcmp(key, "max_timeout_ms") == 0)
         return claim_key(state, 3u) < 0 ? -1 :

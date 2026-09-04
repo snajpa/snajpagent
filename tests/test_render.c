@@ -310,6 +310,8 @@ test_markdown_streaming(void)
 
 static size_t
 capture_color(enum snj_color_mode mode, bool networked,
+              unsigned int verbosity, int timeout_ms,
+              uint32_t default_timeout_ms,
               char *out, size_t out_size)
 {
     struct snj_render render;
@@ -325,7 +327,7 @@ capture_color(enum snj_color_mode mode, bool networked,
     saved = dup(STDERR_FILENO);
     assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
     close(fds[1]);
-    snj_render_init(&render, 6u);
+    snj_render_init(&render, verbosity);
     snj_render_set_networked(&render, networked, "agent");
     snj_render_set_color(&render, mode);
     assert(snj_render_submitted(&render, "› ", "plain") == 0);
@@ -337,9 +339,13 @@ capture_color(enum snj_color_mode mode, bool networked,
     assert(arguments != NULL);
     assert(json_object_set_new(arguments, "command",
                                json_string("printf plain")) == 0);
+    assert(json_object_set_new(arguments, "timeout_ms",
+                               timeout_ms < 0 ? json_null() :
+                                                json_integer(timeout_ms)) == 0);
     call.name = "exec_command";
     call.arguments = arguments;
-    assert(snj_render_tool_start(&render, &call, "/tmp") == 0);
+    assert(snj_render_tool_start(&render, &call, "/tmp",
+                                 default_timeout_ms) == 0);
     json_decref(arguments);
     memset(&event, 0, sizeof(event));
     event.kind = SNJ_IRC_MESSAGE;
@@ -438,18 +444,28 @@ main(void)
     assert(snj_render_transport(&render, '>', "bad\rline", 8u) < 0);
     assert(errno == EINVAL);
 
-    assert(capture_color(SNJ_COLOR_ALWAYS, false,
+    assert(capture_color(SNJ_COLOR_ALWAYS, false, 6u, 2500, 0u,
                          output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[1;36m› \033[0mplain\n") != NULL);
     assert(strstr(output, "\033[1;33msnajpagent: careful\n\033[0m") != NULL);
     assert(strstr(output, "\033[1;31msnajpagent: broken\n\033[0m") != NULL);
     assert(strstr(output, "\033[34mstatus\n\033[0m") != NULL);
     assert(strstr(output,
-                  "\033[33m→ exec\033[0m  'printf plain'\n") != NULL);
+                  "\033[33m→ exec\033[0m  timeout=2500ms  'printf plain'\n") != NULL);
     assert(strstr(output, "\033[1;36magent \033[0m› answer") != NULL);
-    assert(capture_color(SNJ_COLOR_NEVER, true,
+    assert(capture_color(SNJ_COLOR_NEVER, true, 6u, -1, 0u,
                          output, sizeof(output)) > 0u);
     assert(strchr(output, '\033') == NULL);
+    assert(strstr(output, "→ exec  timeout=none  'printf plain'\n") != NULL);
+    assert(capture_color(SNJ_COLOR_NEVER, false, 1u, -1, 0u,
+                         output, sizeof(output)) > 0u);
+    assert(strstr(output, "→ exec  timeout=none  'printf plain'\n") != NULL);
+    assert(strstr(output, "  arguments:") == NULL);
+    assert(capture_color(SNJ_COLOR_NEVER, false, 1u, -1, 4000u,
+                         output, sizeof(output)) > 0u);
+    assert(strstr(output,
+                  "→ exec  timeout=4000ms  'printf plain'\n") != NULL);
+    assert(strstr(output, "  arguments:") == NULL);
 
     assert(setenv("NO_COLOR", "1", 1) == 0);
     snj_render_init(&render, 0u);

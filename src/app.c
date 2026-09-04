@@ -1348,7 +1348,8 @@ execute_calls(struct app_state *app, const char *turn_id,
                          error, error_size) < 0)
             return -1;
         if (snj_render_tool_start(&app->render, call,
-                                  app->session.workspace) < 0) {
+                                  app->session.workspace,
+                                  app->config->default_timeout_ms) < 0) {
             set_error(error, error_size, "tool activity could not be rendered");
             return -1;
         }

@@ -43,6 +43,7 @@
 #define SNJ_TOOL_STREAM_TAIL (SNJ_TOOL_STREAM_TOTAL - SNJ_TOOL_STREAM_HEAD)
 #define SNJ_TOOL_MODEL_TEXT_MAX (512u * 1024u)
 #define SNJ_TOOL_POLL_MS 50u
+#define SNJ_TOOL_YIELD_MAX_MS 600000u
 #define SNJ_TOOL_CLOSE_GRACE_MS 2000u
 #define SNJ_TOOL_REDACTOR_MAX (8192u + SNJ_WIRE_SECRET_MAX)
 
@@ -951,6 +952,8 @@ simple_result(const char *status, const char *reason, const char *message,
 static uint64_t
 saturating_deadline(uint64_t start, uint32_t delta_ms)
 {
+    if (!delta_ms)
+        return UINT64_MAX;
     uint64_t deadline = start + delta_ms;
     return deadline < start ? UINT64_MAX : deadline;
 }
@@ -1549,7 +1552,7 @@ run_write_stdin(const struct snj_response_item *call,
     if (!text_arg_valid(data, SNJ_TOOL_STDIN_MAX) ||
         !json_bool_member(call->arguments, "eof", false, &eof) ||
         !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
-                         0u, config->max_timeout_ms, &yield_ms)) {
+                         0u, SNJ_TOOL_YIELD_MAX_MS, &yield_ms)) {
         *result = simple_result("running", NULL,
             "The write_stdin interaction was rejected because its arguments were invalid; the managed process was not modified.",
             -1, proc->handle);
@@ -1632,7 +1635,8 @@ run_exec_command(const struct snj_response_item *call,
                          config->max_timeout_ms, &timeout_ms) ||
         !json_u32_member(call->arguments, "yield_ms",
                          config->default_yield_ms, 0u,
-                         timeout_ms, &yield_ms)) {
+                         SNJ_TOOL_YIELD_MAX_MS, &yield_ms) ||
+        (timeout_ms && yield_ms > timeout_ms)) {
         set_error(error, error_size, "invalid exec_command arguments");
         errno = EINVAL;
         goto out;
@@ -1706,9 +1710,7 @@ run_exec_command(const struct snj_response_item *call,
         close_if_open(&out_pipe[1]);
         close_if_open(&err_pipe[1]);
     }
-    deadline = started + timeout_ms;
-    if (deadline < started)
-        deadline = UINT64_MAX;
+    deadline = saturating_deadline(started, timeout_ms);
     while (stdout_open || stderr_open || !child_done) {
         struct pollfd fds[3];
         nfds_t nfds = 0;

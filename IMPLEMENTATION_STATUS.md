@@ -131,7 +131,7 @@ unresolved managed process retains exclusive `write_stdin` control.
   frozen in-memory instruction text to the provider request;
 - `exec_command` has a real production non-PTY implementation using the
   configured absolute shell, a resolved absolute working directory, bounded
-  stdin, bounded timeout, nonblocking stdout/stderr capture, process-group
+  stdin, optional bounded timeout, nonblocking stdout/stderr capture, process-group
   termination, and active-input pumping for cancellation;
 - PTY `exec_command` is implemented on Linux and macOS hosts that provide the
   required PTY primitives; stdout and stderr are merged through the PTY stream,

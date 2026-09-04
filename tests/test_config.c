@@ -103,6 +103,7 @@ main(void)
     assert(strcmp(config.irc_listen, "localhost:6667") == 0);
     assert(config.irc_client_count == 0u);
     assert(config.irc_history_lines == 200u);
+    assert(config.default_timeout_ms == 0u);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(config.providers[0].auto_compact_input_tokens == 120000u);

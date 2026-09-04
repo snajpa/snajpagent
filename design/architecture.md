@@ -115,6 +115,13 @@ The first-party tool surface is deliberately small:
 
 Provider credentials and configured secret environment variables are removed
 from child tool environments or redacted before output is persisted or shown.
+`exec_command.timeout_ms` is nullable: the built-in default is no execution
+deadline, and the model supplies a positive millisecond value only when the
+particular command needs one. `[tool] default_timeout_ms` may impose an
+operator-configured fallback, including `0` for no deadline, while
+`max_timeout_ms` remains the hard bound. The ordinary compact `-v` tool-start
+line (networked `-vv`) shows the effective `timeout=none` or `timeout=Nms`
+before the quoted command.
 
 ## Rendering
 

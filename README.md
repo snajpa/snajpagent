@@ -244,7 +244,9 @@ terminal output and honors `NO_COLOR`. Color applies to networked and ordinary
 UI roles, uses broadly supported 16-color foreground attributes, and never
 enters stored text, provider input, or IRC traffic. Compact tool-start lines
 color the arrow and tool name, while an `exec` command itself remains in the
-default foreground like its output.
+default foreground like its output. In ordinary `-v` output (networked `-vv`),
+the first `exec` line shows its effective `timeout=none` or `timeout=Nms`
+before the command.
 
 Markdown presentation is enabled by default. `--no-markdown` disables it and
 `--markdown` explicitly enables it, overriding configuration. Headings, lists,
@@ -357,6 +359,16 @@ typing_pause_ms = 500
 color = auto
 markdown = true
 verbosity = 0
+```
+
+Commands have no built-in execution deadline. A model-requested positive
+`timeout_ms` sets one; `[tool] default_timeout_ms` can instead impose an
+operator fallback, with `0` retaining no deadline:
+
+```ini
+[tool]
+default_timeout_ms = 0
+max_timeout_ms = 86400000
 ```
 
 IRC settings have direct command-line equivalents. `client` may appear up to

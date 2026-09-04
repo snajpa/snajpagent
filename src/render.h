@@ -106,7 +106,7 @@ int snj_render_irc_event(struct snj_render *render,
                          const struct snj_irc_event *event);
 int snj_render_tool_start(struct snj_render *render,
                           const struct snj_response_item *call,
-                          const char *workdir);
+                          const char *workdir, uint32_t default_timeout_ms);
 int snj_render_tool_finish(struct snj_render *render, const char *name,
                            const json_t *result);
 int snj_render_event(struct snj_render *render, uint64_t seq,

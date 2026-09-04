@@ -951,7 +951,7 @@ exec_tool_schema(void)
             json_decref(properties);
         return NULL;
     }
-    return tool_schema("exec_command", "Run one bounded POSIX shell command from an explicit absolute workdir.",
+    return tool_schema("exec_command", "Run one POSIX shell command from an explicit absolute workdir. Set timeout_ms only when this command needs a deadline; null runs without a timeout.",
                        properties, required_array(required, sizeof(required) / sizeof(required[0])));
 }
 

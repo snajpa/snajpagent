@@ -280,9 +280,10 @@ assert failed[0]["data"]["class"] == "protocol"
 PY
 done
 
-after=$($bin -e -- text_tool 2>"$root/text-tool.err")
+after=$($bin -e -v -- text_tool 2>"$root/text-tool.err")
 [ "$after" = done ]
 grep -q '^Checking first\.$' "$root/text-tool.err"
+grep -Fq "→ exec  timeout=1000ms  'fixture ok'" "$root/text-tool.err"
 
 out=$($bin -e -v -- multi_item 2>"$root/multi.err")
 [ "$out" = "Done." ]

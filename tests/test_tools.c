@@ -26,7 +26,9 @@ call_args_yield(const char *command, const char *workdir, int timeout_ms,
     assert(args);
     assert(snj_json_set_new(args, "command", json_string(command)) == 0);
     assert(snj_json_set_new(args, "workdir", json_string(workdir)) == 0);
-    assert(snj_json_set_new(args, "timeout_ms", json_integer(timeout_ms)) == 0);
+    assert(snj_json_set_new(args, "timeout_ms",
+                            timeout_ms < 0 ? json_null() :
+                                             json_integer(timeout_ms)) == 0);
     assert(snj_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
     assert(snj_json_set_new(args, "stdin",
                             stdin_text ? json_string(stdin_text) : json_null()) == 0);
@@ -77,7 +79,7 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     snj_config_init(&config);
     assert(config.shell != NULL);
-    config.default_timeout_ms = 1000;
+    config.default_timeout_ms = 0;
     config.max_timeout_ms = 5000;
     snj_credential_clear(&credential);
     if (secret) {
@@ -425,6 +427,17 @@ test_timeout(void)
 }
 
 static void
+test_no_timeout(void)
+{
+    json_t *result = run_command("sleep 0.05; printf no-timeout", -1);
+
+    assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
+    assert(strcmp(snj_json_string(json_object_get(result, "stdout"),
+                                  "retained"), "no-timeout") == 0);
+    json_decref(result);
+}
+
+static void
 test_large_stdout_uses_blocking_child_fd(void)
 {
     json_t *result = run_command(
@@ -545,11 +558,11 @@ test_managed_process_accepts_repeated_write_stdin(void)
 }
 
 static void
-test_managed_process_poll_consumes_exit(void)
+test_managed_process_without_timeout(void)
 {
     json_t *result = run_managed_exec(
         "printf 'start\\n'; sleep 0.05; printf 'done\\n'",
-        5000, 10);
+        -1, 10);
     const char *handle;
     json_t *next;
 
@@ -989,6 +1002,7 @@ main(void)
     test_success_and_streams();
     test_failure_status();
     test_timeout();
+    test_no_timeout();
     test_timeout_kills_process_family();
     test_large_stdout_uses_blocking_child_fd();
     test_stdin_uses_blocking_child_fd();
@@ -996,7 +1010,7 @@ main(void)
     test_managed_pty_write_stdin_completes();
     test_managed_process_write_stdin_completes();
     test_managed_process_accepts_repeated_write_stdin();
-    test_managed_process_poll_consumes_exit();
+    test_managed_process_without_timeout();
     test_managed_process_hands_off_on_steering();
     test_write_stdin_rejects_unknown_handle();
     test_wrong_handle_does_not_touch_active_process();

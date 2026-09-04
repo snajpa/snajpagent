@@ -1643,11 +1643,13 @@ append_shell_quoted(struct snj_buf *line, const char *text)
 int
 snj_render_tool_start(struct snj_render *render,
                       const struct snj_response_item *call,
-                      const char *workdir)
+                      const char *workdir, uint32_t default_timeout_ms)
 {
     struct snj_buf line;
     const char *label;
     const char *command;
+    json_t *timeout_value;
+    uint32_t timeout_ms = default_timeout_ms;
     size_t prefix_len = 0u;
     int rc = 0;
 
@@ -1655,12 +1657,23 @@ snj_render_tool_start(struct snj_render *render,
         return 0;
     label = tool_label(call->name);
     command = snj_json_string(call->arguments, "command");
+    timeout_value = json_object_get(call->arguments, "timeout_ms");
+    if (json_is_integer(timeout_value)) {
+        json_int_t requested = json_integer_value(timeout_value);
+
+        if (requested >= 0 && (uint64_t)requested <= UINT32_MAX)
+            timeout_ms = (uint32_t)requested;
+    }
     snj_buf_init(&line, SNJ_MAX_TOOL_ARGUMENTS * 2u + 4096u);
     if (snj_buf_printf(&line, "→ %s", label) < 0)
         rc = -1;
     else if (command) {
         prefix_len = line.len;
-        if (snj_buf_append(&line, "  ", 2u) < 0 ||
+        if ((timeout_ms &&
+             snj_buf_printf(&line, "  timeout=%ums", timeout_ms) < 0) ||
+            (!timeout_ms &&
+             snj_buf_append(&line, "  timeout=none", 14u) < 0) ||
+            snj_buf_append(&line, "  ", 2u) < 0 ||
             append_shell_quoted(&line, command) < 0)
             rc = -1;
     }

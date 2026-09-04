@@ -515,6 +515,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle)
 
     tool = tool_by_name(tools, "exec_command");
     if (tool) {
+        assert(strstr(snj_json_string(tool, "description"),
+                      "null runs without a timeout") != NULL);
         properties = assert_strict_tool_contract(tool);
         assert_schema_type(json_object_get(properties, "command"), "string", 0);
         assert_schema_type(json_object_get(properties, "workdir"), "string", 0);
