@@ -29,7 +29,8 @@ def read_until(needle: bytes, timeout: float = 5.0) -> None:
             raise SystemExit(f"unexpected EOF; got {bytes(buf)!r}")
         buf.extend(chunk)
 
-read_until(b"\xe2\x80\xba ")
+idle_prompt = b"gpt-5.5-2026-04-23/medium \xe2\x80\xba "
+read_until(idle_prompt)
 os.write(fd, b"ping\r")
 read_until(b"pong")
 # A prompt redraw can occur while a response is still active.  The durable
@@ -37,7 +38,7 @@ read_until(b"pong")
 read_until(b"turn_completed synced")
 terminal_end = buf.find(b"turn_completed synced") + len(b"turn_completed synced")
 end = time.monotonic() + 5.0
-while b"\xe2\x80\xba " not in buf[terminal_end:]:
+while idle_prompt not in buf[terminal_end:]:
     remaining = end - time.monotonic()
     if remaining <= 0:
         raise SystemExit(f"no idle composer: {bytes(buf)!r}")

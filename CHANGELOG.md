@@ -4,6 +4,18 @@
 
 ## 0.9.0-wip
 
+- Replaced the ordinary input label with stateful typographic prompts:
+  `MODEL/EFFORT › ` starts a non-networked turn and `MODEL/EFFORT » ` adds to
+  the active turn, while networked prompts use
+  `OPERATOR_NICK@MACHINE_HOSTNAME` with the same single/double glyph contract.
+  Terminal-unsafe selector characters are escaped only in presentation.
+
+- Added append-only networked `chat` and `rollout` presentation views.
+  `/chat`, `/rollout`, and empty Tab switch views without changing input
+   routing, then print each unseen semantic item for the entered view once and
+   in order before live output continues. Nonempty Tab retains completion,
+   indentation, and active-turn queueing behavior.
+
 - Made terminal wrapping keep trailing punctuation on the preceding line and
   use hyphens, dashes, periods, commas, and similar closing punctuation as the
   following wrap opportunity through one shared Markdown/literal code path.

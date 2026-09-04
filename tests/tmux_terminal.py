@@ -34,6 +34,9 @@ MARKDOWN_TEXT = (
     "```c\nint value = 1;\n```\n\n"
     "First prose line\ncontinued prose\n\nsecond paragraph"
 )
+DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium ›"
+DEFAULT_ACTIVE_PROMPT = "gpt-5.5-2026-04-23/medium »"
+MACHINE_HOSTNAME = socket.gethostname()
 
 
 def read_events(dotdir):
@@ -455,7 +458,7 @@ def run_status_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 40, 14
     )
     try:
-        terminal.wait("\n›")
+        terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("terminal_status")
         terminal.wait("working…", timeout=3.0)
         terminal.wait("status-first-fragment", timeout=3.0)
@@ -509,7 +512,7 @@ def run_paced_decode_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 28, 14
     )
     try:
-        terminal.wait("\n›")
+        terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("terminal_paced_decode")
         wait_normalized(terminal, "Paced")
         wait_normalized(terminal, "Paced tokens")
@@ -596,7 +599,7 @@ def run_markdown_case(binary, root):
             args=args,
         )
         try:
-            terminal.wait("\n›")
+            terminal.wait(DEFAULT_IDLE_PROMPT)
             terminal.submit("terminal_markdown")
             if rendered:
                 terminal.wait("Stream rea", timeout=2.0, join_wrapped=True)
@@ -676,13 +679,13 @@ def run_render_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 32, 18
     )
     try:
-        terminal.wait("\n›")
+        terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("terminal_render")
         terminal.wait("alpha beta gamma delta-")
         terminal.send_text("draft")
-        first = terminal.wait("steer › draft")
+        first = terminal.wait(f"{DEFAULT_ACTIVE_PROMPT} draft", join_wrapped=True)
         assert_order(first, ["alpha beta gamma delta-", "extraordinary",
-                             "steer › draft"])
+                             f"{DEFAULT_ACTIVE_PROMPT} draft"])
         if re.search(r"(?m)^• alpha beta gamma", first) is None:
             raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
         if "• alpha beta gamma delta-\nextraordinary" not in first:
@@ -691,35 +694,35 @@ def run_render_case(binary, root):
         time.sleep(0.1)
         pause_started = time.monotonic()
         terminal.send_text(" plus")
-        terminal.wait("steer › draft plus")
+        terminal.wait(f"{DEFAULT_ACTIVE_PROMPT} draft plus", join_wrapped=True)
         time.sleep(1.1)
         paused = terminal.capture(join_wrapped=True)
         if "explicit café € line" in paused:
             raise AssertionError(
                 f"model output ignored the configured typing pause:\n{paused}"
             )
-        second = terminal.wait("explicit café € line", timeout=4.0)
+        second = terminal.wait("explicit café € line", timeout=4.0,
+                               join_wrapped=True)
         if time.monotonic() - pause_started < 1.2:
             raise AssertionError("model output resumed before the typing pause")
-        assert_order(second, ["steer › draft plus", "explicit café € line"])
-        if "steer › draft plus\n\nzeta eta theta" in second:
+        assert_order(second, [f"{DEFAULT_ACTIVE_PROMPT} draft plus",
+                              "explicit café € line"])
+        if f"{DEFAULT_ACTIVE_PROMPT} draft plus\n\nzeta eta theta" in second:
             raise AssertionError(f"output resumed with a spurious blank line:\n{second}")
-        if "steer › draft plus\nzeta eta theta" not in second:
+        if f"{DEFAULT_ACTIVE_PROMPT} draft plus\nzeta eta theta" not in second:
             raise AssertionError(f"output did not resume directly below the draft:\n{second}")
         if re.search(r"(?m)^zeta eta theta$", second) is None:
             raise AssertionError(f"wrapped prose gained a hanging indent:\n{second}")
 
         repeat_pause_started = time.monotonic()
         terminal.send_text(" again with long resize text")
-        terminal.wait("steer › draft plus again", join_wrapped=True)
-        terminal.resize(46, 18)
-        resized = terminal.wait(
-            "steer › draft plus again with long resize text",
-            join_wrapped=True,
+        terminal.wait(f"{DEFAULT_ACTIVE_PROMPT} draft plus again",
+                      join_wrapped=True)
+        exact_margin = (
+            f"{DEFAULT_ACTIVE_PROMPT} draft plus again with long resize text"
         )
-        exact_margin = "steer › draft plus again with long resize text"
-        if len(exact_margin) != 46:
-            raise AssertionError("right-margin fixture is not exactly 46 columns")
+        terminal.resize(len(exact_margin), 18)
+        resized = terminal.wait(exact_margin, join_wrapped=True)
         if resized.count(exact_margin) != 1:
             raise AssertionError(f"resized composer was duplicated:\n{resized}")
         time.sleep(0.75)
@@ -747,9 +750,9 @@ def run_render_case(binary, root):
             [
                 "alpha beta gamma delta-",
                 "extraordinary",
-                "steer › draft plus",
+                f"{DEFAULT_ACTIVE_PROMPT} draft plus",
                 "explicit café € line",
-                "steer › draft plus again with long resize text",
+                exact_margin,
                 "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ",
                 "control:\\x1B[31m",
             ],
@@ -776,8 +779,11 @@ def run_render_case(binary, root):
         terminal.submit("slow")
         terminal.wait("working slowly")
         terminal.send_text("change course")
-        steering_screen = terminal.wait("steer › change course")
-        assert_order(steering_screen, ["working slowly", "steer › change course"])
+        steering_screen = terminal.wait(
+            f"{DEFAULT_ACTIVE_PROMPT} change course", join_wrapped=True
+        )
+        assert_order(steering_screen, ["working slowly",
+                                      f"{DEFAULT_ACTIVE_PROMPT} change course"])
         terminal.send_key("Enter")
         terminal.wait("steered: change course")
         events = wait_event_count(dotdir, "turn_completed", 2)
@@ -844,7 +850,7 @@ def run_queue_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 48, 20
     )
     try:
-        terminal.wait("\n›")
+        terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("queue_slow")
         terminal.wait("working slowly")
         for text in ("first", "second", "third", "fourth"):
@@ -876,7 +882,7 @@ def run_queue_case(binary, root):
 
         terminal.send_key("C-c")
         terminal.wait("turn interrupted")
-        terminal.wait("\n›")
+        terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("/queue 1 edit")
         terminal.wait("edit 1 › second active")
         terminal.send_text(" idle")
@@ -955,7 +961,7 @@ def run_tool_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 52, 18
     )
     try:
-        terminal.wait("\n›")
+        terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("/verbose 1")
         terminal.wait("verbosity: 1")
         terminal.submit("text_tool")
@@ -1029,7 +1035,7 @@ def write_irc_config(path, provider_port, model):
 
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
-    expected = f"{operator} ›"
+    expected = f"{operator}@{MACHINE_HOSTNAME} ›"
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture()
@@ -1197,7 +1203,7 @@ def run_irc_case(binary, root):
                 100, 24, args=args, environment=environment,
             )
             terminals[name] = terminal
-            terminal.wait(f"{operator} ›")
+            terminal.wait(f"{operator}@{MACHINE_HOSTNAME} ›")
 
         ordered = [terminals[name] for name in ("host", "one", "two")]
         terminals["host"].wait("@twoop  joined")
@@ -1371,7 +1377,7 @@ def run_live(binary, workspace, config, root):
         )
         started = time.monotonic()
         last_report = started
-        terminal.wait("\n›")
+        terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit(LIVE_PROMPT)
         while True:
             _, events = maybe_events(dotdir)
@@ -1393,7 +1399,7 @@ def run_live(binary, workspace, config, root):
                 last_report = now
             time.sleep(0.1)
 
-        terminal.wait("\n›", timeout=10.0)
+        terminal.wait(DEFAULT_IDLE_PROMPT, timeout=10.0)
         screen = terminal.capture()
         joined_screen = terminal.capture(join_wrapped=True)
         _, events = read_events(dotdir)

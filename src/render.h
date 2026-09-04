@@ -12,6 +12,14 @@
 
 #define SNJ_RENDER_IRC_MARKDOWN_STATES (SNJ_CONFIG_IRC_CLIENT_MAX + 1u)
 
+enum snj_render_view {
+    SNJ_RENDER_CHAT,
+    SNJ_RENDER_ROLLOUT,
+    SNJ_RENDER_VIEW_COUNT
+};
+
+struct snj_render_record;
+
 struct snj_markdown_state {
     char prefix[16];
     char fence_info[64];
@@ -68,8 +76,13 @@ struct snj_render {
     bool markdown_rendering;
     bool markdown_preserve_fence;
     bool networked;
+    enum snj_render_view view;
     char model_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    char activity[64];
     struct snj_term *term;
+    struct snj_render_record *view_head[SNJ_RENDER_VIEW_COUNT];
+    struct snj_render_record *view_tail[SNJ_RENDER_VIEW_COUNT];
+    struct snj_render_record *rollout_open;
     struct snj_buf wrap_pending;
     size_t public_column;
     bool wrap_has_word;
@@ -83,11 +96,14 @@ struct snj_render {
 };
 
 void snj_render_init(struct snj_render *render, unsigned int verbosity);
+void snj_render_free(struct snj_render *render);
 void snj_render_set_color(struct snj_render *render, enum snj_color_mode mode);
 void snj_render_set_markdown(struct snj_render *render, bool enabled);
 void snj_render_set_networked(struct snj_render *render, bool networked,
                               const char *model_nick);
 void snj_render_attach_term(struct snj_render *render, struct snj_term *term);
+enum snj_render_view snj_render_view(const struct snj_render *render);
+int snj_render_set_view(struct snj_render *render, enum snj_render_view view);
 int snj_render_orientation(struct snj_render *render,
                            const struct snj_session *session, bool resumed);
 int snj_render_history(struct snj_render *render,
@@ -101,6 +117,12 @@ int snj_render_public(struct snj_render *render, const char *text, size_t len,
                       struct snj_buf *delivered);
 int snj_render_public_end(struct snj_render *render);
 int snj_render_public_abort(struct snj_render *render);
+int snj_render_rollout_begin(struct snj_render *render, int fd,
+                             const char *label);
+int snj_render_rollout(struct snj_render *render, const char *text, size_t len,
+                       struct snj_buf *delivered);
+int snj_render_rollout_end(struct snj_render *render);
+int snj_render_rollout_abort(struct snj_render *render);
 int snj_render_error(const char *message);
 int snj_render_warning(const char *message);
 int snj_render_error_ctx(struct snj_render *render, const char *message);

@@ -208,10 +208,20 @@ goal turn, and refusal, turn failure, terminal input closure, or process
 restart pauses automatic continuation. See
 [`design/goals.md`](design/goals.md) for the complete lifecycle contract.
 
-While a response is streaming, typing opens the `steer › ` composer on a new
-line and briefly pauses visible model output. Tab queues the current composer
-text as a future turn. `/queue` or `/q` lists queued turns with one-based
-numbers. Queue mutations accept these short and long forms:
+The ordinary composer identifies both the model and reasoning effort. It uses
+`MODEL/EFFORT › ` while idle and `MODEL/EFFORT » ` during a turn, where `›`
+means start a turn and `»` means add input to the active turn. The idle prompt
+shows the effective next-turn selection; the active prompt keeps the model and
+effort frozen for that turn even if `/model` or `/effort` stages a different
+next-turn value. Terminal-unsafe characters in those trusted selectors are
+escaped for display without changing the values sent to the provider.
+
+While a response is streaming, typing opens the active-turn composer on a new
+line and briefly pauses visible model output. With a nonempty draft, Tab keeps
+its contextual behavior: slash-command completion when possible, indentation
+while idle, or future-turn queueing while active. Empty Tab is a no-op outside
+networked mode. `/queue` or `/q` lists queued turns with one-based numbers.
+Queue mutations accept these short and long forms:
 
 ```text
 /q 2d          /queue 2 delete
@@ -247,10 +257,26 @@ Operators can change the topic with normal IRC `TOPIC` or the local
 `/topic TEXT` command. `/names` shows current members, and `//TEXT` sends chat
 beginning with `/`.
 
-The timestamped terminal transcript behaves like a scrolling IRC client, not
-a windowed TUI. At the default verbosity it shows operator/room chat and room
-events, but hides the local model's response and all model/tool internals. The
-networked verbosity ladder is additive:
+The network composer is `OPERATOR_NICK@MACHINE_HOSTNAME › ` while idle and
+`OPERATOR_NICK@MACHINE_HOSTNAME » ` during a turn. It uses the configured local
+operator nick and the local machine hostname in both presentation views; the
+hostname is not the IRC endpoint or room.
+
+The timestamped terminal interface starts in `chat`, which shows operator and
+room messages plus room events. `rollout` shows the local model's streamed work
+using the ordinary non-networked visibility rules, including model text at
+verbosity 0. `/chat` and `/rollout` select either view, and empty Tab toggles
+between them without changing where operator input is sent. A nonempty draft
+never switches views.
+
+The interface remains a scrolling, append-only IRC client rather than a
+windowed TUI. Switching appends a short view boundary and then prints unseen
+content for the entered view once, in order, before continuing live output;
+terminal history is never cleared or repainted. The catch-up begins with the
+current foreground run rather than replaying the complete session log.
+
+Chat view hides the local model's response and model/tool internals at default
+verbosity. The networked verbosity ladder is additive:
 
 1. `-v` reveals terminal model replies and every tool call with complete
    arguments, completion state, and configured result display;

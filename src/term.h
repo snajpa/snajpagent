@@ -12,11 +12,13 @@
 
 #define SNJ_TERM_HISTORY_COUNT 100u
 #define SNJ_TERM_HISTORY_BYTES (4u * 1024u * 1024u)
+#define SNJ_TERM_LABEL_BYTES 512u
 
 enum snj_term_action {
     SNJ_TERM_NONE,
     SNJ_TERM_SUBMIT,
     SNJ_TERM_QUEUE,
+    SNJ_TERM_VIEW,
     SNJ_TERM_INTERRUPT,
     SNJ_TERM_EXIT
 };
@@ -53,7 +55,7 @@ struct snj_term {
     size_t input_pos;
     size_t input_len;
     size_t paste_end_match;
-    char label[16];
+    char label[SNJ_TERM_LABEL_BYTES];
     char status[64];
     bool opened;
     bool raw;

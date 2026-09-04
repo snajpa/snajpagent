@@ -213,6 +213,8 @@ static const struct snj_term_command commands[] = {
     {"/compact", "compact the idle session context"},
     {"/delete", "delete idle session after confirmation"},
     {"/exit", "preserve session and exit"},
+    {"/chat", "show IRC room activity"},
+    {"/rollout", "show local model activity"},
     {"/topic [TEXT]", "show or change the IRC room topic"},
     {"/names", "show IRC endpoints, room members, and operator flags"}
 };
@@ -221,7 +223,7 @@ static size_t
 command_count(const struct app_state *app)
 {
     size_t count = sizeof(commands) / sizeof(commands[0]);
-    return app->networked ? count : count - 2u;
+    return app->networked ? count : count - 4u;
 }
 static const char *
 effective_model(const char *model)
@@ -295,6 +297,8 @@ snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
     return 0;
 }
 #define commit_event snj_app_commit_event
+static const char *next_model(const struct app_state *app);
+static const char *next_effort(const struct app_state *app);
 static int
 render_queue(struct app_state *app)
 {
@@ -312,27 +316,56 @@ render_queue(struct app_state *app)
 }
 
 static int
-set_input_prompt(struct app_state *app, bool active)
+format_input_label(struct app_state *app, bool active,
+                   char label[SNJ_TERM_LABEL_BYTES])
 {
-    char label[64];
+    char hostname[256u];
+    const char *model;
+    const char *effort;
+    int n;
 
-    if (!app->queue_edit_id[0] && !app->networked)
-        return snj_term_set_prompt(&app->term, active);
-    if (!app->queue_edit_id[0]) {
-        if (snprintf(label, sizeof(label), "%s %s ",
-                     snj_irc_operator_nick(app->irc),
-                     active ? "↪" : "›") < 0) {
-            errno = EOVERFLOW;
+    if (app->queue_edit_id[0]) {
+        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "edit %zu › ",
+                     app->queue_edit_number);
+    } else if (app->networked) {
+        if (gethostname(hostname, sizeof(hostname)) < 0)
+            memcpy(hostname, "localhost", 10u);
+        hostname[sizeof(hostname) - 1u] = '\0';
+        if (!snj_utf8_valid((const unsigned char *)hostname,
+                            strlen(hostname), true))
+            memcpy(hostname, "localhost", 10u);
+        for (size_t i = 0u; hostname[i]; ++i) {
+            unsigned char c = (unsigned char)hostname[i];
+            if (c <= 0x20u || c == 0x7fu)
+                hostname[i] = '_';
+        }
+        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "%s@%s %s ",
+                     snj_irc_operator_nick(app->irc), hostname,
+                     active ? "»" : "›");
+    } else {
+        model = active ? app->turn_model : next_model(app);
+        effort = active ? app->turn_effort : resolve_effort(next_effort(app));
+        if (!effort) {
+            errno = EINVAL;
             return -1;
         }
-        return snj_term_set_prompt_label(&app->term, active, label);
+        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "%s/%s %s ", model, effort,
+                     active ? "»" : "›");
     }
-    if (snprintf(label, sizeof(label), "edit %zu › ",
-                 app->queue_edit_number) < 0) {
+    if (n < 0 || (size_t)n >= SNJ_TERM_LABEL_BYTES) {
         errno = EOVERFLOW;
         return -1;
     }
-    return snj_term_set_prompt_label(&app->term, active, label);
+    return 0;
+}
+
+static int
+set_input_prompt(struct app_state *app, bool active)
+{
+    char label[SNJ_TERM_LABEL_BYTES];
+
+    return format_input_label(app, active, label) < 0 ? -1 :
+           snj_term_set_prompt_label(&app->term, active, label);
 }
 
 static struct snj_queued_turn *
@@ -611,9 +644,13 @@ render_status(struct app_state *app)
 static int
 render_help(struct app_state *app)
 {
-    static const char keys[] =
-        "Enter submit/steer · Tab complete/indent/queue · "
-        "Ctrl-C clear/interrupt · Ctrl-J newline";
+    static const char ordinary_keys[] =
+        "Enter submit/add to active turn · Empty Tab no-op · "
+        "Tab complete/indent/queue · Ctrl-C clear/interrupt · Ctrl-J newline";
+    static const char network_keys[] =
+        "Enter submit/add to active turn · Empty Tab switch view · "
+        "Tab complete/indent/queue · Ctrl-C clear/interrupt · Ctrl-J newline";
+    const char *keys = app->networked ? network_keys : ordinary_keys;
     struct snj_buf text;
     int rc = -1;
 
@@ -622,7 +659,7 @@ render_help(struct app_state *app)
         if (snj_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
                            commands[i].description) < 0)
             goto out;
-    if (snj_buf_append(&text, keys, sizeof(keys) - 1u) < 0 ||
+    if (snj_buf_append(&text, keys, strlen(keys)) < 0 ||
         snj_buf_terminate(&text) < 0)
         goto out;
     rc = snj_render_host(&app->render, (const char *)text.data);
@@ -1026,6 +1063,15 @@ change_verbosity(struct app_state *app, const char *value)
     return app_hostf(app, "verbosity: %u", app->render.verbosity);
 }
 static int
+toggle_view(struct app_state *app)
+{
+    if (!app->networked)
+        return 0;
+    return snj_render_set_view(&app->render,
+        snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
+        SNJ_RENDER_ROLLOUT : SNJ_RENDER_CHAT);
+}
+static int
 handle_common_command(struct app_state *app, const char *line, bool active,
                       bool *handled)
 {
@@ -1038,6 +1084,10 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return render_status(app);
     if (strcmp(line, "/history") == 0)
         return snj_render_history(&app->render, &app->session);
+    if (app->networked && strcmp(line, "/chat") == 0)
+        return snj_render_set_view(&app->render, SNJ_RENDER_CHAT);
+    if (app->networked && strcmp(line, "/rollout") == 0)
+        return snj_render_set_view(&app->render, SNJ_RENDER_ROLLOUT);
     if (strcmp(line, "/verbose") == 0)
         return change_verbosity(app, NULL);
     if (strncmp(line, "/verbose ", 9u) == 0)
@@ -1146,6 +1196,14 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         free(line);
         return 2;
     }
+    if (action == SNJ_TERM_VIEW) {
+        if (app->queue_edit_id[0]) {
+            (void)snj_render_error_ctx(&app->render,
+                "queue replacement must be nonempty");
+            return 0;
+        }
+        return toggle_view(app);
+    }
     if (!line)
         return 0;
     error[0] = '\0';
@@ -1190,10 +1248,11 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         } else {
             const char *text = line[0] == '/' && line[1] == '/' ? line + 1 : line;
             char steering_id[SNJ_ID_HEX_LEN + 1u];
+            char label[SNJ_TERM_LABEL_BYTES];
             size_t len = strlen(text);
             if (!len || len > SNJ_MAX_STEERING_TEXT) {
                 (void)snj_render_error_ctx(&app->render,
-                    "steering must be nonempty valid UTF-8 within 256 KiB");
+                    "active-turn input must be nonempty valid UTF-8 within 256 KiB");
                 rc = 0;
             } else if (app->networked) {
                 error[0] = '\0';
@@ -1215,11 +1274,13 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                         snj_app_steering_added_data(app->session.active_turn_id,
                                             steering_id, text),
                         error, sizeof(error));
-                if (rc == 0)
-                    rc = snj_render_submitted(&app->render, "steer › ", text);
+                if (rc == 0 &&
+                    (format_input_label(app, true, label) < 0 ||
+                     snj_render_submitted(&app->render, label, text) < 0))
+                    rc = -1;
                 if (rc < 0) {
                     (void)snj_render_error_ctx(&app->render, error[0] ? error :
-                                               "steering could not be persisted");
+                                               "active-turn input could not be persisted");
                     if (set_input_prompt(app, true) == 0)
                         (void)snj_term_restore_draft(&app->term, line);
                 } else {
@@ -1344,7 +1405,7 @@ recover_session(struct app_state *app, char *error, size_t error_size)
                              error, error_size) < 0)
                 return -1;
             return app_warning(app,
-                "recovered a turn whose pending steering could not be resumed automatically");
+                "recovered a turn whose pending active-turn input could not be resumed automatically");
         }
         switch (app->session.response_outcome) {
         case SNJ_GRAPH_FINAL:
@@ -1807,7 +1868,7 @@ run_turn(struct app_state *app, const char *prompt,
         response_begin_ms = snj_time_ms();
         app->active_since_ms = response_begin_ms;
         app->activity_shown = false;
-        snj_term_clear_status(&app->term);
+        (void)snj_render_activity(&app->render, NULL);
         error[0] = '\0';
         provider_rc = snj_app_provider_run(app, turn_prompt, steering, cycle,
                                    create_request, &credential, &graph,
@@ -1830,7 +1891,7 @@ run_turn(struct app_state *app, const char *prompt,
                     error, sizeof(error)) < 0) {
                 snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error[0] ? error :
-                                       "steered response could not be persisted");
+                                       "active-turn response could not be persisted");
                 result = 3;
                 goto out;
             }
@@ -2198,7 +2259,7 @@ run_turn(struct app_state *app, const char *prompt,
 out:
     app->stream_graph = NULL;
     snj_app_clear_partial_public(app);
-    snj_term_clear_status(&app->term);
+    (void)snj_render_activity(&app->render, NULL);
     if (!app->execute && result != 6 &&
         set_input_prompt(app, false) < 0)
         result = 6;
@@ -2666,6 +2727,13 @@ interactive_loop(struct app_state *app, const char *initial)
                 free(owned);
                 return 0;
             }
+            if (action == SNJ_TERM_VIEW) {
+                if (app->queue_edit_id[0])
+                    (void)app_error(app, "queue replacement must be nonempty");
+                else if (toggle_view(app) < 0)
+                    return 6;
+                continue;
+            }
             if (action != SNJ_TERM_SUBMIT || !owned) {
                 free(owned);
                 owned = NULL;
@@ -2689,10 +2757,14 @@ interactive_loop(struct app_state *app, const char *initial)
                 return 3;
             continue;
         }
-        if (!app->networked &&
-            snj_render_submitted(&app->render, "› ", prompt) < 0) {
-            free(owned);
-            return 6;
+        if (!app->networked) {
+            char label[SNJ_TERM_LABEL_BYTES];
+
+            if (format_input_label(app, false, label) < 0 ||
+                snj_render_submitted(&app->render, label, prompt) < 0) {
+                free(owned);
+                return 6;
+            }
         }
         if (snj_term_history_add(&app->term, prompt) < 0)
             (void)app_warning(app, "submission was accepted but history retention failed");
@@ -3024,6 +3096,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     rc = interactive_loop(&app, cli->prompt);
 out:
     (void)capture_shutdown_signal(&app);
+    snj_render_free(&app.render);
     snj_term_close(&app.term);
     snj_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);

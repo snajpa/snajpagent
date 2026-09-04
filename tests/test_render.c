@@ -435,6 +435,9 @@ capture_color(enum snj_color_mode mode, bool networked,
     memcpy(event.text, "answer", 7u);
     event.local = true;
     assert(snj_render_irc_event(&render, &event) == 0);
+    if (networked)
+        assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
+    snj_render_free(&render);
     assert(dup2(saved, STDERR_FILENO) >= 0);
     close(saved);
     while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
@@ -443,6 +446,85 @@ capture_color(enum snj_color_mode mode, bool networked,
     close(fds[0]);
     out[used] = '\0';
     return used;
+}
+
+static void
+test_append_only_views(void)
+{
+    struct snj_render render;
+    struct snj_irc_event event = {0};
+    struct snj_buf delivered;
+    char output[8192] = {0};
+    size_t used = 0u;
+    int fds[2];
+    int saved;
+
+    assert(pipe(fds) == 0);
+    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
+    saved = dup(STDERR_FILENO);
+    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
+    close(fds[1]);
+    snj_render_init(&render, 1u);
+    snj_render_set_color(&render, SNJ_COLOR_NEVER);
+    snj_render_set_networked(&render, true, "agent");
+    event.kind = SNJ_IRC_MESSAGE;
+    event.timestamp_ms = 1000u;
+    memcpy(event.nick, "peer", 5u);
+    memcpy(event.text, "chat-one", 9u);
+    assert(snj_render_irc_event(&render, &event) == 0);
+    snj_buf_init(&delivered, 1024u);
+    assert(snj_render_rollout_begin(&render, STDERR_FILENO, "agent › ") == 0);
+    assert(snj_render_rollout(&render, "hidden-prefix ", 14u, &delivered) == 0);
+    used = drain_available(fds[0], output, sizeof(output), used);
+    assert(strstr(output, "chat-one") != NULL);
+    assert(strstr(output, "hidden-prefix") == NULL);
+
+    assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
+    assert(snj_render_rollout(&render, "live-suffix ", 12u, &delivered) == 0);
+    render.verbosity = 3u;
+    assert(snj_render_runtime(&render, "queued-runtime") == 0);
+    memcpy(event.text, "chat-two", 9u);
+    assert(snj_render_irc_event(&render, &event) == 0);
+    used = drain_available(fds[0], output, sizeof(output), used);
+    assert(strstr(output, "── rollout ──\nagent › hidden-prefix live-suffix ") != NULL);
+    assert(strstr(output, "queued-runtime") == NULL);
+    assert(strstr(output, "chat-two") == NULL);
+
+    assert(snj_render_set_view(&render, SNJ_RENDER_CHAT) == 0);
+    assert(snj_render_rollout(&render, "hidden-tail", 11u, &delivered) == 0);
+    assert(snj_render_rollout_end(&render) == 0);
+    assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
+    used = drain_available(fds[0], output, sizeof(output), used);
+    assert(strstr(output, "── chat ──\n") != NULL);
+    assert(strstr(output, "chat-two") != NULL);
+    assert(strstr(output, "── rollout ──\nhidden-tail\n") != NULL);
+    assert(strstr(output, "hidden-tail\nqueued-runtime\n") != NULL);
+    assert(count_text(output, "hidden-prefix") == 1u);
+    assert(count_text(output, "live-suffix") == 1u);
+    assert(count_text(output, "hidden-tail") == 1u);
+    assert(count_text(output, "chat-two") == 1u);
+    assert(count_text(output, "── rollout ──") == 2u);
+    assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
+    used = drain_available(fds[0], output, sizeof(output), used);
+    assert(count_text(output, "── rollout ──") == 2u);
+    errno = 0;
+    assert(snj_render_set_view(&render, (enum snj_render_view)-1) < 0);
+    assert(errno == EINVAL);
+    assert(snj_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
+    errno = 0;
+    assert(snj_render_rollout_begin(&render, STDERR_FILENO, NULL) < 0);
+    assert(errno == EBUSY);
+    assert(snj_render_public_abort(&render) == 0);
+    assert(snj_render_rollout_begin(&render, STDERR_FILENO, NULL) == 0);
+    assert(snj_render_rollout_abort(&render) == 0);
+    assert(snj_buf_terminate(&delivered) == 0);
+    assert(strcmp((const char *)delivered.data,
+                  "hidden-prefix live-suffix hidden-tail") == 0);
+    snj_buf_free(&delivered);
+    snj_render_free(&render);
+    assert(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    close(fds[0]);
 }
 
 int
@@ -524,6 +606,7 @@ main(void)
     assert(strstr(output, "assistant: ## Literal assistant\n") != NULL);
     test_history_failure();
     test_markdown_streaming();
+    test_append_only_views();
 
     snj_render_init(&render, 6u);
     errno = 0;

@@ -22,13 +22,15 @@ the terminal, and how users inspect and modify queued turns.
   exact and do not gain presentation newlines. Markdown-enabled and literal
   terminal output use this same wrapping implementation.
 - While a turn is active, the first edit after visible model output starts the
-  `steer › ` composer on a new terminal line immediately.
+  `MODEL/EFFORT » ` composer on a new terminal line immediately. `»` is U+00BB
+  RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK; the composer does not spell out
+  `steer`.
 - Visible model output pauses while the user is editing. Each edit restarts the
   pause. After the pause expires, the current composer line remains as a
   readable snapshot and model output resumes on the following line.
 - If editing resumes after more model text, that text is ended on its current
-  line and the updated draft is shown on a new `steer › ` line. This cycle can
-  repeat without losing or changing the draft.
+  line and the updated draft is shown on a new `MODEL/EFFORT » ` line. This
+  cycle can repeat without losing or changing the draft.
 - `[ui] typing_pause_ms` controls the inactivity pause. It defaults to `500`,
   accepts `0` through `5000`, and applies only to interactive terminal display.
   A value of `0` retains the line separation but disables the delay.
@@ -41,6 +43,36 @@ The `working…` activity line is shown only after an open public item has been
 closed. It follows all text already decoded for that item on a separate line;
 response completion must not release a withheld final word and paint the
 activity line as one delayed update.
+
+## Prompt Identity And Tab
+
+Ordinary input uses U+203A RIGHT-POINTING SINGLE ANGLE QUOTATION MARK (`›`)
+while no turn is running and U+00BB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+(`»`) while input will be added to a running turn. The glyph is the complete
+state marker; the ordinary composer never includes a `steer` word or a
+different active-turn arrow.
+
+The non-networked prompt is `MODEL/EFFORT › ` while idle and
+`MODEL/EFFORT » ` during a turn. The idle identity is the effective next-turn
+selection. The active identity is the model and effort frozen for that turn,
+even if a command stages different next-turn settings. Submitted input keeps
+the same identity and glyph in terminal scrollback. Terminal-unsafe code points
+in a trusted model or effort selector are visibly escaped in the composer only;
+the selected value supplied to the provider remains byte-for-byte unchanged.
+
+The networked prompt identity and its chat/rollout views are specified in
+`irc-chat.md`.
+
+Tab uses the following order in every ordinary composer:
+
+1. an empty draft cycles the available presentation views;
+2. a nonempty slash-command prefix is completed when possible; and
+3. other nonempty text retains the existing contextual action: indentation
+   while idle and future-turn queueing while active.
+
+Non-networked mode has only the rollout view, so empty Tab is a no-op. A
+nonempty draft never changes views. Queue-edit composers retain their explicit
+save behavior.
 
 ## Queue Commands
 
@@ -85,7 +117,8 @@ saving restores the prior armed state when the current turn is still active.
 
 During an active turn, `/queue TEXT` continues to append a future turn. Text
 that is identical to a reserved manipulation expression can still be queued by
-typing it directly and pressing Tab.
+typing it directly and pressing Tab. The draft must be nonempty; empty Tab has
+the view-cycle meaning defined above.
 
 ## Durability And Failure Behavior
 
@@ -101,7 +134,7 @@ typing it directly and pressing Tab.
 ## Acceptance
 
 - Rendering coverage demonstrates word wrapping without changing delivered
-  text. PTY coverage demonstrates newline-separated steer snapshots, pause
+  text. PTY coverage demonstrates newline-separated active-turn snapshots, pause
   reset on continued typing, output resumption after the configured delay, and
   byte-exact persisted text.
 - PTY coverage demonstrates `/q` and `/queue` listing, delete, clear, and edit
@@ -123,7 +156,7 @@ scenario covers:
 - word-boundary wrapping, explicit newlines, long-word hard wrapping, UTF-8,
   and resize to an exact-right-margin composer without changing or erasing the
   stored assistant text;
-- the first steering edit, continued editing before the pause expires, provider
+- the first active-turn edit, continued editing before the pause expires, provider
   text withheld for the configured interval, model output resumption below a
   stable draft snapshot, and another edit/resume cycle after more output;
 - numbered `/q` and `/queue` listing plus edit, delete, clear, and newest-item

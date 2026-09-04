@@ -112,7 +112,8 @@ snj_app_finish_stream_item(struct app_state *app)
     if (!app->stream_item_active)
         return 0;
     app->stream_item_active = false;
-    if (snj_render_public_end(&app->render) < 0) {
+    if ((app->networked ? snj_render_rollout_end(&app->render) :
+                          snj_render_public_end(&app->render)) < 0) {
         app->stream_failed = true;
         return -1;
     }
@@ -125,7 +126,8 @@ snj_app_abort_stream_item(struct app_state *app)
     if (!app->stream_item_active)
         return 0;
     app->stream_item_active = false;
-    if (snj_render_public_abort(&app->render) < 0) {
+    if ((app->networked ? snj_render_rollout_abort(&app->render) :
+                          snj_render_public_abort(&app->render)) < 0) {
         app->stream_failed = true;
         return -1;
     }
@@ -167,7 +169,7 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     if (len) {
         app->active_since_ms = snj_time_ms();
         app->activity_shown = false;
-        snj_term_clear_status(&app->term);
+        (void)snj_render_activity(&app->render, NULL);
     }
 
     if (!app->stream_item_seen || item_index != app->stream_item_index) {
@@ -185,23 +187,14 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
         app->stream_item_hidden = false;
 
         if (kind == SNJ_ITEM_REASONING_SUMMARY) {
-            if (app->render.verbosity < (app->networked ? 3u : 1u))
+            if (app->render.verbosity < 1u)
                 app->stream_item_hidden = true;
             else {
                 fd = STDERR_FILENO;
                 label = "reason › ";
             }
         } else if (kind == SNJ_ITEM_ASSISTANT || kind == SNJ_ITEM_REFUSAL) {
-            if (app->networked) {
-                if (phase == SNJ_PHASE_FINAL_ANSWER ||
-                    app->render.verbosity < 2u)
-                    app->stream_item_hidden = true;
-                else {
-                    fd = STDERR_FILENO;
-                    label = "agent › ";
-                }
-            }
-            else if (app->execute && phase == SNJ_PHASE_FINAL_ANSWER)
+            if (app->execute && phase == SNJ_PHASE_FINAL_ANSWER)
                 app->stream_item_hidden = true;
             else if (app->execute)
                 fd = STDERR_FILENO;
@@ -209,7 +202,9 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
             app->stream_item_hidden = true;
         }
         if (!app->stream_item_hidden) {
-            if (snj_render_public_begin(&app->render, fd, label) < 0) {
+            if ((app->networked ?
+                 snj_render_rollout_begin(&app->render, fd, label) :
+                 snj_render_public_begin(&app->render, fd, label)) < 0) {
                 app->stream_failed = true;
                 return -1;
             }
@@ -242,7 +237,9 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     }
     if (partial->text.max > partial->text.len + remaining)
         partial->text.max = partial->text.len + remaining;
-    if (snj_render_public(&app->render, text, len, &partial->text) < 0)
+    if ((app->networked ?
+         snj_render_rollout(&app->render, text, len, &partial->text) :
+         snj_render_public(&app->render, text, len, &partial->text)) < 0)
         goto fail_partial;
     partial->text.max = partial_max;
     app->partial_bytes += partial->text.len - partial_before;

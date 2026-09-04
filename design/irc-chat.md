@@ -178,13 +178,13 @@ not stop the local session, hosted server, or other connections. Registration,
 join, and protocol failures remain visible diagnostics; no connection may
 silently consume or invent operator input.
 
-## Operator Chat UI
+## Operator Chat And Rollout UI
 
-Networked interactive mode is a chat transcript, not a raw model trace or a
-windowed full-screen TUI. Every transcript entry has a local display time,
-sender or event marker, and readable IRC-client-style spacing; the composer
-remains at the bottom while output is safely redrawn around it. At verbosity 0
-it shows only:
+Networked interactive mode has append-only `chat` and `rollout` presentation
+views, not a windowed full-screen TUI. The process starts in chat view. Every
+chat entry has a local display time, sender or event marker, and readable
+IRC-client-style spacing; the composer remains at the bottom while output is
+safely redrawn around it. Chat view shows:
 
 - timestamped operator and remote-room messages with the sender nick;
 - a visible `@` marker on nicks that currently carry `+o`;
@@ -192,16 +192,36 @@ it shows only:
 - the local operator composer and actionable errors.
 
 Model text is buffered during generation. Only terminal public assistant text
-is sent to IRC as a message from the model nick. This process's own model text
-is not rendered in its local verbosity-0 UI; it becomes locally visible only
-after verbosity is raised. Public text emitted on an intermediate tool cycle,
-raw tool calls, tool results, provider traffic, request bodies, and internal
-agent activity are not written into the verbosity-0 transcript. Intermediate
-and diagnostic material is never sent to the room. This preserves a usable
-operator conversation while keeping implementation details private.
+is sent to IRC as a message from the model nick. Chat view does not render this
+process's own model text or local tool activity at normal verbosity. Public
+text emitted on an intermediate tool cycle, raw tool calls, tool results,
+provider traffic, request bodies, and internal agent activity are never sent
+to the room.
+
+Rollout view shows the local model's streamed work using the ordinary
+non-networked visibility rules at the configured verbosity. At verbosity 0 it
+therefore shows local model text; increasing verbosity adds tools, reasoning
+summaries, runtime state, protocol, and transport detail through the existing
+single verbosity ladder. Actionable errors and direct local-command results
+remain immediately visible in either view.
+
+`/chat` and `/rollout` select a view from either an idle or active composer and
+are not sent to IRC or admitted to the model. Selecting the current view is
+idempotent. Empty Tab toggles the two views; a nonempty draft never switches
+views and keeps ordinary completion, indentation, or active-turn queueing
+semantics.
+
+Switching views never clears or repaints terminal history. It appends a short
+view boundary, emits every semantic item accumulated for the entered view
+since that view was last active in the current foreground run, in original
+order and exactly once, then continues with live output. Each view has an
+independent emitted cursor. A switch during a streamed item emits its complete
+unseen prefix once and subsequent deltas continue without gaps, duplication,
+or changes to stored/provider bytes. Catch-up starts with the current process;
+entering a view does not dump older session history from the rollout log.
 
 Networked mode keeps IRC debugging behind the more useful agent/tool detail.
-Its local-only ladder is:
+Its additional local-only ladder is:
 
 - verbosity 1: terminal model replies shown once as agent chat lines, plus all
   tool calls with complete arguments, completion state, and result text up to
@@ -218,12 +238,19 @@ Non-networked interactive and one-shot modes keep their current output model,
 with the same color roles applied to prompts, labels, status, tools, warnings,
 errors, and high-verbosity diagnostics.
 
+The network composer is `OPERATOR_NICK@MACHINE_HOSTNAME › ` while idle and
+`OPERATOR_NICK@MACHINE_HOSTNAME » ` during an active turn, in both views. `›`
+is U+203A RIGHT-POINTING SINGLE ANGLE QUOTATION MARK and `»` is U+00BB
+RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK. The operator nick is the configured
+local identity and the hostname comes from the local machine, not the IRC
+endpoint, room, or remote server.
+
 Text entered at the network composer is sent as a room message from the local
 operator identity and also admitted once as local operator input to the model;
 echoes returning from several attached servers are deduplicated locally.
-Useful local slash commands include `/topic [TEXT]`, `/names`, the existing
-session/model/goal/queue commands, and `/exit`. `//TEXT` sends a chat message
-whose first byte is `/`.
+Useful local slash commands include `/chat`, `/rollout`, `/topic [TEXT]`,
+`/names`, the existing session/model/goal/queue commands, and `/exit`. `//TEXT`
+sends a chat message whose first byte is `/`.
 
 ## Color Contract
 
@@ -422,21 +449,24 @@ pass and focused local smoke checks demonstrate all of the following:
 2. localhost server startup on port 6667, one advertised/default room, default
    path topic, automatic client joins, operator `+o`, agent non-op membership,
    topic changes, ordinary chat, and bounded history delivery;
-3. distinct operator and agent transcript lines, no local model or raw tool
-   trace at verbosity 0, local model display beginning at verbosity 1, useful
-   agent/tool detail before lower-priority IRC debugging, safe terminal
-   rendering, and `auto`/`always`/`never` color behavior in networked and
-   non-networked modes;
-4. earliest-safe, coalesced urgent admission for local operator, current
+3. distinct operator and agent transcript lines, chat view suppressing local
+   model/tool output at normal verbosity, rollout view showing ordinary local
+   model output, useful agent/tool detail before lower-priority IRC debugging,
+   safe terminal rendering, and `auto`/`always`/`never` color behavior in
+   networked and non-networked modes;
+4. `/chat`, `/rollout`, and empty-Tab switching in idle and active composers,
+   exact U+203A/U+00BB prompts, and ordered exact-once catch-up for both views,
+   including a switch during streamed output;
+5. earliest-safe, coalesced urgent admission for local operator, current
    channel operator, and model-nick mentions without truncating active
    generation or tools; asynchronous managed-command handoff; coalesced
    background events; socket servicing during provider and tool work;
    first-join history projection; and fresh post-compaction history projection;
    one non-looping reply reminder for otherwise-silent local operator turns;
    and no forced response to other traffic;
-5. `irc_send`, `irc_state`, and privilege-correct `irc_topic` behavior without
+6. `irc_send`, `irc_state`, and privilege-correct `irc_topic` behavior without
    model-driven polling, joining, or reconnection; and
-6. autonomous reconnect/disconnect behavior, slow/malformed peer isolation, bounded
+7. autonomous reconnect/disconnect behavior, slow/malformed peer isolation, bounded
    buffers, durable replay/resume, clean shutdown, and no credential, tool
    detail, escape-sequence, or cross-server leakage.
 

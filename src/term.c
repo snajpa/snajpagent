@@ -102,6 +102,10 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
     size_t col = indent;
     size_t i = 0u;
 
+    if (columns >= 20u && col >= columns) {
+        row = col / columns;
+        col %= columns;
+    }
     if (stop == 0u) {
         *stop_row = row;
         *stop_col = col;
@@ -125,6 +129,10 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
                         return -1;
                 ++row;
                 col = indent;
+                if (columns >= 20u && col >= columns) {
+                    row += col / columns;
+                    col %= columns;
+                }
             } else if (snj_buf_putc(out, '\n') < 0) {
                 return -1;
             }
@@ -266,6 +274,15 @@ snj_term_write_safe(int fd, const char *text, size_t len)
         rc = snj_write_full(fd, out.data, out.len);
     snj_buf_free(&out);
     return rc;
+}
+
+static int
+snj_term_append_safe(struct snj_buf *out, const char *text, size_t len)
+{
+    size_t unused = 0u;
+
+    return append_safe(out, (const unsigned char *)text, len, false, 0u, 0u,
+                       len + 1u, &unused, &unused, &unused, &unused);
 }
 
 void
@@ -612,8 +629,8 @@ redraw(struct snj_term *term)
                            7u) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 &&
-            snj_write_full(STDERR_FILENO, term->label,
-                           strlen(term->label)) < 0)
+            snj_term_write_safe(STDERR_FILENO, term->label,
+                                strlen(term->label)) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 && term->color &&
             snj_write_full(STDERR_FILENO, "\033[0m", 4u) < 0)
@@ -628,11 +645,12 @@ redraw(struct snj_term *term)
     }
     if (term->prompt_visible && snj_term_hide(term) < 0)
         return -1;
-    if (term->draft.len > (SIZE_MAX - 1024u) / 8u) {
+    if (label_len > (SIZE_MAX - 1024u) / 8u ||
+        term->draft.len > (SIZE_MAX - 1024u) / 8u - label_len) {
         errno = EOVERFLOW;
         return -1;
     }
-    max = term->draft.len * 8u + 1024u;
+    max = (term->draft.len + label_len) * 8u + 1024u;
     snj_buf_init(&out, max);
     if (term->status[0]) {
         if ((term->color && snj_buf_append(&out, "\033[33m", 5u) < 0) ||
@@ -645,7 +663,7 @@ redraw(struct snj_term *term)
         (term->color &&
          snj_buf_append(&out, term->networked ? "\033[1;35m" : "\033[1;36m",
                         7u) < 0) ||
-        snj_buf_append(&out, term->label, label_len) < 0 ||
+        snj_term_append_safe(&out, term->label, label_len) < 0 ||
         (term->color && snj_buf_append(&out, "\033[0m", 4u) < 0) ||
         append_safe(&out, term->draft.data, term->draft.len, true, label_cols,
                     term->columns, term->cursor,
@@ -689,7 +707,7 @@ snj_term_show(struct snj_term *term)
 int
 snj_term_set_prompt(struct snj_term *term, bool active)
 {
-    const char *label = active ? "steer › " : "› ";
+    const char *label = active ? "» " : "› ";
 
     return snj_term_set_prompt_label(term, active, label);
 }
@@ -1277,6 +1295,10 @@ feed_byte(struct snj_term *term, unsigned char byte,
         return insert_bytes(term, &lf, 1u);
     }
     case '\t':
+        if (!term->draft.len) {
+            *action = SNJ_TERM_VIEW;
+            return 1;
+        }
         {
             bool handled;
             int rc = complete_command_name(term, &handled);

@@ -626,7 +626,8 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         }
         return 0;
     }
-    if (strcmp(prompt, "typing_stream") == 0) {
+    if (strcmp(prompt, "typing_stream") == 0 ||
+        strstr(prompt, "network_view_stream")) {
         static const char full[] =
             "model-output-one model-output-two model-output-three";
         static const char first[] = "model-output-one ";
