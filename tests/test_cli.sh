@@ -20,16 +20,24 @@ export SNAJPAGENT_TEST_ROOT="$root"
 cd "$root/work"
 
 resume_count() {
-    grep -c '^resume: ' "$1" || true
+    grep -c '^resume:$' "$1" || true
 }
 
 only_resume() {
     [ "$(resume_count "$1")" -eq 1 ]
+    [ "$(wc -l < "$1")" -eq 2 ]
+    [ "$(sed -n '1p' "$1")" = 'resume:' ]
+    resume_command_line=$(sed -n '2p' "$1")
+    [ -n "$resume_command_line" ]
+    case "$resume_command_line" in
+        ' '*|"	"*) return 1 ;;
+    esac
     [ ! -s "$1.without-resume" ] || return 1
 }
 
 strip_resume() {
-    grep -v '^resume: ' "$1" >"$1.without-resume" || true
+    awk 'skip { skip = 0; next } /^resume:$/ { skip = 1; next } { print }' \
+        "$1" >"$1.without-resume"
 }
 
 set +e
@@ -217,16 +225,16 @@ out=$($bin -e -- ping 2>"$root/err")
 [ "$out" = pong ]
 strip_resume "$root/err"
 only_resume "$root/err"
-grep -q "^resume: '$bin' --dotdir '$dotdir' --resume '[0-9a-f]\\{32\\}'$" \
+grep -q "^'$bin' --dotdir '$dotdir' --resume '[0-9a-f]\\{32\\}'$" \
     "$root/err"
-! grep -q '^resume:  ' "$root/err"
 [ -d "$dotdir/sessions" ]
 [ -d "$dotdir/trash" ]
 id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 [ ${#id} -eq 32 ]
 [ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 5 ]
 
-# The writer owns exactly "resume: "; dynamic arguments are POSIX-shell safe,
+# The writer owns exactly "resume:\nCOMMAND\n"; the command starts at column
+# zero, dynamic arguments are POSIX-shell safe,
 # prompts and credentials are absent, and the printed command really resumes.
 quoted_dotdir="$root/quoted ' state"
 quoted_config="$root/config/quoted ' config.ini"
@@ -240,10 +248,9 @@ out=$($bin --dotdir "$quoted_dotdir" --config "$quoted_config" \
     --color=never --markdown -e -- ping 2>"$root/quoted.err")
 [ "$out" = pong ]
 [ "$(resume_count "$root/quoted.err")" -eq 1 ]
-! grep -q '^resume:  ' "$root/quoted.err"
 ! grep -q 'must-not-appear\| -- ping\| -e ' "$root/quoted.err"
 grep -Fq "'\\''" "$root/quoted.err"
-resume_command=$(sed -n 's/^resume: //p' "$root/quoted.err")
+resume_command=$(sed -n '/^resume:$/ { n; p; }' "$root/quoted.err")
 resume_prefix=${resume_command% --resume *}
 resume_id=${resume_command##* --resume }
 eval "$resume_prefix -e --resume $resume_id -- ping" \

@@ -18,7 +18,7 @@ interactive path is usable.
   pause/resume, user-controlled wording locks, and explicit completion or
   blocking from the model.
 - Durable `--resume` support without a background worker or tmux session.
-- A copy/paste-safe `resume: ...` command on every resumable session exit,
+- A copy/paste-safe two-line `resume:` block on every resumable session exit,
   including commands that restore outgoing IRC clients or the built-in server.
 - First-class single-room IRC hosting and repeatable outgoing connections for
   agent/operator chat, with reconnects, bounded history, and operator-aware
@@ -103,7 +103,14 @@ printf 'run the tests and summarize failures\n' | ./snajpagent -e
 ```
 
 When a process has opened or created a durable session, normal shutdown prints
-exactly one `resume: COMMAND` line to stderr after restoring the terminal. This
+exactly one two-line block to stderr after restoring the terminal:
+
+```text
+resume:
+COMMAND
+```
+
+Both lines begin at column zero, with no blank line between them. This
 includes `/exit`, idle Ctrl-C, Ctrl-D or terminal EOF, `/archive`, one-shot
 completion, runtime failure, and graceful SIGHUP/SIGTERM shutdown. Ctrl-C
 during a turn keeps its immediate interrupt meaning; the command is printed

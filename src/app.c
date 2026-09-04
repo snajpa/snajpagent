@@ -2595,7 +2595,7 @@ write_resume_command(const struct app_state *app, const char *program,
     snj_buf_init(&command, RESUME_COMMAND_MAX - 9u);
     snj_buf_init(&line, RESUME_COMMAND_MAX);
     if (build_resume_command(app, program, dotdir, &command) == 0 &&
-        snj_buf_append(&line, "resume: ", 8u) == 0 &&
+        snj_buf_append(&line, "resume:\n", 8u) == 0 &&
         snj_buf_append(&line, command.data, command.len) == 0 &&
         snj_buf_putc(&line, '\n') == 0)
         (void)snj_write_full(STDERR_FILENO, line.data, line.len);

@@ -109,10 +109,22 @@ class Child:
                 f"got {bytes(self.buf)!r}"
             )
         commands = []
-        for line in bytes(self.buf).splitlines():
-            marker = line.find(b"resume: ")
+        lines = bytes(self.buf).splitlines()
+        for index, line in enumerate(lines):
+            marker = line.find(b"resume:")
             if marker >= 0:
-                commands.append(line[marker + len(b"resume: "):].decode("ascii"))
+                if line[marker:] != b"resume:" or index + 1 >= len(lines):
+                    raise AssertionError(
+                        f"resume label is not on its own line; "
+                        f"output={bytes(self.buf)!r}"
+                    )
+                command = lines[index + 1]
+                if not command or command[:1].isspace():
+                    raise AssertionError(
+                        f"resume command does not start at column zero; "
+                        f"output={bytes(self.buf)!r}"
+                    )
+                commands.append(command.decode("ascii"))
         if expect_resume:
             if len(commands) != 1:
                 raise AssertionError(
