@@ -869,13 +869,14 @@ empty_excerpt(void)
     return out;
 }
 
-static json_t *
-tool_result(const char *status, const char *reason, const char *model_text,
-            int exit_code)
+json_t *
+snj_tool_result(const char *status, const char *reason,
+                const char *model_text, int exit_code, uint64_t duration_ms)
 {
     json_t *out = json_object();
     if (!out ||
-        snj_json_set_new(out, "duration_ms", json_integer(0)) < 0 ||
+        snj_json_set_new(out, "duration_ms",
+                         json_integer((json_int_t)duration_ms)) < 0 ||
         snj_json_set_new(out, "exit_code",
                          exit_code >= 0 ? json_integer(exit_code) : json_null()) < 0 ||
         snj_json_set_new(out, "handle", json_null()) < 0 ||
@@ -898,14 +899,14 @@ snj_tool_result_not_run(const char *reason)
 {
     char text[192];
     (void)snprintf(text, sizeof(text), "Tool was not run: %s", reason);
-    return tool_result("not_run", reason, text, -1);
+    return snj_tool_result("not_run", reason, text, -1, 0u);
 }
 
 json_t *
 snj_tool_result_terminal(bool succeeded, const char *model_text)
 {
-    return tool_result(succeeded ? "succeeded" : "failed", NULL, model_text,
-                       succeeded ? 0 : 1);
+    return snj_tool_result(succeeded ? "succeeded" : "failed", NULL,
+                           model_text, succeeded ? 0 : 1, 0u);
 }
 
 
@@ -914,7 +915,7 @@ snj_tool_result_outcome_unknown(const char *reason)
 {
     char text[192];
     (void)snprintf(text, sizeof(text), "Tool outcome is unknown: %s", reason);
-    return tool_result("outcome_unknown", reason, text, -1);
+    return snj_tool_result("outcome_unknown", reason, text, -1, 0u);
 }
 
 static int

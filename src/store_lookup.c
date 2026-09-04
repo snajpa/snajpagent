@@ -11,18 +11,6 @@
 #include <unistd.h>
 
 
-static bool
-copy_small(char *dst, size_t size, const char *src)
-{
-    size_t len;
-    if (!src)
-        return false;
-    len = strlen(src);
-    if (len >= size)
-        return false;
-    memcpy(dst, src, len + 1u);
-    return true;
-}
 
 struct resolved_session {
     char id[SNJ_ID_HEX_LEN + 1u];
@@ -279,7 +267,7 @@ session_matches(struct snj_store *store, const char *id, const char *workspace,
     if (saved_workspace)
         *saved_workspace = snj_strdup_checked(tmp.workspace, SNJ_PATH_MAX_BYTES);
     if ((saved_workspace && !*saved_workspace) ||
-        !copy_small(model, model_size, tmp.default_model))
+        !snj_strcpy(model, model_size, tmp.default_model))
         goto out;
     rc = 0;
 out:

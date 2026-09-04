@@ -1215,51 +1215,14 @@ out:
 }
 
 static json_t *
-empty_excerpt(void)
-{
-    json_t *out = json_object();
-    if (!out ||
-        snj_json_set_new(out, "discarded_bytes", json_integer(0)) < 0 ||
-        snj_json_set_new(out, "encoding", json_string("utf8")) < 0 ||
-        snj_json_set_new(out, "original_bytes", json_integer(0)) < 0 ||
-        snj_json_set_new(out, "retained", json_string("")) < 0 ||
-        snj_json_set_new(out, "retained_bytes", json_integer(0)) < 0) {
-        if (out)
-            json_decref(out);
-        return NULL;
-    }
-    return out;
-}
-
-static json_t *
-patch_result(const char *status, const char *model_text, uint64_t duration_ms)
-{
-    json_t *out = json_object();
-    if (!out ||
-        snj_json_set_new(out, "duration_ms", json_integer((json_int_t)duration_ms)) < 0 ||
-        snj_json_set_new(out, "exit_code",
-                         strcmp(status, "succeeded") == 0 ? json_integer(0) : json_null()) < 0 ||
-        snj_json_set_new(out, "handle", json_null()) < 0 ||
-        snj_json_set_new(out, "model_text", json_string(model_text)) < 0 ||
-        snj_json_set_new(out, "reason", json_null()) < 0 ||
-        snj_json_set_new(out, "signal", json_null()) < 0 ||
-        snj_json_set_new(out, "status", json_string(status)) < 0 ||
-        snj_json_set_new(out, "stderr", empty_excerpt()) < 0 ||
-        snj_json_set_new(out, "stdout", empty_excerpt()) < 0) {
-        if (out)
-            json_decref(out);
-        return NULL;
-    }
-    return out;
-}
-
-static json_t *
 patch_result_buf(const char *status, struct snj_buf *text,
                  uint64_t duration_ms)
 {
     if (snj_buf_terminate(text) < 0)
         return NULL;
-    return patch_result(status, (const char *)text->data, duration_ms);
+    return snj_tool_result(status, NULL, (const char *)text->data,
+                           strcmp(status, "succeeded") == 0 ? 0 : -1,
+                           duration_ms);
 }
 
 static int
@@ -1465,10 +1428,14 @@ snj_tools_apply_patch(const struct snj_response_item *call,
     int root_fd = -1;
     int rc = -1;
 
-    if (result)
-        *result = NULL;
+    if (!result) {
+        snj_errorf(error, error_size, "invalid apply_patch result destination");
+        errno = EINVAL;
+        return -1;
+    }
+    *result = NULL;
     snj_buf_init(&summary, PATCH_MODEL_MAX);
-    if (!call || !session_workspace || !result ||
+    if (!call || !session_workspace ||
         !json_bounded_string(call->arguments, "patch", PATCH_TEXT_MAX,
                              &patch, &patch_len) ||
         !json_bounded_string(call->arguments, "workdir", SNJ_PATH_MAX_BYTES,

@@ -290,18 +290,28 @@ snj_json_load_canonical(const unsigned char *data, size_t len,
 }
 
 int
-snj_json_digest(const json_t *value, char out[SNJ_SHA256_HEX_LEN + 1u])
+snj_json_digest_bounded(const json_t *value, size_t max,
+                        char out[SNJ_SHA256_HEX_LEN + 1u], size_t *bytes)
 {
     struct snj_buf encoded;
     int rc = -1;
 
-    snj_buf_init(&encoded, SNJ_MAX_EVENT_LINE);
+    snj_buf_init(&encoded, max);
     if (snj_json_canonical(value, &encoded) == 0) {
-        snj_sha256_hex(encoded.data, encoded.len, out);
+        if (out)
+            snj_sha256_hex(encoded.data, encoded.len, out);
+        if (bytes)
+            *bytes = encoded.len;
         rc = 0;
     }
     snj_buf_free(&encoded);
     return rc;
+}
+
+int
+snj_json_digest(const json_t *value, char out[SNJ_SHA256_HEX_LEN + 1u])
+{
+    return snj_json_digest_bounded(value, SNJ_MAX_EVENT_LINE, out, NULL);
 }
 
 bool

@@ -325,19 +325,6 @@ snj_store_open_session_files(struct snj_session *session, bool create,
     }
     return 0;
 }
-static int
-json_set_new(json_t *object, const char *key, json_t *value)
-{
-    if (!value) {
-        errno = ENOMEM;
-        return -1;
-    }
-    if (json_object_set_new(object, key, value) < 0) {
-        errno = ENOMEM;
-        return -1;
-    }
-    return 0;
-}
 int
 snj_session_append(struct snj_session *session, const char *type, json_t *data,
                    uint64_t *written_seq, char *error, size_t error_size)
@@ -359,24 +346,24 @@ snj_session_append(struct snj_session *session, const char *type, json_t *data,
     event = json_object();
     if (!event)
         goto memory_error;
-    if (json_set_new(event, "data", data) < 0) {
+    if (snj_json_set_new(event, "data", data) < 0) {
         data = NULL;
         goto memory_error;
     }
     data = NULL;
-    if (json_set_new(event, "prev_sha256", json_string(session->prev_sha256)) < 0 ||
-        json_set_new(event, "seq", json_integer((json_int_t)seq)) < 0 ||
-        json_set_new(event, "session_id", json_string(session->id)) < 0 ||
-        json_set_new(event, "time_ms", json_integer((json_int_t)snj_time_ms())) < 0 ||
-        json_set_new(event, "type", json_string(type)) < 0 ||
-        json_set_new(event, "v", json_integer(1)) < 0)
+    if (snj_json_set_new(event, "prev_sha256", json_string(session->prev_sha256)) < 0 ||
+        snj_json_set_new(event, "seq", json_integer((json_int_t)seq)) < 0 ||
+        snj_json_set_new(event, "session_id", json_string(session->id)) < 0 ||
+        snj_json_set_new(event, "time_ms", json_integer((json_int_t)snj_time_ms())) < 0 ||
+        snj_json_set_new(event, "type", json_string(type)) < 0 ||
+        snj_json_set_new(event, "v", json_integer(1)) < 0)
         goto memory_error;
     digest_event = json_deep_copy(event);
     if (!digest_event || snj_json_digest(digest_event, digest) < 0)
         goto memory_error;
     json_decref(digest_event);
     digest_event = NULL;
-    if (json_set_new(event, "event_sha256", json_string(digest)) < 0 ||
+    if (snj_json_set_new(event, "event_sha256", json_string(digest)) < 0 ||
         snj_json_canonical(event, &line) < 0 || snj_buf_putc(&line, '\n') < 0)
         goto memory_error;
     if ((off_t)line.len > SNJ_LOG_HARD_LIMIT - SNJ_LOG_RESERVE - session->log_end) {
@@ -415,18 +402,6 @@ out:
         json_decref(event);
     snj_buf_free(&line);
     return rc;
-}
-static bool
-copy_small(char *dst, size_t size, const char *src)
-{
-    size_t len;
-    if (!src)
-        return false;
-    len = strlen(src);
-    if (len >= size)
-        return false;
-    memcpy(dst, src, len + 1u);
-    return true;
 }
 static int
 replace_text(char **slot, const char *text, size_t max)
@@ -791,11 +766,11 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         if (replace_text(&session->workspace, workspace,
                          SNJ_PATH_MAX_BYTES) < 0)
             return -1;
-        if (!copy_small(session->default_effort,
+        if (!snj_strcpy(session->default_effort,
                         sizeof(session->default_effort), effort) ||
-            !copy_small(session->default_model,
+            !snj_strcpy(session->default_model,
                         sizeof(session->default_model), model) ||
-            (n == 2u && !copy_small(session->default_provider,
+            (n == 2u && !snj_strcpy(session->default_provider,
                                     sizeof(session->default_provider),
                                     provider)))
             goto invalid;
@@ -1147,7 +1122,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             strlen(new_model) >= sizeof(session->default_model) ||
             !snj_utf8_valid((const unsigned char *)new_model,
                             strlen(new_model), true) ||
-            !copy_small(session->default_model,
+            !snj_strcpy(session->default_model,
                         sizeof(session->default_model), new_model))
             goto invalid;
     } else if (strcmp(type, "model_selection_changed") == 0) {
@@ -1174,11 +1149,11 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             (strcmp(old_provider, new_provider) == 0 &&
              strcmp(old_model, new_model) == 0 &&
              strcmp(old_effort, new_effort) == 0) ||
-            !copy_small(session->default_provider,
+            !snj_strcpy(session->default_provider,
                         sizeof(session->default_provider), new_provider) ||
-            !copy_small(session->default_model,
+            !snj_strcpy(session->default_model,
                         sizeof(session->default_model), new_model) ||
-            !copy_small(session->default_effort,
+            !snj_strcpy(session->default_effort,
                         sizeof(session->default_effort), new_effort))
             goto invalid;
     } else if (strcmp(type, "effort_changed") == 0) {
@@ -1190,7 +1165,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !preference_text_valid(new_effort, sizeof(session->default_effort)) ||
             strcmp(old_effort, session->default_effort) != 0 ||
             strcmp(old_effort, new_effort) == 0 ||
-            !copy_small(session->default_effort,
+            !snj_strcpy(session->default_effort,
                         sizeof(session->default_effort), new_effort))
             goto invalid;
     } else if (strcmp(type, "steering_added") == 0 ||
@@ -1398,11 +1373,11 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                 goto invalid;
         }
         memcpy(session->active_turn_id, turn_id, sizeof(session->active_turn_id));
-        if (!copy_small(session->active_turn_model,
+        if (!snj_strcpy(session->active_turn_model,
                         sizeof(session->active_turn_model), model) ||
-            !copy_small(session->active_turn_provider,
+            !snj_strcpy(session->active_turn_provider,
                         sizeof(session->active_turn_provider), provider) ||
-            !copy_small(session->active_turn_effort,
+            !snj_strcpy(session->active_turn_effort,
                         sizeof(session->active_turn_effort), effort))
             goto invalid;
         session->active_turn = true;
@@ -1670,13 +1645,13 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         if (expected_ceiling_known &&
             (!same_binding || expected_ceiling <
                               session->capacity_ceiling_input_tokens)) {
-            if (!copy_small(session->capacity_ceiling_provider,
+            if (!snj_strcpy(session->capacity_ceiling_provider,
                             sizeof(session->capacity_ceiling_provider),
                             session->active_turn_provider) ||
-                !copy_small(session->capacity_ceiling_model,
+                !snj_strcpy(session->capacity_ceiling_model,
                             sizeof(session->capacity_ceiling_model),
                             session->active_turn_model) ||
-                !copy_small(session->capacity_ceiling_source_sha256,
+                !snj_strcpy(session->capacity_ceiling_source_sha256,
                             sizeof(session->capacity_ceiling_source_sha256),
                             provider_source_sha256))
                 goto invalid;
@@ -1872,7 +1847,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                 memset(pending, 0, sizeof(*pending));
                 memcpy(pending->call_id, item->call_id,
                        sizeof(pending->call_id));
-                if (!copy_small(pending->tool_name,
+                if (!snj_strcpy(pending->tool_name,
                                 sizeof(pending->tool_name), item->name)) {
                     snj_response_graph_free(&graph);
                     goto invalid;
@@ -2491,12 +2466,12 @@ session_created_data(const char *workspace, const char *provider,
 {
     json_t *data = json_object();
     if (!data ||
-        json_set_new(data, "default_effort", json_string(effort)) < 0 ||
-        json_set_new(data, "default_model", json_string(model)) < 0 ||
-        json_set_new(data, "default_provider", json_string(provider)) < 0 ||
-        json_set_new(data, "format", json_integer(2)) < 0 ||
-        json_set_new(data, "protocol", json_string("responses")) < 0 ||
-        json_set_new(data, "workspace", json_string(workspace)) < 0) {
+        snj_json_set_new(data, "default_effort", json_string(effort)) < 0 ||
+        snj_json_set_new(data, "default_model", json_string(model)) < 0 ||
+        snj_json_set_new(data, "default_provider", json_string(provider)) < 0 ||
+        snj_json_set_new(data, "format", json_integer(2)) < 0 ||
+        snj_json_set_new(data, "protocol", json_string("responses")) < 0 ||
+        snj_json_set_new(data, "workspace", json_string(workspace)) < 0) {
         if (data)
             json_decref(data);
         return NULL;
@@ -2568,10 +2543,10 @@ snj_session_create(struct snj_store *store, struct snj_session *session,
         goto out;
     session->workspace = resolved;
     resolved = NULL;
-    if (!copy_small(session->default_provider,
+    if (!snj_strcpy(session->default_provider,
                     sizeof(session->default_provider), provider) ||
-        !copy_small(session->default_model, sizeof(session->default_model), model) ||
-        !copy_small(session->default_effort, sizeof(session->default_effort), effort)) {
+        !snj_strcpy(session->default_model, sizeof(session->default_model), model) ||
+        !snj_strcpy(session->default_effort, sizeof(session->default_effort), effort)) {
         errno = EOVERFLOW;
         goto out;
     }

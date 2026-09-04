@@ -293,6 +293,17 @@ snj_sync_dir(int fd)
     return -1;
 }
 
+bool
+snj_strcpy(char *dst, size_t size, const char *src)
+{
+    size_t len;
+
+    if (!src || (len = strlen(src)) >= size)
+        return false;
+    memcpy(dst, src, len + 1u);
+    return true;
+}
+
 char *
 snj_strdup_checked(const char *s, size_t max)
 {

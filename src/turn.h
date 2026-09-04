@@ -126,6 +126,9 @@ int snj_tool_action_digest(const struct snj_response_item *call,
 const char *snj_item_kind_name(enum snj_item_kind kind);
 const char *snj_item_phase_name(enum snj_item_phase phase);
 
+json_t *snj_tool_result(const char *status, const char *reason,
+                        const char *model_text, int exit_code,
+                        uint64_t duration_ms);
 json_t *snj_tool_result_not_run(const char *reason);
 json_t *snj_tool_result_terminal(bool succeeded, const char *model_text);
 json_t *snj_tool_result_outcome_unknown(const char *reason);

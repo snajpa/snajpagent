@@ -381,12 +381,6 @@ append_base64(struct snj_buf *out, const unsigned char *data, size_t len)
     return 0;
 }
 
-static bool
-bytes_textual(const unsigned char *data, size_t len)
-{
-    return snj_utf8_valid(data, len, true);
-}
-
 static json_t *
 excerpt_json(const struct capture_stream *stream)
 {
@@ -398,7 +392,7 @@ excerpt_json(const struct capture_stream *stream)
     if (!out)
         return NULL;
     snj_buf_init(&encoded, SIZE_MAX);
-    textual = bytes_textual(stream->data.data, stream->data.len);
+    textual = snj_utf8_valid(stream->data.data, stream->data.len, true);
     if (textual) {
         if (snj_buf_append(&encoded, stream->data.data, stream->data.len) < 0)
             goto out;
@@ -435,7 +429,7 @@ append_stream_text(struct snj_buf *out, const char *label,
         return 0;
     if (snj_buf_printf(out, "%s%s:\n", out->len ? "\n" : "", label) < 0)
         return -1;
-    if (bytes_textual(stream->data.data, stream->data.len)) {
+    if (snj_utf8_valid(stream->data.data, stream->data.len, true)) {
         if (snj_buf_append(out, stream->data.data, stream->data.len) < 0)
             return -1;
         if (stream->data.data[stream->data.len - 1u] != '\n' &&

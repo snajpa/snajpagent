@@ -4,6 +4,7 @@
 #include "credential.h"
 #include "json.h"
 #include "tools.h"
+#include "tools_patch.h"
 #include "turn.h"
 
 #include <assert.h>
@@ -366,6 +367,18 @@ run_apply_patch(const char *workdir, const char *patch)
     snj_response_graph_free(&graph);
     snj_config_free(&config);
     return result;
+}
+
+static void
+test_apply_patch_rejects_null_result(void)
+{
+    char error[256] = {0};
+
+    errno = 0;
+    assert(snj_tools_apply_patch(NULL, NULL, NULL,
+                                 error, sizeof(error)) < 0);
+    assert(errno == EINVAL);
+    assert(strstr(error, "result destination") != NULL);
 }
 
 static json_int_t
@@ -1195,6 +1208,7 @@ main(void)
     test_managed_close_kills_process_family();
     test_provider_secret_removed_from_environment();
     test_all_provider_secrets_removed_and_redacted();
+    test_apply_patch_rejects_null_result();
     test_apply_patch_add_update_delete();
     test_apply_patch_rejects_ambiguous_match();
     test_apply_patch_rejects_path_escape();

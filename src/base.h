@@ -39,6 +39,7 @@ int snj_write_full(int fd, const void *data, size_t len);
 int snj_sync_file(int fd);
 int snj_sync_dir(int fd);
 char *snj_strdup_checked(const char *s, size_t max);
+bool snj_strcpy(char *dst, size_t size, const char *src);
 char *snj_join_words(char *const *words, size_t count, size_t max);
 
 struct snj_sha256 {

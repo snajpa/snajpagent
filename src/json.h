@@ -12,6 +12,9 @@ json_t *snj_json_load_canonical(const unsigned char *data, size_t len,
                                 char *error, size_t error_size);
 int snj_json_digest(const json_t *value,
                     char out[SNJ_SHA256_HEX_LEN + 1u]);
+int snj_json_digest_bounded(const json_t *value, size_t max,
+                            char out[SNJ_SHA256_HEX_LEN + 1u],
+                            size_t *bytes);
 bool snj_json_exact_keys(const json_t *object, const char *const *keys,
                          size_t count);
 const char *snj_json_string(const json_t *object, const char *key);
