@@ -7,11 +7,27 @@
 - Made bare `-e` read its one-shot prompt from non-terminal stdin while
   preserving the established `-e -- PROMPT...` argument form.
 
-- Made `exec_command` default to no execution deadline unless the model asks
-  for a positive `timeout_ms` (or an operator configures a fallback). Ordinary
+- Changed command timeouts into non-destructive foreground handoff deadlines.
+  A still-running command keeps working under its managed handle while the
+  model is notified through the same continuation path used by urgent local
+  steering and IRC mentions; only explicit interruption or lifecycle closure
+  cancels it.
+
+- Made single `-v` show every tool invocation, complete arguments, completion
+  state, and result text in ordinary and networked modes. Tool stdout/stderr
+  is retained and supplied to the model without a tool-specific cutoff;
+  `[tool] max_output_bytes` optionally limits terminal presentation only and
+  defaults to unlimited (`0`).
+
+- Made `[tool] max_timeout_ms` drive both the advertised `exec_command` schema
+  and runtime validation. The default foreground handoff timeout remains
+  disabled, and the model opts into a deadline per command.
+
+- Made `exec_command` default to no foreground handoff deadline unless the
+  model asks for a positive `timeout_ms` (or an operator configures a fallback). Ordinary
   `-v` compact tool output now shows `timeout=none` or the effective
-  millisecond timeout before the command; networked mode shows the same line
-  at its compact-tool `-vv` level.
+  millisecond timeout before the command; networked mode now shows the same
+  line at `-v`.
 
 - Added default-on, presentation-only Markdown rendering for live streamed
   model text across arbitrary delta and UTF-8 boundaries, resumed assistant
@@ -38,8 +54,8 @@
 - Added program-wide `--color[=auto|always|never]` and `--no-color` behavior
   with a terminal-safe 16-color semantic palette. Network verbosity 0 now
   presents room/operator traffic without local model or tool traces; `-v`
-  reveals terminal model replies, `-vv` adds commentary and compact tool
-  activity, and higher levels add lower-priority runtime/IRC diagnostics.
+  reveals terminal model replies and complete tool activity, `-vv` adds
+  commentary, and higher levels add lower-priority runtime/IRC diagnostics.
 
 - Reassigned the `-d`, `-c`, `-r`, and `-o` short options to daemon, client,
   room name, and operator name. Their former dotdir, config, resume, and effort

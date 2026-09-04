@@ -308,6 +308,35 @@ after=$($bin -e -v -- text_tool 2>"$root/text-tool.err")
 [ "$after" = done ]
 grep -q '^Checking first\.$' "$root/text-tool.err"
 grep -Fq "→ exec  timeout=1000ms  'fixture ok'" "$root/text-tool.err"
+grep -Fq 'arguments: {"command":"fixture ok"' "$root/text-tool.err"
+grep -q '^fixture command succeeded$' "$root/text-tool.err"
+
+cat >"$root/tool-output-cap.ini" <<'EOF'
+[ui]
+verbosity = 1
+[tool]
+max_output_bytes = 8
+EOF
+cap_state="$root/tool-output-cap-state"
+after=$($bin --dotdir "$cap_state" --config "$root/tool-output-cap.ini" \
+    -e -- text_tool \
+    2>"$root/tool-output-cap.err")
+[ "$after" = done ]
+grep -q '^fixture $' "$root/tool-output-cap.err"
+grep -q 'output bytes hidden by max_output_bytes' "$root/tool-output-cap.err"
+! grep -q '^fixture command succeeded$' "$root/tool-output-cap.err"
+python3 - "$cap_state" <<'PY'
+import json
+import pathlib
+import sys
+
+logs = list((pathlib.Path(sys.argv[1]) / "sessions").glob("*/events.jsonl"))
+assert len(logs) == 1
+events = [json.loads(line) for line in logs[0].read_text().splitlines()]
+finished = [event for event in events if event["type"] == "tool_finished"]
+assert len(finished) == 1
+assert finished[0]["data"]["result"]["model_text"] == "fixture command succeeded"
+PY
 
 out=$($bin -e -v -- multi_item 2>"$root/multi.err")
 [ "$out" = "Done." ]

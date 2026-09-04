@@ -115,22 +115,41 @@ The first-party tool surface is deliberately small:
 
 Provider credentials and configured secret environment variables are removed
 from child tool environments or redacted before output is persisted or shown.
-`exec_command.timeout_ms` is nullable: the built-in default is no execution
-deadline, and the model supplies a positive millisecond value only when the
-particular command needs one. `[tool] default_timeout_ms` may impose an
-operator-configured fallback, including `0` for no deadline, while
-`max_timeout_ms` remains the hard bound. The ordinary compact `-v` tool-start
-line (networked `-vv`) shows the effective `timeout=none` or `timeout=Nms`
-before the quoted command.
+`exec_command.timeout_ms` is nullable: the built-in default is no foreground
+handoff deadline, and the model supplies a positive millisecond value only
+when the particular command should be returned to it if still running.
+`[tool] default_timeout_ms` may impose an operator-configured fallback,
+including `0` for no automatic handoff.
+`[tool] max_timeout_ms` is the operator-selected ceiling for positive
+timeouts; the same value is advertised in the model-facing tool schema and
+enforced by the runtime instead of a separate fixed policy ceiling.
+
+Every command uses the managed-process path even when it normally completes
+in the first tool call. If its timeout expires, or urgent local steering or an
+IRC mention arrives, that same path returns a live handle and continues the
+command in the background. The next model cycle receives the elapsed-timeout
+notice or coalesced urgent input plus the exact `write_stdin` continuation; it
+may react immediately or wait for completion. Timeout expiry never signals or
+kills the command. Explicit user interruption and required turn/session
+closure retain their existing cancellation behavior.
+
+Tool stdout and stderr are redacted before capture, retained without a
+tool-specific length cutoff, and supplied completely to the next model cycle.
+`[tool] max_output_bytes` is presentation-only: it limits the number of
+model-result UTF-8 bytes shown for each tool call, while `0` (the default)
+shows the complete result. It never truncates the durable result or the output
+given to the model.
 
 ## Rendering
 
 Networked interactive output is a timestamped scrolling chat transcript. At
 verbosity 0 it shows room/operator traffic and notifications but suppresses
 local model speech and tool internals. Verbosity 1 reveals terminal model
-replies, verbosity 2 adds intermediate commentary and compact tool activity,
-and higher levels progressively add bounded runtime, durable, protocol, and
-transport detail. Only terminal public assistant speech is sent to IRC.
+replies plus every tool call, its complete arguments, completion state, and
+configured amount of result text. Verbosity 2 adds intermediate commentary,
+and higher levels progressively add runtime, durable, protocol, and transport
+detail. Ordinary mode uses the same single-`-v` tool visibility. Only terminal
+public assistant speech is sent to IRC.
 
 One semantic 16-color foreground palette serves networked and ordinary modes.
 `auto` emits attributes only on terminals and honors `NO_COLOR`; `always` and

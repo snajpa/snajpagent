@@ -197,14 +197,15 @@ agent activity are not written into the verbosity-0 transcript. Intermediate
 and diagnostic material is never sent to the room. This preserves a usable
 operator conversation while keeping implementation details private.
 
-Networked mode deliberately spends its first added verbosity step on the
-hidden local reply and keeps IRC debugging behind the more useful agent/tool
-detail. Its local-only ladder is:
+Networked mode keeps IRC debugging behind the more useful agent/tool detail.
+Its local-only ladder is:
 
-- verbosity 1: terminal model replies shown once as agent chat lines;
-- verbosity 2: intermediate local model commentary plus compact agent/tool
-  activity names and completion state;
-- verbosity 3: bounded tool arguments/results and runtime/provider-cycle state;
+- verbosity 1: terminal model replies shown once as agent chat lines, plus all
+  tool calls with complete arguments, completion state, and result text up to
+  `[tool] max_output_bytes` (`0` means unlimited display);
+- verbosity 2: intermediate local model commentary and runtime/provider-cycle
+  state;
+- verbosity 3: additional agent runtime detail;
 - verbosity 4: durable app events and compact IRC connection/event state;
 - verbosity 5: sanitized prompt/protocol bodies and parsed IRC commands, with
   the existing sensitive-content warning; and
@@ -294,14 +295,16 @@ network read waits for a model call to finish. A room-update turn caused only
 by peers or notifications may end without model-authored chat; snajpagent does
 not remind, retry, or force a reaction to that traffic.
 
-Managed commands retain the existing asynchronous handoff model. A command may
-yield a live handle, after which the next model cycle receives the coalesced
-urgent IRC batch and the exact `write_stdin` surface for that handle. The model
-can react to chat immediately, wait for command completion, or continue the
-command; neither the IRC runtime nor the model babysits the socket or process.
-An urgent message received while a synchronous command is executing is
-admitted as soon as that command returns. Ordinary terminal interrupt remains
-an explicit cancellation and is not changed by this rule.
+Every command uses the asynchronous-capable managed path. A configured or
+model-requested timeout is a foreground handoff deadline, not a kill deadline:
+if it expires while the command is still live, the same handoff used for local
+steering and urgent IRC mentions returns a live handle without signaling the
+process. The next model cycle receives the timeout notice or coalesced urgent
+IRC batch and the exact `write_stdin` surface for that handle. The model can
+react immediately, wait for command completion, or continue the command;
+neither the IRC runtime nor the model babysits the socket or process. Ordinary
+terminal interrupt remains an explicit cancellation and is not changed by
+this rule.
 
 For a turn started by the local operator, snajpagent tracks whether terminal
 public assistant text was posted to the room. If the model reaches an otherwise
@@ -336,11 +339,15 @@ coding tools:
   where that identity currently has the required channel mode.
 
 Tool calls are durable and use the same start/result ordering and secret-safe
-rendering as other tools. They never open sockets, join, poll, reconnect, wait
-for traffic, or expose a manual reconnect action. The event loop owns those
-operations continuously. Ordinary terminal assistant text remains the simple
-way to reply; `irc_send` exists for an explicit mid-turn chat action and is not
-required as a completion ritual.
+rendering as other tools. At one `-v`, both ordinary and networked modes show
+every tool invocation, its complete arguments and completion state, and its
+result text. `[tool] max_output_bytes` can bound only that terminal
+presentation; its default `0` is unlimited, and the complete redacted output
+is always persisted and supplied to the model. IRC tools never open sockets,
+join, poll, reconnect, wait for traffic, or expose a manual reconnect action.
+The event loop owns those operations continuously. Ordinary terminal assistant
+text remains the simple way to reply; `irc_send` exists for an explicit
+mid-turn chat action and is not required as a completion ritual.
 
 ## Durability, Bounds, And Failure Semantics
 

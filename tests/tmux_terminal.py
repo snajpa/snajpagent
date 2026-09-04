@@ -926,6 +926,43 @@ def run_queue_case(binary, root):
             close_fixture_terminal(terminal)
 
 
+def run_tool_case(binary, root):
+    case = root / "tools"
+    workspace = case / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False)
+    dotdir = case / "state"
+    terminal = TmuxTerminal(
+        case / "terminal", binary, workspace, dotdir, config, 52, 18
+    )
+    try:
+        terminal.wait("\n›")
+        terminal.submit("/verbose 1")
+        terminal.wait("verbosity: 1")
+        terminal.submit("text_tool")
+        screen = terminal.wait("fixture command succeeded", join_wrapped=True)
+        terminal.wait("done", join_wrapped=True)
+        assert_order(screen, [
+            "→ exec  timeout=1000ms  'fixture ok'",
+            'arguments: {"command":"fixture ok"',
+            "fixture command succeeded",
+        ])
+        _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+        finished = event_list(events, "tool_finished")
+        if (len(finished) != 1 or
+                finished[0]["data"]["result"]["model_text"] !=
+                "fixture command succeeded"):
+            raise AssertionError("tool display changed the model-visible result")
+        terminal.exit()
+    finally:
+        try:
+            screen = terminal.last_screen or terminal.capture()
+            (case / "screen.txt").write_text(screen, encoding="utf-8")
+        finally:
+            close_fixture_terminal(terminal)
+
+
 def wait_for_terminal_event(dotdir, terminal_types, timeout):
     deadline = time.monotonic() + timeout
     path = None
@@ -949,6 +986,7 @@ def run_fixture(binary, workspace, root):
     run_markdown_case(binary, root)
     run_render_case(binary, root)
     run_queue_case(binary, root)
+    run_tool_case(binary, root)
     print("tmux_terminal fixture: ok")
 
 

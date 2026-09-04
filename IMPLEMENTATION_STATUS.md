@@ -25,7 +25,7 @@ Approximate release work remaining: **1%**. Approximate completed work:
 | Persistent goals | durable `/goal` command lifecycle, configurable wording bound, model rewrite/complete/block tool, lock, automatic continuation, FIFO queue precedence, and failure/restart pausing are implemented with replay/context/PTY coverage | 0% |
 | Terminal composer and additive rendering levels 0..6 | live SIGWINCH resize/redraw, Ctrl-Z suspend/continue draft preservation, Linux PTY TERM/width evidence, narrow-tmux rendered-screen coverage for streaming/wrapping/steering/queue behavior, and a Linux/macOS PTY capability surface are implemented and machine-checked; external advertised-platform evidence is tracked under final integrated qualification | 0% |
 | Responses HTTP/SSE/API-key path | ordered named providers, authenticated persistent model/reasoning discovery, durable provider/model/effort selection, transport, exact response input-token count path, durable standalone manual compaction, threshold-gated automatic compaction after completed turns, pre-response active-prefix automatic compaction, exact compact-window input/output count metadata, bounded create/count/compact retry handling, and durable provider-profile response-start captures are implemented; live provider evidence is tracked under integrated qualification | 0% |
-| Process tools | non-PTY `exec_command`, immediate PTY execution, yielded non-PTY and PTY managed handles, bounded `write_stdin`, PTY startup/refresh sizing, one-active-process replay tracking, strict managed-process continuation gating, durable `process_closed` records, owner-loss recovery closure, direct-child kill fallback, and process-family timeout/closure leak regressions are implemented; advertised-platform crash/restart evidence is tracked under final integrated qualification | 0% |
+| Process tools | unified managed non-PTY/PTY `exec_command`, timeout/steering/mention handoff without process termination, bounded `write_stdin`, PTY startup/refresh sizing, one-active-process replay tracking, strict managed-process continuation gating, durable `process_closed` records, owner-loss recovery closure, direct-child kill fallback, and explicit process-family closure regressions are implemented; advertised-platform crash/restart evidence is tracked under final integrated qualification | 0% |
 | Strict `apply_patch` tool | first-party parser/matcher/installer and bounded model-visible diff preview implemented with focused regression coverage; advertised-platform filesystem evidence is tracked under final integrated qualification | 0% |
 | Instruction discovery, metadata, relocation/archive/delete closure, and final lifecycle polish | bounded instruction discovery, turn metadata, explicit resume-time workspace relocation, local archive/unarchive, typed-confirmation delete, active delete-intent completion, and exact post-rename trash completion are implemented for the current scope | 0% |
 | Integrated qualification, deletion pass, sanitizers/static analysis/live provider/filesystem/process evidence | state, dependency/vendoring, portability, source-size, and current-host dependency-closure audit gates, clang-release/sanitizer wiring, local loopback provider-transport evidence for create/count/compact, optional live-provider evidence harness, release-evidence bundle/check tooling with path-confined record validation, single-bundle and matrix evidence-checker self-tests, and matrix-level evidence verification are implemented; external live-provider, macOS/architecture terminal runs, and actual archived checked per-platform evidence bundles remain incomplete | 1% |
@@ -131,11 +131,11 @@ unresolved managed process retains exclusive `write_stdin` control.
   frozen in-memory instruction text to the provider request;
 - `exec_command` has a real production non-PTY implementation using the
   configured absolute shell, a resolved absolute working directory, bounded
-  stdin, optional bounded timeout, nonblocking stdout/stderr capture, process-group
-  termination, and active-input pumping for cancellation;
+  stdin, optional bounded foreground handoff timeout, nonblocking stdout/stderr
+  capture, managed background continuation, and active-input pumping;
 - PTY `exec_command` is implemented on Linux and macOS hosts that provide the
   required PTY primitives; stdout and stderr are merged through the PTY stream,
-  bounded, redacted, and returned as the stdout excerpt, and PTYs are opened
+  completely captured after redaction and returned as stdout, and PTYs are opened
   with the current terminal size or the documented 24x80 fallback;
 - yielded non-PTY and PTY `exec_command` calls now return a lowercase-hex
   managed process handle when the command remains live after `yield_ms`; one
@@ -168,21 +168,22 @@ unresolved managed process retains exclusive `write_stdin` control.
 - tool calls run sequentially only after a durable `tool_started` fence, and
   their structured results are committed before any level-one-or-higher tool
   result rendering;
-- tool output excerpts keep first/last bytes without overlap, preserve the
-  original byte count, and redact admitted credentials/configured secrets before
-  persistence or rendering;
-- failed, signaled, timed-out, cancelled, denied, not-run, outcome-unknown,
+- command output is completely retained after admitted credentials and
+  configured secrets are redacted, persisted in the durable tool result, and
+  supplied to the model; a presentation-only configured byte ceiling can limit
+  what is written to the terminal without changing that result;
+- failed, signaled, legacy timed-out, cancelled, denied, not-run, outcome-unknown,
   running, patch-rejected, and I/O-failed tool outcomes share one validated
   result shape;
 - focused tool coverage exercises stdout/stderr capture, failing exit codes,
-  timeout killing, large-output preservation, delayed stdin delivery, basic PTY
+  non-destructive timeout handoff, large-output preservation, delayed stdin delivery, basic PTY
   merged-stream capture, yielded PTY `write_stdin`, provider-secret redaction,
   provider-secret environment removal, yielded managed-process output,
   `write_stdin` completion, repeated stdin writes, unknown handle rejection,
   successful add/update/delete patches,
   bounded diff previews, preview truncation, ambiguous hunk rejection, path
   escape rejection, symlink-target rejection, validate-before-install behavior,
-  managed-process closure results, process-family timeout/closure leak checks, Linux terminal TERM/width matrix
+  managed-process closure results, process-family handoff/closure checks, Linux terminal TERM/width matrix
   checks, Linux/macOS PTY portability guards, restricted continuation tool schemas, and durable `process_closed` replay,
   instruction discovery precedence, invalid instruction rejection, metadata
   validation, active-turn instruction context projection, resume-time workspace
@@ -197,7 +198,7 @@ active handle, context projection restricts the next request to the matching
 `write_stdin`, and the app emits durable `process_closed` records before ending
 a turn when an unresolved process must be abandoned. PTY execution now supports
 yielded handles, `write_stdin`, and polling-based terminal-size refresh while the
-process is driven. Process-family timeout/closure leak evidence exists, and the local fixture
+process is driven. Process-family handoff/closure evidence exists, and the local fixture
 path covers restart recovery for interrupted provider and tool boundaries.
 Remaining release evidence is limited to external live-provider qualification,
 macOS/architecture terminal reruns, and actual archived checked per-platform evidence bundles;

@@ -993,8 +993,6 @@ snj_tool_result_valid(const json_t *result)
         snj_json_integer_u64(result, "duration_ms", &duration) < 0 ||
         !(status = snj_json_string(result, "status")) ||
         !(model_text = snj_json_string(result, "model_text")) ||
-        json_string_length(json_object_get(result, "model_text")) >
-            512u * 1024u ||
         tool_excerpt_valid(json_object_get(result, "stdout")) < 0 ||
         tool_excerpt_valid(json_object_get(result, "stderr")) < 0)
         return -1;
@@ -1019,7 +1017,8 @@ snj_tool_result_valid(const json_t *result)
     if (strcmp(status, "running") == 0)
         return json_is_string(handle) &&
                snj_hex_is_lower(json_string_value(handle), SNJ_ID_HEX_LEN) &&
-               json_is_null(reason_value) ? 0 : -1;
+               (json_is_null(reason_value) ||
+                (reason && strcmp(reason, "timeout_handoff") == 0)) ? 0 : -1;
     if (!json_is_null(reason_value) || !json_is_null(handle))
         return -1;
     if (strcmp(status, "succeeded") == 0 || strcmp(status, "failed") == 0)

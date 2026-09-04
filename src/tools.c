@@ -38,10 +38,6 @@
 
 #define SNJ_TOOL_COMMAND_MAX (256u * 1024u)
 #define SNJ_TOOL_STDIN_MAX (1024u * 1024u)
-#define SNJ_TOOL_STREAM_HEAD (64u * 1024u)
-#define SNJ_TOOL_STREAM_TOTAL (256u * 1024u)
-#define SNJ_TOOL_STREAM_TAIL (SNJ_TOOL_STREAM_TOTAL - SNJ_TOOL_STREAM_HEAD)
-#define SNJ_TOOL_MODEL_TEXT_MAX (512u * 1024u)
 #define SNJ_TOOL_POLL_MS 50u
 #define SNJ_TOOL_YIELD_MAX_MS 600000u
 #define SNJ_TOOL_CLOSE_GRACE_MS 2000u
@@ -50,9 +46,7 @@
 extern char **environ;
 
 struct capture_stream {
-    struct snj_buf head;
-    struct snj_buf tail;
-    uint64_t total;
+    struct snj_buf data;
 };
 
 struct capture_redactor {
@@ -82,7 +76,7 @@ struct managed_process {
     bool stdout_open;
     bool stderr_open;
     bool child_done;
-    bool timed_out;
+    bool closing;
     bool cancelled;
     bool kill_sent;
     int child_status;
@@ -219,62 +213,25 @@ static void
 capture_init(struct capture_stream *stream)
 {
     memset(stream, 0, sizeof(*stream));
-    snj_buf_init(&stream->head, SNJ_TOOL_STREAM_HEAD);
-    snj_buf_init(&stream->tail, SNJ_TOOL_STREAM_TAIL);
+    snj_buf_init(&stream->data, SIZE_MAX);
 }
 
 static void
 capture_free(struct capture_stream *stream)
 {
-    snj_buf_free(&stream->head);
-    snj_buf_free(&stream->tail);
+    snj_buf_free(&stream->data);
     memset(stream, 0, sizeof(*stream));
-}
-
-static int
-capture_tail_append(struct capture_stream *stream,
-                    const unsigned char *data, size_t len)
-{
-    if (!len)
-        return 0;
-    if (len >= SNJ_TOOL_STREAM_TAIL) {
-        snj_buf_reset(&stream->tail);
-        return snj_buf_append(&stream->tail,
-                              data + len - SNJ_TOOL_STREAM_TAIL,
-                              SNJ_TOOL_STREAM_TAIL);
-    }
-    if (stream->tail.len + len > SNJ_TOOL_STREAM_TAIL) {
-        size_t drop = stream->tail.len + len - SNJ_TOOL_STREAM_TAIL;
-        memmove(stream->tail.data, stream->tail.data + drop,
-                stream->tail.len - drop);
-        stream->tail.len -= drop;
-    }
-    return snj_buf_append(&stream->tail, data, len);
 }
 
 static int
 capture_append(struct capture_stream *stream, const unsigned char *data,
                size_t len)
 {
-    size_t first = 0;
-
     if (len && !data) {
         errno = EINVAL;
         return -1;
     }
-    if (stream->total > UINT64_MAX - len) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    stream->total += len;
-    if (stream->head.len < SNJ_TOOL_STREAM_HEAD) {
-        first = SNJ_TOOL_STREAM_HEAD - stream->head.len;
-        if (first > len)
-            first = len;
-        if (snj_buf_append(&stream->head, data, first) < 0)
-            return -1;
-    }
-    return capture_tail_append(stream, data + first, len - first);
+    return snj_buf_append(&stream->data, data, len);
 }
 
 static size_t
@@ -441,72 +398,38 @@ bytes_textual(const unsigned char *data, size_t len)
     return snj_utf8_valid(data, len, true);
 }
 
-static int
-capture_retained(const struct capture_stream *stream, struct snj_buf *retained,
-                 uint64_t *retained_bytes, uint64_t *discarded_bytes)
-{
-    uint64_t kept;
-    uint64_t tail_start;
-    size_t skip = 0u;
-
-    snj_buf_reset(retained);
-    if (snj_buf_append(retained, stream->head.data, stream->head.len) < 0)
-        return -1;
-    tail_start = stream->total >= stream->tail.len ?
-                 stream->total - stream->tail.len : 0u;
-    if (tail_start < stream->head.len) {
-        uint64_t overlap = (uint64_t)stream->head.len - tail_start;
-        skip = overlap > stream->tail.len ? stream->tail.len : (size_t)overlap;
-    }
-    if (skip < stream->tail.len &&
-        snj_buf_append(retained, stream->tail.data + skip,
-                       stream->tail.len - skip) < 0)
-        return -1;
-    kept = (uint64_t)retained->len;
-    *retained_bytes = kept;
-    *discarded_bytes = stream->total > kept ? stream->total - kept : 0u;
-    return 0;
-}
-
 static json_t *
 excerpt_json(const struct capture_stream *stream)
 {
-    struct snj_buf retained;
     struct snj_buf encoded;
     json_t *out = json_object();
-    uint64_t kept = 0;
-    uint64_t discarded = 0;
     bool textual;
     int rc = -1;
 
     if (!out)
         return NULL;
-    snj_buf_init(&retained, SNJ_TOOL_STREAM_TOTAL);
-    snj_buf_init(&encoded, SNJ_TOOL_STREAM_TOTAL * 2u);
-    if (capture_retained(stream, &retained, &kept, &discarded) < 0)
-        goto out;
-    textual = bytes_textual(retained.data, retained.len);
+    snj_buf_init(&encoded, SIZE_MAX);
+    textual = bytes_textual(stream->data.data, stream->data.len);
     if (textual) {
-        if (snj_buf_append(&encoded, retained.data, retained.len) < 0)
+        if (snj_buf_append(&encoded, stream->data.data, stream->data.len) < 0)
             goto out;
-    } else if (append_base64(&encoded, retained.data, retained.len) < 0) {
+    } else if (append_base64(&encoded, stream->data.data, stream->data.len) < 0) {
         goto out;
     }
     if (snj_json_set_new(out, "discarded_bytes",
-                         json_integer((json_int_t)discarded)) < 0 ||
+                         json_integer(0)) < 0 ||
         snj_json_set_new(out, "encoding",
                          json_string(textual ? "utf8" : "base64")) < 0 ||
         snj_json_set_new(out, "original_bytes",
-                         json_integer((json_int_t)stream->total)) < 0 ||
+                         json_integer((json_int_t)stream->data.len)) < 0 ||
         snj_json_set_new(out, "retained",
                          json_stringn(encoded.len ? (const char *)encoded.data : "",
                                       encoded.len)) < 0 ||
         snj_json_set_new(out, "retained_bytes",
-                         json_integer((json_int_t)kept)) < 0)
+                         json_integer((json_int_t)stream->data.len)) < 0)
         goto out;
     rc = 0;
 out:
-    snj_buf_free(&retained);
     snj_buf_free(&encoded);
     if (rc < 0) {
         json_decref(out);
@@ -516,53 +439,39 @@ out:
 }
 
 static int
-append_utf8_excerpt(struct snj_buf *out, const char *label,
-                    const struct capture_stream *stream)
+append_stream_text(struct snj_buf *out, const char *label,
+                   const struct capture_stream *stream)
 {
-    struct snj_buf retained;
-    uint64_t kept = 0;
-    uint64_t discarded = 0;
-    int rc = -1;
-
-    snj_buf_init(&retained, SNJ_TOOL_STREAM_TOTAL);
-    if (capture_retained(stream, &retained, &kept, &discarded) < 0)
-        goto out;
-    if (retained.len == 0u && discarded == 0u) {
-        rc = 0;
-        goto out;
-    }
+    if (!stream->data.len)
+        return 0;
     if (snj_buf_printf(out, "%s%s:\n", out->len ? "\n" : "", label) < 0)
-        goto out;
-    if (bytes_textual(retained.data, retained.len)) {
-        if (snj_buf_append(out, retained.data, retained.len) < 0)
-            goto out;
-        if (retained.len && retained.data[retained.len - 1u] != '\n' &&
+        return -1;
+    if (bytes_textual(stream->data.data, stream->data.len)) {
+        if (snj_buf_append(out, stream->data.data, stream->data.len) < 0)
+            return -1;
+        if (stream->data.data[stream->data.len - 1u] != '\n' &&
             snj_buf_putc(out, '\n') < 0)
-            goto out;
-    } else if (snj_buf_printf(out,
-            "<%llu retained bytes are binary; see structured %s base64 excerpt>\n",
-            (unsigned long long)kept, label) < 0) {
-        goto out;
+            return -1;
+    } else {
+        if (snj_buf_printf(out, "<%llu binary bytes; base64 follows>\n",
+                           (unsigned long long)stream->data.len) < 0 ||
+            append_base64(out, stream->data.data, stream->data.len) < 0 ||
+            snj_buf_putc(out, '\n') < 0)
+            return -1;
     }
-    if (discarded && snj_buf_printf(out,
-            "<%llu redacted/captured bytes omitted from middle>\n",
-            (unsigned long long)discarded) < 0)
-        goto out;
-    rc = 0;
-out:
-    snj_buf_free(&retained);
-    return rc;
+    return 0;
 }
 
 static char *
-model_text_for(const char *status, int exit_code, int signal_number,
+model_text_for(const char *status, const char *reason, int exit_code,
+               int signal_number,
                const struct capture_stream *stdout_stream,
                const struct capture_stream *stderr_stream)
 {
     struct snj_buf text;
     char *out = NULL;
 
-    snj_buf_init(&text, SNJ_TOOL_MODEL_TEXT_MAX);
+    snj_buf_init(&text, SIZE_MAX);
     if (strcmp(status, "succeeded") == 0) {
         if (snj_buf_printf(&text, "Process exited with code %d.\n", exit_code) < 0)
             goto done;
@@ -573,16 +482,14 @@ model_text_for(const char *status, int exit_code, int signal_number,
         if (snj_buf_printf(&text, "Process was terminated by signal %d.\n",
                            signal_number) < 0)
             goto done;
-    } else if (strcmp(status, "timed_out") == 0) {
-        const char *msg = "Process timed out and was killed.\n";
-        if (snj_buf_append(&text, msg, strlen(msg)) < 0)
-            goto done;
     } else if (strcmp(status, "cancelled") == 0) {
         const char *msg = "Process was cancelled by the user.\n";
         if (snj_buf_append(&text, msg, strlen(msg)) < 0)
             goto done;
     } else if (strcmp(status, "running") == 0) {
-        const char *msg = "Process is still running.\n";
+        const char *msg = reason && strcmp(reason, "timeout_handoff") == 0 ?
+            "Command timeout elapsed; the process continues in the background. Use write_stdin with the active handle to wait for or interact with it.\n" :
+            "Process is still running.\n";
         if (snj_buf_append(&text, msg, strlen(msg)) < 0)
             goto done;
     } else if (strcmp(status, "io_failed") == 0) {
@@ -592,8 +499,8 @@ model_text_for(const char *status, int exit_code, int signal_number,
     } else if (snj_buf_printf(&text, "Tool status: %s.\n", status) < 0) {
         goto done;
     }
-    if (append_utf8_excerpt(&text, "stdout", stdout_stream) < 0 ||
-        append_utf8_excerpt(&text, "stderr", stderr_stream) < 0)
+    if (append_stream_text(&text, "stdout", stdout_stream) < 0 ||
+        append_stream_text(&text, "stderr", stderr_stream) < 0)
         goto done;
     if (snj_buf_terminate(&text) < 0)
         goto done;
@@ -624,7 +531,7 @@ result_json(const char *status, const char *reason, int exit_code,
 
     if (!out)
         return NULL;
-    model_text = model_text_for(status, exit_code, signal_number,
+    model_text = model_text_for(status, reason, exit_code, signal_number,
                                 stdout_stream, stderr_stream);
     stdout_json = excerpt_json(stdout_stream);
     stderr_json = excerpt_json(stderr_stream);
@@ -1113,8 +1020,6 @@ managed_terminal_status(const struct managed_process *proc, const char **reason,
         *reason = "turn_cancelled";
         return "cancelled";
     }
-    if (proc->timed_out)
-        return "timed_out";
     if (WIFEXITED(proc->child_status)) {
         *exit_code = WEXITSTATUS(proc->child_status);
         return *exit_code == 0 ? "succeeded" : "failed";
@@ -1145,10 +1050,11 @@ managed_make_result(struct managed_process *proc, const char *status,
 }
 
 static int
-managed_return_running(struct managed_process *proc, json_t **result,
+managed_return_running(struct managed_process *proc, const char *reason,
+                       json_t **result,
                        char *error, size_t error_size)
 {
-    return managed_make_result(proc, "running", NULL, -1, -1, proc->handle,
+    return managed_make_result(proc, "running", reason, -1, -1, proc->handle,
                                result, error, error_size);
 }
 
@@ -1218,6 +1124,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
     size_t input_written = 0u;
     bool yield_enabled = yield_ms > 0u;
     bool handoff_requested = false;
+    const char *handoff_reason = NULL;
     bool pty_eof_sent = !close_after_input;
 
     if (input_supplied && input_len == 0u && close_after_input &&
@@ -1240,10 +1147,14 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
         if (proc->pty && proc->stdout_open)
             pty_apply_current_size(proc->stdout_fd, &proc->pty_rows,
                                    &proc->pty_cols);
-        if (!proc->child_done && !proc->timed_out && now >= proc->deadline_ms) {
-            proc->timed_out = true;
-            proc->kill_sent = true;
-            kill_child_group(proc->pid, SIGKILL);
+        if (!proc->child_done && now >= proc->deadline_ms) {
+            proc->deadline_ms = UINT64_MAX;
+            if (proc->closing) {
+                kill_child_group(proc->pid, SIGKILL);
+            } else {
+                handoff_requested = true;
+                handoff_reason = "timeout_handoff";
+            }
         }
         if (pump && !proc->child_done) {
             int pump_rc = pump(pump_opaque, 0u);
@@ -1260,12 +1171,15 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
             return -1;
         if (proc->child_done && !proc->stdout_open && !proc->stderr_open)
             return managed_return_terminal(proc, result, error, error_size);
-        if (handoff_requested && input_done && !proc->child_done &&
-            !proc->timed_out && !proc->cancelled && !proc->kill_sent)
-            return managed_return_running(proc, result, error, error_size);
         if (yield_enabled && now >= yield_deadline && input_done &&
-            !proc->child_done && !proc->timed_out && !proc->cancelled)
-            return managed_return_running(proc, result, error, error_size);
+            !proc->child_done && !proc->cancelled) {
+            yield_enabled = false;
+            handoff_requested = true;
+        }
+        if (handoff_requested && input_done && !proc->child_done &&
+            !proc->closing && !proc->cancelled && !proc->kill_sent)
+            return managed_return_running(proc, handoff_reason, result,
+                                          error, error_size);
 
         if (proc->stdout_open) {
             stdout_index = (int)nfds;
@@ -1294,7 +1208,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
             managed_close_input(proc);
             input_done = true;
         }
-        if (!proc->timed_out && !proc->cancelled && proc->deadline_ms > now) {
+        if (!proc->cancelled && proc->deadline_ms > now) {
             uint64_t remain = proc->deadline_ms - now;
             if (remain < (uint64_t)timeout)
                 timeout = (int)remain;
@@ -1363,7 +1277,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
                 return -1;
             }
         }
-        if ((proc->timed_out || proc->cancelled) && !proc->kill_sent) {
+        if (proc->cancelled && !proc->kill_sent) {
             proc->kill_sent = true;
             kill_child_group(proc->pid, SIGKILL);
         }
@@ -1593,38 +1507,7 @@ run_exec_command(const struct snj_response_item *call,
     uint32_t timeout_ms;
     uint32_t yield_ms;
     bool pty;
-    int in_pipe[2] = {-1, -1};
-    int out_pipe[2] = {-1, -1};
-    int err_pipe[2] = {-1, -1};
-    int pty_master = -1;
-    int pty_slave = -1;
-    unsigned short pty_rows = 24;
-    unsigned short pty_cols = 80;
-    char **env = NULL;
-    pid_t pid = -1;
-    uint64_t started = snj_time_ms();
-    uint64_t deadline;
-    bool stdout_open = true;
-    bool stderr_open = true;
-    bool stdin_open = true;
-    bool child_done = false;
-    bool timed_out = false;
-    bool cancelled = false;
-    bool kill_sent = false;
-    size_t stdin_written = 0;
-    int child_status = 0;
-    int rc = -1;
-    struct capture_stream stdout_stream;
-    struct capture_stream stderr_stream;
-    struct capture_redactor stdout_redactor;
-    struct capture_redactor stderr_redactor;
-    struct snj_secret_set secret_set;
 
-    snj_secret_set_build(&secret_set, config, credential);
-    capture_init(&stdout_stream);
-    capture_init(&stderr_stream);
-    redactor_init(&stdout_redactor, &stdout_stream, &secret_set.wire);
-    redactor_init(&stderr_redactor, &stderr_stream, &secret_set.wire);
     (void)session_workspace;
     if (!text_arg_valid(command, SNJ_TOOL_COMMAND_MAX) ||
         (stdin_text && !text_arg_valid(stdin_text, SNJ_TOOL_STDIN_MAX)) ||
@@ -1635,266 +1518,15 @@ run_exec_command(const struct snj_response_item *call,
                          config->max_timeout_ms, &timeout_ms) ||
         !json_u32_member(call->arguments, "yield_ms",
                          config->default_yield_ms, 0u,
-                         SNJ_TOOL_YIELD_MAX_MS, &yield_ms) ||
-        (timeout_ms && yield_ms > timeout_ms)) {
+                         SNJ_TOOL_YIELD_MAX_MS, &yield_ms)) {
         set_error(error, error_size, "invalid exec_command arguments");
         errno = EINVAL;
-        goto out;
+        return -1;
     }
-    if (yield_ms > 0u) {
-        redactor_free(&stderr_redactor);
-        redactor_free(&stdout_redactor);
-        capture_free(&stdout_stream);
-        capture_free(&stderr_stream);
-        return run_exec_command_managed(command, workdir, stdin_text,
-                                        timeout_ms, yield_ms, pty, config,
-                                        credential, pump, pump_opaque,
-                                        result, error, error_size);
-    }
-    if (pty) {
-        if (open_pty_pair(&pty_master, &pty_slave,
-                          &pty_rows, &pty_cols) < 0) {
-            set_error(error, error_size, "cannot create tool PTY: %s", strerror(errno));
-            goto out;
-        }
-        if (set_cloexec(pty_master) < 0 || set_cloexec(pty_slave) < 0 ||
-            set_nonblock(pty_master) < 0) {
-            set_error(error, error_size, "cannot configure tool PTY: %s", strerror(errno));
-            goto out;
-        }
-        stderr_open = false;
-    } else {
-        if (make_pipe(in_pipe) < 0 || make_pipe(out_pipe) < 0 ||
-            make_pipe(err_pipe) < 0) {
-            set_error(error, error_size, "cannot create tool pipes: %s", strerror(errno));
-            goto out;
-        }
-        if (set_nonblock(in_pipe[1]) < 0 || set_nonblock(out_pipe[0]) < 0 ||
-            set_nonblock(err_pipe[0]) < 0) {
-            set_error(error, error_size, "cannot configure tool pipes: %s", strerror(errno));
-            goto out;
-        }
-    }
-    env = filtered_environment(config);
-    if (!env) {
-        set_error(error, error_size, "cannot allocate tool environment");
-        goto out;
-    }
-    pid = fork();
-    if (pid < 0) {
-        set_error(error, error_size, "cannot fork tool process: %s", strerror(errno));
-        goto out;
-    }
-    if (pid == 0) {
-        if (pty) {
-            close_if_open(&pty_master);
-#if defined(SNAJPAGENT_HAVE_PTY)
-            exec_pty_child(config->shell, command, workdir, pty_slave, env);
-#else
-            _exit(125);
-#endif
-        } else {
-            close_if_open(&in_pipe[1]);
-            close_if_open(&out_pipe[0]);
-            close_if_open(&err_pipe[0]);
-            exec_child(config->shell, command, workdir,
-                       in_pipe[0], out_pipe[1], err_pipe[1], env);
-        }
-    }
-    if (!pty)
-        (void)setpgid(pid, pid);
-    if (pty) {
-        close_if_open(&pty_slave);
-    } else {
-        close_if_open(&in_pipe[0]);
-        close_if_open(&out_pipe[1]);
-        close_if_open(&err_pipe[1]);
-    }
-    deadline = saturating_deadline(started, timeout_ms);
-    while (stdout_open || stderr_open || !child_done) {
-        struct pollfd fds[3];
-        nfds_t nfds = 0;
-        uint64_t now = snj_time_ms();
-        int timeout = (int)SNJ_TOOL_POLL_MS;
-        int pump_rc;
-
-        if (!timed_out && now >= deadline) {
-            timed_out = true;
-            kill_sent = true;
-            kill_child_group(pid, SIGKILL);
-        }
-        if (pump && !child_done) {
-            pump_rc = pump(pump_opaque, 0u);
-            if (pump_rc < 0) {
-                cancelled = true;
-                kill_sent = true;
-                kill_child_group(pid, SIGKILL);
-            } else if (pump_rc == 2) {
-                cancelled = true;
-                kill_sent = true;
-                kill_child_group(pid, SIGKILL);
-            }
-        }
-        if (pty && stdout_open)
-            pty_apply_current_size(pty_master, &pty_rows, &pty_cols);
-        if (stdout_open) {
-            fds[nfds].fd = pty ? pty_master : out_pipe[0];
-            fds[nfds].events = POLLIN | POLLHUP;
-            if (pty && stdin_open && stdin_text && stdin_written < strlen(stdin_text))
-                fds[nfds].events |= POLLOUT;
-            fds[nfds].revents = 0;
-            ++nfds;
-        }
-        if (stderr_open) {
-            fds[nfds].fd = err_pipe[0];
-            fds[nfds].events = POLLIN | POLLHUP;
-            fds[nfds].revents = 0;
-            ++nfds;
-        }
-        if (!pty && stdin_open && stdin_text &&
-            stdin_written < strlen(stdin_text)) {
-            fds[nfds].fd = in_pipe[1];
-            fds[nfds].events = POLLOUT | POLLHUP;
-            fds[nfds].revents = 0;
-            ++nfds;
-        } else if (!pty && stdin_open) {
-            close_if_open(&in_pipe[1]);
-            stdin_open = false;
-        } else if (pty && stdin_open &&
-                   (!stdin_text || stdin_written >= strlen(stdin_text))) {
-            stdin_open = false;
-        }
-        if (!timed_out && !cancelled && deadline > now) {
-            uint64_t remain = deadline - now;
-            if (remain < (uint64_t)timeout)
-                timeout = (int)remain;
-        }
-        {
-            int pr = poll(nfds ? fds : NULL, nfds, timeout);
-            if (pr < 0) {
-                if (errno == EINTR)
-                    continue;
-                set_error(error, error_size, "tool process polling failed: %s",
-                          strerror(errno));
-                goto out;
-            }
-        }
-        if (nfds) {
-            nfds_t at = 0;
-            if (stdout_open) {
-                short revents = fds[at].revents;
-                if (pty && stdin_open && stdin_text &&
-                    stdin_written < strlen(stdin_text) && (revents & POLLOUT)) {
-                    if (write_stdin_chunk(&pty_master, stdin_text,
-                                          strlen(stdin_text), &stdin_written,
-                                          &stdin_open, false) < 0) {
-                        set_error(error, error_size, "tool PTY stdin write failed");
-                        goto out;
-                    }
-                }
-                if (revents & (POLLIN | POLLHUP | POLLERR)) {
-                    if ((pty ? drain_pty_fd(pty_master, &stdout_redactor,
-                                            &stdout_open) :
-                               drain_fd(out_pipe[0], &stdout_redactor,
-                                        &stdout_open)) < 0) {
-                        set_error(error, error_size,
-                                  pty ? "tool PTY capture failed" :
-                                        "tool stdout capture failed");
-                        goto out;
-                    }
-                }
-                ++at;
-            }
-            if (stderr_open) {
-                if (fds[at].revents)
-                    if (drain_fd(err_pipe[0], &stderr_redactor,
-                                 &stderr_open) < 0) {
-                        set_error(error, error_size, "tool stderr capture failed");
-                        goto out;
-                    }
-                ++at;
-            }
-            if (!pty && stdin_open && stdin_text &&
-                stdin_written < strlen(stdin_text)) {
-                if (fds[at].revents)
-                    if (write_stdin_chunk(&in_pipe[1], stdin_text,
-                                          strlen(stdin_text), &stdin_written,
-                                          &stdin_open, true) < 0) {
-                        set_error(error, error_size, "tool stdin write failed");
-                        goto out;
-                    }
-            }
-        }
-        if (!stdout_open) {
-            if (pty)
-                close_if_open(&pty_master);
-            else
-                close_if_open(&out_pipe[0]);
-        }
-        if (!stderr_open)
-            close_if_open(&err_pipe[0]);
-        if (!child_done && reap_child(pid, &child_status, &child_done) < 0) {
-            if (errno == ECHILD)
-                child_done = true;
-            else {
-                set_error(error, error_size, "tool process wait failed: %s",
-                          strerror(errno));
-                goto out;
-            }
-        }
-        if ((timed_out || cancelled) && !kill_sent) {
-            kill_sent = true;
-            kill_child_group(pid, SIGKILL);
-        }
-    }
-    {
-        const char *status = "failed";
-        const char *reason = NULL;
-        int exit_code = -1;
-        int signal_number = -1;
-        uint64_t ended = snj_time_ms();
-        uint64_t duration = ended >= started ? ended - started : 0u;
-
-        if (cancelled) {
-            status = "cancelled";
-            reason = "turn_cancelled";
-        } else if (timed_out) {
-            status = "timed_out";
-        } else if (WIFEXITED(child_status)) {
-            exit_code = WEXITSTATUS(child_status);
-            status = exit_code == 0 ? "succeeded" : "failed";
-        } else if (WIFSIGNALED(child_status)) {
-            signal_number = WTERMSIG(child_status);
-            status = "signaled";
-        }
-        *result = result_json(status, reason, exit_code, signal_number, duration,
-                              NULL, &stdout_stream, &stderr_stream);
-        if (!*result) {
-            set_error(error, error_size, "cannot allocate tool result");
-            goto out;
-        }
-    }
-    rc = cancelled ? 2 : 0;
-out:
-    if (pid > 0 && rc < 0) {
-        kill_child_group(pid, SIGKILL);
-        while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
-            ;
-    }
-    close_if_open(&in_pipe[0]);
-    close_if_open(&in_pipe[1]);
-    close_if_open(&out_pipe[0]);
-    close_if_open(&out_pipe[1]);
-    close_if_open(&err_pipe[0]);
-    close_if_open(&err_pipe[1]);
-    close_if_open(&pty_master);
-    close_if_open(&pty_slave);
-    free(env);
-    redactor_free(&stderr_redactor);
-    redactor_free(&stdout_redactor);
-    capture_free(&stdout_stream);
-    capture_free(&stderr_stream);
-    return rc;
+    return run_exec_command_managed(command, workdir, stdin_text,
+                                    timeout_ms, yield_ms, pty, config,
+                                    credential, pump, pump_opaque,
+                                    result, error, error_size);
 }
 
 static json_t *
@@ -1940,6 +1572,7 @@ snj_tools_close_managed(const char *handle, bool user_interrupt,
         return 0;
     }
     managed_close_input(proc);
+    proc->closing = true;
     if (user_interrupt)
         proc->cancelled = true;
     if (!proc->child_done && !proc->kill_sent) {
@@ -1948,8 +1581,7 @@ snj_tools_close_managed(const char *handle, bool user_interrupt,
     }
     now = snj_time_ms();
     close_deadline = saturating_deadline(now, SNJ_TOOL_CLOSE_GRACE_MS);
-    if (proc->deadline_ms > close_deadline)
-        proc->deadline_ms = close_deadline;
+    proc->deadline_ms = close_deadline;
     if (managed_drive(proc, "", 0u, false, false, 0u, pump, pump_opaque,
                       result, error, error_size) < 0) {
         managed_cleanup();

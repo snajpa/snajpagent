@@ -74,6 +74,7 @@ main(void)
         "default_yield_ms = 0\n"
         "default_timeout_ms = 4000\n"
         "max_timeout_ms = 5000\n"
+        "max_output_bytes = 123456\n"
         "secret_env = TOKEN_ONE, TOKEN_TWO\n";
     char temp[] = "/tmp/snajpagent-config-XXXXXX";
     char dotdir[4096];
@@ -104,6 +105,8 @@ main(void)
     assert(config.irc_client_count == 0u);
     assert(config.irc_history_lines == 200u);
     assert(config.default_timeout_ms == 0u);
+    assert(config.max_timeout_ms == 86400000u);
+    assert(config.max_output_bytes == 0u);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(config.providers[0].auto_compact_input_tokens == 120000u);
@@ -168,6 +171,7 @@ main(void)
     assert(config.default_yield_ms == 0u);
     assert(config.default_timeout_ms == 4000u);
     assert(config.max_timeout_ms == 5000u);
+    assert(config.max_output_bytes == 123456u);
     assert(config.secret_env_count == 2u);
     assert(strcmp(config.secret_env[0], "TOKEN_ONE") == 0);
     assert(strcmp(config.secret_env[1], "TOKEN_TWO") == 0);
@@ -223,6 +227,26 @@ main(void)
     write_bytes(path,
         "[tool]\ndefault_timeout_ms=5000\nmax_timeout_ms=4000\n",
         sizeof("[tool]\ndefault_timeout_ms=5000\nmax_timeout_ms=4000\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[tool]\nmax_timeout_ms=4294967295\n",
+                sizeof("[tool]\nmax_timeout_ms=4294967295\n") - 1u);
+    snj_config_init(&config);
+    assert(snj_config_load(&config, path, dotdir,
+                           error, sizeof(error)) == 0);
+    assert(config.max_timeout_ms == UINT32_MAX);
+    snj_config_free(&config);
+    write_bytes(path, "[tool]\nmax_timeout_ms=4294967296\n",
+                sizeof("[tool]\nmax_timeout_ms=4294967296\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path, "[tool]\nmax_output_bytes=4294967295\n",
+                sizeof("[tool]\nmax_output_bytes=4294967295\n") - 1u);
+    snj_config_init(&config);
+    assert(snj_config_load(&config, path, dotdir,
+                           error, sizeof(error)) == 0);
+    assert(config.max_output_bytes == UINT32_MAX);
+    snj_config_free(&config);
+    write_bytes(path, "[tool]\nmax_output_bytes=4294967296\n",
+                sizeof("[tool]\nmax_output_bytes=4294967296\n") - 1u);
     expect_invalid(path);
     write_bytes(path, "[tool]\nsecret_env=A,A\n",
                 sizeof("[tool]\nsecret_env=A,A\n") - 1u);

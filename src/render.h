@@ -108,7 +108,7 @@ int snj_render_tool_start(struct snj_render *render,
                           const struct snj_response_item *call,
                           const char *workdir, uint32_t default_timeout_ms);
 int snj_render_tool_finish(struct snj_render *render, const char *name,
-                           const json_t *result);
+                           const json_t *result, uint32_t max_output_bytes);
 int snj_render_event(struct snj_render *render, uint64_t seq,
                      const char *type);
 int snj_render_protocol(struct snj_render *render, const char *label,

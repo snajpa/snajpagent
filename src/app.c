@@ -1391,7 +1391,7 @@ execute_calls(struct app_state *app, const char *turn_id,
             const char *status = snj_json_string(result, "status");
             bool yielded = status && strcmp(status, "running") == 0;
             json_t *render_result = app->render.verbosity >= 1u ?
-                                    json_deep_copy(result) : NULL;
+                                    json_incref(result) : NULL;
             if (commit_pending_result(app, turn_id, call->call_id, result,
                                       error, error_size) < 0) {
                 if (render_result)
@@ -1400,7 +1400,8 @@ execute_calls(struct app_state *app, const char *turn_id,
             }
             if (render_result &&
                 snj_render_tool_finish(&app->render, call->name,
-                                       render_result) < 0) {
+                                       render_result,
+                                       app->config->max_output_bytes) < 0) {
                 json_decref(render_result);
                 set_error(error, error_size,
                           "tool result could not be rendered");

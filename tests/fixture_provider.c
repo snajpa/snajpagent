@@ -361,6 +361,14 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "msg_fixture_network_reminder",
                            "network reminder reply", 0);
     }
+    if (strstr(prompt, "network_tool")) {
+        if (cycle == 1u)
+            return add_call(graph, workspace, cycle, 0u, "fixture ok");
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER,
+                           "msg_fixture_network_tool",
+                           "network tool complete", 0);
+    }
     if (strstr(prompt, "network_managed")) {
         if (cycle == 1u)
             return add_call(graph, workspace, cycle, 0u,

@@ -225,9 +225,10 @@ a windowed TUI. At the default verbosity it shows operator/room chat and room
 events, but hides the local model's response and all model/tool internals. The
 networked verbosity ladder is additive:
 
-1. `-v` reveals terminal model replies locally;
-2. `-vv` adds intermediate model commentary and compact tool activity;
-3. `-vvv` adds bounded tool details and runtime/provider-cycle state;
+1. `-v` reveals terminal model replies and every tool call with complete
+   arguments, completion state, and configured result display;
+2. `-vv` adds intermediate model commentary and runtime/provider-cycle state;
+3. `-vvv` adds further agent runtime detail;
 4. higher levels add durable/IRC state, sanitized protocol bodies, then
    bounded transport diagnostics.
 
@@ -253,9 +254,8 @@ terminal output and honors `NO_COLOR`. Color applies to networked and ordinary
 UI roles, uses broadly supported 16-color foreground attributes, and never
 enters stored text, provider input, or IRC traffic. Compact tool-start lines
 color the arrow and tool name, while an `exec` command itself remains in the
-default foreground like its output. In ordinary `-v` output (networked `-vv`),
-the first `exec` line shows its effective `timeout=none` or `timeout=Nms`
-before the command.
+default foreground like its output. At `-v` in either mode, the first `exec`
+line shows its effective `timeout=none` or `timeout=Nms` before the command.
 
 Markdown presentation is enabled by default. `--no-markdown` disables it and
 `--markdown` explicitly enables it, overriding configuration. Headings, lists,
@@ -370,14 +370,21 @@ markdown = true
 verbosity = 0
 ```
 
-Commands have no built-in execution deadline. A model-requested positive
-`timeout_ms` sets one; `[tool] default_timeout_ms` can instead impose an
-operator fallback, with `0` retaining no deadline:
+Commands have no built-in foreground handoff deadline. A model-requested
+positive `timeout_ms` sets one; `[tool] default_timeout_ms` can instead impose
+an operator fallback, with `0` retaining no automatic handoff. If the deadline
+expires, the command continues in the background and the model receives its
+live handle through the same continuation used for urgent steering and IRC
+mentions; timeout never kills the process. The configured `max_timeout_ms` is
+both the tool-schema and runtime ceiling. Tool output is captured completely
+for the model; `max_output_bytes` limits only how many result bytes each call
+displays, and defaults to unlimited with `0`:
 
 ```ini
 [tool]
 default_timeout_ms = 0
 max_timeout_ms = 86400000
+max_output_bytes = 0
 ```
 
 IRC settings have direct command-line equivalents. `client` may appear up to

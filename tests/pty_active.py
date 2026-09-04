@@ -1100,7 +1100,18 @@ def test_network_chat_and_managed_mention():
         wire_start = len(human.buf)
         child.send(b"network_one\r")
         human.wait(b"PRIVMSG #lab :network one reply\r\n", start=wire_start)
-        child.wait(b"network one reply", start=verbose_end)
+        verbose_end = child.wait(b"network one reply", start=verbose_end)
+        child.wait(PROMPT, start=verbose_end)
+
+        wire_start = len(human.buf)
+        tool_start = len(child.buf)
+        child.send(b"network_tool\r")
+        human.wait(b"PRIVMSG #lab :network tool complete\r\n", start=wire_start)
+        child.wait(b"\xe2\x86\x92 exec  timeout=1000ms  'fixture ok'",
+                   start=tool_start)
+        child.wait(b"arguments: {\"command\":\"fixture ok\"", start=tool_start)
+        child.wait(b"fixture command succeeded", start=tool_start)
+        child.wait(PROMPT, start=tool_start)
 
         wire_start = len(human.buf)
         human.message("network_operator")

@@ -1653,7 +1653,7 @@ snj_render_tool_start(struct snj_render *render,
     size_t prefix_len = 0u;
     int rc = 0;
 
-    if (render->verbosity < (render->networked ? 2u : 1u))
+    if (render->verbosity < 1u)
         return 0;
     label = tool_label(call->name);
     command = snj_json_string(call->arguments, "command");
@@ -1679,7 +1679,7 @@ snj_render_tool_start(struct snj_render *render,
     }
     if (rc == 0 && snj_buf_putc(&line, '\n') < 0)
         rc = -1;
-    if (rc == 0 && render->verbosity >= (render->networked ? 3u : 2u)) {
+    if (rc == 0) {
         struct snj_buf encoded;
         snj_buf_init(&encoded, SNJ_MAX_TOOL_ARGUMENTS + 64u);
         if (snj_json_canonical(call->arguments, &encoded) < 0 ||
@@ -1701,9 +1701,10 @@ snj_render_tool_start(struct snj_render *render,
 
 int
 snj_render_tool_finish(struct snj_render *render, const char *name,
-                       const json_t *result)
+                       const json_t *result, uint32_t max_output_bytes)
 {
     struct snj_buf line;
+    const char *model_text;
     const char *status;
     const char *reason;
     json_t *exit_value;
@@ -1711,7 +1712,7 @@ snj_render_tool_finish(struct snj_render *render, const char *name,
     const char *color = COLOR_WARNING;
     int rc = 0;
 
-    if (render->verbosity < (render->networked ? 2u : 1u))
+    if (render->verbosity < 1u)
         return 0;
     status = snj_json_string(result, "status");
     reason = snj_json_string(result, "reason");
@@ -1724,7 +1725,8 @@ snj_render_tool_finish(struct snj_render *render, const char *name,
                          strcmp(status, "outcome_unknown") == 0)) ||
              (json_is_integer(exit_value) && json_integer_value(exit_value) != 0))
         color = COLOR_ERROR;
-    snj_buf_init(&line, 2u * 1024u * 1024u + 4096u);
+    model_text = snj_json_string(result, "model_text");
+    snj_buf_init(&line, SIZE_MAX);
     if (snj_buf_printf(&line, "← %s  ", tool_label(name)) < 0)
         rc = -1;
     else if (json_is_integer(exit_value)) {
@@ -1751,15 +1753,25 @@ snj_render_tool_finish(struct snj_render *render, const char *name,
                     (unsigned long long)(duration / 1000u),
                     (unsigned long long)((duration % 1000u) / 100u));
     }
-    if (rc == 0 && render->verbosity >= (render->networked ? 3u : 2u)) {
-        struct snj_buf encoded;
-        snj_buf_init(&encoded, 1024u * 1024u);
-        if (snj_json_canonical(result, &encoded) < 0 ||
-            snj_buf_append(&line, "  result: ", 10u) < 0 ||
-            snj_buf_append(&line, encoded.data, encoded.len) < 0 ||
-            snj_buf_putc(&line, '\n') < 0)
+    if (rc == 0 && model_text) {
+        size_t len = json_string_length(json_object_get(result, "model_text"));
+        size_t shown = len;
+
+        if (max_output_bytes && shown > max_output_bytes) {
+            shown = max_output_bytes;
+            while (shown && shown < len &&
+                   ((unsigned char)model_text[shown] & 0xc0u) == 0x80u)
+                --shown;
+        }
+        if (snj_buf_append(&line, "  output:\n", 10u) < 0 ||
+            snj_buf_append(&line, model_text, shown) < 0 ||
+            (shown && model_text[shown - 1u] != '\n' &&
+             snj_buf_putc(&line, '\n') < 0) ||
+            (shown < len &&
+             snj_buf_printf(&line,
+                            "  <%zu output bytes hidden by max_output_bytes>\n",
+                            len - shown) < 0))
             rc = -1;
-        snj_buf_free(&encoded);
     }
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO, color,

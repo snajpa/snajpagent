@@ -311,13 +311,14 @@ test_markdown_streaming(void)
 static size_t
 capture_color(enum snj_color_mode mode, bool networked,
               unsigned int verbosity, int timeout_ms,
-              uint32_t default_timeout_ms,
+              uint32_t default_timeout_ms, uint32_t max_output_bytes,
               char *out, size_t out_size)
 {
     struct snj_render render;
     struct snj_irc_event event;
     struct snj_response_item call;
     json_t *arguments;
+    json_t *result;
     int fds[2];
     int saved;
     ssize_t n;
@@ -347,6 +348,17 @@ capture_color(enum snj_color_mode mode, bool networked,
     assert(snj_render_tool_start(&render, &call, "/tmp",
                                  default_timeout_ms) == 0);
     json_decref(arguments);
+    result = json_object();
+    assert(result != NULL);
+    assert(json_object_set_new(result, "duration_ms", json_integer(12)) == 0);
+    assert(json_object_set_new(result, "exit_code", json_integer(0)) == 0);
+    assert(json_object_set_new(result, "model_text",
+                               json_string("fixture tool output: café\n")) == 0);
+    assert(json_object_set_new(result, "reason", json_null()) == 0);
+    assert(json_object_set_new(result, "status", json_string("succeeded")) == 0);
+    assert(snj_render_tool_finish(&render, call.name, result,
+                                  max_output_bytes) == 0);
+    json_decref(result);
     memset(&event, 0, sizeof(event));
     event.kind = SNJ_IRC_MESSAGE;
     event.timestamp_ms = 1000u;
@@ -444,7 +456,7 @@ main(void)
     assert(snj_render_transport(&render, '>', "bad\rline", 8u) < 0);
     assert(errno == EINVAL);
 
-    assert(capture_color(SNJ_COLOR_ALWAYS, false, 6u, 2500, 0u,
+    assert(capture_color(SNJ_COLOR_ALWAYS, false, 6u, 2500, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[1;36m› \033[0mplain\n") != NULL);
     assert(strstr(output, "\033[1;33msnajpagent: careful\n\033[0m") != NULL);
@@ -453,19 +465,28 @@ main(void)
     assert(strstr(output,
                   "\033[33m→ exec\033[0m  timeout=2500ms  'printf plain'\n") != NULL);
     assert(strstr(output, "\033[1;36magent \033[0m› answer") != NULL);
-    assert(capture_color(SNJ_COLOR_NEVER, true, 6u, -1, 0u,
+    assert(capture_color(SNJ_COLOR_NEVER, true, 6u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strchr(output, '\033') == NULL);
     assert(strstr(output, "→ exec  timeout=none  'printf plain'\n") != NULL);
-    assert(capture_color(SNJ_COLOR_NEVER, false, 1u, -1, 0u,
+    assert(capture_color(SNJ_COLOR_NEVER, false, 1u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strstr(output, "→ exec  timeout=none  'printf plain'\n") != NULL);
-    assert(strstr(output, "  arguments:") == NULL);
-    assert(capture_color(SNJ_COLOR_NEVER, false, 1u, -1, 4000u,
+    assert(strstr(output, "  arguments: {\"command\":\"printf plain\"") != NULL);
+    assert(strstr(output, "  output:\nfixture tool output: café\n") != NULL);
+    assert(capture_color(SNJ_COLOR_NEVER, true, 1u, -1, 0u, 0u,
+                         output, sizeof(output)) > 0u);
+    assert(strstr(output, "→ exec  timeout=none  'printf plain'\n") != NULL);
+    assert(strstr(output, "  arguments:") != NULL);
+    assert(strstr(output, "fixture tool output: café") != NULL);
+    assert(capture_color(SNJ_COLOR_NEVER, false, 1u, -1, 4000u, 8u,
                          output, sizeof(output)) > 0u);
     assert(strstr(output,
                   "→ exec  timeout=4000ms  'printf plain'\n") != NULL);
-    assert(strstr(output, "  arguments:") == NULL);
+    assert(strstr(output, "  arguments:") != NULL);
+    assert(strstr(output, "  output:\nfixture ") != NULL);
+    assert(strstr(output, "output bytes hidden by max_output_bytes") != NULL);
+    assert(strstr(output, "fixture tool output: café") == NULL);
 
     assert(setenv("NO_COLOR", "1", 1) == 0);
     snj_render_init(&render, 0u);

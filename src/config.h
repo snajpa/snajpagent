@@ -66,6 +66,7 @@ struct snj_config {
     uint32_t default_yield_ms;
     uint32_t default_timeout_ms;
     uint32_t max_timeout_ms;
+    uint32_t max_output_bytes;
     char *secret_env[SNJ_CONFIG_SECRET_ENV_MAX];
     size_t secret_env_count;
 };

@@ -379,7 +379,7 @@ test_managed_process_hands_off_on_steering(void)
     bool requested = false;
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
-    args = call_args_yield("sleep 2", cwd, 4000, 3000, NULL);
+    args = call_args_yield("sleep 2", cwd, 4000, 0, NULL);
     assert(snj_json_set_new(args, "pty", json_false()) == 0);
     result = run_tool_with_args_pump("exec_command", args,
                                      handoff_once_pump, &requested);
@@ -419,10 +419,24 @@ test_failure_status(void)
 }
 
 static void
-test_timeout(void)
+test_timeout_hands_off_without_killing(void)
 {
-    json_t *result = run_command("sleep 2", 50);
-    assert(strcmp(snj_json_string(result, "status"), "timed_out") == 0);
+    json_t *result = run_command("sleep 0.15; printf survived", 20);
+    const char *handle;
+    json_t *completed;
+
+    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    assert(strcmp(snj_json_string(result, "reason"), "timeout_handoff") == 0);
+    assert(strstr(snj_json_string(result, "model_text"),
+                  "process continues in the background") != NULL);
+    handle = snj_json_string(result, "handle");
+    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    sleep_ms(250);
+    completed = run_write_stdin_call(handle, "", false, 0);
+    assert(strcmp(snj_json_string(completed, "status"), "succeeded") == 0);
+    assert(strcmp(snj_json_string(json_object_get(completed, "stdout"),
+                                  "retained"), "survived") == 0);
+    json_decref(completed);
     json_decref(result);
 }
 
@@ -438,7 +452,7 @@ test_no_timeout(void)
 }
 
 static void
-test_large_stdout_uses_blocking_child_fd(void)
+test_large_stdout_is_complete_for_model(void)
 {
     json_t *result = run_command(
         "perl -e 'binmode STDOUT; print q{x} x (1024 * 1024) or exit 23'",
@@ -447,8 +461,24 @@ test_large_stdout_uses_blocking_child_fd(void)
 
     assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
     assert(json_int_member(out, "original_bytes") == 1024 * 1024);
-    assert(json_int_member(out, "retained_bytes") > 0);
-    assert(json_int_member(out, "discarded_bytes") > 0);
+    assert(json_int_member(out, "retained_bytes") == 1024 * 1024);
+    assert(json_int_member(out, "discarded_bytes") == 0);
+    assert(strlen(snj_json_string(out, "retained")) == 1024u * 1024u);
+    assert(strlen(snj_json_string(result, "model_text")) > 1024u * 1024u);
+    json_decref(result);
+}
+
+static void
+test_binary_stdout_is_complete_for_model(void)
+{
+    json_t *result = run_command(
+        "perl -e 'binmode STDOUT; print pack(q{C*}, 0, 255)'", 1000);
+    json_t *out = json_object_get(result, "stdout");
+
+    assert(strcmp(snj_json_string(out, "encoding"), "base64") == 0);
+    assert(strcmp(snj_json_string(out, "retained"), "AP8=") == 0);
+    assert(json_int_member(out, "discarded_bytes") == 0);
+    assert(strstr(snj_json_string(result, "model_text"), "AP8=") != NULL);
     json_decref(result);
 }
 
@@ -673,22 +703,30 @@ test_managed_process_close_returns_terminal_result(void)
 }
 
 static void
-test_timeout_kills_process_family(void)
+test_timeout_handoff_preserves_process_family(void)
 {
     char *dir = make_temp_workspace();
     char marker[4096];
     char command[8192];
     json_t *result;
+    json_t *completed;
+    const char *handle;
 
     join_path(marker, sizeof(marker), dir, "leaked.txt");
     assert(snprintf(command, sizeof(command),
                     "(sleep 0.25; printf leaked > '%s') & wait",
                     marker) > 0);
     result = run_command(command, 50);
-    assert(strcmp(snj_json_string(result, "status"), "timed_out") == 0);
-    json_decref(result);
+    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    handle = snj_json_string(result, "handle");
+    assert(handle != NULL);
     sleep_ms(500);
-    assert(access(marker, F_OK) < 0 && errno == ENOENT);
+    completed = run_write_stdin_call(handle, "", false, 0);
+    assert(strcmp(snj_json_string(completed, "status"), "succeeded") == 0);
+    assert(access(marker, F_OK) == 0);
+    assert(unlink(marker) == 0);
+    json_decref(completed);
+    json_decref(result);
     assert(rmdir(dir) == 0);
     free(dir);
 }
@@ -1001,10 +1039,11 @@ main(void)
 {
     test_success_and_streams();
     test_failure_status();
-    test_timeout();
+    test_timeout_hands_off_without_killing();
     test_no_timeout();
-    test_timeout_kills_process_family();
-    test_large_stdout_uses_blocking_child_fd();
+    test_timeout_handoff_preserves_process_family();
+    test_large_stdout_is_complete_for_model();
+    test_binary_stdout_is_complete_for_model();
     test_stdin_uses_blocking_child_fd();
     test_pty_merges_stdout_and_stderr();
     test_managed_pty_write_stdin_completes();

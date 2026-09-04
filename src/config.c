@@ -117,6 +117,7 @@ snj_config_init(struct snj_config *config)
     config->default_yield_ms = 10000u;
     config->default_timeout_ms = 0u;
     config->max_timeout_ms = 86400000u;
+    config->max_output_bytes = 0u;
 }
 
 void
@@ -543,14 +544,17 @@ parse_tool(struct parse_state *state, const char *key, const char *value)
                parse_u32(value, 0u, 600000u, &config->default_yield_ms);
     if (strcmp(key, "default_timeout_ms") == 0)
         return claim_key(state, 2u) < 0 ? -1 :
-               parse_u32(value, 0u, 86400000u,
+               parse_u32(value, 0u, UINT32_MAX,
                          &config->default_timeout_ms);
     if (strcmp(key, "max_timeout_ms") == 0)
         return claim_key(state, 3u) < 0 ? -1 :
-               parse_u32(value, 1000u, 86400000u, &config->max_timeout_ms);
+               parse_u32(value, 1u, UINT32_MAX, &config->max_timeout_ms);
     if (strcmp(key, "secret_env") == 0)
         return claim_key(state, 4u) < 0 ? -1 :
                parse_secret_env(config, value);
+    if (strcmp(key, "max_output_bytes") == 0)
+        return claim_key(state, 5u) < 0 ? -1 :
+               parse_u32(value, 0u, UINT32_MAX, &config->max_output_bytes);
 invalid:
     errno = EINVAL;
     return -1;
