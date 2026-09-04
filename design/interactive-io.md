@@ -9,7 +9,9 @@ the terminal, and how users inspect and modify queued turns.
 
 - Public model text is soft-wrapped at word boundaries to the current terminal
   width. Explicit model newlines remain explicit, and a single word wider than
-  the terminal may hard-wrap.
+  the terminal may hard-wrap. Trailing punctuation stays with the preceding
+  text; hyphens, dashes, periods, commas, and similar closing punctuation make
+  the next character a wrap opportunity rather than beginning a wrapped line.
 - Every complete UTF-8 provider delta becomes visible before its delivery
   callback returns. Word-wrap lookahead must not retain the newest word until
   another delta or response completion. If a provider divides one word across
@@ -17,7 +19,8 @@ the terminal, and how users inspect and modify queued turns.
   contiguous and may use the terminal's hard wrap if it reaches the margin.
 - Wrapping is a terminal presentation detail. Stored response text, partial
   response events, redirected output, and provider protocol data remain byte
-  exact and do not gain presentation newlines.
+  exact and do not gain presentation newlines. Markdown-enabled and literal
+  terminal output use this same wrapping implementation.
 - While a turn is active, the first edit after visible model output starts the
   `steer › ` composer on a new terminal line immediately.
 - Visible model output pauses while the user is editing. Each edit restarts the

@@ -56,7 +56,9 @@ incomplete UTF-8 sequence or a syntax-only delimiter/prefix may remain pending.
 The renderer resets and reapplies active attributes around each terminal write
 so composer redraws, status transitions, errors, and later output cannot inherit
 model styling. Existing word wrapping, exact-margin handling, typing pauses,
-and stream abort behavior remain in force.
+and stream abort behavior remain in force. Markdown text and literal terminal
+text share the same punctuation-aware wrapping path; Markdown does not carry a
+separate word-break implementation.
 
 Networked final answers are intentionally buffered before being sent to IRC.
 When those local or remote non-operator messages are painted in the scrolling

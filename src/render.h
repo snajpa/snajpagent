@@ -75,6 +75,7 @@ struct snj_render {
     bool wrap_has_word;
     bool wrap_continuation;
     bool wrap_word_open;
+    bool wrap_break_open;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
     struct snj_markdown_state markdown_state;

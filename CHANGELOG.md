@@ -4,6 +4,10 @@
 
 ## 0.9.0-wip
 
+- Made terminal wrapping keep trailing punctuation on the preceding line and
+  use hyphens, dashes, periods, commas, and similar closing punctuation as the
+  following wrap opportunity through one shared Markdown/literal code path.
+
 - Added Codex-style bullets and visible separation to terminal model prose.
   Each paragraph starts with `• `, while wrapped continuation lines stay
   flush-left and stored, provider, redirected, and IRC bytes remain unchanged.

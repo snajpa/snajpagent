@@ -61,10 +61,11 @@ drain_available(int fd, char *out, size_t out_size, size_t used)
 }
 
 static size_t
-capture_wrapped(char *out, size_t out_size, struct snj_buf *delivered)
+capture_wrapped(const char *first, const char *second, unsigned int columns,
+                bool markdown, const char *first_output,
+                const char *second_output, char *out, size_t out_size,
+                struct snj_buf *delivered)
 {
-    static const char first[] = "alpha beta gamm";
-    static const char second[] = "a delta";
     struct snj_render render;
     struct snj_term term;
     int fds[2];
@@ -79,17 +80,18 @@ capture_wrapped(char *out, size_t out_size, struct snj_buf *delivered)
     assert(dup2(fds[1], STDOUT_FILENO) >= 0);
     close(fds[1]);
     snj_term_init(&term);
-    term.columns = 20u;
+    term.columns = columns;
     snj_render_init(&render, 0u);
     render.stdout_terminal = true;
+    snj_render_set_markdown(&render, markdown);
     snj_render_attach_term(&render, &term);
     assert(snj_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
-    assert(snj_render_public(&render, first, sizeof(first) - 1u, delivered) == 0);
+    assert(snj_render_public(&render, first, strlen(first), delivered) == 0);
     used = drain_available(fds[0], out, out_size, used);
-    assert(strcmp(out, "• alpha beta gamm") == 0);
-    assert(snj_render_public(&render, second, sizeof(second) - 1u, delivered) == 0);
+    assert(strcmp(out, first_output) == 0);
+    assert(snj_render_public(&render, second, strlen(second), delivered) == 0);
     used = drain_available(fds[0], out, out_size, used);
-    assert(strcmp(out, "• alpha beta gamma\ndelta") == 0);
+    assert(strcmp(out, second_output) == 0);
     assert(snj_render_public_end(&render) == 0);
     assert(dup2(saved, STDOUT_FILENO) >= 0);
     close(saved);
@@ -100,6 +102,65 @@ capture_wrapped(char *out, size_t out_size, struct snj_buf *delivered)
     out[used] = '\0';
     snj_term_close(&term);
     return used;
+}
+
+static void
+test_punctuation_wrapping(void)
+{
+    static const char *const punctuation[] = {
+        "-", ",", ".", ";", ":", "!", "?", "/", ")", "]", "}",
+        "..", "\")",
+        "\xe2\x80\x90", "\xe2\x80\x92", "\xe2\x80\x93",
+        "\xe2\x80\x94", "\xe2\x80\xa6"
+    };
+    static const char first[] = "1234567890 word";
+    char second[32];
+    char first_output[64];
+    char second_output[128];
+    char delivered_output[128];
+    char output[256];
+
+    for (size_t enabled = 0u; enabled < 2u; ++enabled) {
+        const char *prefix = enabled ? "• " : "";
+
+        assert(snprintf(first_output, sizeof(first_output), "%s%s",
+                        prefix, first) > 0);
+        for (size_t i = 0u; i < sizeof(punctuation) / sizeof(punctuation[0]);
+             ++i) {
+            struct snj_buf delivered;
+
+            assert(snprintf(second, sizeof(second), "%smores",
+                            punctuation[i]) > 0);
+            assert(snprintf(second_output, sizeof(second_output),
+                            "%s%s%s\nmores", prefix, first,
+                            punctuation[i]) > 0);
+            assert(snprintf(delivered_output, sizeof(delivered_output),
+                            "%s%smores", first, punctuation[i]) > 0);
+            snj_buf_init(&delivered, sizeof(delivered_output));
+            assert(capture_wrapped(first, second, 20u, enabled != 0u,
+                                   first_output, second_output, output,
+                                   sizeof(output), &delivered) > 0u);
+            assert(snj_buf_terminate(&delivered) == 0);
+            assert(strcmp((const char *)delivered.data, delivered_output) == 0);
+            snj_buf_free(&delivered);
+        }
+        {
+            struct snj_buf delivered;
+
+            assert(snprintf(first_output, sizeof(first_output),
+                            "%s1234567890 ", prefix) > 0);
+            assert(snprintf(second_output, sizeof(second_output),
+                            "%s1234567890 \n-something", prefix) > 0);
+            snj_buf_init(&delivered, 32u);
+            assert(capture_wrapped("1234567890 ", "-something", 20u,
+                                   enabled != 0u, first_output, second_output,
+                                   output, sizeof(output), &delivered) > 0u);
+            assert(snj_buf_terminate(&delivered) == 0);
+            assert(strcmp((const char *)delivered.data,
+                          "1234567890 -something") == 0);
+            snj_buf_free(&delivered);
+        }
+    }
 }
 
 static size_t
@@ -418,12 +479,15 @@ main(void)
     assert(strstr(output, "> POST https://example.test\n"));
 
     snj_buf_init(&delivered, 1024u);
-    assert(capture_wrapped(output, sizeof(output), &delivered) > 0u);
+    assert(capture_wrapped("alpha beta gamm", "a delta", 20u, true,
+                           "• alpha beta gamm", "• alpha beta gamma\ndelta",
+                           output, sizeof(output), &delivered) > 0u);
     assert(strcmp(output, "• alpha beta gamma\ndelta") == 0);
     assert(snj_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data,
                   "alpha beta gamma delta") == 0);
     snj_buf_free(&delivered);
+    test_punctuation_wrapping();
 
     snj_buf_init(&delivered, sizeof(markdown));
     assert(capture_markdown(markdown, true, true, SNJ_COLOR_NEVER,

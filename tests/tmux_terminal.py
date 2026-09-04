@@ -22,7 +22,7 @@ LIVE_PROMPT = (
     "vpsadminos kernel 6.12.95"
 )
 RENDER_TEXT = (
-    "alpha beta gamma delta epsilon zeta eta theta\n"
+    "alpha beta gamma delta-extraordinary zeta eta theta\n"
     "explicit café € line\n"
     "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ "
     "tail control:\x1b[31m"
@@ -465,11 +465,10 @@ def run_status_case(binary, root):
             raise AssertionError(f"activity redraw erased streamed text:\n{middle}")
         if "working…" in middle:
             raise AssertionError(f"activity status interrupted a public item:\n{middle}")
-        final = terminal.wait("status-second-fragment", timeout=3.0,
+        final = terminal.wait("status-second-\nfragment", timeout=3.0,
                               join_wrapped=True)
-        if ("status-first-fragment status-second-fragment" not in
-                normalize_space(final)):
-            raise AssertionError(f"streamed status output was mangled:\n{final}")
+        assert_order(final, ["status-first-fragment", "status-second-",
+                             "fragment"])
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
         completed = event_list(events, "response_completed")
         expected = "status-first-fragment status-second-fragment"
@@ -679,12 +678,15 @@ def run_render_case(binary, root):
     try:
         terminal.wait("\n›")
         terminal.submit("terminal_render")
-        terminal.wait("alpha beta gamma delta epsilon")
+        terminal.wait("alpha beta gamma delta-")
         terminal.send_text("draft")
         first = terminal.wait("steer › draft")
-        assert_order(first, ["alpha beta gamma delta epsilon", "steer › draft"])
+        assert_order(first, ["alpha beta gamma delta-", "extraordinary",
+                             "steer › draft"])
         if re.search(r"(?m)^• alpha beta gamma", first) is None:
             raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
+        if "• alpha beta gamma delta-\nextraordinary" not in first:
+            raise AssertionError(f"hyphen wrapped on its left side:\n{first}")
 
         time.sleep(0.1)
         pause_started = time.monotonic()
@@ -743,7 +745,8 @@ def run_render_case(binary, root):
         assert_order(
             joined,
             [
-                "alpha beta gamma delta epsilon",
+                "alpha beta gamma delta-",
+                "extraordinary",
                 "steer › draft plus",
                 "explicit café € line",
                 "steer › draft plus again with long resize text",
@@ -751,7 +754,7 @@ def run_render_case(binary, root):
                 "control:\\x1B[31m",
             ],
         )
-        if "alpha beta gamma delta epsilon zeta" in final:
+        if "alpha beta gamma delta-extraordinary" in final:
             raise AssertionError("model output was hard-wrapped instead of word-wrapped")
         completed = event_list(events, "response_completed")
         if len(completed) != 1 or completed[0]["data"]["items"][0]["text"] != RENDER_TEXT:

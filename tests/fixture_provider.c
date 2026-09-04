@@ -469,7 +469,7 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         return 0;
     if (strcmp(prompt, "terminal_render") == 0) {
         static const char first[] =
-            "alpha beta gamma delta epsilon ";
+            "alpha beta gamma delta-extraordinary ";
         static const char second_prefix[] =
             "zeta eta theta\nexplicit café ";
         static const char euro_first[] = "\xe2";
@@ -478,7 +478,7 @@ snj_fixture_response(const char *prompt, const json_t *steering,
             "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ "
             "tail control:\x1b[31m";
         static const char full[] =
-            "alpha beta gamma delta epsilon "
+            "alpha beta gamma delta-extraordinary "
             "zeta eta theta\nexplicit café € line\n"
             "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ "
             "tail control:\x1b[31m";

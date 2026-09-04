@@ -273,7 +273,9 @@ presentation layer only: redirected output, provider input, durable events,
 and IRC frames retain the model's exact bytes. Disabling color keeps Markdown's
 structural rendering while removing its attributes. Prose paragraphs receive a
 `• ` prefix and an empty row between paragraphs; wrapped continuation lines
-start at the left margin without a hanging indent.
+start at the left margin without a hanging indent. Terminal wrapping keeps
+trailing punctuation with the preceding text and breaks after hyphens, dashes,
+periods, commas, and similar closing punctuation in both Markdown modes.
 
 ## Configuration
 

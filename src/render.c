@@ -394,6 +394,7 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
     render->wrap_has_word = false;
     render->wrap_continuation = false;
     render->wrap_word_open = false;
+    render->wrap_break_open = false;
     memset(&render->markdown_state, 0, sizeof(render->markdown_state));
     if (render->public_column == SIZE_MAX)
         goto fail;
@@ -563,6 +564,21 @@ flush_wrap_pending(struct snj_render *render)
     return 0;
 }
 
+static bool
+wrap_break_after(const unsigned char *text, size_t len)
+{
+    if (len == 1u)
+        return text[0] != '\0' &&
+               strchr("\"-,.;:!?/)]}", (int)text[0]) != NULL;
+    if (len != 3u)
+        return false;
+    return memcmp(text, "\xe2\x80\x90", 3u) == 0 ||
+           memcmp(text, "\xe2\x80\x92", 3u) == 0 ||
+           memcmp(text, "\xe2\x80\x93", 3u) == 0 ||
+           memcmp(text, "\xe2\x80\x94", 3u) == 0 ||
+           memcmp(text, "\xe2\x80\xa6", 3u) == 0;
+}
+
 static int
 write_wrapped(struct snj_render *render, const unsigned char *text, size_t len)
 {
@@ -581,20 +597,34 @@ write_wrapped(struct snj_render *render, const unsigned char *text, size_t len)
                 return -1;
             render->public_column = 0u;
             render->wrap_word_open = false;
+            render->wrap_break_open = false;
         } else {
             bool space = text[i] == ' ' || text[i] == '\t';
+            bool punctuation = !space && wrap_break_after(text + i, n);
+            bool break_after = punctuation &&
+                               (render->wrap_word_open ||
+                                render->wrap_break_open);
 
             if (space && render->wrap_has_word &&
                 flush_wrap_pending(render) < 0)
                 return -1;
             if (!space && !render->wrap_has_word) {
-                render->wrap_continuation = render->wrap_word_open &&
-                                            render->wrap_pending.len == 0u;
+                render->wrap_continuation =
+                    (render->wrap_word_open || break_after) &&
+                    render->wrap_pending.len == 0u;
                 render->wrap_has_word = true;
             }
             if (snj_buf_append(&render->wrap_pending, text + i, n) < 0)
                 return -1;
-            render->wrap_word_open = !space;
+            if (break_after) {
+                if (flush_wrap_pending(render) < 0)
+                    return -1;
+                render->wrap_word_open = false;
+                render->wrap_break_open = true;
+            } else {
+                render->wrap_word_open = !space;
+                render->wrap_break_open = false;
+            }
         }
         i += n;
     }
@@ -1263,6 +1293,7 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     render->wrap_has_word = false;
     render->wrap_continuation = false;
     render->wrap_word_open = false;
+    render->wrap_break_open = false;
     snj_buf_free(&render->wrap_pending);
     if (fd == STDOUT_FILENO && had_bytes) {
         render->stdout_item_seen = true;
