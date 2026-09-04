@@ -286,10 +286,13 @@ clean:
 	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN)
 	rm -rf tests/.fixture-obj build
 
-install: $(BIN)
+install: $(BIN) $(BIN).1
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	cp $(BIN) $(DESTDIR)$(PREFIX)/bin/$(BIN)
 	chmod 0755 $(DESTDIR)$(PREFIX)/bin/$(BIN)
+	mkdir -p $(DESTDIR)$(MANPREFIX)/man1
+	cp $(BIN).1 $(DESTDIR)$(MANPREFIX)/man1/$(BIN).1
+	chmod 0644 $(DESTDIR)$(MANPREFIX)/man1/$(BIN).1
 
 FORCE:
 

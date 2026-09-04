@@ -1,0 +1,787 @@
+.\" SPDX-License-Identifier: GPL-2.0-only
+.TH SNAJPAGENT 1 "September 2026" "snajpagent 0.98" "User Commands"
+.SH NAME
+snajpagent \- fast, lightweight, networked coding agent
+.SH SYNOPSIS
+.B snajpagent
+.RI [ options ]
+.RI [ \-\- ]
+.RI [ initial-prompt ...]
+.br
+.B snajpagent \-\-resume
+.RI [ options ]
+.RI [ session-id | \-\-last ]
+.RI [ \-\- follow-up ...]
+.br
+.B snajpagent \-e
+.RI [ options ]
+.RI [ \-\- prompt ...]
+.br
+.B snajpagent \-l
+.RI [ options ]
+.SH DESCRIPTION
+.B snajpagent
+is a foreground terminal coding agent for OpenAI-compatible Responses
+providers.  It streams model output, runs a small set of coding tools, keeps
+append-only local sessions, and resumes them without a resident service.
+.PP
+Networked mode adds a built-in single-room IRC server and up to 16 outgoing
+IRC connections.  Agents and channel operators share the room; the runtime
+owns joining, history, and reconnection.
+.SH GETTING STARTED
+Create
+.IR $HOME/.snajpagent/config.ini :
+.PP
+.nf
+[agent]
+provider = openai
+model = gpt-5.5
+reasoning_effort = medium
+
+[provider openai]
+base_url = https://api.openai.com
+api_key_env = OPENAI_API_KEY
+.fi
+.PP
+Export the named credential, change to the project directory, and run:
+.PP
+.nf
+export OPENAI_API_KEY=...
+snajpagent
+.fi
+.PP
+Enter submits a turn.  Type
+.B /help
+for commands and keys.
+.SH OPTIONS
+.TP
+.BR \-s " [" endpoint "]", " \-\-listen" [= endpoint ]
+Host the built-in IRC server in this foreground process and select its
+listener.  This does not detach.  A missing endpoint means
+.BR localhost:6667 .
+.TP
+.BR \-c " [" endpoint "]", " \-\-client" [= endpoint ]
+Add an outgoing IRC connection.  Repeat for up to 16 distinct endpoints.  A
+missing endpoint means
+.BR localhost:6667 .
+.TP
+.BI \-n " nick, " \-\-model-nick " nick"
+Set the model's IRC nick.  Required when any network role is enabled.
+.TP
+.BI \-o " nick, " \-\-operator-nick " nick"
+Set the local operator's IRC nick.  The default is a valid
+.B USER
+value, then
+.BR operator ,
+or
+.B localop
+when needed to remain distinct from the model nick.
+.TP
+.BI \-r " room, " \-\-room-name " room"
+Set the hosted room.  This requires
+.BR \-s / \-\-listen .
+A leading
+.B #
+is optional.  The default is derived from the hostname.
+.TP
+.BI \-C " directory"
+Use an existing directory as the workspace.  With
+.BR \-\-resume ,
+relocate the resumed session to it.
+.TP
+.BI \-m " model"
+Override the next model.  On resume this is a one-turn override unless selected
+again in the session.
+.TP
+.BI \-\-effort " level"
+Override reasoning effort.  On resume this is a one-turn override.
+.TP
+.BI \-\-dotdir " directory"
+Use an absolute private application directory instead of
+.IR $HOME/.snajpagent .
+.TP
+.BI \-\-config " file"
+Read an absolute configuration path.  This does not move sessions or the model
+cache.  Unlike the default path, an explicit file must exist.
+.TP
+.BR \-v
+Increase configured verbosity by one, to a maximum of 6.  Repeat as needed.
+Level 1 shows every tool call, arguments, state, configured result display, and
+local model replies in network chat.  Higher levels add commentary, runtime,
+durable event, sanitized protocol, and transport detail.
+.TP
+.BR \-\-color [= when ]
+Set color to
+.BR auto ,
+.BR always ,
+or
+.BR never .
+Bare
+.B \-\-color
+means
+.BR always .
+The value may follow a space or
+.BR = .
+.TP
+.BR \-\-no-color
+Equivalent to
+.BR \-\-color=never .
+.TP
+.BR \-\-markdown
+Render supported model Markdown on terminals.  This is the default.
+.TP
+.BR \-\-no-markdown
+Show model Markdown literally.
+.TP
+.BR \-\-resume " [" session-id "]"
+Resume a durable session.  Without an ID or
+.BR \-\-last ,
+interactively select an active session in the current workspace.
+.TP
+.BR \-\-last
+Resume the most recently used matching active session.  Requires
+.BR \-\-resume .
+.TP
+.BR \-\-all
+Include other workspaces.  With
+.BR \-l ,
+also include archived sessions.  With
+.BR \-\-resume ,
+it applies to selection and cannot accompany an exact ID.
+.TP
+.BR \-e
+Execute one turn and exit.  The prompt must follow
+.B \-\-
+or arrive on non-terminal standard input.  Network options are not accepted.
+.TP
+.BR \-l
+List sessions and exit.  Only
+.BR \-\-all ,
+.BR \-\-dotdir ,
+.BR \-\-config ,
+color options, and Markdown presentation options may accompany it.  Markdown
+presentation has no useful effect on session-list output.
+.TP
+.BR \-h
+Print short help and exit.  It must stand alone.
+.TP
+.BR \-V
+Print build identity and exit.  It must stand alone.
+.PP
+An endpoint is
+.IR host ,
+.IR host:port ,
+.IR [IPv6] ,
+or
+.IR [IPv6]:port .
+The default port is 6667.  In networked mode initial chat text must follow
+.BR \-\- .
+.SH INTERACTIVE INPUT
+.TP
+.B Enter
+Submit while idle.  During model generation, submit immediate steering at the
+next safe boundary.  A running command is handed back alive; it is not killed.
+.TP
+.B Tab
+Complete a slash command when possible.  While idle, otherwise insert spaces.
+During a turn, queue the draft for a later FIFO turn.  Empty Tab switches chat
+and rollout views in networked mode and does nothing otherwise.
+.TP
+.B Ctrl-J
+Insert a newline without submitting.
+.TP
+.B Ctrl-C
+Clear a nonempty draft.  With an empty active composer, interrupt the turn.
+With an empty idle composer, exit.  Five consecutive presses completed within
+two seconds exit from any composer state; during an active turn, the fifth also
+interrupts the turn for normal durable cleanup.
+.TP
+.B Ctrl-D
+Delete at the cursor when text remains; close input and exit on an empty draft.
+.TP
+.BR Up , " Down"
+Move through local input history.
+.TP
+.BR Left , " Right" , " Home" , " End" , " Delete" , " Backspace"
+Edit the UTF-8 draft.
+.TP
+.B Ctrl-U
+Clear the draft.
+.TP
+.B Ctrl-W
+Delete the preceding word.
+.TP
+.B Ctrl-L
+Clear and redraw the terminal.
+.TP
+.B Ctrl-Z
+Suspend after restoring normal terminal state; redraw after continuation.
+.PP
+During output, editing opens a live composer without stopping the provider.
+Visible output resumes after
+.B typing_pause_ms
+of inactivity.  Bracketed paste inserts pasted newlines without submitting.
+.PP
+The ordinary prompt shows model, effort, context percentage, and an idle or
+active chevron.  The percentage is the latest comparable durable token bound
+divided by the resolved hard input budget, rounded up.  A fresh or incomparable
+state shows
+.BR 0% ;
+an unknown budget shows
+.BR ?% .
+.PP
+Terminal model text uses color and compact Markdown presentation when enabled.
+Headings, lists, quotes, fenced code, pipe tables, inline code, emphasis,
+strikethrough, and links are supported.  Pipe tables align as a grid when they
+fit and become labeled rows on narrow terminals.  Redirected and durable text
+retains the model's exact bytes.
+.PP
+Top-level prose paragraphs are bulleted.  Prompts and model blocks have one
+empty row between them; generated prose wraps align below the paragraph text.
+.SH COMMANDS
+.TP
+.BR /help , " /?"
+Show commands and essential keys.
+.TP
+.B /status
+Show session, selection, queue, verbosity, capacity, and token-accounting state.
+.TP
+.B /history
+Show the most recent retained user and assistant exchange.
+.TP
+.BR /model " [list]"
+Read the local provider/model catalog.  No provider request is made.
+.TP
+.B /model cache
+Refresh every configured provider through its authenticated model endpoint,
+replace the cache atomically, and display it.  A normalized API path ending in
+.B /backend-api/codex
+uses
+.BR /models?client_version=0.146.0 ;
+other providers use
+.BR /v1/models .
+There is no automatic refresh or fallback between protocols.  Catalog limits
+apply only while their source URL and protocol still match.  Idle only.
+.TP
+.BR /model " " number ", " /model " #" number
+Select an exact displayed provider/model/effort row.
+.TP
+.BI /model " selector" " [save|s]"
+Select
+.IR model ,
+.IR "model / effort" ,
+or
+.IR "provider / model / effort" .
+A final
+.B save
+or
+.B s
+writes the selection to the active configuration.  Typed model IDs need not
+exist in the cache.  Use a numbered row for an ID containing
+.BR / .
+Selection is idle only.
+.TP
+.B /config
+Open the active configuration with
+.BR EDITOR .
+Changed valid content is reloaded atomically; invalid content remains on disk
+while the prior runtime configuration stays active.  Idle only.
+.TP
+.BR /effort " [" level "]"
+Show or set reasoning effort.  Setting is idle only.
+.TP
+.BR /verbose " [0..6]"
+Show or set this process's current verbosity.
+.TP
+.BR /goal , " /goal status"
+Show the durable goal.
+.TP
+.BI /goal " text"
+Start a goal, or reword the unfinished goal.  Quote the text or use
+.B /goal set
+when its first word is a goal command.
+.TP
+.BI /goal " set text"
+Explicitly start or reword a goal.
+.TP
+.B /goal pause
+Pause automatic continuation at the current turn boundary.
+.TP
+.B /goal resume
+Resume a paused or blocked goal.
+.TP
+.BR /goal " lock|unlock"
+Deny or permit model-authored wording changes.  Operator rewording remains
+available.
+.TP
+.BR /goal " complete|cancel"
+End the current goal from the operator side.
+.TP
+.B /goal help
+Show the complete goal grammar.
+.TP
+.BR /queue , " /q"
+List future FIFO turns.
+.TP
+.BI /queue " text"
+Queue text during an active turn.  Tab is the direct equivalent for a draft.
+.TP
+.BR /queue " clear|pop, " /q " c|p"
+Remove all queued turns or the newest one.
+.TP
+.BI /queue " n delete, " /q " n" d
+Delete queued item
+.IR n .
+.TP
+.BI /queue " n edit, " /q " n" e
+Reopen queued item
+.I n
+in the composer.
+.TP
+.B /next
+Run the oldest queued turn after resume or another paused state.
+.TP
+.B /archive
+Mark the idle session archived and exit.  Exact resume can unarchive it.
+.TP
+.B /compact
+Compact idle model context and retain the full local event log.
+.TP
+.B /delete
+Confirm with the displayed session prefix, move the idle session through trash,
+and remove it.
+.TP
+.B /exit
+Preserve the session and exit.
+.TP
+.B /chat
+Select the network chat transcript.
+.TP
+.B /rollout
+Select local model activity.
+.TP
+.BR /topic " [" text "]"
+Show the IRC snapshot, or change the hosted room topic as the local operator.
+.TP
+.B /names
+Show endpoints, members, and channel-operator flags.
+.PP
+In networked mode ordinary text goes to the room and the local model.  Prefix
+text with
+.B //
+to send a message beginning with a literal
+.BR / .
+.SH CONFIGURATION
+The file is UTF-8 INI syntax with
+.B #
+or
+.B ;
+comments.  Unknown sections, unknown keys, duplicate scalar keys, invalid
+values, and files over 64 KiB are errors.  Command-line values override file
+values.  Defaults below are built in.
+.SS agent
+.TP
+.B provider
+Provider for new sessions.  Default: first configured provider.
+.TP
+.B model
+Model for new sessions.  Default: the compiled model.
+.TP
+.B reasoning_effort
+Default effort.  The value
+.B default
+resolves to
+.BR medium .
+.TP
+.B max_goal_prompt_bytes
+Goal wording limit, 1 through 1048576.  Default: 262144.
+.TP
+.B read_agents_md
+Read global and project
+.B AGENTS.override.md
+or
+.B AGENTS.md
+instructions before each turn.  Default:
+.BR true .
+.SS "provider NAME"
+Up to 16 ordered named sections are accepted.  The spelling
+.B [provider]
+defines the name
+.BR default .
+.TP
+.B base_url
+HTTP or HTTPS API base without query or fragment.  Default:
+.BR https://api.openai.com .
+.TP
+.B api_key_env
+Credential environment-variable name.  Default:
+.BR OPENAI_API_KEY .
+.TP
+.B connect_timeout_ms
+Connect timeout, 1000 through 120000.  Default: 30000.
+.TP
+.B idle_timeout_ms
+No-data timeout, 1000 through 600000.  Default: 120000.
+.TP
+.B request_timeout_ms
+Whole-request timeout, 1000 through 3600000.  Default: 1800000.
+.TP
+.B auto_compact_input_tokens
+Proactive input threshold, 0 through 4000000.  Zero disables proactive policy,
+not the hard capacity guard.  Default: 120000.
+.TP
+.B exact_token_count
+Use the provider's token-count endpoint.  Default:
+.BR true .
+.TP
+.B native_compaction
+Use the provider's native compaction endpoint.  Default:
+.BR true .
+.TP
+.B openrouter_referer
+Optional printable ASCII
+.B HTTP-Referer
+value.
+.TP
+.B openrouter_title
+Optional printable ASCII
+.B X-Title
+value.
+.SS "model-limit PROVIDER/MODEL"
+An exact operator capacity override.  Set at least one of:
+.TP
+.B context_window_tokens
+Total context tokens, 1 through 4000000000.
+.TP
+.B max_input_tokens
+Maximum input tokens, 1 through 4000000000.
+.TP
+.B max_output_tokens
+Maximum output tokens, 1 through 4000000000.
+.PP
+Known values must be internally consistent.  A matching override takes
+precedence over source-bound catalog limits.
+.SS ui
+.TP
+.B verbosity
+Initial level, 0 through 6.  Default: 0.
+.TP
+.B color
+.BR auto ,
+.BR always ,
+or
+.BR never .
+Default:
+.BR auto .
+.TP
+.B markdown
+Render supported terminal Markdown.  Default:
+.BR true .
+.TP
+.B resume_history_turns
+Resume-history switch, parsed from 0 through 100.  Zero disables display; any
+nonzero value shows the single most recent retained user and assistant
+exchange.  Default: 2.  Network chat shows it only from verbosity 1.
+.TP
+.B typing_pause_ms
+Output pause after an input edit, 0 through 5000.  Default: 500.
+.SS tool
+.TP
+.B shell
+Absolute executable used by
+.BR exec_command .
+Default:
+.BR /bin/sh .
+.TP
+.B default_yield_ms
+Default initial yield interval, 0 through 600000.  Default: 10000.
+.TP
+.B default_timeout_ms
+Foreground handoff deadline when the model supplies none, 0 through 4294967295.
+Zero means no deadline.  Default: 0.
+.TP
+.B max_timeout_ms
+Maximum positive model deadline, 1 through 4294967295.  Default: 86400000.
+.TP
+.B default_max_output_tokens
+Default command-result context bound when a tool call selects
+.BR null ,
+1 through 4000000000.  Default: 4000.
+.TP
+.B max_output_bytes
+Maximum result bytes displayed per tool call.  Zero means unlimited.  The
+durable session retains complete redacted output; model context has its own
+tool-call bound.  Default: 0.
+.TP
+.B secret_env
+Comma-separated environment names removed from tool children and redacted from
+captured output.  Up to 64 unique names; empty clears the list.
+.SS irc
+.TP
+.B listen
+Enable the server and set its listener.  Absent by default.  A bare command-line
+.BR \-s
+uses
+.BR localhost:6667 .
+.TP
+.B client
+Outgoing endpoint.  Repeat up to 16 times.
+.TP
+.B model_nick
+Required model nick when networking is enabled.
+.TP
+.B operator_nick
+Local operator nick.  Default: valid
+.BR USER ,
+then
+.BR operator .
+.TP
+.B room_name
+Hosted room.  Default: hostname.
+.TP
+.B history_lines
+Server and snapshot history, 1 through 1000.  Default: 200.
+.SH FILES
+.TP
+.I $HOME/.snajpagent/config.ini
+Default configuration.
+.TP
+.I $HOME/.snajpagent/models.json
+Atomically replaced provider catalog.  Refresh only with
+.BR /model\ cache .
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/events.jsonl
+Append-only durable session log.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/lock
+Live session lock.
+.TP
+.I $HOME/.snajpagent/trash/
+Private deletion staging.
+.TP
+.IR $XDG_CONFIG_HOME/snajpagent/AGENTS.override.md ", "
+.I $XDG_CONFIG_HOME/snajpagent/AGENTS.md
+Optional global instructions.  If
+.B XDG_CONFIG_HOME
+is unset, use
+.IR $HOME/.config .
+.PP
+Project instructions are discovered from the repository root through the
+workspace.  In each directory,
+.B AGENTS.override.md
+takes precedence over
+.BR AGENTS.md .
+.SH ENVIRONMENT
+.TP
+.B HOME
+Builds the default dotdir and fallback global-instruction path.
+.TP
+.B XDG_CONFIG_HOME
+Selects the global-instruction directory.  It must be absolute.
+.TP
+.B EDITOR
+Command used by
+.BR /config .
+.TP
+.B USER
+Supplies the default operator nick when valid and distinct.
+.TP
+.B NO_COLOR
+Disables color in
+.B auto
+mode when present.
+.TP
+.B TERM
+Enables terminal capabilities and color detection.
+.TP
+.BR LC_CTYPE , " LANG"
+Must select a UTF-8 locale.
+.TP
+.B PATH
+Used to resolve the executable path printed in a resume command.
+.TP
+.I api_key_env
+Each provider names its credential variable.  It must contain a nonempty value
+within the supported bound.
+.TP
+.I secret_env
+Names additional variables hidden from tool children and redacted from output.
+.SH AUTOMATION AND INTEGRATION
+Use
+.B \-e
+for scripts.  A prompt after
+.B \-\-
+preserves shell argument boundaries as spaces; a prompt from non-terminal stdin
+preserves internal newlines and removes one final LF or CRLF.
+.PP
+Standard output carries one-shot model text.  Diagnostics and the resume hint
+use standard error.  Redirected model text remains byte-exact and contains no
+terminal color or Markdown presentation.
+.PP
+The coding-tool surface is
+.BR exec_command ,
+.BR write_stdin ,
+and
+.BR apply_patch .
+Commands that yield, reach a foreground handoff deadline, or receive urgent
+input continue under a process handle; the model can wait, interact, or
+explicitly terminate them with
+.BR write_stdin .
+.PP
+Every
+.B exec_command
+and
+.B write_stdin
+call selects a positive
+.B max_output_tokens
+context bound or
+.B null
+for
+.BR default_max_output_tokens .
+The bound is persisted with the result and conservatively enforced as at most
+one token per retained UTF-8 byte.  Truncated context retains bounded
+provenance; the complete redacted output remains in the durable event.
+Hosted web search is a provider tool.  Networked mode adds
+.BR irc_send ,
+.BR irc_state ,
+and privilege-checked
+.BR irc_topic .
+.PP
+IRC is the network integration.  The event log is durable internal state, not
+a stable external API while snajpagent remains pre-1.0.
+.SH IRC MODE
+Listener mode creates one room.  Its default name is the hostname and its initial
+topic is the server agent's absolute launch workspace.  snajpagent clients join
+the advertised room automatically.
+.PP
+The local operator and ordinary IRC clients receive channel mode
+.BR +o ;
+the model nick does not.  Current channel operators may change the topic and
+their messages steer the model.  Direct mentions of the model nick are also
+urgent.  Urgent input is coalesced and admitted at the earliest safe boundary;
+generation reaches a safe stream boundary and commands are handed back alive.
+.PP
+Other messages, joins, leaves, mode changes, and topic changes enter model
+context when convenient and do not force a reply.  First join and successful
+compaction inject bounded room history.  The runtime reconnects outgoing links
+without model babysitting.
+.PP
+The terminal starts in the timestamped
+.B chat
+view.  It hides local model and tool activity at verbosity 0.  The
+.B rollout
+view shows local model output.  Both append to the scrolling terminal; there is
+no full-screen or windowed interface.  Only public assistant text is sent to
+IRC.  If a local-operator turn ends without a room reply, the model receives
+one reminder.  Other room traffic never forces a reply.
+.PP
+The built-in IRC subset has no TLS or authentication.  A non-loopback listener
+is suitable only for a trusted network or a separately secured tunnel.
+.SH SESSION DURABILITY
+Every accepted transition is appended and synced before it is treated as
+durable.  Resume reconstructs turns, tool state, queue, goals, provider/model
+selection, and admitted IRC state.
+.PP
+Normal exit prints a two-line resume hint for every resumable session.  It
+includes the exact session, dotdir, explicit configuration, presentation
+overrides, unused one-turn preferences, and effective IRC topology.  It never
+includes prompts or credential values.
+.PP
+Resuming an active goal pauses it; use
+.B /goal resume
+to continue.  Queued turns are also paused; use
+.B /next
+to restart FIFO execution.  Interrupted active turns are recovered from their
+durable prefix.
+.PP
+SIGKILL, power loss, and fatal process corruption cannot guarantee cleanup or a
+printed resume command.  Already synced events remain available.
+.SH SIGNALS
+.TP
+.B SIGINT
+Interactive Ctrl-C follows the composer rules above.  Outside that handler it
+requests graceful shutdown.
+.TP
+.BR SIGHUP , " SIGTERM"
+Request graceful shutdown, terminal restoration, IRC closure, and a resume
+hint.  Exit status is 128 plus the signal number.
+.TP
+.B SIGTSTP
+Ctrl-Z restores the terminal before suspension and redraws after continuation.
+.TP
+.B SIGPIPE
+Ignored; write failures are handled as errors.
+.SH EXIT STATUS
+.TP
+.B 0
+Success or normal interactive exit.
+.TP
+.B 2
+Command-line, configuration, locale, credential, prompt, or selection error.
+.TP
+.B 3
+Durable state, local runtime, or IRC failure.
+.TP
+.B 4
+One-shot provider, protocol, context, or tool-cycle failure.
+.TP
+.B 6
+Terminal/output failure or one-shot interruption that cannot return to a prompt.
+.TP
+.B 128+N
+Graceful exit after signal
+.IR N .
+.SH EXAMPLES
+Start an interactive session in the current directory:
+.PP
+.nf
+snajpagent
+.fi
+.PP
+Execute a task from a script:
+.PP
+.nf
+printf '%s\en' 'run the tests and summarize failures' | snajpagent -e
+.fi
+.PP
+Resume the newest active session:
+.PP
+.nf
+snajpagent --resume --last
+.fi
+.PP
+Host a room and connect another agent:
+.PP
+.nf
+snajpagent -s localhost:6667 -n builder -o alice -r work
+snajpagent -c localhost:6667 -n reviewer -o bob
+.fi
+.SH SECURITY
+The model and its tools act with the user's local authority.  Run in a suitable
+workspace, inspect configuration, and protect the dotdir.  snajpagent requires
+its state directories to be mode 0700 and creates state files mode 0600.
+.PP
+Provider credential variables and configured
+.B secret_env
+values are removed from tool environments or redacted before tool output is
+stored and displayed.  This does not make arbitrary workspace content safe to
+send to a provider or publish.
+.PP
+Provider redirects are not followed.  The IRC server is unauthenticated and
+unencrypted; keep its default local listener unless the surrounding network is
+trusted or independently secured.
+.PP
+Verbosity 5 exposes prompts, source, tool output, and model content.  Review
+terminal capture before sharing it.
+.SH SEE ALSO
+.BR sh (1),
+.BR tmux (1)
+.PP
+Project documentation:
+.br
+.I https://github.com/snajpa/snajpagent
+.SH LICENSE
+GPL-2.0-only.  See
+.B COPYING
+and
+.BR LICENSE_SCOPE .

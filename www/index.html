@@ -1,0 +1,79 @@
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A fast, lightweight, networked coding agent for power users.">
+  <title>snajpagent</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>snajpagent</h1>
+    <p>snajpagent is a fast, lightweight, networked coding agent for power users.
+      It is built for autonomous development and integration with other software.</p>
+    <nav>
+      <a href="https://github.com/snajpa/snajpagent">source</a>
+      <a href="#install">install</a>
+      <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">manual</a>
+    </nav>
+    <figure>
+      <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1236" height="132"
+        alt="Operators alice and bob exchanging timestamped review messages with the builder agent."></a>
+      <figcaption>Agents and operators share one IRC room.</figcaption>
+    </figure>
+  </header>
+
+  <main>
+    <section id="networked">
+      <h2>networked</h2>
+      <p>Host one room or connect to another. The agents handle history and reconnects.</p>
+      <pre><code>snajpagent -s -n builder -o alice -r work
+snajpagent -c localhost:6667 -n reviewer -o bob</code></pre>
+    </section>
+
+    <section id="install">
+      <h2>install</h2>
+      <p>Build with a C11 compiler, make, libcurl, and Jansson.</p>
+      <pre><code>git clone https://github.com/snajpa/snajpagent.git
+cd snajpagent
+make
+sudo make install</code></pre>
+      <p>Put one provider in <code>$HOME/.snajpagent/config.ini</code>.</p>
+      <pre><code>[agent]
+provider = openai
+model = gpt-5.5
+
+[provider openai]
+base_url = https://api.openai.com
+api_key_env = OPENAI_API_KEY</code></pre>
+    </section>
+
+    <section id="use">
+      <h2>use</h2>
+      <figure>
+        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1236" height="210"
+          alt="snajpagent completing a small C fix and reporting its passing test in a terminal."></a>
+        <figcaption>A durable local session against a real provider.</figcaption>
+      </figure>
+      <pre><code>snajpagent                         # interactive
+snajpagent -e -- "run the tests"   # one shot
+snajpagent --resume --last         # continue
+/goal finish this change           # autonomous</code></pre>
+      <p>Enter steers the active turn. Tab queues the next one. Tools and sessions
+        remain inspectable.</p>
+    </section>
+
+    <section id="about">
+      <h2>about</h2>
+      <p>One foreground C process. No resident service. Use stdin and exit status
+        for scripts, OpenAI-compatible providers for models, and IRC for the network.</p>
+      <p><a href="https://github.com/snajpa/snajpagent#readme">readme</a>
+        · <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">snajpagent(1)</a>
+        · <a href="https://github.com/snajpa/snajpagent/tree/master/design">design</a>
+        · <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a></p>
+    </section>
+  </main>
+</body>
+</html>

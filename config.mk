@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 PREFIX = /usr/local
+MANPREFIX = $(PREFIX)/share/man
 CC = cc
 CPPFLAGS = -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700
 CFLAGS = -std=c11 -O2 -g -Wall -Wextra -Wpedantic -Werror
