@@ -89,12 +89,17 @@ The repository vendors no third-party implementation source. See
 ./snajpagent
 ./snajpagent -- "explain this repository"
 ./snajpagent -e -- "run the tests and summarize failures"
+printf 'run the tests and summarize failures\n' | ./snajpagent -e
 ./snajpagent --resume --last -- "continue"
 ./snajpagent -l
 ./snajpagent -d -n builder
 ./snajpagent -s irc.example:6667 -n worker -o alice
 ./snajpagent -c irc.example:6667 -n worker -o alice
 ```
+
+With `-e`, omit the argument prompt to read it from non-terminal stdin. One
+final LF or CRLF line terminator is removed; internal newlines are preserved.
+The `-e -- PROMPT...` form remains available for an argument prompt.
 
 Useful options:
 

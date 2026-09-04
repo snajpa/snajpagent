@@ -255,6 +255,58 @@ bounded_preference(const char *value, size_t max)
            snj_utf8_valid((const unsigned char *)value, len, true);
 }
 
+static int
+read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
+{
+    struct snj_buf prompt;
+    unsigned char chunk[4096];
+
+    if (isatty(STDIN_FILENO) == 1) {
+        set_error(error, error_size,
+                  "-e requires a prompt after -- or non-terminal stdin");
+        errno = EINVAL;
+        return -1;
+    }
+    snj_buf_init(&prompt, SNJ_MAX_DIRECT_PROMPT + 2u);
+    for (;;) {
+        ssize_t got = read(STDIN_FILENO, chunk, sizeof(chunk));
+
+        if (got > 0) {
+            if (snj_buf_append(&prompt, chunk, (size_t)got) < 0) {
+                set_error(error, error_size,
+                          "stdin prompt is invalid or exceeds 1 MiB");
+                snj_buf_free(&prompt);
+                return -1;
+            }
+            continue;
+        }
+        if (got < 0 && errno == EINTR)
+            continue;
+        if (got < 0) {
+            set_error(error, error_size, "stdin prompt could not be read");
+            snj_buf_free(&prompt);
+            return -1;
+        }
+        break;
+    }
+    if (prompt.len != 0u && prompt.data[prompt.len - 1u] == '\n') {
+        --prompt.len;
+        if (prompt.len != 0u && prompt.data[prompt.len - 1u] == '\r')
+            --prompt.len;
+    }
+    if (prompt.len == 0u || prompt.len > SNJ_MAX_DIRECT_PROMPT ||
+        !snj_utf8_valid(prompt.data, prompt.len, true) ||
+        snj_buf_terminate(&prompt) < 0) {
+        set_error(error, error_size,
+                  "stdin prompt is empty, invalid, or exceeds 1 MiB");
+        snj_buf_free(&prompt);
+        errno = EINVAL;
+        return -1;
+    }
+    cli->prompt = (char *)prompt.data;
+    return 0;
+}
+
 int
 snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
               char *error, size_t error_size)
@@ -480,7 +532,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                 return -1;
             }
         }
-    } else if (!cli->list && positional >= 0) {
+    } else if (!cli->list && positional >= 0 && positional < argc) {
         if (cli->execute && !dashdash) {
             set_error(error, error_size, "-e requires -- before its prompt");
             return -1;
@@ -490,7 +542,10 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         if (!cli->prompt)
             return -1;
     }
-    if (cli->execute && (!cli->prompt || !*cli->prompt)) {
+    if (cli->execute && !cli->prompt &&
+        read_execute_prompt(cli, error, error_size) < 0)
+        return -1;
+    if (cli->execute && !*cli->prompt) {
         set_error(error, error_size, "-e requires a nonempty prompt");
         return -1;
     }
@@ -504,7 +559,7 @@ snj_cli_usage(int fd)
     static const char text[] =
         "usage: snajpagent [OPTIONS] [--] [INITIAL PROMPT...]\n"
         "       snajpagent --resume [OPTIONS] [SESSION_ID|--last] [-- FOLLOW-UP...]\n"
-        "       snajpagent -e [OPTIONS] -- PROMPT...\n"
+        "       snajpagent -e [OPTIONS] [-- PROMPT...]\n"
         "       snajpagent -l [OPTIONS]\n"
         "  -d, --daemon                 host the IRC server in this process\n"
         "  -s, --listen[=ENDPOINT]      connect, or listen with -d\n"
@@ -524,7 +579,7 @@ snj_cli_usage(int fd)
         "  -v                           increase verbosity; repeatable to 6\n"
         "      --resume [ID|--last]      resume a durable session\n"
         "      --all                    include sessions from all workspaces\n"
-        "  -e                           one-shot execution (prompt follows --)\n"
+        "  -e                           one-shot execution (prompt or stdin)\n"
         "  -l                           list sessions\n"
         "  -h                           show this help\n"
         "  -V                           show version\n";

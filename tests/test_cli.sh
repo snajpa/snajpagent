@@ -134,6 +134,31 @@ for option in --client= --listen=; do
     grep -q 'requires a nonempty endpoint' "$root/empty-endpoint.err"
 done
 
+stdin_dotdir="$root/stdin-state"
+out=$(printf 'ping\n' | $bin --dotdir "$stdin_dotdir" -e \
+    2>"$root/stdin.err")
+[ "$out" = pong ]
+[ ! -s "$root/stdin.err" ]
+stdin_log=$(find "$stdin_dotdir/sessions" -name events.jsonl -print)
+python3 - "$stdin_log" <<'PY'
+import json
+import sys
+
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+started = [event for event in events if event["type"] == "turn_started"]
+assert len(started) == 1
+assert started[0]["data"]["text"] == "ping"
+PY
+
+set +e
+$bin -e </dev/null >"$root/empty-stdin.out" 2>"$root/empty-stdin.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+[ ! -s "$root/empty-stdin.out" ]
+grep -q 'stdin prompt is empty' "$root/empty-stdin.err"
+
+# The established explicit argument form remains supported alongside stdin.
 out=$($bin -e -- ping 2>"$root/err")
 [ "$out" = pong ]
 [ ! -s "$root/err" ]

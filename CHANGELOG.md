@@ -4,6 +4,9 @@
 
 ## 0.9.0-wip
 
+- Made bare `-e` read its one-shot prompt from non-terminal stdin while
+  preserving the established `-e -- PROMPT...` argument form.
+
 - Made `exec_command` default to no execution deadline unless the model asks
   for a positive `timeout_ms` (or an operator configures a fallback). Ordinary
   `-v` compact tool output now shows `timeout=none` or the effective
