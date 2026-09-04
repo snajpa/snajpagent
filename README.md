@@ -373,10 +373,15 @@ Markdown's structural rendering while removing its attributes. Prose
 paragraphs receive a `• ` prefix and an empty row between paragraphs; generated
 soft-wrap continuation lines start with two spaces, aligned below the
 paragraph text. A generated wrap drops the separator space that would otherwise
-start the new row. Submitted prompts and model output have one empty row between
-them in both directions. Terminal wrapping keeps trailing punctuation with the
+start the new row. Terminal wrapping keeps trailing punctuation with the
 preceding text and breaks after hyphens, dashes, periods, commas, and similar
 closing punctuation in both Markdown modes.
+
+Interactive submitted input, model output, activity, and the next prompt are
+separate visible blocks with exactly one empty row at each boundary. The rule
+applies equally when model output ends in prose, a heading, a list, a quote, or
+a pipe table or fenced code, and adds only the newline missing from an existing
+boundary. Markdown-disabled literal output follows the same rule.
 
 ## Configuration
 

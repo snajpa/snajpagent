@@ -39,10 +39,14 @@ non-blank source line breaks within one paragraph remain unbulleted. Headings,
 list items, block quotes, and fenced code keep their own structural markers
 instead of gaining a redundant paragraph bullet.
 
-An interactively submitted operator prompt and the first model paragraph have
-one empty terminal row between them. The last model paragraph and the next
-interactive prompt have the same separation. These are presentation boundaries
-only and do not add bytes to submitted or model text.
+Interactive conversation spacing is a renderer boundary rule rather than a
+prose-parser side effect. Submitted input and the first model block have one
+empty terminal row between them. A completed model block and the following
+activity or input prompt also have one empty row, whether the model ends with
+prose, a heading, an unordered or ordered list, a block quote, fenced code, or
+a pipe table, as well as literal output with Markdown disabled. Existing
+trailing newlines count toward the boundary, and repeated prompt preparation
+adds nothing after the required two newline transitions are present.
 
 Headings, quotations, lists, code, and inline spans have readable structural
 fallbacks when color is disabled. When color is active, they use only ordinary
@@ -111,8 +115,9 @@ not join separate IRC messages into one table.
   and duplicate assignment. CLI tests cover both overrides and conflicts.
 - Deterministic tmux coverage checks a genuinely paced Markdown response before
   completion, its byte-exact durable form, static Markdown in the IRC chat UI,
-  prose bullets, two-space continuation lines, prompt/model and paragraph
-  spacing, discarded wrap-separator spaces, an aligned table, the disabled
-  setting, width safety, and absence of raw escape leakage.
+  prose bullets, two-space continuation lines, discarded wrap-separator spaces,
+  aligned and narrow tables, exact submitted/model and every-block-type/prompt
+  boundaries, the disabled setting, width safety, and absence of raw escape
+  leakage.
 - Full optimized and sanitizer suites plus `make sizecheck` must pass without a
   new production translation unit or dependency.

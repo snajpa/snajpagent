@@ -132,6 +132,8 @@ out:
         (void)write_literal(fd, COLOR_RESET);
     if (output_end(render) < 0 && rc == 0)
         rc = -1;
+    if (rc == 0 && persistent)
+        render->previous_public_item = false;
     if (saved_errno)
         errno = saved_errno;
     return rc;
@@ -410,10 +412,21 @@ render_submitted(struct snj_render *render, const char *label, const char *text,
     rc = snj_buf_append(&line, label, strlen(label));
     if (rc == 0)
         rc = snj_buf_append(&line, text, strlen(text));
-    if (rc == 0)
+    if (rc == 0 && separate && render->stderr_terminal) {
+        size_t len = strlen(text);
+        size_t trailing = 0u;
+
+        while (trailing < len && trailing < 2u &&
+               text[len - trailing - 1u] == '\n')
+            ++trailing;
+        while (trailing++ < 2u)
+            if (snj_buf_putc(&line, '\n') < 0) {
+                rc = -1;
+                break;
+            }
+    } else if (rc == 0) {
         rc = snj_buf_putc(&line, '\n');
-    if (rc == 0 && separate && render->stderr_terminal)
-        rc = snj_buf_putc(&line, '\n');
+    }
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO,
                               render->networked ? COLOR_OPERATOR : COLOR_AGENT,
@@ -431,7 +444,8 @@ render_submitted(struct snj_render *render, const char *label, const char *text,
 }
 
 int
-snj_render_submitted(struct snj_render *render, const char *label, const char *text)
+snj_render_submitted(struct snj_render *render, const char *label,
+                     const char *text)
 {
     return render_submitted(render, label, text, false);
 }

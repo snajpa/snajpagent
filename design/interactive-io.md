@@ -77,14 +77,18 @@ closure and return the terminal result. A rejected termination combination does
 not modify the process.
 
 The `working…` activity line is shown only after an open public item has been
-closed. When it is the first row of the redrawn prompt block, the model block's
-required empty row precedes it. Response completion must not release a withheld
-final word and paint the activity line as one delayed update.
+closed. When it is the first row of the redrawn input block, exactly one empty
+row separates it from the completed model block. Response completion must not
+release a withheld final word and paint the activity line as one delayed
+update.
 
-Interactive submitted input and the first visible model block are separated by
-one empty row. The final visible model block and the next input prompt are also
-separated by one empty row. These terminal-only separators do not alter
-submitted input, response text, events, or provider traffic.
+Interactive submitted input and the first visible model block have exactly one
+empty row between them. The final visible model block and the next activity or
+input prompt have the same separation. Boundary handling counts the model
+block's existing trailing newlines and emits only the missing amount, so a
+paragraph break, prompt redraw, or repeated boundary call cannot accumulate
+extra empty rows. The rule is independent of Markdown presentation type and
+does not alter submitted text, model text, events, or provider traffic.
 
 ## Prompt Identity And Tab
 

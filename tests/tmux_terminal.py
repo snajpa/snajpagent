@@ -36,7 +36,8 @@ MARKDOWN_TEXT = (
     "| Item | State | Count |\n"
     "| :--- | :---: | ---: |\n"
     "| alpha | `ready` | 7 |\n\n"
-    "second paragraph"
+    "second paragraph\n\n"
+    "> final quoted boundary"
 )
 DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium 0% ›"
 DEFAULT_ACCOUNTED_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium ?% ›"
@@ -727,9 +728,11 @@ def run_markdown_case(binary, root):
                     raise AssertionError(
                         "Markdown did not become visible during the provider pause"
                     )
+                terminal.wait("│ alpha │ ready │     7 │", timeout=2.0,
+                              join_wrapped=True)
                 terminal.wait("• second paragraph", timeout=2.0,
                               join_wrapped=True)
-                terminal.wait("│ alpha │ ready │     7 │", timeout=2.0,
+                terminal.wait("│ final quoted boundary", timeout=2.0,
                               join_wrapped=True)
                 styled = terminal.capture_styled()
                 if re.search(
@@ -764,6 +767,7 @@ def run_markdown_case(binary, root):
                     "│ alpha │ ready │     7 │",
                     "└───────┴───────┴───────┘",
                     "• second paragraph",
+                    "│ final quoted boundary",
                 ])
                 raw = terminal.capture()
                 if ("• First prose line\ncontinued prose\n\n┌" not in raw or
@@ -772,18 +776,29 @@ def run_markdown_case(binary, root):
                         f"prose bullets or paragraph spacing are wrong:\n{raw}"
                     )
                 first_model = "Stream ready"
-                last_model = "• second paragraph"
+                last_model = "│ final quoted boundary"
             else:
                 first_model = "# Stream **ready**"
-                last_model = "second paragraph"
+                last_model = "> final quoted boundary"
             submitted = f"{DEFAULT_IDLE_PROMPT} terminal_markdown"
             if f"{submitted}\n\n{first_model}" not in screen:
                 raise AssertionError(
-                    f"submitted input and model output lack an empty row:\n{screen}"
+                    f"submitted input and model output lack one empty row:\n{screen}"
                 )
-            if f"{last_model}\n\n{DEFAULT_ACCOUNTED_IDLE_PROMPT}" not in screen:
+            if f"{submitted}\n\n\n{first_model}" in screen:
                 raise AssertionError(
-                    f"model output and the next prompt lack an empty row:\n{screen}"
+                    f"submitted input and model output have an extra empty row:\n{screen}"
+                )
+            after_model = screen.rsplit(last_model, 1)[1]
+            if after_model.startswith("\n\n\n"):
+                raise AssertionError(
+                    f"model block and next visible block have an extra empty row:\n{screen}"
+                )
+            if not (after_model.startswith("\n\nworking\u2026") or
+                    after_model.startswith(
+                        f"\n\n{DEFAULT_ACCOUNTED_IDLE_PROMPT}")):
+                raise AssertionError(
+                    f"model block and next visible block lack one empty row:\n{screen}"
                 )
             if any(len(line) > terminal.cols for line in terminal.capture().splitlines()):
                 raise AssertionError("Markdown rendering exceeded the tmux width")

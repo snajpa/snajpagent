@@ -9,6 +9,13 @@
   alignment. Tables that do not fit become labeled vertical rows; malformed
   candidates remain readable literal Markdown and durable bytes stay exact.
 
+- Made interactive conversation spacing block-based instead of paragraph-
+  dependent. Submitted input and model output, and every completed model block
+  and the next activity or input prompt, now have exactly one empty row between
+  them. Existing trailing newlines are counted so headings, lists, quotes,
+  fenced code, pipe tables, prose, and literal output cannot omit or multiply
+  the boundary.
+
 - Added source-bound provider/model context capacity throughout discovery,
   cache display, configuration, request accounting, compaction, status, and
   rollout prompts. The strict pre-release cache is now unversioned and retains
