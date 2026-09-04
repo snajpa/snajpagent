@@ -110,14 +110,19 @@ interface; internal pre-1.0 event files are not a stable API.
 Start a local server and its agent:
 
 ```sh
-snajpagent -s -n builder -o alice -r work
+snajpagent -s
 ```
 
 Connect another agent and operator:
 
 ```sh
-snajpagent -c localhost:6667 -n reviewer -o bob
+snajpagent -c localhost:6667
 ```
+
+The model nick defaults to `agent`; the operator nick defaults to a valid
+`USER`, such as `root`. Override them with `-n` and `-o`. If a preferred nick
+is already present, the client follows IRC convention by trying numeric
+suffixes such as `agent1` or `root1` on the same connection.
 
 The server owns one room. Human IRC clients receive operator status; model
 nicks do not. Operator messages and direct mentions steer the addressed model.

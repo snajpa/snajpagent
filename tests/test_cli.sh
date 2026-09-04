@@ -61,6 +61,7 @@ $bin -h >"$root/help" 2>"$root/help.err"
 grep -q -- '-s, --listen\[=ENDPOINT\]' "$root/help"
 grep -q -- '-c, --client\[=ENDPOINT\]' "$root/help"
 grep -q -- '--model-nick NICK' "$root/help"
+grep -q -- 'model nick (default agent)' "$root/help"
 grep -q -- '--operator-nick NICK' "$root/help"
 ! grep -q -- '--operator-name' "$root/help"
 grep -q -- '--color\[=WHEN\]' "$root/help"
@@ -116,23 +117,13 @@ set -e
 grep -q 'networked initial chat text must follow --' \
     "$root/network-config.err"
 
-cat >"$root/listen-only.ini" <<'EOF'
-[irc]
-listen = localhost:6667
-EOF
-set +e
-$bin --config "$root/listen-only.ini" >"$root/listen-only.out" \
-    2>"$root/listen-only.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
-grep -q 'requires a valid -n/--model-nick' "$root/listen-only.err"
-
 cat >"$root/color-network-error.ini" <<'EOF'
 [ui]
 color = always
 [irc]
 listen = localhost:6667
+model_nick = worker
+operator_nick = WORKER
 EOF
 set +e
 $bin --config "$root/color-network-error.ini" \
@@ -143,14 +134,16 @@ set -e
 LC_ALL=C grep -q "$(printf '\033')" "$root/color-network-error.err"
 
 set +e
-$bin --no-color -s >"$root/no-color-error.out" 2>"$root/no-color-error.err"
+$bin --no-color -s -n worker -o WORKER \
+    >"$root/no-color-error.out" 2>"$root/no-color-error.err"
 status=$?
 set -e
 [ "$status" -eq 2 ]
 ! LC_ALL=C grep -q "$(printf '\033')" "$root/no-color-error.err"
 
 set +e
-$bin --color -s >"$root/color-error.out" 2>"$root/color-error.err"
+$bin --color -s -n worker -o WORKER \
+    >"$root/color-error.out" 2>"$root/color-error.err"
 status=$?
 set -e
 [ "$status" -eq 2 ]

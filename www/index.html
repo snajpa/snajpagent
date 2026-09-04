@@ -29,8 +29,10 @@
     <section id="networked">
       <h2>networked</h2>
       <p>Host one room or connect to another. The agents handle history and reconnects.</p>
-      <pre><code>snajpagent -s -n builder -o alice -r work
-snajpagent -c localhost:6667 -n reviewer -o bob</code></pre>
+      <pre><code>snajpagent -s
+snajpagent -c localhost:6667</code></pre>
+      <p>The model nick defaults to <code>agent</code>, the operator nick to
+      your login, and IRC nickname collisions gain numeric suffixes.</p>
     </section>
 
     <section id="install">

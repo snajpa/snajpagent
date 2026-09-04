@@ -17,7 +17,7 @@ The network options are:
 ```text
 -s, --listen[=ENDPOINT]      host the built-in IRC server
 -c, --client[=ENDPOINT]      connect to a server; repeatable
--n, --model-nick NICK        model IRC nick
+-n, --model-nick NICK        preferred model IRC nick (default agent)
 -o, --operator-nick NICK     local operator IRC nick
 -r, --room-name ROOM         hosted room name
     --color[=WHEN]           color: auto, always, or never
@@ -38,11 +38,11 @@ separate arguments, and long `=ENDPOINT` arguments are accepted. In networked
 mode any initial chat text must follow `--`, which removes the only ambiguity
 between an optional endpoint and positional text.
 
-`-n`/`--model-nick` is required whenever a server or client role is enabled. It
-is the nick used for model-authored chat. `-o`/`--operator-nick` controls the
-separate nick used for text typed in the local UI. Its default is the current
-login identifier when that is a valid IRC nick, then `operator`. The two local
-nicks must differ under IRC case folding.
+`-n`/`--model-nick` selects the preferred nick used for model-authored chat and
+defaults to `agent`. `-o`/`--operator-nick` controls the separate preferred nick
+used for text typed in the local UI. Its default is the current login identifier
+when that is a valid IRC nick, then `operator`. The two preferred local nicks
+must differ under IRC case folding.
 
 `-r`/`--room-name` applies to the hosted room and requires `-s`. A leading `#`
 is optional on input and is present on the wire and in the UI.
@@ -153,9 +153,15 @@ IRC clients:
 The snajpagent agent connection identifies its role during capability
 negotiation and is not granted `+o`. Its UI operator connection is distinct
 and is granted `+o` when it joins. A regular IRC client is an operator-facing
-client. Nick collisions, malformed lines, overlong lines, invalid UTF-8 chat,
-messages to another room, and commands used before registration or join are
-rejected without disturbing other clients.
+client. On a pre-registration `433 ERR_NICKNAMEINUSE`, an outgoing snajpagent
+client retries on the same connection by appending `1`, `2`, and so on to its
+preferred nick, truncating the preferred portion at a UTF-8 boundary when the
+IRC nick bound requires it. The accepted per-server nick remains stable across
+reconnects and governs echo suppression and direct-mention recognition. The
+server itself follows IRC convention by rejecting collisions rather than
+silently assigning an identity. Malformed lines, overlong lines, invalid UTF-8
+chat, messages to another room, and commands used before registration or join
+are rejected without disturbing other clients.
 
 The server supports IRCv3 `batch`, `server-time`, and a bounded channel-history
 capability. On join it sends the current topic, member nicks and modes,
@@ -295,7 +301,8 @@ When any network role is enabled, the fixed developer harness sent before the
 conversation explains:
 
 - that this process participates in one or more views of a single IRC room;
-- the separate model and operator identities and their current nicks;
+- the preferred model and operator identities, with room snapshots identifying
+  accepted per-server aliases after collisions;
 - that chat entries marked `+o` are operator instructions;
 - that a direct mention of the agent requires immediate attention;
 - that unprivileged agent/room traffic and membership notifications are
@@ -378,8 +385,9 @@ Networked requests expose native bounded IRC tools alongside the existing
 coding tools:
 
 - `irc_send` sends a room message or notice as the agent identity;
-- `irc_state` returns the current endpoints, joins, room, topic, member nicks
-  and operator flags from already-maintained runtime state; and
+- `irc_state` returns the current endpoints, joins, room, topic, accepted local
+  aliases, member nicks, and operator flags from already-maintained runtime
+  state; and
 - `irc_topic` requests a topic change as the agent identity and succeeds only
   where that identity currently has the required channel mode.
 
@@ -460,7 +468,7 @@ Implementation is complete when the existing build and validation commands
 pass and focused local smoke checks demonstrate all of the following:
 
 1. the new short/long forms, compatibility long forms, config equivalents,
-   defaults, required model nick, repeated clients, combined roles, and invalid
+   default model and operator nicks, repeated clients, combined roles, and invalid
    combinations;
 2. localhost server startup on port 6667, one advertised/default room, default
    path topic, automatic client joins, operator `+o`, agent non-op membership,

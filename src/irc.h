@@ -71,6 +71,7 @@ int snj_irc_restore_event(struct snj_irc *irc,
 const char *snj_irc_model_nick(const struct snj_irc *irc);
 const char *snj_irc_operator_nick(const struct snj_irc *irc);
 const char *snj_irc_room_name(const struct snj_irc *irc);
-bool snj_irc_mentions_agent(const struct snj_irc *irc, const char *text);
+bool snj_irc_mentions_agent(const struct snj_irc *irc, const char *endpoint,
+                            const char *text);
 
 #endif

@@ -66,6 +66,7 @@ struct irc_conn {
     char topic[513u];
     struct irc_member members[IRC_MEMBERS_MAX];
     size_t member_count;
+    size_t nick_suffix;
     uint64_t retry_at_ms;
     enum link_role role;
     bool used;
@@ -512,9 +513,10 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
         errno = EINVAL;
         return -1;
     }
+    if (!config->irc_model_nick[0])
+        memcpy(config->irc_model_nick, "agent", 6u);
     if (!nick_valid(config->irc_model_nick)) {
-        set_error(error, error_size,
-                  "networked mode requires a valid -n/--model-nick IRC nick");
+        set_error(error, error_size, "IRC model nick is invalid");
         errno = EINVAL;
         return -1;
     }
@@ -1612,6 +1614,35 @@ link_emit_enabled(const struct irc_conn *link)
 }
 
 static int
+link_retry_nick(struct snj_irc *irc, struct irc_conn *link)
+{
+    const char *preferred = link->role == LINK_AGENT ? irc->model_nick :
+                                                       irc->operator_nick;
+    char suffix[32u];
+    size_t len = strlen(preferred);
+    int n;
+
+    if (link->nick_suffix == SIZE_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    n = snprintf(suffix, sizeof(suffix), "%zu", ++link->nick_suffix);
+    if (n < 0 || (size_t)n >= sizeof(suffix) ||
+        (size_t)n >= sizeof(link->nick)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if (len + (size_t)n >= sizeof(link->nick)) {
+        len = sizeof(link->nick) - (size_t)n - 1u;
+        while (len && ((unsigned char)preferred[len] & 0xc0u) == 0x80u)
+            --len;
+    }
+    memcpy(link->nick, preferred, len);
+    memcpy(link->nick + len, suffix, (size_t)n + 1u);
+    return queue_line(link, "NICK %s", link->nick);
+}
+
+static int
 link_queue_pending(struct irc_conn *link, enum snj_irc_event_kind kind,
                    const char *text)
 {
@@ -1864,9 +1895,11 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
         message.param_count >= 2u && link->joined && link->room[0] &&
         irc_casecmp(message.params[0], link->room) == 0) {
         struct irc_member *member;
-        if (irc_casecmp(sender, irc->model_nick) == 0 ||
-            irc_casecmp(sender, irc->operator_nick) == 0)
-            return 0;
+        for (size_t i = 0u; i < irc->link_count; ++i)
+            if (irc->links[i].joined &&
+                endpoint_equal(irc->links[i].endpoint, link->endpoint) &&
+                irc_casecmp(sender, irc->links[i].nick) == 0)
+                return 0;
         member = member_find(link, sender);
         return link_emit(irc, link,
             strcmp(message.command, "NOTICE") == 0 ? SNJ_IRC_NOTICE :
@@ -1874,6 +1907,8 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
             message.params[0], sender, message.params[1], member && member->op,
             timestamp_ms);
     }
+    if (strcmp(message.command, "433") == 0 && !link->registered)
+        return link_retry_nick(irc, link);
     if (strcmp(message.command, "ERROR") == 0 ||
         strcmp(message.command, "433") == 0 ||
         strcmp(message.command, "403") == 0 ||
@@ -2529,15 +2564,26 @@ snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
     }
     for (size_t i = 0; i < irc->link_count; ++i) {
         const struct irc_conn *link = &irc->links[i];
+        const struct irc_conn *agent = NULL;
 
         if (link->role != LINK_OPERATOR)
             continue;
+        for (size_t j = 0u; j < irc->link_count; ++j)
+            if (irc->links[j].role == LINK_AGENT &&
+                endpoint_equal(irc->links[j].endpoint, link->endpoint)) {
+                agent = &irc->links[j];
+                break;
+            }
         if (snj_buf_printf(out, "endpoint[%s]: %s%s%s\n",
                            link->endpoint,
                            link->joined ? "joined " :
                            link->connecting ? "connecting" : "disconnected",
                            link->joined ? link->room : "",
                            link->joined && link->op ? " as operator" : "") < 0)
+            goto fail;
+        if (snj_buf_printf(out, "aliases[%s]: model %s operator %s\n",
+                           link->endpoint, agent ? agent->nick : "",
+                           link->nick) < 0)
             goto fail;
         if (link->joined) {
             if (snj_buf_printf(out, "topic[%s]: %s\nmembers[%s]:",
@@ -2792,14 +2838,11 @@ snj_irc_room_name(const struct snj_irc *irc)
     return irc ? irc->room : NULL;
 }
 
-bool
-snj_irc_mentions_agent(const struct snj_irc *irc, const char *text)
+static bool
+text_mentions_nick(const char *text, const char *nick)
 {
-    size_t nick_len;
+    size_t nick_len = strlen(nick);
 
-    if (!irc || !text)
-        return false;
-    nick_len = strlen(irc->model_nick);
     for (size_t i = 0; text[i]; ++i) {
         size_t j;
 
@@ -2808,11 +2851,28 @@ snj_irc_mentions_agent(const struct snj_irc *irc, const char *text)
             continue;
         for (j = 0u; j < nick_len && text[i + j]; ++j)
             if (irc_fold((unsigned char)text[i + j]) !=
-                irc_fold((unsigned char)irc->model_nick[j]))
+                irc_fold((unsigned char)nick[j]))
                 break;
         if (j == nick_len && (unsigned char)text[i + nick_len] < 0x80u &&
             !nick_char((unsigned char)text[i + nick_len]))
             return true;
     }
+    return false;
+}
+
+bool
+snj_irc_mentions_agent(const struct snj_irc *irc, const char *endpoint,
+                       const char *text)
+{
+    if (!irc || !endpoint || !text)
+        return false;
+    if (irc->listener >= 0 && endpoint_equal(endpoint, irc->listen) &&
+        text_mentions_nick(text, irc->model_nick))
+        return true;
+    for (size_t i = 0u; i < irc->link_count; ++i)
+        if (irc->links[i].role == LINK_AGENT && irc->links[i].joined &&
+            endpoint_equal(endpoint, irc->links[i].endpoint) &&
+            text_mentions_nick(text, irc->links[i].nick))
+            return true;
     return false;
 }

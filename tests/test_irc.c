@@ -226,7 +226,10 @@ test_validation(void)
     memset(&cli, 0, sizeof(cli));
     snj_config_init(&config);
     config.irc_listen_explicit = true;
-    assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
+    assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
+    assert(strcmp(config.irc_model_nick, "agent") == 0);
+    assert(config.irc_operator_nick[0] != '\0');
+    assert(strcmp(config.irc_operator_nick, config.irc_model_nick) != 0);
     snj_config_free(&config);
 
     snj_config_init(&config);
@@ -299,13 +302,13 @@ test_cli_network_roles(void)
 
     memset(&cli, 0, sizeof(cli));
     cli.irc_listen = "irc.example:7667";
-    cli.irc_model_nick = "worker";
-    cli.irc_operator_nick = "operator";
     snj_config_init(&config);
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
     assert(config.irc_listen_explicit);
     assert(strcmp(config.irc_listen, "irc.example:7667") == 0);
     assert(config.irc_client_count == 0u);
+    assert(strcmp(config.irc_model_nick, "agent") == 0);
+    assert(config.irc_operator_nick[0] != '\0');
     snj_config_free(&config);
 
     memset(&cli, 0, sizeof(cli));
@@ -344,8 +347,9 @@ test_server(void)
                     "%s", config.irc_listen) > 0);
     server = open_server(&config, &capture);
     assert(strcmp(snj_irc_room_name(server), "#lab") == 0);
-    assert(snj_irc_mentions_agent(server, "AGENT: please"));
-    assert(!snj_irc_mentions_agent(server, "otheragent: no"));
+    assert(snj_irc_mentions_agent(server, config.irc_listen, "AGENT: please"));
+    assert(!snj_irc_mentions_agent(server, config.irc_listen,
+                                   "otheragent: no"));
 
     human = connect_local(port, false);
     register_peer(server, human, "human", false, wire, sizeof(wire));
@@ -569,6 +573,104 @@ test_client_reconnect(void)
 }
 
 static void
+test_client_nick_collision(void)
+{
+    struct snj_config server_config;
+    struct snj_config client_config;
+    struct snj_cli cli;
+    struct capture server_capture = {0};
+    struct capture next_capture = {0};
+    struct capture client_capture = {0};
+    struct snj_irc *server;
+    struct snj_irc *next_server;
+    struct snj_irc *client = NULL;
+    struct snj_buf snapshot;
+    unsigned short port = free_port();
+    int occupied[2u];
+    char address[64u];
+    char wire[8192u];
+    char error[256] = {0};
+    unsigned int messages;
+
+    init_server_config(&server_config, port);
+    server = open_server(&server_config, &server_capture);
+    occupied[0] = connect_local(port, false);
+    register_peer(server, occupied[0], "agent1", false, wire, sizeof(wire));
+    occupied[1] = connect_local(port, false);
+    register_peer(server, occupied[1], "operator1", false, wire, sizeof(wire));
+
+    snj_config_init(&client_config);
+    memset(&cli, 0, sizeof(cli));
+    endpoint(address, port);
+    client_config.irc_client_count = 1u;
+    assert(snprintf(client_config.irc_clients[0],
+                    sizeof(client_config.irc_clients[0]), "%s", address) > 0);
+    memcpy(client_config.irc_model_nick, "agent", 6u);
+    memcpy(client_config.irc_operator_nick, "operator", 9u);
+    assert(snj_irc_apply_cli(&client_config, &cli,
+                             error, sizeof(error)) == 0);
+    assert(snj_irc_open(&client, &client_config, "/client", capture_event,
+                        capture_trace, &client_capture,
+                        error, sizeof(error)) == 0);
+    pump_pair(server, client, 300u);
+    assert(client_capture.events[SNJ_IRC_HISTORY_READY] != 0u);
+    assert(client_capture.events[SNJ_IRC_CONNECTED] == 1u);
+    assert(client_capture.events[SNJ_IRC_DISCONNECTED] == 0u);
+
+    assert(snj_irc_send_operator(client, "operator alias",
+                                 error, sizeof(error)) == 0);
+    pump_pair(server, client, 20u);
+    assert(strcmp(server_capture.last_message.nick, "operator2") == 0);
+    assert(strcmp(server_capture.last_message.text, "operator alias") == 0);
+    assert(snj_irc_send_agent(client, "agent alias",
+                              error, sizeof(error)) == 0);
+    pump_pair(server, client, 20u);
+    assert(strcmp(server_capture.last_message.nick, "agent2") == 0);
+    assert(strcmp(server_capture.last_message.text, "agent alias") == 0);
+
+    messages = client_capture.events[SNJ_IRC_MESSAGE];
+    assert(snj_irc_send_agent(server, "preferred nick is remote",
+                              error, sizeof(error)) == 0);
+    pump_pair(server, client, 20u);
+    assert(client_capture.events[SNJ_IRC_MESSAGE] == messages + 1u);
+    assert(strcmp(client_capture.last_message.nick, "agent") == 0);
+    assert(strcmp(client_capture.last_message.text,
+                  "preferred nick is remote") == 0);
+    assert(snj_irc_mentions_agent(client, address, "agent2: respond"));
+    assert(!snj_irc_mentions_agent(client, address, "agent: not this client"));
+    snj_buf_init(&snapshot, SNJ_MAX_IRC_SNAPSHOT);
+    assert(snj_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
+    assert(snj_buf_terminate(&snapshot) == 0);
+    assert(strstr((const char *)snapshot.data,
+                  "model agent2 operator operator2") != NULL);
+    snj_buf_free(&snapshot);
+
+    for (size_t i = 0u; i < 2u; ++i)
+        assert(close(occupied[i]) == 0);
+    snj_irc_close(server);
+    for (unsigned int i = 0u;
+         i < 50u && !client_capture.events[SNJ_IRC_DISCONNECTED]; ++i)
+        tick(client, 1u);
+    assert(client_capture.events[SNJ_IRC_DISCONNECTED] != 0u);
+    next_server = open_server(&server_config, &next_capture);
+    pump_pair(next_server, client, 800u);
+    assert(client_capture.events[SNJ_IRC_CONNECTED] == 2u);
+    assert(snj_irc_send_operator(client, "stable operator alias",
+                                 error, sizeof(error)) == 0);
+    pump_pair(next_server, client, 20u);
+    assert(strcmp(next_capture.last_message.nick, "operator2") == 0);
+    assert(snj_irc_send_agent(client, "stable agent alias",
+                              error, sizeof(error)) == 0);
+    pump_pair(next_server, client, 20u);
+    assert(strcmp(next_capture.last_message.nick, "agent2") == 0);
+
+    snj_irc_close(client);
+    snj_irc_close(next_server);
+    snj_config_free(&client_config);
+    snj_config_free(&server_config);
+}
+
+static void
 test_client_ignores_direct_messages(void)
 {
     struct snj_config config;
@@ -674,6 +776,7 @@ main(void)
     test_cli_network_roles();
     test_server();
     test_client_reconnect();
+    test_client_nick_collision();
     test_client_ignores_direct_messages();
     puts("test_irc: ok");
     return 0;

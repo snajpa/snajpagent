@@ -66,7 +66,8 @@ missing endpoint means
 .BR localhost:6667 .
 .TP
 .BI \-n " nick, " \-\-model-nick " nick"
-Set the model's IRC nick.  Required when any network role is enabled.
+Set the model's preferred IRC nick.  Default:
+.BR agent .
 .TP
 .BI \-o " nick, " \-\-operator-nick " nick"
 Set the local operator's IRC nick.  The default is a valid
@@ -528,7 +529,8 @@ uses
 Outgoing endpoint.  Repeat up to 16 times.
 .TP
 .B model_nick
-Required model nick when networking is enabled.
+Preferred model nick.  Default:
+.BR agent .
 .TP
 .B operator_nick
 Local operator nick.  Default: valid
@@ -665,6 +667,15 @@ Other messages, joins, leaves, mode changes, and topic changes enter model
 context when convenient and do not force a reply.  First join and successful
 compaction inject bounded room history.  The runtime reconnects outgoing links
 without model babysitting.
+.PP
+When a preferred outgoing nick is already present, the client handles the
+server's normal
+.B 433
+reply by appending
+.BR 1 ,
+.BR 2 ,
+and so on until registration succeeds.  The accepted nick is retained across
+reconnects.
 .PP
 The terminal starts in the timestamped
 .B chat

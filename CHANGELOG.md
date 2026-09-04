@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Default the IRC model nick to `agent`. Make outgoing clients resolve nickname
+  collisions in-place by trying numeric suffixes, and use the accepted
+  per-server identities for echo suppression and mention recognition instead
+  of reconnecting forever.
+
 - Make five consecutive Ctrl-C presses within two seconds an unconditional
   interactive exit, including during an active turn, while preserving ordinary
   single-press draft clearing, interruption, and idle-exit behavior.
