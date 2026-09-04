@@ -593,10 +593,12 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         static const char full[] =
             "# Stream **ready**\n"
             "- split `code` and [docs](https://example.test)\n"
-            "```c\nint value = 1;\n```";
+            "```c\nint value = 1;\n```\n\n"
+            "First prose line\ncontinued prose\n\nsecond paragraph";
         static const char *const fragments[] = {
             "# Stream **rea", "dy**\n- split `co", "de` and [docs](",
-            "https://example.test)\n```", "c\nint value ", "= 1;\n```"
+            "https://example.test)\n```", "c\nint value ",
+            "= 1;\n```\n\nFirst prose", " line\ncontinued prose\n\nsecond paragraph"
         };
         size_t index = graph->count;
 

@@ -357,6 +357,7 @@ int
 snj_render_public_begin(struct snj_render *render, int fd, const char *label)
 {
     size_t label_len = label ? strlen(label) : 0u;
+    bool terminal;
 
     if (render->public_item_open || render->utf8_pending_len ||
         render->wrap_pending.data) {
@@ -367,6 +368,18 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
         errno = EINVAL;
         return -1;
     }
+    terminal = fd == STDOUT_FILENO ? render->stdout_terminal :
+                                     render->stderr_terminal;
+    if (render->markdown && terminal && render->previous_markdown_item &&
+        render->previous_markdown_fd == fd &&
+        render->previous_markdown_newlines < 2u) {
+        static const char newlines[] = "\n\n";
+        size_t count = 2u - render->previous_markdown_newlines;
+
+        if (write_block(render, fd, newlines, count, false, true) < 0)
+            return -1;
+    }
+    render->previous_markdown_item = false;
     if (fd == STDOUT_FILENO && render->stdout_item_seen &&
         !render->stdout_item_ended_lf && !render->stdout_terminal &&
         write_literal(STDOUT_FILENO, "\n") < 0)
@@ -376,6 +389,7 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
     render->public_item_open = true;
     render->public_item_bytes = label_len != 0u;
     render->public_item_ended_lf = label_len && label[label_len - 1u] == '\n';
+    render->public_trailing_newlines = 0u;
     render->public_column = label_len ? snj_term_text_width(label, label_len) : 0u;
     render->wrap_has_word = false;
     render->wrap_continuation = false;
@@ -415,6 +429,7 @@ fail:
         render->public_item_open = false;
         render->public_item_bytes = false;
         render->public_item_ended_lf = false;
+        render->public_trailing_newlines = 0u;
         render->markdown_rendering = false;
         render->public_fd = -1;
         snj_buf_free(&render->wrap_pending);
@@ -434,6 +449,7 @@ static int
 public_write(struct snj_render *render, const char *text, size_t len)
 {
     bool terminal = public_terminal(render);
+    size_t trailing = 0u;
 
     if (!len)
         return 0;
@@ -451,6 +467,16 @@ public_write(struct snj_render *render, const char *text, size_t len)
         snj_term_note_output(render->term, text, len);
     render->public_item_bytes = true;
     render->public_item_ended_lf = text[len - 1u] == '\n';
+    while (trailing < len && trailing < 2u &&
+           text[len - trailing - 1u] == '\n')
+        ++trailing;
+    if (trailing == len && trailing < 2u) {
+        unsigned int prior = render->public_trailing_newlines;
+        unsigned int room = 2u - (unsigned int)trailing;
+
+        trailing += prior < room ? prior : room;
+    }
+    render->public_trailing_newlines = (unsigned int)trailing;
     return 0;
 }
 
@@ -793,9 +819,16 @@ markdown_prefix_literal(struct snj_render *render)
 {
     struct snj_markdown_state *md = &render->markdown_state;
     size_t len = md->prefix_len;
+    size_t spaces = markdown_prefix_spaces(md);
+    bool prose = len != 0u && spaces != len;
 
     md->prefix_len = 0u;
     md->line_start = false;
+    if (prose && !md->prose) {
+        md->prose = true;
+        if (markdown_text(render, "• ", strlen("• ")) < 0)
+            return -1;
+    }
     return markdown_inline(render, (const unsigned char *)md->prefix, len);
 }
 
@@ -807,6 +840,7 @@ markdown_code_prefix_literal(struct snj_render *render)
 
     md->prefix_len = 0u;
     md->line_start = false;
+    md->prose = false;
     if (markdown_text(render, "│ ", strlen("│ ")) < 0)
         return -1;
     return markdown_text(render, md->prefix, len);
@@ -890,6 +924,7 @@ markdown_line_prefix(struct snj_render *render,
                 goto ordinary;
         md->prefix_len = 0u;
         md->line_start = false;
+        md->prose = false;
         md->heading = true;
         return markdown_style_changed(render);
     }
@@ -911,6 +946,7 @@ markdown_line_prefix(struct snj_render *render,
             md->fence_header = true;
             md->prefix_len = 0u;
             md->line_start = false;
+            md->prose = false;
             return 0;
         }
     }
@@ -925,6 +961,7 @@ markdown_line_prefix(struct snj_render *render,
             md->quote = true;
         md->prefix_len = 0u;
         md->line_start = false;
+        md->prose = false;
         if (markdown_style_changed(render) < 0 ||
             markdown_text(render, md->prefix, spaces) < 0)
             return -1;
@@ -945,6 +982,7 @@ markdown_line_prefix(struct snj_render *render,
             size_t amount = md->prefix_len;
             md->prefix_len = 0u;
             md->line_start = false;
+            md->prose = false;
             return markdown_text(render, md->prefix, amount);
         }
     }
@@ -956,6 +994,11 @@ static int
 markdown_newline(struct snj_render *render)
 {
     struct snj_markdown_state *md = &render->markdown_state;
+    bool blank = md->line_start && !md->fence &&
+                 markdown_prefix_spaces(md) == md->prefix_len;
+
+    if (blank)
+        md->prose = false;
 
     if (md->fence_header)
         return markdown_open_fence(render, true);
@@ -1171,6 +1214,9 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     int fd;
     bool ended_lf;
     bool had_bytes;
+    bool markdown_item;
+    bool terminal;
+    unsigned int trailing_newlines;
     bool invalid = false;
     int rc = 0;
     int saved_errno = 0;
@@ -1203,10 +1249,14 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     fd = render->public_fd;
     ended_lf = render->public_item_ended_lf;
     had_bytes = render->public_item_bytes;
+    markdown_item = render->markdown_rendering;
+    terminal = public_terminal(render);
+    trailing_newlines = render->public_trailing_newlines;
     render->public_item_open = false;
     render->public_output_open = false;
     render->public_item_bytes = false;
     render->public_item_ended_lf = false;
+    render->public_trailing_newlines = 0u;
     render->markdown_rendering = false;
     render->markdown_preserve_fence = false;
     render->public_fd = -1;
@@ -1227,6 +1277,14 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
         rc = -1;
     } else if (fd == STDERR_FILENO && had_bytes && !ended_lf && render->term) {
         snj_term_note_output(render->term, "\n", 1u);
+    }
+    if (had_bytes && markdown_item && terminal) {
+        if (!ended_lf)
+            trailing_newlines = fd == STDERR_FILENO || render->stderr_terminal ?
+                                1u : 0u;
+        render->previous_markdown_item = true;
+        render->previous_markdown_fd = fd;
+        render->previous_markdown_newlines = trailing_newlines;
     }
     if (rc < 0 && !saved_errno)
         saved_errno = errno;

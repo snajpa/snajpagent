@@ -31,7 +31,8 @@ PACED_TEXT = "Paced tokens form interfragment and finish finalword"
 MARKDOWN_TEXT = (
     "# Stream **ready**\n"
     "- split `code` and [docs](https://example.test)\n"
-    "```c\nint value = 1;\n```"
+    "```c\nint value = 1;\n```\n\n"
+    "First prose line\ncontinued prose\n\nsecond paragraph"
 )
 
 
@@ -614,6 +615,8 @@ def run_markdown_case(binary, root):
                     raise AssertionError(
                         "Markdown did not become visible during the provider pause"
                     )
+                terminal.wait("• second paragraph", timeout=2.0,
+                              join_wrapped=True)
                 styled = terminal.capture_styled()
                 if re.search(
                         r"(?m)^(?:\x1b\[[0-9;]*m)+Stream", styled) is None:
@@ -640,7 +643,15 @@ def run_markdown_case(binary, root):
                     "┌─ c",
                     "│ int value = 1;",
                     "└─",
+                    "• First prose line",
+                    "continued prose",
+                    "• second paragraph",
                 ])
+                raw = terminal.capture()
+                if "• First prose line\ncontinued prose\n\n• second paragraph" not in raw:
+                    raise AssertionError(
+                        f"prose bullets or paragraph spacing are wrong:\n{raw}"
+                    )
             if any(len(line) > terminal.cols for line in terminal.capture().splitlines()):
                 raise AssertionError("Markdown rendering exceeded the tmux width")
             terminal.exit()
@@ -672,6 +683,8 @@ def run_render_case(binary, root):
         terminal.send_text("draft")
         first = terminal.wait("steer › draft")
         assert_order(first, ["alpha beta gamma delta epsilon", "steer › draft"])
+        if re.search(r"(?m)^• alpha beta gamma", first) is None:
+            raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
 
         time.sleep(0.1)
         pause_started = time.monotonic()
@@ -691,6 +704,8 @@ def run_render_case(binary, root):
             raise AssertionError(f"output resumed with a spurious blank line:\n{second}")
         if "steer › draft plus\nzeta eta theta" not in second:
             raise AssertionError(f"output did not resume directly below the draft:\n{second}")
+        if re.search(r"(?m)^zeta eta theta$", second) is None:
+            raise AssertionError(f"wrapped prose gained a hanging indent:\n{second}")
 
         repeat_pause_started = time.monotonic()
         terminal.send_text(" again with long resize text")
@@ -1078,7 +1093,11 @@ def wait_irc_quits(terminal, nicks, timeout=15.0):
 
 def assert_chat_line(screen, nick, text, operator=False):
     marker = "@" if operator else ""
-    pattern = rf"(?m)^\d{{2}}:\d{{2}} {re.escape(marker + nick)} › {re.escape(text)}$"
+    bullet = "" if operator else "• "
+    pattern = (
+        rf"(?m)^\d{{2}}:\d{{2}} {re.escape(marker + nick)} › "
+        rf"{re.escape(bullet + text)}$"
+    )
     if re.search(pattern, screen) is None:
         raise AssertionError(f"missing timestamped IRC line {nick!r}: {text!r}\n{screen}")
 

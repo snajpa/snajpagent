@@ -86,10 +86,10 @@ capture_wrapped(char *out, size_t out_size, struct snj_buf *delivered)
     assert(snj_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snj_render_public(&render, first, sizeof(first) - 1u, delivered) == 0);
     used = drain_available(fds[0], out, out_size, used);
-    assert(strcmp(out, "alpha beta gamm") == 0);
+    assert(strcmp(out, "• alpha beta gamm") == 0);
     assert(snj_render_public(&render, second, sizeof(second) - 1u, delivered) == 0);
     used = drain_available(fds[0], out, out_size, used);
-    assert(strcmp(out, "alpha beta gamma\ndelta") == 0);
+    assert(strcmp(out, "• alpha beta gamma\ndelta") == 0);
     assert(snj_render_public_end(&render) == 0);
     assert(dup2(saved, STDOUT_FILENO) >= 0);
     close(saved);
@@ -296,10 +296,18 @@ test_markdown_streaming(void)
 
     assert(snj_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snj_render_public(&render, "**aborted", 9u, NULL) == 0);
+    used = drain_available(fds[0], output, sizeof(output), used);
+    assert(strcmp(output,
+                  "Live café [docs] <https://example.test> and code\n\n"
+                  "• aborted") == 0);
     assert(snj_render_public_abort(&render) == 0);
     assert(snj_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snj_render_public(&render, "literal", 7u, NULL) == 0);
     assert(snj_render_public_end(&render) == 0);
+    used = drain_available(fds[0], output, sizeof(output), used);
+    assert(strcmp(output,
+                  "Live café [docs] <https://example.test> and code\n\n"
+                  "• aborted\n\n• literal") == 0);
     assert(dup2(saved, STDOUT_FILENO) >= 0);
     close(saved);
     while (read(fds[0], output, sizeof(output)) > 0)
@@ -384,13 +392,15 @@ main(void)
         "- item with `code` and [docs](https://example.test)\n"
         "> ~~old~~ new\n"
         "````c\nint main(void) { return 0; }\n````\n"
-        "~~~text\ntilde fence\n~~~\n";
+        "~~~text\ntilde fence\n~~~\n"
+        "First prose line\ncontinued prose\n\nsecond paragraph\n";
     static const char rendered[] =
         "Live Markdown\n"
         "• item with code and [docs] <https://example.test>\n"
         "│ old new\n"
         "┌─ c\n│ int main(void) { return 0; }\n└─\n"
-        "┌─ text\n│ tilde fence\n└─\n";
+        "┌─ text\n│ tilde fence\n└─\n"
+        "• First prose line\ncontinued prose\n\n• second paragraph\n";
     char output[4096];
     struct snj_render render;
     struct snj_buf delivered;
@@ -409,7 +419,7 @@ main(void)
 
     snj_buf_init(&delivered, 1024u);
     assert(capture_wrapped(output, sizeof(output), &delivered) > 0u);
-    assert(strcmp(output, "alpha beta gamma\ndelta") == 0);
+    assert(strcmp(output, "• alpha beta gamma\ndelta") == 0);
     assert(snj_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data,
                   "alpha beta gamma delta") == 0);
@@ -432,17 +442,17 @@ main(void)
     assert(strstr(output, "\033[0;4;34mhttps://example.test") != NULL);
     assert(strstr(output, "\033[0;34;2mold") != NULL);
     assert(capture_markdown("**", true, true, SNJ_COLOR_NEVER,
-                            output, sizeof(output), NULL) == 2u);
-    assert(strcmp(output, "**") == 0);
+                            output, sizeof(output), NULL) == strlen("• **"));
+    assert(strcmp(output, "• **") == 0);
 
     assert(capture_static_markdown(output, sizeof(output)) > 0u);
-    assert(strstr(output, "agent › answer and code\n") != NULL);
+    assert(strstr(output, "agent › • answer and code\n") != NULL);
     assert(strstr(output, "@operator › **literal operator**\n") != NULL);
     assert(strstr(output, "remote › ┌─ c\n") != NULL);
     assert(strstr(output, "remote › │ int value = 1;\n") != NULL);
     assert(strstr(output, "remote › └─\n") != NULL);
     assert(strstr(output, "-remote - **literal notice**\n") != NULL);
-    assert(strstr(output, "remote › plain after quit\n") != NULL);
+    assert(strstr(output, "remote › • plain after quit\n") != NULL);
     assert(strstr(output, "remote › │ plain after quit\n") == NULL);
     assert(strstr(output, "user: **literal user**\n") != NULL);
     assert(strstr(output, "assistant: Saved answer\n") != NULL);

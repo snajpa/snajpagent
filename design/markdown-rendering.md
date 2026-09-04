@@ -29,6 +29,13 @@ coding models:
 - inline code, emphasis, strong emphasis, and strikethrough; and
 - escapes and inline link destinations, which remain visibly attributable.
 
+Each top-level prose paragraph begins with `• `. Consecutive model items and
+Markdown paragraph breaks have one empty terminal row between them. A soft or
+hard terminal wrap continues at the left margin rather than under the first
+paragraph character; explicit non-blank source line breaks within one paragraph
+also remain unbulleted. Headings, list items, block quotes, and fenced code keep
+their own structural markers instead of gaining a redundant paragraph bullet.
+
 Headings, quotations, lists, code, and inline spans have readable structural
 fallbacks when color is disabled. When color is active, they use only ordinary
 SGR attributes and the existing broadly supported 16-color palette. Link
@@ -68,7 +75,7 @@ non-networked assistant history uses the same static model-text presentation.
   and duplicate assignment. CLI tests cover both overrides and conflicts.
 - Deterministic tmux coverage checks a genuinely paced Markdown response before
   completion, its byte-exact durable form, static Markdown in the IRC chat UI,
-  the disabled setting, width safety, and absence of raw escape leakage.
+  prose bullets, flush-left continuation lines, paragraph spacing, the disabled
+  setting, width safety, and absence of raw escape leakage.
 - Full optimized and sanitizer suites plus `make sizecheck` must pass without a
   new production translation unit or dependency.
-

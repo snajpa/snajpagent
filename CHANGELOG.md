@@ -4,6 +4,10 @@
 
 ## 0.9.0-wip
 
+- Added Codex-style bullets and visible separation to terminal model prose.
+  Each paragraph starts with `• `, while wrapped continuation lines stay
+  flush-left and stored, provider, redirected, and IRC bytes remain unchanged.
+
 - Renamed IRC identity terminology consistently to nick: `-n` now has long
   form `--model-nick`, `-o` has `--operator-nick`, and their `[irc]` keys are
   `model_nick` and `operator_nick`. The superseded forms are not aliases.

@@ -271,7 +271,9 @@ quotes, fenced code, inline code, emphasis, strikethrough, and links receive a
 compact terminal rendering; link destinations remain visible. This is a
 presentation layer only: redirected output, provider input, durable events,
 and IRC frames retain the model's exact bytes. Disabling color keeps Markdown's
-structural rendering while removing its attributes.
+structural rendering while removing its attributes. Prose paragraphs receive a
+`• ` prefix and an empty row between paragraphs; wrapped continuation lines
+start at the left margin without a hanging indent.
 
 ## Configuration
 

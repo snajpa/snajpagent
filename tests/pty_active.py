@@ -1171,7 +1171,7 @@ def test_network_chat_and_managed_mention():
         child.send(b"network_commentary\r")
         human.wait(b"PRIVMSG #lab :network commentary reply\r\n",
                    start=wire_start)
-        child.wait(b"agent \xe2\x80\xba network local planning",
+        child.wait(b"agent \xe2\x80\xba \xe2\x80\xa2 network local planning",
                    start=verbose_end)
 
         wire_start = len(human.buf)

@@ -36,6 +36,7 @@ struct snj_markdown_state {
     bool previous_word;
     bool delimiter_previous_word;
     bool style_painted;
+    bool prose;
 };
 
 struct snj_irc_markdown_state {
@@ -54,6 +55,10 @@ struct snj_render {
     bool public_output_open;
     bool public_item_bytes;
     bool public_item_ended_lf;
+    unsigned int public_trailing_newlines;
+    unsigned int previous_markdown_newlines;
+    int previous_markdown_fd;
+    bool previous_markdown_item;
     bool stdout_item_seen;
     bool stdout_item_ended_lf;
     bool protocol_warning_shown;
