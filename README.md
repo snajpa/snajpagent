@@ -182,6 +182,11 @@ there is no automatic age check, so the user decides when it is stale. A
 provider whose normalized API path ends in `/backend-api/codex` uses the Codex
 `/models?client_version=0.146.0` catalog endpoint; other providers use
 `/v1/models`. Every catalog display ends with the cache update time.
+Provider-advertised context/input/output limits are retained with their source
+URL and protocol, shown by the catalog, and used only while that source binding
+still matches. The pre-release cache has one strict unversioned shape; an old
+or malformed cache asks for an explicit `/model cache` refresh rather than
+migrating or borrowing another application's data.
 
 `/model NUMBER` and `/model #NUMBER` select an exact displayed row. Append
 `save` or `s` to a selection to also store its provider, model, and effort in
@@ -231,13 +236,17 @@ goal turn, and refusal, turn failure, terminal input closure, or process
 restart pauses automatic continuation. See
 [`design/goals.md`](design/goals.md) for the complete lifecycle contract.
 
-The ordinary composer identifies both the model and reasoning effort. It uses
-`MODEL/EFFORT › ` while idle and `MODEL/EFFORT » ` during a turn, where `›`
-means start a turn and `»` means add input to the active turn. The idle prompt
-shows the effective next-turn selection; the active prompt keeps the model and
-effort frozen for that turn even if `/model` or `/effort` stages a different
-next-turn value. Terminal-unsafe characters in those trusted selectors are
-escaped for display without changing the values sent to the provider.
+The ordinary composer identifies the model, reasoning effort, and current
+context position. It uses `MODEL/EFFORT context=N% › ` while idle and
+`MODEL/EFFORT context=N% » ` during a turn, where `›` means start a turn and
+`»` means add input to the active turn. The percentage is the latest comparable
+durable token bound divided by the resolved hard input budget, rounded up;
+unknown capacity or incompatible lineage renders `context=?%`. Raw serialized
+bytes are never displayed as measured tokens. The idle prompt shows the
+effective next-turn selection; the active prompt keeps the model and effort
+frozen for that turn even if `/model` or `/effort` stages a different next-turn
+value. Terminal-unsafe characters in those trusted selectors are escaped for
+display without changing the values sent to the provider.
 
 At startup the orientation identifies the product build, workspace, and
 abbreviated session explicitly, for example
@@ -261,8 +270,8 @@ Queue mutations accept these short and long forms:
 ```
 
 `pop` removes the newest queued turn. Editing reopens the selected text under
-an `edit N › ` prompt and saves it in the same FIFO position with Enter (or
-with Tab while another turn is active).
+an `edit N context=N% › ` prompt (or `context=?%`) and saves it in the same
+FIFO position with Enter (or with Tab while another turn is active).
 
 ## IRC Chat Mode
 
@@ -425,6 +434,24 @@ exact_token_count = false
 native_compaction = false
 ```
 
+Provider capacity is resolved from an exact matching operator tuple first,
+then source-bound catalog metadata, then unknown. A model-specific tuple is
+useful for a standard OpenAI-compatible Models endpoint that advertises IDs but
+not limits:
+
+```ini
+[model-limit openai/gpt-5.6-sol]
+context_window_tokens = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+```
+
+The first slash separates the configured provider name and the remainder is
+the literal model ID. Each key is optional, but the section must contain at
+least one consistent value. Overrides are runtime configuration and are not
+copied into `models.json`. When output capacity is unknown, snajpagent omits
+`max_output_tokens` instead of guessing 128,000.
+
 OpenRouter uses the same OpenAI-compatible Responses path. Its `/api/v1`
 base URL is accepted directly:
 
@@ -441,6 +468,20 @@ openrouter_title = snajpagent
 exact_token_count = false
 native_compaction = false
 ```
+
+`auto_compact_input_tokens = 0` disables proactive compaction only. Every
+request still passes the always-on hard-capacity check when a limit is known,
+and a trustworthy pre-output `context_length_exceeded` gets one bounded
+compact-and-retry recovery attempt even when the first limit was unknown.
+When the rejection includes a context limit or requested-input detail, the
+derived lower safety ceiling is retained for that session and exact
+provider/model/source route, survives resume, participates in subsequent hard
+budgets and prompt percentages, and appears separately in `/status`. An error
+without either token fact never creates a ceiling.
+Exact token counts are used when configured. Otherwise provider-reported usage
+anchors pessimistic growth accounting when compatible, with a one-token-per-
+serialized-byte upper bound only as the explicit fallback; byte and token
+measurements remain separately reported.
 
 Local codex-lb proxy configuration:
 
@@ -516,7 +557,8 @@ room_name = builds
 history_lines = 200
 ```
 
-Other supported config sections are `[irc]`, `[ui]`, and `[tool]`; the parser in
+Other supported config sections are `[model-limit PROVIDER/MODEL]`, `[irc]`,
+`[ui]`, and `[tool]`; the parser in
 `src/config.c` is currently the source of truth for every accepted key.
 The complete cache and selector contract is recorded in
 `design/model-cache.md`.

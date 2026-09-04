@@ -72,6 +72,35 @@ Hidden, `none`, missing, and unknown visibility values do not become selectable.
 Other providers read `data[].id`, including optional model metadata, in
 response order. Structural bounds, valid JSON/UTF-8, and required cache fields
 are checked for safe storage, but model identifiers are not judged by name.
+Both decoders retain provider-advertised context, input, output, automatic-
+compaction, and effective-window limits when present. The OpenAI-compatible
+decoder accepts bounded integral snake-case and camel-case aliases at the
+model top level and in `metadata` or `capabilities`; aliases for the same fact
+must agree. A standard Models response that supplies only IDs is valid and
+stores unknown limits.
+
+The cache has one strict, unversioned pre-release schema. Each provider record
+binds its models to the normalized `base_url` and the `codex` or `openai`
+catalog protocol that supplied them. Each model has this fixed-shape object,
+whose absent provider facts remain JSON null:
+
+```json
+"limits": {
+  "context_window_tokens": 272000,
+  "max_context_window_tokens": 872000,
+  "input_context_window_tokens": null,
+  "max_input_tokens": null,
+  "max_output_tokens": null,
+  "auto_compact_input_tokens": null,
+  "effective_context_window_percent": null
+}
+```
+
+There is no format/version member, old-shape reader, migration, or implicit
+rewrite. A non-current cache is unusable and directs the operator to run
+`/model cache`. If a configured provider's URL or catalog protocol no longer
+matches its cached source binding, its catalog remains displayable but its
+limits are ignored for runtime safety until an explicit refresh.
 Refreshing is transactional across all configured providers: any discovery or
 write failure preserves the previous cache rather than publishing a partial
 replacement. Both protocols share the provider's configured credentials,
@@ -99,6 +128,9 @@ then shows one flat numbered list of discovered provider/model/reasoning
 variants. Models whose endpoint supplies no reasoning metadata still get one
 selectable row using the configured/default reasoning effort. Provider names
 are shown so duplicate model IDs from different providers remain distinct.
+Each model line also shows the advertised normal context, maximum context,
+maximum input, and maximum output when known; unknown facts remain visibly
+unknown rather than being inferred from the model name.
 
 `/model NUMBER` selects the exact displayed row. `/model #NUMBER` is accepted
 as an equivalent explicit-number spelling. Numbering is read from the same
@@ -159,3 +191,40 @@ Configuration may name `provider` alongside `model` and `reasoning_effort` in
 `[agent]`. If absent, the first configured provider remains the default. The
 named provider must exist, and it becomes the provider for a newly created
 session. This is the representation written by `/model SELECTOR save`.
+
+## Configured Limits And Runtime Resolution
+
+A provider whose catalog does not advertise capacity can receive an exact
+model-specific operator tuple. The first slash separates the configured
+provider name; the rest is the literal model ID, so IDs containing slashes are
+representable:
+
+```ini
+[model-limit paid-openai/gpt-5.6-sol]
+context_window_tokens = 1050000
+max_input_tokens = 922000
+max_output_tokens = 128000
+```
+
+All three keys are optional, but a section must provide at least one and its
+known values must be internally consistent. A matching configured tuple takes
+precedence as a whole over source-bound catalog limits. Otherwise matching
+catalog limits are used; without either source the hard capacity is unknown.
+Configuration facts are never written into `models.json`.
+
+For Codex catalogs, the ordinary `context_window` is the default working
+window and `max_context_window` remains separately visible as an advertised
+client ceiling. An absent effective percentage derives a 95-percent Codex
+client policy at runtime. A generic provider that supplies only total context
+derives 90-percent headroom. Derived policy is visible but is not cached or
+described as a provider promise. Unknown output capacity omits
+`max_output_tokens` from Responses requests.
+
+A typed pre-output capacity rejection may additionally establish a lower
+in-session hard-input ceiling when the provider supplies an integral context
+limit or requested-input count. This observed ceiling is durable session
+state, not provider-advertised cache data. It is bound to the exact provider,
+model, normalized base URL, and protocol that rejected the request, never
+raises a configured or advertised budget, and is ignored after a source
+mismatch. `/status` reports observed usage and the observed ceiling as
+separate facts. Without either provider token detail, no ceiling is inferred.

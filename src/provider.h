@@ -48,6 +48,7 @@ int snj_provider_responses_create(const json_t *create_request,
                                   snj_provider_pump_fn pump,
                                   void *pump_opaque,
                                   struct snj_response_graph *graph,
+                                  struct snj_provider_failure *failure,
                                   char *error, size_t error_size,
                                   int *cancel_code,
                                   unsigned int *retry_count);
@@ -58,5 +59,8 @@ int snj_provider_models_list(const struct snj_config *config,
                              struct snj_render *render,
                              json_t **models,
                              char *error, size_t error_size);
+
+const char *snj_provider_catalog_protocol(
+    const struct snj_provider_config *provider);
 
 #endif

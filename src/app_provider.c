@@ -19,6 +19,31 @@ typedef int (*fixture_emit_fn)(void *opaque, size_t item_index,
                                const char *text, size_t len);
 typedef int (*fixture_pump_fn)(void *opaque, unsigned int timeout_ms);
 #ifdef SNAJPAGENT_TEST_FIXTURE
+static bool fixture_capacity_rejected_once;
+
+static json_t *
+fixture_model_limits(size_t index)
+{
+    json_t *limits = json_object();
+
+    if (!limits ||
+        snj_json_set_new(limits, "auto_compact_input_tokens", json_null()) < 0 ||
+        snj_json_set_new(limits, "context_window_tokens",
+                         index < 2u ? json_integer(272000) : json_null()) < 0 ||
+        snj_json_set_new(limits, "effective_context_window_percent",
+                         json_null()) < 0 ||
+        snj_json_set_new(limits, "input_context_window_tokens", json_null()) < 0 ||
+        snj_json_set_new(limits, "max_context_window_tokens",
+                         index < 2u ? json_integer(872000) : json_null()) < 0 ||
+        snj_json_set_new(limits, "max_input_tokens", json_null()) < 0 ||
+        snj_json_set_new(limits, "max_output_tokens", json_null()) < 0) {
+        if (limits)
+            json_decref(limits);
+        return NULL;
+    }
+    return limits;
+}
+
 int snj_fixture_response(const char *prompt, const json_t *steering,
                          const char *workspace, unsigned int cycle,
                          const char *goal_prompt, uint64_t goal_turn_count,
@@ -115,7 +140,8 @@ snj_app_provider_models(struct app_state *app,
             goto fail_entry;
         }
         variants = NULL;
-        if (snj_json_set_new(entry, "id", json_string(ids[i])) < 0)
+        if (snj_json_set_new(entry, "id", json_string(ids[i])) < 0 ||
+            snj_json_set_new(entry, "limits", fixture_model_limits(i)) < 0)
             goto fail_entry;
         if (json_array_append_new(out, entry) < 0) {
             entry = NULL;
@@ -215,7 +241,8 @@ snj_app_provider_compact(struct app_state *app, const json_t *compact_request,
     (void)compact_request;
     (void)credential;
     if (app && app->session.last_user &&
-        strcmp(app->session.last_user, "compaction_steer") == 0)
+        (strcmp(app->session.last_user, "compaction_steer") == 0 ||
+         strcmp(app->session.last_user, "capacity_recovery_steer") == 0))
         for (unsigned int i = 0u; i < 100u; ++i) {
             int pump_rc = snj_app_active_input_pump(app, 20u);
 
@@ -266,14 +293,36 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
                      const json_t *create_request,
                      const struct snj_credential *credential,
                      struct snj_response_graph *graph,
+                     struct snj_provider_failure *failure,
                      char *error, size_t error_size,
                      unsigned int *retry_count)
 {
 #ifdef SNAJPAGENT_TEST_FIXTURE
     (void)create_request;
     (void)credential;
+    if (failure)
+        memset(failure, 0, sizeof(*failure));
     if (retry_count)
         *retry_count = 0u;
+    if (((strcmp(prompt, "capacity_recovery") == 0 ||
+          strcmp(prompt, "capacity_recovery_steer") == 0) &&
+         !fixture_capacity_rejected_once) ||
+        strcmp(prompt, "capacity_recovery_twice") == 0) {
+        fixture_capacity_rejected_once = true;
+        if (failure) {
+            memcpy(failure->code, "context_length_exceeded", 24u);
+            memcpy(failure->message, "fixture context rejected", 25u);
+            failure->context_limit_tokens = 100000u;
+            failure->requested_input_tokens = 90000u;
+            failure->context_limit_known = true;
+            failure->requested_input_known = true;
+        }
+        if (error_size)
+            (void)snprintf(error, error_size,
+                           "fixture context rejected");
+        errno = EOVERFLOW;
+        return -1;
+    }
     return snj_fixture_response(prompt, steering, app->session.workspace, cycle,
                                 app->session.goal_prompt,
                                 app->session.goal_turn_count,
@@ -291,7 +340,7 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
                                            &app->render,
                                            snj_app_stream_public_response, app,
                                            snj_app_active_input_pump, app, graph,
-                                           error, error_size, &cancel_code,
+                                           failure, error, error_size, &cancel_code,
                                            retry_count);
     if (rc == 1 || rc == 2)
         return rc;

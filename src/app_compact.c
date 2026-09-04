@@ -42,7 +42,16 @@ static bool
 count_method_valid(const char *method)
 {
     return method && (strcmp(method, "exact") == 0 ||
+                      strcmp(method, "anchored_upper_bound") == 0 ||
                       strcmp(method, "qualified_upper_bound") == 0);
+}
+
+static bool
+active_reason(const char *reason)
+{
+    return reason && (strcmp(reason, "proactive") == 0 ||
+                      strcmp(reason, "hard_budget") == 0 ||
+                      strcmp(reason, "provider_rejection") == 0);
 }
 
 static json_t *
@@ -169,13 +178,13 @@ compaction_state_valid(const struct app_state *app, const char *reason,
                        bool active_prefix, char *error, size_t error_size)
 {
     if (!app || !app->config || !reason ||
-        (strcmp(reason, "manual") != 0 && strcmp(reason, "automatic") != 0)) {
+        (strcmp(reason, "manual") != 0 && !active_reason(reason))) {
         snprintf(error, error_size, "invalid compaction reason");
         errno = EINVAL;
         return -1;
     }
     if (active_prefix) {
-        if (strcmp(reason, "automatic") != 0 || !app->session.active_turn ||
+        if (!active_reason(reason) || !app->session.active_turn ||
             app->session.response_open ||
             app->session.active_process_handle[0] != '\0' ||
             app->session.active_compact_id[0] != '\0') {
@@ -199,6 +208,7 @@ compaction_state_valid(const struct app_state *app, const char *reason,
 static int
 build_compaction_request(struct app_state *app, bool active_prefix,
                          const char *model, const char *effort,
+                         uint64_t source_budget, bool allow_oversized_first,
                          json_t **request, json_t **count_request,
                          char source_hash[SNJ_SHA256_HEX_LEN + 1u],
                          size_t *source_bytes,
@@ -208,14 +218,17 @@ build_compaction_request(struct app_state *app, bool active_prefix,
 {
     if (active_prefix)
         return snj_context_compact_active_prefix_request_build(&app->session,
-            model, effort, request, count_request, source_hash, source_bytes,
+            model, effort, source_budget, allow_oversized_first,
+            request, count_request,
+            source_hash, source_bytes,
             request_hash, request_bytes, source_seq, error, error_size);
     return snj_context_compact_request_build(&app->session, model, effort,
-        request, count_request, source_hash, source_bytes, request_hash,
+        source_budget, allow_oversized_first, request, count_request,
+        source_hash, source_bytes,
+        request_hash,
         request_bytes, source_seq, error, error_size);
 }
 
-#ifndef SNAJPAGENT_TEST_FIXTURE
 static json_t *
 reasoning_settings(const char *effort)
 {
@@ -232,7 +245,8 @@ reasoning_settings(const char *effort)
 
 static json_t *
 responses_compact_create_request(const json_t *compact_request,
-                                 const char *model, const char *effort)
+                                 const char *model, const char *effort,
+                                 const struct snj_model_capacity *capacity)
 {
     static const char instruction[] =
         "Compact the prior conversation for future Responses turns. Return "
@@ -247,7 +261,7 @@ responses_compact_create_request(const json_t *compact_request,
     json_t *compact_instruction = json_object();
 
     if (!request || !json_is_array(input) || !compact_instruction ||
-        !model || !effort)
+        !model || !effort || !capacity)
         goto fail;
     input_copy = json_deep_copy(input);
     if (!input_copy ||
@@ -261,9 +275,7 @@ responses_compact_create_request(const json_t *compact_request,
     if (snj_json_set_new(request, "input", input_copy) < 0)
         goto fail;
     input_copy = NULL;
-    if (snj_json_set_new(request, "max_output_tokens",
-                         json_integer(SNAJPAGENT_MAX_OUTPUT_TOKENS)) < 0 ||
-        snj_json_set_new(request, "model", json_string(model)) < 0 ||
+    if (snj_json_set_new(request, "model", json_string(model)) < 0 ||
         snj_json_set_new(request, "parallel_tool_calls", json_false()) < 0 ||
         snj_json_set_new(request, "reasoning", reasoning_settings(effort)) < 0 ||
         snj_json_set_new(request, "store", json_false()) < 0 ||
@@ -271,6 +283,10 @@ responses_compact_create_request(const json_t *compact_request,
         snj_json_set_new(request, "tool_choice", json_string("none")) < 0 ||
         snj_json_set_new(request, "tools", json_array()) < 0 ||
         snj_json_set_new(request, "truncation", json_string("disabled")) < 0)
+        goto fail;
+    if (capacity->max_output_known &&
+        snj_json_set_new(request, "max_output_tokens",
+            json_integer((json_int_t)capacity->max_output_tokens)) < 0)
         goto fail;
     return request;
 
@@ -283,12 +299,31 @@ fail:
         json_decref(request);
     return NULL;
 }
-#endif
+
+static json_t *
+responses_compact_count_request(const json_t *compact_request,
+                                const char *model, const char *effort,
+                                const struct snj_model_capacity *capacity)
+{
+    json_t *request = responses_compact_create_request(compact_request,
+                                                        model, effort,
+                                                        capacity);
+
+    if (!request)
+        return NULL;
+    if (json_object_del(request, "store") < 0 ||
+        json_object_del(request, "stream") < 0 ||
+        (json_object_get(request, "max_output_tokens") &&
+         json_object_del(request, "max_output_tokens") < 0)) {
+        json_decref(request);
+        return NULL;
+    }
+    return request;
+}
 
 static int
-run_responses_compaction(struct app_state *app, const json_t *compact_request,
+run_responses_compaction(struct app_state *app, const json_t *create_request,
                          const struct snj_credential *credential,
-                         const char *model, const char *effort,
                          json_t **output, uint64_t *output_tokens_bound,
                          char *error, size_t error_size)
 {
@@ -309,10 +344,8 @@ run_responses_compaction(struct app_state *app, const json_t *compact_request,
     json_t *item = json_object();
 
     (void)app;
-    (void)compact_request;
+    (void)create_request;
     (void)credential;
-    (void)model;
-    (void)effort;
     if (!fixture_output || !item ||
         snj_json_set_new(item, "content",
                          json_string("fixture responses compact summary")) < 0 ||
@@ -337,23 +370,15 @@ run_responses_compaction(struct app_state *app, const json_t *compact_request,
 #else
     struct snj_response_graph graph;
     struct snj_graph_decision decision;
-    json_t *create_request = NULL;
     int cancel_code = 0;
     int provider_rc;
     int rc = -1;
 
-    create_request = responses_compact_create_request(compact_request,
-                                                      model, effort);
-    if (!create_request) {
-        snprintf(error, error_size, "cannot build Responses compact request");
-        errno = ENOMEM;
-        return -1;
-    }
     snj_response_graph_init(&graph);
     provider_rc = snj_provider_responses_create(
         create_request, app->config, app->turn_provider, credential,
         &app->render, NULL, NULL, snj_app_active_input_pump, app, &graph,
-        error, error_size, &cancel_code, NULL);
+        NULL, error, error_size, &cancel_code, NULL);
     if (provider_rc != 0) {
         rc = provider_rc;
         goto out;
@@ -385,7 +410,6 @@ run_responses_compaction(struct app_state *app, const json_t *compact_request,
     rc = 0;
 out:
     snj_response_graph_free(&graph);
-    json_decref(create_request);
     return rc;
 #endif
 }
@@ -398,6 +422,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
     struct snj_credential owned_credential;
     const struct snj_credential *credential = provided_credential;
     json_t *request = NULL;
+    json_t *provider_request = NULL;
     json_t *count_request = NULL;
     json_t *output_count_request = NULL;
     json_t *output = NULL;
@@ -419,6 +444,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
     uint64_t input_tokens_bound = 0u;
     uint64_t output_tokens_bound = 0u;
     uint64_t source_seq;
+    uint64_t source_budget;
     bool started = false;
     int build_rc;
     int stage_rc;
@@ -444,33 +470,11 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         errno = ENOENT;
         goto out;
     }
-    build_rc = build_compaction_request(app, active_prefix, model, effort,
-                                        &request, &count_request, source_hash,
-                                        &source_bytes, request_hash,
-                                        &request_bytes, &source_seq,
-                                        error, error_size);
-    if (build_rc == 1) {
-        if (!active_prefix && strcmp(reason, "manual") == 0 &&
-            snj_render_host(&app->render,
-                            "compaction skipped; no new context since the previous compact output") < 0)
-            return -1;
-        return 0;
-    }
-    if (build_rc < 0)
+    if (!active_prefix &&
+        snj_app_capacity_resolve(app, app->turn_provider, model,
+                                 &app->turn_capacity,
+                                 error, error_size) < 0)
         goto out;
-    if (source_bytes == 0u || source_bytes > (size_t)INT64_MAX ||
-        request_bytes == 0u) {
-        snprintf(error, error_size, "compact request has invalid bounds");
-        errno = EINVAL;
-        goto out;
-    }
-    input_tokens_bound = (uint64_t)source_bytes;
-    if (hash_json_bounded(count_request, SNJ_CONTEXT_MAX_COMPACT,
-                          count_request_hash, &count_request_bytes,
-                          error, error_size) < 0 || count_request_bytes == 0u) {
-        snprintf(error, error_size, "compact count request exceeds 12 MiB");
-        goto out;
-    }
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (!credential) {
         if (snj_credential_read(&owned_credential,
@@ -479,23 +483,119 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             goto out;
         credential = &owned_credential;
     }
-    if (app->turn_provider->exact_token_count) {
-        stage_rc = snj_app_provider_count(app, count_request, credential,
-                                          &input_tokens_bound,
-                                          error, error_size);
-        if (stage_rc != 0) {
-            rc = stage_rc;
+#endif
+    source_budget = app->turn_capacity.hard_input_known &&
+        !app->turn_provider->exact_token_count ?
+        app->turn_capacity.hard_input_tokens : 0u;
+    for (unsigned int selection = 0u; selection < 8u; ++selection) {
+        build_rc = build_compaction_request(app, active_prefix, model, effort,
+                                            source_budget,
+                                            app->turn_provider->exact_token_count,
+                                            &request, &count_request,
+                                            source_hash, &source_bytes,
+                                            request_hash, &request_bytes,
+                                            &source_seq, error, error_size);
+        if (build_rc == 1) {
+            if (selection != 0u) {
+                snprintf(error, error_size,
+                         "no complete history prefix fits the hard context budget");
+                errno = EOVERFLOW;
+                goto out;
+            }
+            if (!active_prefix && strcmp(reason, "manual") == 0 &&
+                snj_render_host(&app->render,
+                    "compaction skipped; no new context since the previous compact output") < 0)
+                goto out;
+            rc = 0;
             goto out;
         }
-        count_method = "exact";
-    }
+        if (build_rc < 0)
+            goto out;
+        if (source_bytes == 0u || source_bytes > (size_t)INT64_MAX) {
+            snprintf(error, error_size, "compact source has invalid bounds");
+            errno = EINVAL;
+            goto out;
+        }
+        if (app->turn_provider->native_compaction) {
+            provider_request = json_incref(request);
+        } else {
+            provider_request = responses_compact_create_request(
+                request, model, effort, &app->turn_capacity);
+            json_decref(count_request);
+            count_request = responses_compact_count_request(
+                request, model, effort, &app->turn_capacity);
+        }
+        if (!provider_request || !count_request) {
+            snprintf(error, error_size,
+                     "cannot build bounded compaction provider request");
+            errno = ENOMEM;
+            goto out;
+        }
+        if (hash_json_bounded(provider_request, SNJ_CONTEXT_MAX_COMPACT,
+                              request_hash, &request_bytes,
+                              error, error_size) < 0 || request_bytes == 0u ||
+            hash_json_bounded(count_request, SNJ_CONTEXT_MAX_COMPACT,
+                              count_request_hash, &count_request_bytes,
+                              error, error_size) < 0 ||
+            count_request_bytes == 0u) {
+            snprintf(error, error_size,
+                     "compaction provider request exceeds 12 MiB");
+            goto out;
+        }
+        input_tokens_bound = (uint64_t)count_request_bytes;
+#ifndef SNAJPAGENT_TEST_FIXTURE
+        if (app->turn_provider->exact_token_count) {
+            if (snj_app_provider_count(app, count_request, credential,
+                                       &input_tokens_bound,
+                                       error, error_size) != 0)
+                goto out;
+            count_method = "exact";
+        }
 #endif
-    if (input_tokens_bound == 0u || input_tokens_bound > (uint64_t)INT64_MAX) {
-        snprintf(error, error_size, "compact input-token bound is invalid");
-        errno = EOVERFLOW;
-        goto out;
+        if (input_tokens_bound == 0u ||
+            input_tokens_bound > (uint64_t)INT64_MAX) {
+            snprintf(error, error_size,
+                     "compact input-token bound is invalid");
+            errno = EOVERFLOW;
+            goto out;
+        }
+        if (!app->turn_capacity.hard_input_known ||
+            input_tokens_bound <= app->turn_capacity.hard_input_tokens)
+            break;
+        if (selection == 7u || source_bytes <= 1u) {
+            snprintf(error, error_size,
+                     "compaction input estimate %llu (%s) cannot fit hard budget %llu",
+                     (unsigned long long)input_tokens_bound, count_method,
+                     (unsigned long long)app->turn_capacity.hard_input_tokens);
+            errno = EOVERFLOW;
+            goto out;
+        }
+        if (strcmp(count_method, "exact") == 0) {
+            uint64_t scaled;
+            if ((uint64_t)source_bytes > UINT64_MAX /
+                    app->turn_capacity.hard_input_tokens)
+                scaled = (uint64_t)source_bytes / 2u;
+            else
+                scaled = (uint64_t)source_bytes *
+                    app->turn_capacity.hard_input_tokens /
+                    input_tokens_bound;
+            source_budget = scaled - scaled / 10u;
+        } else {
+            uint64_t envelope = count_request_bytes > source_bytes ?
+                (uint64_t)(count_request_bytes - source_bytes) : 0u;
+            source_budget = app->turn_capacity.hard_input_tokens > envelope ?
+                app->turn_capacity.hard_input_tokens - envelope : 0u;
+        }
+        if (source_budget >= (uint64_t)source_bytes)
+            source_budget = (uint64_t)source_bytes - 1u;
+        json_decref(provider_request);
+        provider_request = NULL;
+        json_decref(count_request);
+        count_request = NULL;
+        json_decref(request);
+        request = NULL;
     }
-    if (!active_prefix && strcmp(reason, "automatic") == 0 &&
+    if (!active_prefix && strcmp(reason, "proactive") == 0 &&
         app->turn_provider->auto_compact_input_tokens != 0u &&
         input_tokens_bound < app->turn_provider->auto_compact_input_tokens) {
         rc = 0;
@@ -514,7 +614,8 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         goto out;
     started = true;
     if (app->turn_provider->native_compaction) {
-        stage_rc = snj_app_provider_compact(app, request, credential, &output,
+        stage_rc = snj_app_provider_compact(app, provider_request, credential,
+                                            &output,
                                             &output_tokens_bound,
                                             error, error_size);
         if (stage_rc != 0) {
@@ -522,8 +623,8 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             goto out;
         }
     } else {
-        stage_rc = run_responses_compaction(app, request, credential,
-                                            model, effort, &output,
+        stage_rc = run_responses_compaction(app, provider_request, credential,
+                                            &output,
                                             &output_tokens_bound,
                                             error, error_size);
         if (stage_rc != 0) {
@@ -590,6 +691,8 @@ out:
         json_decref(output_count_request);
     if (count_request)
         json_decref(count_request);
+    if (provider_request)
+        json_decref(provider_request);
     if (request)
         json_decref(request);
     snj_credential_clear(&owned_credential);
@@ -610,7 +713,7 @@ snj_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
 {
     if (!app || !app->config || !app->turn_provider ||
         !count_method_valid(count_method)) {
-        snprintf(error, error_size, "invalid automatic compaction state");
+        snprintf(error, error_size, "invalid proactive compaction state");
         errno = EINVAL;
         return -1;
     }
@@ -618,7 +721,7 @@ snj_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
         return 0;
     if (input_tokens_bound < app->turn_provider->auto_compact_input_tokens)
         return 0;
-    return snj_app_compact_idle_command(app, "automatic", error, error_size);
+    return snj_app_compact_idle_command(app, "proactive", error, error_size);
 }
 
 int
@@ -636,10 +739,46 @@ snj_app_compact_before_response(struct app_state *app,
         errno = EINVAL;
         return -1;
     }
-    if (app->turn_provider->auto_compact_input_tokens == 0u)
+    {
+        bool over_hard = app->turn_capacity.hard_input_known &&
+            input_tokens_bound > app->turn_capacity.hard_input_tokens;
+        bool over_proactive =
+            app->turn_provider->auto_compact_input_tokens != 0u &&
+            input_tokens_bound >=
+                app->turn_provider->auto_compact_input_tokens;
+        int rc;
+
+        if (!over_hard && !over_proactive)
+            return 0;
+        rc = run_compaction(app, over_hard ? "hard_budget" : "proactive",
+                            true, credential, compacted, error, error_size);
+        if (rc != 0)
+            return rc;
+        if (over_hard && !*compacted) {
+            snprintf(error, error_size,
+                     "context input estimate %llu (%s) exceeds hard budget %llu; no complete older turn can be compacted",
+                     (unsigned long long)input_tokens_bound, count_method,
+                     (unsigned long long)app->turn_capacity.hard_input_tokens);
+            errno = EOVERFLOW;
+            return -1;
+        }
         return 0;
-    if (input_tokens_bound < app->turn_provider->auto_compact_input_tokens)
-        return 0;
-    return run_compaction(app, "automatic", true, credential, compacted,
-                          error, error_size);
+    }
+}
+
+int
+snj_app_compact_after_capacity_rejection(
+    struct app_state *app, const struct snj_credential *credential,
+    bool *compacted, char *error, size_t error_size)
+{
+    if (compacted)
+        *compacted = false;
+    if (!app || !credential || !compacted) {
+        snprintf(error, error_size,
+                 "invalid provider-rejection compaction state");
+        errno = EINVAL;
+        return -1;
+    }
+    return run_compaction(app, "provider_rejection", true, credential,
+                          compacted, error, error_size);
 }

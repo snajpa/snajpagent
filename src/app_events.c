@@ -60,7 +60,9 @@ turn_config(const struct app_state *app)
                          json_string(SNAJPAGENT_CAPABILITY_VERSION)) < 0 ||
         snj_json_set_new(config, "effort", json_string(app->turn_effort)) < 0 ||
         snj_json_set_new(config, "max_output_tokens",
-                         json_integer(SNAJPAGENT_MAX_OUTPUT_TOKENS)) < 0 ||
+            app->turn_capacity.max_output_known ?
+                json_integer((json_int_t)app->turn_capacity.max_output_tokens) :
+                json_null()) < 0 ||
         snj_json_set_new(config, "model", json_string(app->turn_model)) < 0 ||
         snj_json_set_new(config, "provider",
                          json_string(app->turn_provider->name)) < 0 ||
@@ -486,7 +488,10 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
                 char input_hash[SNJ_SHA256_HEX_LEN + 1u],
                 char request_hash[SNJ_SHA256_HEX_LEN + 1u],
                 char count_request_hash[SNJ_SHA256_HEX_LEN + 1u],
-                uint64_t *input_tokens_bound, struct snj_buf *request_body,
+                uint64_t *input_tokens_bound, uint64_t *model_input_bytes,
+                uint64_t *request_input_bytes, uint64_t *request_input_count,
+                char request_input_hash[SNJ_SHA256_HEX_LEN + 1u],
+                const char **count_method, struct snj_buf *request_body,
                 json_t **create_request, json_t **count_request,
                 char *error, size_t error_size)
 {
@@ -494,6 +499,12 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
     int rc;
 
     (void)prompt;
+    if (!input_tokens_bound || !model_input_bytes || !request_input_bytes ||
+        !request_input_count || !request_input_hash || !count_method) {
+        errno = EINVAL;
+        return -1;
+    }
+    *count_method = "qualified_upper_bound";
     if (create_request)
         *create_request = NULL;
     if (count_request)
@@ -501,6 +512,8 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
     snj_context_projection_init(&projection);
     rc = snj_context_build(&app->session, app->turn_model, app->turn_effort,
                            cycle, steering,
+                           app->turn_capacity.max_output_tokens,
+                           app->turn_capacity.max_output_known,
                            app->config,
                            &app->turn_instructions, &projection,
                            error, error_size);
@@ -512,6 +525,27 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
         memcpy(count_request_hash, projection.count_request_sha256,
                SNJ_SHA256_HEX_LEN + 1u);
         *input_tokens_bound = projection.input_tokens_bound;
+        *model_input_bytes = (uint64_t)projection.model_input_bytes;
+        *request_input_bytes = (uint64_t)projection.request_input_bytes;
+        *request_input_count = (uint64_t)projection.request_input_count;
+        memcpy(request_input_hash, projection.request_input_sha256,
+               SNJ_SHA256_HEX_LEN + 1u);
+        {
+            uint64_t anchored_bound = 0u;
+            int anchor_rc = snj_context_usage_anchor_bound(
+                &app->session, app->turn_provider->name, app->turn_model,
+                app->turn_effort, &projection, &anchored_bound);
+
+            if (anchor_rc < 0) {
+                if (error_size)
+                    (void)snprintf(error, error_size,
+                                   "cannot evaluate provider-usage anchor");
+                rc = -1;
+            } else if (anchor_rc == 1) {
+                *input_tokens_bound = anchored_bound;
+                *count_method = "anchored_upper_bound";
+            }
+        }
         if (create_request)
             *create_request = json_incref(projection.create_request);
         if (count_request)
@@ -560,12 +594,17 @@ snj_app_response_started_data(const char *turn_id, const char *response_id,
                       const char *input_hash,
                       const char *request_hash, const char *count_request_hash,
                       const char *count_method, uint64_t input_tokens_bound,
+                      uint64_t model_input_bytes, uint64_t request_input_bytes,
+                      uint64_t request_input_count, const char *request_input_hash,
+                      const char *baseline_hash,
+                      const char *provider, const char *effort,
+                      const struct snj_model_capacity *capacity,
                       const json_t *steering)
 {
     json_t *data = json_object();
     json_t *ids = json_array();
 
-    if (!data || !ids || !steering)
+    if (!data || !ids || !steering || !provider || !effort || !capacity)
         goto fail;
     for (size_t i = 0; i < json_array_size(steering); ++i) {
         json_t *item = json_array_get(steering, i);
@@ -575,7 +614,9 @@ snj_app_response_started_data(const char *turn_id, const char *response_id,
     }
     if (!model || !count_method || !count_request_hash)
         goto fail;
-    if (snj_json_set_new(data, "baseline_sha256", json_null()) < 0 ||
+    if (snj_json_set_new(data, "baseline_sha256",
+                         baseline_hash && *baseline_hash ?
+                         json_string(baseline_hash) : json_null()) < 0 ||
         snj_json_set_new(data, "capability_version",
                          json_string(SNAJPAGENT_CAPABILITY_VERSION)) < 0 ||
         snj_json_set_new(data, "compact_id",
@@ -584,15 +625,38 @@ snj_app_response_started_data(const char *turn_id, const char *response_id,
         snj_json_set_new(data, "count_method", json_string(count_method)) < 0 ||
         snj_json_set_new(data, "count_request_sha256",
                          json_string(count_request_hash)) < 0 ||
+        snj_json_set_new(data, "capacity_source",
+                         json_string(snj_capacity_source_name(
+                             capacity->source))) < 0 ||
         snj_json_set_new(data, "cycle", json_integer((json_int_t)cycle)) < 0 ||
+        snj_json_set_new(data, "effort", json_string(effort)) < 0 ||
+        snj_json_set_new(data, "hard_input_tokens",
+            capacity->hard_input_known ?
+                json_integer((json_int_t)capacity->hard_input_tokens) :
+                json_null()) < 0 ||
         snj_json_set_new(data, "input_tokens_bound",
                          json_integer((json_int_t)input_tokens_bound)) < 0 ||
         snj_json_set_new(data, "model", json_string(model)) < 0 ||
+        snj_json_set_new(data, "model_input_bytes",
+                         json_integer((json_int_t)model_input_bytes)) < 0 ||
         snj_json_set_new(data, "model_input_sha256", json_string(input_hash)) < 0 ||
         snj_json_set_new(data, "profile_id",
                          json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
+        snj_json_set_new(data, "provider", json_string(provider)) < 0 ||
+        snj_json_set_new(data, "request_input_bytes",
+                         json_integer((json_int_t)request_input_bytes)) < 0 ||
+        snj_json_set_new(data, "request_input_count",
+                         json_integer((json_int_t)request_input_count)) < 0 ||
+        snj_json_set_new(data, "request_input_sha256",
+                         json_string(request_input_hash)) < 0 ||
+        snj_json_set_new(data, "requested_output_tokens",
+            capacity->max_output_known ?
+                json_integer((json_int_t)capacity->max_output_tokens) :
+                json_null()) < 0 ||
         snj_json_set_new(data, "request_sha256", json_string(request_hash)) < 0 ||
-        snj_json_set_new(data, "response_id", json_string(response_id)) < 0)
+        snj_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
+        snj_json_set_new(data, "source_bound",
+                         json_boolean(capacity->source_bound)) < 0)
         goto fail;
     {
         int rc = snj_json_set_new(data, "steering_ids", ids);
@@ -609,6 +673,52 @@ fail:
     if (data)
         json_decref(data);
     return NULL;
+}
+
+json_t *
+snj_app_response_capacity_rejected_data(
+    const char *turn_id, const char *response_id, unsigned int cycle,
+    const char *request_hash, const struct snj_provider_failure *failure,
+    const struct snj_model_capacity *capacity,
+    const char *provider_source_sha256)
+{
+    json_t *data = json_object();
+    uint64_t safety_ceiling = 0u;
+    bool safety_ceiling_known;
+
+    safety_ceiling_known = capacity &&
+        snj_provider_failure_safety_ceiling(failure,
+            capacity->max_output_known, capacity->max_output_tokens,
+            &safety_ceiling);
+
+    if (!data || !turn_id || !response_id || !request_hash || !failure ||
+        !capacity || !provider_source_sha256 ||
+        !snj_hex_is_lower(provider_source_sha256, SNJ_SHA256_HEX_LEN) ||
+        snj_json_set_new(data, "code", json_string(failure->code)) < 0 ||
+        snj_json_set_new(data, "context_limit_tokens",
+            failure->context_limit_known ?
+                json_integer((json_int_t)failure->context_limit_tokens) :
+                json_null()) < 0 ||
+        snj_json_set_new(data, "cycle", json_integer((json_int_t)cycle)) < 0 ||
+        snj_json_set_new(data, "message", json_string(failure->message)) < 0 ||
+        snj_json_set_new(data, "observed_hard_input_tokens",
+            safety_ceiling_known ?
+                json_integer((json_int_t)safety_ceiling) : json_null()) < 0 ||
+        snj_json_set_new(data, "provider_source_sha256",
+                         json_string(provider_source_sha256)) < 0 ||
+        snj_json_set_new(data, "request_sha256",
+                         json_string(request_hash)) < 0 ||
+        snj_json_set_new(data, "requested_input_tokens",
+            failure->requested_input_known ?
+                json_integer((json_int_t)failure->requested_input_tokens) :
+                json_null()) < 0 ||
+        snj_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
+        snj_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
+        if (data)
+            json_decref(data);
+        return NULL;
+    }
+    return data;
 }
 
 json_t *

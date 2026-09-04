@@ -11,6 +11,7 @@
 /tests/test_instructions
 /tests/test_irc
 /tests/test_json
+/tests/test_model_cache
 /tests/test_provider_retry
 /tests/test_provider_transport
 /tests/test_render

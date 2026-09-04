@@ -11,6 +11,7 @@
 #include "irc.h"
 #include "model_cache.h"
 #include "render.h"
+#include "responses.h"
 #include "store.h"
 #include "term.h"
 #include "turn.h"
@@ -39,6 +40,7 @@ struct app_state {
     struct snj_buf irc_background;
     struct snj_instruction_set turn_instructions;
     struct snj_model_cache model_cache;
+    struct snj_model_capacity turn_capacity;
     const struct snj_cli *cli;
     struct snj_config *config;
     const char *config_path;
@@ -80,10 +82,16 @@ struct app_state {
     size_t queue_edit_number;
     uint64_t active_since_ms;
     bool activity_shown;
+    char capacity_cache_error[256];
 };
 
 int snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
                          char *error, size_t error_size);
+int snj_app_capacity_resolve(struct app_state *app,
+                             const struct snj_provider_config *provider,
+                             const char *model,
+                             struct snj_model_capacity *capacity,
+                             char *error, size_t error_size);
 int snj_app_goal_command(struct app_state *app, const char *line, bool active);
 int snj_app_goal_tool(struct app_state *app,
                       const struct snj_response_item *call,
@@ -128,6 +136,11 @@ int snj_app_request_digests(struct app_state *app, const char *prompt,
                             char request_hash[SNJ_SHA256_HEX_LEN + 1u],
                             char count_request_hash[SNJ_SHA256_HEX_LEN + 1u],
                             uint64_t *input_tokens_bound,
+                            uint64_t *model_input_bytes,
+                            uint64_t *request_input_bytes,
+                            uint64_t *request_input_count,
+                            char request_input_hash[SNJ_SHA256_HEX_LEN + 1u],
+                            const char **count_method,
                             struct snj_buf *request_body,
                             json_t **create_request,
                             json_t **count_request,
@@ -142,7 +155,23 @@ json_t *snj_app_response_started_data(const char *turn_id,
                                       const char *count_request_hash,
                                       const char *count_method,
                                       uint64_t input_tokens_bound,
+                                      uint64_t model_input_bytes,
+                                      uint64_t request_input_bytes,
+                                      uint64_t request_input_count,
+                                      const char *request_input_hash,
+                                      const char *baseline_hash,
+                                      const char *provider,
+                                      const char *effort,
+                                      const struct snj_model_capacity *capacity,
                                       const json_t *steering);
+json_t *snj_app_response_capacity_rejected_data(
+                                      const char *turn_id,
+                                      const char *response_id,
+                                      unsigned int cycle,
+                                      const char *request_hash,
+                                      const struct snj_provider_failure *failure,
+                                      const struct snj_model_capacity *capacity,
+                                      const char *provider_source_sha256);
 json_t *snj_app_response_completed_data(const char *turn_id,
                                         const char *response_id,
                                         unsigned int cycle,
@@ -200,6 +229,11 @@ int snj_app_compact_before_response(struct app_state *app,
                                     uint64_t input_tokens_bound,
                                     const char *count_method, bool *compacted,
                                     char *error, size_t error_size);
+int snj_app_compact_after_capacity_rejection(
+                                    struct app_state *app,
+                                    const struct snj_credential *credential,
+                                    bool *compacted,
+                                    char *error, size_t error_size);
 void snj_app_response_cycle_release(struct app_state *app,
                                     struct snj_response_graph *graph,
                                     json_t **steering, json_t **create_request,
@@ -242,6 +276,7 @@ int snj_app_provider_run(struct app_state *app, const char *prompt,
                          const json_t *create_request,
                          const struct snj_credential *credential,
                          struct snj_response_graph *graph,
+                         struct snj_provider_failure *failure,
                          char *error, size_t error_size,
                          unsigned int *retry_count);
 int snj_app_tool_run(struct app_state *app,

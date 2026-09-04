@@ -10,6 +10,15 @@
 
 #define SNJ_MAX_RESPONSE_PARTS 96u
 
+struct snj_provider_failure {
+    char code[64];
+    char message[256];
+    uint64_t context_limit_tokens;
+    uint64_t requested_input_tokens;
+    bool context_limit_known;
+    bool requested_input_known;
+};
+
 typedef int (*snj_responses_emit_fn)(void *opaque, size_t output_index,
                                      enum snj_item_kind kind,
                                      enum snj_item_phase phase,
@@ -67,6 +76,7 @@ struct snj_responses_stream {
     bool created;
     bool terminal;
     bool failed;
+    struct snj_provider_failure provider_failure;
     char error[256];
 };
 
@@ -79,5 +89,13 @@ int snj_responses_stream_finish(struct snj_responses_stream *stream,
                                 struct snj_response_graph *graph,
                                 char *error, size_t error_size);
 const char *snj_responses_stream_error(const struct snj_responses_stream *stream);
+bool snj_provider_failure_is_capacity(
+    const struct snj_provider_failure *failure);
+bool snj_provider_failure_safety_ceiling(
+    const struct snj_provider_failure *failure,
+    bool requested_output_known, uint64_t requested_output_tokens,
+    uint64_t *ceiling_tokens);
+int snj_provider_failure_from_json(const json_t *root,
+                                   struct snj_provider_failure *failure);
 
 #endif

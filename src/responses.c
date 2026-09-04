@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "responses.h"
+#include "config.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -18,6 +19,122 @@ stream_fail(struct snj_responses_stream *stream, int code, const char *fmt, ...)
     va_end(ap);
     errno = code;
     return -1;
+}
+
+static int
+failure_limit(const json_t *object, const char *key, uint64_t *value,
+              bool *known)
+{
+    json_t *entry;
+    json_int_t integer;
+
+    if (!object || !(entry = json_object_get(object, key)) ||
+        json_is_null(entry))
+        return 0;
+    if (!json_is_integer(entry) || (integer = json_integer_value(entry)) <= 0 ||
+        (uint64_t)integer > SNJ_CONFIG_TOKEN_LIMIT_MAX ||
+        (*known && *value != (uint64_t)integer))
+        return -1;
+    *known = true;
+    *value = (uint64_t)integer;
+    return 0;
+}
+
+bool
+snj_provider_failure_is_capacity(const struct snj_provider_failure *failure)
+{
+    return failure && strcmp(failure->code,
+                             "context_length_exceeded") == 0;
+}
+
+bool
+snj_provider_failure_safety_ceiling(
+    const struct snj_provider_failure *failure,
+    bool requested_output_known, uint64_t requested_output_tokens,
+    uint64_t *ceiling_tokens)
+{
+    uint64_t ceiling = 0u;
+    bool known = false;
+
+    if (!failure || !ceiling_tokens)
+        return false;
+    if (failure->context_limit_known) {
+        ceiling = failure->context_limit_tokens;
+        if (requested_output_known)
+            ceiling = ceiling > requested_output_tokens ?
+                ceiling - requested_output_tokens : 1u;
+        known = true;
+    }
+    if (failure->requested_input_known &&
+        failure->requested_input_tokens > 1u &&
+        (!known || failure->requested_input_tokens - 1u < ceiling)) {
+        ceiling = failure->requested_input_tokens - 1u;
+        known = true;
+    }
+    if (known)
+        *ceiling_tokens = ceiling;
+    return known;
+}
+
+int
+snj_provider_failure_from_json(const json_t *root,
+                               struct snj_provider_failure *failure)
+{
+    static const char *const limit_keys[] = {
+        "context_limit", "context_length", "max_context_length",
+        "max_context_tokens"
+    };
+    static const char *const requested_keys[] = {
+        "input_tokens", "requested_tokens", "requested_input_tokens"
+    };
+    json_t *object;
+    json_t *response;
+    const char *code;
+    const char *message;
+
+    if (!failure)
+        return -1;
+    memset(failure, 0, sizeof(*failure));
+    if (!json_is_object(root))
+        return 0;
+    object = json_object_get(root, "error");
+    response = json_object_get(root, "response");
+    if (json_is_object(response)) {
+        json_t *nested = json_object_get(response, "error");
+        if (json_is_object(nested))
+            object = nested;
+        else if (!json_is_object(object)) {
+            nested = json_object_get(response, "incomplete_details");
+            if (json_is_object(nested))
+                object = nested;
+        }
+    }
+    if (!json_is_object(object) &&
+        (snj_json_string(root, "code") || snj_json_string(root, "reason")))
+        object = (json_t *)root;
+    if (!json_is_object(object))
+        return 0;
+    code = snj_json_string(object, "code");
+    if (!code)
+        code = snj_json_string(object, "reason");
+    message = snj_json_string(object, "message");
+    if (code && *code && strlen(code) < sizeof(failure->code) &&
+        snj_utf8_valid((const unsigned char *)code, strlen(code), true))
+        memcpy(failure->code, code, strlen(code) + 1u);
+    if (message && strlen(message) < sizeof(failure->message) &&
+        snj_utf8_valid((const unsigned char *)message, strlen(message), true))
+        memcpy(failure->message, message, strlen(message) + 1u);
+    for (size_t i = 0; i < sizeof(limit_keys) / sizeof(limit_keys[0]); ++i)
+        if (failure_limit(object, limit_keys[i],
+                          &failure->context_limit_tokens,
+                          &failure->context_limit_known) < 0)
+            return -1;
+    for (size_t i = 0; i < sizeof(requested_keys) / sizeof(requested_keys[0]); ++i)
+        if (failure_limit(object, requested_keys[i],
+                          &failure->requested_input_tokens,
+                          &failure->requested_input_known) < 0)
+            return -1;
+    return 0;
 }
 
 static bool
@@ -747,6 +864,11 @@ handle_provider_failure(struct snj_responses_stream *stream,
     }
     if (!message && json_is_object(error))
         message = snj_json_string(error, "message");
+    if (!message && strcmp(type, "error") == 0)
+        message = snj_json_string(root, "message");
+    if (snj_provider_failure_from_json(root, &stream->provider_failure) < 0)
+        return stream_fail(stream, EPROTO,
+                           "invalid structured provider failure");
     return stream_fail(stream, EIO, "%s%s%s", type,
                        message ? ": " : "", message ? message : "");
 }

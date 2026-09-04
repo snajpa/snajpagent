@@ -28,6 +28,7 @@ enum section {
     SECTION_NONE,
     SECTION_AGENT,
     SECTION_PROVIDER,
+    SECTION_MODEL_LIMIT,
     SECTION_UI,
     SECTION_IRC,
     SECTION_TOOL,
@@ -40,7 +41,9 @@ struct parse_state {
     unsigned int seen_sections;
     unsigned int seen_keys[SECTION_COUNT];
     unsigned int seen_provider_keys[SNJ_CONFIG_PROVIDER_MAX];
+    unsigned int seen_model_limit_keys[SNJ_CONFIG_MODEL_LIMIT_MAX];
     size_t provider_index;
+    size_t model_limit_index;
     bool providers_started;
 };
 
@@ -163,6 +166,32 @@ parse_u32(const char *text, uint32_t min, uint32_t max, uint32_t *out)
     if (value < min || value > max)
         goto invalid;
     *out = (uint32_t)value;
+    return 0;
+invalid:
+    errno = EINVAL;
+    return -1;
+}
+
+static int
+parse_u64(const char *text, uint64_t min, uint64_t max, uint64_t *out)
+{
+    uint64_t value = 0u;
+
+    if (!*text)
+        goto invalid;
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p) {
+        uint64_t digit;
+
+        if (*p < '0' || *p > '9')
+            goto invalid;
+        digit = (uint64_t)(*p - '0');
+        if (value > (UINT64_MAX - digit) / 10u)
+            goto invalid;
+        value = value * 10u + digit;
+    }
+    if (value < min || value > max)
+        goto invalid;
+    *out = value;
     return 0;
 invalid:
     errno = EINVAL;
@@ -318,6 +347,55 @@ invalid:
     return -1;
 }
 
+static bool
+provider_name_valid(const char *name)
+{
+    const unsigned char *p = (const unsigned char *)name;
+
+    if (!*p || strlen(name) > SNJ_CONFIG_PROVIDER_NAME_MAX)
+        return false;
+    for (; *p; ++p)
+        if (!((*p >= 'A' && *p <= 'Z') ||
+              (*p >= 'a' && *p <= 'z') ||
+              (*p >= '0' && *p <= '9') ||
+              *p == '.' || *p == '_' || *p == '-'))
+            return false;
+    return true;
+}
+
+static int
+set_model_limit_section(struct parse_state *state, char *name)
+{
+    struct snj_config *config = state->config;
+    struct snj_model_limit_config *limit;
+    char *slash = strchr(name, '/');
+
+    if (!slash || slash == name || !slash[1] ||
+        (size_t)(slash - name) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
+        strlen(slash + 1u) >= SNJ_CONFIG_MODEL_MAX ||
+        !snj_utf8_valid((const unsigned char *)(slash + 1u),
+                        strlen(slash + 1u), true) ||
+        config->model_limit_count >= SNJ_CONFIG_MODEL_LIMIT_MAX)
+        goto invalid;
+    *slash = '\0';
+    if (!provider_name_valid(name))
+        goto invalid;
+    for (size_t i = 0; i < config->model_limit_count; ++i)
+        if (strcmp(config->model_limits[i].provider, name) == 0 &&
+            strcmp(config->model_limits[i].model, slash + 1u) == 0)
+            goto invalid;
+    state->model_limit_index = config->model_limit_count++;
+    limit = &config->model_limits[state->model_limit_index];
+    memset(limit, 0, sizeof(*limit));
+    (void)snprintf(limit->provider, sizeof(limit->provider), "%s", name);
+    (void)snprintf(limit->model, sizeof(limit->model), "%s", slash + 1u);
+    state->section = SECTION_MODEL_LIMIT;
+    return 0;
+invalid:
+    errno = EINVAL;
+    return -1;
+}
+
 static int
 set_section(struct parse_state *state, char *name)
 {
@@ -328,6 +406,8 @@ set_section(struct parse_state *state, char *name)
         return set_provider_section(state, "default");
     else if (strncmp(name, "provider ", 9u) == 0)
         return set_provider_section(state, trim(name + 9u));
+    else if (strncmp(name, "model-limit ", 12u) == 0)
+        return set_model_limit_section(state, trim(name + 12u));
     else if (strcmp(name, "ui") == 0)
         section = SECTION_UI;
     else if (strcmp(name, "irc") == 0)
@@ -352,6 +432,8 @@ claim_key(struct parse_state *state, unsigned int bit)
 {
     unsigned int *seen = state->section == SECTION_PROVIDER ?
         &state->seen_provider_keys[state->provider_index] :
+        state->section == SECTION_MODEL_LIMIT ?
+        &state->seen_model_limit_keys[state->model_limit_index] :
         &state->seen_keys[state->section];
     if (*seen & (1u << bit)) {
         errno = EINVAL;
@@ -440,6 +522,41 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
                                  sizeof(provider->openrouter_title),
                                  value);
 invalid:
+    errno = EINVAL;
+    return -1;
+}
+
+static int
+parse_model_limit(struct parse_state *state, const char *key,
+                  const char *value)
+{
+    struct snj_model_limit_config *limit =
+        &state->config->model_limits[state->model_limit_index];
+
+    if (strcmp(key, "context_window_tokens") == 0) {
+        if (claim_key(state, 0u) < 0 ||
+            parse_u64(value, 1u, SNJ_CONFIG_TOKEN_LIMIT_MAX,
+                      &limit->context_window_tokens) < 0)
+            return -1;
+        limit->context_window_known = true;
+        return 0;
+    }
+    if (strcmp(key, "max_input_tokens") == 0) {
+        if (claim_key(state, 1u) < 0 ||
+            parse_u64(value, 1u, SNJ_CONFIG_TOKEN_LIMIT_MAX,
+                      &limit->max_input_tokens) < 0)
+            return -1;
+        limit->max_input_known = true;
+        return 0;
+    }
+    if (strcmp(key, "max_output_tokens") == 0) {
+        if (claim_key(state, 2u) < 0 ||
+            parse_u64(value, 1u, SNJ_CONFIG_TOKEN_LIMIT_MAX,
+                      &limit->max_output_tokens) < 0)
+            return -1;
+        limit->max_output_known = true;
+        return 0;
+    }
     errno = EINVAL;
     return -1;
 }
@@ -590,6 +707,7 @@ parse_assignment(struct parse_state *state, char *line)
     switch (state->section) {
     case SECTION_AGENT: return parse_agent(state, key, value);
     case SECTION_PROVIDER: return parse_provider(state, key, value);
+    case SECTION_MODEL_LIMIT: return parse_model_limit(state, key, value);
     case SECTION_UI: return parse_ui(state, key, value);
     case SECTION_IRC: return parse_irc(state, key, value);
     case SECTION_TOOL: return parse_tool(state, key, value);
@@ -800,6 +918,26 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
     if (read_rc == 0 && parse_file(config, (char *)text.data,
                                    error, error_size) < 0)
         goto out;
+    for (size_t i = 0; i < config->model_limit_count; ++i) {
+        const struct snj_model_limit_config *limit = &config->model_limits[i];
+        if (!snj_config_provider(config, limit->provider) ||
+            (!limit->context_window_known && !limit->max_input_known &&
+             !limit->max_output_known) ||
+            (limit->context_window_known && limit->max_input_known &&
+             limit->max_input_tokens > limit->context_window_tokens) ||
+            (limit->context_window_known && limit->max_output_known &&
+             limit->max_output_tokens > limit->context_window_tokens) ||
+            (limit->context_window_known && limit->max_input_known &&
+             limit->max_output_known &&
+             limit->max_input_tokens >
+                 limit->context_window_tokens - limit->max_output_tokens)) {
+            set_error(error, error_size,
+                      "invalid model-limit section for %s/%s",
+                      limit->provider, limit->model);
+            errno = EINVAL;
+            goto out;
+        }
+    }
     if (config->default_timeout_ms > config->max_timeout_ms) {
         set_error(error, error_size,
                   "tool default_timeout_ms cannot exceed max_timeout_ms");
@@ -1168,5 +1306,18 @@ snj_config_provider(const struct snj_config *config, const char *name)
     for (size_t i = 0; i < config->provider_count; ++i)
         if (strcmp(config->providers[i].name, name) == 0)
             return &config->providers[i];
+    return NULL;
+}
+
+const struct snj_model_limit_config *
+snj_config_model_limit(const struct snj_config *config, const char *provider,
+                       const char *model)
+{
+    if (!config || !provider || !model)
+        return NULL;
+    for (size_t i = 0; i < config->model_limit_count; ++i)
+        if (strcmp(config->model_limits[i].provider, provider) == 0 &&
+            strcmp(config->model_limits[i].model, model) == 0)
+            return &config->model_limits[i];
     return NULL;
 }

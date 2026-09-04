@@ -20,6 +20,25 @@ request. Streaming events update the terminal as they arrive. A final answer,
 refusal, or completed tool cycle closes the turn; it does not close the
 session.
 
+Before `response_started`, the runtime builds the exact outgoing model-input
+and request projections and accounts for them in token units. A configured
+exact count is mandatory. Otherwise a compatible provider-reported input
+usage anchors a pessimistic growth bound; without an anchor, one token per
+serialized input byte is the deliberately conservative fallback. Serialized
+bytes and token bounds remain separate durable facts. Source-bound catalog
+limits or an exact `[model-limit PROVIDER/MODEL]` tuple determine the hard
+input budget; `auto_compact_input_tokens = 0` disables only proactive policy,
+never the hard guard.
+
+An over-budget request is not sent. Native Codex compaction or the existing
+Responses summary path runs first, and the rebuilt request must be recounted
+below the hard budget. Oversized historical tool/process and assistant text is
+represented by a bounded provenance notice containing its byte size, digest,
+and durable rollout path. The current user input, active controller state, and
+tool schemas are never silently dropped. Responses-based recovery can compact
+the oldest complete turn prefix hierarchically while preserving all newer
+turns and the current turn.
+
 The stream decoder strictly interprets only response creation, output
 structure, public text/refusals, function arguments, and terminal success or
 failure. Other bounded `response.*` records are discarded after envelope
@@ -28,6 +47,18 @@ and never becomes durable response data or a local action; only exact completed
 registered function calls enter the tool graph. A known successful terminal
 snapshot remains required, while malformed envelopes and unknown non-Responses
 event types fail.
+
+Structured non-2xx and SSE failures retain their bounded provider code,
+message, and integral capacity details. A pre-output
+`context_length_exceeded` closes the open response with the durable
+`response_capacity_rejected` transition. Trustworthy context-limit or
+requested-input detail lowers a durable in-session safety ceiling bound to the
+exact provider, model, base URL, and protocol; replay restores it and later
+budget resolution applies it only while that source binding still matches.
+The runtime compacts and retries once only with a different request hash.
+Partial output, an identical request, failed compaction, or a second rejection
+terminates locally as a context-capacity failure rather than entering an
+unbounded retry.
 
 An active persistent goal schedules another ordinary turn after a normal final
 answer. Durable queued user turns take precedence over that continuation.
@@ -148,8 +179,10 @@ The provider layer targets the Responses API over HTTP/SSE. Ordered named
 provider sections independently configure base URLs, credential environment
 variables, timeouts, counting, and compaction. Turns route through the durable
 provider/model/effort session selection. Authenticated `GET /v1/models`
-discovery preserves provider model and reasoning-variant order in the local
-catalog, but typed model identifiers are not checked against the catalog.
+discovery preserves provider model, reasoning-variant order, and optional
+capacity metadata in the local catalog; Codex routes use their dedicated
+catalog shape. Capacity is source-bound to the configured URL and protocol,
+while typed model identifiers are not checked against the catalog.
 
 Hosted web search is exposed as a Responses request tool. There is no separate
 helper binary for web search.

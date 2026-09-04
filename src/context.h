@@ -17,25 +17,38 @@ struct snj_context_projection {
     json_t *create_request;
     json_t *count_request;
     size_t model_input_bytes;
+    size_t request_input_bytes;
+    size_t request_input_count;
     size_t create_request_bytes;
     size_t count_request_bytes;
     uint64_t input_tokens_bound;
     char model_input_sha256[SNJ_SHA256_HEX_LEN + 1u];
+    char request_input_sha256[SNJ_SHA256_HEX_LEN + 1u];
     char request_sha256[SNJ_SHA256_HEX_LEN + 1u];
     char count_request_sha256[SNJ_SHA256_HEX_LEN + 1u];
 };
 
 void snj_context_projection_init(struct snj_context_projection *projection);
 void snj_context_projection_free(struct snj_context_projection *projection);
+int snj_context_usage_anchor_bound(
+                      const struct snj_session *session,
+                      const char *provider, const char *model,
+                      const char *effort,
+                      const struct snj_context_projection *projection,
+                      uint64_t *input_tokens_bound);
 int snj_context_build(struct snj_session *session, const char *model,
                       const char *effort, unsigned int cycle,
                       const json_t *steering,
+                      uint64_t max_output_tokens,
+                      bool max_output_known,
                       const struct snj_config *config,
                       const struct snj_instruction_set *instructions,
                       struct snj_context_projection *projection,
                       char *error, size_t error_size);
 int snj_context_compact_request_build(struct snj_session *session,
                                       const char *model, const char *effort,
+                                      uint64_t source_budget,
+                                      bool allow_oversized_first,
                                       json_t **request,
                                       json_t **count_request,
                                       char source_hash[SNJ_SHA256_HEX_LEN + 1u],
@@ -46,6 +59,8 @@ int snj_context_compact_request_build(struct snj_session *session,
                                       char *error, size_t error_size);
 int snj_context_compact_active_prefix_request_build(struct snj_session *session,
                                       const char *model, const char *effort,
+                                      uint64_t source_budget,
+                                      bool allow_oversized_first,
                                       json_t **request,
                                       json_t **count_request,
                                       char source_hash[SNJ_SHA256_HEX_LEN + 1u],

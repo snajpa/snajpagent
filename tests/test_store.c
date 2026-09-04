@@ -46,8 +46,20 @@ turn_started_data(const struct snj_session *session, const char *turn_id)
     metadata = snj_instructions_metadata_json(&instructions);
     snj_instructions_free(&instructions);
     assert(config && data && metadata);
+    assert(snj_json_set_new(config, "capability_version",
+                            json_string(SNAJPAGENT_CAPABILITY_VERSION)) == 0);
+    assert(snj_json_set_new(config, "effort",
+                            json_string(session->default_effort)) == 0);
+    assert(snj_json_set_new(config, "max_output_tokens", json_null()) == 0);
     assert(snj_json_set_new(config, "model",
                             json_string(session->default_model)) == 0);
+    assert(snj_json_set_new(config, "provider",
+                            json_string(session->default_provider)) == 0);
+    assert(snj_json_set_new(config, "profile_id",
+                            json_string(SNAJPAGENT_PROFILE_ID)) == 0);
+    assert(snj_json_set_new(config, "prompt_schema", json_integer(1)) == 0);
+    assert(snj_json_set_new(config, "replay_schema", json_integer(1)) == 0);
+    assert(snj_json_set_new(config, "tool_schema", json_integer(1)) == 0);
     assert(snj_json_set_new(data, "config", config) == 0);
     assert(snj_json_set_new(data, "input_kind", json_string("direct")) == 0);
     assert(snj_json_set_new(data, "instructions", metadata) == 0);

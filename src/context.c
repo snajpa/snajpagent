@@ -36,7 +36,17 @@ struct context_builder {
     size_t active_request_start;
     size_t compact_new_items;
     uint64_t compact_source_seq;
+    uint64_t max_output_tokens;
+    uint64_t compact_budget;
+    uint64_t compact_best_seq;
+    size_t compact_best_request_count;
+    bool compact_best_known;
+    bool compact_allow_oversized_first;
+    bool max_output_known;
 };
+
+#define SNJ_USAGE_ANCHOR_ENVELOPE_RESERVE UINT64_C(512)
+#define SNJ_USAGE_ANCHOR_ITEM_RESERVE UINT64_C(32)
 
 static void
 set_error(char *error, size_t size, const char *fmt, ...)
@@ -186,28 +196,51 @@ append_tool_result(struct context_builder *builder, const char *call_id,
                    const json_t *result)
 {
     const char *model_text = snj_json_string(result, "model_text");
+    const char *output_text = model_text;
+    struct snj_buf notice;
+    char digest[SNJ_SHA256_HEX_LEN + 1u];
     json_t *semantic = json_object();
     json_t *request = json_object();
+    bool historical;
 
-    if (!model_text || !semantic || !request ||
+    snj_buf_init(&notice, 4096u);
+    historical = builder->session &&
+        strcmp(builder->active_turn_id, builder->target_turn_id) != 0;
+    if (model_text && historical && strlen(model_text) > 64u * 1024u) {
+        const char *status = snj_json_string(result, "status");
+        snj_sha256_hex(model_text, strlen(model_text), digest);
+        if (snj_buf_printf(&notice,
+                "[historical tool/process output omitted from model context; type=%s; bytes=%zu; sha256=%s; durable_log=%s/events.jsonl]",
+                status ? status : "unknown", strlen(model_text), digest,
+                builder->session->dir_path) < 0 ||
+            snj_buf_terminate(&notice) < 0)
+            goto fail;
+        output_text = (const char *)notice.data;
+    }
+
+    if (!output_text || !semantic || !request ||
         json_set_new(semantic, "call_id", json_string(call_id)) < 0 ||
         json_set_new(semantic, "kind", json_string("tool_result")) < 0 ||
-        json_set_new(semantic, "result", json_deep_copy(result)) < 0 ||
+        json_set_new(semantic, "model_text", json_string(output_text)) < 0 ||
         json_set_new(request, "call_id", json_string(call_id)) < 0 ||
-        json_set_new(request, "output", json_string(model_text)) < 0 ||
+        json_set_new(request, "output", json_string(output_text)) < 0 ||
         json_set_new(request, "type", json_string("function_call_output")) < 0 ||
         json_array_append_new(builder->semantic_items, semantic) < 0) {
+fail:
         if (semantic)
             json_decref(semantic);
         if (request)
             json_decref(request);
+        snj_buf_free(&notice);
         return -1;
     }
     semantic = NULL;
     if (json_array_append_new(builder->request_input, request) < 0) {
         json_decref(request);
+        snj_buf_free(&notice);
         return -1;
     }
+    snj_buf_free(&notice);
     return 0;
 }
 
@@ -317,47 +350,6 @@ truncate_array(json_t *array, size_t keep)
     return 0;
 }
 
-static json_t *
-array_suffix_copy(const json_t *array, size_t start)
-{
-    json_t *copy = json_array();
-
-    if (!copy || !json_is_array(array) || start > json_array_size(array)) {
-        if (copy)
-            json_decref(copy);
-        errno = EINVAL;
-        return NULL;
-    }
-    for (size_t i = start; i < json_array_size(array); ++i) {
-        json_t *item = json_deep_copy(json_array_get(array, i));
-        if (!item || json_array_append_new(copy, item) < 0) {
-            if (item)
-                json_decref(item);
-            json_decref(copy);
-            return NULL;
-        }
-    }
-    return copy;
-}
-
-static int
-array_append_deep(json_t *array, const json_t *items)
-{
-    if (!json_is_array(array) || !json_is_array(items)) {
-        errno = EINVAL;
-        return -1;
-    }
-    for (size_t i = 0; i < json_array_size(items); ++i) {
-        json_t *item = json_deep_copy(json_array_get(items, i));
-        if (!item || json_array_append_new(array, item) < 0) {
-            if (item)
-                json_decref(item);
-            return -1;
-        }
-    }
-    return 0;
-}
-
 static int
 append_compact_output_raw(json_t *array, const json_t *output)
 {
@@ -454,44 +446,6 @@ install_compact_output(struct context_builder *builder, const char *compact_id,
 }
 
 static int
-install_compact_output_active(struct context_builder *builder,
-                              const char *compact_id, const json_t *output,
-                              char *error, size_t error_size)
-{
-    json_t *semantic_suffix = NULL;
-    json_t *request_suffix = NULL;
-    int rc = -1;
-
-    if (!builder->active_turn)
-        return install_compact_output(builder, compact_id, output,
-                                      error, error_size);
-    semantic_suffix = array_suffix_copy(builder->semantic_items,
-                                        builder->active_semantic_start);
-    request_suffix = array_suffix_copy(builder->request_input,
-                                       builder->active_request_start);
-    if (!semantic_suffix || !request_suffix ||
-        truncate_array(builder->semantic_items, builder->base_semantic_count) < 0 ||
-        truncate_array(builder->request_input, builder->base_request_count) < 0 ||
-        install_compact_output(builder, compact_id, output, error, error_size) < 0)
-        goto out;
-    builder->active_semantic_start = json_array_size(builder->semantic_items);
-    builder->active_request_start = json_array_size(builder->request_input);
-    if (array_append_deep(builder->semantic_items, semantic_suffix) < 0 ||
-        array_append_deep(builder->request_input, request_suffix) < 0) {
-        set_error(error, error_size,
-                  "cannot preserve active suffix after compact output");
-        goto out;
-    }
-    rc = 0;
-out:
-    if (semantic_suffix)
-        json_decref(semantic_suffix);
-    if (request_suffix)
-        json_decref(request_suffix);
-    return rc;
-}
-
-static int
 append_instruction_messages(struct context_builder *builder)
 {
     if (!builder->instructions)
@@ -582,34 +536,106 @@ append_response_items(struct context_builder *builder, const json_t *items,
         goto out;
     for (size_t i = 0; i < graph.count; ++i) {
         const struct snj_response_item *item = &graph.items[i];
+        const char *text = item->text;
+        struct snj_buf notice;
+        bool historical = builder->session &&
+            strcmp(builder->active_turn_id, builder->target_turn_id) != 0;
+
+        snj_buf_init(&notice, 4096u);
+        if (text && historical && strlen(text) > 64u * 1024u) {
+            char digest[SNJ_SHA256_HEX_LEN + 1u];
+            snj_sha256_hex(text, strlen(text), digest);
+            if (snj_buf_printf(&notice,
+                    "[historical assistant material omitted from model context; type=%s; bytes=%zu; sha256=%s; durable_log=%s/events.jsonl]",
+                    item->kind == SNJ_ITEM_REASONING_SUMMARY ?
+                        "reasoning_summary" :
+                    item->kind == SNJ_ITEM_REFUSAL ? "refusal" : "message",
+                    strlen(text), digest, builder->session->dir_path) < 0 ||
+                snj_buf_terminate(&notice) < 0) {
+                snj_buf_free(&notice);
+                goto out;
+            }
+            text = (const char *)notice.data;
+        }
         if (item->kind == SNJ_ITEM_ASSISTANT) {
             if (append_message(builder,
                     item->phase == SNJ_PHASE_COMMENTARY ?
                     "assistant_commentary" : "assistant_final",
-                    "assistant", item->text) < 0)
+                    "assistant", text) < 0) {
+                snj_buf_free(&notice);
                 goto out;
+            }
         } else if (item->kind == SNJ_ITEM_REFUSAL) {
             if (append_message(builder, "assistant_refusal", "assistant",
-                               item->text) < 0)
+                               text) < 0) {
+                snj_buf_free(&notice);
                 goto out;
+            }
         } else if (item->kind == SNJ_ITEM_REASONING_SUMMARY) {
             if (append_message(builder, "reasoning_summary", "assistant",
-                               item->text) < 0)
+                               text) < 0) {
+                snj_buf_free(&notice);
                 goto out;
+            }
         } else if (item->kind == SNJ_ITEM_TOOL_CALL) {
-            if (append_tool_call(builder, item) < 0)
+            if (append_tool_call(builder, item) < 0) {
+                snj_buf_free(&notice);
                 goto out;
+            }
         } else {
+            snj_buf_free(&notice);
             set_error(error, error_size,
                       "opaque response replay is not qualified in this checkpoint");
             errno = ENOTSUP;
             goto out;
         }
+        snj_buf_free(&notice);
     }
     rc = 0;
 out:
     snj_response_graph_free(&graph);
     return rc;
+}
+
+static int
+compact_complete_boundary(struct context_builder *builder, uint64_t seq,
+                          char *error, size_t error_size)
+{
+    struct snj_buf encoded;
+    size_t count;
+
+    if (!builder->compact_budget)
+        return 0;
+    snj_buf_init(&encoded, SNJ_CONTEXT_MAX_COMPACT);
+    if (snj_json_canonical(builder->request_input, &encoded) == 0 &&
+        (encoded.len <= builder->compact_budget ||
+         (!builder->compact_best_known &&
+          builder->compact_allow_oversized_first))) {
+        builder->compact_best_known = true;
+        builder->compact_best_seq = seq;
+        builder->compact_best_request_count =
+            json_array_size(builder->request_input);
+        snj_buf_free(&encoded);
+        return 0;
+    }
+    snj_buf_free(&encoded);
+    if (!builder->compact_best_known) {
+        set_error(error, error_size,
+                  "oldest complete history prefix exceeds the conservative compaction budget");
+        errno = EOVERFLOW;
+        return -1;
+    }
+    count = json_array_size(builder->request_input);
+    while (count > builder->compact_best_request_count) {
+        if (json_array_remove(builder->request_input, count - 1u) < 0)
+            return -1;
+        --count;
+    }
+    builder->compact_source_seq = builder->compact_best_seq;
+    builder->compact_new_items = count > builder->base_request_count ?
+        count - builder->base_request_count : 0u;
+    builder->compact_stopped = true;
+    return 0;
 }
 
 static int
@@ -684,22 +710,10 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
 {
     struct context_builder *builder = opaque;
 
-    if (strcmp(type, "compaction_completed") == 0) {
-        const char *compact_id = snj_json_string(data, "compact_id");
-        json_t *output = json_object_get(data, "output");
-        json_t *turn_value = json_object_get(data, "turn_id");
-        const char *turn_id = snj_json_string(data, "turn_id");
-        if (!compact_id || !snj_hex_is_lower(compact_id, SNJ_ID_HEX_LEN) ||
-            (builder->active_turn && turn_value &&
-             (!turn_id || strcmp(turn_id, builder->active_turn_id) != 0)) ||
-            (!builder->active_turn && turn_value && !json_is_null(turn_value))) {
-            set_error(error, error_size, "invalid compact context transition");
-            errno = EINVAL;
-            return -1;
-        }
-        return install_compact_output_active(builder, compact_id, output,
-                                             error, error_size);
-    }
+    if (builder->session && seq <= builder->session->compact_seq)
+        return 0;
+    if (strcmp(type, "compaction_completed") == 0)
+        return 0;
     if (strcmp(type, "irc_snapshot") == 0) {
         const char *text = snj_json_string(data, "text");
         if (!text) {
@@ -1307,6 +1321,95 @@ hash_json_bounded(const json_t *value, size_t max,
     return rc;
 }
 
+static bool
+checked_add_u64(uint64_t *value, uint64_t addition)
+{
+    if (*value > UINT64_MAX - addition)
+        return false;
+    *value += addition;
+    return true;
+}
+
+int
+snj_context_usage_anchor_bound(
+    const struct snj_session *session, const char *provider,
+    const char *model, const char *effort,
+    const struct snj_context_projection *projection,
+    uint64_t *input_tokens_bound)
+{
+    json_t *items;
+    json_t *prefix = NULL;
+    char prefix_hash[SNJ_SHA256_HEX_LEN + 1u];
+    uint64_t added_bytes;
+    uint64_t added_count;
+    uint64_t envelope;
+    uint64_t item_reserve;
+    uint64_t bound;
+    int rc = 0;
+
+    if (!session || !provider || !model || !effort || !projection ||
+        !input_tokens_bound || !projection->create_request) {
+        errno = EINVAL;
+        return -1;
+    }
+    *input_tokens_bound = 0u;
+    if (!session->usage_anchor_valid ||
+        strcmp(session->usage_anchor_provider, provider) != 0 ||
+        strcmp(session->usage_anchor_model, model) != 0 ||
+        strcmp(session->usage_anchor_effort, effort) != 0 ||
+        strcmp(session->usage_anchor_compact_id, session->compact_id) != 0 ||
+        projection->request_input_count <
+            session->usage_anchor_request_input_count ||
+        projection->request_input_bytes <
+            session->usage_anchor_request_input_bytes ||
+        projection->create_request_bytes < projection->request_input_bytes)
+        return 0;
+    items = json_object_get(projection->create_request, "input");
+    if (!json_is_array(items) || json_array_size(items) !=
+        projection->request_input_count)
+        return 0;
+    prefix = json_array();
+    if (!prefix)
+        return -1;
+    for (size_t i = 0;
+         i < session->usage_anchor_request_input_count; ++i) {
+        if (json_array_append(prefix, json_array_get(items, i)) < 0)
+            goto out;
+    }
+    if (hash_json_bounded(prefix, SNJ_CONTEXT_MAX_REQUEST,
+                          prefix_hash, NULL) < 0)
+        goto out;
+    if (strcmp(prefix_hash,
+               session->usage_anchor_request_input_sha256) != 0) {
+        rc = 0;
+        goto out;
+    }
+    added_bytes = (uint64_t)projection->request_input_bytes -
+        session->usage_anchor_request_input_bytes;
+    added_count = (uint64_t)projection->request_input_count -
+        session->usage_anchor_request_input_count;
+    envelope = (uint64_t)projection->create_request_bytes -
+        (uint64_t)projection->request_input_bytes;
+    if (added_count > UINT64_MAX / SNJ_USAGE_ANCHOR_ITEM_RESERVE) {
+        errno = EOVERFLOW;
+        goto out;
+    }
+    item_reserve = added_count * SNJ_USAGE_ANCHOR_ITEM_RESERVE;
+    bound = session->usage_anchor_input_tokens;
+    if (!checked_add_u64(&bound, added_bytes) ||
+        !checked_add_u64(&bound, envelope) ||
+        !checked_add_u64(&bound, SNJ_USAGE_ANCHOR_ENVELOPE_RESERVE) ||
+        !checked_add_u64(&bound, item_reserve)) {
+        errno = EOVERFLOW;
+        goto out;
+    }
+    *input_tokens_bound = bound;
+    rc = 1;
+out:
+    json_decref(prefix);
+    return rc;
+}
+
 static json_t *
 model_input_object(struct context_builder *builder)
 {
@@ -1322,8 +1425,6 @@ model_input_object(struct context_builder *builder)
         json_set_new(input, "effort", json_string(builder->effort)) < 0 ||
         json_set_new(input, "instructions", instructions_metadata_object(builder)) < 0 ||
         json_set_new(input, "items", json_deep_copy(builder->semantic_items)) < 0 ||
-        json_set_new(input, "max_output_tokens",
-                     json_integer(SNAJPAGENT_MAX_OUTPUT_TOKENS)) < 0 ||
         json_set_new(input, "model", json_string(builder->model)) < 0 ||
         json_set_new(input, "profile_id", json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
         json_set_new(input, "tool_schema", json_integer(1)) < 0 ||
@@ -1334,6 +1435,12 @@ model_input_object(struct context_builder *builder)
                                   builder->config)) < 0) {
         if (input)
             json_decref(input);
+        return NULL;
+    }
+    if (builder->max_output_known &&
+        json_set_new(input, "max_output_tokens",
+                     json_integer((json_int_t)builder->max_output_tokens)) < 0) {
+        json_decref(input);
         return NULL;
     }
     return input;
@@ -1349,8 +1456,6 @@ create_request_object(struct context_builder *builder)
 
     if (!request ||
         json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
-        json_set_new(request, "max_output_tokens",
-                     json_integer(SNAJPAGENT_MAX_OUTPUT_TOKENS)) < 0 ||
         json_set_new(request, "model", json_string(builder->model)) < 0 ||
         json_set_new(request, "parallel_tool_calls", json_false()) < 0 ||
         json_set_new(request, "reasoning", reasoning_settings(builder->effort)) < 0 ||
@@ -1365,6 +1470,12 @@ create_request_object(struct context_builder *builder)
         json_set_new(request, "truncation", json_string("disabled")) < 0) {
         if (request)
             json_decref(request);
+        return NULL;
+    }
+    if (builder->max_output_known &&
+        json_set_new(request, "max_output_tokens",
+                     json_integer((json_int_t)builder->max_output_tokens)) < 0) {
+        json_decref(request);
         return NULL;
     }
     return request;
@@ -1421,6 +1532,8 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
 
     if (builder->compact_stopped)
         return 0;
+    if (builder->session && seq <= builder->session->compact_seq)
+        return 0;
     builder->compact_source_seq = seq;
 
     if (builder->compact_stop_before_active &&
@@ -1438,21 +1551,8 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         }
     }
 
-    if (strcmp(type, "compaction_completed") == 0) {
-        const char *compact_id = snj_json_string(data, "compact_id");
-        json_t *output = json_object_get(data, "output");
-        if (!compact_id || !snj_hex_is_lower(compact_id, SNJ_ID_HEX_LEN) ||
-            install_compact_output_active(builder, compact_id, output,
-                                          error, error_size) < 0) {
-            set_error(error, error_size, "invalid compact-source transition");
-            errno = EINVAL;
-            return -1;
-        }
-        builder->compact_new_items = builder->active_turn ?
-            json_array_size(builder->request_input) - builder->active_request_start :
-            0u;
+    if (strcmp(type, "compaction_completed") == 0)
         return 0;
-    }
     if (strcmp(type, "irc_snapshot") == 0) {
         const char *text = snj_json_string(data, "text");
         if (!text) {
@@ -1607,7 +1707,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             json_array_size(builder->request_input) - before;
         builder->active_turn = false;
         builder->active_turn_id[0] = '\0';
-        return 0;
+        return compact_complete_boundary(builder, seq, error, error_size);
     }
     if (strcmp(type, "turn_failed") == 0) {
         const char *class_name = snj_json_string(data, "class");
@@ -1623,7 +1723,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         builder->active_turn = false;
         builder->active_turn_id[0] = '\0';
-        return 0;
+        return compact_complete_boundary(builder, seq, error, error_size);
     }
     if (strcmp(type, "turn_interrupted") == 0) {
         const char *origin = snj_json_string(data, "origin");
@@ -1640,7 +1740,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         builder->active_turn = false;
         builder->active_turn_id[0] = '\0';
-        return 0;
+        return compact_complete_boundary(builder, seq, error, error_size);
     }
     return 0;
 }
@@ -1691,6 +1791,8 @@ static int
 compact_request_build(struct snj_session *session,
                       const char *model, const char *effort,
                       bool active_prefix,
+                      uint64_t source_budget,
+                      bool allow_oversized_first,
                       json_t **request, json_t **count_request,
                       char source_hash[SNJ_SHA256_HEX_LEN + 1u],
                       size_t *source_bytes,
@@ -1710,12 +1812,15 @@ compact_request_build(struct snj_session *session,
     if (source_seq)
         *source_seq = 0u;
     memset(&builder, 0, sizeof(builder));
+    builder.session = session;
     builder.model = model;
     builder.effort = effort;
     builder.semantic_items = json_array();
     builder.request_input = json_array();
     builder.deferred_steering = json_array();
     builder.compact_stop_before_active = active_prefix;
+    builder.compact_budget = source_budget;
+    builder.compact_allow_oversized_first = allow_oversized_first;
     if (session && session->active_turn_id[0])
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
@@ -1731,6 +1836,11 @@ compact_request_build(struct snj_session *session,
         errno = EINVAL;
         goto out;
     }
+    if (session->compact_id[0] &&
+        install_compact_output(&builder, session->compact_id,
+                               session->compact_output,
+                               error, error_size) < 0)
+        goto out;
     if (snj_session_each_event(session, compact_event, &builder,
                                error, error_size) < 0)
         goto out;
@@ -1790,6 +1900,8 @@ out:
 int
 snj_context_compact_request_build(struct snj_session *session,
                                       const char *model, const char *effort,
+                                      uint64_t source_budget,
+                                      bool allow_oversized_first,
                                       json_t **request,
                                       json_t **count_request,
                                       char source_hash[SNJ_SHA256_HEX_LEN + 1u],
@@ -1799,7 +1911,9 @@ snj_context_compact_request_build(struct snj_session *session,
                                       uint64_t *source_seq,
                                       char *error, size_t error_size)
 {
-    return compact_request_build(session, model, effort, false, request,
+    return compact_request_build(session, model, effort, false, source_budget,
+                                 allow_oversized_first,
+                                 request,
                                  count_request, source_hash, source_bytes,
                                  request_hash, request_bytes, source_seq,
                                  error, error_size);
@@ -1808,6 +1922,8 @@ snj_context_compact_request_build(struct snj_session *session,
 int
 snj_context_compact_active_prefix_request_build(struct snj_session *session,
                                       const char *model, const char *effort,
+                                      uint64_t source_budget,
+                                      bool allow_oversized_first,
                                       json_t **request,
                                       json_t **count_request,
                                       char source_hash[SNJ_SHA256_HEX_LEN + 1u],
@@ -1817,7 +1933,9 @@ snj_context_compact_active_prefix_request_build(struct snj_session *session,
                                       uint64_t *source_seq,
                                       char *error, size_t error_size)
 {
-    return compact_request_build(session, model, effort, true, request,
+    return compact_request_build(session, model, effort, true, source_budget,
+                                 allow_oversized_first,
+                                 request,
                                  count_request, source_hash, source_bytes,
                                  request_hash, request_bytes, source_seq,
                                  error, error_size);
@@ -1866,6 +1984,7 @@ int
 snj_context_build(struct snj_session *session, const char *model,
                   const char *effort, unsigned int cycle,
                   const json_t *steering,
+                  uint64_t max_output_tokens, bool max_output_known,
                   const struct snj_config *config,
                   const struct snj_instruction_set *instructions,
                   struct snj_context_projection *projection,
@@ -1886,6 +2005,8 @@ snj_context_build(struct snj_session *session, const char *model,
                                     session->active_process_handle : NULL;
     builder.instructions = instructions;
     builder.config = config;
+    builder.max_output_tokens = max_output_tokens;
+    builder.max_output_known = max_output_known;
     builder.networked = config &&
         (config->irc_daemon || config->irc_client_count != 0u);
     if (session && session->active_turn_id[0])
@@ -1929,6 +2050,11 @@ snj_context_build(struct snj_session *session, const char *model,
     }
     builder.base_semantic_count = json_array_size(builder.semantic_items);
     builder.base_request_count = json_array_size(builder.request_input);
+    if (session->compact_id[0] &&
+        install_compact_output(&builder, session->compact_id,
+                               session->compact_output,
+                               error, error_size) < 0)
+        goto out;
     if (snj_session_each_event(session, context_event, &builder,
                                error, error_size) < 0)
         goto out;
@@ -1952,6 +2078,10 @@ snj_context_build(struct snj_session *session, const char *model,
         hash_json_bounded(projection->model_input, SNJ_CONTEXT_MAX_REQUEST,
                           projection->model_input_sha256,
                           &projection->model_input_bytes) < 0 ||
+        hash_json_bounded(json_object_get(projection->create_request, "input"),
+                          SNJ_CONTEXT_MAX_REQUEST,
+                          projection->request_input_sha256,
+                          &projection->request_input_bytes) < 0 ||
         hash_json_bounded(projection->create_request, SNJ_CONTEXT_MAX_REQUEST,
                           projection->request_sha256,
                           &projection->create_request_bytes) < 0 ||
@@ -1961,6 +2091,8 @@ snj_context_build(struct snj_session *session, const char *model,
         set_error(error, error_size, "response request projection exceeds 32 MiB");
         goto out;
     }
+    projection->request_input_count = json_array_size(
+        json_object_get(projection->create_request, "input"));
     if (projection->model_input_bytes > (size_t)LLONG_MAX) {
         set_error(error, error_size, "response request projection is too large");
         errno = EOVERFLOW;

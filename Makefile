@@ -31,7 +31,7 @@ COMMON_OBJ = $(COMMON_SRC:.c=.o)
 HEADERS = src/snajpagent.h src/base.h src/config.h src/credential.h src/secret.h src/instructions.h src/json.h src/snj_jansson.h src/snj_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/irc.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h
 DEPFLAGS = -MMD -MP
 FIXTURE_BIN = tests/$(NAME)-fixture
-TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_render tests/test_turn tests/test_tools tests/test_store $(FIXTURE_BIN)
+TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store $(FIXTURE_BIN)
 BUILD_INPUTS = build/.build-inputs
 
 all: $(BIN)
@@ -126,6 +126,11 @@ tests/test_context: src/base.c src/config.c src/json.c src/instructions.c src/co
 		-o $@ src/base.c src/config.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c \
 		tests/test_context.c $(LDLIBS)
 
+tests/test_model_cache: src/base.c src/config.c src/json.c src/instructions.c src/turn.c src/store.c src/model_cache.c tests/test_model_cache.c $(HEADERS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
+		-o $@ src/base.c src/config.c src/json.c src/instructions.c src/turn.c src/store.c src/model_cache.c \
+		tests/test_model_cache.c $(LDLIBS)
+
 tests/test_render: src/base.c src/json.c src/term.c src/render.c tests/test_render.c \
 		src/base.h src/json.h src/term.h src/render.h src/snajpagent.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
@@ -158,6 +163,7 @@ check: $(TEST_BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
 	./tests/test_context
+	./tests/test_model_cache
 	./tests/test_render
 	./tests/test_turn
 	./tests/test_tools

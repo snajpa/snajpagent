@@ -251,6 +251,85 @@ next_provider(const struct app_state *app)
     return snj_config_provider(app->config,
         app->session.default_provider[0] ? app->session.default_provider : NULL);
 }
+
+static void
+provider_capacity_source_sha256(
+    const struct snj_provider_config *provider,
+    char digest[SNJ_SHA256_HEX_LEN + 1u])
+{
+    char source[SNJ_CONFIG_URL_MAX + 16u];
+    const char *protocol = snj_provider_catalog_protocol(provider);
+    size_t protocol_len = strlen(protocol);
+    size_t base_url_len = strlen(provider->base_url);
+
+    memcpy(source, protocol, protocol_len);
+    source[protocol_len] = '\n';
+    memcpy(source + protocol_len + 1u, provider->base_url, base_url_len);
+    snj_sha256_hex(source, protocol_len + 1u + base_url_len, digest);
+}
+
+static bool
+capacity_ceiling_matches(const struct app_state *app,
+                         const struct snj_provider_config *provider,
+                         const char *model)
+{
+    char source_hash[SNJ_SHA256_HEX_LEN + 1u];
+
+    if (!app->session.capacity_ceiling_valid ||
+        strcmp(app->session.capacity_ceiling_provider, provider->name) != 0 ||
+        strcmp(app->session.capacity_ceiling_model, model) != 0)
+        return false;
+    provider_capacity_source_sha256(provider, source_hash);
+    return strcmp(app->session.capacity_ceiling_source_sha256,
+                  source_hash) == 0;
+}
+
+static void
+apply_capacity_ceiling(const struct app_state *app,
+                       const struct snj_provider_config *provider,
+                       const char *model,
+                       struct snj_model_capacity *capacity)
+{
+    if (capacity_ceiling_matches(app, provider, model) &&
+        (!capacity->hard_input_known ||
+         app->session.capacity_ceiling_input_tokens <
+             capacity->hard_input_tokens)) {
+        capacity->hard_input_tokens =
+            app->session.capacity_ceiling_input_tokens;
+        capacity->hard_input_known = true;
+        capacity->source = SNJ_CAPACITY_OBSERVED;
+    }
+}
+
+int
+snj_app_capacity_resolve(struct app_state *app,
+                         const struct snj_provider_config *provider,
+                         const char *model,
+                         struct snj_model_capacity *capacity,
+                         char *error, size_t error_size)
+{
+    int cache_rc;
+
+    if (!app || !provider || !model || !capacity) {
+        set_error(error, error_size, "invalid model capacity selection");
+        errno = EINVAL;
+        return -1;
+    }
+    snj_model_cache_free(&app->model_cache);
+    app->capacity_cache_error[0] = '\0';
+    cache_rc = snj_model_cache_load(&app->store, &app->model_cache,
+                                    app->capacity_cache_error,
+                                    sizeof(app->capacity_cache_error));
+    if (cache_rc == 1)
+        app->capacity_cache_error[0] = '\0';
+    cache_rc = snj_model_capacity_resolve(&app->model_cache, app->config,
+        provider, model, snj_provider_catalog_protocol(provider), capacity,
+        error, error_size);
+    if (cache_rc == 0)
+        apply_capacity_ceiling(app, provider, model, capacity);
+    return cache_rc;
+}
+
 static int
 prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
 {
@@ -275,6 +354,9 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
     app->turn_model = model;
     app->turn_effort = effort;
     app->turn_provider = provider;
+    if (snj_app_capacity_resolve(app, provider, model, &app->turn_capacity,
+                                 error, error_size) < 0)
+        return -1;
     return 0;
 }
 static void
@@ -318,17 +400,75 @@ render_queue(struct app_state *app)
 }
 
 static int
+format_context_meter(struct app_state *app, bool active,
+                     char meter[32u])
+{
+    const struct snj_provider_config *provider = active ? app->turn_provider :
+                                                        next_provider(app);
+    const char *model = active ? app->turn_model : next_model(app);
+    const char *effort = active ? app->turn_effort :
+                                  resolve_effort(next_effort(app));
+    struct snj_model_capacity resolved;
+    const struct snj_model_capacity *capacity = &app->turn_capacity;
+    uint64_t used;
+    uint64_t hard;
+    unsigned int percent;
+    int n;
+
+    if (snj_render_view(&app->render) != SNJ_RENDER_ROLLOUT)
+        return 0;
+    if (!provider || !model || !effort) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!active) {
+        char error[256] = {0};
+
+        if (snj_app_capacity_resolve(app, provider, model, &resolved,
+                                     error, sizeof(error)) < 0)
+            return -1;
+        capacity = &resolved;
+    }
+    if (!capacity->hard_input_known ||
+        !app->session.context_meter_valid ||
+        strcmp(app->session.context_meter_provider, provider->name) != 0 ||
+        strcmp(app->session.context_meter_model, model) != 0 ||
+        strcmp(app->session.context_meter_effort, effort) != 0 ||
+        strcmp(app->session.context_meter_compact_id,
+               app->session.compact_id) != 0) {
+        memcpy(meter, " context=?%", sizeof(" context=?%"));
+        return 0;
+    }
+    used = app->session.context_meter_input_tokens;
+    hard = capacity->hard_input_tokens;
+    if (used >= hard) {
+        percent = 100u;
+    } else {
+        percent = (unsigned int)((used * 100u + hard - 1u) / hard);
+    }
+    n = snprintf(meter, 32u, " context=%u%%", percent);
+    if (n < 0 || n >= 32) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return 0;
+}
+
+static int
 format_input_label(struct app_state *app, bool active,
                    char label[SNJ_TERM_LABEL_BYTES])
 {
     char hostname[256u];
+    char meter[32u] = {0};
     const char *model;
     const char *effort;
     int n;
 
+    if (format_context_meter(app, active, meter) < 0)
+        return -1;
     if (app->queue_edit_id[0]) {
-        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "edit %zu › ",
-                     app->queue_edit_number);
+        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "edit %zu%s › ",
+                     app->queue_edit_number, meter);
     } else if (app->networked) {
         if (gethostname(hostname, sizeof(hostname)) < 0)
             memcpy(hostname, "localhost", 10u);
@@ -341,8 +481,8 @@ format_input_label(struct app_state *app, bool active,
             if (c <= 0x20u || c == 0x7fu)
                 hostname[i] = '_';
         }
-        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "%s@%s %s ",
-                     snj_irc_operator_nick(app->irc), hostname,
+        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "%s@%s%s %s ",
+                     snj_irc_operator_nick(app->irc), hostname, meter,
                      active ? "»" : "›");
     } else {
         model = active ? app->turn_model : next_model(app);
@@ -351,7 +491,8 @@ format_input_label(struct app_state *app, bool active,
             errno = EINVAL;
             return -1;
         }
-        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "%s/%s %s ", model, effort,
+        n = snprintf(label, SNJ_TERM_LABEL_BYTES, "%s/%s%s %s ",
+                     model, effort, meter,
                      active ? "»" : "›");
     }
     if (n < 0 || (size_t)n >= SNJ_TERM_LABEL_BYTES) {
@@ -415,9 +556,8 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
                   char *error, size_t error_size)
 {
     struct snj_queued_turn *queued;
-    char label[32];
+    char label[SNJ_TERM_LABEL_BYTES];
     size_t len = strlen(text);
-    size_t number = app->queue_edit_number;
     bool restore_armed = app->queue_edit_was_armed;
     int rc = 0;
 
@@ -448,7 +588,7 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
             (void)snj_term_restore_draft(&app->term, text);
         return -1;
     }
-    if (snprintf(label, sizeof(label), "edit %zu › ", number) < 0 ||
+    if (format_input_label(app, active, label) < 0 ||
         snj_render_submitted(&app->render, label, text) < 0) {
         set_error(error, error_size, "edited turn acknowledgement could not be rendered");
         return -1;
@@ -613,11 +753,81 @@ next_effort(const struct app_state *app)
     return app->staged_effort ? app->staged_effort :
                                 app->session.default_effort;
 }
+
+static int
+append_capacity_value(struct snj_buf *text, const char *name,
+                      bool known, uint64_t value)
+{
+    return known ?
+        snj_buf_printf(text, " · %s=%llu", name,
+                       (unsigned long long)value) :
+        snj_buf_printf(text, " · %s=unknown", name);
+}
+
+static int
+append_advertised_capacity(struct snj_buf *text, const json_t *model)
+{
+    static const struct {
+        const char *key;
+        const char *name;
+    } fields[] = {
+        {"context_window_tokens", "context"},
+        {"max_context_window_tokens", "max-context"},
+        {"input_context_window_tokens", "input-context"},
+        {"max_input_tokens", "max-input"},
+        {"max_output_tokens", "max-output"},
+        {"auto_compact_input_tokens", "auto-compact"},
+        {"effective_context_window_percent", "effective-percent"}
+    };
+    const json_t *limits = model ? json_object_get(model, "limits") : NULL;
+
+    if (!json_is_object(limits))
+        return 0;
+    if (snj_buf_append(text, "\nadvertised", 11u) < 0)
+        return -1;
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+        uint64_t value = 0u;
+        bool known = snj_json_integer_u64((json_t *)limits,
+                                          fields[i].key, &value) == 0;
+        if (append_capacity_value(text, fields[i].name, known, value) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int
 render_status(struct app_state *app)
 {
     const char *id = app->render.verbosity >= 3u ? app->session.id : NULL;
-    return app_hostf(app,
+    const struct snj_provider_config *provider = next_provider(app);
+    const struct snj_model_limit_config *configured = NULL;
+    const json_t *advertised = NULL;
+    struct snj_model_capacity capacity;
+    struct snj_buf text;
+    bool ceiling_selection_matches;
+    bool ceiling_source_matches;
+    char error[256] = {0};
+    int rc = -1;
+
+    if (!provider)
+        return app_error(app,
+            "selected provider is not present in the current configuration");
+    if (snj_app_capacity_resolve(app, provider, next_model(app), &capacity,
+                                 error, sizeof(error)) < 0)
+        return app_error(app, error[0] ? error :
+                         "model capacity could not be resolved");
+    configured = snj_config_model_limit(app->config, provider->name,
+                                        next_model(app));
+    ceiling_selection_matches = app->session.capacity_ceiling_valid &&
+        strcmp(app->session.capacity_ceiling_provider, provider->name) == 0 &&
+        strcmp(app->session.capacity_ceiling_model, next_model(app)) == 0;
+    ceiling_source_matches = ceiling_selection_matches &&
+        capacity_ceiling_matches(app, provider, next_model(app));
+    if (capacity.source_bound)
+        advertised = snj_model_cache_find(&app->model_cache, provider->name,
+                                          next_model(app));
+    snj_buf_init(&text, 64u * 1024u);
+    if (snj_buf_printf(&text,
         "session: %s\n"
         "state: %s\n"
         "provider: %s%s\n"
@@ -627,7 +837,7 @@ render_status(struct app_state *app)
         "turns: %llu\n"
         "queue: %zu%s\n"
         "verbosity: %u\n"
-        "context: not counted",
+        "context: source=%s",
         id ? id : (char [9]){app->session.id[0], app->session.id[1],
                              app->session.id[2], app->session.id[3],
                              app->session.id[4], app->session.id[5],
@@ -641,7 +851,82 @@ render_status(struct app_state *app)
         (unsigned long long)app->session.turn_count,
         app->session.pending_queue_count,
         app->session.pending_queue_count && !app->queue_armed ? " paused" : "",
-        app->render.verbosity);
+        app->render.verbosity, snj_capacity_source_name(capacity.source)) < 0 ||
+        append_capacity_value(&text, "hard-input",
+                              capacity.hard_input_known,
+                              capacity.hard_input_tokens) < 0 ||
+        append_capacity_value(&text, "requested-output",
+                              capacity.max_output_known,
+                              capacity.max_output_tokens) < 0)
+        goto out;
+    if (capacity.effective_context_window_known &&
+        snj_buf_printf(&text, " · effective=%u%%%s",
+                       capacity.effective_context_window_percent,
+                       capacity.effective_context_window_derived ?
+                           " (derived client policy)" : " (advertised)") < 0)
+        goto out;
+    if (configured) {
+        if (snj_buf_append(&text, "\nconfigured", 11u) < 0 ||
+            append_capacity_value(&text, "context",
+                configured->context_window_known,
+                configured->context_window_tokens) < 0 ||
+            append_capacity_value(&text, "max-input",
+                configured->max_input_known,
+                configured->max_input_tokens) < 0 ||
+            append_capacity_value(&text, "max-output",
+                configured->max_output_known,
+                configured->max_output_tokens) < 0)
+            goto out;
+    }
+    if (append_advertised_capacity(&text, advertised) < 0)
+        goto out;
+    if (capacity.cache_source_mismatch &&
+        snj_buf_append(&text,
+            "\ncatalog source: mismatch; advertised limits ignored",
+            strlen("\ncatalog source: mismatch; advertised limits ignored")) < 0)
+        goto out;
+    if (app->capacity_cache_error[0] &&
+        snj_buf_printf(&text, "\ncatalog: %s", app->capacity_cache_error) < 0)
+        goto out;
+    if (app->session.capacity_ceiling_valid) {
+        if (snj_buf_printf(&text,
+                "\nobserved ceiling: hard-input=%llu · provider=%s · model=%s · binding=%s%s",
+                (unsigned long long)
+                    app->session.capacity_ceiling_input_tokens,
+                app->session.capacity_ceiling_provider,
+                app->session.capacity_ceiling_model,
+                ceiling_source_matches ? "current" :
+                    ceiling_selection_matches ? "source mismatch" :
+                                                "different selection",
+                ceiling_source_matches ? "" : "; ignored") < 0)
+            goto out;
+    } else if (snj_buf_append(&text, "\nobserved ceiling: unknown",
+                              strlen("\nobserved ceiling: unknown")) < 0) {
+        goto out;
+    }
+    if (snj_buf_printf(&text, "\naccounting: %s",
+            provider->exact_token_count ? "exact provider token count" :
+            "provider-usage anchor, then pessimistic serialized-byte bound") < 0)
+        goto out;
+    if (app->session.usage_anchor_valid) {
+        if (snj_buf_printf(&text,
+                "\nobserved usage: input=%llu tokens · model-input=%llu bytes · provider=%s · model=%s · effort=%s",
+                (unsigned long long)app->session.usage_anchor_input_tokens,
+                (unsigned long long)app->session.usage_anchor_model_input_bytes,
+                app->session.usage_anchor_provider,
+                app->session.usage_anchor_model,
+                app->session.usage_anchor_effort) < 0)
+            goto out;
+    } else if (snj_buf_append(&text, "\nobserved usage: unknown",
+                              strlen("\nobserved usage: unknown")) < 0) {
+        goto out;
+    }
+    if (snj_buf_terminate(&text) < 0)
+        goto out;
+    rc = snj_render_host(&app->render, (const char *)text.data);
+out:
+    snj_buf_free(&text);
+    return rc;
 }
 static int
 render_help(struct app_state *app)
@@ -713,7 +998,11 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
             goto out;
         }
         models = NULL;
-        if (snj_json_set_new(entry, "name", json_string(provider->name)) < 0) {
+        if (snj_json_set_new(entry, "base_url",
+                             json_string(provider->base_url)) < 0 ||
+            snj_json_set_new(entry, "name", json_string(provider->name)) < 0 ||
+            snj_json_set_new(entry, "protocol",
+                json_string(snj_provider_catalog_protocol(provider))) < 0) {
             json_decref(entry);
             set_error(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
@@ -753,6 +1042,36 @@ load_model_cache(struct app_state *app, bool refresh,
     return rc;
 }
 static int
+append_catalog_limits(struct snj_buf *text, const json_t *model)
+{
+    const json_t *limits = model ? json_object_get(model, "limits") : NULL;
+    static const struct {
+        const char *key;
+        const char *label;
+    } fields[] = {
+        {"context_window_tokens", "context"},
+        {"max_context_window_tokens", "max-context"},
+        {"max_input_tokens", "input"},
+        {"max_output_tokens", "output"}
+    };
+    bool any = false;
+
+    if (!json_is_object(limits))
+        return 0;
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+        uint64_t value;
+        if (snj_json_integer_u64((json_t *)limits, fields[i].key, &value) < 0)
+            continue;
+        if (snj_buf_printf(text, "%s%s=%llu",
+                           any ? "," : " · ", fields[i].label,
+                           (unsigned long long)value) < 0)
+            return -1;
+        any = true;
+    }
+    return 0;
+}
+
+static int
 render_model_catalog(struct app_state *app)
 {
     const struct snj_provider_config *selected = next_provider(app);
@@ -783,6 +1102,9 @@ render_model_catalog(struct app_state *app)
                                   &provider, &model, &effort) != 0 ||
             snj_buf_printf(&text, "\n%zu. %s / %s / %s",
                            index, provider, model, effort) < 0)
+            goto out;
+        if (append_catalog_limits(&text,
+                snj_model_cache_find(&app->model_cache, provider, model)) < 0)
             goto out;
     }
     if (gmtime_r(&seconds, &broken) &&
@@ -1411,11 +1733,14 @@ change_verbosity(struct app_state *app, const char *value)
 static int
 toggle_view(struct app_state *app)
 {
+    int rc;
+
     if (!app->networked)
         return 0;
-    return snj_render_set_view(&app->render,
+    rc = snj_render_set_view(&app->render,
         snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
         SNJ_RENDER_ROLLOUT : SNJ_RENDER_CHAT);
+    return rc < 0 ? rc : set_input_prompt(app, app->session.active_turn);
 }
 static int
 handle_common_command(struct app_state *app, const char *line, bool active,
@@ -1430,10 +1755,14 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return render_status(app);
     if (strcmp(line, "/history") == 0)
         return snj_render_history(&app->render, &app->session);
-    if (app->networked && strcmp(line, "/chat") == 0)
-        return snj_render_set_view(&app->render, SNJ_RENDER_CHAT);
-    if (app->networked && strcmp(line, "/rollout") == 0)
-        return snj_render_set_view(&app->render, SNJ_RENDER_ROLLOUT);
+    if (app->networked && strcmp(line, "/chat") == 0) {
+        int rc = snj_render_set_view(&app->render, SNJ_RENDER_CHAT);
+        return rc < 0 ? rc : set_input_prompt(app, active);
+    }
+    if (app->networked && strcmp(line, "/rollout") == 0) {
+        int rc = snj_render_set_view(&app->render, SNJ_RENDER_ROLLOUT);
+        return rc < 0 ? rc : set_input_prompt(app, active);
+    }
     if (strcmp(line, "/verbose") == 0)
         return change_verbosity(app, NULL);
     if (strncmp(line, "/verbose ", 9u) == 0)
@@ -1939,6 +2268,14 @@ run_turn(struct app_state *app, const char *prompt,
     char count_request_hash[SNJ_SHA256_HEX_LEN + 1u];
     char error[256];
     uint64_t input_tokens_bound = 0;
+    uint64_t model_input_bytes = 0;
+    uint64_t request_input_bytes = 0;
+    uint64_t request_input_count = 0;
+    char request_input_hash[SNJ_SHA256_HEX_LEN + 1u];
+    char rejected_request_hash[SNJ_SHA256_HEX_LEN + 1u] = {0};
+    char over_budget_request_hash[SNJ_SHA256_HEX_LEN + 1u] = {0};
+    unsigned int hard_compaction_attempts = 0u;
+    bool capacity_recovery_used = false;
     char *turn_prompt;
     struct snj_credential credential;
     size_t prompt_max = queued ? SNJ_MAX_QUEUED_TEXT : SNJ_MAX_DIRECT_PROMPT;
@@ -2018,7 +2355,9 @@ run_turn(struct app_state *app, const char *prompt,
         struct snj_buf request_body;
         uint64_t response_begin_ms;
         unsigned int provider_retry_count = 0u;
+        struct snj_provider_failure provider_failure;
         int provider_rc;
+        memset(&provider_failure, 0, sizeof(provider_failure));
         error[0] = '\0';
         if (snj_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
             (void)app_error(app, error[0] ? error :
@@ -2034,6 +2373,9 @@ run_turn(struct app_state *app, const char *prompt,
             snj_app_request_digests(app, turn_prompt, steering, cycle, &credential,
                             input_hash, request_hash, count_request_hash,
                             &input_tokens_bound,
+                            &model_input_bytes, &request_input_bytes,
+                            &request_input_count, request_input_hash,
+                            &count_method,
                             &request_body, &create_request, &count_request,
                             error, sizeof(error)) < 0) {
             snj_app_response_cycle_release(app, &graph, &steering,
@@ -2116,7 +2458,40 @@ run_turn(struct app_state *app, const char *prompt,
 #endif
         {
             bool compacted = false;
-            int compact_rc = snj_app_compact_before_response(app, &credential,
+            bool over_hard = app->turn_capacity.hard_input_known &&
+                input_tokens_bound > app->turn_capacity.hard_input_tokens;
+            int compact_rc;
+
+            if (over_hard &&
+                (hard_compaction_attempts >= 8u ||
+                 strcmp(over_budget_request_hash, request_hash) == 0)) {
+                char failure[256];
+
+                (void)snprintf(failure, sizeof(failure),
+                    "%s while reducing context estimate %llu (%s) to hard budget %llu",
+                    hard_compaction_attempts >= 8u ?
+                        "context compaction reached its eight-attempt bound" :
+                        "context compaction repeated an over-budget request",
+                    (unsigned long long)input_tokens_bound, count_method,
+                    (unsigned long long)app->turn_capacity.hard_input_tokens);
+                snj_app_response_cycle_release(app, &graph, &steering,
+                                               &create_request, &count_request,
+                                               &request_body);
+                if (commit_event(app, "turn_failed",
+                        snj_app_turn_failed_data(turn_id, "context", failure),
+                        error, sizeof(error)) < 0) {
+                    (void)app_error(app, error);
+                    result = 3;
+                } else {
+                    (void)app_error(app, failure);
+                    result = 4;
+                }
+                goto out;
+            }
+            if (over_hard)
+                memcpy(over_budget_request_hash, request_hash,
+                       sizeof(over_budget_request_hash));
+            compact_rc = snj_app_compact_before_response(app, &credential,
                     input_tokens_bound, count_method, &compacted,
                     error, sizeof(error));
             if (compact_rc == 1 && app->steering_requested) {
@@ -2151,7 +2526,8 @@ run_turn(struct app_state *app, const char *prompt,
                                                &create_request, &count_request,
                                                &request_body);
                 if (commit_event(app, "turn_failed",
-                                 snj_app_turn_failed_data(turn_id, "provider",
+                                 snj_app_turn_failed_data(turn_id,
+                                     over_hard ? "context" : "provider",
                                      error[0] ? error :
                                      "pre-response compaction failed"),
                                  error, sizeof(error)) < 0) {
@@ -2165,12 +2541,32 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             if (compacted) {
+                if (over_hard)
+                    ++hard_compaction_attempts;
                 snj_app_response_cycle_release(app, &graph, &steering,
                                                &create_request, &count_request,
                                                &request_body);
                 --cycle;
                 continue;
             }
+        }
+        if (capacity_recovery_used &&
+            strcmp(rejected_request_hash, request_hash) == 0) {
+            static const char failure[] =
+                "capacity recovery produced an identical provider request";
+            snj_app_response_cycle_release(app, &graph, &steering,
+                                           &create_request, &count_request,
+                                           &request_body);
+            if (commit_event(app, "turn_failed",
+                    snj_app_turn_failed_data(turn_id, "context", failure),
+                    error, sizeof(error)) < 0) {
+                (void)app_error(app, error);
+                result = 3;
+            } else {
+                (void)app_error(app, failure);
+                result = 4;
+            }
+            goto out;
         }
         if (commit_event(app, "response_started",
                          snj_app_response_started_data(turn_id, response_id, cycle,
@@ -2179,6 +2575,17 @@ run_turn(struct app_state *app, const char *prompt,
                                                input_hash, request_hash,
                                                count_request_hash, count_method,
                                                input_tokens_bound,
+                                               model_input_bytes,
+                                               request_input_bytes,
+                                               request_input_count,
+                                               request_input_hash,
+                                               strcmp(count_method,
+                                                   "anchored_upper_bound") == 0 ?
+                                                   app->session.usage_anchor_model_input_sha256 :
+                                                   NULL,
+                                               app->turn_provider->name,
+                                               app->turn_effort,
+                                               &app->turn_capacity,
                                                steering),
                          error, sizeof(error)) < 0) {
             snj_app_response_cycle_release(app, &graph, &steering,
@@ -2187,6 +2594,14 @@ run_turn(struct app_state *app, const char *prompt,
             (void)app_error(app, error[0] ? error :
                                    "response setup could not be persisted");
             result = 3;
+            goto out;
+        }
+        if (!app->execute && set_input_prompt(app, true) < 0) {
+            snj_app_response_cycle_release(app, &graph, &steering,
+                                           &create_request, &count_request,
+                                           &request_body);
+            (void)app_error(app, "context meter could not be displayed");
+            result = 6;
             goto out;
         }
         json_decref(count_request);
@@ -2249,6 +2664,7 @@ run_turn(struct app_state *app, const char *prompt,
         error[0] = '\0';
         provider_rc = snj_app_provider_run(app, turn_prompt, steering, cycle,
                                    create_request, &credential, &graph,
+                                   &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
         json_decref(create_request);
         json_decref(steering);
@@ -2299,10 +2715,15 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (provider_rc < 0 || app->stream_failed) {
+            bool capacity_failure = provider_rc < 0 &&
+                snj_provider_failure_is_capacity(&provider_failure);
+            bool replay_safe = capacity_failure && !app->stream_failed &&
+                app->partial_count == 0u && graph.count == 0u &&
+                !app->stream_item_seen;
             const char *class_name = app->stream_failed ?
                 (app->stream_errno == EPROTO ? "protocol" :
                  app->stream_errno == EOVERFLOW ? "resource" : "output") :
-                "provider";
+                capacity_failure ? "context" : "provider";
             int exit_status = app->stream_failed &&
                 strcmp(class_name, "output") == 0 ? 6 : 4;
             char failure[256];
@@ -2312,6 +2733,86 @@ run_turn(struct app_state *app, const char *prompt,
                            (app->stream_error[0] ? app->stream_error :
                             "assistant output could not be delivered") :
                            (error[0] ? error : "provider response failed"));
+            if (replay_safe && !capacity_recovery_used) {
+                bool compacted = false;
+                char provider_source_hash[SNJ_SHA256_HEX_LEN + 1u];
+
+                provider_capacity_source_sha256(app->turn_provider,
+                                                provider_source_hash);
+
+                if (strcmp(rejected_request_hash, request_hash) == 0) {
+                    (void)snprintf(failure, sizeof(failure),
+                                   "provider rejected an identical context request twice");
+                } else if (commit_event(app, "response_capacity_rejected",
+                        snj_app_response_capacity_rejected_data(
+                            turn_id, response_id, cycle, request_hash,
+                            &provider_failure, &app->turn_capacity,
+                            provider_source_hash), error, sizeof(error)) < 0) {
+                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                                   NULL, NULL);
+                    (void)app_error(app, error[0] ? error :
+                        "capacity rejection could not be persisted");
+                    result = 3;
+                    goto out;
+                } else {
+                    int recovery_rc;
+
+                    memcpy(rejected_request_hash, request_hash,
+                           sizeof(rejected_request_hash));
+                    apply_capacity_ceiling(app, app->turn_provider,
+                                           app->turn_model,
+                                           &app->turn_capacity);
+                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                                                   NULL, NULL);
+                    for (;;) {
+                        error[0] = '\0';
+                        recovery_rc =
+                            snj_app_compact_after_capacity_rejection(
+                                app, &credential, &compacted,
+                                error, sizeof(error));
+                        if (recovery_rc == 1 && app->steering_requested) {
+                            app->steering_requested = false;
+                            continue;
+                        }
+                        if (recovery_rc == 2 && app->interrupt_requested) {
+                            if (close_active_process_for_turn(app, turn_id,
+                                    "user_interrupt", true,
+                                    error, sizeof(error)) < 0 ||
+                                commit_event(app, "turn_interrupted",
+                                    snj_app_turn_interrupted_data(
+                                        turn_id, "user", "cancelled"),
+                                    error, sizeof(error)) < 0) {
+                                (void)app_error(app, error[0] ? error :
+                                    "interruption could not be persisted");
+                                result = 3;
+                            } else {
+                                (void)app_warning(app, "turn interrupted");
+                                result = app->execute ? 6 : 1;
+                            }
+                            goto out;
+                        }
+                        break;
+                    }
+                    if (recovery_rc == 0 && compacted) {
+                        capacity_recovery_used = true;
+                        continue;
+                    }
+                    (void)snprintf(failure, sizeof(failure),
+                        "context capacity rejection could not be reduced%s%.*s",
+                        error[0] ? ": " : "", 190,
+                        error[0] ? error : "");
+                    if (commit_event(app, "turn_failed",
+                            snj_app_turn_failed_data(turn_id, "context", failure),
+                            error, sizeof(error)) < 0) {
+                        (void)app_error(app, error);
+                        result = 3;
+                    } else {
+                        (void)app_error(app, failure);
+                        result = 4;
+                    }
+                    goto out;
+                }
+            }
             partial = snj_app_partial_public_json(app);
             if (!partial) {
                 snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);

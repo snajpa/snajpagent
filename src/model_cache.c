@@ -62,14 +62,82 @@ cache_string(const json_t *value, size_t max)
 }
 
 static bool
+nullable_limit(const json_t *object, const char *key, uint64_t max,
+               uint64_t *value, bool *known)
+{
+    json_t *entry = json_object_get(object, key);
+    json_int_t integer;
+
+    *known = false;
+    *value = 0u;
+    if (json_is_null(entry))
+        return true;
+    if (!json_is_integer(entry) || (integer = json_integer_value(entry)) <= 0 ||
+        (uint64_t)integer > max)
+        return false;
+    *known = true;
+    *value = (uint64_t)integer;
+    return true;
+}
+
+static bool
+limits_valid(const json_t *limits)
+{
+    static const char *const keys[] = {
+        "auto_compact_input_tokens", "context_window_tokens",
+        "effective_context_window_percent", "input_context_window_tokens",
+        "max_context_window_tokens", "max_input_tokens", "max_output_tokens"
+    };
+    uint64_t context, max_context, input_context, max_input, max_output;
+    uint64_t auto_compact, effective;
+    bool context_known, max_context_known, input_context_known;
+    bool max_input_known, max_output_known, auto_compact_known, effective_known;
+
+    if (!json_is_object(limits) ||
+        !snj_json_exact_keys((json_t *)limits, keys,
+                             sizeof(keys) / sizeof(keys[0])) ||
+        !nullable_limit(limits, "context_window_tokens",
+                        SNJ_CONFIG_TOKEN_LIMIT_MAX, &context,
+                        &context_known) ||
+        !nullable_limit(limits, "max_context_window_tokens",
+                        SNJ_CONFIG_TOKEN_LIMIT_MAX, &max_context,
+                        &max_context_known) ||
+        !nullable_limit(limits, "input_context_window_tokens",
+                        SNJ_CONFIG_TOKEN_LIMIT_MAX, &input_context,
+                        &input_context_known) ||
+        !nullable_limit(limits, "max_input_tokens",
+                        SNJ_CONFIG_TOKEN_LIMIT_MAX, &max_input,
+                        &max_input_known) ||
+        !nullable_limit(limits, "max_output_tokens",
+                        SNJ_CONFIG_TOKEN_LIMIT_MAX, &max_output,
+                        &max_output_known) ||
+        !nullable_limit(limits, "auto_compact_input_tokens",
+                        SNJ_CONFIG_TOKEN_LIMIT_MAX, &auto_compact,
+                        &auto_compact_known) ||
+        !nullable_limit(limits, "effective_context_window_percent", 100u,
+                        &effective, &effective_known))
+        return false;
+    return !(context_known && max_context_known && context > max_context) &&
+           !(context_known && input_context_known && input_context > context) &&
+           !(context_known && max_input_known && max_input > context) &&
+           !(context_known && max_output_known && max_output > context) &&
+           !(context_known && max_input_known && max_output_known &&
+             max_input > context - max_output) &&
+           !(context_known && auto_compact_known && auto_compact > context);
+}
+
+static bool
 model_valid(const json_t *model)
 {
-    static const char *const keys[] = {"default_effort", "efforts", "id"};
+    static const char *const keys[] = {
+        "default_effort", "efforts", "id", "limits"
+    };
     json_t *fallback;
     json_t *efforts;
 
-    if (!json_is_object(model) || !snj_json_exact_keys((json_t *)model, keys, 3u) ||
-        !cache_string(json_object_get(model, "id"), SNJ_CONFIG_MODEL_MAX - 1u))
+    if (!json_is_object(model) || !snj_json_exact_keys((json_t *)model, keys, 4u) ||
+        !cache_string(json_object_get(model, "id"), SNJ_CONFIG_MODEL_MAX - 1u) ||
+        !limits_valid(json_object_get(model, "limits")))
         return false;
     fallback = json_object_get(model, "default_effort");
     if (!json_is_null(fallback) &&
@@ -94,7 +162,9 @@ model_valid(const json_t *model)
 static bool
 providers_valid(const json_t *providers)
 {
-    static const char *const keys[] = {"models", "name"};
+    static const char *const keys[] = {
+        "base_url", "models", "name", "protocol"
+    };
     size_t total_models = 0u;
     size_t total_entries = 0u;
 
@@ -106,14 +176,23 @@ providers_valid(const json_t *providers)
         json_t *models;
         const char *name;
         if (!json_is_object(provider) ||
-            !snj_json_exact_keys(provider, keys, 2u) ||
+            !snj_json_exact_keys(provider, keys, 4u) ||
             !cache_string(json_object_get(provider, "name"),
                           SNJ_CONFIG_PROVIDER_NAME_MAX) ||
+            !cache_string(json_object_get(provider, "base_url"),
+                          SNJ_CONFIG_URL_MAX) ||
+            !cache_string(json_object_get(provider, "protocol"), 6u) ||
             !(name = snj_json_string(provider, "name")) ||
             !json_is_array((models = json_object_get(provider, "models"))) ||
             json_array_size(models) >
                 SNJ_MODEL_CACHE_MODELS_MAX - total_models)
             return false;
+        {
+            const char *protocol = snj_json_string(provider, "protocol");
+            if (!protocol || (strcmp(protocol, "codex") != 0 &&
+                              strcmp(protocol, "openai") != 0))
+                return false;
+        }
         for (size_t j = 0; j < i; ++j)
             if (strcmp(snj_json_string(json_array_get(providers, j), "name"),
                        name) == 0)
@@ -148,25 +227,22 @@ decode_cache(const unsigned char *data, size_t len,
              struct snj_model_cache *cache,
              char *error, size_t error_size)
 {
-    static const char *const keys[] = {"format", "providers", "updated_at_ms"};
+    static const char *const keys[] = {"providers", "updated_at_ms"};
     json_t *root;
     json_t *providers;
     json_t *copy;
-    uint64_t format;
     uint64_t updated;
     char json_error[160] = {0};
 
     root = snj_json_load_strict(data, len, SNJ_MODEL_CACHE_FILE_MAX,
                                 json_error, sizeof(json_error));
     if (!root || !json_is_object(root) ||
-        !snj_json_exact_keys(root, keys, 3u) ||
-        snj_json_integer_u64(root, "format", &format) < 0 || format != 1u ||
+        !snj_json_exact_keys(root, keys, 2u) ||
         snj_json_integer_u64(root, "updated_at_ms", &updated) < 0 ||
         updated == 0u ||
         !providers_valid((providers = json_object_get(root, "providers")))) {
-        set_error(error, error_size, "invalid model cache%s%s",
-                  json_error[0] ? ": " : "",
-                  json_error[0] ? json_error : "");
+        set_error(error, error_size,
+                  "model cache is unusable; use /model cache while idle");
         if (root)
             json_decref(root);
         errno = EINVAL;
@@ -264,7 +340,6 @@ snj_model_cache_replace(struct snj_store *store, const json_t *providers,
     installed = json_deep_copy(providers);
     snj_buf_init(&data, SNJ_MODEL_CACHE_FILE_MAX);
     if (!root || !installed ||
-        snj_json_set_new(root, "format", json_integer(1)) < 0 ||
         snj_json_set_new(root, "providers", json_deep_copy(providers)) < 0 ||
         snj_json_set_new(root, "updated_at_ms",
                          json_integer((json_int_t)updated_at_ms)) < 0 ||
@@ -441,4 +516,196 @@ snj_model_cache_entry(const struct snj_model_cache *cache, size_t index,
         }
     }
     return 1;
+}
+
+static const json_t *
+find_provider(const struct snj_model_cache *cache, const char *name)
+{
+    if (!cache || !cache->providers || !name)
+        return NULL;
+    for (size_t i = 0; i < json_array_size(cache->providers); ++i) {
+        json_t *provider = json_array_get(cache->providers, i);
+        if (strcmp(snj_json_string(provider, "name"), name) == 0)
+            return provider;
+    }
+    return NULL;
+}
+
+static void
+read_capacity_limit(const json_t *limits, const char *key, uint64_t max,
+                    uint64_t *value, bool *known)
+{
+    if (!nullable_limit(limits, key, max, value, known)) {
+        *value = 0u;
+        *known = false;
+    }
+}
+
+static void
+minimum_budget(uint64_t value, uint64_t *budget, bool *known)
+{
+    if (!*known || value < *budget) {
+        *budget = value;
+        *known = true;
+    }
+}
+
+const char *
+snj_capacity_source_name(enum snj_capacity_source source)
+{
+    switch (source) {
+    case SNJ_CAPACITY_UNKNOWN: return "unknown";
+    case SNJ_CAPACITY_CATALOG: return "advertised";
+    case SNJ_CAPACITY_CONFIG: return "configured";
+    case SNJ_CAPACITY_OBSERVED: return "observed";
+    case SNJ_CAPACITY_STALE_CATALOG: return "stale-catalog-ignored";
+    }
+    return "unknown";
+}
+
+int
+snj_model_capacity_resolve(const struct snj_model_cache *cache,
+                           const struct snj_config *config,
+                           const struct snj_provider_config *provider,
+                           const char *model, const char *protocol,
+                           struct snj_model_capacity *capacity,
+                           char *error, size_t error_size)
+{
+    const struct snj_model_limit_config *override;
+    const json_t *cached_provider;
+    const json_t *cached_model = NULL;
+    const json_t *limits = NULL;
+    bool catalog_used = false;
+
+    if (!config || !provider || !model || !*model || !protocol || !capacity ||
+        (strcmp(protocol, "codex") != 0 && strcmp(protocol, "openai") != 0)) {
+        set_error(error, error_size, "invalid model capacity selection");
+        errno = EINVAL;
+        return -1;
+    }
+    memset(capacity, 0, sizeof(*capacity));
+    capacity->codex_protocol = strcmp(protocol, "codex") == 0;
+    cached_provider = find_provider(cache, provider->name);
+    if (cached_provider) {
+        capacity->source_bound =
+            strcmp(snj_json_string(cached_provider, "base_url"),
+                   provider->base_url) == 0 &&
+            strcmp(snj_json_string(cached_provider, "protocol"), protocol) == 0;
+        if (capacity->source_bound) {
+            cached_model = snj_model_cache_find(cache, provider->name, model);
+            if (cached_model)
+                limits = json_object_get(cached_model, "limits");
+        } else {
+            capacity->source = SNJ_CAPACITY_STALE_CATALOG;
+            capacity->cache_source_mismatch = true;
+        }
+    }
+    override = snj_config_model_limit(config, provider->name, model);
+    if (override) {
+        if (override->context_window_known) {
+            capacity->context_window_tokens = override->context_window_tokens;
+            capacity->context_window_known = true;
+        }
+        if (override->max_input_known) {
+            capacity->max_input_tokens = override->max_input_tokens;
+            capacity->max_input_known = true;
+        }
+        if (override->max_output_known) {
+            capacity->max_output_tokens = override->max_output_tokens;
+            capacity->max_output_known = true;
+        }
+        capacity->source = SNJ_CAPACITY_CONFIG;
+    } else if (limits) {
+        read_capacity_limit(limits, "context_window_tokens",
+            SNJ_CONFIG_TOKEN_LIMIT_MAX, &capacity->context_window_tokens,
+            &capacity->context_window_known);
+        read_capacity_limit(limits, "max_context_window_tokens",
+            SNJ_CONFIG_TOKEN_LIMIT_MAX, &capacity->max_context_window_tokens,
+            &capacity->max_context_window_known);
+        read_capacity_limit(limits, "input_context_window_tokens",
+            SNJ_CONFIG_TOKEN_LIMIT_MAX, &capacity->input_context_window_tokens,
+            &capacity->input_context_window_known);
+        read_capacity_limit(limits, "max_input_tokens",
+            SNJ_CONFIG_TOKEN_LIMIT_MAX, &capacity->max_input_tokens,
+            &capacity->max_input_known);
+        read_capacity_limit(limits, "max_output_tokens",
+            SNJ_CONFIG_TOKEN_LIMIT_MAX, &capacity->max_output_tokens,
+            &capacity->max_output_known);
+        read_capacity_limit(limits, "auto_compact_input_tokens",
+            SNJ_CONFIG_TOKEN_LIMIT_MAX, &capacity->auto_compact_input_tokens,
+            &capacity->auto_compact_input_known);
+        {
+            uint64_t percent = 0u;
+            read_capacity_limit(limits, "effective_context_window_percent",
+                                100u, &percent,
+                                &capacity->effective_context_window_known);
+            capacity->effective_context_window_percent =
+                (unsigned int)percent;
+        }
+        catalog_used = capacity->context_window_known ||
+            capacity->max_context_window_known ||
+            capacity->input_context_window_known ||
+            capacity->max_input_known || capacity->max_output_known ||
+            capacity->auto_compact_input_known ||
+            capacity->effective_context_window_known;
+    }
+    if ((capacity->context_window_known &&
+         capacity->max_context_window_known &&
+         capacity->context_window_tokens >
+             capacity->max_context_window_tokens) ||
+        (capacity->context_window_known &&
+         capacity->input_context_window_known &&
+         capacity->input_context_window_tokens >
+             capacity->context_window_tokens) ||
+        (capacity->context_window_known && capacity->max_input_known &&
+         capacity->max_input_tokens > capacity->context_window_tokens) ||
+        (capacity->context_window_known && capacity->max_output_known &&
+         capacity->max_output_tokens > capacity->context_window_tokens) ||
+        (capacity->context_window_known && capacity->max_input_known &&
+         capacity->max_output_known &&
+         capacity->max_input_tokens > capacity->context_window_tokens -
+                                      capacity->max_output_tokens)) {
+        set_error(error, error_size,
+                  "contradictory capacity limits for %s/%s",
+                  provider->name, model);
+        errno = EINVAL;
+        return -1;
+    }
+    if (!override && catalog_used)
+        capacity->source = SNJ_CAPACITY_CATALOG;
+    if (capacity->max_input_known)
+        minimum_budget(capacity->max_input_tokens,
+                       &capacity->hard_input_tokens,
+                       &capacity->hard_input_known);
+    if (capacity->input_context_window_known)
+        minimum_budget(capacity->input_context_window_tokens,
+                       &capacity->hard_input_tokens,
+                       &capacity->hard_input_known);
+    if (capacity->context_window_known) {
+        uint64_t context_budget = capacity->context_window_tokens;
+        uint64_t effective_budget;
+
+        if (capacity->max_output_known)
+            context_budget -= capacity->max_output_tokens;
+        minimum_budget(context_budget, &capacity->hard_input_tokens,
+                       &capacity->hard_input_known);
+        if (!capacity->effective_context_window_known) {
+            if (capacity->codex_protocol) {
+                capacity->effective_context_window_percent = 95u;
+                capacity->effective_context_window_known = true;
+                capacity->effective_context_window_derived = true;
+            } else if (!capacity->max_output_known) {
+                capacity->effective_context_window_percent = 90u;
+                capacity->effective_context_window_known = true;
+                capacity->effective_context_window_derived = true;
+            }
+        }
+        if (capacity->effective_context_window_known) {
+            effective_budget = capacity->context_window_tokens *
+                capacity->effective_context_window_percent / 100u;
+            minimum_budget(effective_budget, &capacity->hard_input_tokens,
+                           &capacity->hard_input_known);
+        }
+    }
+    return 0;
 }

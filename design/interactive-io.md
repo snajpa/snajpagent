@@ -86,13 +86,19 @@ while no turn is running and U+00BB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
 state marker; the ordinary composer never includes a `steer` word or a
 different active-turn arrow.
 
-The non-networked prompt is `MODEL/EFFORT › ` while idle and
-`MODEL/EFFORT » ` during a turn. The idle identity is the effective next-turn
-selection. The active identity is the model and effort frozen for that turn,
-even if a command stages different next-turn settings. Submitted input keeps
-the same identity and glyph in terminal scrollback. Terminal-unsafe code points
-in a trusted model or effort selector are visibly escaped in the composer only;
-the selected value supplied to the provider remains byte-for-byte unchanged.
+The non-networked prompt is `MODEL/EFFORT context=N% › ` while idle and
+`MODEL/EFFORT context=N% » ` during a turn. The context meter is the final
+field immediately before the state glyph. `N` is the rounded-up percentage of
+the latest durable token-domain input bound against the resolved hard input
+budget for the same provider, model, effort, and compaction lineage. Unknown,
+stale, or incomparable facts render `context=?%`; serialized byte counts are
+never substituted as measured tokens. The idle identity is the effective
+next-turn selection. The active identity is the model and effort frozen for
+that turn, even if a command stages different next-turn settings. Submitted
+input and queue-edit prompts keep the same meter and glyph in terminal
+scrollback. Terminal-unsafe code points in a trusted model or effort selector
+are visibly escaped in the composer only; the selected value supplied to the
+provider remains byte-for-byte unchanged.
 
 The networked prompt identity and its chat/rollout views are specified in
 `irc-chat.md`.

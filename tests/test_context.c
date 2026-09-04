@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "context.h"
+#include "base.h"
 #include "json.h"
 #include "snajpagent.h"
 
@@ -27,8 +28,9 @@ turn_config(void)
                             json_string(SNAJPAGENT_CAPABILITY_VERSION)) == 0);
     assert(snj_json_set_new(config, "effort", json_string("medium")) == 0);
     assert(snj_json_set_new(config, "max_output_tokens",
-                            json_integer(SNAJPAGENT_MAX_OUTPUT_TOKENS)) == 0);
+                            json_null()) == 0);
     assert(snj_json_set_new(config, "model", json_string(SNAJPAGENT_MODEL)) == 0);
+    assert(snj_json_set_new(config, "provider", json_string("default")) == 0);
     assert(snj_json_set_new(config, "profile_id",
                             json_string(SNAJPAGENT_PROFILE_ID)) == 0);
     assert(snj_json_set_new(config, "prompt_schema", json_integer(1)) == 0);
@@ -53,6 +55,17 @@ turn_started(const char *turn_id, unsigned int number, const char *text,
     assert(snj_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
     assert(snj_json_set_new(data, "turn_number", json_integer(number)) == 0);
     assert(snj_json_set_new(data, "workspace", json_string(workspace)) == 0);
+    return data;
+}
+
+static json_t *
+turn_started_model(const char *turn_id, unsigned int number, const char *text,
+                   const char *workspace, const char *model)
+{
+    json_t *data = turn_started(turn_id, number, text, workspace, NULL);
+    json_t *config = json_object_get(data, "config");
+
+    assert(json_object_set_new(config, "model", json_string(model)) == 0);
     return data;
 }
 
@@ -111,20 +124,42 @@ response_started(const char *turn_id, const char *response_id,
     assert(snj_json_set_new(data, "compact_id",
                             compact_id ? json_string(compact_id) : json_null()) == 0);
     assert(snj_json_set_new(data, "count_method", json_string("exact")) == 0);
+    assert(snj_json_set_new(data, "capacity_source",
+                            json_string("unknown")) == 0);
     assert(snj_json_set_new(data, "count_request_sha256",
         json_string("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")) == 0);
     assert(snj_json_set_new(data, "cycle", json_integer(1)) == 0);
+    assert(snj_json_set_new(data, "effort", json_string("medium")) == 0);
+    assert(snj_json_set_new(data, "hard_input_tokens", json_null()) == 0);
     assert(snj_json_set_new(data, "input_tokens_bound", json_integer(1000)) == 0);
     assert(snj_json_set_new(data, "model", json_string(SNAJPAGENT_MODEL)) == 0);
+    assert(snj_json_set_new(data, "model_input_bytes", json_integer(4000)) == 0);
     assert(snj_json_set_new(data, "model_input_sha256",
         json_string("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == 0);
+    assert(snj_json_set_new(data, "request_input_bytes", json_integer(3000)) == 0);
+    assert(snj_json_set_new(data, "request_input_count", json_integer(1)) == 0);
+    assert(snj_json_set_new(data, "request_input_sha256",
+        json_string("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")) == 0);
     assert(snj_json_set_new(data, "profile_id",
                             json_string(SNAJPAGENT_PROFILE_ID)) == 0);
+    assert(snj_json_set_new(data, "provider", json_string("default")) == 0);
     assert(snj_json_set_new(data, "request_sha256",
         json_string("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) == 0);
+    assert(snj_json_set_new(data, "requested_output_tokens", json_null()) == 0);
     assert(snj_json_set_new(data, "response_id", json_string(response_id)) == 0);
+    assert(snj_json_set_new(data, "source_bound", json_false()) == 0);
     assert(snj_json_set_new(data, "steering_ids", steering) == 0);
     assert(snj_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
+    return data;
+}
+
+static json_t *
+response_started_model(const char *turn_id, const char *response_id,
+                       const char *compact_id, const char *model)
+{
+    json_t *data = response_started(turn_id, response_id, compact_id);
+
+    assert(json_object_set_new(data, "model", json_string(model)) == 0);
     return data;
 }
 
@@ -169,6 +204,31 @@ response_completed(const char *turn_id, const char *response_id,
     assert(snj_json_set_new(data, "status", json_string("completed")) == 0);
     assert(snj_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
     assert(snj_json_set_new(data, "usage", usage()) == 0);
+    return data;
+}
+
+static json_t *
+response_capacity_rejected(const char *turn_id, const char *response_id)
+{
+    json_t *data = json_object();
+    assert(data);
+    assert(snj_json_set_new(data, "code",
+                            json_string("context_length_exceeded")) == 0);
+    assert(snj_json_set_new(data, "context_limit_tokens",
+                            json_integer(272000)) == 0);
+    assert(snj_json_set_new(data, "cycle", json_integer(1)) == 0);
+    assert(snj_json_set_new(data, "message", json_string("too large")) == 0);
+    assert(snj_json_set_new(data, "observed_hard_input_tokens",
+                            json_integer(272000)) == 0);
+    assert(snj_json_set_new(data, "provider_source_sha256",
+        json_string("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")) == 0);
+    assert(snj_json_set_new(data, "request_sha256",
+        json_string("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) == 0);
+    assert(snj_json_set_new(data, "requested_input_tokens",
+                            json_integer(300000)) == 0);
+    assert(snj_json_set_new(data, "response_id",
+                            json_string(response_id)) == 0);
+    assert(snj_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
     return data;
 }
 
@@ -247,8 +307,9 @@ compaction_started_data(const struct snj_session *session,
                             json_string(request_hash)) == 0);
     assert(snj_json_set_new(data, "input_tokens_bound",
                             json_integer((json_int_t)input_tokens_bound)) == 0);
-    assert(snj_json_set_new(data, "model",
-                            json_string(session->default_model)) == 0);
+    assert(snj_json_set_new(data, "model", json_string(
+        session->active_turn ? session->active_turn_model :
+                               session->default_model)) == 0);
     assert(snj_json_set_new(data, "predecessor_compact_id",
                             session->compact_id[0] ?
                             json_string(session->compact_id) : json_null()) == 0);
@@ -627,6 +688,90 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
     }
 }
 
+static size_t
+canonical_size(const json_t *value)
+{
+    struct snj_buf encoded;
+    size_t size;
+
+    snj_buf_init(&encoded, SNJ_CONTEXT_MAX_REQUEST);
+    assert(snj_json_canonical(value, &encoded) == 0);
+    size = encoded.len;
+    snj_buf_free(&encoded);
+    return size;
+}
+
+static void
+test_usage_anchor(void)
+{
+    struct snj_session session;
+    struct snj_context_projection projection;
+    json_t *prefix = json_array();
+    json_t *items = json_array();
+    json_t *old_item = json_object();
+    json_t *new_item = json_object();
+    json_t *request = json_object();
+    uint64_t bound = 0u;
+    uint64_t expected;
+
+    assert(prefix && items && old_item && new_item && request);
+    snj_session_init(&session);
+    snj_context_projection_init(&projection);
+    assert(snj_json_set_new(old_item, "content", json_string("old")) == 0);
+    assert(snj_json_set_new(old_item, "role", json_string("user")) == 0);
+    assert(snj_json_set_new(new_item, "content", json_string("new")) == 0);
+    assert(snj_json_set_new(new_item, "role", json_string("user")) == 0);
+    assert(json_array_append(prefix, old_item) == 0);
+    assert(json_array_append_new(items, old_item) == 0);
+    old_item = NULL;
+    assert(json_array_append_new(items, new_item) == 0);
+    new_item = NULL;
+    assert(snj_json_set_new(request, "input", items) == 0);
+    items = NULL;
+    assert(snj_json_set_new(request, "model", json_string("model")) == 0);
+    projection.create_request = request;
+    request = NULL;
+    projection.request_input_count = 2u;
+    projection.request_input_bytes = canonical_size(
+        json_object_get(projection.create_request, "input"));
+    projection.create_request_bytes = canonical_size(projection.create_request);
+
+    session.usage_anchor_valid = true;
+    memcpy(session.usage_anchor_provider, "provider", 9u);
+    memcpy(session.usage_anchor_model, "model", 6u);
+    memcpy(session.usage_anchor_effort, "medium", 7u);
+    session.usage_anchor_request_input_count = 1u;
+    session.usage_anchor_request_input_bytes = canonical_size(prefix);
+    session.usage_anchor_input_tokens = 100u;
+    assert(snj_json_digest(prefix,
+            session.usage_anchor_request_input_sha256) == 0);
+    expected = session.usage_anchor_input_tokens +
+        (uint64_t)projection.request_input_bytes -
+        session.usage_anchor_request_input_bytes +
+        (uint64_t)projection.create_request_bytes -
+        (uint64_t)projection.request_input_bytes + 512u + 32u;
+    assert(snj_context_usage_anchor_bound(&session, "provider", "model",
+               "medium", &projection, &bound) == 1);
+    assert(bound == expected);
+    assert(snj_context_usage_anchor_bound(&session, "other", "model",
+               "medium", &projection, &bound) == 0);
+    memcpy(session.compact_id, "different", 10u);
+    assert(snj_context_usage_anchor_bound(&session, "provider", "model",
+               "medium", &projection, &bound) == 0);
+    session.compact_id[0] = '\0';
+    assert(json_object_set_new(json_array_get(
+               json_object_get(projection.create_request, "input"), 0u),
+               "content", json_string("changed")) == 0);
+    projection.request_input_bytes = canonical_size(
+        json_object_get(projection.create_request, "input"));
+    projection.create_request_bytes = canonical_size(projection.create_request);
+    assert(snj_context_usage_anchor_bound(&session, "provider", "model",
+               "medium", &projection, &bound) == 0);
+
+    json_decref(prefix);
+    snj_context_projection_free(&projection);
+}
+
 int
 main(void)
 {
@@ -652,8 +797,10 @@ main(void)
     json_t *items;
     json_t *request_input;
     char *large_tool_output;
+    char large_tool_hash[SNJ_SHA256_HEX_LEN + 1u];
     char closure_output[4097];
 
+    test_usage_anchor();
     assert(mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
     assert(snprintf(workspace, sizeof(workspace), "%s/work", temp) > 0);
@@ -672,12 +819,33 @@ main(void)
     assert(snj_session_commit(&session, "turn_started",
                               turn_started(turn1, 1, "ping", workspace, NULL),
                               NULL, error, sizeof(error)) == 0);
+    {
+        json_t *old_shape = response_started(turn1, resp1, NULL);
+        assert(json_object_del(old_shape, "request_input_bytes") == 0);
+        assert(json_object_del(old_shape, "request_input_count") == 0);
+        assert(json_object_del(old_shape, "request_input_sha256") == 0);
+        assert(snj_session_commit(&session, "response_started", old_shape,
+                                  NULL, error, sizeof(error)) < 0);
+        assert(!session.response_open);
+    }
     assert(snj_session_commit(&session, "response_started",
                               response_started(turn1, resp1, NULL),
                               NULL, error, sizeof(error)) == 0);
+    assert(session.active_response_model_input_bytes == 4000u);
+    assert(session.active_response_request_input_bytes == 3000u);
+    assert(session.active_response_request_input_count == 1u);
+    assert(session.context_meter_valid);
+    assert(session.context_meter_input_tokens == 1000u);
+    assert(strcmp(session.context_meter_provider, "default") == 0);
+    assert(strcmp(session.context_meter_model, SNAJPAGENT_MODEL) == 0);
+    assert(strcmp(session.context_meter_effort, "medium") == 0);
+    assert(session.context_meter_compact_id[0] == '\0');
     assert(snj_session_commit(&session, "response_completed",
                               response_completed(turn1, resp1, "pong"),
                               NULL, error, sizeof(error)) == 0);
+    assert(session.usage_anchor_model_input_bytes == 4000u);
+    assert(session.usage_anchor_request_input_bytes == 3000u);
+    assert(session.usage_anchor_request_input_count == 1u);
     assert(snj_session_commit(&session, "turn_completed",
                               turn_completed(turn1, resp1),
                               NULL, error, sizeof(error)) == 0);
@@ -698,6 +866,7 @@ main(void)
         assert(snj_context_compact_request_build(&session,
                                                  session.default_model,
                                                  session.default_effort,
+                                                 0u, false,
                                                  &compact_request,
                                                  &compact_count_request,
                                                  source_hash, &source_bytes,
@@ -752,10 +921,12 @@ main(void)
         size_t output_bytes = 0u;
         size_t output_count_bytes = 0u;
         uint64_t source_seq = 0u;
+        uint64_t active_prefix_seq;
         const char *active_turn1 = "08080808080808080808080808080808";
         const char *active_resp1 = "09090909090909090909090909090909";
         const char *active_turn2 = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a";
         const char *active_compact = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
+        const char *active_model = "staged-active-model";
 
         snj_session_init(&active);
         snj_context_projection_init(&active_projection);
@@ -778,35 +949,57 @@ main(void)
         assert(snj_session_commit(&active, "turn_completed",
                                   turn_completed(active_turn1, active_resp1),
                                   NULL, error, sizeof(error)) == 0);
+        active_prefix_seq = active.next_seq - 1u;
         assert(snj_session_commit(&active, "turn_started",
-                                  turn_started(active_turn2, 2, "new",
-                                               workspace, NULL),
+                                  turn_started_model(active_turn2, 2, "new",
+                                                     workspace, active_model),
                                   NULL, error, sizeof(error)) == 0);
-        assert(snj_context_build(&active, SNAJPAGENT_MODEL, "medium", 1,
-                                 active_steering, NULL, &no_instructions,
+        assert(snj_session_commit(&active, "response_started",
+                                  response_started_model(active_turn2,
+                                      active_resp1, NULL, active_model),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&active, "response_capacity_rejected",
+                                  response_capacity_rejected(active_turn2,
+                                                             active_resp1),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(!active.response_open);
+        assert(active.capacity_ceiling_valid);
+        assert(active.capacity_ceiling_input_tokens == 272000u);
+        assert(strcmp(active.capacity_ceiling_provider, "default") == 0);
+        assert(strcmp(active.capacity_ceiling_model, active_model) == 0);
+        assert(strcmp(active.capacity_ceiling_source_sha256,
+                      "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") == 0);
+        assert(snj_session_commit(&active, "response_capacity_rejected",
+                                  response_capacity_rejected(active_turn2,
+                                                             active_resp1),
+                                  NULL, error, sizeof(error)) < 0);
+        assert(snj_context_build(&active, active_model, "medium", 1,
+                                 active_steering, 0u, false, NULL,
+                                 &no_instructions,
                                  &active_projection, error, sizeof(error)) == 0);
         assert(item_by_kind(json_object_get(active_projection.model_input,
                                             "items"),
                             "rollout_log_location") == NULL);
         snj_context_projection_free(&active_projection);
         assert(snj_context_compact_active_prefix_request_build(&active,
-                   active.default_model, active.default_effort, &compact_request,
+                   active_model, active.default_effort, 0u, false,
+                   &compact_request,
                    &compact_count_request, source_hash, &source_bytes,
                    request_hash, &request_bytes, &source_seq,
                    error, sizeof(error)) == 0);
         assert(compact_request != NULL && compact_count_request != NULL);
-        assert(source_seq + 1u == active.next_seq - 1u);
+        assert(source_seq == active_prefix_seq);
         assert(source_bytes > 0u && request_bytes > 0u);
         assert(snj_context_compact_output_valid(compact_output, output_hash,
                                                 &output_bytes,
                                                 error, sizeof(error)) == 0);
         assert(snj_context_compact_output_count_request_build(compact_output,
-                   active.default_model, &output_count_request,
+                   active_model, &output_count_request,
                    output_count_hash, &output_count_bytes,
                    error, sizeof(error)) == 0);
         assert(snj_session_commit(&active, "compaction_started",
                                   compaction_started_data(&active,
-                                      active_compact, "automatic", source_seq,
+                                      active_compact, "hard_budget", source_seq,
                                       source_hash, request_hash,
                                       (uint64_t)source_bytes),
                                   NULL, error, sizeof(error)) == 0);
@@ -819,7 +1012,8 @@ main(void)
         assert(active.active_turn);
         assert(strcmp(active.compact_id, active_compact) == 0);
         assert(snj_context_build(&active, SNAJPAGENT_MODEL, "medium", 1,
-                                 active_steering, NULL, &no_instructions,
+                                 active_steering, 0u, false, NULL,
+                                 &no_instructions,
                                  &active_projection, error, sizeof(error)) == 0);
         input = json_object_get(active_projection.create_request, "input");
         assert(json_is_array(input));
@@ -900,7 +1094,7 @@ main(void)
                                                  "and preserve order"),
                                   NULL, error, sizeof(error)) == 0);
         assert(snj_context_build(&steered, SNAJPAGENT_MODEL, "medium", 2,
-                                 snapshot, NULL, &no_instructions,
+                                 snapshot, 0u, false, NULL, &no_instructions,
                                  &steered_projection,
                                  error, sizeof(error)) == 0);
         input = json_object_get(steered_projection.create_request, "input");
@@ -984,7 +1178,7 @@ main(void)
                                           "steering_handoff")),
                                   NULL, error, sizeof(error)) == 0);
         assert(snj_context_build(&steered, SNAJPAGENT_MODEL, "medium", 2,
-                                 snapshot, NULL, &no_instructions,
+                                 snapshot, 0u, false, NULL, &no_instructions,
                                  &steered_projection,
                                  error, sizeof(error)) == 0);
         input = json_object_get(steered_projection.create_request, "input");
@@ -1008,6 +1202,169 @@ main(void)
         snj_session_close(&steered);
     }
 
+    {
+        struct snj_session bounded;
+        json_t *compact_request = NULL;
+        json_t *compact_count_request = NULL;
+        json_t *compact_output = NULL;
+        json_t *output_count_request = NULL;
+        json_t *bounded_steering = NULL;
+        json_t *input;
+        struct snj_context_projection bounded_projection;
+        char source_hash[SNJ_SHA256_HEX_LEN + 1u];
+        char request_hash[SNJ_SHA256_HEX_LEN + 1u];
+        char output_hash[SNJ_SHA256_HEX_LEN + 1u];
+        char output_count_hash[SNJ_SHA256_HEX_LEN + 1u];
+        size_t first_bytes = 0u;
+        size_t source_bytes = 0u;
+        size_t request_bytes = 0u;
+        size_t output_bytes = 0u;
+        size_t output_count_bytes = 0u;
+        uint64_t source_seq = 0u;
+        uint64_t first_turn_end;
+        uint64_t second_turn_end;
+        const char *bounded_compact = "15151515151515151515151515151515";
+        const char *bounded_turn1 = "10101010101010101010101010101010";
+        const char *bounded_turn2 = "11111111111111111111111111111111";
+        const char *bounded_turn3 = "12121212121212121212121212121212";
+        const char *bounded_resp1 = "13131313131313131313131313131313";
+        const char *bounded_resp2 = "14141414141414141414141414141414";
+
+        snj_session_init(&bounded);
+        assert(snj_session_create(&store, &bounded, workspace, "default",
+                                  SNAJPAGENT_MODEL, "default",
+                                  error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "turn_started",
+                                  turn_started(bounded_turn1, 1, "first",
+                                               workspace, NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "response_started",
+                                  response_started(bounded_turn1,
+                                                   bounded_resp1, NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "response_completed",
+                                  response_completed(bounded_turn1,
+                                                     bounded_resp1,
+                                                     "first answer"),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "turn_completed",
+                                  turn_completed(bounded_turn1,
+                                                 bounded_resp1),
+                                  NULL, error, sizeof(error)) == 0);
+        first_turn_end = bounded.next_seq - 1u;
+        assert(snj_context_compact_request_build(&bounded,
+                   bounded.default_model, bounded.default_effort, 0u, false,
+                   &compact_request, &compact_count_request,
+                   source_hash, &first_bytes, request_hash, &request_bytes,
+                   &source_seq, error, sizeof(error)) == 0);
+        assert(source_seq == first_turn_end && first_bytes > 0u);
+        json_decref(compact_request);
+        json_decref(compact_count_request);
+        compact_request = NULL;
+        compact_count_request = NULL;
+        assert(snj_session_commit(&bounded, "turn_started",
+                                  turn_started(bounded_turn2, 2, "second",
+                                               workspace, NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "response_started",
+                                  response_started(bounded_turn2,
+                                                   bounded_resp2, NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "response_completed",
+                                  response_completed(bounded_turn2,
+                                                     bounded_resp2,
+                                                     "second answer"),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "turn_completed",
+                                  turn_completed(bounded_turn2,
+                                                 bounded_resp2),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "turn_started",
+                                  turn_started(bounded_turn3, 3, "current",
+                                               workspace, NULL),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_context_compact_active_prefix_request_build(&bounded,
+                   bounded.default_model, bounded.default_effort,
+                   (uint64_t)first_bytes, false, &compact_request,
+                   &compact_count_request, source_hash, &source_bytes,
+                   request_hash, &request_bytes, &source_seq,
+                   error, sizeof(error)) == 0);
+        assert(source_seq == first_turn_end);
+        assert(source_bytes <= first_bytes);
+        json_decref(compact_request);
+        json_decref(compact_count_request);
+        compact_request = NULL;
+        compact_count_request = NULL;
+        assert(snj_context_compact_active_prefix_request_build(&bounded,
+                   bounded.default_model, bounded.default_effort,
+                   1u, true, &compact_request,
+                   &compact_count_request, source_hash, &source_bytes,
+                   request_hash, &request_bytes, &source_seq,
+                   error, sizeof(error)) == 0);
+        assert(source_seq == first_turn_end);
+        assert(source_bytes > 1u);
+        compact_output = compact_output_fixture();
+        assert(snj_context_compact_output_valid(compact_output, output_hash,
+                                                &output_bytes,
+                                                error, sizeof(error)) == 0);
+        assert(snj_context_compact_output_count_request_build(compact_output,
+                   bounded.default_model, &output_count_request,
+                   output_count_hash, &output_count_bytes,
+                   error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "compaction_started",
+                                  compaction_started_data(&bounded,
+                                      bounded_compact, "hard_budget", source_seq,
+                                      source_hash, request_hash,
+                                      (uint64_t)source_bytes),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&bounded, "compaction_completed",
+                                  compaction_completed_data(bounded_compact,
+                                      source_hash, output_hash, output_count_hash,
+                                      (uint64_t)source_bytes,
+                                      (uint64_t)output_bytes, compact_output),
+                                  NULL, error, sizeof(error)) == 0);
+        assert(bounded.compact_seq == first_turn_end);
+        snj_context_projection_init(&bounded_projection);
+        bounded_steering = json_array();
+        assert(bounded_steering != NULL);
+        assert(snj_context_build(&bounded, bounded.default_model, "medium", 1,
+                                 bounded_steering, 0u, false, NULL,
+                                 &instructions, &bounded_projection,
+                                 error, sizeof(error)) == 0);
+        input = json_object_get(bounded_projection.create_request, "input");
+        assert(json_is_array(input));
+        assert(json_array_size(input) == 7u);
+        assert(strcmp(snj_json_string(json_array_get(input, 1u), "type"),
+                      "compaction") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 1u),
+                                      "encrypted_content"),
+                      "test-native-compact") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 3u), "content"),
+                      "second") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 4u), "content"),
+                      "second answer") == 0);
+        assert(strcmp(snj_json_string(json_array_get(input, 5u), "content"),
+                      "current") == 0);
+        second_turn_end = first_turn_end + 4u;
+        json_decref(compact_request);
+        json_decref(compact_count_request);
+        compact_request = NULL;
+        compact_count_request = NULL;
+        assert(snj_context_compact_active_prefix_request_build(&bounded,
+                   bounded.default_model, bounded.default_effort,
+                   0u, false, &compact_request, &compact_count_request,
+                   source_hash, &source_bytes, request_hash, &request_bytes,
+                   &source_seq, error, sizeof(error)) == 0);
+        assert(source_seq == second_turn_end);
+        snj_context_projection_free(&bounded_projection);
+        json_decref(bounded_steering);
+        json_decref(output_count_request);
+        json_decref(compact_output);
+        json_decref(compact_request);
+        json_decref(compact_count_request);
+        snj_session_close(&bounded);
+    }
+
     assert(snj_instructions_discover(&instructions, workspace,
                                      error, sizeof(error)) == 0);
     assert(instructions.count == 1u);
@@ -1018,7 +1375,8 @@ main(void)
     empty_steering = json_array();
     assert(empty_steering);
     assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-                             empty_steering, NULL, &instructions, &projection,
+                             empty_steering, 64000u, true, NULL,
+                             &instructions, &projection,
                              error, sizeof(error)) == 0);
     assert(projection.model_input_bytes > 0);
     assert(projection.create_request_bytes > 0);
@@ -1028,6 +1386,10 @@ main(void)
     assert(strcmp(projection.count_request_sha256,
                   projection.request_sha256) != 0);
     assert(json_is_object(projection.count_request));
+    assert(json_integer_value(json_object_get(
+               projection.create_request, "max_output_tokens")) == 64000);
+    assert(json_integer_value(json_object_get(
+               projection.model_input, "max_output_tokens")) == 64000);
     assert(json_object_get(projection.count_request, "stream") == NULL);
     assert(json_object_get(projection.count_request, "store") == NULL);
     assert(json_object_get(projection.count_request, "max_output_tokens") == NULL);
@@ -1102,6 +1464,7 @@ main(void)
     memcpy(large_tool_output + 1024u * 1024u - 15u,
            "full-model-tail", 15u);
     large_tool_output[1024u * 1024u] = '\0';
+    snj_sha256_hex(large_tool_output, 1024u * 1024u, large_tool_hash);
     assert(snj_session_commit(&session, "tool_finished",
                               tool_finished_data(turn2, call2,
                                   running_result(handle, large_tool_output,
@@ -1113,7 +1476,8 @@ main(void)
                               goal_started_data(goal, "finish compacted work"),
                               NULL, error, sizeof(error)) == 0);
     assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
-                             empty_steering, NULL, &instructions, &projection,
+                             empty_steering, 0u, false, NULL,
+                             &instructions, &projection,
                              error, sizeof(error)) == 0);
     {
         json_t *tools = json_object_get(projection.create_request, "tools");
@@ -1151,7 +1515,7 @@ main(void)
         memcpy(network_config.irc_model_nick, "builder", 8u);
         memcpy(network_config.irc_operator_nick, "alice", 6u);
         assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
-                                 empty_steering, &network_config,
+                                 empty_steering, 0u, false, &network_config,
                                  &instructions, &projection,
                                  error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request, "tools");
@@ -1199,7 +1563,8 @@ main(void)
                               NULL, error, sizeof(error)) == 0);
     assert(session.goal_turn_count == 1u);
     assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-                             empty_steering, NULL, &instructions, &projection,
+                             empty_steering, 0u, false, NULL,
+                             &instructions, &projection,
                              error, sizeof(error)) == 0);
     {
         json_t *tools = json_object_get(projection.create_request, "tools");
@@ -1207,6 +1572,10 @@ main(void)
         json_t *continuation = item_by_kind(semantic, "goal_continuation");
         json_t *controller = item_by_kind(semantic, "goal_controller");
         json_t *closed = item_by_kind(semantic, "managed_process_closed");
+        json_t *historical_output = tool_by_type(
+            json_object_get(projection.create_request, "input"),
+            "function_call_output");
+        const char *historical_text;
 
         assert(json_array_size(tools) == 5u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX);
@@ -1224,6 +1593,17 @@ main(void)
         assert(closed != NULL);
         assert(strstr(snj_json_string(closed, "text"),
                       "closure-model-tail") != NULL);
+        assert(historical_output != NULL);
+        historical_text = snj_json_string(historical_output, "output");
+        assert(historical_text != NULL);
+        assert(strstr(historical_text,
+                      "historical tool/process output omitted") != NULL);
+        assert(strstr(historical_text, "type=running") != NULL);
+        assert(strstr(historical_text, "bytes=1048576") != NULL);
+        assert(strstr(historical_text, large_tool_hash) != NULL);
+        assert(strstr(historical_text, session.dir_path) != NULL);
+        assert(strstr(historical_text, "/events.jsonl") != NULL);
+        assert(strstr(historical_text, "full-model-tail") == NULL);
         assert(item_by_kind(semantic, "native_compact_output") != NULL);
     }
 
@@ -1239,7 +1619,7 @@ main(void)
         memcpy(network_config.irc_model_nick, "builder", 8u);
         memcpy(network_config.irc_operator_nick, "alice", 6u);
         assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-                                 empty_steering, &network_config,
+                                 empty_steering, 0u, false, &network_config,
                                  &instructions, &projection,
                                  error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request, "tools");
@@ -1264,7 +1644,8 @@ main(void)
                               goal_paused_data(goal), NULL,
                               error, sizeof(error)) == 0);
     assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-                             empty_steering, NULL, &instructions, &projection,
+                             empty_steering, 0u, false, NULL,
+                             &instructions, &projection,
                              error, sizeof(error)) == 0);
     {
         json_t *tools = json_object_get(projection.create_request, "tools");

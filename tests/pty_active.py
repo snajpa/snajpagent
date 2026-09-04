@@ -21,8 +21,8 @@ DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
-DEFAULT_IDLE_PROMPT = f"{DEFAULT_MODEL}/medium › ".encode()
-DEFAULT_ACTIVE_PROMPT = f"{DEFAULT_MODEL}/medium » ".encode()
+DEFAULT_IDLE_PROMPT = f"{DEFAULT_MODEL}/medium context=?% › ".encode()
+DEFAULT_ACTIVE_PROMPT = f"{DEFAULT_MODEL}/medium context=?% » ".encode()
 GOAL_SET = "• Goal set".encode()
 GOAL_CLEARED = "• Goal cleared".encode()
 COMPACTED = "• Compacted".encode()
@@ -327,7 +327,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
-    prompt = f"{model}/medium › ".encode()
+    prompt = f"{model}/medium context=?% › ".encode()
     child = Child(["-m", model])
     try:
         child.wait(prompt)
@@ -613,6 +613,87 @@ def test_steering_during_pre_response_compaction():
     resumed = Child(["--config", str(config), "--resume", session_id])
     resumed.wait(PROMPT)
     resumed.exit_now()
+
+
+def test_steering_during_capacity_recovery_compaction():
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"ping\r")
+    answer_end = child.wait(b"pong")
+    child.exit_cleanly(answer_end)
+    session_id = new_session(before)
+
+    child = Child(["--resume", session_id])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"capacity_recovery_steer\rchange recovery plan\r")
+    steer_end = child.wait(b"\xc2\xbb change recovery plan")
+    answer_end = child.wait(b"fixture answer", start=steer_end)
+    child.exit_cleanly(answer_end)
+
+    log = events(session_id)
+    turn = [item for item in log if item["type"] == "turn_started"][-1]
+    turn_id = turn["data"]["turn_id"]
+    rejected = [item for item in log
+                if item["type"] == "response_capacity_rejected" and
+                item["data"]["turn_id"] == turn_id]
+    interrupted = [item for item in log
+                   if item["type"] == "compaction_interrupted"]
+    compactions = [item for item in log
+                   if item["type"] == "compaction_started" and
+                   item["data"]["reason"] == "provider_rejection"]
+    completed = [item for item in log if item["type"] == "compaction_completed"]
+    steering = [item for item in log
+                if item["type"] == "steering_added" and
+                item["data"]["turn_id"] == turn_id]
+    starts = [item for item in log
+              if item["type"] == "response_started" and
+              item["data"]["turn_id"] == turn_id]
+    assert len(rejected) == 1
+    assert rejected[0]["data"]["observed_hard_input_tokens"] == 89999
+    assert re.fullmatch(
+        r"[0-9a-f]{64}", rejected[0]["data"]["provider_source_sha256"]
+    )
+    assert len(interrupted) == 1
+    assert interrupted[0]["data"]["reason"] == "steering"
+    assert len(compactions) == 2 and len(completed) == 1
+    assert len(steering) == 1 and len(starts) == 2
+    assert starts[1]["data"]["steering_ids"] == [
+        steering[0]["data"]["steering_id"]
+    ]
+    assert (rejected[0]["seq"] < compactions[0]["seq"] <
+            interrupted[0]["seq"] < compactions[1]["seq"] <
+            completed[0]["seq"] < starts[1]["seq"])
+
+    resumed = Child(["--resume", session_id])
+    prompt_end = resumed.wait(b"\xe2\x80\xba ")
+    resumed.send(b"/status\r")
+    status_end = resumed.wait(b"context: source=observed", start=prompt_end)
+    status_end = resumed.wait(
+        b"observed ceiling: hard-input=89999", start=status_end
+    )
+    resumed.wait(b"binding=current", start=status_end)
+    resumed.exit_now()
+
+    mismatch_config = (
+        Path(os.environ["SNAJPAGENT_TEST_ROOT"]) /
+        "capacity-source-mismatch.ini"
+    )
+    mismatch_config.write_text(
+        "[provider]\nbase_url = https://different.example.test\n",
+        encoding="utf-8",
+    )
+    mismatched = Child([
+        "--config", str(mismatch_config), "--resume", session_id
+    ])
+    prompt_end = mismatched.wait(b"context=?% \xe2\x80\xba ")
+    mismatched.send(b"/status\r")
+    status_end = mismatched.wait(b"context: source=unknown", start=prompt_end)
+    status_end = mismatched.wait(
+        b"observed ceiling: hard-input=89999", start=status_end
+    )
+    mismatched.wait(b"binding=source mismatch; ignored", start=status_end)
+    mismatched.exit_now()
 
 
 def test_agents_md_config():
@@ -1025,9 +1106,9 @@ def test_queue_mutation_commands():
     child.wait(b"1 future turn cancelled")
 
     child.send(b"/q 1e\r")
-    child.wait(b"edit 1 " + PROMPT + b"second")
+    child.wait(b"edit 1 context=?% " + PROMPT + b"second")
     child.send(b" active\r")
-    child.wait(b"edit 1 " + PROMPT + b"second active")
+    child.wait(b"edit 1 context=?% " + PROMPT + b"second active")
 
     child.send(b"fourth\t")
     child.wait(b"next " + PROMPT + b"fourth")
@@ -1036,9 +1117,9 @@ def test_queue_mutation_commands():
     child.wait(b"\r" + DEFAULT_IDLE_PROMPT, start=interrupted_end)
 
     child.send(b"/queue 1 edit\r")
-    child.wait(b"edit 1 " + PROMPT + b"second active")
+    child.wait(b"edit 1 context=?% " + PROMPT + b"second active")
     child.send(b" idle\r")
-    child.wait(b"edit 1 " + PROMPT + b"second active idle")
+    child.wait(b"edit 1 context=?% " + PROMPT + b"second active idle")
 
     child.send(b"/exit\r")
     _, status = os.waitpid(child.pid, 0)
@@ -1276,7 +1357,7 @@ def test_uncached_typed_model_selection():
 
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
-    initial_prompt = b"uncached-start/low \xe2\x80\xba "
+    initial_prompt = b"uncached-start/low context=?% \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     config.write_text(
@@ -1692,6 +1773,43 @@ def test_config_editor_reload():
         else:
             os.environ["SNAJPAGENT_EDITOR_SEEN"] = old_seen
 
+
+def test_known_context_meter():
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
+    before = session_ids()
+    child = Child(["--config", str(config)])
+    child.wait(b"uncached-start/low context=?% \xe2\x80\xba ")
+    child.send(b"/model gpt-5.6-sol / medium\r")
+    selected = child.wait(
+        b"model for next turn: first / gpt-5.6-sol / medium"
+    )
+    child.wait(b"gpt-5.6-sol/medium context=?% \xe2\x80\xba ", start=selected)
+    session_id = new_session(before)
+    start = len(child.buf)
+    child.send(b"slow\r")
+    deadline = time.monotonic() + 8.0
+    response = None
+    while time.monotonic() < deadline:
+        starts = [event for event in events(session_id)
+                  if event["type"] == "response_started"]
+        if starts:
+            response = starts[-1]["data"]
+            break
+        child.read_once(0.02)
+    assert response is not None
+    hard = response["hard_input_tokens"]
+    used = response["input_tokens_bound"]
+    assert isinstance(hard, int) and hard > 0
+    assert isinstance(used, int) and used > 0
+    percent = min(100, (used * 100 + hard - 1) // hard)
+    assert percent > 0
+    expected = f"gpt-5.6-sol/medium context={percent}% » ".encode()
+    child.wait(expected, start=start)
+    child.send(b"\x03")
+    interrupted = child.wait(b"turn interrupted", start=start)
+    child.exit_cleanly(interrupted)
+
+
 def test_config_and_cli_model_passthrough():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "model-passthrough.ini"
     config.write_text(
@@ -1700,7 +1818,7 @@ def test_config_and_cli_model_passthrough():
     )
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"openai/gpt-5.6/medium \xe2\x80\xba ")
+    child.wait(b"openai/gpt-5.6/medium context=?% \xe2\x80\xba ")
 
     child.send(b"/status\r")
     end = child.wait(b"model: openai/gpt-5.6")
@@ -1720,7 +1838,7 @@ def test_config_and_cli_model_passthrough():
         "--config", str(config), "-m", "vendor/future-model",
         "--effort", "custom-effort", "--resume", session_id
     ])
-    resumed.wait(b"vendor/future-model/custom-effort \xe2\x80\xba ")
+    resumed.wait(b"vendor/future-model/custom-effort context=?% \xe2\x80\xba ")
     start = len(resumed.buf)
     resumed.send(b"/status\r")
     end = resumed.wait(
@@ -1728,10 +1846,11 @@ def test_config_and_cli_model_passthrough():
     )
     resumed.wait(PROMPT, start=end)
     resumed.send(b"ping\r")
-    resumed.wait(b"vendor/future-model/custom-effort \xc2\xbb ", start=end)
+    resumed.wait(b"vendor/future-model/custom-effort context=?% \xc2\xbb ",
+                 start=end)
     answer_end = resumed.wait(b"pong", start=end)
     idle_end = resumed.wait(
-        b"openai/gpt-5.6/medium \xe2\x80\xba ", start=answer_end
+        b"openai/gpt-5.6/medium context=?% \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -1931,11 +2050,11 @@ def test_prompt_identity_is_terminal_safe():
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(visible + b" \xe2\x80\xba ")
+    child.wait(visible + b" context=?% \xe2\x80\xba ")
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send(b"ping\r")
-    child.wait(visible + b" \xc2\xbb ")
+    child.wait(visible + b" context=?% \xc2\xbb ")
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
 
@@ -1958,7 +2077,10 @@ def test_network_chat_and_managed_mention():
     peer_agent = None
     exited = False
     network_idle = f"localop@{socket.gethostname()} › ".encode()
-    network_active = f"localop@{socket.gethostname()} » ".encode()
+    network_active = f"localop@{socket.gethostname()} context=?% » ".encode()
+    network_rollout_idle = (
+        f"localop@{socket.gethostname()} context=?% › ".encode()
+    )
     try:
         child.wait(network_idle)
         session_id = new_session(before)
@@ -1966,7 +2088,7 @@ def test_network_chat_and_managed_mention():
         view_start = len(child.buf)
         child.send(b"\t")
         rollout_end = child.wait("── rollout ──".encode(), start=view_start)
-        child.wait(network_idle, start=rollout_end)
+        child.wait(network_rollout_idle, start=rollout_end)
         child.send(b"/rollout\r")
         child.drain()
         assert child.buf[view_start:].count("── rollout ──".encode()) == 1
@@ -2263,6 +2385,7 @@ test_typing_pause_and_stream_snapshots()
 test_armed_fifo()
 test_managed_command_steering_and_tab_queue()
 test_steering_during_pre_response_compaction()
+test_steering_during_capacity_recovery_compaction()
 test_agents_md_config()
 test_active_ctrl_c_clears_draft()
 test_interrupt()
@@ -2283,6 +2406,7 @@ test_uncached_typed_model_selection()
 test_model_cache_and_selection()
 test_model_configuration_save()
 test_config_editor_reload()
+test_known_context_meter()
 test_config_and_cli_model_passthrough()
 test_exit_resume_matrix()
 test_network_resume_roles()

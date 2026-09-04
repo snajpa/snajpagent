@@ -508,10 +508,47 @@ clear_response_state(struct snj_session *session)
     session->response_complete = false;
     session->response_terminal = SNJ_RESPONSE_TERMINAL_NONE;
     session->active_response_id[0] = '\0';
+    session->active_response_model_input_sha256[0] = '\0';
+    session->active_response_request_input_sha256[0] = '\0';
+    session->active_response_request_sha256[0] = '\0';
+    session->active_response_model_input_bytes = 0u;
+    session->active_response_request_input_bytes = 0u;
+    session->active_response_request_input_count = 0u;
+    session->active_response_requested_output_tokens = 0u;
+    session->active_response_requested_output_known = false;
     session->final_item_id[0] = '\0';
     session->final_response_id[0] = '\0';
     session->pending_call_count = 0;
     memset(session->pending_calls, 0, sizeof(session->pending_calls));
+}
+
+static bool
+replayed_capacity_ceiling(bool context_limit_known,
+                          uint64_t context_limit_tokens,
+                          bool requested_input_known,
+                          uint64_t requested_input_tokens,
+                          bool requested_output_known,
+                          uint64_t requested_output_tokens,
+                          uint64_t *ceiling_tokens)
+{
+    uint64_t ceiling = 0u;
+    bool known = false;
+
+    if (context_limit_known) {
+        ceiling = context_limit_tokens;
+        if (requested_output_known)
+            ceiling = ceiling > requested_output_tokens ?
+                ceiling - requested_output_tokens : 1u;
+        known = true;
+    }
+    if (requested_input_known && requested_input_tokens > 1u &&
+        (!known || requested_input_tokens - 1u < ceiling)) {
+        ceiling = requested_input_tokens - 1u;
+        known = true;
+    }
+    if (known)
+        *ceiling_tokens = ceiling;
+    return known;
 }
 static bool
 all_pending_finished(const struct snj_session *session)
@@ -975,8 +1012,12 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             "predecessor_compact_id", "profile_id", "reason",
             "request_sha256", "source_seq", "source_sha256"
         };
-        static const char *const methods[] = {"exact", "qualified_upper_bound"};
-        static const char *const reasons[] = {"manual", "automatic"};
+        static const char *const methods[] = {
+            "exact", "anchored_upper_bound", "qualified_upper_bound"
+        };
+        static const char *const reasons[] = {
+            "manual", "proactive", "hard_budget", "provider_rejection"
+        };
         const char *compact_id = snj_json_string(data, "compact_id");
         const char *predecessor = snj_json_string(data, "predecessor_compact_id");
         const char *reason = snj_json_string(data, "reason");
@@ -990,9 +1031,12 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         uint64_t source_seq;
         uint64_t tokens;
         bool active_prefix;
+        const char *expected_model;
 
-        active_prefix = reason && strcmp(reason, "automatic") == 0 &&
+        active_prefix = reason && strcmp(reason, "manual") != 0 &&
             session->active_turn && !session->response_open;
+        expected_model = active_prefix ? session->active_turn_model :
+                                         session->default_model;
         if (!snj_json_exact_keys(data, keys, sizeof(keys) / sizeof(keys[0])) ||
             (session->active_turn && !active_prefix) || session->response_open ||
             session->active_process_handle[0] != '\0' ||
@@ -1004,7 +1048,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !source_hash || !snj_hex_is_lower(source_hash, SNJ_SHA256_HEX_LEN) ||
             !request_hash || !snj_hex_is_lower(request_hash, SNJ_SHA256_HEX_LEN) ||
             !count_hash || !snj_hex_is_lower(count_hash, SNJ_SHA256_HEX_LEN) ||
-            !model || strcmp(model, session->default_model) != 0 ||
+            !model || strcmp(model, expected_model) != 0 ||
             !profile || strcmp(profile, SNAJPAGENT_PROFILE_ID) != 0 ||
             !capability ||
             strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
@@ -1297,6 +1341,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         const char *workspace;
         const char *kind;
         const char *model;
+        const char *provider;
+        const char *effort;
         json_t *config = json_object_get(data, "config");
         bool queued;
         bool goal;
@@ -1312,6 +1358,10 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !(kind = snj_json_string(data, "input_kind")) ||
             !json_is_object(config) ||
             !(model = snj_json_string(config, "model")) || !*model ||
+            !(provider = snj_json_string(config, "provider")) || !*provider ||
+            strlen(provider) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
+            !(effort = snj_json_string(config, "effort")) || !*effort ||
+            strlen(effort) >= sizeof(session->active_turn_effort) ||
             strlen(model) >= sizeof(session->active_turn_model) ||
             !snj_utf8_valid((const unsigned char *)model, strlen(model), true) ||
             snj_instructions_metadata_valid(json_object_get(data, "instructions"),
@@ -1348,7 +1398,11 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         }
         memcpy(session->active_turn_id, turn_id, sizeof(session->active_turn_id));
         if (!copy_small(session->active_turn_model,
-                        sizeof(session->active_turn_model), model))
+                        sizeof(session->active_turn_model), model) ||
+            !copy_small(session->active_turn_provider,
+                        sizeof(session->active_turn_provider), provider) ||
+            !copy_small(session->active_turn_effort,
+                        sizeof(session->active_turn_effort), effort))
             goto invalid;
         session->active_turn = true;
         session->turn_count = n;
@@ -1366,10 +1420,12 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
     } else if (strcmp(type, "response_started") == 0) {
         static const char *const keys[] = {
             "baseline_sha256", "capability_version", "compact_id",
-            "count_method", "count_request_sha256", "cycle",
-            "input_tokens_bound", "model", "model_input_sha256",
-            "profile_id", "request_sha256", "response_id",
-            "steering_ids", "turn_id"
+            "capacity_source", "count_method", "count_request_sha256", "cycle",
+            "effort", "hard_input_tokens", "input_tokens_bound", "model",
+            "model_input_bytes", "model_input_sha256", "profile_id", "provider",
+            "request_input_bytes", "request_input_count", "request_input_sha256",
+            "request_sha256", "requested_output_tokens", "response_id",
+            "source_bound", "steering_ids", "turn_id"
         };
         const char *response_id = snj_json_string(data, "response_id");
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -1377,13 +1433,24 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         const char *compact_id = snj_json_string(data, "compact_id");
         const char *capability = snj_json_string(data, "capability_version");
         const char *model = snj_json_string(data, "model");
+        const char *provider = snj_json_string(data, "provider");
+        const char *effort = snj_json_string(data, "effort");
+        const char *capacity_source = snj_json_string(data, "capacity_source");
         const char *profile = snj_json_string(data, "profile_id");
         const char *input_hash = snj_json_string(data, "model_input_sha256");
+        const char *request_input_hash =
+            snj_json_string(data, "request_input_sha256");
         const char *request_hash = snj_json_string(data, "request_sha256");
         const char *count_hash = snj_json_string(data, "count_request_sha256");
         json_t *steering_ids = json_object_get(data, "steering_ids");
         uint64_t cycle;
         uint64_t token_bound;
+        uint64_t model_input_bytes;
+        uint64_t request_input_bytes;
+        uint64_t request_input_count;
+        uint64_t requested_output_tokens = 0u;
+        bool requested_output_known =
+            !json_is_null(json_object_get(data, "requested_output_tokens"));
         bool state_allows_start;
 
         state_allows_start = !session->response_open &&
@@ -1395,25 +1462,76 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
              (session->pending_steering_count != 0u &&
               all_pending_finished(session) &&
               session->response_outcome != SNJ_GRAPH_CONFLICT));
-        if (!snj_json_exact_keys(data, keys, 14u) || !session->active_turn ||
+        if (!snj_json_exact_keys(data, keys, 24u) || !session->active_turn ||
             !state_allows_start || !response_id ||
             !snj_hex_is_lower(response_id, SNJ_ID_HEX_LEN) || !turn_id ||
             strcmp(turn_id, session->active_turn_id) != 0 || !method ||
             (strcmp(method, "exact") != 0 &&
+            strcmp(method, "anchored_upper_bound") != 0 &&
             strcmp(method, "qualified_upper_bound") != 0) ||
             !capability || strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
             !model || strcmp(model, session->active_turn_model) != 0 ||
+            !provider || strcmp(provider, session->active_turn_provider) != 0 ||
+            !effort || strcmp(effort, session->active_turn_effort) != 0 ||
+            (!capacity_source ||
+             (strcmp(capacity_source, "unknown") != 0 &&
+              strcmp(capacity_source, "advertised") != 0 &&
+              strcmp(capacity_source, "configured") != 0 &&
+              strcmp(capacity_source, "observed") != 0 &&
+              strcmp(capacity_source, "stale-catalog-ignored") != 0)) ||
+            (!json_is_true(json_object_get(data, "source_bound")) &&
+             !json_is_false(json_object_get(data, "source_bound"))) ||
+            (!json_is_null(json_object_get(data, "hard_input_tokens")) &&
+             snj_json_integer_u64(data, "hard_input_tokens", &n) < 0) ||
+            (requested_output_known &&
+             (snj_json_integer_u64(data, "requested_output_tokens",
+                                   &requested_output_tokens) < 0 ||
+              requested_output_tokens == 0u ||
+              requested_output_tokens > SNJ_CONFIG_TOKEN_LIMIT_MAX)) ||
             !profile || strcmp(profile, SNAJPAGENT_PROFILE_ID) != 0 ||
-            !json_is_null(json_object_get(data, "baseline_sha256")) ||
+            (strcmp(method, "anchored_upper_bound") == 0 ?
+                (!session->usage_anchor_valid ||
+                 !snj_json_string(data, "baseline_sha256") ||
+                 !snj_hex_is_lower(snj_json_string(data, "baseline_sha256"),
+                                   SNJ_SHA256_HEX_LEN) ||
+                 strcmp(snj_json_string(data, "baseline_sha256"),
+                        session->usage_anchor_model_input_sha256) != 0 ||
+                 strcmp(session->usage_anchor_provider,
+                        session->active_turn_provider) != 0 ||
+                 strcmp(session->usage_anchor_model,
+                        session->active_turn_model) != 0 ||
+                 strcmp(session->usage_anchor_effort,
+                        session->active_turn_effort) != 0 ||
+                 strcmp(session->usage_anchor_compact_id,
+                        session->compact_id) != 0) :
+                !json_is_null(json_object_get(data, "baseline_sha256"))) ||
             (session->compact_id[0] == '\0' ?
              !json_is_null(json_object_get(data, "compact_id")) :
              (!compact_id || strcmp(compact_id, session->compact_id) != 0)) ||
             !json_is_array(steering_ids) ||
             json_array_size(steering_ids) != session->pending_steering_count ||
             !input_hash || !snj_hex_is_lower(input_hash, SNJ_SHA256_HEX_LEN) ||
+            !request_input_hash ||
+            !snj_hex_is_lower(request_input_hash, SNJ_SHA256_HEX_LEN) ||
             !request_hash || !snj_hex_is_lower(request_hash, SNJ_SHA256_HEX_LEN) ||
             !count_hash || !snj_hex_is_lower(count_hash, SNJ_SHA256_HEX_LEN) ||
             snj_json_integer_u64(data, "input_tokens_bound", &token_bound) < 0 ||
+            (strcmp(method, "anchored_upper_bound") == 0 &&
+             token_bound < session->usage_anchor_input_tokens) ||
+            snj_json_integer_u64(data, "model_input_bytes",
+                                 &model_input_bytes) < 0 ||
+            model_input_bytes == 0u ||
+            snj_json_integer_u64(data, "request_input_bytes",
+                                 &request_input_bytes) < 0 ||
+            request_input_bytes == 0u ||
+            snj_json_integer_u64(data, "request_input_count",
+                                 &request_input_count) < 0 ||
+            request_input_count > SNJ_EVENT_LIMIT ||
+            (strcmp(method, "anchored_upper_bound") == 0 &&
+             (request_input_bytes <
+                  session->usage_anchor_request_input_bytes ||
+              request_input_count <
+                  session->usage_anchor_request_input_count)) ||
             snj_json_integer_u64(data, "cycle", &cycle) < 0 ||
             cycle != (uint64_t)session->active_cycle + 1u ||
             cycle > UINT_MAX)
@@ -1428,8 +1546,127 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         clear_pending_steering(session);
         memcpy(session->active_response_id, response_id,
                sizeof(session->active_response_id));
+        memcpy(session->active_response_model_input_sha256, input_hash,
+               sizeof(session->active_response_model_input_sha256));
+        memcpy(session->active_response_request_input_sha256,
+               request_input_hash,
+               sizeof(session->active_response_request_input_sha256));
+        memcpy(session->active_response_request_sha256, request_hash,
+               sizeof(session->active_response_request_sha256));
+        session->active_response_model_input_bytes = model_input_bytes;
+        session->active_response_request_input_bytes = request_input_bytes;
+        session->active_response_request_input_count = request_input_count;
+        session->active_response_requested_output_tokens =
+            requested_output_tokens;
+        session->active_response_requested_output_known =
+            requested_output_known;
+        memcpy(session->context_meter_provider,
+               session->active_turn_provider,
+               sizeof(session->context_meter_provider));
+        memcpy(session->context_meter_model, session->active_turn_model,
+               sizeof(session->context_meter_model));
+        memcpy(session->context_meter_effort, session->active_turn_effort,
+               sizeof(session->context_meter_effort));
+        memcpy(session->context_meter_compact_id, session->compact_id,
+               sizeof(session->context_meter_compact_id));
+        session->context_meter_input_tokens = token_bound;
+        session->context_meter_valid = true;
         session->active_cycle = (unsigned int)cycle;
         session->response_open = true;
+    } else if (strcmp(type, "response_capacity_rejected") == 0) {
+        static const char *const keys[] = {
+            "code", "context_limit_tokens", "cycle", "message",
+            "observed_hard_input_tokens", "provider_source_sha256",
+            "request_sha256", "requested_input_tokens", "response_id",
+            "turn_id"
+        };
+        const char *code = snj_json_string(data, "code");
+        const char *message = snj_json_string(data, "message");
+        const char *provider_source_sha256 =
+            snj_json_string(data, "provider_source_sha256");
+        const char *request_hash = snj_json_string(data, "request_sha256");
+        const char *response_id = snj_json_string(data, "response_id");
+        const char *turn_id = snj_json_string(data, "turn_id");
+        json_t *context_limit =
+            json_object_get(data, "context_limit_tokens");
+        json_t *requested_input =
+            json_object_get(data, "requested_input_tokens");
+        json_t *observed_ceiling =
+            json_object_get(data, "observed_hard_input_tokens");
+        uint64_t context_limit_tokens = 0u;
+        uint64_t requested_input_tokens = 0u;
+        uint64_t expected_ceiling = 0u;
+        uint64_t recorded_ceiling = 0u;
+        uint64_t cycle;
+        bool expected_ceiling_known;
+        bool same_binding;
+
+        if (!snj_json_exact_keys(data, keys, 10u) || !session->response_open ||
+            !code || strcmp(code, "context_length_exceeded") != 0 ||
+            !message || strlen(message) > 255u ||
+            !provider_source_sha256 ||
+            !snj_hex_is_lower(provider_source_sha256,
+                              SNJ_SHA256_HEX_LEN) ||
+            !request_hash || !snj_hex_is_lower(request_hash,
+                                                SNJ_SHA256_HEX_LEN) ||
+            strcmp(request_hash,
+                   session->active_response_request_sha256) != 0 ||
+            !response_id || strcmp(response_id,
+                                    session->active_response_id) != 0 ||
+            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
+            (!json_is_null(context_limit) &&
+             (snj_json_integer_u64(data, "context_limit_tokens",
+                                   &context_limit_tokens) < 0 ||
+              context_limit_tokens == 0u ||
+              context_limit_tokens >
+                  SNJ_CONFIG_TOKEN_LIMIT_MAX)) ||
+            (!json_is_null(requested_input) &&
+             (snj_json_integer_u64(data, "requested_input_tokens",
+                                   &requested_input_tokens) < 0 ||
+              requested_input_tokens == 0u ||
+              requested_input_tokens >
+                  SNJ_CONFIG_TOKEN_LIMIT_MAX)) ||
+            (!json_is_null(observed_ceiling) &&
+             (snj_json_integer_u64(data, "observed_hard_input_tokens",
+                                   &recorded_ceiling) < 0 ||
+              recorded_ceiling == 0u ||
+              recorded_ceiling > SNJ_CONFIG_TOKEN_LIMIT_MAX)) ||
+            snj_json_integer_u64(data, "cycle", &cycle) < 0 ||
+            cycle != session->active_cycle)
+            goto invalid;
+        expected_ceiling_known = replayed_capacity_ceiling(
+            !json_is_null(context_limit), context_limit_tokens,
+            !json_is_null(requested_input), requested_input_tokens,
+            session->active_response_requested_output_known,
+            session->active_response_requested_output_tokens,
+            &expected_ceiling);
+        if (expected_ceiling_known != !json_is_null(observed_ceiling) ||
+            (expected_ceiling_known && expected_ceiling != recorded_ceiling))
+            goto invalid;
+        same_binding = session->capacity_ceiling_valid &&
+            strcmp(session->capacity_ceiling_provider,
+                   session->active_turn_provider) == 0 &&
+            strcmp(session->capacity_ceiling_model,
+                   session->active_turn_model) == 0 &&
+            strcmp(session->capacity_ceiling_source_sha256,
+                   provider_source_sha256) == 0;
+        if (expected_ceiling_known &&
+            (!same_binding || expected_ceiling <
+                              session->capacity_ceiling_input_tokens)) {
+            if (!copy_small(session->capacity_ceiling_provider,
+                            sizeof(session->capacity_ceiling_provider),
+                            session->active_turn_provider) ||
+                !copy_small(session->capacity_ceiling_model,
+                            sizeof(session->capacity_ceiling_model),
+                            session->active_turn_model) ||
+                !copy_small(session->capacity_ceiling_source_sha256,
+                            sizeof(session->capacity_ceiling_source_sha256),
+                            provider_source_sha256))
+                goto invalid;
+            session->capacity_ceiling_input_tokens = expected_ceiling;
+            session->capacity_ceiling_valid = true;
+        }
+        clear_response_state(session);
     } else if (strcmp(type, "response_interrupted") == 0) {
         static const char *const keys[] = {
             "cycle", "origin", "partial_public", "reason", "response_id",
@@ -1524,6 +1761,33 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         if (graph_rc < 0) {
             snj_response_graph_free(&graph);
             goto invalid;
+        }
+        if (graph.usage.input_known) {
+            memcpy(session->usage_anchor_turn_id, session->active_turn_id,
+                   sizeof(session->usage_anchor_turn_id));
+            memcpy(session->usage_anchor_provider,
+                   session->active_turn_provider,
+                   sizeof(session->usage_anchor_provider));
+            memcpy(session->usage_anchor_model, session->active_turn_model,
+                   sizeof(session->usage_anchor_model));
+            memcpy(session->usage_anchor_effort, session->active_turn_effort,
+                   sizeof(session->usage_anchor_effort));
+            memcpy(session->usage_anchor_compact_id, session->compact_id,
+                   sizeof(session->usage_anchor_compact_id));
+            memcpy(session->usage_anchor_model_input_sha256,
+                   session->active_response_model_input_sha256,
+                   sizeof(session->usage_anchor_model_input_sha256));
+            memcpy(session->usage_anchor_request_input_sha256,
+                   session->active_response_request_input_sha256,
+                   sizeof(session->usage_anchor_request_input_sha256));
+            session->usage_anchor_model_input_bytes =
+                session->active_response_model_input_bytes;
+            session->usage_anchor_request_input_bytes =
+                session->active_response_request_input_bytes;
+            session->usage_anchor_request_input_count =
+                session->active_response_request_input_count;
+            session->usage_anchor_input_tokens = graph.usage.input_tokens;
+            session->usage_anchor_valid = true;
         }
         session->response_open = false;
         session->response_complete = true;

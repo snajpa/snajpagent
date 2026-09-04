@@ -598,6 +598,77 @@ test_protocol_conflicts_fail_closed(void)
     }
 }
 
+static void
+test_structured_capacity_failure(void)
+{
+    static const char payload[] =
+        "{\"type\":\"response.failed\",\"response\":{\"error\":{"
+        "\"code\":\"context_length_exceeded\",\"message\":\"too large\","
+        "\"context_length\":272000,\"requested_tokens\":300000}}}";
+    struct snj_responses_stream stream;
+    struct snj_sse_record record;
+    json_t *root;
+    struct snj_provider_failure failure;
+
+    snj_responses_stream_init(&stream, NULL, NULL);
+    memset(&record, 0, sizeof(record));
+    record.kind = SNJ_SSE_EVENT;
+    record.event = (const unsigned char *)"response.failed";
+    record.event_len = strlen("response.failed");
+    record.data = (const unsigned char *)payload;
+    record.data_len = strlen(payload);
+    assert(snj_responses_sse_record(&stream, &record) < 0);
+    assert(snj_provider_failure_is_capacity(&stream.provider_failure));
+    assert(strcmp(stream.provider_failure.message, "too large") == 0);
+    assert(stream.provider_failure.context_limit_known);
+    assert(stream.provider_failure.context_limit_tokens == 272000u);
+    assert(stream.provider_failure.requested_input_known);
+    assert(stream.provider_failure.requested_input_tokens == 300000u);
+    {
+        uint64_t ceiling = 0u;
+
+        assert(snj_provider_failure_safety_ceiling(
+            &stream.provider_failure, true, 128000u, &ceiling));
+        assert(ceiling == 144000u);
+        memset(&failure, 0, sizeof(failure));
+        assert(!snj_provider_failure_safety_ceiling(
+            &failure, false, 0u, &ceiling));
+    }
+    snj_responses_stream_free(&stream);
+
+    {
+        static const char ordinary[] =
+            "{\"error\":{\"code\":\"rate_limit_exceeded\","
+            "\"message\":\"later\"}}";
+        char json_error[128] = {0};
+        root = snj_json_load_strict((const unsigned char *)ordinary,
+                                    strlen(ordinary), sizeof(ordinary),
+                                    json_error, sizeof(json_error));
+    }
+    assert(root);
+    assert(snj_provider_failure_from_json(root, &failure) == 0);
+    assert(!snj_provider_failure_is_capacity(&failure));
+    assert(strcmp(failure.code, "rate_limit_exceeded") == 0);
+    json_decref(root);
+
+    {
+        static const char top_level[] =
+            "{\"type\":\"error\",\"code\":\"context_length_exceeded\","
+            "\"message\":\"top-level failure\",\"max_context_tokens\":42}";
+        char json_error[128] = {0};
+        root = snj_json_load_strict((const unsigned char *)top_level,
+                                    strlen(top_level), sizeof(top_level),
+                                    json_error, sizeof(json_error));
+    }
+    assert(root);
+    assert(snj_provider_failure_from_json(root, &failure) == 0);
+    assert(snj_provider_failure_is_capacity(&failure));
+    assert(strcmp(failure.message, "top-level failure") == 0);
+    assert(failure.context_limit_known);
+    assert(failure.context_limit_tokens == 42u);
+    json_decref(root);
+}
+
 int
 main(void)
 {
@@ -616,6 +687,7 @@ main(void)
     test_function_call_arguments();
     test_refusal();
     test_protocol_conflicts_fail_closed();
+    test_structured_capacity_failure();
     puts("test_responses: ok");
     return 0;
 }

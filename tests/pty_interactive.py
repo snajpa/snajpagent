@@ -29,7 +29,7 @@ def read_until(needle: bytes, timeout: float = 5.0) -> None:
             raise SystemExit(f"unexpected EOF; got {bytes(buf)!r}")
         buf.extend(chunk)
 
-idle_prompt = b"gpt-5.5-2026-04-23/medium \xe2\x80\xba "
+idle_prompt = b"gpt-5.5-2026-04-23/medium context=?% \xe2\x80\xba "
 read_until(idle_prompt)
 os.write(fd, b"ping\r")
 read_until(b"pong")

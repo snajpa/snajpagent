@@ -48,7 +48,10 @@ enum model_fixture {
     MODEL_CODEX,
     MODEL_CODEX_MALFORMED,
     MODEL_CODEX_LOOKALIKE,
-    MODEL_CODEX_FAILURE
+    MODEL_CODEX_FAILURE,
+    MODEL_LIMIT_CONFLICT,
+    MODEL_CREATE_HTTP_FAILURE,
+    MODEL_CREATE_SSE_FAILURE
 };
 
 static void
@@ -267,6 +270,34 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_transport\",\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
+    if (models == MODEL_CREATE_HTTP_FAILURE) {
+        struct http_request request;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0)
+            server_fail("accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") != 0 ||
+            strcmp(request.path, "/v1/responses") != 0)
+            server_fail("unexpected failed create request");
+        send_status(fd, 400u,
+            "{\"error\":{\"code\":\"context_length_exceeded\","
+            "\"message\":\"too large\",\"max_context_tokens\":272000,"
+            "\"requested_input_tokens\":300000}}");
+        if (close(fd) < 0)
+            server_fail("close failed create socket");
+        _exit(0);
+    }
+    if (models == MODEL_CREATE_SSE_FAILURE) {
+        serve_one(listen_fd, "POST", "/v1/responses", NULL,
+                  "text/event-stream",
+                  "event: response.failed\n"
+                  "data: {\"type\":\"response.failed\",\"response\":{"
+                  "\"error\":{\"code\":\"context_length_exceeded\","
+                  "\"message\":\"stream too large\","
+                  "\"context_length\":872000}}}\n\n");
+        _exit(0);
+    }
+
     if (models == MODEL_CODEX_FAILURE) {
         struct http_request request;
         int fd = accept(listen_fd, NULL, NULL);
@@ -293,7 +324,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                   "application/json",
                   "{\"models\":["
                   "{\"slug\":\"hidden-first\",\"visibility\":\"hide\",\"priority\":0},"
-                  "{\"slug\":\"vendor/native-model\",\"visibility\":\"list\",\"priority\":20,\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"ultra\"},{\"effort\":\"low\"}],\"default_reasoning_level\":\"low\"},"
+                  "{\"slug\":\"vendor/native-model\",\"visibility\":\"list\",\"priority\":20,\"context_window\":272000,\"max_context_window\":872000,\"auto_compact_token_limit\":null,\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"ultra\"},{\"effort\":\"low\"}],\"default_reasoning_level\":\"low\"},"
                   "{\"slug\":\"codex-fast\",\"visibility\":\"list\",\"priority\":5,\"supported_reasoning_levels\":[{\"effort\":\"medium\"}],\"default_reasoning_level\":\"medium\"},"
                   "{\"slug\":\"codex-tied\",\"visibility\":\"list\",\"priority\":5,\"supported_reasoning_levels\":[{\"effort\":\"high\"}],\"default_reasoning_level\":\"high\"},"
                   "{\"slug\":\"missing-visibility\",\"priority\":1},"
@@ -303,10 +334,20 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         serve_one(listen_fd, "GET", "/backend-api/codexish/v1/models", NULL,
                   "application/json",
                   "{\"data\":[{\"id\":\"lookalike-openai\"}]}");
+    } else if (models == MODEL_LIMIT_CONFLICT) {
+        serve_one(listen_fd, "GET", "/v1/models", NULL,
+                  "application/json",
+                  "{\"data\":[{\"id\":\"conflict\",\"context_length\":100,"
+                  "\"metadata\":{\"contextWindow\":101}}]}");
     } else {
         serve_one(listen_fd, "GET", "/v1/models", NULL,
                   "application/json",
-                  "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-standard\",\"metadata\":{\"supported_reasoning_levels\":[\"medium\",\"high\"],\"default_reasoning_level\":\"medium\"}},{\"id\":\"future-standard\",\"supported_reasoning_levels\":[\"quantum\",\"cosmic\"]}]}");
+                  "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-standard\","
+                  "\"contextLength\":100000,\"metadata\":{\"context_window\":100000,"
+                  "\"inputContextWindow\":90000,\"supported_reasoning_levels\":[\"medium\",\"high\"],"
+                  "\"default_reasoning_level\":\"medium\"},\"capabilities\":{"
+                  "\"maxOutputTokens\":10000,\"effective_context_window_percent\":80}},"
+                  "{\"id\":\"future-standard\",\"supported_reasoning_levels\":[\"quantum\",\"cosmic\"]}]}");
     }
     if (!transport)
         _exit(0);
@@ -483,6 +524,26 @@ test_local_provider_transport(void)
                   "high") == 0);
     assert(strcmp(snj_json_string(json_array_get(models, 0),
                                   "default_effort"), "medium") == 0);
+    {
+        json_t *limits = json_object_get(json_array_get(models, 0), "limits");
+        assert(limits);
+        assert(json_integer_value(json_object_get(
+                   limits, "context_window_tokens")) == 100000);
+        assert(json_integer_value(json_object_get(
+                   limits, "input_context_window_tokens")) == 90000);
+        assert(json_integer_value(json_object_get(
+                   limits, "max_output_tokens")) == 10000);
+        assert(json_integer_value(json_object_get(
+                   limits, "effective_context_window_percent")) == 80);
+        assert(json_is_null(json_object_get(limits, "max_input_tokens")));
+    }
+    {
+        json_t *limits = json_object_get(json_array_get(models, 1), "limits");
+        assert(limits);
+        assert(json_is_null(json_object_get(
+                   limits, "context_window_tokens")));
+        assert(json_is_null(json_object_get(limits, "max_output_tokens")));
+    }
     assert(strcmp(snj_model_cache_best_effort(json_array_get(models, 1),
                                               "fallback"),
                   "quantum") == 0);
@@ -506,7 +567,7 @@ test_local_provider_transport(void)
     assert(snj_provider_responses_create(request, &config,
                                          &config.providers[1], &credential, NULL,
                                          emit_capture, &emitted, NULL, NULL,
-                                         &graph, error, sizeof(error), &cancel,
+                                         &graph, NULL, error, sizeof(error), &cancel,
                                          &retries) == 0);
     assert(strcmp(graph.provider_response_id, "resp_transport") == 0);
     assert(graph.count == 1u);
@@ -595,6 +656,16 @@ test_codex_model_list(void)
     assert(strcmp(json_string_value(json_array_get(efforts, 0)), "low") == 0);
     assert(strcmp(json_string_value(json_array_get(efforts, 1)), "ultra") == 0);
     assert(strcmp(snj_json_string(model, "default_effort"), "low") == 0);
+    {
+        json_t *limits = json_object_get(model, "limits");
+        assert(json_integer_value(json_object_get(
+                   limits, "context_window_tokens")) == 272000);
+        assert(json_integer_value(json_object_get(
+                   limits, "max_context_window_tokens")) == 872000);
+        assert(json_is_null(json_object_get(limits, "max_output_tokens")));
+        assert(json_is_null(json_object_get(
+                   limits, "effective_context_window_percent")));
+    }
     json_decref(models);
     snj_config_free(&config);
     stop_server(&server);
@@ -683,7 +754,78 @@ test_codex_path_selection(void)
     assert(models == NULL);
     assert(strstr(error, "catalog rejected") != NULL);
     stop_server(&server);
+
+    models = NULL;
+    start_server(&server, MODEL_LIMIT_CONFLICT, false);
+    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
+                    (unsigned int)server.port) > 0);
+    assert(snprintf(config.providers[0].base_url,
+                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+    assert(snj_provider_models_list(&config, &config.providers[0],
+                                    &credential, NULL, &models,
+                                    error, sizeof(error)) < 0);
+    assert(models == NULL);
+    assert(strstr(error, "invalid model entry") != NULL);
+    stop_server(&server);
     snj_config_free(&config);
+}
+
+static void
+test_structured_create_failures(void)
+{
+    const enum model_fixture fixtures[] = {
+        MODEL_CREATE_HTTP_FAILURE, MODEL_CREATE_SSE_FAILURE
+    };
+
+    for (size_t i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); ++i) {
+        struct local_server server;
+        struct snj_config config;
+        struct snj_credential credential;
+        struct snj_response_graph graph;
+        struct snj_provider_failure failure;
+        json_t *request = request_with_marker("capacity-failure");
+        char endpoint[128];
+        char error[256] = {0};
+        int cancel = 0;
+
+        start_server(&server, fixtures[i], false);
+        assert(snprintf(endpoint, sizeof(endpoint),
+                        "http://127.0.0.1:%u/v1",
+                        (unsigned int)server.port) > 0);
+        snj_config_init(&config);
+        assert(snprintf(config.providers[0].base_url,
+                        sizeof(config.providers[0].base_url),
+                        "%s", endpoint) > 0);
+        config.providers[0].connect_timeout_ms = 1000u;
+        config.providers[0].idle_timeout_ms = 1000u;
+        config.providers[0].request_timeout_ms = 3000u;
+        assert(snprintf(config.providers[0].openrouter_referer,
+                        sizeof(config.providers[0].openrouter_referer),
+                        "%s", "https://github.com/snajpa/snajpagent") > 0);
+        assert(snprintf(config.providers[0].openrouter_title,
+                        sizeof(config.providers[0].openrouter_title),
+                        "%s", "snajpagent") > 0);
+        credential_set(&credential, "transport-secret");
+        snj_response_graph_init(&graph);
+        memset(&failure, 0, sizeof(failure));
+        assert(snj_provider_responses_create(request, &config,
+                   &config.providers[0], &credential, NULL,
+                   NULL, NULL, NULL, NULL, &graph, &failure,
+                   error, sizeof(error), &cancel, NULL) < 0);
+        assert(snj_provider_failure_is_capacity(&failure));
+        assert(failure.context_limit_known);
+        assert(failure.context_limit_tokens ==
+               (fixtures[i] == MODEL_CREATE_HTTP_FAILURE ?
+                    272000u : 872000u));
+        if (fixtures[i] == MODEL_CREATE_HTTP_FAILURE) {
+            assert(failure.requested_input_known);
+            assert(failure.requested_input_tokens == 300000u);
+        }
+        snj_response_graph_free(&graph);
+        json_decref(request);
+        snj_config_free(&config);
+        stop_server(&server);
+    }
 }
 
 int
@@ -692,6 +834,7 @@ main(void)
     test_local_provider_transport();
     test_codex_model_list();
     test_codex_path_selection();
+    test_structured_create_failures();
     puts("test_provider_transport: ok");
     return 0;
 }

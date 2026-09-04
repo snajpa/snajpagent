@@ -56,6 +56,12 @@ main(void)
         "\n[provider backup]\n"
         "base_url = https://backup.example.test/v1\n"
         "api_key_env = BACKUP_API_KEY\n"
+        "\n[model-limit default/gpt-5.5]\n"
+        "context_window_tokens = 1050000\n"
+        "max_input_tokens = 922000\n"
+        "max_output_tokens = 128000\n"
+        "\n[model-limit backup/org/model/with/slashes]\n"
+        "max_input_tokens = 4000000000\n"
         "\n[ui]\n"
         "verbosity = 4\n"
         "color = never\n"
@@ -154,6 +160,29 @@ main(void)
     assert(strcmp(config.providers[1].base_url,
                   "https://backup.example.test/v1") == 0);
     assert(strcmp(config.providers[1].api_key_env, "BACKUP_API_KEY") == 0);
+    assert(config.model_limit_count == 2u);
+    {
+        const struct snj_model_limit_config *limit =
+            snj_config_model_limit(&config, "default", "gpt-5.5");
+        assert(limit);
+        assert(limit->context_window_known);
+        assert(limit->context_window_tokens == UINT64_C(1050000));
+        assert(limit->max_input_known);
+        assert(limit->max_input_tokens == UINT64_C(922000));
+        assert(limit->max_output_known);
+        assert(limit->max_output_tokens == UINT64_C(128000));
+    }
+    {
+        const struct snj_model_limit_config *limit =
+            snj_config_model_limit(&config, "backup",
+                                   "org/model/with/slashes");
+        assert(limit);
+        assert(!limit->context_window_known);
+        assert(limit->max_input_known);
+        assert(limit->max_input_tokens == SNJ_CONFIG_TOKEN_LIMIT_MAX);
+        assert(!limit->max_output_known);
+    }
+    assert(snj_config_model_limit(&config, "default", "missing") == NULL);
     assert(snj_config_provider(&config, NULL) == &config.providers[0]);
     assert(snj_config_provider(&config, "backup") == &config.providers[1]);
     assert(snj_config_provider(&config, "missing") == NULL);
@@ -299,6 +328,56 @@ main(void)
     write_bytes(path,
                 "[provider duplicate]\n[provider duplicate]\n",
                 sizeof("[provider duplicate]\n[provider duplicate]\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[provider paid]\n[model-limit paid/model]\n",
+                sizeof("[provider paid]\n[model-limit paid/model]\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit missing/model]\nmax_input_tokens=1\n",
+                sizeof("[model-limit missing/model]\nmax_input_tokens=1\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit /model]\nmax_input_tokens=1\n",
+                sizeof("[model-limit /model]\nmax_input_tokens=1\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/]\nmax_input_tokens=1\n",
+                sizeof("[model-limit default/]\nmax_input_tokens=1\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/model]\nmax_input_tokens=0\n",
+                sizeof("[model-limit default/model]\nmax_input_tokens=0\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/model]\nmax_input_tokens=4000000001\n",
+                sizeof("[model-limit default/model]\nmax_input_tokens=4000000001\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/model]\nmax_output_tokens=18446744073709551616\n",
+                sizeof("[model-limit default/model]\nmax_output_tokens=18446744073709551616\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/model]\nmax_input_tokens=1\nmax_input_tokens=2\n",
+                sizeof("[model-limit default/model]\nmax_input_tokens=1\nmax_input_tokens=2\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/model]\nmax_input_tokens=1\n"
+                "[model-limit default/model]\nmax_output_tokens=1\n",
+                sizeof("[model-limit default/model]\nmax_input_tokens=1\n"
+                       "[model-limit default/model]\nmax_output_tokens=1\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=101\n",
+                sizeof("[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=101\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/model]\ncontext_window_tokens=100\nmax_output_tokens=101\n",
+                sizeof("[model-limit default/model]\ncontext_window_tokens=100\nmax_output_tokens=101\n") - 1u);
+    expect_invalid(path);
+    write_bytes(path,
+                "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=70\nmax_output_tokens=31\n",
+                sizeof("[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=70\nmax_output_tokens=31\n") - 1u);
     expect_invalid(path);
     {
         static const unsigned char bad_header[] = {

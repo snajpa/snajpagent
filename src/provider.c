@@ -40,6 +40,7 @@ struct provider_ctx {
     bool semantic_body_seen;
     bool request_may_have_been_sent;
     char error[256];
+    struct snj_provider_failure provider_failure;
 };
 
 static void
@@ -647,6 +648,21 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
         return -1;
     }
     snj_buf_init(&redacted, SNJ_WIRE_BODY_MAX);
+    if (ctx->error_body.len) {
+        json_t *root = snj_json_load_strict(ctx->error_body.data,
+                                            ctx->error_body.len,
+                                            SNJ_WIRE_BODY_MAX,
+                                            json_error,
+                                            sizeof(json_error));
+        if (root) {
+            if (snj_provider_failure_from_json(root,
+                                               &ctx->provider_failure) < 0)
+                memset(&ctx->provider_failure, 0,
+                       sizeof(ctx->provider_failure));
+            json_decref(root);
+        }
+        json_error[0] = '\0';
+    }
     rc = snj_wire_json_redact(ctx->error_body.data, ctx->error_body.len,
                               &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));
@@ -787,6 +803,178 @@ struct codex_model_ref {
     size_t order;
 };
 
+struct optional_limit {
+    uint64_t value;
+    bool known;
+};
+
+static int
+merge_limit(const json_t *object, const char *key, uint64_t max,
+            struct optional_limit *out)
+{
+    json_t *value;
+    json_int_t integer;
+
+    if (!object || !(value = json_object_get(object, key)) ||
+        json_is_null(value))
+        return 0;
+    if (!json_is_integer(value) || (integer = json_integer_value(value)) <= 0 ||
+        (uint64_t)integer > max ||
+        (out->known && out->value != (uint64_t)integer))
+        return -1;
+    out->known = true;
+    out->value = (uint64_t)integer;
+    return 0;
+}
+
+static int
+collect_limit(const json_t *const *objects, size_t object_count,
+              const char *const *keys, size_t key_count, uint64_t max,
+              struct optional_limit *out)
+{
+    for (size_t i = 0; i < object_count; ++i)
+        for (size_t j = 0; j < key_count; ++j)
+            if (merge_limit(objects[i], keys[j], max, out) < 0)
+                return -1;
+    return 0;
+}
+
+static int
+set_optional_limit(json_t *limits, const char *key,
+                   const struct optional_limit *value)
+{
+    return snj_json_set_new(limits, key,
+        value->known ? json_integer((json_int_t)value->value) : json_null());
+}
+
+static int
+build_model_limits(const json_t *source, bool codex, json_t **out)
+{
+    static const char *const context_keys[] = {
+        "context_window_tokens", "contextWindowTokens", "context_window",
+        "contextWindow", "context_length", "contextLength"
+    };
+    static const char *const max_context_keys[] = {
+        "max_context_window_tokens", "maxContextWindowTokens",
+        "max_context_window", "maxContextWindow"
+    };
+    static const char *const input_context_keys[] = {
+        "input_context_window_tokens", "inputContextWindowTokens",
+        "input_context_window", "inputContextWindow"
+    };
+    static const char *const max_input_keys[] = {
+        "max_input_tokens", "maxInputTokens"
+    };
+    static const char *const max_output_keys[] = {
+        "max_output_tokens", "maxOutputTokens"
+    };
+    static const char *const auto_compact_keys[] = {
+        "auto_compact_input_tokens", "autoCompactInputTokens",
+        "auto_compact_token_limit", "autoCompactTokenLimit"
+    };
+    static const char *const effective_keys[] = {
+        "effective_context_window_percent", "effectiveContextWindowPercent"
+    };
+    const json_t *objects[3] = {source, NULL, NULL};
+    size_t object_count = 1u;
+    struct optional_limit context = {0};
+    struct optional_limit max_context = {0};
+    struct optional_limit input_context = {0};
+    struct optional_limit max_input = {0};
+    struct optional_limit max_output = {0};
+    struct optional_limit auto_compact = {0};
+    struct optional_limit effective = {0};
+    json_t *limits = NULL;
+
+    if (!codex) {
+        static const char *const nested[] = {"metadata", "capabilities"};
+        for (size_t i = 0; i < sizeof(nested) / sizeof(nested[0]); ++i) {
+            json_t *value = json_object_get(source, nested[i]);
+            if (!value || json_is_null(value))
+                continue;
+            if (!json_is_object(value))
+                goto invalid;
+            objects[object_count++] = value;
+        }
+    }
+#define COLLECT(field, keys, max) \
+    collect_limit(objects, object_count, keys, \
+                  sizeof(keys) / sizeof((keys)[0]), max, &field)
+    if (codex) {
+        static const char *const native_context[] = {"context_window"};
+        static const char *const native_max_context[] = {"max_context_window"};
+        static const char *const native_input_context[] = {"input_context_window"};
+        static const char *const native_max_input[] = {"max_input_tokens"};
+        static const char *const native_max_output[] = {"max_output_tokens"};
+        static const char *const native_auto[] = {"auto_compact_token_limit"};
+        static const char *const native_effective[] = {
+            "effective_context_window_percent"
+        };
+        if (COLLECT(context, native_context, SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+            COLLECT(max_context, native_max_context,
+                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+            COLLECT(input_context, native_input_context,
+                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+            COLLECT(max_input, native_max_input,
+                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+            COLLECT(max_output, native_max_output,
+                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+            COLLECT(auto_compact, native_auto,
+                    SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+            COLLECT(effective, native_effective, 100u) < 0)
+            goto invalid;
+    } else if (COLLECT(context, context_keys,
+                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+               COLLECT(max_context, max_context_keys,
+                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+               COLLECT(input_context, input_context_keys,
+                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+               COLLECT(max_input, max_input_keys,
+                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+               COLLECT(max_output, max_output_keys,
+                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+               COLLECT(auto_compact, auto_compact_keys,
+                       SNJ_CONFIG_TOKEN_LIMIT_MAX) < 0 ||
+               COLLECT(effective, effective_keys, 100u) < 0) {
+        goto invalid;
+    }
+#undef COLLECT
+    if ((context.known && max_context.known &&
+         context.value > max_context.value) ||
+        (context.known && input_context.known &&
+         input_context.value > context.value) ||
+        (context.known && max_input.known && max_input.value > context.value) ||
+        (context.known && max_output.known &&
+         max_output.value > context.value) ||
+        (context.known && max_input.known && max_output.known &&
+         max_input.value > context.value - max_output.value) ||
+        (context.known && auto_compact.known &&
+         auto_compact.value > context.value))
+        goto invalid;
+    limits = json_object();
+    if (!limits ||
+        set_optional_limit(limits, "context_window_tokens", &context) < 0 ||
+        set_optional_limit(limits, "max_context_window_tokens",
+                           &max_context) < 0 ||
+        set_optional_limit(limits, "input_context_window_tokens",
+                           &input_context) < 0 ||
+        set_optional_limit(limits, "max_input_tokens", &max_input) < 0 ||
+        set_optional_limit(limits, "max_output_tokens", &max_output) < 0 ||
+        set_optional_limit(limits, "auto_compact_input_tokens",
+                           &auto_compact) < 0 ||
+        set_optional_limit(limits, "effective_context_window_percent",
+                           &effective) < 0)
+        goto fail;
+    *out = limits;
+    return 0;
+invalid:
+    errno = EPROTO;
+fail:
+    if (limits)
+        json_decref(limits);
+    return -1;
+}
+
 static bool
 bounded_utf8_string(const json_t *value, size_t max, const char **out)
 {
@@ -844,6 +1032,7 @@ append_model(json_t *out, const json_t *source, bool codex)
     json_t *effort_source;
     json_t *entry = NULL;
     json_t *efforts = NULL;
+    json_t *limits = NULL;
 
     if (!json_is_object(source) ||
         !bounded_utf8_string(json_object_get(source, codex ? "slug" : "id"),
@@ -875,7 +1064,9 @@ append_model(json_t *out, const json_t *source, bool codex)
         return -1;
     entry = json_object();
     efforts = json_array();
-    if (!entry || !efforts || append_efforts(efforts, effort_source, codex) < 0)
+    if (!entry || !efforts ||
+        append_efforts(efforts, effort_source, codex) < 0 ||
+        build_model_limits(source, codex, &limits) < 0)
         goto fail;
     if (codex && default_effort) {
         bool supported = false;
@@ -900,6 +1091,11 @@ append_model(json_t *out, const json_t *source, bool codex)
     efforts = NULL;
     if (snj_json_set_new(entry, "id", json_string(id)) < 0)
         goto fail;
+    if (snj_json_set_new(entry, "limits", limits) < 0) {
+        limits = NULL;
+        goto fail;
+    }
+    limits = NULL;
     if (json_array_append_new(out, entry) < 0) {
         entry = NULL;
         goto fail;
@@ -907,6 +1103,8 @@ append_model(json_t *out, const json_t *source, bool codex)
     entry = NULL;
     return 0;
 fail:
+    if (limits)
+        json_decref(limits);
     if (efforts)
         json_decref(efforts);
     if (entry)
@@ -1053,6 +1251,14 @@ provider_uses_codex_catalog(const struct snj_provider_config *provider)
     return len >= sizeof(suffix) - 1u &&
            memcmp(path + len - (sizeof(suffix) - 1u),
                   suffix, sizeof(suffix) - 1u) == 0;
+}
+
+const char *
+snj_provider_catalog_protocol(const struct snj_provider_config *provider)
+{
+    if (!provider)
+        return NULL;
+    return provider_uses_codex_catalog(provider) ? "codex" : "openai";
 }
 
 static const char *
@@ -1489,6 +1695,7 @@ snj_provider_responses_create(const json_t *create_request,
                               snj_provider_pump_fn pump,
                               void *pump_opaque,
                               struct snj_response_graph *graph,
+                              struct snj_provider_failure *failure,
                               char *error, size_t error_size,
                               int *cancel_code,
                               unsigned int *retry_count)
@@ -1504,6 +1711,8 @@ snj_provider_responses_create(const json_t *create_request,
 
     if (cancel_code)
         *cancel_code = 0;
+    if (failure)
+        memset(failure, 0, sizeof(*failure));
     if (retry_count)
         *retry_count = 0u;
     if (!create_request || !config || !provider || !credential ||
@@ -1625,6 +1834,12 @@ out_global:
     curl_slist_free_all(headers);
     curl_global_cleanup();
 out:
+    if (failure) {
+        if (ctx.stream.provider_failure.code[0])
+            *failure = ctx.stream.provider_failure;
+        else
+            *failure = ctx.provider_failure;
+    }
     snj_buf_free(&body);
     snj_buf_free(&ctx.error_body);
     snj_sse_free(&ctx.sse);

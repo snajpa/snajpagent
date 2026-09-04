@@ -586,7 +586,7 @@ events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 started = [event for event in events if event["type"] == "compaction_started"]
 completed = [event for event in events if event["type"] == "compaction_completed"]
 assert len(started) == 1 and len(completed) == 1
-assert started[0]["data"]["reason"] == "automatic"
+assert started[0]["data"]["reason"] == "proactive"
 assert started[0]["data"]["count_method"] == "qualified_upper_bound"
 assert started[0]["data"]["count_request_sha256"]
 assert completed[0]["data"]["count_method"] == "qualified_upper_bound"
@@ -642,13 +642,95 @@ completed = [event for event in events if event["type"] == "compaction_completed
 assert len(started) == 2 and len(completed) == 2
 assert turn2["seq"] < started[0]["seq"] < completed[0]["seq"] < responses2[0]["seq"]
 assert started[0]["data"]["source_seq"] == turn2["seq"] - 1
-assert started[0]["data"]["reason"] == "automatic"
+assert started[0]["data"]["reason"] == "proactive"
 assert completed[0]["data"]["output_count_method"] == "qualified_upper_bound"
 assert responses2[0]["data"]["compact_id"] == started[0]["data"]["compact_id"]
 assert responses2[0]["data"]["profile_id"]
 assert responses2[0]["data"]["capability_version"]
 assert responses2[0]["data"]["count_request_sha256"]
 assert started[1]["seq"] > responses2[0]["seq"]
+PY
+
+# The always-on hard budget remains active when proactive compaction is off,
+# and irreducible current input fails before any provider response starts.
+hard_state="$root/hard-budget-state"
+mkdir -m 700 "$hard_state"
+cat >"$root/hard-budget.ini" <<'EOF'
+[provider]
+auto_compact_input_tokens = 0
+
+[model-limit default/gpt-5.5-2026-04-23]
+max_input_tokens = 1
+EOF
+set +e
+$bin --dotdir "$hard_state" --config "$root/hard-budget.ini" -e -- ping >"$root/hard-budget.out" 2>"$root/hard-budget.err"
+hard_status=$?
+set -e
+[ "$hard_status" -eq 4 ]
+hard_id=$(find "$hard_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+python3 - "$hard_state/sessions/$hard_id/events.jsonl" <<'PY'
+import json
+import sys
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+assert not any(event["type"] == "response_started" for event in events)
+failed = [event for event in events if event["type"] == "turn_failed"]
+assert len(failed) == 1
+assert failed[0]["data"]["class"] == "context"
+assert "hard budget 1" in failed[0]["data"]["message"]
+PY
+
+# A typed capacity rejection before output closes the response, compacts one
+# complete prefix, and retries exactly one changed provider request.
+recovery_state="$root/capacity-recovery-state"
+mkdir -m 700 "$recovery_state"
+$bin --dotdir "$recovery_state" -e -- ping >/dev/null 2>"$root/recovery-first.err"
+recovery_id=$(find "$recovery_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+$bin --dotdir "$recovery_state" -e --resume "$recovery_id" -- capacity_recovery >"$root/recovery.out" 2>"$root/recovery.err"
+[ "$(cat "$root/recovery.out")" = "fixture answer" ]
+python3 - "$recovery_state/sessions/$recovery_id/events.jsonl" <<'PY'
+import json
+import sys
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+turn = [event for event in events if event["type"] == "turn_started"][-1]
+starts = [event for event in events if event["type"] == "response_started"
+          and event["data"]["turn_id"] == turn["data"]["turn_id"]]
+rejected = [event for event in events
+            if event["type"] == "response_capacity_rejected"]
+compacted = [event for event in events if event["type"] == "compaction_started"
+             and event["data"]["reason"] == "provider_rejection"]
+assert len(starts) == 2 and len(rejected) == 1 and len(compacted) == 1
+assert starts[0]["data"]["request_sha256"] == rejected[0]["data"]["request_sha256"]
+assert starts[1]["data"]["request_sha256"] != starts[0]["data"]["request_sha256"]
+assert rejected[0]["data"]["observed_hard_input_tokens"] == 89999
+assert len(rejected[0]["data"]["provider_source_sha256"]) == 64
+assert starts[1]["data"]["capacity_source"] == "observed"
+assert starts[1]["data"]["hard_input_tokens"] == 89999
+assert starts[0]["seq"] < rejected[0]["seq"] < compacted[0]["seq"] < starts[1]["seq"]
+PY
+
+# A second typed rejection after recovery is terminal and is never replayed.
+second_state="$root/capacity-second-state"
+mkdir -m 700 "$second_state"
+$bin --dotdir "$second_state" -e -- ping >/dev/null 2>"$root/second-first.err"
+second_id=$(find "$second_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+set +e
+$bin --dotdir "$second_state" -e --resume "$second_id" -- capacity_recovery_twice >"$root/second.out" 2>"$root/second.err"
+second_status=$?
+set -e
+[ "$second_status" -eq 4 ]
+python3 - "$second_state/sessions/$second_id/events.jsonl" <<'PY'
+import json
+import sys
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+turn = [event for event in events if event["type"] == "turn_started"][-1]
+starts = [event for event in events if event["type"] == "response_started"
+          and event["data"]["turn_id"] == turn["data"]["turn_id"]]
+rejected = [event for event in events
+            if event["type"] == "response_capacity_rejected"]
+failed = [event for event in events if event["type"] == "turn_failed"
+          and event["data"]["turn_id"] == turn["data"]["turn_id"]]
+assert len(starts) == 2 and len(rejected) == 1 and len(failed) == 1
+assert failed[0]["data"]["class"] == "context"
 PY
 
 TERM=xterm "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"

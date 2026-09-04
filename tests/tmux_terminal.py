@@ -34,8 +34,8 @@ MARKDOWN_TEXT = (
     "```c\nint value = 1;\n```\n\n"
     "First prose line\ncontinued prose\n\nsecond paragraph"
 )
-DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium ›"
-DEFAULT_ACTIVE_PROMPT = "gpt-5.5-2026-04-23/medium »"
+DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium context=?% ›"
+DEFAULT_ACTIVE_PROMPT = "gpt-5.5-2026-04-23/medium context=?% »"
 MACHINE_HOSTNAME = socket.gethostname()
 
 
@@ -941,7 +941,7 @@ def run_queue_case(binary, root):
         terminal.submit("/queue 1 delete")
         wait_event_count(dotdir, "future_turn_cancelled", 3)
         terminal.submit("/q 1e")
-        terminal.wait("edit 1 › second")
+        terminal.wait("edit 1 context=?% › second")
         terminal.send_text(" active")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 1)
@@ -956,7 +956,7 @@ def run_queue_case(binary, root):
         terminal.wait("turn interrupted")
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("/queue 1 edit")
-        terminal.wait("edit 1 › second active")
+        terminal.wait("edit 1 context=?% › second active")
         terminal.send_text(" idle")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 2)
@@ -972,9 +972,9 @@ def run_queue_case(binary, root):
                 "next › second",
                 "next › third",
                 "next › fourth",
-                "edit 1 › second active",
+                "edit 1 context=?% › second active",
                 "next › fifth",
-                "edit 1 › second active idle",
+                "edit 1 context=?% › second active idle",
                 "future-turn queue is empty",
             ],
         )
@@ -1222,7 +1222,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         100, 24, environment=environment,
     )
     try:
-        terminal.wait("uncached-start/low ›")
+        terminal.wait("uncached-start/low context=?% ›")
         before = provider.catalog_paths()
         terminal.submit("/model cache")
         screen = terminal.wait("4. codex / codex-late / ultra",
@@ -1288,7 +1288,7 @@ def run_model_catalog_case(binary, root, provider, environment):
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
     expected = (f"{operator}@{MACHINE_HOSTNAME} ›" if operator else
-                "uncached-start/low ›")
+                "uncached-start/low context=?% ›")
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture()

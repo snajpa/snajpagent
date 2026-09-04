@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+- Added source-bound provider/model context capacity throughout discovery,
+  cache display, configuration, request accounting, compaction, status, and
+  rollout prompts. The strict pre-release cache is now unversioned and retains
+  nullable advertised limits; `[model-limit PROVIDER/MODEL]` supplies exact
+  operator overrides. Hard-budget compaction remains active when proactive
+  compaction is disabled, unknown output limits omit `max_output_tokens`, and
+  a typed pre-output context rejection gets one replay-safe compact-and-retry
+  recovery. Trustworthy rejection details durably lower a source-bound
+  in-session safety ceiling that survives resume and is visible in `/status`.
+  Bytes and token bounds remain distinct, and rollout composers end in
+  `context=N% ›|»` or `context=?% ›|»`.
+
 ## 0.98
 
 - Added a two-field `META` as the sole compiled product-name/base-version
