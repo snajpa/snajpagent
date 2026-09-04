@@ -127,8 +127,9 @@
   the persistent user-refreshed catalog and its update time; numbered and
   typed selectors durably retain provider, model, and effort across resume,
   while manually entered model and effort names pass through without catalog
-  validation. A first listing can seed a missing catalog from the local Codex
-  model cache without contacting a provider.
+  validation. Codex API providers use their versioned `/models` catalog with
+  visibility and priority semantics, while other providers retain `/v1/models`;
+  snajpagent no longer imports Codex CLI cache state.
 
 - Added durable persistent goals: `/goal TEXT` and quoted or explicit `set`
   forms start or reword an objective; status/help, pause/resume, lock/unlock,

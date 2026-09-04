@@ -54,34 +54,39 @@ secret.
 ## Persistent Discovery
 
 `/model cache` discovers models from every configured provider, records all of
-them in `DOTDIR/models.json`, and then displays the new catalog. Discovery uses
-the provider's authenticated `GET /v1/models` endpoint and accepts both common
-OpenAI-compatible shapes:
+them in `DOTDIR/models.json`, and then displays the new catalog. Discovery is
+selected by the normalized configured API path, never the provider name:
 
-- `data[].id`, including optional model metadata; and
-- Codex-compatible `models[].slug`, including
-  `supported_reasoning_levels[].effort` and `default_reasoning_level`.
+- a path ending in the exact case-sensitive `/backend-api/codex` component
+  sequence uses authenticated
+  `GET <base>/models?client_version=0.146.0`; and
+- every other path uses authenticated `GET <base>/v1/models`.
 
-Provider order, model order, and advertised reasoning-variant order are
-preserved. Structural bounds, valid JSON/UTF-8, and required cache fields are
-checked for safe storage, but model identifiers are not judged by name.
+`0.146.0` is the dedicated Codex catalog compatibility version supported by
+this decoder and its Codex response fixture, selected from the inspected Codex
+0.146.0 catalog contract; it is not the snajpagent product version. The Codex
+endpoint reads `models[].slug`, keeps only entries whose `visibility` is exactly `list`,
+stably orders them by ascending numeric `priority`, and preserves advertised
+`supported_reasoning_levels[].effort` order and `default_reasoning_level`.
+Hidden, `none`, missing, and unknown visibility values do not become selectable.
+Other providers read `data[].id`, including optional model metadata, in
+response order. Structural bounds, valid JSON/UTF-8, and required cache fields
+are checked for safe storage, but model identifiers are not judged by name.
 Refreshing is transactional across all configured providers: any discovery or
 write failure preserves the previous cache rather than publishing a partial
-replacement.
+replacement. Both protocols share the provider's configured credentials,
+headers, redaction, retries, timeouts, response bounds, and no-redirect policy.
+A failed Codex endpoint never falls back to `/v1/models`.
 
 `/model` and its alias `/model list` read the persistent cache without
 contacting a provider and do not refresh it merely because it is old. If no
-cache exists yet, the first listing imports the bounded local Codex catalog
-from `$CODEX_HOME/models_cache.json`, or from
-`$HOME/.codex/models_cache.json` when `CODEX_HOME` is unset, and associates
-that provider-neutral bootstrap catalog with the first configured provider.
-The local source must be a bounded, user-owned regular file containing valid
-Codex JSON, and import atomically replaces only snajpagent's cache. If neither
-local cache exists, the command asks the user to run `/model cache`. After a
-cache exists, the user alone decides that it is stale and refreshes it with
-`/model cache`; there is no TTL or background refresh. No unauthenticated
-public catalog is assumed: authenticated provider discovery is the only online
-refresh path. Typed selectors contact no provider and populate no cache.
+cache exists, the command asks the user to run `/model cache`. snajpagent owns
+and consumes only `DOTDIR/models.json`; it does not inspect a Codex executable
+or any external application's model cache. After a cache exists, the user alone
+decides that it is stale and refreshes it with `/model cache`; there is no TTL
+or background refresh. No unauthenticated public catalog is assumed:
+authenticated provider discovery is the only online refresh path. Typed
+selectors contact no provider and populate no cache.
 
 The last line of every successful `/model`, `/model list`, and `/model cache`
 catalog display reports when that cache was last updated. The timestamp is

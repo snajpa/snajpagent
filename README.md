@@ -157,12 +157,12 @@ The built-in help is intentionally short:
 
 In an interactive session, `/model` and `/model list` display the persistent
 provider/model/reasoning catalog without contacting a provider. If the cache is
-missing, the first listing imports `$CODEX_HOME/models_cache.json`, or
-`$HOME/.codex/models_cache.json` when `CODEX_HOME` is unset, under the first
-configured provider. `/model cache` explicitly refreshes every configured
-provider through its authenticated model endpoint; there is no automatic age
-check, so the user decides when it is stale. Every catalog display ends with
-the cache update time.
+missing, the listing asks you to run `/model cache`. That command explicitly
+refreshes every configured provider through its authenticated model endpoint;
+there is no automatic age check, so the user decides when it is stale. A
+provider whose normalized API path ends in `/backend-api/codex` uses the Codex
+`/models?client_version=0.146.0` catalog endpoint; other providers use
+`/v1/models`. Every catalog display ends with the cache update time.
 
 `/model NUMBER` and `/model #NUMBER` select an exact displayed row. Typed
 selection accepts `MODEL`, `MODEL / EFFORT`, or

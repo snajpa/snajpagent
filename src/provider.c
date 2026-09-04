@@ -343,11 +343,13 @@ provider_endpoint_url(const struct snj_provider_config *provider,
     }
     append_path = path;
     base_len = strlen(provider->base_url);
+    while (base_len && provider->base_url[base_len - 1u] == '/')
+        --base_len;
     if (base_len >= 3u &&
-        strcmp(provider->base_url + base_len - 3u, "/v1") == 0 &&
+        memcmp(provider->base_url + base_len - 3u, "/v1", 3u) == 0 &&
         strncmp(path, "/v1/", 4u) == 0)
         append_path = path + 3u;
-    written = snprintf(buffer, buffer_size, "%s%s",
+    written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len,
                        provider->base_url, append_path);
     if (written <= 0 || (size_t)written >= buffer_size) {
         set_error(error, error_size, "provider endpoint is too long");
@@ -362,10 +364,13 @@ provider_endpoint_url(const struct snj_provider_config *provider,
             return 0;
         append_path = path;
         base_len = strlen(base);
-        if (base_len >= 3u && strcmp(base + base_len - 3u, "/v1") == 0 &&
+        while (base_len && base[base_len - 1u] == '/')
+            --base_len;
+        if (base_len >= 3u && memcmp(base + base_len - 3u, "/v1", 3u) == 0 &&
             strncmp(path, "/v1/", 4u) == 0)
             append_path = path + 3u;
-        written = snprintf(buffer, buffer_size, "%s%s", base, append_path);
+        written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len,
+                           base, append_path);
         if (written <= 0 || (size_t)written >= buffer_size) {
             set_error(error, error_size, "test provider endpoint is too long");
             errno = ENAMETOOLONG;
@@ -772,6 +777,15 @@ out:
 
 #define SNJ_PROVIDER_MODELS_MAX 4096u
 #define SNJ_PROVIDER_EFFORTS_MAX 32u
+#define SNJ_CODEX_CATALOG_CLIENT_VERSION "0.146.0"
+#define SNJ_CODEX_CATALOG_PATH \
+    "/models?client_version=" SNJ_CODEX_CATALOG_CLIENT_VERSION
+
+struct codex_model_ref {
+    const json_t *model;
+    json_int_t priority;
+    size_t order;
+};
 
 static bool
 bounded_utf8_string(const json_t *value, size_t max, const char **out)
@@ -791,7 +805,7 @@ bounded_utf8_string(const json_t *value, size_t max, const char **out)
 }
 
 static int
-append_efforts(json_t *out, const json_t *source)
+append_efforts(json_t *out, const json_t *source, bool codex)
 {
     if (!source)
         return 0;
@@ -805,6 +819,8 @@ append_efforts(json_t *out, const json_t *source)
 
         if (json_is_object(value))
             value = json_object_get(value, "effort");
+        else if (codex)
+            return -1;
         if (!bounded_utf8_string(value, SNJ_CONFIG_EFFORT_MAX - 1u,
                                  &effort))
             return -1;
@@ -820,7 +836,7 @@ append_efforts(json_t *out, const json_t *source)
 }
 
 static int
-append_model(json_t *out, const json_t *source, bool native)
+append_model(json_t *out, const json_t *source, bool codex)
 {
     const char *id;
     const char *default_effort = NULL;
@@ -830,7 +846,7 @@ append_model(json_t *out, const json_t *source, bool native)
     json_t *efforts = NULL;
 
     if (!json_is_object(source) ||
-        !bounded_utf8_string(json_object_get(source, native ? "slug" : "id"),
+        !bounded_utf8_string(json_object_get(source, codex ? "slug" : "id"),
                              SNJ_CONFIG_MODEL_MAX - 1u, &id))
         return -1;
     for (size_t i = 0; i < json_array_size(out); ++i) {
@@ -855,10 +871,24 @@ append_model(json_t *out, const json_t *source, bool native)
                                  &default_effort))
             return -1;
     }
+    if (codex && default_effort && !effort_source)
+        return -1;
     entry = json_object();
     efforts = json_array();
-    if (!entry || !efforts || append_efforts(efforts, effort_source) < 0)
+    if (!entry || !efforts || append_efforts(efforts, effort_source, codex) < 0)
         goto fail;
+    if (codex && default_effort) {
+        bool supported = false;
+
+        for (size_t i = 0; i < json_array_size(efforts); ++i)
+            if (strcmp(json_string_value(json_array_get(efforts, i)),
+                       default_effort) == 0) {
+                supported = true;
+                break;
+            }
+        if (!supported)
+            goto fail;
+    }
     if (snj_json_set_new(entry, "default_effort",
                          default_effort ? json_string(default_effort) :
                                           json_null()) < 0)
@@ -885,15 +915,29 @@ fail:
     return -1;
 }
 
-int
-snj_provider_models_decode(const unsigned char *data, size_t len,
-                           json_t **models, char *error, size_t error_size)
+static int
+codex_model_ref_compare(const void *left, const void *right)
+{
+    const struct codex_model_ref *a = left;
+    const struct codex_model_ref *b = right;
+
+    if (a->priority < b->priority)
+        return -1;
+    if (a->priority > b->priority)
+        return 1;
+    return a->order < b->order ? -1 : a->order > b->order;
+}
+
+static int
+decode_models(const unsigned char *data, size_t len, bool codex,
+              json_t **models, char *error, size_t error_size)
 {
     char json_error[128] = {0};
     json_t *root = NULL;
     json_t *source;
     json_t *out = NULL;
-    bool native;
+    struct codex_model_ref *refs = NULL;
+    size_t ref_count = 0u;
     int rc = -1;
 
     if (models)
@@ -912,10 +956,7 @@ snj_provider_models_decode(const unsigned char *data, size_t len,
         errno = EPROTO;
         goto out;
     }
-    source = json_object_get(root, "models");
-    native = json_is_array(source);
-    if (!native)
-        source = json_object_get(root, "data");
+    source = json_object_get(root, codex ? "models" : "data");
     if (!json_is_array(source) ||
         json_array_size(source) > SNJ_PROVIDER_MODELS_MAX) {
         set_error(error, error_size,
@@ -928,8 +969,43 @@ snj_provider_models_decode(const unsigned char *data, size_t len,
         errno = ENOMEM;
         goto out;
     }
-    for (size_t i = 0; i < json_array_size(source); ++i)
-        if (append_model(out, json_array_get(source, i), native) < 0) {
+    if (codex && json_array_size(source)) {
+        refs = calloc(json_array_size(source), sizeof(*refs));
+        if (!refs) {
+            errno = ENOMEM;
+            goto out;
+        }
+        for (size_t i = 0; i < json_array_size(source); ++i) {
+            json_t *model = json_array_get(source, i);
+            const char *visibility;
+            json_t *priority;
+
+            if (!json_is_object(model)) {
+                set_error(error, error_size,
+                          "model-list response contains an invalid model entry");
+                errno = EPROTO;
+                goto out;
+            }
+            visibility = snj_json_string(model, "visibility");
+            if (!visibility || strcmp(visibility, "list") != 0)
+                continue;
+            priority = json_object_get(model, "priority");
+            if (!json_is_integer(priority)) {
+                set_error(error, error_size,
+                          "model-list response contains an invalid model entry");
+                errno = EPROTO;
+                goto out;
+            }
+            refs[ref_count].model = model;
+            refs[ref_count].priority = json_integer_value(priority);
+            refs[ref_count].order = i;
+            ++ref_count;
+        }
+        qsort(refs, ref_count, sizeof(*refs), codex_model_ref_compare);
+    }
+    for (size_t i = 0; i < (codex ? ref_count : json_array_size(source)); ++i)
+        if (append_model(out, codex ? refs[i].model : json_array_get(source, i),
+                         codex) < 0) {
             set_error(error, error_size,
                       "model-list response contains an invalid model entry");
             errno = EPROTO;
@@ -939,6 +1015,7 @@ snj_provider_models_decode(const unsigned char *data, size_t len,
     out = NULL;
     rc = 0;
 out:
+    free(refs);
     if (out)
         json_decref(out);
     if (root)
@@ -947,7 +1024,7 @@ out:
 }
 
 static int
-parse_models_body(struct provider_ctx *ctx, json_t **models,
+parse_models_body(struct provider_ctx *ctx, bool codex, json_t **models,
                   char *error, size_t error_size)
 {
     if (ctx->body_failed) {
@@ -956,9 +1033,35 @@ parse_models_body(struct provider_ctx *ctx, json_t **models,
         errno = EOVERFLOW;
         return -1;
     }
-    return snj_provider_models_decode(ctx->error_body.data,
-                                      ctx->error_body.len,
-                                      models, error, error_size);
+    return decode_models(ctx->error_body.data, ctx->error_body.len, codex,
+                         models, error, error_size);
+}
+
+static bool
+provider_uses_codex_catalog(const struct snj_provider_config *provider)
+{
+    static const char suffix[] = "/backend-api/codex";
+    const char *authority = strstr(provider->base_url, "://");
+    const char *path = authority ? strchr(authority + 3u, '/') : NULL;
+    size_t len;
+
+    if (!path)
+        return false;
+    len = strlen(path);
+    while (len && path[len - 1u] == '/')
+        --len;
+    return len >= sizeof(suffix) - 1u &&
+           memcmp(path + len - (sizeof(suffix) - 1u),
+                  suffix, sizeof(suffix) - 1u) == 0;
+}
+
+static const char *
+url_request_target(const char *url)
+{
+    const char *scheme = strstr(url, "://");
+    const char *target = scheme ? strchr(scheme + 3u, '/') : NULL;
+
+    return target ? target : "/";
 }
 
 int
@@ -973,7 +1076,10 @@ snj_provider_models_list(const struct snj_config *config,
     CURL *curl = NULL;
     CURLcode code;
     char url_buffer[SNJ_CONFIG_URL_MAX + 64u];
+    char request_line[SNJ_CONFIG_URL_MAX + 96u];
     const char *url = NULL;
+    const char *path;
+    bool codex;
     unsigned int retry_count = 0u;
     int rc = -1;
 
@@ -990,10 +1096,23 @@ snj_provider_models_list(const struct snj_config *config,
     ctx.render = render;
     snj_secret_set_build(&ctx.secrets, config, credential);
     snj_buf_init(&ctx.error_body, SNJ_WIRE_BODY_MAX);
-    if (provider_endpoint_url(provider, "/v1/models", url_buffer,
+    codex = provider_uses_codex_catalog(provider);
+    path = codex ? SNJ_CODEX_CATALOG_PATH : "/v1/models";
+    if (provider_endpoint_url(provider, path, url_buffer,
                               sizeof(url_buffer), &url,
                               error, error_size) < 0)
         goto out;
+    {
+        int written = snprintf(request_line, sizeof(request_line),
+                               "GET %s HTTP/1.1",
+                               url_request_target(url));
+        if (written <= 0 || (size_t)written >= sizeof(request_line)) {
+            set_error(error, error_size,
+                      "model-list request line is too long");
+            errno = ENAMETOOLONG;
+            goto out;
+        }
+    }
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
         set_error(error, error_size, "libcurl could not initialize");
         errno = EIO;
@@ -1011,7 +1130,7 @@ snj_provider_models_list(const struct snj_config *config,
         set_error(error, error_size, "provider headers could not be allocated");
         goto out_global;
     }
-    if (render_request_headers(&ctx, "GET /v1/models HTTP/1.1",
+    if (render_request_headers(&ctx, request_line,
                                "accept: application/json") < 0) {
         set_error(error, error_size, ctx.error[0] ? ctx.error :
                   "model-list request headers could not be rendered");
@@ -1056,7 +1175,7 @@ snj_provider_models_list(const struct snj_config *config,
                             ctx.request_may_have_been_sent);
         goto out_global;
     }
-    rc = parse_models_body(&ctx, models, error, error_size);
+    rc = parse_models_body(&ctx, codex, models, error, error_size);
 out_global:
     if (curl)
         curl_easy_cleanup(curl);

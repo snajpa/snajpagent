@@ -63,9 +63,9 @@ lifecycle state without depending on process memory.
 The default private application directory is `$HOME/.snajpagent`, with a
 `--dotdir` override. It contains `config.ini`, the `sessions/` and `trash/`
 directories, and the atomically replaced `models.json` provider catalog. Cache
-age never causes an implicit refresh. A missing catalog can be seeded offline
-from the local Codex model cache; only explicit `/model cache` performs
-provider work.
+age never causes an implicit refresh. A missing catalog directs the operator to
+explicit `/model cache`; snajpagent neither imports nor depends on Codex CLI
+cache state.
 
 IRC configuration is process-local, while admitted room state is durable
 session data. Typed events cover connection, membership, message, mode, topic,

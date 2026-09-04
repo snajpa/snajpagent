@@ -42,6 +42,14 @@ struct emitted_text {
     unsigned int calls;
 };
 
+enum model_fixture {
+    MODEL_OPENAI,
+    MODEL_CODEX,
+    MODEL_CODEX_MALFORMED,
+    MODEL_CODEX_LOOKALIKE,
+    MODEL_CODEX_FAILURE
+};
+
 static void
 write_all_or_die(int fd, const char *data, size_t len)
 {
@@ -192,6 +200,23 @@ send_response(int fd, const char *content_type, const char *body)
 }
 
 static void
+send_status(int fd, unsigned int status, const char *body)
+{
+    char header[256];
+    size_t len = strlen(body);
+    int n = snprintf(header, sizeof(header),
+                     "HTTP/1.1 %u Test\r\n"
+                     "Content-Type: application/json\r\n"
+                     "Content-Length: %llu\r\n"
+                     "Connection: close\r\n\r\n",
+                     status, (unsigned long long)len);
+    if (n <= 0 || (size_t)n >= sizeof(header))
+        server_fail("status response header build failed");
+    write_all_or_die(fd, header, (size_t)n);
+    write_all_or_die(fd, body, len);
+}
+
+static void
 serve_one(int listen_fd, const char *method, const char *path,
           const char *marker,
           const char *content_type, const char *body)
@@ -215,7 +240,7 @@ serve_one(int listen_fd, const char *method, const char *path,
 }
 
 static void
-server_child(int listen_fd, bool native_models, bool transport)
+server_child(int listen_fd, enum model_fixture models, bool transport)
 {
     static const char create_sse[] =
         "event: response.created\n"
@@ -237,11 +262,47 @@ server_child(int listen_fd, bool native_models, bool transport)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_transport\",\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
-    serve_one(listen_fd, "GET", "/v1/models", NULL,
-              "application/json",
-              native_models ?
-              "{\"models\":[{\"slug\":\"vendor/native-model\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"ultra\"}],\"default_reasoning_level\":\"low\"}]}" :
-              "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-standard\",\"metadata\":{\"supported_reasoning_levels\":[\"medium\",\"high\"],\"default_reasoning_level\":\"medium\"}},{\"id\":\"future-standard\",\"supported_reasoning_levels\":[\"quantum\",\"cosmic\"]}]}");
+    if (models == MODEL_CODEX_FAILURE) {
+        struct http_request request;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0)
+            server_fail("accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "GET") != 0 ||
+            strcmp(request.path,
+                   "/backend-api/codex/models?client_version=0.146.0") != 0)
+            server_fail("unexpected failed Codex catalog request");
+        send_status(fd, 400u, "{\"error\":{\"message\":\"catalog rejected\"}}");
+        if (close(fd) < 0)
+            server_fail("close failed Codex request socket");
+        _exit(0);
+    }
+    if (models == MODEL_CODEX_MALFORMED) {
+        serve_one(listen_fd, "GET",
+                  "/backend-api/codex/models?client_version=0.146.0", NULL,
+                  "application/json",
+                  "{\"models\":[{\"slug\":\"malformed\",\"visibility\":\"list\",\"priority\":1,\"supported_reasoning_levels\":[\"high\"]}]}");
+    } else if (models == MODEL_CODEX) {
+        serve_one(listen_fd, "GET",
+                  "/backend-api/codex/models?client_version=0.146.0", NULL,
+                  "application/json",
+                  "{\"models\":["
+                  "{\"slug\":\"hidden-first\",\"visibility\":\"hide\",\"priority\":0},"
+                  "{\"slug\":\"vendor/native-model\",\"visibility\":\"list\",\"priority\":20,\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"ultra\"},{\"effort\":\"low\"}],\"default_reasoning_level\":\"low\"},"
+                  "{\"slug\":\"codex-fast\",\"visibility\":\"list\",\"priority\":5,\"supported_reasoning_levels\":[{\"effort\":\"medium\"}],\"default_reasoning_level\":\"medium\"},"
+                  "{\"slug\":\"codex-tied\",\"visibility\":\"list\",\"priority\":5,\"supported_reasoning_levels\":[{\"effort\":\"high\"}],\"default_reasoning_level\":\"high\"},"
+                  "{\"slug\":\"missing-visibility\",\"priority\":1},"
+                  "{\"slug\":\"none\",\"visibility\":\"none\",\"priority\":1},"
+                  "{\"slug\":\"unknown\",\"visibility\":\"future\",\"priority\":1}]}");
+    } else if (models == MODEL_CODEX_LOOKALIKE) {
+        serve_one(listen_fd, "GET", "/backend-api/codexish/v1/models", NULL,
+                  "application/json",
+                  "{\"data\":[{\"id\":\"lookalike-openai\"}]}");
+    } else {
+        serve_one(listen_fd, "GET", "/v1/models", NULL,
+                  "application/json",
+                  "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-standard\",\"metadata\":{\"supported_reasoning_levels\":[\"medium\",\"high\"],\"default_reasoning_level\":\"medium\"}},{\"id\":\"future-standard\",\"supported_reasoning_levels\":[\"quantum\",\"cosmic\"]}]}");
+    }
     if (!transport)
         _exit(0);
     serve_one(listen_fd, "POST", "/v1/responses/input_tokens", "transport-count",
@@ -256,7 +317,8 @@ server_child(int listen_fd, bool native_models, bool transport)
 }
 
 static void
-start_server(struct local_server *server, bool native_models, bool transport)
+start_server(struct local_server *server, enum model_fixture models,
+             bool transport)
 {
     struct sockaddr_in addr;
     socklen_t len = sizeof(addr);
@@ -278,7 +340,7 @@ start_server(struct local_server *server, bool native_models, bool transport)
     server->pid = fork();
     assert(server->pid >= 0);
     if (server->pid == 0)
-        server_child(server->fd, native_models, transport);
+        server_child(server->fd, models, transport);
 }
 
 static void
@@ -331,6 +393,40 @@ credential_set(struct snj_credential *credential, const char *value)
     memcpy(credential->value, value, credential->len + 1u);
 }
 
+static int
+capture_stderr_begin(int pipefd[2])
+{
+    int saved;
+
+    assert(pipe(pipefd) == 0);
+    saved = dup(STDERR_FILENO);
+    assert(saved >= 0);
+    assert(dup2(pipefd[1], STDERR_FILENO) == STDERR_FILENO);
+    assert(close(pipefd[1]) == 0);
+    return saved;
+}
+
+static void
+capture_stderr_end(int pipefd[2], int saved, char *out, size_t out_size)
+{
+    size_t used = 0u;
+
+    assert(dup2(saved, STDERR_FILENO) == STDERR_FILENO);
+    assert(close(saved) == 0);
+    while (used + 1u < out_size) {
+        ssize_t got = read(pipefd[0], out + used, out_size - used - 1u);
+        if (got < 0) {
+            assert(errno == EINTR);
+            continue;
+        }
+        if (got == 0)
+            break;
+        used += (size_t)got;
+    }
+    out[used] = '\0';
+    assert(close(pipefd[0]) == 0);
+}
+
 static void
 test_local_provider_transport(void)
 {
@@ -349,7 +445,7 @@ test_local_provider_transport(void)
     char endpoint[128];
     char error[256] = {0};
 
-    start_server(&server, false, true);
+    start_server(&server, MODEL_OPENAI, true);
     assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
                     (unsigned int)server.port) > 0);
     snj_config_init(&config);
@@ -362,7 +458,7 @@ test_local_provider_transport(void)
     config.providers[1].request_timeout_ms = 3000u;
     assert(snprintf(config.providers[1].base_url,
                     sizeof(config.providers[1].base_url),
-                    "%s/v1", endpoint) > 0);
+                    "%s/v1/", endpoint) > 0);
     assert(snprintf(config.providers[1].openrouter_referer,
                     sizeof(config.providers[1].openrouter_referer),
                     "%s", "https://github.com/snajpa/snajpagent") > 0);
@@ -437,19 +533,24 @@ test_local_provider_transport(void)
 }
 
 static void
-test_native_model_list(void)
+test_codex_model_list(void)
 {
     struct local_server server;
     struct snj_config config;
     struct snj_credential credential;
+    struct snj_render render;
     json_t *models = NULL;
     json_t *model;
     json_t *efforts;
     char endpoint[128];
+    char diagnostic[8192];
     char error[256] = {0};
+    int pipefd[2];
+    int saved_stderr;
 
-    start_server(&server, true, false);
-    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
+    start_server(&server, MODEL_CODEX, false);
+    assert(snprintf(endpoint, sizeof(endpoint),
+                    "http://127.0.0.1:%u/backend-api/codex/",
                     (unsigned int)server.port) > 0);
     snj_config_init(&config);
     assert(snprintf(config.providers[0].base_url,
@@ -464,11 +565,25 @@ test_native_model_list(void)
     config.providers[0].idle_timeout_ms = 1000u;
     config.providers[0].request_timeout_ms = 3000u;
     credential_set(&credential, "transport-secret");
+    snj_render_init(&render, 6u);
+    snj_render_set_color(&render, SNJ_COLOR_NEVER);
+    saved_stderr = capture_stderr_begin(pipefd);
     assert(snj_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, &models,
+                                    &credential, &render, &models,
                                     error, sizeof(error)) == 0);
-    assert(json_array_size(models) == 1u);
+    capture_stderr_end(pipefd, saved_stderr, diagnostic, sizeof(diagnostic));
+    assert(strstr(diagnostic,
+                  "> GET /backend-api/codex/models?client_version=0.146.0 HTTP/1.1") != NULL);
+    assert(strstr(diagnostic, "> authorization:") != NULL);
+    assert(strstr(diagnostic, "<redacted:bearer>") != NULL);
+    assert(strstr(diagnostic, "transport-secret") == NULL);
+    assert(json_array_size(models) == 3u);
     model = json_array_get(models, 0);
+    assert(strcmp(snj_json_string(model, "id"), "codex-fast") == 0);
+    assert(strcmp(snj_json_string(model, "default_effort"), "medium") == 0);
+    model = json_array_get(models, 1);
+    assert(strcmp(snj_json_string(model, "id"), "codex-tied") == 0);
+    model = json_array_get(models, 2);
     efforts = json_object_get(model, "efforts");
     assert(strcmp(snj_json_string(model, "id"), "vendor/native-model") == 0);
     assert(json_array_size(efforts) == 2u);
@@ -480,11 +595,98 @@ test_native_model_list(void)
     stop_server(&server);
 }
 
+static void
+test_codex_path_selection(void)
+{
+    struct local_server server;
+    struct snj_config config;
+    struct snj_credential credential;
+    json_t *models = NULL;
+    char endpoint[128];
+    char error[256] = {0};
+
+    snj_config_init(&config);
+    credential_set(&credential, "transport-secret");
+    assert(snprintf(config.providers[0].openrouter_referer,
+                    sizeof(config.providers[0].openrouter_referer), "%s",
+                    "https://github.com/snajpa/snajpagent") > 0);
+    assert(snprintf(config.providers[0].openrouter_title,
+                    sizeof(config.providers[0].openrouter_title), "%s",
+                    "snajpagent") > 0);
+    config.providers[0].connect_timeout_ms = 1000u;
+    config.providers[0].idle_timeout_ms = 1000u;
+    config.providers[0].request_timeout_ms = 3000u;
+    start_server(&server, MODEL_CODEX_LOOKALIKE, false);
+    assert(snprintf(endpoint, sizeof(endpoint),
+                    "http://127.0.0.1:%u/backend-api/codexish",
+                    (unsigned int)server.port) > 0);
+    assert(snprintf(config.providers[0].name,
+                    sizeof(config.providers[0].name), "codex") > 0);
+    assert(snprintf(config.providers[0].base_url,
+                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+    assert(snj_provider_models_list(&config, &config.providers[0],
+                                    &credential, NULL, &models,
+                                    error, sizeof(error)) == 0);
+    assert(json_array_size(models) == 1u);
+    assert(strcmp(snj_json_string(json_array_get(models, 0), "id"),
+                  "lookalike-openai") == 0);
+    json_decref(models);
+    stop_server(&server);
+
+    models = NULL;
+    start_server(&server, MODEL_OPENAI, false);
+    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
+                    (unsigned int)server.port) > 0);
+    assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+    assert(snprintf(config.providers[0].base_url,
+                    sizeof(config.providers[0].base_url), "%s",
+                    "http://backend-api/codex") > 0);
+    assert(snj_provider_models_list(&config, &config.providers[0],
+                                    &credential, NULL, &models,
+                                    error, sizeof(error)) == 0);
+    assert(json_array_size(models) == 2u);
+    json_decref(models);
+    assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
+    stop_server(&server);
+
+    models = NULL;
+    start_server(&server, MODEL_CODEX_MALFORMED, false);
+    assert(snprintf(endpoint, sizeof(endpoint),
+                    "http://127.0.0.1:%u/backend-api/codex",
+                    (unsigned int)server.port) > 0);
+    assert(snprintf(config.providers[0].base_url,
+                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+    assert(snj_provider_models_list(&config, &config.providers[0],
+                                    &credential, NULL, &models,
+                                    error, sizeof(error)) < 0);
+    assert(models == NULL);
+    assert(strstr(error, "invalid model entry") != NULL);
+    stop_server(&server);
+
+    models = NULL;
+    start_server(&server, MODEL_CODEX_FAILURE, false);
+    assert(snprintf(endpoint, sizeof(endpoint),
+                    "http://127.0.0.1:%u/backend-api/codex",
+                    (unsigned int)server.port) > 0);
+    assert(snprintf(config.providers[0].name,
+                    sizeof(config.providers[0].name), "neutral") > 0);
+    assert(snprintf(config.providers[0].base_url,
+                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+    assert(snj_provider_models_list(&config, &config.providers[0],
+                                    &credential, NULL, &models,
+                                    error, sizeof(error)) < 0);
+    assert(models == NULL);
+    assert(strstr(error, "catalog rejected") != NULL);
+    stop_server(&server);
+    snj_config_free(&config);
+}
+
 int
 main(void)
 {
     test_local_provider_transport();
-    test_native_model_list();
+    test_codex_model_list();
+    test_codex_path_selection();
     puts("test_provider_transport: ok");
     return 0;
 }

@@ -58,8 +58,5 @@ int snj_provider_models_list(const struct snj_config *config,
                              struct snj_render *render,
                              json_t **models,
                              char *error, size_t error_size);
-int snj_provider_models_decode(const unsigned char *data, size_t len,
-                               json_t **models,
-                               char *error, size_t error_size);
 
 #endif

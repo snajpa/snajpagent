@@ -3,13 +3,11 @@
 
 #include "base.h"
 #include "json.h"
-#include "provider.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -25,7 +23,6 @@
 #define SNJ_MODEL_CACHE_MODELS_MAX 4096u
 #define SNJ_MODEL_CACHE_EFFORTS_MAX 32u
 #define SNJ_MODEL_CACHE_ENTRIES_MAX 32768u
-#define SNJ_MODEL_BOOTSTRAP_FILE_MAX (8u * 1024u * 1024u)
 
 static void
 set_error(char *error, size_t size, const char *fmt, ...)
@@ -327,164 +324,6 @@ out:
     if (installed)
         json_decref(installed);
     snj_buf_free(&data);
-    return rc;
-}
-
-static char *
-codex_cache_path(char *error, size_t error_size)
-{
-    const char *codex_home = getenv("CODEX_HOME");
-    const char *home = getenv("HOME");
-    const char *base;
-    const char *suffix;
-    struct snj_buf path;
-    char *result = NULL;
-
-    if (codex_home && *codex_home) {
-        base = codex_home;
-        suffix = "/models_cache.json";
-    } else {
-        base = home;
-        suffix = "/.codex/models_cache.json";
-    }
-    if (!base || base[0] != '/' ||
-        strlen(base) > SNJ_CONFIG_PATH_MAX ||
-        !snj_utf8_valid((const unsigned char *)base, strlen(base), true)) {
-        set_error(error, error_size,
-                  "local Codex cache requires an absolute CODEX_HOME or HOME");
-        errno = EINVAL;
-        return NULL;
-    }
-    snj_buf_init(&path, SNJ_CONFIG_PATH_MAX);
-    if (snj_buf_printf(&path, "%s%s", base, suffix) < 0 ||
-        snj_buf_terminate(&path) < 0) {
-        set_error(error, error_size,
-                  "local Codex cache path exceeds the supported limit");
-        snj_buf_free(&path);
-        return NULL;
-    }
-    result = (char *)path.data;
-    path.data = NULL;
-    snj_buf_free(&path);
-    return result;
-}
-
-static int
-read_codex_cache(const char *path, struct snj_buf *data,
-                 char *error, size_t error_size)
-{
-    struct stat st;
-    int fd;
-    int rc = -1;
-
-    fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) {
-        if (errno == ENOENT)
-            return 1;
-        set_error(error, error_size, "cannot open local Codex cache: %s",
-                  strerror(errno));
-        return -1;
-    }
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_uid != getuid() ||
-        st.st_size <= 0 ||
-        (uintmax_t)st.st_size > SNJ_MODEL_BOOTSTRAP_FILE_MAX) {
-        set_error(error, error_size,
-                  "local Codex cache must be a user-owned regular file no larger than 8 MiB");
-        errno = EACCES;
-        goto out;
-    }
-    for (;;) {
-        unsigned char chunk[8192];
-        ssize_t got = read(fd, chunk, sizeof(chunk));
-        if (got < 0) {
-            if (errno == EINTR)
-                continue;
-            set_error(error, error_size, "cannot read local Codex cache: %s",
-                      strerror(errno));
-            goto out;
-        }
-        if (got == 0)
-            break;
-        if (snj_buf_append(data, chunk, (size_t)got) < 0) {
-            set_error(error, error_size,
-                      "local Codex cache exceeds the supported limit");
-            goto out;
-        }
-    }
-    rc = 0;
-out:
-    {
-        int saved = errno;
-        (void)close(fd);
-        errno = saved;
-    }
-    return rc;
-}
-
-int
-snj_model_cache_bootstrap_codex(struct snj_store *store,
-                                const struct snj_config *config,
-                                struct snj_model_cache *cache,
-                                char *error, size_t error_size)
-{
-    struct snj_buf data;
-    char *path = NULL;
-    json_t *models = NULL;
-    json_t *provider = NULL;
-    json_t *providers = NULL;
-    int rc = -1;
-
-    if (!store || !config || config->provider_count == 0u || !cache) {
-        set_error(error, error_size, "invalid local model-cache bootstrap");
-        errno = EINVAL;
-        return -1;
-    }
-    path = codex_cache_path(error, error_size);
-    if (!path)
-        return -1;
-    snj_buf_init(&data, SNJ_MODEL_BOOTSTRAP_FILE_MAX);
-    rc = read_codex_cache(path, &data, error, error_size);
-    if (rc != 0)
-        goto out;
-    if (snj_provider_models_decode(data.data, data.len, &models,
-                                   error, error_size) < 0)
-        goto fail;
-    provider = json_object();
-    providers = json_array();
-    if (!provider || !providers)
-        goto unavailable;
-    if (snj_json_set_new(provider, "models", models) < 0) {
-        models = NULL;
-        goto unavailable;
-    }
-    models = NULL;
-    if (snj_json_set_new(provider, "name",
-                         json_string(config->providers[0].name)) < 0)
-        goto unavailable;
-    if (json_array_append_new(providers, provider) < 0) {
-        provider = NULL;
-        goto unavailable;
-    }
-    provider = NULL;
-    if (snj_model_cache_replace(store, providers, snj_time_ms(), cache,
-                                error, error_size) < 0)
-        goto fail;
-    rc = 0;
-    goto out;
-unavailable:
-    set_error(error, error_size, "cannot assemble local model-cache bootstrap");
-    errno = ENOMEM;
-fail:
-    rc = -1;
-out:
-    free(path);
-    snj_buf_free(&data);
-    if (models)
-        json_decref(models);
-    if (provider)
-        json_decref(provider);
-    if (providers)
-        json_decref(providers);
     return rc;
 }
 

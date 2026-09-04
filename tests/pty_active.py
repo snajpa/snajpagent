@@ -912,64 +912,66 @@ def cached_timestamp(cache):
 
 def test_uncached_typed_model_selection():
     cache_path = Path(DOTDIR) / "models.json"
-    codex_cache_path = Path(os.environ["HOME"]) / ".codex" / "models_cache.json"
+    default_codex_cache = Path(os.environ["HOME"]) / ".codex" / "models_cache.json"
+    custom_codex_home = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "codex-home"
+    custom_codex_cache = custom_codex_home / "models_cache.json"
+    borrowed_catalog = json.dumps({
+        "models": [{
+            "slug": "borrowed-model", "visibility": "list", "priority": 1,
+            "supported_reasoning_levels": [{"effort": "high"}],
+            "default_reasoning_level": "high",
+        }],
+    })
+    previous_codex_home = os.environ.get("CODEX_HOME")
     cache_path.unlink(missing_ok=True)
-    codex_cache_path.unlink(missing_ok=True)
-    child = Child([])
-    child.wait(PROMPT)
+    default_codex_cache.parent.mkdir(mode=0o700, exist_ok=True)
+    custom_codex_home.mkdir(mode=0o700, exist_ok=True)
+    default_codex_cache.write_text(borrowed_catalog, encoding="utf-8")
+    custom_codex_cache.write_text(borrowed_catalog, encoding="utf-8")
+    try:
+        # Even an explicitly located Codex cache is not snajpagent state.
+        os.environ["CODEX_HOME"] = str(custom_codex_home)
+        child = Child([])
+        child.wait(PROMPT)
+        child.send(b"/model\r")
+        end = child.wait(b"model cache is empty; use /model cache while idle")
+        child.wait(PROMPT, start=end)
+        assert not cache_path.exists()
 
-    # Listing without either cache stays offline and explains how to populate it.
-    child.send(b"/model\r")
-    end = child.wait(
-        b"model cache is empty; run Codex once or use /model cache while idle"
-    )
-    child.wait(PROMPT, start=end)
-    assert not cache_path.exists()
+        # A typed model is trusted without discovery or any cache mutation.
+        child.send(b"/model gpt-5.6-sol\r")
+        end = child.wait(
+            b"model for next turn: default / gpt-5.6-sol / medium", start=end
+        )
+        end = child.wait(
+            b"snajpagent: model is not known in the model cache; "
+            b"it will still be sent unchanged",
+            start=end,
+        )
+        child.wait(PROMPT, start=end)
+        assert not cache_path.exists()
+        child.exit_now()
 
-    # A typed model is trusted without discovery or any cache mutation.
-    child.send(b"/model gpt-5.6-sol\r")
-    end = child.wait(
-        b"model for next turn: default / gpt-5.6-sol / medium", start=end
-    )
-    end = child.wait(
-        b"snajpagent: model is not known in the model cache; "
-        b"it will still be sent unchanged",
-        start=end,
-    )
-    child.wait(PROMPT, start=end)
-    assert not cache_path.exists()
-    child.exit_now()
+        # The conventional ~/.codex cache is ignored as well.
+        os.environ.pop("CODEX_HOME", None)
+        child = Child([])
+        child.wait(PROMPT)
+        child.send(b"/model list\r")
+        end = child.wait(b"model cache is empty; use /model cache while idle")
+        child.wait(PROMPT, start=end)
+        assert not cache_path.exists()
+        child.exit_now()
+    finally:
+        if previous_codex_home is None:
+            os.environ.pop("CODEX_HOME", None)
+        else:
+            os.environ["CODEX_HOME"] = previous_codex_home
 
 
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
     initial_prompt = b"uncached-start/low \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
-    codex_home = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "codex-home"
-    codex_home.mkdir(mode=0o700)
-    (codex_home / "models_cache.json").write_text(
-        json.dumps(
-            {
-                "models": [
-                    {
-                        "slug": model,
-                        "supported_reasoning_levels": [
-                            {"effort": effort}
-                            for effort in (
-                                "low", "medium", "high", "xhigh", "max", "ultra"
-                            )
-                        ],
-                        "default_reasoning_level": "medium",
-                    }
-                    for model in ("gpt-5.6-sol", "gpt-5.6-terra")
-                ]
-                + [{"slug": "vendor/future-model"}]
-            }
-        ),
-        encoding="utf-8",
-    )
-    previous_codex_home = os.environ.get("CODEX_HOME")
-    os.environ["CODEX_HOME"] = str(codex_home)
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     config.write_text(
         "[agent]\n"
@@ -985,15 +987,17 @@ def test_model_cache_and_selection():
     child = Child(["--config", str(config)])
     child.wait(PROMPT)
 
-    # A first plain listing imports the local Codex cache without provider work.
+    # Explicit refresh creates the complete all-provider cache.
     start = len(child.buf)
-    child.send(b"/model\r")
+    child.send(b"/model cache\r")
     child.wait(b"selected: first / uncached-start / low", start=start)
     child.wait(b"1. first / gpt-5.6-sol / low", start=start)
-    child.wait(b"13. first / vendor/future-model / low", start=start)
+    child.wait(b"26. second / vendor/future-model / low", start=start)
     cache = json.loads(cache_path.read_text(encoding="utf-8"))
     assert cache_path.stat().st_mode & 0o777 == 0o600
-    assert [provider["name"] for provider in cache["providers"]] == ["first"]
+    assert [provider["name"] for provider in cache["providers"]] == [
+        "first", "second"
+    ]
     stamp = cached_timestamp(cache)
     end = child.wait(stamp + b"\r\n" + initial_prompt, start=start)
 
@@ -1005,7 +1009,7 @@ def test_model_cache_and_selection():
     assert cache_path.read_bytes() == original
     assert cache_path.stat().st_ino == original_inode
 
-    # Explicit refresh replaces the complete catalog and prints its timestamp.
+    # A later explicit refresh atomically replaces the complete catalog.
     child.send(b"/model cache\r")
     child.wait(b"26. second / vendor/future-model / low", start=end)
     refreshed = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -1119,10 +1123,6 @@ def test_model_cache_and_selection():
         os.environ.pop("SNAJPAGENT_FIXTURE_MODEL_FAILURE", None)
     assert cache_path.read_bytes() == complete_cache
     assert cache_path.stat().st_ino == complete_inode
-    if previous_codex_home is None:
-        os.environ.pop("CODEX_HOME")
-    else:
-        os.environ["CODEX_HOME"] = previous_codex_home
 
 def test_config_and_cli_model_passthrough():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "model-passthrough.ini"

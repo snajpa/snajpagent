@@ -26,11 +26,6 @@ int snj_model_cache_replace(struct snj_store *store,
                             uint64_t updated_at_ms,
                             struct snj_model_cache *cache,
                             char *error, size_t error_size);
-/* Returns 1 when no local Codex cache exists, 0 on success, and -1 on error. */
-int snj_model_cache_bootstrap_codex(struct snj_store *store,
-                                    const struct snj_config *config,
-                                    struct snj_model_cache *cache,
-                                    char *error, size_t error_size);
 
 const json_t *snj_model_cache_find(const struct snj_model_cache *cache,
                                    const char *provider,

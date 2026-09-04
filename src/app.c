@@ -734,7 +734,7 @@ out:
     return rc;
 }
 static int
-load_model_cache(struct app_state *app, bool refresh, bool populate_missing,
+load_model_cache(struct app_state *app, bool refresh,
                  char *error, size_t error_size)
 {
     int rc;
@@ -742,16 +742,9 @@ load_model_cache(struct app_state *app, bool refresh, bool populate_missing,
         return refresh_model_cache(app, error, error_size);
     rc = snj_model_cache_load(&app->store, &app->model_cache,
                               error, error_size);
-    if (rc == 1 && populate_missing) {
-        rc = snj_model_cache_bootstrap_codex(&app->store, app->config,
-                                              &app->model_cache,
-                                              error, error_size);
-        if (rc <= 0)
-            return rc;
-    }
     if (rc == 1) {
         set_error(error, error_size,
-                  "model cache is empty; run Codex once or use /model cache while idle");
+                  "model cache is empty; use /model cache while idle");
         errno = ENOENT;
         return -1;
     }
@@ -890,7 +883,7 @@ select_cached_model(struct app_state *app, const char *value)
 
     if (!parse_model_index(value, &index))
         return 1;
-    if (load_model_cache(app, false, true, error, sizeof(error)) < 0)
+    if (load_model_cache(app, false, error, sizeof(error)) < 0)
         return app_error(app, error);
     entry_rc = snj_model_cache_entry(&app->model_cache, index,
                                      resolve_effort(app->config->reasoning_effort),
@@ -986,7 +979,7 @@ change_model(struct app_state *app, const char *value, bool active)
         selector = trim_selector_part(copy);
     }
     if (!selector || strcmp(selector, "list") == 0) {
-        rc = load_model_cache(app, false, !active, error, sizeof(error));
+        rc = load_model_cache(app, false, error, sizeof(error));
         if (rc < 0)
             rc = app_error(app, error);
         else
@@ -998,7 +991,7 @@ change_model(struct app_state *app, const char *value, bool active)
         if (active)
             rc = app_error(app,
                 "/model cache is idle-only; interrupt or wait");
-        else if (load_model_cache(app, true, true, error, sizeof(error)) < 0)
+        else if (load_model_cache(app, true, error, sizeof(error)) < 0)
             rc = app_error(app, error);
         else
             rc = render_model_catalog(app);

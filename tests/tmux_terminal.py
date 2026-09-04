@@ -79,6 +79,8 @@ class FakeResponses:
     def __init__(self):
         self.lock = threading.Lock()
         self.requests = []
+        self.catalog_requests = []
+        self.catalog_failure = None
         self.failure = None
         self.sequence = 0
         owner = self
@@ -88,6 +90,9 @@ class FakeResponses:
 
             def do_POST(self):
                 owner.handle(self)
+
+            def do_GET(self):
+                owner.handle_catalog(self)
 
             def log_message(self, _format, *_args):
                 return
@@ -215,6 +220,73 @@ class FakeResponses:
                 handler.send_error(500)
             except OSError:
                 pass
+
+    def handle_catalog(self, handler):
+        try:
+            if handler.headers.get("Authorization") != "Bearer irc-ui-secret":
+                raise AssertionError("catalog endpoint received the wrong credential")
+            with self.lock:
+                self.catalog_requests.append(handler.path)
+                reject = self.catalog_failure == handler.path
+            if reject:
+                status = 400
+                response = {"error": {"message": "catalog rejected"}}
+            elif handler.path == "/v1/models":
+                status = 200
+                response = {
+                    "data": [{
+                        "id": "standard-model",
+                        "metadata": {
+                            "supported_reasoning_levels": ["medium"],
+                            "default_reasoning_level": "medium",
+                        },
+                    }],
+                }
+            elif handler.path == (
+                    "/backend-api/codex/models?client_version=0.146.0"):
+                status = 200
+                response = {
+                    "models": [
+                        {"slug": "hidden", "visibility": "hide",
+                         "priority": 0},
+                        {"slug": "codex-late", "visibility": "list",
+                         "priority": 20,
+                         "supported_reasoning_levels": [
+                             {"effort": "low"}, {"effort": "ultra"},
+                         ],
+                         "default_reasoning_level": "low"},
+                        {"slug": "codex-fast", "visibility": "list",
+                         "priority": 1,
+                         "supported_reasoning_levels": [{"effort": "high"}],
+                         "default_reasoning_level": "high"},
+                    ],
+                }
+            else:
+                raise AssertionError(
+                    f"unexpected fake catalog endpoint {handler.path!r}"
+                )
+            body = json.dumps(response, separators=(",", ":")).encode()
+            handler.send_response(status)
+            handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(body)
+            handler.close_connection = True
+        except Exception as exc:
+            with self.lock:
+                if self.failure is None:
+                    self.failure = repr(exc)
+            try:
+                handler.send_error(500)
+            except OSError:
+                pass
+
+    def catalog_paths(self):
+        with self.lock:
+            if self.failure:
+                raise AssertionError(f"fake endpoint failed: {self.failure}")
+            return list(self.catalog_requests)
 
     def matching_requests(self, marker):
         with self.lock:
@@ -1033,9 +1105,102 @@ def write_irc_config(path, provider_port, model):
     )
 
 
+def write_catalog_config(path, provider_port):
+    path.write_text(
+        "[agent]\nmodel = uncached-start\nreasoning_effort = low\n"
+        "read_agents_md = false\n"
+        f"[provider ordinary]\nbase_url = http://127.0.0.1:{provider_port}\n"
+        "api_key_env = SNAJPAGENT_IRC_UI_KEY\n"
+        "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
+        "request_timeout_ms = 5000\n"
+        f"[provider codex]\nbase_url = http://127.0.0.1:{provider_port}"
+        "/backend-api/codex/\n"
+        "api_key_env = SNAJPAGENT_IRC_UI_KEY\n"
+        "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
+        "request_timeout_ms = 5000\n"
+        "[ui]\nverbosity = 0\ncolor = never\n",
+        encoding="utf-8",
+    )
+
+
+def run_model_catalog_case(binary, root, provider, environment):
+    case = root / "model-catalog"
+    workspace = case / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_catalog_config(config, provider.port)
+    terminal = TmuxTerminal(
+        case / "terminal", binary, workspace, case / "state", config,
+        100, 24, environment=environment,
+    )
+    try:
+        terminal.wait("uncached-start/low ›")
+        before = provider.catalog_paths()
+        terminal.submit("/model cache")
+        screen = terminal.wait("4. codex / codex-late / ultra",
+                               join_wrapped=True)
+        for expected in (
+                "1. ordinary / standard-model / medium",
+                "2. codex / codex-fast / high",
+                "3. codex / codex-late / low"):
+            if expected not in screen:
+                raise AssertionError(
+                    f"model catalog UI omitted {expected!r}:\n{screen}"
+                )
+        cache_path = terminal.dotdir / "models.json"
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        if [entry["name"] for entry in cache["providers"]] != [
+                "ordinary", "codex"]:
+            raise AssertionError("mixed provider cache changed provider order")
+        if [model["id"] for model in cache["providers"][1]["models"]] != [
+                "codex-fast", "codex-late"]:
+            raise AssertionError("Codex cache retained hidden or unsorted models")
+        expected_paths = [
+            "/v1/models",
+            "/backend-api/codex/models?client_version=0.146.0",
+        ]
+        if provider.catalog_paths()[len(before):] != expected_paths:
+            raise AssertionError("mixed refresh used unexpected catalog endpoints")
+
+        paths_before_list = provider.catalog_paths()
+        terminal.submit("/model list")
+        terminal.wait("4. codex / codex-late / ultra", join_wrapped=True)
+        wait_current_prompt(terminal, None, timeout=5.0)
+        if provider.catalog_paths() != paths_before_list:
+            raise AssertionError("offline model list contacted a provider")
+
+        old_cache = cache_path.read_bytes()
+        old_inode = cache_path.stat().st_ino
+        with provider.lock:
+            provider.catalog_failure = expected_paths[1]
+        failure_start = len(provider.catalog_paths())
+        terminal.submit("/model cache")
+        terminal.wait("cannot refresh provider codex:", join_wrapped=True)
+        wait_current_prompt(terminal, None, timeout=5.0)
+        with provider.lock:
+            provider.catalog_failure = None
+        if provider.catalog_paths()[failure_start:] != expected_paths:
+            raise AssertionError("failed Codex refresh fell back to another endpoint")
+        if (cache_path.read_bytes() != old_cache or
+                cache_path.stat().st_ino != old_inode):
+            raise AssertionError("failed mixed refresh replaced the complete cache")
+        terminal.exit()
+    finally:
+        try:
+            screen = terminal.last_screen or terminal.capture()
+            (case / "screen.txt").write_text(screen, encoding="utf-8")
+        finally:
+            terminal.close()
+            if os.path.lexists(terminal.socket):
+                raise AssertionError(
+                    f"tmux socket survived cleanup: {terminal.socket}"
+                )
+
+
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
-    expected = f"{operator}@{MACHINE_HOSTNAME} ›"
+    expected = (f"{operator}@{MACHINE_HOSTNAME} ›" if operator else
+                "uncached-start/low ›")
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture()
@@ -1192,6 +1357,7 @@ def run_irc_case(binary, root):
     ]
     terminals = {}
     try:
+        run_model_catalog_case(binary, root, provider, environment)
         for name, model, _agent, operator, args in specs:
             case = root / name
             workspace = case / "workspace"
