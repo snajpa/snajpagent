@@ -2193,6 +2193,50 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
     return commit_event(app, "process_closed", data, error, error_size);
 }
 static int
+fail_turn(struct app_state *app, const char *turn_id, const char *cause,
+          const char *class_name, const char *message,
+          char *error, size_t error_size)
+{
+    return close_active_process_for_turn(app, turn_id, cause, false,
+                                         error, error_size) < 0 ||
+           commit_event(app, "turn_failed",
+                        snj_app_turn_failed_data(turn_id, class_name, message),
+                        error, error_size) < 0 ? -1 : 0;
+}
+
+static int
+interrupt_turn(struct app_state *app, const char *turn_id,
+               const char *cause, bool user_interrupt,
+               const char *origin, const char *reason,
+               char *error, size_t error_size)
+{
+    return close_active_process_for_turn(app, turn_id, cause, user_interrupt,
+                                         error, error_size) < 0 ||
+           commit_event(app, "turn_interrupted",
+                        snj_app_turn_interrupted_data(turn_id, origin, reason),
+                        error, error_size) < 0 ? -1 : 0;
+}
+
+static int
+fail_response(struct app_state *app, const char *turn_id,
+              const char *response_id, unsigned int cycle,
+              const char *class_name, const char *message, json_t *partial,
+              unsigned int retry_count, const char *cause,
+              char *error, size_t error_size)
+{
+    json_t *data = snj_app_response_failed_data(
+        turn_id, response_id, cycle, class_name, message, partial, retry_count);
+
+    if (!data) {
+        snj_errorf(error, error_size, "cannot allocate response failure event");
+        return -1;
+    }
+    return commit_event(app, "response_failed", data, error, error_size) < 0 ||
+           fail_turn(app, turn_id, cause, class_name, message,
+                     error, error_size) < 0 ? -1 : 0;
+}
+
+static int
 recover_session(struct app_state *app, char *error, size_t error_size)
 {
     char turn_id[SNJ_ID_HEX_LEN + 1u];
@@ -2210,10 +2254,9 @@ recover_session(struct app_state *app, char *error, size_t error_size)
                                                    "recovery", "process_lost",
                                                    NULL),
                          error, error_size) < 0 ||
-            close_active_process_for_turn(app, turn_id, "internal_failure",
-                                          false, error, error_size) < 0 ||
-            commit_event(app, "turn_interrupted", snj_app_turn_interrupted_data(turn_id, "recovery", "session_recovered"),
-                         error, error_size) < 0)
+            interrupt_turn(app, turn_id, "internal_failure", false,
+                           "recovery", "session_recovered",
+                           error, error_size) < 0)
             return -1;
         return app_warning(app, "recovered an interrupted turn");
     }
@@ -2222,11 +2265,8 @@ recover_session(struct app_state *app, char *error, size_t error_size)
             message = "provider response had conflicting terminal actions";
             if (terminalize_pending(app, turn_id, "protocol_conflict",
                                     error, error_size) < 0 ||
-                close_active_process_for_turn(app, turn_id, "protocol_failure",
-                                              false, error, error_size) < 0 ||
-                commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "protocol", message),
-                             error, error_size) < 0)
+                fail_turn(app, turn_id, "protocol_failure",
+                          "protocol", message, error, error_size) < 0)
                 return -1;
             return app_warning(app, "recovered a protocol-conflicted turn");
         }
@@ -2235,10 +2275,9 @@ recover_session(struct app_state *app, char *error, size_t error_size)
                 terminalize_pending(app, turn_id, "superseded_by_steering",
                                     error, error_size) < 0)
                 return -1;
-            if (close_active_process_for_turn(app, turn_id, "internal_failure",
-                                              false, error, error_size) < 0 ||
-                commit_event(app, "turn_interrupted", snj_app_turn_interrupted_data(turn_id, "recovery", "session_recovered"),
-                             error, error_size) < 0)
+            if (interrupt_turn(app, turn_id, "internal_failure", false,
+                               "recovery", "session_recovered",
+                               error, error_size) < 0)
                 return -1;
             return app_warning(app,
                 "recovered a turn whose pending active-turn input could not be resumed automatically");
@@ -2248,11 +2287,8 @@ recover_session(struct app_state *app, char *error, size_t error_size)
         case SNJ_GRAPH_REFUSAL:
             if (app->session.active_process_handle[0] != '\0') {
                 message = "recovered terminal response while a managed process was unresolved";
-                if (close_active_process_for_turn(app, turn_id, "protocol_failure",
-                                                  false, error, error_size) < 0 ||
-                    commit_event(app, "turn_failed",
-                                 snj_app_turn_failed_data(turn_id, "protocol", message),
-                                 error, error_size) < 0)
+                if (fail_turn(app, turn_id, "protocol_failure",
+                              "protocol", message, error, error_size) < 0)
                     return -1;
                 return app_warning(app, "recovered a terminal response that violated managed process ordering");
             }
@@ -2266,39 +2302,31 @@ recover_session(struct app_state *app, char *error, size_t error_size)
         case SNJ_GRAPH_CALLS:
             if (terminalize_pending(app, turn_id, "recovery_unstarted",
                                     error, error_size) < 0 ||
-                close_active_process_for_turn(app, turn_id, "internal_failure",
-                                              false, error, error_size) < 0 ||
-                commit_event(app, "turn_interrupted", snj_app_turn_interrupted_data(turn_id, "recovery", "session_recovered"),
-                             error, error_size) < 0)
+                interrupt_turn(app, turn_id, "internal_failure", false,
+                               "recovery", "session_recovered",
+                               error, error_size) < 0)
                 return -1;
             return app_warning(app, "recovered a turn with unfinished tool work");
         case SNJ_GRAPH_CONFLICT:
             break;
         case SNJ_GRAPH_NONPRODUCTIVE:
             message = "provider completed without a final answer, refusal, or tool call";
-            if (close_active_process_for_turn(app, turn_id, "protocol_failure",
-                                              false, error, error_size) < 0 ||
-                commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "protocol", message),
-                             error, error_size) < 0)
+            if (fail_turn(app, turn_id, "protocol_failure",
+                          "protocol", message, error, error_size) < 0)
                 return -1;
             return app_warning(app, "recovered a nonproductive response");
         }
     }
     if (app->session.response_terminal == SNJ_RESPONSE_TERMINAL_FAILED) {
         message = "provider response had already failed before process recovery";
-        if (close_active_process_for_turn(app, turn_id, "provider_failure",
-                                          false, error, error_size) < 0 ||
-            commit_event(app, "turn_failed",
-                         snj_app_turn_failed_data(turn_id, "provider", message),
-                         error, error_size) < 0)
+        if (fail_turn(app, turn_id, "provider_failure",
+                      "provider", message, error, error_size) < 0)
             return -1;
         return app_warning(app, "recovered a provider-failed turn");
     }
-    if (close_active_process_for_turn(app, turn_id, "internal_failure",
-                                      false, error, error_size) < 0 ||
-        commit_event(app, "turn_interrupted", snj_app_turn_interrupted_data(turn_id, "recovery", "session_recovered"),
-                     error, error_size) < 0)
+    if (interrupt_turn(app, turn_id, "internal_failure", false,
+                       "recovery", "session_recovered",
+                       error, error_size) < 0)
         return -1;
     return app_warning(app, "recovered an interrupted turn");
 }
@@ -2363,11 +2391,9 @@ execute_calls(struct app_state *app, const char *turn_id,
                                           error, error_size) < 0 ||
                     terminalize_pending(app, turn_id, "turn_cancelled",
                                         error, error_size) < 0 ||
-                    close_active_process_for_turn(app, turn_id, "user_interrupt",
-                                                  true, error, error_size) < 0 ||
-                    commit_event(app, "turn_interrupted",
-                                 snj_app_turn_interrupted_data(turn_id, "user", "cancelled"),
-                                 error, error_size) < 0)
+                    interrupt_turn(app, turn_id, "user_interrupt", true,
+                                   "user", "cancelled",
+                                   error, error_size) < 0)
                     return -1;
                 snj_errorf(error, error_size, "turn cancelled");
                 return 2;
@@ -2598,12 +2624,9 @@ run_turn(struct app_state *app, const char *prompt,
             snj_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
-            if (close_active_process_for_turn(app, turn_id,
-                    "user_interrupt", true, error, sizeof(error)) < 0 ||
-                commit_event(app, "turn_interrupted",
-                    snj_app_turn_interrupted_data(turn_id, "user",
-                                                  "cancelled"),
-                    error, sizeof(error)) < 0) {
+            if (interrupt_turn(app, turn_id, "user_interrupt", true,
+                               "user", "cancelled",
+                               error, sizeof(error)) < 0) {
                 (void)app_error(app, error[0] ? error :
                                 "interruption could not be persisted");
                 result = 3;
@@ -2807,25 +2830,16 @@ run_turn(struct app_state *app, const char *prompt,
                                 (const char *)request_body.data,
                                 request_body.len) < 0) {
             json_t *partial = json_array();
-            json_t *failed;
             static const char failure[] =
                 "request diagnostics could not be rendered";
             snj_buf_free(&request_body);
             if (create_request)
                 json_decref(create_request);
             json_decref(steering);
-            failed = partial ?
-                snj_app_response_failed_data(turn_id, response_id, cycle,
-                                     "output", failure, partial, 0u) : NULL;
-            partial = NULL;
-            if (!failed ||
-                commit_event(app, "response_failed", failed,
-                             error, sizeof(error)) < 0 ||
-                close_active_process_for_turn(app, turn_id, "output_failure",
-                                              false, error, sizeof(error)) < 0 ||
-                commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "output", failure),
-                             error, sizeof(error)) < 0) {
+            if (!partial || fail_response(app, turn_id, response_id, cycle,
+                                          "output", failure, partial, 0u,
+                                          "output_failure", error,
+                                          sizeof(error)) < 0) {
                 snj_response_graph_free(&graph);
                 (void)app_error(app, error[0] ? error :
                                 "diagnostic output failure could not be persisted");
@@ -2880,11 +2894,9 @@ run_turn(struct app_state *app, const char *prompt,
                     snj_app_response_interrupted_data(turn_id, response_id, cycle,
                                               "user", "cancelled", partial),
                     error, sizeof(error)) < 0 ||
-                close_active_process_for_turn(app, turn_id, "user_interrupt",
-                                              true, error, sizeof(error)) < 0 ||
-                commit_event(app, "turn_interrupted",
-                    snj_app_turn_interrupted_data(turn_id, "user", "cancelled"),
-                    error, sizeof(error)) < 0) {
+                interrupt_turn(app, turn_id, "user_interrupt", true,
+                               "user", "cancelled",
+                               error, sizeof(error)) < 0) {
                 snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                 "interruption could not be persisted");
@@ -3057,21 +3069,13 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
-            if (commit_event(app, "response_failed",
-                             snj_app_response_failed_data(turn_id, response_id, cycle,
-                                                  class_name, failure, partial,
-                                                  provider_retry_count),
-                             error, sizeof(error)) < 0 ||
-                close_active_process_for_turn(app, turn_id,
-                                              app->stream_failed ?
-                                              (app->stream_errno == EPROTO ?
-                                               "protocol_failure" :
-                                               "output_failure") :
-                                              "provider_failure",
-                                              false, error, sizeof(error)) < 0 ||
-                commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, class_name, failure),
-                             error, sizeof(error)) < 0) {
+            if (fail_response(app, turn_id, response_id, cycle, class_name,
+                              failure, partial, provider_retry_count,
+                              app->stream_failed ?
+                              (app->stream_errno == EPROTO ?
+                               "protocol_failure" : "output_failure") :
+                              "provider_failure",
+                              error, sizeof(error)) < 0) {
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
@@ -3103,16 +3107,9 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
-            if (commit_event(app, "response_failed",
-                             snj_app_response_failed_data(turn_id, response_id, cycle,
-                                                  "protocol", failure, partial,
-                                                  provider_retry_count),
-                             error, sizeof(error)) < 0 ||
-                close_active_process_for_turn(app, turn_id, "protocol_failure",
-                                              false, error, sizeof(error)) < 0 ||
-                commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "protocol", failure),
-                             error, sizeof(error)) < 0) {
+            if (fail_response(app, turn_id, response_id, cycle, "protocol",
+                              failure, partial, provider_retry_count,
+                              "protocol_failure", error, sizeof(error)) < 0) {
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
@@ -3192,13 +3189,8 @@ run_turn(struct app_state *app, const char *prompt,
                      terminalize_pending(app, turn_id,
                                          "managed_process_conflict",
                                          error, sizeof(error)) < 0) ||
-                    close_active_process_for_turn(app, turn_id,
-                                                  "protocol_failure", false,
-                                                  error, sizeof(error)) < 0 ||
-                    commit_event(app, "turn_failed",
-                                 snj_app_turn_failed_data(turn_id, "protocol",
-                                                          message),
-                                 error, sizeof(error)) < 0) {
+                    fail_turn(app, turn_id, "protocol_failure",
+                              "protocol", message, error, sizeof(error)) < 0) {
                     snj_app_response_cycle_release(app, &graph, NULL, NULL,
                                                    NULL, NULL);
                     (void)app_error(app, error);
@@ -3217,11 +3209,8 @@ run_turn(struct app_state *app, const char *prompt,
                 "provider response contained conflicting actions";
             if (terminalize_pending(app, turn_id, "protocol_conflict",
                                     error, sizeof(error)) < 0 ||
-                close_active_process_for_turn(app, turn_id, "protocol_failure",
-                                              false, error, sizeof(error)) < 0 ||
-                commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "protocol", message),
-                             error, sizeof(error)) < 0) {
+                fail_turn(app, turn_id, "protocol_failure",
+                          "protocol", message, error, sizeof(error)) < 0) {
                 snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
@@ -3345,11 +3334,8 @@ run_turn(struct app_state *app, const char *prompt,
         {
             const char *message = decision.message ? decision.message :
                 "provider response was not actionable";
-            if (close_active_process_for_turn(app, turn_id, "protocol_failure",
-                                              false, error, sizeof(error)) < 0 ||
-                commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "protocol", message),
-                             error, sizeof(error)) < 0) {
+            if (fail_turn(app, turn_id, "protocol_failure",
+                          "protocol", message, error, sizeof(error)) < 0) {
                 snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
@@ -3363,11 +3349,8 @@ run_turn(struct app_state *app, const char *prompt,
     }
     {
         static const char message[] = "response-cycle counter exhausted";
-        if (close_active_process_for_turn(app, turn_id, "internal_failure",
-                                          false, error, sizeof(error)) < 0 ||
-            commit_event(app, "turn_failed",
-                         snj_app_turn_failed_data(turn_id, "resource", message),
-                         error, sizeof(error)) < 0) {
+        if (fail_turn(app, turn_id, "internal_failure",
+                      "resource", message, error, sizeof(error)) < 0) {
             (void)app_error(app, error);
             result = 3;
             goto out;
