@@ -1335,9 +1335,9 @@ def test_uncached_typed_model_selection():
         assert not cache_path.exists()
 
         # A typed model is trusted without discovery or any cache mutation.
-        child.send(b"/model gpt-5.6-sol\r")
+        child.send(b"/model gpt-5.6-luna / high\r")
         end = child.wait(
-            b"model for next turn: default / gpt-5.6-sol / medium", start=end
+            b"model for next turn: default / gpt-5.6-luna / high", start=end
         )
         end = child.wait(
             b"snajpagent: model is not known in the model cache; "
@@ -1387,8 +1387,8 @@ def test_model_cache_and_selection():
     start = len(child.buf)
     child.send(b"/model cache\r")
     child.wait(b"selected: first / uncached-start / low", start=start)
-    child.wait(b"1. first / gpt-5.6-sol / low", start=start)
-    child.wait(b"26. second / vendor/future-model / low", start=start)
+    child.wait(b"1. first / gpt-5.6-luna / high", start=start)
+    child.wait(b"16. second / vendor/future-model / low", start=start)
     cache = json.loads(cache_path.read_text(encoding="utf-8"))
     assert cache_path.stat().st_mode & 0o777 == 0o600
     assert [provider["name"] for provider in cache["providers"]] == [
@@ -1407,7 +1407,7 @@ def test_model_cache_and_selection():
 
     # A later explicit refresh atomically replaces the complete catalog.
     child.send(b"/model cache\r")
-    child.wait(b"26. second / vendor/future-model / low", start=end)
+    child.wait(b"16. second / vendor/future-model / low", start=end)
     refreshed = json.loads(cache_path.read_text(encoding="utf-8"))
     assert refreshed["updated_at_ms"] >= cache["updated_at_ms"]
     assert cache_path.stat().st_ino != original_inode
@@ -1415,9 +1415,9 @@ def test_model_cache_and_selection():
     end = child.wait(refreshed_stamp + b"\r\n" + initial_prompt, start=end)
 
     # A bare cached model chooses the highest recognized advertised effort.
-    child.send(b"/model gpt-5.6-sol\r")
+    child.send(b"/model gpt-5.6-luna\r")
     end = child.wait(
-        b"model for next turn: first / gpt-5.6-sol / ultra", start=end
+        b"model for next turn: first / gpt-5.6-luna / high", start=end
     )
     prompt_end = child.wait(PROMPT, start=end)
     assert b"not known in the model cache" not in child.buf[end:prompt_end]
@@ -1426,7 +1426,7 @@ def test_model_cache_and_selection():
     # Uncached identifiers and effort names pass through without local lookup.
     child.send(b"/model definitely-new-model\r")
     end = child.wait(
-        b"model for next turn: first / definitely-new-model / ultra", start=end
+        b"model for next turn: first / definitely-new-model / high", start=end
     )
     end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT, start=end)
@@ -1450,19 +1450,19 @@ def test_model_cache_and_selection():
     child.wait(PROMPT, start=end)
 
     # Both numeric spellings select the exact flattened cached variant.
-    child.send(b"/model 7\r")
+    child.send(b"/model 2\r")
     end = child.wait(
         b"model for next turn: first / gpt-5.6-terra / low", start=end
     )
     child.wait(PROMPT, start=end)
-    child.send(b"/model #26\r")
+    child.send(b"/model #16\r")
     end = child.wait(
         b"model for next turn: second / vendor/future-model / low", start=end
     )
     child.wait(PROMPT, start=end)
-    child.send(b"/model #18\r")
+    child.send(b"/model #9\r")
     end = child.wait(
-        b"model for next turn: second / gpt-5.6-sol / max", start=end
+        b"model for next turn: second / gpt-5.6-luna / high", start=end
     )
     child.wait(PROMPT, start=end)
     child.send(b"ping\r")
@@ -1475,20 +1475,20 @@ def test_model_cache_and_selection():
                if event["type"] == "model_selection_changed"]
     assert len(changes) == 8
     assert changes[-1]["data"]["new_provider"] == "second"
-    assert changes[-1]["data"]["new_model"] == "gpt-5.6-sol"
-    assert changes[-1]["data"]["new_effort"] == "max"
+    assert changes[-1]["data"]["new_model"] == "gpt-5.6-luna"
+    assert changes[-1]["data"]["new_effort"] == "high"
     turn = one(log, "turn_started")
     assert turn["data"]["config"]["provider"] == "second"
-    assert turn["data"]["config"]["model"] == "gpt-5.6-sol"
-    assert turn["data"]["config"]["effort"] == "max"
+    assert turn["data"]["config"]["model"] == "gpt-5.6-luna"
+    assert turn["data"]["config"]["effort"] == "high"
 
     # Provider/model/effort selection survives a process restart and resume.
     resumed = Child(["--config", str(config), "--resume", session_id])
     resumed.wait(PROMPT)
     resumed.send(b"/status\r")
     status_end = resumed.wait(b"provider: second")
-    resumed.wait(b"model: gpt-5.6-sol", start=status_end)
-    status_end = resumed.wait(b"effort: max", start=status_end)
+    resumed.wait(b"model: gpt-5.6-luna", start=status_end)
+    status_end = resumed.wait(b"effort: high", start=status_end)
     resumed.wait(PROMPT, start=status_end)
     resumed.send(b"ping\r")
     answer_end = resumed.wait(b"pong", start=status_end)
@@ -1496,8 +1496,8 @@ def test_model_cache_and_selection():
     turns = [event for event in events(session_id)
              if event["type"] == "turn_started"]
     assert turns[-1]["data"]["config"]["provider"] == "second"
-    assert turns[-1]["data"]["config"]["model"] == "gpt-5.6-sol"
-    assert turns[-1]["data"]["config"]["effort"] == "max"
+    assert turns[-1]["data"]["config"]["model"] == "gpt-5.6-luna"
+    assert turns[-1]["data"]["config"]["effort"] == "high"
 
     # Any provider failure leaves the previous complete cache untouched.
     complete_cache = cache_path.read_bytes()
@@ -1543,16 +1543,16 @@ def test_model_configuration_save():
     child.wait(PROMPT)
 
     # Selection without a suffix remains session-only.
-    child.send(b"/model #18\r")
+    child.send(b"/model #9\r")
     end = child.wait(
-        b"model for next turn: second / gpt-5.6-sol / max"
+        b"model for next turn: second / gpt-5.6-luna / high"
     )
     child.wait(PROMPT, start=end)
     assert config.read_bytes() == original
 
     # The one-letter spelling atomically persists a numbered cache row.
     old_inode = config.stat().st_ino
-    child.send(b"/model 7 s\r")
+    child.send(b"/model 2 s\r")
     end = child.wait(
         b"model for next turn: first / gpt-5.6-terra / low", start=end
     )
@@ -1788,11 +1788,11 @@ def test_known_context_meter():
     before = session_ids()
     child = Child(["--config", str(config)])
     child.wait(b"uncached-start/low 0% \xe2\x80\xba ")
-    child.send(b"/model gpt-5.6-sol / medium\r")
+    child.send(b"/model gpt-5.6-luna / high\r")
     selected = child.wait(
-        b"model for next turn: first / gpt-5.6-sol / medium"
+        b"model for next turn: first / gpt-5.6-luna / high"
     )
-    child.wait(b"gpt-5.6-sol/medium 0% \xe2\x80\xba ", start=selected)
+    child.wait(b"gpt-5.6-luna/high 0% \xe2\x80\xba ", start=selected)
     session_id = new_session(before)
     start = len(child.buf)
     child.send(b"slow\r")
@@ -1812,7 +1812,7 @@ def test_known_context_meter():
     assert isinstance(used, int) and used > 0
     percent = min(100, (used * 100 + hard - 1) // hard)
     assert percent > 0
-    expected = f"gpt-5.6-sol/medium {percent}% » ".encode()
+    expected = f"gpt-5.6-luna/high {percent}% » ".encode()
     child.wait(expected, start=start)
     child.send(b"\x03")
     interrupted = child.wait(b"turn interrupted", start=start)

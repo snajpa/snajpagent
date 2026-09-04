@@ -101,7 +101,7 @@ snj_app_provider_models(struct app_state *app,
 {
 #ifdef SNAJPAGENT_TEST_FIXTURE
     static const char *const ids[] = {
-        "gpt-5.6-sol", "gpt-5.6-terra", "vendor/future-model"
+        "gpt-5.6-luna", "gpt-5.6-terra", "vendor/future-model"
     };
     static const char *const efforts[] = {
         "low", "medium", "high", "xhigh", "max", "ultra"
@@ -127,13 +127,18 @@ snj_app_provider_models(struct app_state *app,
         json_t *variants = json_array();
         if (!entry || !variants)
             goto fail_entry;
-        if (i < 2u)
+        if (i == 0u) {
+            if (json_array_append_new(variants, json_string("high")) < 0)
+                goto fail_entry;
+        } else if (i == 1u) {
             for (size_t j = 0; j < sizeof(efforts) / sizeof(efforts[0]); ++j)
                 if (json_array_append_new(variants,
                                           json_string(efforts[j])) < 0)
                     goto fail_entry;
+        }
         if (snj_json_set_new(entry, "default_effort",
-                             i < 2u ? json_string("medium") : json_null()) < 0)
+                             i == 0u ? json_string("high") :
+                             i == 1u ? json_string("medium") : json_null()) < 0)
             goto fail_entry;
         if (snj_json_set_new(entry, "efforts", variants) < 0) {
             variants = NULL;

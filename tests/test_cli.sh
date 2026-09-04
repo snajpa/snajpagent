@@ -712,13 +712,14 @@ anchor_state="$root/context-anchor-state"
 mkdir -m 700 "$anchor_state"
 cat >"$root/context-anchor.ini" <<'EOF'
 [agent]
-model = gpt-5.6-sol
+model = gpt-5.6-luna
+reasoning_effort = high
 
 [provider]
 base_url = http://127.0.0.1:2455/backend-api/codex
 auto_compact_input_tokens = 0
 
-[model-limit default/gpt-5.6-sol]
+[model-limit default/gpt-5.6-luna]
 context_window_tokens = 1050000
 max_input_tokens = 922000
 max_output_tokens = 128000
