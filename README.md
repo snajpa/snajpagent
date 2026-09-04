@@ -92,6 +92,7 @@ The repository vendors no third-party implementation source. See
 ./snajpagent --resume --last -- "continue"
 ./snajpagent -l
 ./snajpagent -d -n builder
+./snajpagent -s irc.example:6667 -n worker -o alice
 ./snajpagent -c irc.example:6667 -n worker -o alice
 ```
 
@@ -100,7 +101,7 @@ Useful options:
 ```text
 -C DIR      run in a specific workspace
 -d          host the built-in IRC server
--s ENDPOINT choose its listen endpoint (default localhost:6667)
+-s ENDPOINT connect to IRC, or choose the listener with -d
 -c ENDPOINT connect to IRC; repeatable (default localhost:6667)
 -n NAME     networked agent name (required in networked mode)
 -o NAME     local operator name
@@ -117,10 +118,12 @@ Useful options:
 ```
 
 `--daemon`, `--listen`, `--client`, `--name`, `--operator-name`, and
-`--room-name` are the long forms of the network options. Bare `-s` or `-c`
-uses `localhost:6667`. The former `-d`, `-c`, `-r`, and `-o` meanings remain
-available as `--dotdir`, `--config`, `--resume`, and `--effort`. Dotdir and
-explicit configuration paths must be absolute.
+`--room-name` are the long forms of the network options. Without daemon mode,
+`-s`/`--listen` adds an outgoing connection like `-c`/`--client`; with daemon
+mode, it selects the listener while any `-c` connections remain outgoing.
+Bare `-s` or `-c` uses `localhost:6667`. The former `-d`, `-c`, `-r`, and `-o`
+meanings remain available as `--dotdir`, `--config`, `--resume`, and
+`--effort`. Dotdir and explicit configuration paths must be absolute.
 
 The built-in help is intentionally short:
 
@@ -192,14 +195,15 @@ with Tab while another turn is active).
 ## IRC Chat Mode
 
 `-d` hosts the bounded built-in IRC server in the normal foreground process;
-it does not detach. `-s` selects its listener and requires the server role.
-Each `-c` adds an outgoing connection, so hosting and one or more client roles
-can be combined. Networked mode requires `-n NAME`. Initial chat text in this
-mode must follow `--`:
+it does not detach. Without `-d`, `-s` adds an outgoing connection just like
+`-c`; with `-d`, `-s` selects the listener. Each `-c` always adds an outgoing
+connection, so hosting and one or more client roles can be combined. Networked
+mode requires `-n NAME`. Initial chat text in this mode must follow `--`:
 
 ```sh
 ./snajpagent -d -n builder -- "introduce yourself"
 ./snajpagent -d -s 0.0.0.0:7667 -n builder -o alice -r builds
+./snajpagent -s localhost:7667 -n reviewer -o bob
 ./snajpagent -c localhost:7667 -c irc.example:6667 -n reviewer -o bob
 ```
 

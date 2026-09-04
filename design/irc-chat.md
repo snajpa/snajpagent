@@ -16,7 +16,7 @@ The network options are:
 
 ```text
 -d, --daemon                 host the built-in IRC server
--s, --listen[=ENDPOINT]      server listen endpoint
+-s, --listen[=ENDPOINT]      connect, or select the listener with -d
 -c, --client[=ENDPOINT]      connect to a server; repeatable
 -n, --name NAME              agent IRC name
 -o, --operator-name NAME     local operator IRC name
@@ -26,8 +26,9 @@ The network options are:
 ```
 
 `-d` adds the IRC server to the normal foreground snajpagent process; it does
-not fork, detach, or hide the operator UI. `-s` selects the endpoint used by
-that server and requires `-d`. `-c` adds an outgoing server connection and may
+not fork, detach, or hide the operator UI. Without daemon mode, `-s` adds one
+outgoing connection like `-c`; with daemon mode, it selects the endpoint used
+by the built-in server. `-c` always adds an outgoing server connection and may
 be given more than once. Server and client roles are deliberately composable,
 including `-d -s ENDPOINT -c ENDPOINT`. Incoming traffic is presented to the
 one local agent and operator, but is not blindly bridged from one server to
@@ -69,6 +70,7 @@ Examples:
 ```sh
 snajpagent -d -n builder
 snajpagent -d -s 0.0.0.0:6667 -n builder -o alice
+snajpagent -s irc-a.example:6667 -n worker -o bob
 snajpagent -c -n worker -o bob
 snajpagent -c irc-a.example:6667 -c '[2001:db8::20]:6667' -n worker
 snajpagent -d -s localhost:7667 -c upstream.example -n relay-worker
@@ -94,11 +96,11 @@ color = auto
 ```
 
 `client` is the one intentionally repeatable configuration key. There may be
-at most 16 distinct outgoing endpoints. Any command-line `-c` occurrences
-replace the configured client list; repeated command-line occurrences retain
-their order. Command-line scalar values override configured values. `-d`
-enables a configured-off daemon, while `listen`, `name`, `operator_name`, and
-`room_name` otherwise supply their documented defaults.
+at most 16 distinct outgoing endpoints. Any command-line `-c` occurrences, or
+a standalone `-s`, replace the configured client list; repeated `-c`
+occurrences retain their order. Command-line scalar values override configured
+values. `-d` enables a configured-off daemon, while `listen`, `name`,
+`operator_name`, and `room_name` otherwise supply their documented defaults.
 
 `history_lines` bounds both the server's in-memory room history and the fresh
 history snapshot projected after compaction. It accepts 1 through 1000 and

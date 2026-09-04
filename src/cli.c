@@ -507,7 +507,7 @@ snj_cli_usage(int fd)
         "       snajpagent -e [OPTIONS] -- PROMPT...\n"
         "       snajpagent -l [OPTIONS]\n"
         "  -d, --daemon                 host the IRC server in this process\n"
-        "  -s, --listen[=ENDPOINT]      listen address (localhost:6667)\n"
+        "  -s, --listen[=ENDPOINT]      connect, or listen with -d\n"
         "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"
         "  -n, --name NAME              required networked agent name\n"
         "  -o, --operator-name NAME     local operator name\n"

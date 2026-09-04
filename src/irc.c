@@ -444,6 +444,7 @@ int
 snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
                   char *error, size_t error_size)
 {
+    bool listen_as_client;
     const char *login;
 
     if (!config || !cli) {
@@ -452,22 +453,43 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
     }
     if (cli->irc_daemon)
         config->irc_daemon = true;
-    if (cli->irc_listen &&
+    listen_as_client = cli->irc_listen && !config->irc_daemon;
+    if (cli->irc_listen && !listen_as_client &&
         config_copy(config->irc_listen, sizeof(config->irc_listen),
                     cli->irc_listen, "IRC listen endpoint", error,
                     error_size) < 0)
         return -1;
-    if (cli->irc_listen)
+    if (cli->irc_listen && !listen_as_client)
         config->irc_listen_explicit = true;
-    if (cli->irc_client_count) {
+    if (listen_as_client || cli->irc_client_count) {
+        size_t next = 0u;
+
+        if (listen_as_client &&
+            cli->irc_client_count >= SNJ_CONFIG_IRC_CLIENT_MAX) {
+            set_error(error, error_size,
+                      "at most %u outgoing IRC endpoints are supported",
+                      SNJ_CONFIG_IRC_CLIENT_MAX);
+            errno = EINVAL;
+            return -1;
+        }
         memset(config->irc_clients, 0, sizeof(config->irc_clients));
         config->irc_client_count = 0u;
+        if (listen_as_client) {
+            if (config_copy(config->irc_clients[next],
+                            sizeof(config->irc_clients[next]),
+                            cli->irc_listen, "IRC client endpoint",
+                            error, error_size) < 0)
+                return -1;
+            ++next;
+            ++config->irc_client_count;
+        }
         for (size_t i = 0; i < cli->irc_client_count; ++i) {
-            if (config_copy(config->irc_clients[i],
-                            sizeof(config->irc_clients[i]),
+            if (config_copy(config->irc_clients[next],
+                            sizeof(config->irc_clients[next]),
                             cli->irc_clients[i], "IRC client endpoint",
                             error, error_size) < 0)
                 return -1;
+            ++next;
             ++config->irc_client_count;
         }
     }
@@ -485,11 +507,6 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
                     cli->irc_room_name, "IRC room name", error,
                     error_size) < 0)
         return -1;
-    if (cli->irc_listen && !config->irc_daemon) {
-        set_error(error, error_size, "-s/--listen requires -d/--daemon");
-        errno = EINVAL;
-        return -1;
-    }
     if (cli->irc_room_name && !config->irc_daemon) {
         set_error(error, error_size, "-r/--room-name requires -d/--daemon");
         errno = EINVAL;

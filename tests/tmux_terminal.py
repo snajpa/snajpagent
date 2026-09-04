@@ -1121,7 +1121,7 @@ def run_irc_case(binary, root):
          ["-c", endpoint, "-n", "onebot", "-o", "oneop",
           "--color=always"]),
         ("two", "two-model", "twobot", "twoop",
-         ["-c", endpoint, "-n", "twobot", "-o", "twoop",
+         ["-s", endpoint, "-n", "twobot", "-o", "twoop",
           "--color=always"]),
     ]
     terminals = {}

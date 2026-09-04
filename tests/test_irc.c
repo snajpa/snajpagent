@@ -297,6 +297,43 @@ test_validation(void)
 }
 
 static void
+test_cli_network_roles(void)
+{
+    struct snj_config config;
+    struct snj_cli cli;
+    char error[256] = {0};
+
+    memset(&cli, 0, sizeof(cli));
+    cli.irc_listen = "irc.example:7667";
+    cli.irc_name = "worker";
+    cli.irc_operator_name = "operator";
+    snj_config_init(&config);
+    assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
+    assert(!config.irc_daemon);
+    assert(!config.irc_listen_explicit);
+    assert(config.irc_client_count == 1u);
+    assert(strcmp(config.irc_clients[0], "irc.example:7667") == 0);
+    snj_config_free(&config);
+
+    memset(&cli, 0, sizeof(cli));
+    cli.irc_daemon = true;
+    cli.irc_listen = "127.0.0.1:7667";
+    cli.irc_clients[0] = "upstream.example:6667";
+    cli.irc_client_count = 1u;
+    cli.irc_name = "worker";
+    cli.irc_operator_name = "operator";
+    snj_config_init(&config);
+    error[0] = '\0';
+    assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
+    assert(config.irc_daemon);
+    assert(config.irc_listen_explicit);
+    assert(strcmp(config.irc_listen, "127.0.0.1:7667") == 0);
+    assert(config.irc_client_count == 1u);
+    assert(strcmp(config.irc_clients[0], "upstream.example:6667") == 0);
+    snj_config_free(&config);
+}
+
+static void
 test_server(void)
 {
     struct snj_config config;
@@ -643,6 +680,7 @@ int
 main(void)
 {
     test_validation();
+    test_cli_network_roles();
     test_server();
     test_client_reconnect();
     test_client_ignores_direct_messages();

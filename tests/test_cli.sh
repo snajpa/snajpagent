@@ -37,7 +37,6 @@ grep -q -- '--no-markdown' "$root/help"
 
 for args in \
     '-d' \
-    '-s -n worker' \
     '-r room -n worker' \
     '-d -n worker -o WORKER' \
     '-c localhost -c localhost:6667 -n worker' \

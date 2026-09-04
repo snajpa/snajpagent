@@ -19,9 +19,10 @@
   structural rendering.
 
 - Added first-class IRC agent/operator chat: `-d`/`--daemon` hosts one bounded
-  room, `-s`/`--listen` selects its endpoint, repeatable `-c`/`--client`
-  connections join advertised rooms and reconnect autonomously, and combined
-  roles share one durable session and timestamped non-windowed chat UI.
+  room, `-s`/`--listen` connects like `-c` unless daemon mode makes it the
+  listener, repeatable `-c`/`--client` connections join advertised rooms and
+  reconnect autonomously, and combined roles share one durable session and
+  timestamped non-windowed chat UI.
   Networked mode requires `-n`/`--name`; `-o`/`--operator-name` and
   `-r`/`--room-name` select the local operator and hosted room identities.
 
