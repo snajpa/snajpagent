@@ -77,9 +77,137 @@ account_bytes(struct snj_responses_stream *stream, size_t extra)
     return 0;
 }
 
+static bool
+annotation_string(const json_t *annotation, const char *name)
+{
+    return json_is_string(json_object_get(annotation, name));
+}
+
+static bool
+annotation_integer(const json_t *annotation, const char *name,
+                   json_int_t *out)
+{
+    json_t *value = json_object_get(annotation, name);
+
+    if (!json_is_integer(value) || json_integer_value(value) < 0)
+        return false;
+    if (out)
+        *out = json_integer_value(value);
+    return true;
+}
+
+static int
+validate_annotation(struct snj_responses_stream *stream,
+                    const json_t *annotation)
+{
+    const char *type;
+    json_int_t start;
+    json_int_t end;
+    bool valid = false;
+
+    if (json_is_null(annotation))
+        return 0;
+    if (!json_is_object(annotation))
+        return stream_fail(stream, EPROTO,
+                           "invalid output text annotation");
+    type = snj_json_string(annotation, "type");
+    if (!type)
+        return stream_fail(stream, EPROTO,
+                           "invalid output text annotation");
+    if (strcmp(type, "file_citation") == 0) {
+        valid = annotation_string(annotation, "file_id") &&
+                annotation_string(annotation, "filename") &&
+                annotation_integer(annotation, "index", NULL);
+    } else if (strcmp(type, "url_citation") == 0) {
+        valid = annotation_integer(annotation, "start_index", &start) &&
+                annotation_integer(annotation, "end_index", &end) &&
+                start <= end && annotation_string(annotation, "title") &&
+                annotation_string(annotation, "url");
+    } else if (strcmp(type, "container_file_citation") == 0) {
+        valid = annotation_string(annotation, "container_id") &&
+                annotation_string(annotation, "file_id") &&
+                annotation_string(annotation, "filename") &&
+                annotation_integer(annotation, "start_index", &start) &&
+                annotation_integer(annotation, "end_index", &end) &&
+                start <= end;
+    } else if (strcmp(type, "file_path") == 0) {
+        valid = annotation_string(annotation, "file_id") &&
+                annotation_integer(annotation, "index", NULL);
+    } else {
+        return stream_fail(stream, ENOTSUP,
+                           "unsupported output text annotation type %s", type);
+    }
+    return valid ? 0 : stream_fail(stream, EPROTO,
+                                   "invalid %s output text annotation", type);
+}
+
+static int
+append_annotation(struct snj_responses_stream *stream,
+                  struct snj_wire_part *part, const json_t *annotation)
+{
+    struct snj_buf encoded;
+    json_t *copy;
+
+    snj_buf_init(&encoded, SNJ_MAX_SSE_EVENT);
+    if (snj_json_canonical(annotation, &encoded) < 0) {
+        snj_buf_free(&encoded);
+        return stream_fail(stream, EOVERFLOW,
+                           "output text annotation exceeds its limit");
+    }
+    if (account_bytes(stream, encoded.len) < 0) {
+        snj_buf_free(&encoded);
+        return -1;
+    }
+    snj_buf_free(&encoded);
+    if (!part->annotations && !(part->annotations = json_array()))
+        return stream_fail(stream, ENOMEM,
+                           "cannot retain output text annotations");
+    copy = json_deep_copy(annotation);
+    if (!copy || json_array_append_new(part->annotations, copy) < 0) {
+        if (!copy)
+            errno = ENOMEM;
+        return stream_fail(stream, ENOMEM,
+                           "cannot retain output text annotation");
+    }
+    return 0;
+}
+
+static int
+reconcile_annotations(struct snj_responses_stream *stream,
+                      struct snj_wire_part *part, const json_t *annotations)
+{
+    size_t count;
+    size_t seen = part->annotations ? json_array_size(part->annotations) : 0u;
+
+    if (!json_is_array(annotations) ||
+        (count = json_array_size(annotations)) > SNJ_MAX_RESPONSE_ANNOTATIONS)
+        return stream_fail(stream, EPROTO,
+                           "invalid output text annotations snapshot");
+    for (size_t i = 0; i < count; ++i)
+        if (validate_annotation(stream, json_array_get(annotations, i)) < 0)
+            return -1;
+    if (seen) {
+        if (seen != count)
+            return stream_fail(stream, EPROTO,
+                               "output text annotations snapshot disagrees");
+        for (size_t i = 0; i < count; ++i)
+            if (!json_equal(json_array_get(part->annotations, i),
+                            json_array_get(annotations, i)))
+                return stream_fail(stream, EPROTO,
+                                   "output text annotation snapshot disagrees");
+        return 0;
+    }
+    for (size_t i = 0; i < count; ++i)
+        if (append_annotation(stream, part,
+                              json_array_get(annotations, i)) < 0)
+            return -1;
+    return 0;
+}
+
 static void
 wire_part_free(struct snj_wire_part *part)
 {
+    json_decref(part->annotations);
     snj_buf_free(&part->text);
     memset(part, 0, sizeof(*part));
 }
@@ -333,16 +461,20 @@ part_snapshot(struct snj_responses_stream *stream, size_t output_index,
     if (strcmp(type, "output_text") == 0) {
         json_t *annotations = json_object_get(part, "annotations");
         json_t *logprobs = json_object_get(part, "logprobs");
+        struct snj_wire_part *wire_part;
 
         text = snj_json_string(part, "text");
-        if ((annotations && (!json_is_array(annotations) ||
-                             json_array_size(annotations) != 0u)) ||
-            (logprobs && (!json_is_array(logprobs) ||
-                          json_array_size(logprobs) != 0u)))
+        if (logprobs && (!json_is_array(logprobs) ||
+                         json_array_size(logprobs) != 0u))
             return stream_fail(stream, ENOTSUP,
-                               "output annotations or logprobs are unqualified");
+                               "output text logprobs are unqualified");
+        wire_part = part_at(stream, item, content_index,
+                            SNJ_WIRE_PART_TEXT, create);
+        if (!wire_part || (annotations &&
+            reconcile_annotations(stream, wire_part, annotations) < 0))
+            return -1;
         return reconcile_part(stream, output_index, item, content_index,
-                              SNJ_WIRE_PART_TEXT, text, create, complete);
+                              SNJ_WIRE_PART_TEXT, text, false, complete);
     }
     if (strcmp(type, "refusal") == 0) {
         text = snj_json_string(part, "refusal");
@@ -705,6 +837,40 @@ handle_public_done(struct snj_responses_stream *stream, const json_t *root,
 }
 
 static int
+handle_annotation_added(struct snj_responses_stream *stream,
+                        const json_t *root)
+{
+    const char *item_id = snj_json_string(root, "item_id");
+    json_t *annotation = json_object_get(root, "annotation");
+    size_t output_index;
+    size_t content_index;
+    size_t annotation_index_value;
+    size_t count;
+    struct snj_wire_item *item;
+    struct snj_wire_part *part;
+
+    if (json_index(stream, root, "output_index", SNJ_MAX_RESPONSE_ITEMS,
+                   &output_index) < 0 ||
+        json_index(stream, root, "content_index", SNJ_MAX_RESPONSE_PARTS,
+                   &content_index) < 0 ||
+        json_index(stream, root, "annotation_index",
+                   SNJ_MAX_RESPONSE_ANNOTATIONS, &annotation_index_value) < 0)
+        return -1;
+    item = find_item(stream, output_index, item_id, SNJ_WIRE_ITEM_MESSAGE);
+    part = item ? part_at(stream, item, content_index,
+                          SNJ_WIRE_PART_TEXT, false) : NULL;
+    if (!part)
+        return -1;
+    count = part->annotations ? json_array_size(part->annotations) : 0u;
+    if (part->complete || annotation_index_value != count)
+        return stream_fail(stream, EPROTO,
+                           "invalid output text annotation order");
+    if (validate_annotation(stream, annotation) < 0)
+        return -1;
+    return append_annotation(stream, part, annotation);
+}
+
+static int
 handle_arguments_delta(struct snj_responses_stream *stream, const json_t *root)
 {
     const char *item_id = snj_json_string(root, "item_id");
@@ -879,6 +1045,8 @@ dispatch_event(struct snj_responses_stream *stream, const char *type,
         return handle_public_delta(stream, root, SNJ_WIRE_PART_TEXT);
     if (strcmp(type, "response.output_text.done") == 0)
         return handle_public_done(stream, root, SNJ_WIRE_PART_TEXT);
+    if (strcmp(type, "response.output_text.annotation.added") == 0)
+        return handle_annotation_added(stream, root);
     if (strcmp(type, "response.refusal.delta") == 0)
         return handle_public_delta(stream, root, SNJ_WIRE_PART_REFUSAL);
     if (strcmp(type, "response.refusal.done") == 0)

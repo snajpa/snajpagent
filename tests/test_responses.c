@@ -165,6 +165,109 @@ test_structured_keepalives_do_not_end_response(void)
     snj_response_graph_free(&graph);
 }
 
+static void
+test_output_text_annotations_are_reconciled(void)
+{
+    static const char wire[] =
+        "event: response.created\n"
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_citation\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "event: response.output_item.added\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+        "event: response.content_part.added\n"
+        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
+        "event: response.output_text.delta\n"
+        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"delta\":\"Source.\"}\n\n"
+        "event: response.output_text.annotation.added\n"
+        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"},\"sequence_number\":5}\n\n"
+        "event: response.output_text.done\n"
+        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"text\":\"Source.\"}\n\n"
+        "event: response.content_part.done\n"
+        "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}}\n\n"
+        "event: response.output_item.done\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}]}}\n\n"
+        "event: response.completed\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_citation\",\"status\":\"completed\",\"output\":[]}}\n\n";
+    struct snj_response_graph graph;
+    struct emitted emitted;
+    char error[256] = {0};
+
+    snj_response_graph_init(&graph);
+    memset(&emitted, 0, sizeof(emitted));
+    snj_buf_init(&emitted.text, 1024u);
+    assert(parse_stream(wire, 11u, &graph, &emitted,
+                        error, sizeof(error)) == 0);
+    assert(graph.count == 1u);
+    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
+    assert(strcmp(graph.items[0].text, "Source.") == 0);
+    assert(emitted.calls == 1u);
+    assert(emitted.text.len == 7u);
+    assert(memcmp(emitted.text.data, "Source.", 7u) == 0);
+    snj_buf_free(&emitted.text);
+    snj_response_graph_free(&graph);
+}
+
+static void
+test_terminal_snapshot_can_supply_annotations(void)
+{
+    static const char wire[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_file\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_file\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_file\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"See file.\",\"annotations\":[{\"type\":\"file_citation\",\"file_id\":\"file-abc\",\"filename\":\"example.txt\",\"index\":4},{\"type\":\"container_file_citation\",\"container_id\":\"container-abc\",\"file_id\":\"file-def\",\"filename\":\"notes.txt\",\"start_index\":0,\"end_index\":3},{\"type\":\"file_path\",\"file_id\":\"file-ghi\",\"index\":8},null]}]}]}}\n\n";
+    struct snj_response_graph graph;
+    struct emitted emitted;
+    char error[256] = {0};
+
+    snj_response_graph_init(&graph);
+    memset(&emitted, 0, sizeof(emitted));
+    snj_buf_init(&emitted.text, 1024u);
+    assert(parse_stream(wire, 13u, &graph, &emitted,
+                        error, sizeof(error)) == 0);
+    assert(graph.count == 1u);
+    assert(strcmp(graph.items[0].text, "See file.") == 0);
+    assert(emitted.calls == 1u);
+    snj_buf_free(&emitted.text);
+    snj_response_graph_free(&graph);
+}
+
+static void
+test_output_text_annotations_fail_closed(void)
+{
+    static const char prefix[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n";
+    static const char *const bad_suffixes[] = {
+        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":1,\"annotation\":{\"type\":\"file_path\",\"file_id\":\"file-a\",\"index\":0}}\n\n",
+        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0}\n\n",
+        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":1,\"url\":\"https://example.com/\"}}\n\n",
+        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"future_citation\"}}\n\n",
+        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"file_path\",\"file_id\":\"file-a\",\"index\":0}}\n\n"
+        "data: {\"type\":\"response.content_part.done\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[{\"type\":\"file_path\",\"file_id\":\"file-b\",\"index\":0}]}}\n\n"
+    };
+
+    for (size_t i = 0; i < sizeof(bad_suffixes) / sizeof(bad_suffixes[0]); ++i) {
+        struct snj_response_graph graph;
+        struct emitted emitted;
+        struct snj_buf wire;
+        char error[256] = {0};
+
+        snj_buf_init(&wire, 8192u);
+        assert(snj_buf_append(&wire, prefix, strlen(prefix)) == 0);
+        assert(snj_buf_append(&wire, bad_suffixes[i],
+                              strlen(bad_suffixes[i])) == 0);
+        assert(snj_buf_terminate(&wire) == 0);
+        snj_response_graph_init(&graph);
+        memset(&emitted, 0, sizeof(emitted));
+        snj_buf_init(&emitted.text, 1024u);
+        assert(parse_stream((char *)wire.data, 7u, &graph, &emitted,
+                            error, sizeof(error)) < 0);
+        assert(error[0]);
+        assert(graph.count == 0u);
+        snj_buf_free(&emitted.text);
+        snj_response_graph_free(&graph);
+        snj_buf_free(&wire);
+    }
+}
+
 
 static void
 test_phase_absent_text_becomes_visible_final(void)
@@ -406,6 +509,7 @@ test_protocol_conflicts_fail_closed(void)
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"delta\":\"a\"}\n\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"text\":\"b\"}\n\n",
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"x\",\"annotations\":[]},{\"type\":\"refusal\",\"refusal\":\"no\"}]}]}}\n\n",
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"usage\":{\"input_tokens\":4,\"output_tokens\":3,\"total_tokens\":99},\"output\":[]}}\n\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\ndata: {\"type\":\"response.future\"}\n\n",
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
     };
 
@@ -432,6 +536,9 @@ main(void)
     test_deltas_survive_empty_terminal_output();
     test_terminal_snapshot_can_supply_unseen_items();
     test_structured_keepalives_do_not_end_response();
+    test_output_text_annotations_are_reconciled();
+    test_terminal_snapshot_can_supply_annotations();
+    test_output_text_annotations_fail_closed();
     test_phase_absent_text_becomes_visible_final();
     test_phase_absent_text_before_tool_stays_commentary();
     test_empty_reasoning_item_is_internal_only();

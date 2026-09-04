@@ -4,6 +4,9 @@
 
 ## 0.9.0-wip
 
+- Added strict support for streamed output-text annotations and reconciled them
+  with response snapshots without changing public assistant text bytes.
+
 - Replaced the ordinary input label with stateful typographic prompts:
   `MODEL/EFFORT › ` starts a non-networked turn and `MODEL/EFFORT » ` adds to
   the active turn, while networked prompts use
