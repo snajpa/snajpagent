@@ -415,7 +415,7 @@ replace_text(char **slot, const char *text, size_t max)
 }
 static bool
 common_event_valid(json_t *event, struct snj_session *session, uint64_t seq,
-                   const char *prev, const char **type_out, json_t **data_out,
+                   const char **type_out, json_t **data_out,
                    char *error, size_t error_size)
 {
     static const char *const keys[] = {
@@ -439,7 +439,8 @@ common_event_valid(json_t *event, struct snj_session *session, uint64_t seq,
         !(type = snj_json_string(event, "type")) ||
         !snj_hex_is_lower(event_hash, SNJ_SHA256_HEX_LEN) ||
         !snj_hex_is_lower(prev_hash, SNJ_SHA256_HEX_LEN) ||
-        strcmp(prev_hash, prev) != 0 || strcmp(session_id, session->id) != 0 ||
+        strcmp(prev_hash, session->prev_sha256) != 0 ||
+        strcmp(session_id, session->id) != 0 ||
         !json_is_object(json_object_get(event, "data"))) {
         snj_errorf(error, error_size, "invalid event envelope at sequence %llu",
                   (unsigned long long)seq);
@@ -2085,143 +2086,47 @@ invalid:
     return -1;
 }
 
-int
-snj_store_scan_log(struct snj_session *session,
-                   enum snj_tail_policy tail_policy, bool allow_active,
-                   char *error, size_t error_size)
+static int
+read_event_log(struct snj_session *source, struct snj_session *verifier,
+               off_t boundary, enum snj_tail_policy tail_policy,
+               snj_session_event_fn fn, void *opaque,
+               off_t *complete_end_out, uint64_t *next_seq_out,
+               char *error, size_t error_size)
 {
     struct snj_buf line;
     unsigned char chunk[8192];
     off_t complete_end = 0;
     off_t read_off = 0;
     uint64_t seq = 1;
-    char prev[SNJ_SHA256_HEX_LEN + 1u];
     int rc = -1;
 
-    memset(prev, '0', SNJ_SHA256_HEX_LEN);
-    prev[SNJ_SHA256_HEX_LEN] = '\0';
     snj_buf_init(&line, SNJ_MAX_EVENT_LINE);
     for (;;) {
-        ssize_t got = pread(session->log_fd, chunk, sizeof(chunk), read_off);
-        if (got < 0) {
-            if (errno == EINTR)
-                continue;
-            snj_errorf(error, error_size, "cannot read event log: %s", strerror(errno));
-            goto out;
-        }
-        if (got == 0)
-            break;
-        read_off += got;
-        for (ssize_t i = 0; i < got; ++i) {
-            if (chunk[i] != '\n') {
-                if (snj_buf_putc(&line, chunk[i]) < 0) {
-                    snj_errorf(error, error_size, "event line exceeds 16 MiB");
-                    goto out;
-                }
-                continue;
-            }
-            if (!line.len) {
-                snj_errorf(error, error_size, "blank event line at sequence %llu",
-                          (unsigned long long)seq);
-                errno = EINVAL;
-                goto out;
-            }
-            char jerr[192];
-            json_t *event = snj_json_load_canonical(line.data, line.len,
-                                                    jerr, sizeof(jerr));
-            const char *type;
-            json_t *data;
-            if (!event) {
-                snj_errorf(error, error_size, "corrupt event %llu: %s",
-                          (unsigned long long)seq, jerr);
-                goto out;
-            }
-            if (!common_event_valid(event, session, seq, prev, &type, &data,
-                                    error, error_size) ||
-                apply_event(session, type, data, seq, error, error_size) < 0) {
-                json_decref(event);
-                goto out;
-            }
-            memcpy(prev, session->prev_sha256, sizeof(prev));
-            json_decref(event);
-            complete_end = read_off - (off_t)(got - i - 1);
-            ++seq;
-            snj_buf_reset(&line);
-        }
-    }
-    if (line.len && tail_policy == SNJ_TAIL_REJECT) {
-        snj_errorf(error, error_size, "event log has an incomplete final suffix");
-        errno = EINVAL;
-        goto out;
-    }
-    if (line.len && tail_policy == SNJ_TAIL_TRUNCATE &&
-        (ftruncate(session->log_fd, complete_end) < 0 ||
-         snj_sync_file(session->log_fd) < 0)) {
-        snj_errorf(error, error_size, "cannot truncate incomplete log tail: %s",
-                  strerror(errno));
-        goto out;
-    }
-    session->log_end = complete_end;
-    session->next_seq = seq;
-    if (seq == 1) {
-        snj_errorf(error, error_size, "session event log is empty");
-        errno = EINVAL;
-        goto out;
-    }
-    if (session->active_turn && !allow_active) {
-        snj_errorf(error, error_size,
-                  "active-turn recovery is unavailable in this scan mode");
-        errno = ENOTSUP;
-        goto out;
-    }
-    session->active_compact_id[0] = '\0';
-    session->active_compact_source_sha256[0] = '\0';
-    session->active_compact_source_seq = 0u;
-    rc = 0;
-out:
-    snj_buf_free(&line);
-    return rc;
-}
-
-int
-snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
-                       void *opaque, char *error, size_t error_size)
-{
-    struct snj_session verifier;
-    struct snj_buf line;
-    unsigned char chunk[8192];
-    off_t read_off = 0;
-    uint64_t seq = 1;
-    char prev[SNJ_SHA256_HEX_LEN + 1u];
-    int rc = -1;
-
-    if (!session || !fn || session->log_fd < 0 || session->log_end < 0 ||
-        !snj_hex_is_lower(session->id, SNJ_ID_HEX_LEN)) {
-        snj_errorf(error, error_size, "invalid session event iterator");
-        errno = EINVAL;
-        return -1;
-    }
-    snj_session_init(&verifier);
-    memcpy(verifier.id, session->id, sizeof(verifier.id));
-    memset(prev, '0', SNJ_SHA256_HEX_LEN);
-    prev[SNJ_SHA256_HEX_LEN] = '\0';
-    snj_buf_init(&line, SNJ_MAX_EVENT_LINE);
-    while (read_off < session->log_end) {
         size_t want = sizeof(chunk);
         ssize_t got;
-        if ((off_t)want > session->log_end - read_off)
-            want = (size_t)(session->log_end - read_off);
-        got = pread(session->log_fd, chunk, want, read_off);
+
+        if (boundary >= 0) {
+            if (read_off == boundary)
+                break;
+            if (read_off > boundary) {
+                errno = EIO;
+                goto boundary_error;
+            }
+            if ((off_t)want > boundary - read_off)
+                want = (size_t)(boundary - read_off);
+        }
+        got = pread(source->log_fd, chunk, want, read_off);
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            snj_errorf(error, error_size, "cannot read event log: %s", strerror(errno));
+            snj_errorf(error, error_size, "cannot read event log: %s",
+                       strerror(errno));
             goto out;
         }
         if (got == 0) {
-            snj_errorf(error, error_size, "event log ended before recorded boundary");
-            errno = EIO;
-            goto out;
+            if (boundary >= 0 && read_off != boundary)
+                goto boundary_error;
+            break;
         }
         read_off += got;
         for (ssize_t i = 0; i < got; ++i) {
@@ -2232,14 +2137,16 @@ snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
 
             if (chunk[i] != '\n') {
                 if (snj_buf_putc(&line, chunk[i]) < 0) {
-                    snj_errorf(error, error_size, "event line exceeds 16 MiB");
+                    snj_errorf(error, error_size,
+                               "event line exceeds 16 MiB");
                     goto out;
                 }
                 continue;
             }
             if (!line.len) {
-                snj_errorf(error, error_size, "blank event line at sequence %llu",
-                          (unsigned long long)seq);
+                snj_errorf(error, error_size,
+                           "blank event line at sequence %llu",
+                           (unsigned long long)seq);
                 errno = EINVAL;
                 goto out;
             }
@@ -2247,30 +2154,100 @@ snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
                                             jerr, sizeof(jerr));
             if (!event) {
                 snj_errorf(error, error_size, "corrupt event %llu: %s",
-                          (unsigned long long)seq, jerr);
+                           (unsigned long long)seq, jerr);
                 goto out;
             }
-            if (!common_event_valid(event, &verifier, seq, prev, &type, &data,
+            if (!common_event_valid(event, verifier, seq, &type, &data,
                                     error, error_size) ||
-                fn(opaque, seq, type, data, error, error_size) < 0) {
+                (fn ? fn(opaque, seq, type, data, error, error_size) :
+                      apply_event(verifier, type, data, seq,
+                                  error, error_size)) < 0) {
                 json_decref(event);
                 goto out;
             }
-            memcpy(prev, verifier.prev_sha256, sizeof(prev));
             json_decref(event);
+            complete_end = read_off - (off_t)(got - i - 1);
             ++seq;
             snj_buf_reset(&line);
         }
     }
-    if (line.len) {
-        snj_errorf(error, error_size, "event log has an incomplete final suffix");
+    if (line.len && (boundary >= 0 || tail_policy == SNJ_TAIL_REJECT)) {
+        snj_errorf(error, error_size,
+                   "event log has an incomplete final suffix");
         errno = EINVAL;
         goto out;
     }
+    if (line.len && tail_policy == SNJ_TAIL_TRUNCATE &&
+        (ftruncate(source->log_fd, complete_end) < 0 ||
+         snj_sync_file(source->log_fd) < 0)) {
+        snj_errorf(error, error_size,
+                   "cannot truncate incomplete log tail: %s",
+                   strerror(errno));
+        goto out;
+    }
+    if (complete_end_out)
+        *complete_end_out = complete_end;
+    if (next_seq_out)
+        *next_seq_out = seq;
     rc = 0;
+    goto out;
+
+boundary_error:
+    snj_errorf(error, error_size,
+               "event log ended before recorded boundary");
+    errno = EIO;
 out:
     snj_buf_free(&line);
     return rc;
+}
+
+int
+snj_store_scan_log(struct snj_session *session,
+                   enum snj_tail_policy tail_policy, bool allow_active,
+                   char *error, size_t error_size)
+{
+    off_t complete_end;
+    uint64_t next_seq;
+
+    if (read_event_log(session, session, -1, tail_policy, NULL, NULL,
+                       &complete_end, &next_seq, error, error_size) < 0)
+        return -1;
+    session->log_end = complete_end;
+    session->next_seq = next_seq;
+    if (next_seq == 1) {
+        snj_errorf(error, error_size, "session event log is empty");
+        errno = EINVAL;
+        return -1;
+    }
+    if (session->active_turn && !allow_active) {
+        snj_errorf(error, error_size,
+                   "active-turn recovery is unavailable in this scan mode");
+        errno = ENOTSUP;
+        return -1;
+    }
+    session->active_compact_id[0] = '\0';
+    session->active_compact_source_sha256[0] = '\0';
+    session->active_compact_source_seq = 0u;
+    return 0;
+}
+
+int
+snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
+                       void *opaque, char *error, size_t error_size)
+{
+    struct snj_session verifier;
+
+    if (!session || !fn || session->log_fd < 0 || session->log_end < 0 ||
+        !snj_hex_is_lower(session->id, SNJ_ID_HEX_LEN)) {
+        snj_errorf(error, error_size, "invalid session event iterator");
+        errno = EINVAL;
+        return -1;
+    }
+    snj_session_init(&verifier);
+    memcpy(verifier.id, session->id, sizeof(verifier.id));
+    return read_event_log(session, &verifier, session->log_end,
+                          SNJ_TAIL_REJECT, fn, opaque, NULL, NULL,
+                          error, error_size);
 }
 
 static char *
