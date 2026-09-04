@@ -483,6 +483,7 @@ snj_term_hide(struct snj_term *term)
     term->prompt_visible = false;
     term->rendered_rows = 0u;
     term->rendered_cursor_row = 0u;
+    term->rendered_end_at_margin = false;
     return 0;
 }
 
@@ -494,12 +495,18 @@ leave_prompt(struct snj_term *term)
     if (term->capable && term->rendered_cursor_row + 1u < term->rendered_rows &&
         move_cursor(term->rendered_rows - term->rendered_cursor_row - 1u, 'B') < 0)
         return -1;
-    if (snj_write_full(STDERR_FILENO, term->capable ? "\r\n" : "\n",
-                       term->capable ? 2u : 1u) < 0)
+    if (term->capable && term->rendered_end_at_margin) {
+        if (snj_write_full(STDERR_FILENO, "\r", 1u) < 0)
+            return -1;
+    } else if (snj_write_full(STDERR_FILENO,
+                              term->capable ? "\r\n" : "\n",
+                              term->capable ? 2u : 1u) < 0) {
         return -1;
+    }
     term->prompt_visible = false;
     term->rendered_rows = 0u;
     term->rendered_cursor_row = 0u;
+    term->rendered_end_at_margin = false;
     term->output_seen = false;
     term->output_ended_lf = true;
     return 0;
@@ -512,6 +519,46 @@ mark_input_activity(struct snj_term *term)
         return;
     term->typing_active = true;
     term->last_input_ms = snj_time_ms();
+}
+
+static int
+sync_prompt_layout_after_resize(struct snj_term *term)
+{
+    struct snj_buf scratch;
+    size_t cursor_row = 0u, cursor_col = 0u;
+    size_t end_row = 0u, end_col = 0u;
+    size_t label_len = strlen(term->label);
+    size_t label_cols = snj_term_text_width(term->label, label_len);
+    size_t max;
+    int rc = -1;
+
+    if (term->draft.len > (SIZE_MAX - 32u) / 8u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    max = term->draft.len * 8u + 32u;
+    snj_buf_init(&scratch, max);
+    if (label_cols == SIZE_MAX ||
+        append_safe(&scratch, term->draft.data, term->draft.len, true,
+                    label_cols, term->columns, term->cursor,
+                    &cursor_row, &cursor_col, &end_row, &end_col) < 0)
+        goto out;
+    /*
+     * tmux and VT terminals represent an exact-margin cursor as the pending
+     * wrap position on the preceding row after reflow.  The renderer tracks
+     * that position as column zero on the next row.  Materialize the pending
+     * wrap before erase/movement commands use the recomputed row counts.
+     */
+    if (cursor_row != 0u && cursor_col == 0u &&
+        snj_write_full(STDERR_FILENO, " \b", 2u) < 0)
+        goto out;
+    term->rendered_rows = end_row + 1u + (term->status[0] ? 1u : 0u);
+    term->rendered_cursor_row = cursor_row + (term->status[0] ? 1u : 0u);
+    term->rendered_end_at_margin = end_row != 0u && end_col == 0u;
+    rc = 0;
+out:
+    snj_buf_free(&scratch);
+    return rc;
 }
 
 static int
@@ -574,8 +621,20 @@ redraw(struct snj_term *term)
         snj_buf_append(&out, term->label, label_len) < 0 ||
         append_safe(&out, term->draft.data, term->draft.len, true, label_cols,
                     term->columns, term->cursor,
-                    &cursor_row, &cursor_col, &end_row, &end_col) < 0 ||
-        snj_buf_append(&out, "\033[K", 3u) < 0 ||
+                    &cursor_row, &cursor_col, &end_row, &end_col) < 0)
+        goto out;
+    /*
+     * A VT-style terminal keeps the cursor in a pending-wrap state after a
+     * printable character fills the right margin.  Our row accounting already
+     * places that cursor at column zero of the next row.  Force the pending
+     * wrap before emitting cursor controls, otherwise a later redraw can think
+     * the prompt occupies one row more than it really does and erase the model
+     * output immediately above it.
+     */
+    if (end_row != 0u && end_col == 0u &&
+        snj_buf_append(&out, " \b", 2u) < 0)
+        goto out;
+    if (snj_buf_append(&out, "\033[K", 3u) < 0 ||
         snj_write_full(STDERR_FILENO, out.data, out.len) < 0)
         goto out;
     if (end_row > cursor_row && move_cursor(end_row - cursor_row, 'A') < 0)
@@ -585,6 +644,7 @@ redraw(struct snj_term *term)
         goto out;
     term->rendered_rows = end_row + 1u + (term->status[0] ? 1u : 0u);
     term->rendered_cursor_row = cursor_row + (term->status[0] ? 1u : 0u);
+    term->rendered_end_at_margin = end_row != 0u && end_col == 0u;
     term->prompt_visible = true;
     rc = 0;
 out:
@@ -1262,6 +1322,7 @@ static int
 consume_resize(struct snj_term *term)
 {
     bool was_capable;
+    bool now_capable;
 
     if (!sigwinch_pending)
         return 0;
@@ -1269,9 +1330,19 @@ consume_resize(struct snj_term *term)
     if (!term->opened)
         return 0;
     was_capable = term->capable;
-    if (term->prompt_visible && was_capable && snj_term_hide(term) < 0)
-        return -1;
     update_size(term);
+    now_capable = term->capable;
+    if (term->prompt_visible && was_capable) {
+        if (now_capable && sync_prompt_layout_after_resize(term) < 0)
+            return -1;
+        if (!now_capable)
+            term->capable = true;
+        if (snj_term_hide(term) < 0) {
+            term->capable = now_capable;
+            return -1;
+        }
+        term->capable = now_capable;
+    }
     if (!term->prompt_wanted || term->output_depth)
         return 0;
     return redraw(term);

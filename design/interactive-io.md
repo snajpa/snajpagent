@@ -108,10 +108,11 @@ asserts tmux's rendered pane contents after each interaction. The deterministic
 scenario covers:
 
 - word-boundary wrapping, explicit newlines, long-word hard wrapping, UTF-8,
-  and terminal resize without changing the stored assistant text;
-- the first steering edit, continued editing before the pause expires, model
-  output resumption below a stable draft snapshot, and another edit/resume
-  cycle after more output;
+  and resize to an exact-right-margin composer without changing or erasing the
+  stored assistant text;
+- the first steering edit, continued editing before the pause expires, provider
+  text withheld for the configured interval, model output resumption below a
+  stable draft snapshot, and another edit/resume cycle after more output;
 - numbered `/q` and `/queue` listing plus edit, delete, clear, and newest-item
   pop, including the `edit N › ` composer and preservation of queue order;
 - prompt, status, model output, and composer redraws without leaked escape
@@ -135,6 +136,7 @@ great... now please gather the complete state of livepatch status for vpsadminos
 Only one live qualification instance may run at a time. It runs from `/root`
 in a narrow tmux, admits the applicable `/root/AGENTS.md`, waits through all
 local tool work and response cycles, and exits normally. Acceptance compares
-the final rendered pane/history with the byte-exact `response_completed` data,
-checks the `turn_started.data.instructions` path/size/SHA-256 metadata, and
-rejects dropped, duplicated, reordered, overwritten, or visibly escaped text.
+the normalized logical text sequence in the final rendered pane/history with
+the byte-exact `response_completed` data, checks the
+`turn_started.data.instructions` path/size/SHA-256 metadata, and rejects
+dropped, duplicated, reordered, overwritten, or visibly escaped text.

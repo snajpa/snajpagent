@@ -3,7 +3,7 @@
 set -eu
 bin=$1
 case "$bin" in /*) ;; *) bin=$(pwd)/$bin ;; esac
-root=$(mktemp -d /tmp/snajpagent-cli-XXXXXX)
+root=$(mktemp -d "${TMPDIR:-/tmp}/snajpagent-cli-XXXXXX")
 cleanup() {
     rm -rf "$root"
 }

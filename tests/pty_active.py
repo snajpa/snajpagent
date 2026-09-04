@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 import errno
+import hashlib
 import json
 import os
 import pty
@@ -239,9 +240,12 @@ def test_agents_md_config():
     child.exit_cleanly(answer_end)
     turn = one(events(new_session(before)), "turn_started")
     instructions = turn["data"]["instructions"]
-    assert len(instructions) == 1
-    assert instructions[0]["path"] == str(agents)
-    assert instructions[0]["bytes"] == len(contents.encode())
+    assert instructions
+    assert instructions[-1] == {
+        "path": str(agents),
+        "bytes": len(contents.encode()),
+        "sha256": hashlib.sha256(contents.encode()).hexdigest(),
+    }
 
     disabled_config = root / "config" / "agents-disabled.ini"
     disabled_config.write_text(

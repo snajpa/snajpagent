@@ -311,6 +311,84 @@ snj_fixture_response(const char *prompt, const json_t *steering,
     }
     if (strcmp(prompt, "empty") == 0)
         return 0;
+    if (strcmp(prompt, "terminal_render") == 0) {
+        static const char first[] =
+            "alpha beta gamma delta epsilon ";
+        static const char second_prefix[] =
+            "zeta eta theta\nexplicit café ";
+        static const char euro_first[] = "\xe2";
+        static const char second_suffix[] = "\x82\xac line\n";
+        static const char third[] =
+            "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ "
+            "tail control:\x1b[31m";
+        static const char full[] =
+            "alpha beta gamma delta epsilon "
+            "zeta eta theta\nexplicit café € line\n"
+            "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ "
+            "tail control:\x1b[31m";
+        size_t index = graph->count;
+
+        if (snj_response_graph_add_public(
+                graph, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                "msg_fixture_terminal_render", full) < 0 ||
+            emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 first, sizeof(first) - 1u) < 0)
+            goto allocation;
+        for (unsigned int i = 0u; i < 50u; ++i) {
+            int pump_rc = pump(opaque, 20u);
+
+            if (pump_rc != 0)
+                return pump_rc;
+        }
+        if (emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 second_prefix, sizeof(second_prefix) - 1u) < 0 ||
+            emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 euro_first, sizeof(euro_first) - 1u) < 0 ||
+            emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 second_suffix, sizeof(second_suffix) - 1u) < 0)
+            goto allocation;
+        for (unsigned int i = 0u; i < 25u; ++i) {
+            int pump_rc = pump(opaque, 20u);
+
+            if (pump_rc != 0)
+                return pump_rc;
+        }
+        if (emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 third, sizeof(third) - 1u) < 0)
+            goto allocation;
+        return 0;
+    }
+    if (strcmp(prompt, "terminal_status") == 0) {
+        static const char full[] =
+            "status-first-fragment status-second-fragment";
+        static const char first[] = "status-first-fragment ";
+        static const char second[] = "status-second-fragment";
+        size_t index = graph->count;
+
+        if (snj_response_graph_add_public(
+                graph, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                "msg_fixture_terminal_status", full) < 0)
+            goto allocation;
+        for (unsigned int i = 0u; i < 50u; ++i) {
+            int pump_rc = pump(opaque, 20u);
+
+            if (pump_rc != 0)
+                return pump_rc;
+        }
+        if (emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 first, sizeof(first) - 1u) < 0)
+            goto allocation;
+        for (unsigned int i = 0u; i < 60u; ++i) {
+            int pump_rc = pump(opaque, 20u);
+
+            if (pump_rc != 0)
+                return pump_rc;
+        }
+        if (emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 second, sizeof(second) - 1u) < 0)
+            goto allocation;
+        return 0;
+    }
     if (strcmp(prompt, "typing_stream") == 0) {
         static const char full[] =
             "model-output-one model-output-two model-output-three";

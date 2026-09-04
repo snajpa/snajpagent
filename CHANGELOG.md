@@ -4,6 +4,15 @@
 
 ## 0.9.0-wip
 
+- Added permanent narrow-tmux rendered-screen regression coverage plus an
+  explicit serialized live terminal target that compares the configured
+  provider run with durable response and `AGENTS.md` metadata.
+- Fixed exact-right-margin composer redraws so VT pending-wrap state cannot make
+  a later edit or resize erase the model-output row above it.
+- Prevented the transient activity status from redrawing in the middle of an
+  open streamed public item, and made post-steering output resume directly
+  below the preserved draft without an extra wrap line.
+
 - Made Codex-style project instruction discovery explicitly configurable with
   `[agent] read_agents_md`; it remains enabled by default so an applicable
   workspace `AGENTS.md` is supplied to the model automatically.

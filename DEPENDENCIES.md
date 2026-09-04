@@ -23,6 +23,7 @@ The linked/runtime dependencies for a normal provider-capable build are:
 | system Jansson | not vendored | strict JSON parsing, construction, and canonical event/request encoding |
 | system libcurl | not vendored | bounded OpenAI Responses create/count/compact HTTPS transport |
 | libcurl backend closure | not vendored | TLS, resolver, compression, HTTP, and other backends selected by the system libcurl build |
+| tmux | not vendored; test-only | optional rendered-screen regression in `make check`; required by `make tmuxcheck` and `make terminallivecheck` |
 
 `src/snj_jansson.h` is the only Jansson include surface in first-party C code. It
 prefers a system `<jansson.h>` when one is available. Some minimal qualification

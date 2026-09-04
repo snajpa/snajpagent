@@ -265,11 +265,28 @@ flush_wrap_pending(struct snj_render *render)
     size_t leading = 0u;
     size_t width;
     unsigned int columns;
+    bool prompt_interposed;
+    bool continued_line;
 
     if (!len)
         return 0;
     while (leading < len && (text[leading] == ' ' || text[leading] == '\t'))
         ++leading;
+    prompt_interposed = !render->public_output_open && render->term &&
+                        snj_term_typing_active(render->term);
+    if (prompt_interposed) {
+        continued_line = render->public_column != 0u;
+        render->public_column = 0u;
+        if (continued_line) {
+            text += leading;
+            len -= leading;
+        }
+        if (!len) {
+            snj_buf_reset(&render->wrap_pending);
+            render->wrap_has_word = false;
+            return 0;
+        }
+    }
     width = snj_term_text_width(text, len);
     columns = snj_term_columns(render->term);
     if (width == SIZE_MAX)

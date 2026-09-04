@@ -7,6 +7,10 @@ BIN = snajpagent
 EVIDENCE_DIR ?= build/release-evidence/current-host
 RELEASE_PLATFORMS ?= linux-x86_64 linux-aarch64 macos-x86_64 macos-arm64
 RELEASE_EVIDENCE_DIRS ?=
+LIVE_CONFIG ?= $(HOME)/.snajpagent/config.ini
+LIVE_WORKSPACE ?= $(CURDIR)
+LIVE_RESULT_ROOT ?=
+TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
 COMMON_SRC = src/base.c src/config.c src/credential.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/sse.c src/responses.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/term.c src/render.c src/cli.c src/app_events.c src/app_stream.c src/app_process.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
 HEADERS = src/snajpagent.h src/base.h src/config.h src/credential.h src/secret.h src/instructions.h src/json.h src/snj_jansson.h src/snj_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h
@@ -111,6 +115,11 @@ check: tests/test_base tests/test_config tests/test_instructions tests/test_cred
 	./tests/test_tools
 	./tests/test_store
 	./tests/test_cli.sh ./tests/snajpagent-fixture
+	@if command -v tmux >/dev/null 2>&1; then \
+		$(MAKE) tmuxcheck; \
+	else \
+		printf '%s\n' 'tmux_terminal: skipped (tmux unavailable)'; \
+	fi
 	./tools/check_spdx.sh
 	$(MAKE) depscheck
 	$(MAKE) portabilitycheck
@@ -147,6 +156,33 @@ releasecheck:
 
 livecheck: $(BIN)
 	python3 ./tools/live_provider_check.py ./$(BIN)
+
+tmuxcheck: tests/snajpagent-fixture
+	@command -v tmux >/dev/null 2>&1 || { \
+		printf '%s\n' 'tmuxcheck: tmux is required' >&2; exit 2; \
+	}
+	@test -n "$(TMUX_TEST_ROOT)"
+	@case "$(abspath $(TMUX_TEST_ROOT))" in \
+		"$(abspath $(CURDIR))/build/"*) ;; \
+		*) printf '%s\n' 'tmuxcheck: TMUX_TEST_ROOT must be below build/' >&2; \
+		   exit 2 ;; \
+	esac
+	rm -rf "$(TMUX_TEST_ROOT)"
+	mkdir -p -m 700 "$(TMUX_TEST_ROOT)/home" "$(TMUX_TEST_ROOT)/work"
+	HOME="$(TMUX_TEST_ROOT)/home" LC_ALL=C.utf8 \
+		python3 ./tests/tmux_terminal.py fixture \
+		./tests/snajpagent-fixture "$(TMUX_TEST_ROOT)/work" \
+		"$(TMUX_TEST_ROOT)/run"
+
+terminallivecheck: $(BIN)
+	@test -n "$(LIVE_RESULT_ROOT)" || { \
+		printf '%s\n' 'terminallivecheck: set LIVE_RESULT_ROOT' >&2; exit 2; \
+	}
+	@test -f "$(LIVE_CONFIG)" || { \
+		printf '%s\n' 'terminallivecheck: LIVE_CONFIG is not a file' >&2; exit 2; \
+	}
+	python3 ./tests/tmux_terminal.py live ./$(BIN) \
+		"$(LIVE_WORKSPACE)" "$(LIVE_CONFIG)" "$(LIVE_RESULT_ROOT)"
 
 evidencebundle: $(BIN) tests/snajpagent-fixture
 	rm -rf $(EVIDENCE_DIR)
@@ -197,6 +233,6 @@ install: $(BIN)
 	cp $(BIN) $(DESTDIR)$(PREFIX)/bin/$(BIN)
 	chmod 0755 $(DESTDIR)$(PREFIX)/bin/$(BIN)
 
-.PHONY: all check statuscheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck evidencebundle evidencecheck releaseevidence sizecheck clean install
+.PHONY: all check statuscheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install
 
 -include $(COMMON_OBJ:.o=.d) src/main.d

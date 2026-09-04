@@ -69,6 +69,7 @@ struct snj_term {
     bool typing_active;
     bool output_seen;
     bool output_ended_lf;
+    bool rendered_end_at_margin;
 };
 
 void snj_term_init(struct snj_term *term);

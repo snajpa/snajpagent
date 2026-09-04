@@ -23,11 +23,15 @@ The default `make check` path now includes the following machine-checkable gates
 | `make sizecheck` | enforces preferred/hard line budgets and the 2,000-line per-file review trigger |
 | `tests/test_provider_transport` | exercises the real libcurl create/count/compact transport against a local loopback HTTP server |
 | `tests/pty_*.py` | exercises the interactive terminal composer, live resize, suspend/continue, and TERM/width fallback behavior through a PTY on the current POSIX host |
+| `make tmuxcheck` | runs deterministic streaming, status, wrapping, steering, resize, queue, durable-text, and instruction-discovery scenarios through isolated narrow tmux panes and asserts the rendered screen/scrollback; `make check` runs it whenever tmux is installed |
+| `make terminallivecheck` | runs the fixed vpsAdminOS 6.12.95 real-work prompt through the configured default provider in a 52×18 tmux, serializes checks using the same config file, and compares rendered public text with durable response events and `AGENTS.md` metadata |
 
 The PTY implementation is now compiled through a single `SNAJPAGENT_HAVE_PTY`
 capability surface. Linux uses `<pty.h>` and macOS uses `<util.h>`; runtime PTY
 behavior then uses the same `openpty`, `ioctl(TIOCGWINSZ/TIOCSWINSZ)`,
 controlling-terminal, immediate-run, yielded-run, and `write_stdin` paths.
+The tmux layer complements those raw-PTY checks by interpreting cursor movement,
+erase, wrap, and resize sequences as a real terminal does.
 
 ## External evidence still required
 

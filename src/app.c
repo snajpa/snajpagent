@@ -985,6 +985,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     if (rc == 0) {
         uint64_t now = snj_time_ms();
         if (!snj_term_typing_active(&app->term) &&
+            !app->stream_item_active &&
             !app->activity_shown && now >= app->active_since_ms &&
             now - app->active_since_ms >= 750u) {
             if (snj_render_activity(&app->render, "working…") < 0)

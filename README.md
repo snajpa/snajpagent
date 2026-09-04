@@ -37,6 +37,7 @@ Requirements:
 - make
 - system libcurl
 - system Jansson
+- tmux (optional for `make check`, required by the strict real-screen targets)
 
 Build and test:
 
@@ -44,6 +45,29 @@ Build and test:
 make
 make check
 ```
+
+When tmux is installed, `make check` also runs `make tmuxcheck`. That target
+starts the fixture binary in isolated 32–48 column tmux panes and validates the
+rendered screen and scrollback, not merely the PTY byte stream. It covers
+streaming/status interaction, word and hard wrapping, UTF-8/control safety,
+steering pause/resume snapshots, resize at the right margin, every queue
+mutation, durable response/queue text, and enabled/disabled `AGENTS.md`
+admission. Call `make tmuxcheck` directly when tmux coverage is mandatory.
+
+The explicit live counterpart uses the configured default provider, the fixed
+vpsAdminOS 6.12.95 status prompt documented in `design/interactive-io.md`, and
+retains its screen plus event copy under a caller-selected new directory:
+
+```sh
+make terminallivecheck \
+  LIVE_WORKSPACE=/root \
+  LIVE_CONFIG=$HOME/.snajpagent/config.ini \
+  LIVE_RESULT_ROOT=/path/to/new/result-directory
+```
+
+Live terminal checks take a nonblocking exclusive advisory lock on
+`LIVE_CONFIG`, so two instances using the same configured profile cannot run at
+once. The result directory must not already exist.
 
 The repository vendors no third-party implementation source. See
 `DEPENDENCIES.md` for the dependency policy and the available audit targets.
