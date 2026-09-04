@@ -143,6 +143,8 @@ response_started(const char *turn_id, const char *response_id,
     assert(snj_json_set_new(data, "profile_id",
                             json_string(SNAJPAGENT_PROFILE_ID)) == 0);
     assert(snj_json_set_new(data, "provider", json_string("default")) == 0);
+    assert(snj_json_set_new(data, "provider_source_sha256",
+        json_string("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")) == 0);
     assert(snj_json_set_new(data, "request_sha256",
         json_string("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) == 0);
     assert(snj_json_set_new(data, "requested_output_tokens", json_null()) == 0);
@@ -740,6 +742,8 @@ test_usage_anchor(void)
     memcpy(session.usage_anchor_provider, "provider", 9u);
     memcpy(session.usage_anchor_model, "model", 6u);
     memcpy(session.usage_anchor_effort, "medium", 7u);
+    memcpy(session.usage_anchor_provider_source_sha256,
+           "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 65u);
     session.usage_anchor_request_input_count = 1u;
     session.usage_anchor_request_input_bytes = canonical_size(prefix);
     session.usage_anchor_input_tokens = 100u;
@@ -751,13 +755,23 @@ test_usage_anchor(void)
         (uint64_t)projection.create_request_bytes -
         (uint64_t)projection.request_input_bytes + 512u + 32u;
     assert(snj_context_usage_anchor_bound(&session, "provider", "model",
-               "medium", &projection, &bound) == 1);
+               "medium",
+               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+               &projection, &bound) == 1);
     assert(bound == expected);
     assert(snj_context_usage_anchor_bound(&session, "other", "model",
-               "medium", &projection, &bound) == 0);
+               "medium",
+               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+               &projection, &bound) == 0);
+    assert(snj_context_usage_anchor_bound(&session, "provider", "model",
+               "medium",
+               "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+               &projection, &bound) == 0);
     memcpy(session.compact_id, "different", 10u);
     assert(snj_context_usage_anchor_bound(&session, "provider", "model",
-               "medium", &projection, &bound) == 0);
+               "medium",
+               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+               &projection, &bound) == 0);
     session.compact_id[0] = '\0';
     assert(json_object_set_new(json_array_get(
                json_object_get(projection.create_request, "input"), 0u),
@@ -766,7 +780,9 @@ test_usage_anchor(void)
         json_object_get(projection.create_request, "input"));
     projection.create_request_bytes = canonical_size(projection.create_request);
     assert(snj_context_usage_anchor_bound(&session, "provider", "model",
-               "medium", &projection, &bound) == 0);
+               "medium",
+               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+               &projection, &bound) == 0);
 
     json_decref(prefix);
     snj_context_projection_free(&projection);
@@ -840,6 +856,8 @@ main(void)
     assert(strcmp(session.context_meter_model, SNAJPAGENT_MODEL) == 0);
     assert(strcmp(session.context_meter_effort, "medium") == 0);
     assert(session.context_meter_compact_id[0] == '\0');
+    assert(strcmp(session.context_meter_provider_source_sha256,
+                  "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff") == 0);
     assert(snj_session_commit(&session, "response_completed",
                               response_completed(turn1, resp1, "pong"),
                               NULL, error, sizeof(error)) == 0);

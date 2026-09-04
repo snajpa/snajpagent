@@ -16,7 +16,8 @@ binary = os.path.abspath(sys.argv[1])
 workspace = os.path.abspath(sys.argv[2])
 dotdir = os.environ["SNAJPAGENT_DOTDIR"]
 state_root = Path(dotdir) / "sessions"
-prompt = "gpt-5.5-2026-04-23/medium context=?% › ".encode()
+fresh_prompt = "gpt-5.5-2026-04-23/medium 0% › ".encode()
+accounted_prompt = "gpt-5.5-2026-04-23/medium ?% › ".encode()
 text = b"resize draft"
 
 
@@ -73,20 +74,20 @@ def set_winsize(cols):
 
 
 try:
-    wait(prompt)
+    wait(fresh_prompt)
     typed_start = len(buf)
     os.write(fd, text)
     typed_end = wait(text[-1:] + b"\x1b[K", start=typed_start)
     resize_start = len(buf)
     set_winsize(40)
-    wait(prompt, start=resize_start)
+    wait(fresh_prompt, start=resize_start)
     os.write(fd, b"\r")
     answer_end = wait(b"fixture answer", start=typed_end)
     terminal_end = wait(b"turn_completed synced", start=answer_end)
-    idle_end = wait(b"\r" + prompt, start=terminal_end)
+    idle_end = wait(b"\r" + accounted_prompt, start=terminal_end)
     narrow_start = len(buf)
     set_winsize(10)
-    wait(prompt, start=narrow_start)
+    wait(accounted_prompt, start=narrow_start)
     os.write(fd, b"/exit\r")
     _, status = os.waitpid(pid, 0)
     while read_once(0.05):

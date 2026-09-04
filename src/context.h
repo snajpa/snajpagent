@@ -33,7 +33,7 @@ void snj_context_projection_free(struct snj_context_projection *projection);
 int snj_context_usage_anchor_bound(
                       const struct snj_session *session,
                       const char *provider, const char *model,
-                      const char *effort,
+                      const char *effort, const char *provider_source_sha256,
                       const struct snj_context_projection *projection,
                       uint64_t *input_tokens_bound);
 int snj_context_build(struct snj_session *session, const char *model,

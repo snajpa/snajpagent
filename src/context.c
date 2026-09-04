@@ -1334,6 +1334,7 @@ int
 snj_context_usage_anchor_bound(
     const struct snj_session *session, const char *provider,
     const char *model, const char *effort,
+    const char *provider_source_sha256,
     const struct snj_context_projection *projection,
     uint64_t *input_tokens_bound)
 {
@@ -1347,7 +1348,8 @@ snj_context_usage_anchor_bound(
     uint64_t bound;
     int rc = 0;
 
-    if (!session || !provider || !model || !effort || !projection ||
+    if (!session || !provider || !model || !effort ||
+        !provider_source_sha256 || !projection ||
         !input_tokens_bound || !projection->create_request) {
         errno = EINVAL;
         return -1;
@@ -1357,6 +1359,8 @@ snj_context_usage_anchor_bound(
         strcmp(session->usage_anchor_provider, provider) != 0 ||
         strcmp(session->usage_anchor_model, model) != 0 ||
         strcmp(session->usage_anchor_effort, effort) != 0 ||
+        strcmp(session->usage_anchor_provider_source_sha256,
+               provider_source_sha256) != 0 ||
         strcmp(session->usage_anchor_compact_id, session->compact_id) != 0 ||
         projection->request_input_count <
             session->usage_anchor_request_input_count ||

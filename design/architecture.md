@@ -23,12 +23,13 @@ session.
 Before `response_started`, the runtime builds the exact outgoing model-input
 and request projections and accounts for them in token units. A configured
 exact count is mandatory. Otherwise a compatible provider-reported input
-usage anchors a pessimistic growth bound; without an anchor, one token per
-serialized input byte is the deliberately conservative fallback. Serialized
-bytes and token bounds remain separate durable facts. Source-bound catalog
-limits or an exact `[model-limit PROVIDER/MODEL]` tuple determine the hard
-input budget; `auto_compact_input_tokens = 0` disables only proactive policy,
-never the hard guard.
+usage from the same provider source, model, effort, and compaction lineage
+anchors a pessimistic growth bound; without an anchor, one token per serialized
+input byte is the deliberately conservative fallback. Serialized bytes and
+token bounds remain separate durable facts. Source-bound catalog limits or an
+exact `[model-limit PROVIDER/MODEL]` tuple determine the hard input budget;
+`auto_compact_input_tokens = 0` disables only proactive policy, never the hard
+guard.
 
 An over-budget request is not sent. Native Codex compaction or the existing
 Responses summary path runs first, and the rebuilt request must be recounted

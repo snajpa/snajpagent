@@ -199,12 +199,13 @@ summaries, runtime state, protocol, and transport detail through the existing
 single verbosity ladder. Actionable errors and direct local-command results
 remain immediately visible in either view.
 
-The rollout composer appends `context=N%` as its final field immediately before
-`›` or `»`, using the latest comparable durable token bound and resolved hard
-input budget; unknown capacity or lineage renders `context=?%`. Chat view keeps
-the existing `OPERATOR_NICK@MACHINE_HOSTNAME ›|»` prompt without a meter, so
-switching presentation views does not imply a token fact that is unavailable
-there.
+The rollout composer appends `N%` as its final field immediately before `›` or
+`»`, using the latest comparable durable token bound and resolved hard input
+budget. A fresh session or accounting from a different provider source,
+selection, or compaction lineage renders `0%`; compatible accounting with an
+unknown hard budget renders `?%`. Chat view keeps the existing
+`OPERATOR_NICK@MACHINE_HOSTNAME ›|»` prompt without a meter, so switching
+presentation views does not imply a token fact that is unavailable there.
 
 Successful durable lifecycle milestones are also first-class rollout records
 at verbosity 0. They use exact terse bullet lines: `• Compacted` after

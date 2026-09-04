@@ -410,6 +410,7 @@ format_context_meter(struct app_state *app, bool active,
                                   resolve_effort(next_effort(app));
     struct snj_model_capacity resolved;
     const struct snj_model_capacity *capacity = &app->turn_capacity;
+    char provider_source_hash[SNJ_SHA256_HEX_LEN + 1u];
     uint64_t used;
     uint64_t hard;
     unsigned int percent;
@@ -429,14 +430,20 @@ format_context_meter(struct app_state *app, bool active,
             return -1;
         capacity = &resolved;
     }
-    if (!capacity->hard_input_known ||
-        !app->session.context_meter_valid ||
+    provider_capacity_source_sha256(provider, provider_source_hash);
+    if (!app->session.context_meter_valid ||
         strcmp(app->session.context_meter_provider, provider->name) != 0 ||
         strcmp(app->session.context_meter_model, model) != 0 ||
         strcmp(app->session.context_meter_effort, effort) != 0 ||
+        strcmp(app->session.context_meter_provider_source_sha256,
+               provider_source_hash) != 0 ||
         strcmp(app->session.context_meter_compact_id,
                app->session.compact_id) != 0) {
-        memcpy(meter, " context=?%", sizeof(" context=?%"));
+        memcpy(meter, " 0%", sizeof(" 0%"));
+        return 0;
+    }
+    if (!capacity->hard_input_known) {
+        memcpy(meter, " ?%", sizeof(" ?%"));
         return 0;
     }
     used = app->session.context_meter_input_tokens;
@@ -446,7 +453,7 @@ format_context_meter(struct app_state *app, bool active,
     } else {
         percent = (unsigned int)((used * 100u + hard - 1u) / hard);
     }
-    n = snprintf(meter, 32u, " context=%u%%", percent);
+    n = snprintf(meter, 32u, " %u%%", percent);
     if (n < 0 || n >= 32) {
         errno = EOVERFLOW;
         return -1;
@@ -2272,6 +2279,7 @@ run_turn(struct app_state *app, const char *prompt,
     uint64_t request_input_bytes = 0;
     uint64_t request_input_count = 0;
     char request_input_hash[SNJ_SHA256_HEX_LEN + 1u];
+    char provider_source_hash[SNJ_SHA256_HEX_LEN + 1u];
     char rejected_request_hash[SNJ_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNJ_SHA256_HEX_LEN + 1u] = {0};
     unsigned int hard_compaction_attempts = 0u;
@@ -2295,6 +2303,7 @@ run_turn(struct app_state *app, const char *prompt,
         (void)app_error(app, error);
         return 2;
     }
+    provider_capacity_source_sha256(app->turn_provider, provider_source_hash);
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (snj_credential_read(&credential, app->turn_provider->api_key_env,
                             error, sizeof(error)) < 0) {
@@ -2375,6 +2384,7 @@ run_turn(struct app_state *app, const char *prompt,
                             &input_tokens_bound,
                             &model_input_bytes, &request_input_bytes,
                             &request_input_count, request_input_hash,
+                            provider_source_hash,
                             &count_method,
                             &request_body, &create_request, &count_request,
                             error, sizeof(error)) < 0) {
@@ -2585,6 +2595,7 @@ run_turn(struct app_state *app, const char *prompt,
                                                    NULL,
                                                app->turn_provider->name,
                                                app->turn_effort,
+                                               provider_source_hash,
                                                &app->turn_capacity,
                                                steering),
                          error, sizeof(error)) < 0) {

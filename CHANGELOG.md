@@ -18,8 +18,9 @@
   a typed pre-output context rejection gets one replay-safe compact-and-retry
   recovery. Trustworthy rejection details durably lower a source-bound
   in-session safety ceiling that survives resume and is visible in `/status`.
-  Bytes and token bounds remain distinct, and rollout composers end in
-  `context=N% ›|»` or `context=?% ›|»`.
+  Bytes and token bounds remain distinct, and rollout composers end in `N% ›|»`,
+  with `0%` before compatible accounting and `?%` when only the hard budget is
+  unknown.
 
 - Replaced the terse exit `resume:` label with the capitalized bullet header
   `• You can resume this session with the following command:`. It uses the

@@ -14,7 +14,8 @@ binary = os.path.abspath(sys.argv[1])
 workspace = os.path.abspath(sys.argv[2])
 dotdir = os.environ["SNAJPAGENT_DOTDIR"]
 state_root = Path(dotdir) / "sessions"
-prompt = "gpt-5.5-2026-04-23/medium context=?% › ".encode()
+fresh_prompt = "gpt-5.5-2026-04-23/medium 0% › ".encode()
+accounted_prompt = "gpt-5.5-2026-04-23/medium ?% › ".encode()
 text = b"suspend draft"
 
 
@@ -76,7 +77,7 @@ def wait_stopped(timeout=8.0):
 
 
 try:
-    wait(prompt)
+    wait(fresh_prompt)
     typed_start = len(buf)
     os.write(fd, text)
     typed_end = wait(text[-1:] + b"\x1b[K", start=typed_start)
@@ -84,12 +85,12 @@ try:
     wait_stopped()
     resume_start = len(buf)
     os.kill(pid, signal.SIGCONT)
-    wait(prompt, start=resume_start)
+    wait(fresh_prompt, start=resume_start)
     wait(text, start=resume_start)
     os.write(fd, b"\r")
     answer_end = wait(b"fixture answer", start=typed_end)
     terminal_end = wait(b"turn_completed synced", start=answer_end)
-    wait(b"\r" + prompt, start=terminal_end)
+    wait(b"\r" + accounted_prompt, start=terminal_end)
     os.write(fd, b"/exit\r")
     _, status = os.waitpid(pid, 0)
     code = os.waitstatus_to_exitcode(status)

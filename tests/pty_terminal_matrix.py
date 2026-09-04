@@ -15,7 +15,8 @@ binary = os.path.abspath(sys.argv[1])
 workspace = os.path.abspath(sys.argv[2])
 dotdir = os.environ["SNAJPAGENT_DOTDIR"]
 state_root = Path(dotdir) / "sessions"
-prompt = "gpt-5.5-2026-04-23/medium context=?% › ".encode()
+fresh_prompt = "gpt-5.5-2026-04-23/medium 0% › ".encode()
+accounted_prompt = "gpt-5.5-2026-04-23/medium ?% › ".encode()
 
 
 def session_ids():
@@ -72,7 +73,7 @@ def run_case(term, cols, expect_ansi, expected_text):
 
     def wait_idle_prompt(start=0, timeout=8.0):
         end = time.monotonic() + timeout
-        needles = (b"\r" + prompt, b"\n" + prompt)
+        needles = (b"\r" + accounted_prompt, b"\n" + accounted_prompt)
         while not any(needle in buf[start:] for needle in needles):
             remaining = end - time.monotonic()
             if remaining <= 0 or not read_once(remaining):
@@ -95,7 +96,7 @@ def run_case(term, cols, expect_ansi, expected_text):
             read_once(min(0.05, remaining))
 
     try:
-        wait(prompt)
+        wait(fresh_prompt)
         os.write(fd, expected_text.encode() + b"\r")
         answer_end = wait(b"fixture answer")
         terminal_end = wait(b"turn_completed synced", start=answer_end)

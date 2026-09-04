@@ -38,8 +38,9 @@ MARKDOWN_TEXT = (
     "| alpha | `ready` | 7 |\n\n"
     "second paragraph"
 )
-DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium context=?% ›"
-DEFAULT_ACTIVE_PROMPT = "gpt-5.5-2026-04-23/medium context=?% »"
+DEFAULT_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium 0% ›"
+DEFAULT_ACCOUNTED_IDLE_PROMPT = "gpt-5.5-2026-04-23/medium ?% ›"
+DEFAULT_ACTIVE_PROMPT = "gpt-5.5-2026-04-23/medium ?% »"
 MACHINE_HOSTNAME = socket.gethostname()
 
 
@@ -989,7 +990,7 @@ def run_queue_case(binary, root):
         terminal.submit("/queue 1 delete")
         wait_event_count(dotdir, "future_turn_cancelled", 3)
         terminal.submit("/q 1e")
-        terminal.wait("edit 1 context=?% › second")
+        terminal.wait("edit 1 ?% › second")
         terminal.send_text(" active")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 1)
@@ -1002,9 +1003,9 @@ def run_queue_case(binary, root):
 
         terminal.send_key("C-c")
         terminal.wait("turn interrupted")
-        terminal.wait(DEFAULT_IDLE_PROMPT)
+        terminal.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
         terminal.submit("/queue 1 edit")
-        terminal.wait("edit 1 context=?% › second active")
+        terminal.wait("edit 1 ?% › second active")
         terminal.send_text(" idle")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 2)
@@ -1020,9 +1021,9 @@ def run_queue_case(binary, root):
                 "next › second",
                 "next › third",
                 "next › fourth",
-                "edit 1 context=?% › second active",
+                "edit 1 ?% › second active",
                 "next › fifth",
-                "edit 1 context=?% › second active idle",
+                "edit 1 ?% › second active idle",
                 "future-turn queue is empty",
             ],
         )
@@ -1115,12 +1116,12 @@ def run_tool_case(binary, root):
             close_fixture_terminal(terminal)
 
 
-def wait_idle_prompt_at_bottom(terminal, timeout=5.0):
+def wait_idle_prompt_at_bottom(terminal, prompt, timeout=5.0):
     deadline = time.monotonic() + timeout
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture()
-        if screen.rstrip().endswith(DEFAULT_IDLE_PROMPT.rstrip()):
+        if screen.rstrip().endswith(prompt.rstrip()):
             return screen
         if terminal.dead():
             raise AssertionError(
@@ -1150,11 +1151,11 @@ def run_lifecycle_case(binary, root):
         terminal.wait("• Goal cleared")
         terminal.wait("goal checkpoint")
         wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
-        wait_idle_prompt_at_bottom(terminal)
+        wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
 
         terminal.submit("/compact")
         terminal.wait("• Compacted")
-        wait_idle_prompt_at_bottom(terminal)
+        wait_idle_prompt_at_bottom(terminal, DEFAULT_IDLE_PROMPT)
         screen = terminal.capture(join_wrapped=True)
         assert_order(screen, ["• Goal set", "• Goal cleared", "• Compacted"])
         for notice in ("• Goal set", "• Goal cleared", "• Compacted"):
@@ -1271,7 +1272,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         100, 24, environment=environment,
     )
     try:
-        terminal.wait("uncached-start/low context=?% ›")
+        terminal.wait("uncached-start/low 0% ›")
         before = provider.catalog_paths()
         terminal.submit("/model cache")
         screen = terminal.wait("4. codex / codex-late / ultra",
@@ -1337,7 +1338,7 @@ def run_model_catalog_case(binary, root, provider, environment):
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
     expected = (f"{operator}@{MACHINE_HOSTNAME} ›" if operator else
-                "uncached-start/low context=?% ›")
+                "uncached-start/low 0% ›")
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture()
@@ -1702,7 +1703,7 @@ def run_live(binary, workspace, config, root):
                 last_report = now
             time.sleep(0.1)
 
-        terminal.wait(DEFAULT_IDLE_PROMPT, timeout=10.0)
+        terminal.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, timeout=10.0)
         screen = terminal.capture()
         joined_screen = terminal.capture(join_wrapped=True)
         _, events = read_events(dotdir)

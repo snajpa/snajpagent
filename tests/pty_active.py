@@ -21,8 +21,9 @@ DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
-DEFAULT_IDLE_PROMPT = f"{DEFAULT_MODEL}/medium context=?% › ".encode()
-DEFAULT_ACTIVE_PROMPT = f"{DEFAULT_MODEL}/medium context=?% » ".encode()
+DEFAULT_IDLE_PROMPT = f"{DEFAULT_MODEL}/medium 0% › ".encode()
+DEFAULT_ACCOUNTED_IDLE_PROMPT = f"{DEFAULT_MODEL}/medium ?% › ".encode()
+DEFAULT_ACTIVE_PROMPT = f"{DEFAULT_MODEL}/medium ?% » ".encode()
 GOAL_SET = "• Goal set".encode()
 GOAL_CLEARED = "• Goal cleared".encode()
 COMPACTED = "• Compacted".encode()
@@ -331,7 +332,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
-    prompt = f"{model}/medium context=?% › ".encode()
+    prompt = f"{model}/medium 0% › ".encode()
     child = Child(["-m", model])
     try:
         child.wait(prompt)
@@ -589,7 +590,7 @@ def test_steering_during_pre_response_compaction():
     session_id = new_session(before)
 
     child = Child(["--config", str(config), "--resume", session_id])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
     child.send(b"compaction_steer\rchange plan\r")
     steer_end = child.wait(DEFAULT_ACTIVE_PROMPT + b"change plan")
     child.wait(DEFAULT_ACTIVE_PROMPT, start=steer_end)
@@ -629,7 +630,7 @@ def test_steering_during_capacity_recovery_compaction():
     session_id = new_session(before)
 
     child = Child(["--resume", session_id])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
     child.send(b"capacity_recovery_steer\rchange recovery plan\r")
     steer_end = child.wait(b"\xc2\xbb change recovery plan")
     answer_end = child.wait(b"fixture answer", start=steer_end)
@@ -690,7 +691,7 @@ def test_steering_during_capacity_recovery_compaction():
     mismatched = Child([
         "--config", str(mismatch_config), "--resume", session_id
     ])
-    prompt_end = mismatched.wait(b"context=?% \xe2\x80\xba ")
+    prompt_end = mismatched.wait(b" 0% \xe2\x80\xba ")
     mismatched.send(b"/status\r")
     status_end = mismatched.wait(b"context: source=unknown", start=prompt_end)
     status_end = mismatched.wait(
@@ -796,7 +797,7 @@ def test_multiline_and_paste():
     child.wait(PROMPT)
     child.send(b"line one\nline two\r")
     first_end = child.wait(b"fixture answer")
-    child.wait(b"\r" + DEFAULT_IDLE_PROMPT, start=first_end)
+    child.wait(b"\r" + DEFAULT_ACCOUNTED_IDLE_PROMPT, start=first_end)
     child.send(b"\x1b[200~ping\x1b[201~\r")
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
@@ -1110,20 +1111,20 @@ def test_queue_mutation_commands():
     child.wait(b"1 future turn cancelled")
 
     child.send(b"/q 1e\r")
-    child.wait(b"edit 1 context=?% " + PROMPT + b"second")
+    child.wait(b"edit 1 ?% " + PROMPT + b"second")
     child.send(b" active\r")
-    child.wait(b"edit 1 context=?% " + PROMPT + b"second active")
+    child.wait(b"edit 1 ?% " + PROMPT + b"second active")
 
     child.send(b"fourth\t")
     child.wait(b"next " + PROMPT + b"fourth")
     child.send(b"\x03")
     interrupted_end = child.wait(b"turn interrupted")
-    child.wait(b"\r" + DEFAULT_IDLE_PROMPT, start=interrupted_end)
+    child.wait(b"\r" + DEFAULT_ACCOUNTED_IDLE_PROMPT, start=interrupted_end)
 
     child.send(b"/queue 1 edit\r")
-    child.wait(b"edit 1 context=?% " + PROMPT + b"second active")
+    child.wait(b"edit 1 ?% " + PROMPT + b"second active")
     child.send(b" idle\r")
-    child.wait(b"edit 1 context=?% " + PROMPT + b"second active idle")
+    child.wait(b"edit 1 ?% " + PROMPT + b"second active idle")
 
     child.send(b"/exit\r")
     _, status = os.waitpid(child.pid, 0)
@@ -1361,7 +1362,7 @@ def test_uncached_typed_model_selection():
 
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
-    initial_prompt = b"uncached-start/low context=?% \xe2\x80\xba "
+    initial_prompt = b"uncached-start/low 0% \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     config.write_text(
@@ -1782,12 +1783,12 @@ def test_known_context_meter():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"uncached-start/low context=?% \xe2\x80\xba ")
+    child.wait(b"uncached-start/low 0% \xe2\x80\xba ")
     child.send(b"/model gpt-5.6-sol / medium\r")
     selected = child.wait(
         b"model for next turn: first / gpt-5.6-sol / medium"
     )
-    child.wait(b"gpt-5.6-sol/medium context=?% \xe2\x80\xba ", start=selected)
+    child.wait(b"gpt-5.6-sol/medium 0% \xe2\x80\xba ", start=selected)
     session_id = new_session(before)
     start = len(child.buf)
     child.send(b"slow\r")
@@ -1807,7 +1808,7 @@ def test_known_context_meter():
     assert isinstance(used, int) and used > 0
     percent = min(100, (used * 100 + hard - 1) // hard)
     assert percent > 0
-    expected = f"gpt-5.6-sol/medium context={percent}% » ".encode()
+    expected = f"gpt-5.6-sol/medium {percent}% » ".encode()
     child.wait(expected, start=start)
     child.send(b"\x03")
     interrupted = child.wait(b"turn interrupted", start=start)
@@ -1822,7 +1823,7 @@ def test_config_and_cli_model_passthrough():
     )
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"openai/gpt-5.6/medium context=?% \xe2\x80\xba ")
+    child.wait(b"openai/gpt-5.6/medium 0% \xe2\x80\xba ")
 
     child.send(b"/status\r")
     end = child.wait(b"model: openai/gpt-5.6")
@@ -1842,7 +1843,7 @@ def test_config_and_cli_model_passthrough():
         "--config", str(config), "-m", "vendor/future-model",
         "--effort", "custom-effort", "--resume", session_id
     ])
-    resumed.wait(b"vendor/future-model/custom-effort context=?% \xe2\x80\xba ")
+    resumed.wait(b"vendor/future-model/custom-effort 0% \xe2\x80\xba ")
     start = len(resumed.buf)
     resumed.send(b"/status\r")
     end = resumed.wait(
@@ -1850,11 +1851,11 @@ def test_config_and_cli_model_passthrough():
     )
     resumed.wait(PROMPT, start=end)
     resumed.send(b"ping\r")
-    resumed.wait(b"vendor/future-model/custom-effort context=?% \xc2\xbb ",
+    resumed.wait(b"vendor/future-model/custom-effort ?% \xc2\xbb ",
                  start=end)
     answer_end = resumed.wait(b"pong", start=end)
     idle_end = resumed.wait(
-        b"openai/gpt-5.6/medium context=?% \xe2\x80\xba ", start=answer_end
+        b"openai/gpt-5.6/medium 0% \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -2052,11 +2053,11 @@ def test_prompt_identity_is_terminal_safe():
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(visible + b" context=?% \xe2\x80\xba ")
+    child.wait(visible + b" 0% \xe2\x80\xba ")
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send(b"ping\r")
-    child.wait(visible + b" context=?% \xc2\xbb ")
+    child.wait(visible + b" ?% \xc2\xbb ")
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
 
@@ -2079,9 +2080,9 @@ def test_network_chat_and_managed_mention():
     peer_agent = None
     exited = False
     network_idle = f"localop@{socket.gethostname()} › ".encode()
-    network_active = f"localop@{socket.gethostname()} context=?% » ".encode()
+    network_active = f"localop@{socket.gethostname()} ?% » ".encode()
     network_rollout_idle = (
-        f"localop@{socket.gethostname()} context=?% › ".encode()
+        f"localop@{socket.gethostname()} 0% › ".encode()
     )
     try:
         child.wait(network_idle)

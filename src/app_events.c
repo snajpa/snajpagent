@@ -491,6 +491,7 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
                 uint64_t *input_tokens_bound, uint64_t *model_input_bytes,
                 uint64_t *request_input_bytes, uint64_t *request_input_count,
                 char request_input_hash[SNJ_SHA256_HEX_LEN + 1u],
+                const char *provider_source_sha256,
                 const char **count_method, struct snj_buf *request_body,
                 json_t **create_request, json_t **count_request,
                 char *error, size_t error_size)
@@ -500,7 +501,8 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
 
     (void)prompt;
     if (!input_tokens_bound || !model_input_bytes || !request_input_bytes ||
-        !request_input_count || !request_input_hash || !count_method) {
+        !request_input_count || !request_input_hash ||
+        !provider_source_sha256 || !count_method) {
         errno = EINVAL;
         return -1;
     }
@@ -534,7 +536,8 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
             uint64_t anchored_bound = 0u;
             int anchor_rc = snj_context_usage_anchor_bound(
                 &app->session, app->turn_provider->name, app->turn_model,
-                app->turn_effort, &projection, &anchored_bound);
+                app->turn_effort, provider_source_sha256, &projection,
+                &anchored_bound);
 
             if (anchor_rc < 0) {
                 if (error_size)
@@ -598,13 +601,17 @@ snj_app_response_started_data(const char *turn_id, const char *response_id,
                       uint64_t request_input_count, const char *request_input_hash,
                       const char *baseline_hash,
                       const char *provider, const char *effort,
+                      const char *provider_source_sha256,
                       const struct snj_model_capacity *capacity,
                       const json_t *steering)
 {
     json_t *data = json_object();
     json_t *ids = json_array();
 
-    if (!data || !ids || !steering || !provider || !effort || !capacity)
+    if (!data || !ids || !steering || !provider || !effort ||
+        !provider_source_sha256 ||
+        !snj_hex_is_lower(provider_source_sha256, SNJ_SHA256_HEX_LEN) ||
+        !capacity)
         goto fail;
     for (size_t i = 0; i < json_array_size(steering); ++i) {
         json_t *item = json_array_get(steering, i);
@@ -643,6 +650,8 @@ snj_app_response_started_data(const char *turn_id, const char *response_id,
         snj_json_set_new(data, "profile_id",
                          json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
         snj_json_set_new(data, "provider", json_string(provider)) < 0 ||
+        snj_json_set_new(data, "provider_source_sha256",
+                         json_string(provider_source_sha256)) < 0 ||
         snj_json_set_new(data, "request_input_bytes",
                          json_integer((json_int_t)request_input_bytes)) < 0 ||
         snj_json_set_new(data, "request_input_count",

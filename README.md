@@ -237,16 +237,18 @@ restart pauses automatic continuation. See
 [`design/goals.md`](design/goals.md) for the complete lifecycle contract.
 
 The ordinary composer identifies the model, reasoning effort, and current
-context position. It uses `MODEL/EFFORT context=N% › ` while idle and
-`MODEL/EFFORT context=N% » ` during a turn, where `›` means start a turn and
-`»` means add input to the active turn. The percentage is the latest comparable
-durable token bound divided by the resolved hard input budget, rounded up;
-unknown capacity or incompatible lineage renders `context=?%`. Raw serialized
-bytes are never displayed as measured tokens. The idle prompt shows the
-effective next-turn selection; the active prompt keeps the model and effort
-frozen for that turn even if `/model` or `/effort` stages a different next-turn
-value. Terminal-unsafe characters in those trusted selectors are escaped for
-display without changing the values sent to the provider.
+context position. It uses `MODEL/EFFORT N% › ` while idle and
+`MODEL/EFFORT N% » ` during a turn, where `›` means start a turn and `»` means
+add input to the active turn. The percentage is the latest comparable durable
+token bound divided by the resolved hard input budget, rounded up. A fresh
+session or accounting from a different provider source, selection, or
+compaction lineage renders `0%`; compatible accounting with an unknown hard
+budget renders `?%`. Raw serialized bytes are never displayed as measured
+tokens. The idle prompt shows the effective next-turn selection; the active
+prompt keeps the model and effort frozen for that turn even if `/model` or
+`/effort` stages a different next-turn value. Terminal-unsafe characters in
+those trusted selectors are escaped for display without changing the values
+sent to the provider.
 
 At startup the orientation identifies the product build, workspace, and
 abbreviated session explicitly, for example
@@ -270,8 +272,8 @@ Queue mutations accept these short and long forms:
 ```
 
 `pop` removes the newest queued turn. Editing reopens the selected text under
-an `edit N context=N% › ` prompt (or `context=?%`) and saves it in the same
-FIFO position with Enter (or with Tab while another turn is active).
+an `edit INDEX N% › ` prompt (or `?%`) and saves it in the same FIFO position
+with Enter (or with Tab while another turn is active).
 
 ## IRC Chat Mode
 
@@ -484,9 +486,10 @@ provider/model/source route, survives resume, participates in subsequent hard
 budgets and prompt percentages, and appears separately in `/status`. An error
 without either token fact never creates a ceiling.
 Exact token counts are used when configured. Otherwise provider-reported usage
-anchors pessimistic growth accounting when compatible, with a one-token-per-
-serialized-byte upper bound only as the explicit fallback; byte and token
-measurements remain separately reported.
+from the same provider source, model, effort, and compaction lineage anchors
+pessimistic growth accounting, with a one-token-per-serialized-byte upper bound
+only as the explicit fallback; byte and token measurements remain separately
+reported.
 
 Local codex-lb proxy configuration:
 
