@@ -524,6 +524,39 @@ def assert_order(screen, fragments):
         offset = position + len(fragment)
 
 
+def wrapped_fragment_pattern(fragment):
+    if not fragment or "\n" in fragment:
+        raise ValueError("wrapped fragment must be nonempty and single-line")
+    return re.compile(r"\n?".join(re.escape(char) for char in fragment))
+
+
+def wait_wrapped_fragment(terminal, fragment, timeout=10.0):
+    pattern = wrapped_fragment_pattern(fragment)
+    deadline = time.monotonic() + timeout
+    screen = ""
+    while time.monotonic() < deadline:
+        screen = terminal.capture(join_wrapped=True)
+        if pattern.search(screen):
+            return screen
+        if terminal.dead():
+            raise AssertionError(
+                f"pane exited while waiting for wrapped {fragment!r}:\n{screen}"
+            )
+        time.sleep(0.02)
+    raise AssertionError(f"timeout waiting for wrapped {fragment!r}:\n{screen}")
+
+
+def assert_wrapped_order(screen, fragments):
+    offset = 0
+    for fragment in fragments:
+        match = wrapped_fragment_pattern(fragment).search(screen, offset)
+        if match is None:
+            raise AssertionError(
+                f"wrapped fragment {fragment!r} is missing or reordered:\n{screen}"
+            )
+        offset = match.end()
+
+
 def run_status_case(binary, root):
     case = root / "status"
     workspace = case / "workspace"
@@ -804,9 +837,13 @@ def run_render_case(binary, root):
         terminal.submit("terminal_render")
         terminal.wait("alpha beta gamma delta-")
         terminal.send_text("draft")
-        first = terminal.wait(f"{DEFAULT_ACTIVE_PROMPT} draft", join_wrapped=True)
-        assert_order(first, ["alpha beta gamma delta-", "extraordinary",
-                             f"{DEFAULT_ACTIVE_PROMPT} draft"])
+        first = wait_wrapped_fragment(
+            terminal, f"{DEFAULT_ACTIVE_PROMPT} draft"
+        )
+        assert_wrapped_order(first, [
+            "alpha beta gamma delta-", "extraordinary",
+            f"{DEFAULT_ACTIVE_PROMPT} draft",
+        ])
         if re.search(r"(?m)^• alpha beta gamma", first) is None:
             raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
         if "• alpha beta gamma delta-\nextraordinary" not in first:
@@ -815,7 +852,7 @@ def run_render_case(binary, root):
         time.sleep(0.1)
         pause_started = time.monotonic()
         terminal.send_text(" plus")
-        terminal.wait(f"{DEFAULT_ACTIVE_PROMPT} draft plus", join_wrapped=True)
+        wait_wrapped_fragment(terminal, f"{DEFAULT_ACTIVE_PROMPT} draft plus")
         time.sleep(1.1)
         paused = terminal.capture(join_wrapped=True)
         if "explicit café € line" in paused:
@@ -826,19 +863,24 @@ def run_render_case(binary, root):
                                join_wrapped=True)
         if time.monotonic() - pause_started < 1.2:
             raise AssertionError("model output resumed before the typing pause")
-        assert_order(second, [f"{DEFAULT_ACTIVE_PROMPT} draft plus",
-                              "explicit café € line"])
-        if f"{DEFAULT_ACTIVE_PROMPT} draft plus\n\nzeta eta theta" in second:
+        assert_wrapped_order(second, [
+            f"{DEFAULT_ACTIVE_PROMPT} draft plus", "explicit café € line",
+        ])
+        prompt_pattern = wrapped_fragment_pattern(
+            f"{DEFAULT_ACTIVE_PROMPT} draft plus"
+        ).pattern
+        if re.search(prompt_pattern + r"\n\nzeta eta theta", second):
             raise AssertionError(f"output resumed with a spurious blank line:\n{second}")
-        if f"{DEFAULT_ACTIVE_PROMPT} draft plus\nzeta eta theta" not in second:
+        if re.search(prompt_pattern + r"\nzeta eta theta", second) is None:
             raise AssertionError(f"output did not resume directly below the draft:\n{second}")
         if re.search(r"(?m)^zeta eta theta$", second) is None:
             raise AssertionError(f"wrapped prose gained a hanging indent:\n{second}")
 
         repeat_pause_started = time.monotonic()
         terminal.send_text(" again with long resize text")
-        terminal.wait(f"{DEFAULT_ACTIVE_PROMPT} draft plus again",
-                      join_wrapped=True)
+        wait_wrapped_fragment(
+            terminal, f"{DEFAULT_ACTIVE_PROMPT} draft plus again"
+        )
         exact_margin = (
             f"{DEFAULT_ACTIVE_PROMPT} draft plus again with long resize text"
         )
@@ -853,7 +895,7 @@ def run_render_case(binary, root):
                 f"repeated editing did not restart the typing pause:\n{paused_again}"
             )
 
-        final = terminal.wait("control:\\x1B[31m", timeout=5.0)
+        final = wait_wrapped_fragment(terminal, "control:\\x1B[31m", timeout=5.0)
         if time.monotonic() - repeat_pause_started < 1.2:
             raise AssertionError("repeated typing pause ended too early")
         if f"{exact_margin}\n\nsupercalifragilisticexpialidocious" in final:
@@ -866,7 +908,7 @@ def run_render_case(binary, root):
             )
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
         joined = terminal.capture(join_wrapped=True)
-        assert_order(
+        assert_wrapped_order(
             joined,
             [
                 "alpha beta gamma delta-",
