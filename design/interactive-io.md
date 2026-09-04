@@ -25,7 +25,8 @@ the terminal, and how users inspect and modify queued turns.
   exact and do not gain presentation newlines. Markdown-enabled and literal
   terminal output use this same wrapping implementation.
 - While a turn is active, the first edit after visible model output starts the
-  `MODEL/EFFORT » ` composer on a new terminal line immediately. `»` is U+00BB
+  configured rollout-active composer on a new terminal line immediately. `»`
+  is U+00BB
   RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK; the composer does not spell out
   `steer`.
 - Ordinary character insertion, deletion, and cursor movement update the
@@ -36,7 +37,7 @@ the terminal, and how users inspect and modify queued turns.
   pause. After the pause expires, the current composer line remains as a
   readable snapshot and model output resumes on the following line.
 - If editing resumes after more model text, that text is ended on its current
-  line and the updated draft is shown on a new `MODEL/EFFORT » ` line. This
+  line and the updated draft is shown on a new rollout-active prompt line. This
   cycle can repeat without losing or changing the draft.
 - `[ui] typing_pause_ms` controls the inactivity pause. It defaults to `500`,
   accepts `0` through `5000`, and applies only to interactive terminal display.
@@ -51,15 +52,14 @@ submits the draft as immediate steering and interrupts the current provider
 response at the next input-pump boundary. Tab durably appends the draft to the
 future-turn FIFO and does not interrupt the response, yield a managed command,
 or expose the text to the current model cycle. Ctrl-C is composer-first in
-both idle and active states: it clears a nonempty draft without changing the
-turn or session. Only Ctrl-C on an already-empty active composer interrupts the
-turn; on an empty idle composer it exits. Five consecutive Ctrl-Cs completed
-within two seconds exit from any composer state. Presses two through four in
-such an active-turn sequence are consumed so the transition to an idle composer
-cannot exit early; the fifth interrupts the active turn and closes input. After
-every accepted Enter steer, an empty `MODEL/EFFORT » ` composer is armed
-immediately, before provider cancellation or the next response cycle completes,
-so another steer can be entered at once.
+both idle and active states: it leaves the displayed draft in scrollback,
+appends literal `^C` and a newline, discards the draft/search state, and opens a
+clean prompt. A nonempty active draft does not interrupt the turn; an empty
+active composer requests safe turn interruption. Ctrl-C never exits and no
+press count or timing is retained. Ctrl-D, terminal EOF, and `/exit` remain
+explicit exits. After every accepted Enter steer, an empty active composer is
+armed immediately, before provider cancellation or the next response cycle
+completes, so another steer can be entered at once.
 
 When Enter interrupts visible model output, `response_interrupted` retains its
 byte-exact public prefix. The next request places that prefix in assistant role,
@@ -79,15 +79,14 @@ with empty data and no EOF request to use the existing TERM-then-bounded-KILL
 closure and return the terminal result. A rejected termination combination does
 not modify the process.
 
-The `working…` activity line is shown only after an open public item has been
-closed. When it is the first row of the redrawn input block, exactly one empty
-row separates it from the completed model block. Response completion must not
-release a withheld final word and paint the activity line as one delayed
-update.
+There is no textual activity row: interactive operation emits neither
+`working…` nor `interrupting…` and reserves no extra status row. Idle,
+provider, and synchronous tool work appear only in the fixed-width prompt
+status cell described below.
 
 Interactive submitted input and the first visible model block have exactly one
-empty row between them. The final visible model block and the next activity or
-input prompt have the same separation. Boundary handling counts the model
+empty row between them. The final visible model block and the next input prompt
+have the same separation. Boundary handling counts the model
 block's existing trailing newlines and emits only the missing amount, so a
 paragraph break, prompt redraw, or repeated boundary call cannot accumulate
 extra empty rows. The rule is independent of Markdown presentation type and
@@ -95,15 +94,17 @@ does not alter submitted text, model text, events, or provider traffic.
 
 ## Prompt Identity And Tab
 
-Ordinary input uses U+203A RIGHT-POINTING SINGLE ANGLE QUOTATION MARK (`›`)
-while no turn is running and U+00BB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
-(`»`) while input will be added to a running turn. The glyph is the complete
-state marker; the ordinary composer never includes a `steer` word or a
-different active-turn arrow.
+`[ui] prompt` is one data-only template with exactly one `{chat:TEXT}`, one
+`{rollout-idle:TEXT}`, and one `{rollout-active:TEXT}` case. It supports
+separate `{provider}`, `{model}`, `{effort}`, `{operator}`, `{host}`,
+`{context}`, `{mode}`, and required `{status_char}` fields plus escaped literal
+braces/backslash; it performs no shell or environment expansion. The default
+rollout prompt is `PROVIDER/MODEL/EFFORT N% › ` while idle and uses `»` while
+active. The default chat prompt is `OPERATOR@HOST : `. Snajpagent appends one
+space after the expanded template.
 
-The non-networked prompt is `MODEL/EFFORT N% › ` while idle and
-`MODEL/EFFORT N% » ` during a turn. The context meter is the final field
-immediately before the state glyph. `N` is the rounded-up percentage of the
+The context meter is the final rollout data field before the one-column status
+cell and state glyph. `N` is the rounded-up percentage of the
 latest durable token-domain input bound against the resolved hard input budget
 for the same provider source, model, effort, and compaction lineage. A fresh
 session or accounting from a different provider source, selection, or lineage
@@ -116,8 +117,38 @@ and glyph in terminal scrollback. Terminal-unsafe code points in a trusted
 model or effort selector are visibly escaped in the composer only; the
 selected value supplied to the provider remains byte-for-byte unchanged.
 
+`prompt_spinner_idle`, `prompt_spinner_provider`, and `prompt_spinner_tool`
+are quoted sequences of 1--16 safe one-column Unicode frames, defaulting to a
+single space, `◴◷◶◵`, and `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`. One frame is deliberately
+static and schedules no periodic work or cell rewrite. Multiple frames use the
+one shared `prompt_spinner_per_second` rate (1--60, default 8), monotonic phase,
+and no catch-up bursts. Only the status cell is overwritten; a search prompt,
+hidden prompt, suspended process, or non-addressable terminal does not animate.
+Tool status spans the synchronous adapter call and returns to provider after a
+managed `running` result. A fixed interruption skull blink is included only if
+its documented implementation preflight records `GO`.
+
 The networked prompt identity and its chat/rollout views are specified in
 `irc-chat.md`.
+
+## Persistent Prompt History And Reverse Search
+
+All ordinary chat and rollout composers in one dotdir share the plaintext
+`DOTDIR/prompt_history`. Each submitted line is appended under an advisory lock
+as one UTF-8 physical line; backslash, newline, carriage return, tab, and other
+controls use reversible text escapes. The `0600` no-follow regular file retains
+the newest 100 decoded entries within 4 MiB. Torn tails and malformed records
+are skipped or repaired without changing accepted-input semantics. Fresh
+Up/Down navigation and Ctrl-R refresh from disk; an active search keeps a stable
+snapshot. Initial noninteractive input, confirmation input, aborted drafts,
+peer/model/tool text, and resumed `last_user` are excluded.
+
+Ctrl-R performs case-sensitive newest-to-oldest substring search and displays
+`(reverse-i-search)`QUERY': MATCH`; a miss uses
+`(failed reverse-i-search)`QUERY': `. Repeated Ctrl-R selects older matches,
+Backspace broadens again, Ctrl-G restores the exact original draft/cursor,
+Escape accepts without submitting, movement/editing accepts then applies, and
+Enter submits the displayed match. Search never wraps or animates its prompt.
 
 Tab uses the following order in every ordinary composer:
 
@@ -200,8 +231,9 @@ non-steering behavior as `/queue TEXT`.
 - Store replay coverage rejects invalid edit targets and no-op edits, and
   reconstructs a valid edited queue. PTY coverage verifies the durable delete
   and clear events.
-- Configuration coverage checks the default, bounds, duplicate-key handling,
-  and explicit `typing_pause_ms` values.
+- Configuration coverage checks prompt cases/fields/escapes, spinner frame and
+  shared-rate bounds, duplicate-key handling, and explicit `typing_pause_ms`
+  values.
 - Response/context coverage demonstrates nonconsecutive public output indexes,
   interrupted-prefix replay, an explicit steering boundary, and exact ordered
   steering content. PTY coverage demonstrates that the empty active composer is
@@ -213,10 +245,11 @@ non-steering behavior as `/queue TEXT`.
   `future_turn_queued`, creates no steering or response interruption, leaves the
   active response or command running, and drains queued turns later in FIFO
   order.
-- PTY coverage asserts that Ctrl-C clears a nonempty active draft without
-  creating steering or interruption state. Separate coverage retains explicit
-  turn interruption for Ctrl-C on an empty active composer and proves four
-  rapid presses keep the process alive while the fifth exits it.
+- PTY coverage asserts persistent cross-mode/cross-process history, Ctrl-R
+  search controls, exact append-only `^C` cancellation, no count-based Ctrl-C
+  exit, prompt expansions, one-cell spinner updates, and no periodic refresh
+  for a selected one-frame state. Separate coverage retains explicit turn
+  interruption for Ctrl-C on an empty active composer.
 
 ### Real-terminal regression
 
@@ -240,8 +273,8 @@ scenario covers:
   40--100 ms, including a word divided across deltas and a final fragment with
   no trailing whitespace; each complete fragment must be visible at callback
   cadence, the divided word must remain contiguous, and the final fragment
-  must be visible during a subsequent provider pause before `working…` appears
-  alone on the following line; and
+  must remain visible during a subsequent provider pause without any textual
+  activity row appearing; and
 - enabled and disabled `AGENTS.md` discovery as recorded in the durable
   `turn_started` event.
 

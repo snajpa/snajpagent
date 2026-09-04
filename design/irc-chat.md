@@ -90,6 +90,11 @@ history_lines = 200
 
 [ui]
 color = auto
+prompt = {chat:{operator}@{host}{status_char}:}{rollout-idle:{provider}/{model}/{effort} {context}{status_char}›}{rollout-active:{provider}/{model}/{effort} {context}{status_char}»}
+prompt_spinner_idle = " "
+prompt_spinner_provider = "◴◷◶◵"
+prompt_spinner_tool = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+prompt_spinner_per_second = 8
 ```
 
 `client` is the one intentionally repeatable configuration key. There may be
@@ -209,13 +214,13 @@ summaries, runtime state, protocol, and transport detail through the existing
 single verbosity ladder. Actionable errors and direct local-command results
 remain immediately visible in either view.
 
-The rollout composer appends `N%` as its final field immediately before `›` or
-`»`, using the latest comparable durable token bound and resolved hard input
-budget. A fresh session or accounting from a different provider source,
-selection, or compaction lineage renders `0%`; compatible accounting with an
-unknown hard budget renders `?%`. Chat view keeps the existing
-`OPERATOR_NICK@MACHINE_HOSTNAME ›|»` prompt without a meter, so switching
-presentation views does not imply a token fact that is unavailable there.
+The rollout composer includes bare `N%` as its last data field immediately
+before the one-column status cell and `›` or `»`, using the latest comparable
+durable token bound and resolved hard input budget. A fresh session or
+accounting from a different provider source, selection, or compaction lineage
+renders `0%`; compatible accounting with an unknown hard budget renders `?%`.
+The default chat prompt uses `OPERATOR_NICK@MACHINE_HOSTNAME` without a meter,
+so switching presentation views does not imply a token fact there.
 
 Successful durable lifecycle milestones are also first-class rollout records
 at verbosity 0. They use exact terse bullet lines: `• Compacted` after
@@ -259,14 +264,15 @@ Non-networked interactive and one-shot modes keep their current output model,
 with the same color roles applied to prompts, labels, status, tools, warnings,
 errors, and high-verbosity diagnostics.
 
-The network composer is `OPERATOR_NICK@MACHINE_HOSTNAME › ` while idle and
-`OPERATOR_NICK@MACHINE_HOSTNAME » ` during an active turn, in both views. `›`
-is U+203A RIGHT-POINTING SINGLE ANGLE QUOTATION MARK and `»` is U+00BB
-RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK. The prompt and local chat use the
-accepted nick on the first configured server, or the hosted nick when serving
-a room. Nick changes refresh the prompt without losing the draft. Configured
-nicks remain registration preferences. The hostname comes from the local
-machine, not the IRC endpoint, room, or remote server.
+The default chat-view composer is `OPERATOR_NICK@MACHINE_HOSTNAME : `. The
+default rollout view uses `PROVIDER/MODEL/EFFORT N% › ` while idle and the
+double-angle `»` plus provider/tool status cell while active. The prompt and
+local chat use the accepted operator nick on the first configured server, or
+the hosted nick when serving a room. Nick changes refresh the prompt without
+losing the draft; configured nicks remain registration preferences. The
+hostname comes from the local machine, not the IRC endpoint, room, or remote
+server. Both views use the one shared dotdir prompt history and Ctrl-R search
+without changing input routing.
 
 Text entered at the network composer is sent as a room message from the local
 operator identity and also admitted once as local operator input to the model;

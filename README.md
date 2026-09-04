@@ -41,6 +41,13 @@ reasoning_effort = medium
 base_url = https://api.openai.com
 api_key_env = OPENAI_API_KEY
 exact_token_count = auto
+
+[ui]
+prompt = {chat:{operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
+prompt_spinner_goal = " ◆"
+prompt_spinner_provider = " ◴◷◶◵"
+prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+prompt_spinner_per_second = 8
 ```
 
 Set the named credential in the environment:
@@ -60,6 +67,23 @@ capacity failures can teach the source-bound model cache a conservative
 byte/token estimate without treating bytes or statistical values as exact token
 counts.
 
+`prompt` is a non-shell data template with one case for chat, rollout-idle,
+and rollout-active. Fields such as `{provider}`, `{model}`, and `{effort}`
+expand separately; snajpagent appends one space after the selected label.
+Each case may omit or include each adjacent `{goal_spinner}`,
+`{provider_spinner}`, and `{tool_spinner}` field.
+
+In each quoted spinner value, the first item is the inactive rendering. A safe
+one-column code point such as the default space reserves stable width. The two
+literal file characters `\0` at the beginning instead select a zero-width
+inactive rendering; no NUL byte is stored. The remaining zero through 16 safe
+one-column Unicode code points are active frames. Thus `"\0"` removes a
+present field, `" "` reserves a blank field, and `"\0◆"` appears only while
+active. One active frame is static; multiple frames use the shared 1--60
+frames-per-second rate. Goal state, provider work, and synchronous tool calls
+select their respective fields. No textual `working…` or `interrupting…` row
+is emitted.
+
 ## Use
 
 Change to a project and start the agent:
@@ -70,9 +94,17 @@ snajpagent
 ```
 
 Enter submits a turn. During a response, Enter steers it at the next safe
-boundary and Tab queues a future turn. Ctrl-J inserts a newline. Ctrl-C clears
-a draft before it interrupts a turn or exits; five consecutive presses within
-two seconds exit from any composer state. `/help` shows all keys and commands.
+boundary and Tab queues a future turn. Ctrl-J inserts a newline. Ctrl-R starts
+incremental reverse history search and Ctrl-G aborts it. Ctrl-C preserves the
+visible draft, prints `^C` and a newline, and opens a clean prompt. On an empty
+active composer it also interrupts the turn; it never exits. Use Ctrl-D or
+`/exit` to leave. `/help` shows all keys and commands.
+
+The default rollout prompt is `PROVIDER/MODEL/EFFORT N%   › ` while idle and
+uses `»` plus the goal/provider/tool spinner fields while active. The bare
+context percentage is the last data field before those optional spinners and
+the marker. A fresh session displays `0%`; `?%` is reserved for a non-fresh
+session whose effective input limit cannot be resolved.
 
 Useful commands:
 
@@ -102,6 +134,14 @@ when absent from the cache; snajpagent warns but does not validate or reject it.
 
 The terminal renders model Markdown and uses color when supported. Override
 those defaults with `--no-markdown` and `--color=auto|always|never`.
+
+Interactive submissions are appended immediately to the shared plaintext
+`$DOTDIR/prompt_history`, mode-agnostic across sessions, workspaces, and live
+processes using that dotdir. The newest 100 decoded entries within 4 MiB are
+retained. Backslash and control characters use reversible visible escapes, and
+the file is private mode `0600`. Up/Down navigate the shared stream. This
+history intentionally contains text typed and submitted by the operator;
+`/archive` and `/delete` do not erase it.
 
 ## Resume
 
@@ -159,7 +199,8 @@ is retried without exposing that correction as room chat or operator output.
 
 `-c` is repeatable. `-s ENDPOINT` selects the listener and may be combined with
 outgoing `-c` connections. Networked mode starts in chat view; Tab on an empty
-draft switches between chat and local rollout.
+draft switches between chat and local rollout. The default chat composer is
+`OPERATOR_NICK@MACHINE_HOSTNAME   : `; both views use the same prompt history.
 
 ## Reference
 

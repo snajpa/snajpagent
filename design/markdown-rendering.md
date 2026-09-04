@@ -42,7 +42,7 @@ instead of gaining a redundant paragraph bullet.
 Interactive conversation spacing is a renderer boundary rule rather than a
 prose-parser side effect. Submitted input and the first model block have one
 empty terminal row between them. A completed model block and the following
-activity or input prompt also have one empty row, whether the model ends with
+input prompt also have one empty row, whether the model ends with
 prose, a heading, an unordered or ordered list, a block quote, fenced code, or
 a pipe table, as well as literal output with Markdown disabled. Existing
 trailing newlines count toward the boundary, and repeated prompt preparation
