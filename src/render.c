@@ -1891,8 +1891,8 @@ render_irc_event_now(struct snj_render *render,
         return 0;
     seconds = (time_t)(event->timestamp_ms / 1000u);
     if (!localtime_r(&seconds, &tm) ||
-        strftime(when, sizeof(when), "%H:%M", &tm) == 0)
-        memcpy(when, "--:--", 6u);
+        strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
+        memcpy(when, "--:--:--", 9u);
     colored = render->color_stderr;
     nick_color = event->op ? "\033[1;35m" :
                  (render->model_nick[0] &&

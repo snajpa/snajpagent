@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static size_t
@@ -625,6 +626,8 @@ main(void)
     struct snj_buf delivered;
 
     assert(setlocale(LC_ALL, "") != NULL);
+    assert(setenv("TZ", "UTC0", 1) == 0);
+    tzset();
     assert(capture_orientation(false, output, sizeof(output)) > 0u);
     assert(strcmp(output, SNAJPAGENT_IDENTITY
                   " · /work/tree · session id 01234567\n") == 0);
@@ -677,12 +680,13 @@ main(void)
     assert(strcmp(output, "• **") == 0);
 
     assert(capture_static_markdown(output, sizeof(output)) > 0u);
-    assert(strstr(output, "agent › • answer and code\n") != NULL);
+    assert(strstr(output, "00:00:01 agent › • answer and code\n") != NULL);
     assert(strstr(output, "@operator › **literal operator**\n") != NULL);
     assert(strstr(output, "remote › ┌─ c\n") != NULL);
     assert(strstr(output, "remote › │ int value = 1;\n") != NULL);
     assert(strstr(output, "remote › └─\n") != NULL);
-    assert(strstr(output, "-remote - **literal notice**\n") != NULL);
+    assert(strstr(output,
+                  "00:00:01 -remote - **literal notice**\n") != NULL);
     assert(strstr(output, "remote › • plain after quit\n") != NULL);
     assert(strstr(output, "remote › │ plain after quit\n") == NULL);
     assert(strstr(output, "user: **literal user**\n") != NULL);

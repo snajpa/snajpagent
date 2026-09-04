@@ -182,9 +182,9 @@ silently consume or invent operator input.
 
 Networked interactive mode has append-only `chat` and `rollout` presentation
 views, not a windowed full-screen TUI. The process starts in chat view. Every
-chat entry has a local display time, sender or event marker, and readable
-IRC-client-style spacing; the composer remains at the bottom while output is
-safely redrawn around it. Chat view shows:
+chat entry has a local `HH:MM:SS` display time, sender or event marker, and
+readable IRC-client-style spacing; the composer remains at the bottom while
+output is safely redrawn around it. Chat view shows:
 
 - timestamped operator and remote-room messages with the sender nick;
 - a visible `@` marker on nicks that currently carry `+o`;

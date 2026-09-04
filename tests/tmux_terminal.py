@@ -1357,7 +1357,7 @@ def assert_chat_line(screen, nick, text, operator=False):
     marker = "@" if operator else ""
     bullet = "" if operator else "• "
     pattern = (
-        rf"(?m)^\d{{2}}:\d{{2}} {re.escape(marker + nick)} › "
+        rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {re.escape(marker + nick)} › "
         rf"{re.escape(bullet + text)}$"
     )
     if re.search(pattern, screen) is None:
