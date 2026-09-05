@@ -2224,17 +2224,11 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     if (fd == STDOUT_FILENO && had_bytes) {
         render->stdout_item_seen = true;
         render->stdout_item_ended_lf = ended_lf;
-        if (!ended_lf && render->stderr_terminal &&
-            write_literal(STDERR_FILENO, "\n") < 0)
-            rc = -1;
-        else if (!ended_lf && render->stderr_terminal && render->term)
-            rc = snj_term_note_output(render->term, "\n", 1u, "");
-    } else if (fd == STDERR_FILENO && had_bytes && !ended_lf &&
-               write_literal(STDERR_FILENO, "\n") < 0) {
-        rc = -1;
-    } else if (fd == STDERR_FILENO && had_bytes && !ended_lf && render->term) {
-        rc = snj_term_note_output(render->term, "\n", 1u, "");
     }
+    if (had_bytes && !ended_lf &&
+        (fd == STDERR_FILENO || render->stderr_terminal) &&
+        write_block(render, STDERR_FILENO, "\n", 1u, false, true) < 0)
+        rc = -1;
     if (had_bytes && terminal) {
         if (!ended_lf)
             trailing_newlines = fd == STDERR_FILENO || render->stderr_terminal ?
