@@ -10,7 +10,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
-#include "snj_jansson.h"
+#include "snag_jansson.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,14 +26,14 @@ call_args_yield(const char *command, const char *workdir, int timeout_ms,
 {
     json_t *args = json_object();
     assert(args);
-    assert(snj_json_set_new(args, "command", json_string(command)) == 0);
-    assert(snj_json_set_new(args, "workdir", json_string(workdir)) == 0);
-    assert(snj_json_set_new(args, "timeout_ms",
+    assert(snag_json_set_new(args, "command", json_string(command)) == 0);
+    assert(snag_json_set_new(args, "workdir", json_string(workdir)) == 0);
+    assert(snag_json_set_new(args, "timeout_ms",
                             timeout_ms < 0 ? json_null() :
                                              json_integer(timeout_ms)) == 0);
-    assert(snj_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
-    assert(snj_json_set_new(args, "max_output_tokens", json_null()) == 0);
-    assert(snj_json_set_new(args, "stdin",
+    assert(snag_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
+    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
+    assert(snag_json_set_new(args, "stdin",
                             stdin_text ? json_string(stdin_text) : json_null()) == 0);
     return args;
 }
@@ -46,22 +46,22 @@ call_args(const char *command, const char *workdir, int timeout_ms,
 }
 
 static void
-make_call_with_pty(struct snj_response_graph *graph, const char *command,
+make_call_with_pty(struct snag_response_graph *graph, const char *command,
                    const char *workdir, int timeout_ms, const char *stdin_text,
                    bool pty)
 {
     json_t *args = call_args(command, workdir, timeout_ms, stdin_text);
     assert(args != NULL);
-    assert(snj_json_set_new(args, "pty", json_boolean(pty)) == 0);
-    snj_response_graph_init(graph);
-    assert(snj_response_graph_set_provider_id(graph, "resp_tool_test") == 0);
-    assert(snj_response_graph_add_call(graph, "item_tool_test",
+    assert(snag_json_set_new(args, "pty", json_boolean(pty)) == 0);
+    snag_response_graph_init(graph);
+    assert(snag_response_graph_set_provider_id(graph, "resp_tool_test") == 0);
+    assert(snag_response_graph_add_call(graph, "item_tool_test",
                                        "call_tool_test", "exec_command",
                                        args) == 0);
 }
 
 static void
-make_call(struct snj_response_graph *graph, const char *command,
+make_call(struct snag_response_graph *graph, const char *command,
           const char *workdir, int timeout_ms, const char *stdin_text)
 {
     make_call_with_pty(graph, command, workdir, timeout_ms, stdin_text, false);
@@ -69,27 +69,27 @@ make_call(struct snj_response_graph *graph, const char *command,
 
 static json_t *
 run_command_full(const char *command, int timeout_ms, const char *secret,
-                 const char *stdin_text, snj_tool_pump_fn pump,
+                 const char *stdin_text, snag_tool_pump_fn pump,
                  void *pump_opaque, int selected_limit,
                  uint32_t ceiling)
 {
     char cwd[4096];
-    struct snj_config config;
-    struct snj_credential credential;
-    struct snj_response_graph graph;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_response_graph graph;
     json_t *result = NULL;
     char error[256];
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
-    snj_config_init(&config);
+    snag_config_init(&config);
     assert(config.shell != NULL);
     config.default_timeout_ms = 0;
     config.max_timeout_ms = 5000;
     config.max_output_tokens = ceiling;
-    snj_credential_clear(&credential);
+    snag_credential_clear(&credential);
     if (secret) {
         credential.len = strlen(secret);
-        assert(credential.len <= SNJ_CREDENTIAL_MAX);
+        assert(credential.len <= SNAG_CREDENTIAL_MAX);
         memcpy(credential.value, secret, credential.len + 1u);
     }
     make_call(&graph, command, cwd, timeout_ms, stdin_text);
@@ -98,20 +98,20 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
             "max_output_tokens", json_integer(selected_limit)) == 0);
     error[0] = '\0';
     {
-        int rc = snj_tools_run(&graph.items[0], &config, &credential, cwd,
+        int rc = snag_tools_run(&graph.items[0], &config, &credential, cwd,
                                pump, pump_opaque, -1, &result, error, sizeof(error));
         if (rc != 0)
             fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
         assert(rc == 0);
     }
     assert(result != NULL);
-    assert(snj_tool_result_valid(result) == 0);
+    assert(snag_tool_result_valid(result) == 0);
     assert(json_integer_value(json_object_get(result,
                "max_output_tokens")) ==
            (selected_limit >= 0 && (uint32_t)selected_limit < ceiling ?
             (uint32_t)selected_limit : ceiling));
-    snj_response_graph_free(&graph);
-    snj_config_free(&config);
+    snag_response_graph_free(&graph);
+    snag_config_free(&config);
     return result;
 }
 
@@ -133,65 +133,65 @@ static json_t *
 run_pty_command(const char *command, int timeout_ms)
 {
     char cwd[4096];
-    struct snj_config config;
-    struct snj_credential credential;
-    struct snj_response_graph graph;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_response_graph graph;
     json_t *result = NULL;
     char error[256];
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
-    snj_config_init(&config);
+    snag_config_init(&config);
     config.default_timeout_ms = 1000;
     config.max_timeout_ms = 5000;
-    snj_credential_clear(&credential);
+    snag_credential_clear(&credential);
     make_call_with_pty(&graph, command, cwd, timeout_ms, NULL, true);
     error[0] = '\0';
     {
-        int rc = snj_tools_run(&graph.items[0], &config, &credential, cwd,
+        int rc = snag_tools_run(&graph.items[0], &config, &credential, cwd,
                                NULL, NULL, -1, &result, error, sizeof(error));
         if (rc != 0)
             fprintf(stderr, "pty tool error: %s errno=%d\n", error, errno);
         assert(rc == 0);
     }
     assert(result != NULL);
-    assert(snj_tool_result_valid(result) == 0);
-    snj_response_graph_free(&graph);
-    snj_config_free(&config);
+    assert(snag_tool_result_valid(result) == 0);
+    snag_response_graph_free(&graph);
+    snag_config_free(&config);
     return result;
 }
 
 static json_t *
 run_tool_with_args_pump(const char *name, json_t *args,
-                        snj_tool_pump_fn pump, void *pump_opaque)
+                        snag_tool_pump_fn pump, void *pump_opaque)
 {
     char cwd[4096];
-    struct snj_config config;
-    struct snj_credential credential;
-    struct snj_response_graph graph;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_response_graph graph;
     json_t *result = NULL;
     char error[256];
     int rc;
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
-    snj_config_init(&config);
+    snag_config_init(&config);
     config.default_timeout_ms = 1000;
     config.default_yield_ms = 1000;
     config.max_timeout_ms = 5000;
-    snj_credential_clear(&credential);
-    snj_response_graph_init(&graph);
-    assert(snj_response_graph_set_provider_id(&graph, "resp_managed_test") == 0);
-    assert(snj_response_graph_add_call(&graph, "item_managed_test",
+    snag_credential_clear(&credential);
+    snag_response_graph_init(&graph);
+    assert(snag_response_graph_set_provider_id(&graph, "resp_managed_test") == 0);
+    assert(snag_response_graph_add_call(&graph, "item_managed_test",
                                        "call_managed_test", name, args) == 0);
     error[0] = '\0';
-    rc = snj_tools_run(&graph.items[0], &config, &credential, cwd,
+    rc = snag_tools_run(&graph.items[0], &config, &credential, cwd,
                        pump, pump_opaque, -1, &result, error, sizeof(error));
     if (rc != 0)
         fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
     assert(rc == 0);
     assert(result != NULL);
-    assert(snj_tool_result_valid(result) == 0);
-    snj_response_graph_free(&graph);
-    snj_config_free(&config);
+    assert(snag_tool_result_valid(result) == 0);
+    snag_response_graph_free(&graph);
+    snag_config_free(&config);
     return result;
 }
 
@@ -210,7 +210,7 @@ run_managed_exec_with_pty(const char *command, int timeout_ms, int yield_ms,
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     args = call_args_yield(command, cwd, timeout_ms, yield_ms, NULL);
-    assert(snj_json_set_new(args, "pty", json_boolean(pty)) == 0);
+    assert(snag_json_set_new(args, "pty", json_boolean(pty)) == 0);
     return run_tool_with_args("exec_command", args);
 }
 
@@ -226,12 +226,12 @@ run_write_stdin_call_limit(const char *handle, const char *data, bool eof,
 {
     json_t *args = json_object();
     assert(args != NULL);
-    assert(snj_json_set_new(args, "handle", json_string(handle)) == 0);
-    assert(snj_json_set_new(args, "data", json_string(data)) == 0);
-    assert(snj_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
-    assert(snj_json_set_new(args, "terminate", json_false()) == 0);
-    assert(snj_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
-    assert(snj_json_set_new(args, "max_output_tokens",
+    assert(snag_json_set_new(args, "handle", json_string(handle)) == 0);
+    assert(snag_json_set_new(args, "data", json_string(data)) == 0);
+    assert(snag_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
+    assert(snag_json_set_new(args, "terminate", json_false()) == 0);
+    assert(snag_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
+    assert(snag_json_set_new(args, "max_output_tokens",
         max_output_tokens < 0 ? json_null() :
                                 json_integer(max_output_tokens)) == 0);
     return run_tool_with_args("write_stdin", args);
@@ -249,12 +249,12 @@ run_terminate_call(const char *handle, const char *data, bool eof)
 {
     json_t *args = json_object();
     assert(args != NULL);
-    assert(snj_json_set_new(args, "handle", json_string(handle)) == 0);
-    assert(snj_json_set_new(args, "data", json_string(data)) == 0);
-    assert(snj_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
-    assert(snj_json_set_new(args, "terminate", json_true()) == 0);
-    assert(snj_json_set_new(args, "yield_ms", json_integer(0)) == 0);
-    assert(snj_json_set_new(args, "max_output_tokens", json_null()) == 0);
+    assert(snag_json_set_new(args, "handle", json_string(handle)) == 0);
+    assert(snag_json_set_new(args, "data", json_string(data)) == 0);
+    assert(snag_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
+    assert(snag_json_set_new(args, "terminate", json_true()) == 0);
+    assert(snag_json_set_new(args, "yield_ms", json_integer(0)) == 0);
+    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
     return run_tool_with_args("write_stdin", args);
 }
 
@@ -264,11 +264,11 @@ run_malformed_write_stdin_call(const char *handle)
     json_t *args = json_object();
 
     assert(args != NULL);
-    assert(snj_json_set_new(args, "handle", json_string(handle)) == 0);
-    assert(snj_json_set_new(args, "data", json_string("")) == 0);
-    assert(snj_json_set_new(args, "eof", json_false()) == 0);
-    assert(snj_json_set_new(args, "terminate", json_false()) == 0);
-    assert(snj_json_set_new(args, "yield_ms", json_integer(0)) == 0);
+    assert(snag_json_set_new(args, "handle", json_string(handle)) == 0);
+    assert(snag_json_set_new(args, "data", json_string("")) == 0);
+    assert(snag_json_set_new(args, "eof", json_false()) == 0);
+    assert(snag_json_set_new(args, "terminate", json_false()) == 0);
+    assert(snag_json_set_new(args, "yield_ms", json_integer(0)) == 0);
     return run_tool_with_args("write_stdin", args);
 }
 
@@ -340,34 +340,34 @@ sleep_ms(unsigned int ms)
 static json_t *
 run_apply_patch(const char *workdir, const char *patch)
 {
-    struct snj_config config;
-    struct snj_credential credential;
-    struct snj_response_graph graph;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_response_graph graph;
     json_t *args = json_object();
     json_t *result = NULL;
     char error[256];
     int rc;
 
     assert(args != NULL);
-    assert(snj_json_set_new(args, "patch", json_string(patch)) == 0);
-    assert(snj_json_set_new(args, "workdir", json_string(workdir)) == 0);
-    snj_config_init(&config);
-    snj_credential_clear(&credential);
-    snj_response_graph_init(&graph);
-    assert(snj_response_graph_set_provider_id(&graph, "resp_patch_test") == 0);
-    assert(snj_response_graph_add_call(&graph, "item_patch_test",
+    assert(snag_json_set_new(args, "patch", json_string(patch)) == 0);
+    assert(snag_json_set_new(args, "workdir", json_string(workdir)) == 0);
+    snag_config_init(&config);
+    snag_credential_clear(&credential);
+    snag_response_graph_init(&graph);
+    assert(snag_response_graph_set_provider_id(&graph, "resp_patch_test") == 0);
+    assert(snag_response_graph_add_call(&graph, "item_patch_test",
                                        "call_patch_test", "apply_patch",
                                        args) == 0);
     error[0] = '\0';
-    rc = snj_tools_run(&graph.items[0], &config, &credential, workdir,
+    rc = snag_tools_run(&graph.items[0], &config, &credential, workdir,
                        NULL, NULL, -1, &result, error, sizeof(error));
     if (rc != 0)
         fprintf(stderr, "patch tool error: %s errno=%d\n", error, errno);
     assert(rc == 0);
     assert(result != NULL);
-    assert(snj_tool_result_valid(result) == 0);
-    snj_response_graph_free(&graph);
-    snj_config_free(&config);
+    assert(snag_tool_result_valid(result) == 0);
+    snag_response_graph_free(&graph);
+    snag_config_free(&config);
     return result;
 }
 
@@ -377,7 +377,7 @@ test_apply_patch_rejects_null_result(void)
     char error[256] = {0};
 
     errno = 0;
-    assert(snj_tools_apply_patch(NULL, NULL, NULL,
+    assert(snag_tools_apply_patch(NULL, NULL, NULL,
                                  error, sizeof(error)) < 0);
     assert(errno == EINVAL);
     assert(strstr(error, "result destination") != NULL);
@@ -427,26 +427,26 @@ test_managed_process_hands_off_on_steering(void)
     json_t *closed = NULL;
     const char *handle;
     char error[256] = {0};
-    uint64_t started = snj_time_ms();
+    uint64_t started = snag_time_ms();
     bool requested = false;
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     args = call_args_yield("sleep 2", cwd, 4000, 0, NULL);
-    assert(snj_json_set_new(args, "pty", json_false()) == 0);
+    assert(snag_json_set_new(args, "pty", json_false()) == 0);
     result = run_tool_with_args_pump("exec_command", args,
                                      handoff_once_pump, &requested);
     assert(requested);
-    assert(snj_time_ms() - started < 1000u);
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    assert(strcmp(snj_json_string(result, "reason"),
+    assert(snag_time_ms() - started < 1000u);
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    assert(strcmp(snag_json_string(result, "reason"),
                   "steering_handoff") == 0);
-    assert(strstr(snj_json_string(result, "model_text"),
+    assert(strstr(snag_json_string(result, "model_text"),
                   "steering arrived") != NULL);
-    handle = snj_json_string(result, "handle");
+    handle = snag_json_string(result, "handle");
     assert(handle != NULL);
-    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+    assert(snag_tools_close_managed(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
-    assert(closed != NULL && snj_tool_result_valid(closed) == 0);
+    assert(closed != NULL && snag_tool_result_valid(closed) == 0);
     assert(json_integer_value(json_object_get(closed,
                "max_output_tokens")) == 6000);
     json_decref(closed);
@@ -459,9 +459,9 @@ test_success_and_streams(void)
     json_t *result = run_command("printf out; printf err >&2", 1000);
     json_t *out = json_object_get(result, "stdout");
     json_t *err = json_object_get(result, "stderr");
-    assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
-    assert(strcmp(snj_json_string(out, "retained"), "out") == 0);
-    assert(strcmp(snj_json_string(err, "retained"), "err") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(out, "retained"), "out") == 0);
+    assert(strcmp(snag_json_string(err, "retained"), "err") == 0);
     json_decref(result);
 }
 
@@ -473,7 +473,7 @@ test_command_output_limit_selection(void)
         json_t *result = run_command_full("printf unchanged", 1000, NULL,
             NULL, NULL, NULL, requests[i], 6789u);
 
-        assert(strcmp(snj_json_string(json_object_get(result, "stdout"),
+        assert(strcmp(snag_json_string(json_object_get(result, "stdout"),
                                      "retained"), "unchanged") == 0);
         json_decref(result);
     }
@@ -483,7 +483,7 @@ static void
 test_managed_output_ceiling(void)
 {
     json_t *started = run_managed_exec("read line; printf '%s' \"$line\"", 5000, 1);
-    const char *handle = snj_json_string(started, "handle");
+    const char *handle = snag_json_string(started, "handle");
     static const int requests[] = {-1, 42, 6000, 6001};
     json_t *closed = NULL;
     char error[256] = {0};
@@ -492,12 +492,12 @@ test_managed_output_ceiling(void)
     for (size_t i = 0u; i < sizeof(requests) / sizeof(requests[0]); ++i) {
         json_t *result = run_write_stdin_call_limit(handle, "", false, 1,
                                                     requests[i]);
-        assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+        assert(strcmp(snag_json_string(result, "status"), "running") == 0);
         assert(json_integer_value(json_object_get(result, "max_output_tokens")) ==
                (requests[i] == 42 ? 42 : 6000));
         json_decref(result);
     }
-    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+    assert(snag_tools_close_managed(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(json_integer_value(json_object_get(closed, "max_output_tokens")) == 6000);
     json_decref(closed);
@@ -508,40 +508,40 @@ static void
 test_command_output_limit_is_required_and_positive(void)
 {
     char cwd[4096];
-    struct snj_config config;
-    struct snj_credential credential;
-    struct snj_response_graph graph;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_response_graph graph;
     json_t *result = NULL;
     char error[256] = {0};
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
-    snj_config_init(&config);
-    snj_credential_clear(&credential);
+    snag_config_init(&config);
+    snag_credential_clear(&credential);
     make_call(&graph, "printf never-run", cwd, 1000, NULL);
     assert(json_object_del(graph.items[0].arguments,
                            "max_output_tokens") == 0);
-    assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
+    assert(snag_tools_run(&graph.items[0], &config, &credential, cwd,
                          NULL, NULL, -1, &result, error, sizeof(error)) < 0);
     assert(result == NULL);
-    result = snj_tool_result_terminal(false, "invalid arguments");
+    result = snag_tool_result_terminal(false, "invalid arguments");
     assert(result != NULL);
     config.max_output_tokens = 123u;
-    assert(snj_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
+    assert(snag_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
     assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
     json_decref(result);
     result = NULL;
     assert(json_object_set_new(graph.items[0].arguments,
                "max_output_tokens", json_integer(0)) == 0);
-    assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
+    assert(snag_tools_run(&graph.items[0], &config, &credential, cwd,
                          NULL, NULL, -1, &result, error, sizeof(error)) < 0);
     assert(result == NULL);
-    result = snj_tool_result_terminal(false, "invalid arguments");
+    result = snag_tool_result_terminal(false, "invalid arguments");
     assert(result != NULL);
-    assert(snj_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
+    assert(snag_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
     assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
     json_decref(result);
-    snj_response_graph_free(&graph);
-    snj_config_free(&config);
+    snag_response_graph_free(&graph);
+    snag_config_free(&config);
 }
 
 static void
@@ -549,7 +549,7 @@ test_failure_status(void)
 {
     json_t *result = run_command("exit 7", 1000);
     json_t *exit_code = json_object_get(result, "exit_code");
-    assert(strcmp(snj_json_string(result, "status"), "failed") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "failed") == 0);
     assert(json_is_integer(exit_code));
     assert(json_integer_value(exit_code) == 7);
     json_decref(result);
@@ -562,18 +562,18 @@ test_timeout_hands_off_without_killing(void)
     const char *handle;
     json_t *completed;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    assert(strcmp(snj_json_string(result, "reason"), "timeout_handoff") == 0);
-    assert(strstr(snj_json_string(result, "model_text"),
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    assert(strcmp(snag_json_string(result, "reason"), "timeout_handoff") == 0);
+    assert(strstr(snag_json_string(result, "model_text"),
                   "process continues in the background") != NULL);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     sleep_ms(250);
     completed = run_write_stdin_call_limit(handle, "", false, 0, 222);
-    assert(strcmp(snj_json_string(completed, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(completed, "status"), "succeeded") == 0);
     assert(json_integer_value(json_object_get(completed,
                "max_output_tokens")) == 222);
-    assert(strcmp(snj_json_string(json_object_get(completed, "stdout"),
+    assert(strcmp(snag_json_string(json_object_get(completed, "stdout"),
                                   "retained"), "survived") == 0);
     json_decref(completed);
     json_decref(result);
@@ -584,8 +584,8 @@ test_no_timeout(void)
 {
     json_t *result = run_command("sleep 0.05; printf no-timeout", -1);
 
-    assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
-    assert(strcmp(snj_json_string(json_object_get(result, "stdout"),
+    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(json_object_get(result, "stdout"),
                                   "retained"), "no-timeout") == 0);
     json_decref(result);
 }
@@ -598,12 +598,12 @@ test_large_stdout_is_complete_for_model(void)
         5000);
     json_t *out = json_object_get(result, "stdout");
 
-    assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
     assert(json_int_member(out, "original_bytes") == 1024 * 1024);
     assert(json_int_member(out, "retained_bytes") == 1024 * 1024);
     assert(json_int_member(out, "discarded_bytes") == 0);
-    assert(strlen(snj_json_string(out, "retained")) == 1024u * 1024u);
-    assert(strlen(snj_json_string(result, "model_text")) > 1024u * 1024u);
+    assert(strlen(snag_json_string(out, "retained")) == 1024u * 1024u);
+    assert(strlen(snag_json_string(result, "model_text")) > 1024u * 1024u);
     json_decref(result);
 }
 
@@ -614,10 +614,10 @@ test_binary_stdout_is_complete_for_model(void)
         "perl -e 'binmode STDOUT; print pack(q{C*}, 0, 255)'", 1000);
     json_t *out = json_object_get(result, "stdout");
 
-    assert(strcmp(snj_json_string(out, "encoding"), "base64") == 0);
-    assert(strcmp(snj_json_string(out, "retained"), "AP8=") == 0);
+    assert(strcmp(snag_json_string(out, "encoding"), "base64") == 0);
+    assert(strcmp(snag_json_string(out, "retained"), "AP8=") == 0);
     assert(json_int_member(out, "discarded_bytes") == 0);
-    assert(strstr(snj_json_string(result, "model_text"), "AP8=") != NULL);
+    assert(strstr(snag_json_string(result, "model_text"), "AP8=") != NULL);
     json_decref(result);
 }
 
@@ -630,8 +630,8 @@ test_stdin_uses_blocking_child_fd(void)
         1000, NULL, "hello", delay_once_pump, &delayed, -1, 4000u);
 
     assert(delayed);
-    assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
-    assert(strcmp(snj_json_string(json_object_get(result, "stdout"),
+    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(json_object_get(result, "stdout"),
                                   "retained"), "hello") == 0);
     json_decref(result);
 }
@@ -640,10 +640,10 @@ static void
 test_pty_merges_stdout_and_stderr(void)
 {
     json_t *result = run_pty_command("printf out; printf err >&2", 1000);
-    const char *merged = snj_json_string(json_object_get(result, "stdout"),
+    const char *merged = snag_json_string(json_object_get(result, "stdout"),
                                          "retained");
 
-    assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
     assert(strstr(merged, "out") != NULL);
     assert(strstr(merged, "err") != NULL);
     assert(json_int_member(json_object_get(result, "stderr"),
@@ -661,14 +661,14 @@ test_managed_pty_write_stdin_completes(void)
     json_t *next;
     const char *merged;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
     assert(json_int_member(json_object_get(result, "stderr"),
                            "original_bytes") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     next = run_write_stdin_call(handle, "hello\r", true, 5000);
-    assert(strcmp(snj_json_string(next, "status"), "succeeded") == 0);
-    merged = snj_json_string(json_object_get(next, "stdout"), "retained");
+    assert(strcmp(snag_json_string(next, "status"), "succeeded") == 0);
+    merged = snag_json_string(json_object_get(next, "stdout"), "retained");
     assert(strstr(merged, "hello") != NULL);
     assert(strstr(merged, "pty:hello") != NULL);
     assert(json_int_member(json_object_get(next, "stderr"),
@@ -686,12 +686,12 @@ test_managed_process_write_stdin_completes(void)
     const char *handle;
     json_t *next;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     next = run_write_stdin_call(handle, "hello\n", true, 5000);
-    assert(strcmp(snj_json_string(next, "status"), "succeeded") == 0);
-    assert(strstr(snj_json_string(json_object_get(next, "stdout"),
+    assert(strcmp(snag_json_string(next, "status"), "succeeded") == 0);
+    assert(strstr(snag_json_string(json_object_get(next, "stdout"),
                                   "retained"), "got:hello") != NULL);
     json_decref(next);
     json_decref(result);
@@ -707,16 +707,16 @@ test_managed_process_accepts_repeated_write_stdin(void)
     json_t *next;
     json_t *done;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     next = run_write_stdin_call(handle, "one\n", false, 50);
-    assert(strcmp(snj_json_string(next, "status"), "running") == 0);
+    assert(strcmp(snag_json_string(next, "status"), "running") == 0);
     done = run_write_stdin_call(handle, "two\n", true, 5000);
-    assert(strcmp(snj_json_string(done, "status"), "succeeded") == 0);
-    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+    assert(strcmp(snag_json_string(done, "status"), "succeeded") == 0);
+    assert(strstr(snag_json_string(json_object_get(done, "stdout"),
                                   "retained"), "first:one") != NULL);
-    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+    assert(strstr(snag_json_string(json_object_get(done, "stdout"),
                                   "retained"), "second:two") != NULL);
     json_decref(done);
     json_decref(next);
@@ -732,8 +732,8 @@ test_managed_process_without_timeout(void)
     const char *handle;
     json_t *next;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
     assert(handle != NULL);
     {
         struct timespec remaining = {0, 500000000L};
@@ -741,8 +741,8 @@ test_managed_process_without_timeout(void)
             ;
     }
     next = run_write_stdin_call(handle, "", false, 0);
-    assert(strcmp(snj_json_string(next, "status"), "succeeded") == 0);
-    assert(strstr(snj_json_string(json_object_get(next, "stdout"),
+    assert(strcmp(snag_json_string(next, "status"), "succeeded") == 0);
+    assert(strstr(snag_json_string(json_object_get(next, "stdout"),
                                   "retained"), "done") != NULL);
     json_decref(next);
     json_decref(result);
@@ -754,7 +754,7 @@ test_write_stdin_rejects_unknown_handle(void)
     json_t *result = run_write_stdin_call("00000000000000000000000000000000",
                                           "x", false, 0);
 
-    assert(strcmp(snj_json_string(result, "status"), "failed") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "failed") == 0);
     json_decref(result);
 }
 
@@ -767,17 +767,17 @@ test_wrong_handle_does_not_touch_active_process(void)
     json_t *wrong;
     json_t *done;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     wrong = run_write_stdin_call("00000000000000000000000000000000",
                                  "wrong\\n", true, 0);
-    assert(strcmp(snj_json_string(wrong, "status"), "failed") == 0);
+    assert(strcmp(snag_json_string(wrong, "status"), "failed") == 0);
     done = run_write_stdin_call(handle, "right\\n", true, 5000);
-    assert(strcmp(snj_json_string(done, "status"), "succeeded") == 0);
-    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+    assert(strcmp(snag_json_string(done, "status"), "succeeded") == 0);
+    assert(strstr(snag_json_string(json_object_get(done, "stdout"),
                                   "retained"), "got:right") != NULL);
-    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+    assert(strstr(snag_json_string(json_object_get(done, "stdout"),
                                   "retained"), "got:wrong") == NULL);
     json_decref(done);
     json_decref(wrong);
@@ -793,17 +793,17 @@ test_malformed_interaction_preserves_active_process(void)
     json_t *rejected;
     json_t *done;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     rejected = run_malformed_write_stdin_call(handle);
-    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
-    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
-    assert(strstr(snj_json_string(rejected, "model_text"),
+    assert(strcmp(snag_json_string(rejected, "status"), "running") == 0);
+    assert(strcmp(snag_json_string(rejected, "handle"), handle) == 0);
+    assert(strstr(snag_json_string(rejected, "model_text"),
                   "interaction was rejected") != NULL);
     done = run_write_stdin_call(handle, "right\\n", true, 5000);
-    assert(strcmp(snj_json_string(done, "status"), "succeeded") == 0);
-    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+    assert(strcmp(snag_json_string(done, "status"), "succeeded") == 0);
+    assert(strstr(snag_json_string(json_object_get(done, "stdout"),
                                   "retained"), "got:right") != NULL);
     json_decref(done);
     json_decref(rejected);
@@ -818,11 +818,11 @@ test_write_stdin_terminates_managed_process(void)
     json_t *terminated;
     const char *status;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     terminated = run_terminate_call(handle, "", false);
-    status = snj_json_string(terminated, "status");
+    status = snag_json_string(terminated, "status");
     assert(status != NULL && strcmp(status, "running") != 0);
     assert(json_is_null(json_object_get(terminated, "handle")));
     json_decref(terminated);
@@ -837,21 +837,21 @@ test_invalid_termination_preserves_managed_process(void)
     json_t *rejected;
     json_t *terminated;
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     rejected = run_terminate_call(handle, "must not be written", false);
-    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
-    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
-    assert(strstr(snj_json_string(rejected, "model_text"),
+    assert(strcmp(snag_json_string(rejected, "status"), "running") == 0);
+    assert(strcmp(snag_json_string(rejected, "handle"), handle) == 0);
+    assert(strstr(snag_json_string(rejected, "model_text"),
                   "not modified") != NULL);
     json_decref(rejected);
     rejected = run_terminate_call(handle, "", true);
-    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
-    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
+    assert(strcmp(snag_json_string(rejected, "status"), "running") == 0);
+    assert(strcmp(snag_json_string(rejected, "handle"), handle) == 0);
     json_decref(rejected);
     terminated = run_terminate_call(handle, "", false);
-    assert(strcmp(snj_json_string(terminated, "status"), "running") != 0);
+    assert(strcmp(snag_json_string(terminated, "status"), "running") != 0);
     json_decref(terminated);
     json_decref(result);
 }
@@ -867,17 +867,17 @@ test_managed_process_close_returns_terminal_result(void)
     const char *status;
     char error[256];
 
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     error[0] = '\0';
-    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+    assert(snag_tools_close_managed(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL);
-    assert(snj_tool_result_valid(closed) == 0);
+    assert(snag_tool_result_valid(closed) == 0);
     assert(json_integer_value(json_object_get(closed,
                "max_output_tokens")) == 6000);
-    status = snj_json_string(closed, "status");
+    status = snag_json_string(closed, "status");
     assert(strcmp(status, "running") != 0);
     assert(json_is_null(json_object_get(closed, "handle")));
     json_decref(closed);
@@ -899,12 +899,12 @@ test_timeout_handoff_preserves_process_family(void)
                     "(sleep 0.25; printf leaked > '%s') & wait",
                     marker) > 0);
     result = run_command(command, 50);
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
     assert(handle != NULL);
     sleep_ms(500);
     completed = run_write_stdin_call(handle, "", false, 0);
-    assert(strcmp(snj_json_string(completed, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(completed, "status"), "succeeded") == 0);
     assert(access(marker, F_OK) == 0);
     assert(unlink(marker) == 0);
     json_decref(completed);
@@ -929,14 +929,14 @@ test_managed_close_kills_process_family(void)
                     "(sleep 0.25; printf leaked > '%s') & wait",
                     marker) > 0);
     result = run_managed_exec(command, 5000, 50);
-    assert(strcmp(snj_json_string(result, "status"), "running") == 0);
-    handle = snj_json_string(result, "handle");
-    assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
+    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
+    handle = snag_json_string(result, "handle");
+    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     error[0] = '\0';
-    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+    assert(snag_tools_close_managed(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL);
-    assert(snj_tool_result_valid(closed) == 0);
+    assert(snag_tool_result_valid(closed) == 0);
     sleep_ms(500);
     assert(access(marker, F_OK) < 0 && errno == ENOENT);
     json_decref(closed);
@@ -951,7 +951,7 @@ test_provider_secret_redacted_from_output(void)
     json_t *result = run_command_with_credential("printf secret-value-for-test",
                                                  1000,
                                                  "secret-value-for-test");
-    const char *retained = snj_json_string(json_object_get(result, "stdout"),
+    const char *retained = snag_json_string(json_object_get(result, "stdout"),
                                            "retained");
     assert(strstr(retained, "secret-value-for-test") == NULL);
     assert(strstr(retained, "<redacted:secret>") != NULL);
@@ -965,7 +965,7 @@ test_provider_secret_redacted_across_read_boundary(void)
         "printf '%8190ssecret-value-for-test' ''",
         1000,
         "secret-value-for-test");
-    const char *retained = snj_json_string(json_object_get(result, "stdout"),
+    const char *retained = snag_json_string(json_object_get(result, "stdout"),
                                            "retained");
     assert(strstr(retained, "secret-value-for-test") == NULL);
     assert(strstr(retained, "<redacted:secret>") != NULL);
@@ -978,7 +978,7 @@ test_provider_secret_removed_from_environment(void)
     json_t *result;
     setenv("OPENAI_API_KEY", "secret-value-for-test", 1);
     result = run_command("printf ${OPENAI_API_KEY-unset}", 1000);
-    assert(strcmp(snj_json_string(json_object_get(result, "stdout"),
+    assert(strcmp(snag_json_string(json_object_get(result, "stdout"),
                                   "retained"), "unset") == 0);
     unsetenv("OPENAI_API_KEY");
     json_decref(result);
@@ -988,15 +988,15 @@ static void
 test_all_provider_secrets_removed_and_redacted(void)
 {
     char cwd[4096];
-    struct snj_config config;
-    struct snj_credential credential;
-    struct snj_response_graph graph;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_response_graph graph;
     json_t *result = NULL;
     const char *retained;
     char error[256] = {0};
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
-    snj_config_init(&config);
+    snag_config_init(&config);
     config.providers[1] = config.providers[0];
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name,
@@ -1005,18 +1005,18 @@ test_all_provider_secrets_removed_and_redacted(void)
                     sizeof(config.providers[1].api_key_env),
                     "SECOND_PROVIDER_KEY") > 0);
     assert(setenv("SECOND_PROVIDER_KEY", "second-provider-secret", 1) == 0);
-    snj_credential_clear(&credential);
+    snag_credential_clear(&credential);
     make_call(&graph,
               "printf \"${SECOND_PROVIDER_KEY-unset}:second-provider-secret\"",
               cwd, 1000, NULL);
-    assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
+    assert(snag_tools_run(&graph.items[0], &config, &credential, cwd,
                          NULL, NULL, -1, &result, error, sizeof(error)) == 0);
-    retained = snj_json_string(json_object_get(result, "stdout"), "retained");
+    retained = snag_json_string(json_object_get(result, "stdout"), "retained");
     assert(strcmp(retained, "unset:<redacted:secret>") == 0);
     assert(unsetenv("SECOND_PROVIDER_KEY") == 0);
     json_decref(result);
-    snj_response_graph_free(&graph);
-    snj_config_free(&config);
+    snag_response_graph_free(&graph);
+    snag_config_free(&config);
 }
 
 static void
@@ -1044,9 +1044,9 @@ test_apply_patch_add_update_delete(void)
     join_path(path, sizeof(path), dir, "old.txt");
     write_text_file(path, "bye\n");
     result = run_apply_patch(dir, patch);
-    assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
     {
-        const char *model_text = snj_json_string(result, "model_text");
+        const char *model_text = snag_json_string(result, "model_text");
         assert(strstr(model_text, "Diff preview (bounded") != NULL);
         assert(strstr(model_text, "*** Update File: a.txt") != NULL);
         assert(strstr(model_text, "-two") != NULL);
@@ -1088,7 +1088,7 @@ test_apply_patch_rejects_ambiguous_match(void)
     join_path(path, sizeof(path), dir, "dup.txt");
     write_text_file(path, "x\nx\n");
     result = run_apply_patch(dir, patch);
-    assert(strcmp(snj_json_string(result, "status"), "patch_rejected") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "patch_rejected") == 0);
     json_decref(result);
     text = read_text_file(path);
     assert(strcmp(text, "x\nx\n") == 0);
@@ -1110,7 +1110,7 @@ test_apply_patch_rejects_path_escape(void)
         "*** End Patch\n";
 
     result = run_apply_patch(dir, patch);
-    assert(strcmp(snj_json_string(result, "status"), "patch_rejected") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "patch_rejected") == 0);
     json_decref(result);
     assert(rmdir(dir) == 0);
     free(dir);
@@ -1137,7 +1137,7 @@ test_apply_patch_rejects_symlink_target(void)
     join_path(linkpath, sizeof(linkpath), dir, "link.txt");
     assert(symlink("real.txt", linkpath) == 0);
     result = run_apply_patch(dir, patch);
-    assert(strcmp(snj_json_string(result, "status"), "patch_rejected") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "patch_rejected") == 0);
     json_decref(result);
     text = read_text_file(path);
     assert(strcmp(text, "real\n") == 0);
@@ -1165,7 +1165,7 @@ test_apply_patch_validates_before_install(void)
         "*** End Patch\n";
 
     result = run_apply_patch(dir, patch);
-    assert(strcmp(snj_json_string(result, "status"), "patch_rejected") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "patch_rejected") == 0);
     json_decref(result);
     join_path(path, sizeof(path), dir, "added.txt");
     assert(access(path, F_OK) < 0 && errno == ENOENT);
@@ -1197,9 +1197,9 @@ test_apply_patch_preview_is_bounded(void)
     memset(patch + strlen(head), 'a', payload);
     memcpy(patch + strlen(head) + payload, tail, strlen(tail) + 1u);
     result = run_apply_patch(dir, patch);
-    assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
+    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
     {
-        const char *model_text = snj_json_string(result, "model_text");
+        const char *model_text = snag_json_string(result, "model_text");
         assert(strlen(model_text) < PATCH_MODEL_MAX_FOR_TEST);
         assert(strstr(model_text, "Diff preview (bounded") != NULL);
         assert(strstr(model_text, "diff preview truncated") != NULL);
@@ -1225,22 +1225,22 @@ ro_cancel(void *opaque, unsigned int timeout_ms)
 
 static void
 check_read_tool(const char *workspace, const char *name, const char *arguments,
-                 bool success, const char *expected, snj_tool_pump_fn pump)
+                 bool success, const char *expected, snag_tool_pump_fn pump)
 {
-    struct snj_response_item call = {0};
+    struct snag_response_item call = {0};
     json_t *result = NULL;
     char error[256] = {0};
 
-    call.kind = SNJ_ITEM_TOOL_CALL;
+    call.kind = SNAG_ITEM_TOOL_CALL;
     call.name = (char *)name;
-    call.arguments = snj_json_load_strict((const unsigned char *)arguments,
+    call.arguments = snag_json_load_strict((const unsigned char *)arguments,
         strlen(arguments), 8192u, error, sizeof(error));
     assert(call.arguments);
-    assert(snj_tools_read_only(&call, workspace, pump, NULL, &result) ==
+    assert(snag_tools_read_only(&call, workspace, pump, NULL, &result) ==
             (pump ? 2 : 0));
-    assert(snj_tool_result_valid(result) == 0);
-    assert(strcmp(snj_json_string(result, "status"), success ? "succeeded" : "failed") == 0);
-    assert(strstr(snj_json_string(result, "model_text"), expected));
+    assert(snag_tool_result_valid(result) == 0);
+    assert(strcmp(snag_json_string(result, "status"), success ? "succeeded" : "failed") == 0);
+    assert(strstr(snag_json_string(result, "model_text"), expected));
     json_decref(result);
     json_decref(call.arguments);
 }
@@ -1253,10 +1253,10 @@ test_native_read_tools(void)
     bool read_only;
     FILE *file;
 
-    assert(strcmp(snj_prompt_parse("/ro\n inspect", &read_only), "inspect") == 0 && read_only);
-    assert(!*snj_prompt_parse("/ro  \t", &read_only) && read_only);
-    assert(strcmp(snj_prompt_parse("//ro inspect", &read_only), "/ro inspect") == 0 && !read_only);
-    assert(strcmp(snj_prompt_parse("/root", &read_only), "/root") == 0 && !read_only);
+    assert(strcmp(snag_prompt_parse("/ro\n inspect", &read_only), "inspect") == 0 && read_only);
+    assert(!*snag_prompt_parse("/ro  \t", &read_only) && read_only);
+    assert(strcmp(snag_prompt_parse("//ro inspect", &read_only), "/ro inspect") == 0 && !read_only);
+    assert(strcmp(snag_prompt_parse("/root", &read_only), "/root") == 0 && !read_only);
     assert(snprintf(temp, sizeof(temp), "%s/ro-tools-XXXXXX", scratch ? scratch : "/tmp") > 0);
     assert(mkdtemp(temp));
     join_path(path, sizeof(path), temp, "a ; echo nope");

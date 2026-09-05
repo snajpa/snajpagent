@@ -25,10 +25,10 @@ The linked/runtime dependencies for a normal provider-capable build are:
 | libcurl backend closure | not vendored | TLS, resolver, compression, HTTP, and other backends selected by the system libcurl build |
 | tmux | not vendored; test-only | optional rendered-screen regression in `make check`; required by `make tmuxcheck` and `make terminallivecheck` |
 
-`src/snj_jansson.h` is the only Jansson include surface in first-party C code. It
+`src/snag_jansson.h` is the only Jansson include surface in first-party C code. It
 prefers a system `<jansson.h>` when one is available. Some minimal qualification
 roots carry `libjansson.so.4` without the development header; for those roots the
-wrapper falls back to `src/snj_jansson_abi.h`, a GPL-2.0-only first-party ABI
+wrapper falls back to `src/snag_jansson_abi.h`, a GPL-2.0-only first-party ABI
 declaration shim. That shim contains declarations only, no parser, encoder,
 allocator, object implementation, or upstream Jansson source, and it does not use
 the name `src/jansson.h` so it cannot silently shadow a system development

@@ -24,31 +24,31 @@ write_bytes(const char *path, const void *data, size_t len)
 static void
 expect_invalid(const char *path)
 {
-    struct snj_config config;
+    struct snag_config config;
     char error[256];
 
-    snj_config_init(&config);
+    snag_config_init(&config);
     error[0] = '\0';
-    assert(snj_config_load(&config, path, NULL, error, sizeof(error)) < 0);
+    assert(snag_config_load(&config, path, NULL, error, sizeof(error)) < 0);
     assert(error[0] != '\0');
-    snj_config_free(&config);
+    snag_config_free(&config);
 }
 
 static void
 expect_ui(const char *path, const char *key, const char *value, bool valid)
 {
-    struct snj_config config;
+    struct snag_config config;
     char data[512], error[256] = {0};
     int n = snprintf(data, sizeof(data), "[ui]\n%s=%s\n", key, value);
 
     assert(n > 0 && (size_t)n < sizeof(data));
     write_bytes(path, data, (size_t)n);
-    snj_config_init(&config);
-    assert((snj_config_load(&config, path, NULL, error, sizeof(error)) == 0) ==
+    snag_config_init(&config);
+    assert((snag_config_load(&config, path, NULL, error, sizeof(error)) == 0) ==
            valid);
     if (!valid)
         assert(error[0]);
-    snj_config_free(&config);
+    snag_config_free(&config);
 }
 
 static void
@@ -59,7 +59,7 @@ test_compact_setting(const char *path)
         uint32_t expected;
         bool valid;
     } cases[] = {
-        {"auto", SNJ_CONFIG_COMPACT_AUTO, true},
+        {"auto", SNAG_CONFIG_COMPACT_AUTO, true},
         {"0", 0u, true},
         {"1", 1u, true},
         {"120000", 120000u, true},
@@ -73,7 +73,7 @@ test_compact_setting(const char *path)
     };
 
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        struct snj_config config;
+        struct snag_config config;
         char data[256], error[256] = {0};
         int n = snprintf(data, sizeof(data),
                          "[provider first]\nauto_compact_input_tokens=%s\n"
@@ -81,26 +81,26 @@ test_compact_setting(const char *path)
 
         assert(n > 0 && (size_t)n < sizeof(data));
         write_bytes(path, data, (size_t)n);
-        snj_config_init(&config);
-        assert((snj_config_load(&config, path, NULL,
+        snag_config_init(&config);
+        assert((snag_config_load(&config, path, NULL,
                                 error, sizeof(error)) == 0) == cases[i].valid);
         if (cases[i].valid) {
             assert(config.providers[0].auto_compact_input_tokens ==
                    cases[i].expected);
             assert(config.providers[1].auto_compact_input_tokens ==
-                   SNJ_CONFIG_COMPACT_AUTO);
+                   SNAG_CONFIG_COMPACT_AUTO);
         } else {
             assert(error[0]);
         }
-        snj_config_free(&config);
+        snag_config_free(&config);
     }
 }
 
 static void
 test_auth_settings(const char *path)
 {
-    struct snj_config config;
-    struct snj_provider_config provider;
+    struct snag_config config;
+    struct snag_provider_config provider;
     char error[256] = {0};
     static const char initial[] = "# retain this\n[ui]\ntyping_pause_ms=2\n";
     static const char invalid[] = "[provider]\nauth=chatgpt\nbase_url=https://other.test\n";
@@ -111,42 +111,42 @@ test_auth_settings(const char *path)
     write_bytes(path, duplicate, sizeof(duplicate) - 1u);
     expect_invalid(path);
     write_bytes(path, initial, sizeof(initial) - 1u);
-    snj_config_init(&config);
+    snag_config_init(&config);
     provider = config.providers[0];
     strcpy(provider.name, "openrouter");
     strcpy(provider.base_url, "https://openrouter.ai/api/v1");
     strcpy(provider.api_key_env, "OPENROUTER_API_KEY");
-    provider.auth = SNJ_AUTH_API_KEY;
+    provider.auth = SNAG_AUTH_API_KEY;
     provider.native_compaction = false;
-    assert(snj_config_save_provider(path, false, &provider, NULL, NULL,
+    assert(snag_config_save_provider(path, false, &provider, NULL, NULL,
                                      error, sizeof(error)) == 0);
-    assert(snj_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+    assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
     assert(config.provider_count == 2u);
     assert(strcmp(config.providers[0].name, "default") == 0);
-    assert(config.providers[0].auth == SNJ_AUTH_ENV);
-    assert(config.providers[1].auth == SNJ_AUTH_API_KEY);
+    assert(config.providers[0].auth == SNAG_AUTH_ENV);
+    assert(config.providers[1].auth == SNAG_AUTH_API_KEY);
     assert(!config.providers[1].native_compaction);
     assert(config.typing_pause_ms == 2u);
-    snj_config_free(&config);
-    provider.auth = SNJ_AUTH_CHATGPT;
-    assert(snj_config_validate_provider(&provider, error, sizeof(error)) < 0);
-    strcpy(provider.base_url, SNJ_CHATGPT_BASE);
-    assert(snj_config_validate_provider(&provider, error, sizeof(error)) == 0);
-    assert(snj_config_save_provider(path, false, &provider, "chosen/model", "high",
+    snag_config_free(&config);
+    provider.auth = SNAG_AUTH_CHATGPT;
+    assert(snag_config_validate_provider(&provider, error, sizeof(error)) < 0);
+    strcpy(provider.base_url, SNAG_CHATGPT_BASE);
+    assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
+    assert(snag_config_save_provider(path, false, &provider, "chosen/model", "high",
                                      error, sizeof(error)) == 0);
-    snj_config_init(&config);
-    assert(snj_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+    snag_config_init(&config);
+    assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
     assert(config.provider_count == 2u);
-    assert(config.providers[1].auth == SNJ_AUTH_CHATGPT);
+    assert(config.providers[1].auth == SNAG_AUTH_CHATGPT);
     assert(strcmp(config.provider, "openrouter") == 0);
     assert(strcmp(config.model, "chosen/model") == 0);
-    snj_config_free(&config);
+    snag_config_free(&config);
 }
 
 static void
 test_prompt_numbers(const char *path)
 {
-    const char *values[SNJ_PROMPT_FIELD_COUNT] = {
+    const char *values[SNAG_PROMPT_FIELD_COUNT] = {
         "p", "m", "e", "op", "host", "0%", "chat", "3", "7", "9"};
     static const char *const contexts[] = {"0%", "9%", "10%", "99%",
                                            "100%", "?%"};
@@ -159,16 +159,16 @@ test_prompt_numbers(const char *path)
         "model:2", "provider:2", "mode:2", "goal_spinner:1",
         "activity_spinner:1", "provider_spinner", "tool_spinner", "host:2", "operator:2",
         "effort:2"};
-    char label[SNJ_TERM_LABEL_BYTES], template[256];
+    char label[SNAG_TERM_LABEL_BYTES], template[256];
 
     for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
-        values[SNJ_PROMPT_CONTEXT] = contexts[i];
-        assert(snj_config_prompt_expand(
+        values[SNAG_PROMPT_CONTEXT] = contexts[i];
+        assert(snag_config_prompt_expand(
             "{chat:{context:4}}{rollout-idle:x}{rollout-active:y}", 0u,
             values, 0xfdu, label, sizeof(label)) == 0);
         assert(strcmp(label, padded[i]) == 0);
     }
-    assert(snj_config_prompt_expand(
+    assert(snag_config_prompt_expand(
         "{chat:{hour}:{minute}:{second}/{hour:2}:{minute:02}:{second:02}}"
         "{rollout-idle:x}{rollout-active:y}", 0u, values, 0xfdu,
         label, sizeof(label)) == 0);
@@ -177,26 +177,26 @@ test_prompt_numbers(const char *path)
         char number[4], expected[16];
 
         assert(snprintf(number, sizeof(number), "%u", i) > 0);
-        values[SNJ_PROMPT_SECOND] = number;
+        values[SNAG_PROMPT_SECOND] = number;
         assert(snprintf(expected, sizeof(expected), "%u/%2u/%02u ", i, i, i) > 0);
-        assert(snj_config_prompt_expand(
+        assert(snag_config_prompt_expand(
             "{chat:{second}/{second:2}/{second:02}}{rollout-idle:x}"
             "{rollout-active:y}", 0u, values, 0xfdu,
             label, sizeof(label)) == 0);
         assert(strcmp(label, expected) == 0);
     }
-    values[SNJ_PROMPT_CONTEXT] = "100%";
-    values[SNJ_PROMPT_HOUR] = "23";
-    values[SNJ_PROMPT_MINUTE] = "59";
-    values[SNJ_PROMPT_SECOND] = "60";
-    assert(snj_config_prompt_expand(
+    values[SNAG_PROMPT_CONTEXT] = "100%";
+    values[SNAG_PROMPT_HOUR] = "23";
+    values[SNAG_PROMPT_MINUTE] = "59";
+    values[SNAG_PROMPT_SECOND] = "60";
+    assert(snag_config_prompt_expand(
         "{chat:{context:2}/{hour:1}:{minute:1}:{second:01}}"
         "{rollout-idle:x}{rollout-active:y}", 0u, values, 0xfdu,
         label, sizeof(label)) == 0);
     assert(strcmp(label, "100%/23:59:60 ") == 0);
-    values[SNJ_PROMPT_HOUR] = values[SNJ_PROMPT_MINUTE] =
-        values[SNJ_PROMPT_SECOND] = "--";
-    assert(snj_config_prompt_expand(
+    values[SNAG_PROMPT_HOUR] = values[SNAG_PROMPT_MINUTE] =
+        values[SNAG_PROMPT_SECOND] = "--";
+    assert(snag_config_prompt_expand(
         "{chat:{hour:02}:{minute:03}:{second:3}}{rollout-idle:x}"
         "{rollout-active:y}", 0u, values, 0xfdu, label, sizeof(label)) == 0);
     assert(strcmp(label, "--: --: -- ") == 0);
@@ -205,20 +205,20 @@ test_prompt_numbers(const char *path)
             "{chat:x}{rollout-idle:y}{rollout-active:{%s}}", invalid[i]) > 0);
         expect_ui(path, "prompt", template, false);
         /* Even an inactive mode must reject malformed numeric formats. */
-        assert(snj_config_prompt_expand(template, 0u, values, 0xfdu,
+        assert(snag_config_prompt_expand(template, 0u, values, 0xfdu,
                                          label, sizeof(label)) < 0);
     }
     expect_ui(path, "prompt",
         "{chat:{hour:0510}}{rollout-idle:{context:510}}{rollout-active:y}", true);
-    assert(snj_config_prompt_expand(
+    assert(snag_config_prompt_expand(
         "{chat:{context:510}}{rollout-idle:x}{rollout-active:y}", 0u,
         values, 0xfdu, label, sizeof(label)) == 0);
     assert(strlen(label) == sizeof(label) - 1u);
     assert(strcmp(label + 506u, "100% ") == 0);
-    assert(snj_config_prompt_expand(
+    assert(snag_config_prompt_expand(
         "{chat:{context:510}x}{rollout-idle:x}{rollout-active:y}", 0u,
         values, 0xfdu, label, sizeof(label)) < 0);
-    assert(snj_config_prompt_expand(
+    assert(snag_config_prompt_expand(
         "{chat:\\{{hour:02}\\}\\\\}{rollout-idle:x}{rollout-active:y}", 0u,
         values, 0xfdu, label, sizeof(label)) == 0);
     assert(strcmp(label, "{--}\\ ") == 0);
@@ -257,14 +257,14 @@ test_openrouter_provider(void)
         {"ftp://openrouter.ai/api/v1", false},
         {"", false}
     };
-    struct snj_provider_config provider = {0};
+    struct snag_provider_config provider = {0};
 
-    assert(!snj_config_provider_is_openrouter(NULL));
+    assert(!snag_config_provider_is_openrouter(NULL));
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         (void)snprintf(provider.base_url, sizeof(provider.base_url), "%s", cases[i].url);
         (void)snprintf(provider.name, sizeof(provider.name), "%s",
                        cases[i].openrouter ? "arbitrary" : "openrouter");
-        assert(snj_config_provider_is_openrouter(&provider) == cases[i].openrouter);
+        assert(snag_config_provider_is_openrouter(&provider) == cases[i].openrouter);
     }
 }
 
@@ -330,7 +330,7 @@ main(void)
     char path[4096];
     char link_path[4096];
     char error[256];
-    struct snj_config config;
+    struct snag_config config;
     char *shell;
 
     assert(setlocale(LC_CTYPE, "") != NULL);
@@ -338,8 +338,8 @@ main(void)
     assert(snprintf(dotdir, sizeof(dotdir), "%s/dotdir", temp) > 0);
     assert(mkdir(dotdir, 0700) == 0);
 
-    snj_config_init(&config);
-    assert(snj_config_load(&config, NULL, dotdir,
+    snag_config_init(&config);
+    assert(snag_config_load(&config, NULL, dotdir,
                            error, sizeof(error)) == 0);
     assert(strcmp(config.model, "default") == 0);
     assert(config.provider[0] == '\0');
@@ -358,17 +358,17 @@ main(void)
     assert(config.prompt_spinner_per_second == 8u);
     {
         static const char *const contexts[] = {"0%", "9%", "10%", "99%", "100%", "?%"};
-        const char *values[SNJ_PROMPT_FIELD_COUNT] = {
+        const char *values[SNAG_PROMPT_FIELD_COUNT] = {
             "p", "m", "e", "op", "host", "0%", "chat", "3", "7", "9"};
         char expanded[128], expected[128];
 
-        assert(snj_config_prompt_expand(config.prompt, 0u, values, 0xfdu,
+        assert(snag_config_prompt_expand(config.prompt, 0u, values, 0xfdu,
                                         expanded, sizeof(expanded)) == 0);
         assert(strcmp(expanded, "\xfd\xfe 03:07:09 op@host : ") == 0);
         for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
-            values[SNJ_PROMPT_CONTEXT] = contexts[i];
+            values[SNAG_PROMPT_CONTEXT] = contexts[i];
             for (unsigned int mode = 1u; mode <= 2u; ++mode) {
-                assert(snj_config_prompt_expand(config.prompt, mode, values, 0xfdu,
+                assert(snag_config_prompt_expand(config.prompt, mode, values, 0xfdu,
                                                 expanded, sizeof(expanded)) == 0);
                 assert(snprintf(expected, sizeof(expected), "\xfd\xfe%4s p/m/e %s ",
                                 contexts[i], mode == 1u ? "›" : "»") > 0);
@@ -387,8 +387,8 @@ main(void)
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(config.providers[0].auto_compact_input_tokens ==
-           SNJ_CONFIG_COMPACT_AUTO);
-    assert(config.providers[0].exact_token_count == SNJ_TOKEN_COUNT_AUTO);
+           SNAG_CONFIG_COMPACT_AUTO);
+    assert(config.providers[0].exact_token_count == SNAG_TOKEN_COUNT_AUTO);
     assert(config.providers[0].native_compaction);
     test_openrouter_provider();
     assert(strcmp(config.providers[0].base_url, "https://api.openai.com") == 0);
@@ -400,14 +400,14 @@ main(void)
     assert(shell);
     assert(strcmp(config.shell, shell) == 0);
     free(shell);
-    snj_config_free(&config);
+    snag_config_free(&config);
 
     assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
     write_bytes(path, valid, sizeof(valid) - 1u);
-    snj_config_init(&config);
+    snag_config_init(&config);
     config.irc_model_nick_implicit = true;
     config.irc_operator_nick_implicit = true;
-    assert(snj_config_load(&config, path, dotdir,
+    assert(snag_config_load(&config, path, dotdir,
                            error, sizeof(error)) == 0);
     assert(strcmp(config.model, "gpt-5.5") == 0);
     assert(strcmp(config.provider, "backup") == 0);
@@ -426,17 +426,17 @@ main(void)
     assert(strcmp(config.providers[0].openrouter_referer,
                   "https://github.com/snajpa/snajpagent") == 0);
     assert(strcmp(config.providers[0].openrouter_title, "snajpagent") == 0);
-    assert(config.providers[0].exact_token_count == SNJ_TOKEN_COUNT_OFF);
+    assert(config.providers[0].exact_token_count == SNAG_TOKEN_COUNT_OFF);
     assert(!config.providers[0].native_compaction);
     assert(strcmp(config.providers[1].name, "backup") == 0);
     assert(strcmp(config.providers[1].base_url,
                   "https://backup.example.test/v1") == 0);
     assert(strcmp(config.providers[1].api_key_env, "BACKUP_API_KEY") == 0);
-    assert(config.providers[1].exact_token_count == SNJ_TOKEN_COUNT_STRICT);
+    assert(config.providers[1].exact_token_count == SNAG_TOKEN_COUNT_STRICT);
     assert(config.model_limit_count == 2u);
     {
-        const struct snj_model_limit_config *limit =
-            snj_config_model_limit(&config, "default", "gpt-5.5");
+        const struct snag_model_limit_config *limit =
+            snag_config_model_limit(&config, "default", "gpt-5.5");
         assert(limit);
         assert(limit->context_window_known);
         assert(limit->context_window_tokens == UINT64_C(1050000));
@@ -446,20 +446,20 @@ main(void)
         assert(limit->max_output_tokens == UINT64_C(128000));
     }
     {
-        const struct snj_model_limit_config *limit =
-            snj_config_model_limit(&config, "backup",
+        const struct snag_model_limit_config *limit =
+            snag_config_model_limit(&config, "backup",
                                    "org/model/with/slashes");
         assert(limit);
         assert(!limit->context_window_known);
         assert(limit->max_input_known);
-        assert(limit->max_input_tokens == SNJ_CONFIG_TOKEN_LIMIT_MAX);
+        assert(limit->max_input_tokens == SNAG_CONFIG_TOKEN_LIMIT_MAX);
         assert(!limit->max_output_known);
     }
-    assert(snj_config_model_limit(&config, "default", "missing") == NULL);
-    assert(snj_config_provider(&config, NULL) == &config.providers[0]);
-    assert(snj_config_provider(&config, "backup") == &config.providers[1]);
-    assert(snj_config_provider(&config, "missing") == NULL);
-    assert(config.color == SNJ_COLOR_NEVER);
+    assert(snag_config_model_limit(&config, "default", "missing") == NULL);
+    assert(snag_config_provider(&config, NULL) == &config.providers[0]);
+    assert(snag_config_provider(&config, "backup") == &config.providers[1]);
+    assert(snag_config_provider(&config, "missing") == NULL);
+    assert(config.color == SNAG_COLOR_NEVER);
     assert(!config.markdown);
     assert(config.resume_history_turns == 0u);
     assert(config.typing_pause_ms == 750u);
@@ -487,17 +487,17 @@ main(void)
     assert(config.secret_env_count == 2u);
     assert(strcmp(config.secret_env[0], "TOKEN_ONE") == 0);
     assert(strcmp(config.secret_env[1], "TOKEN_TWO") == 0);
-    snj_config_free(&config);
+    snag_config_free(&config);
 
     assert(snprintf(path, sizeof(path), "%s/config.ini", dotdir) > 0);
     write_bytes(path, valid, sizeof(valid) - 1u);
-    snj_config_init(&config);
-    assert(snj_config_load(&config, NULL, dotdir,
+    snag_config_init(&config);
+    assert(snag_config_load(&config, NULL, dotdir,
                            error, sizeof(error)) == 0);
     assert(config.provider_count == 2u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(strcmp(config.providers[1].name, "backup") == 0);
-    snj_config_free(&config);
+    snag_config_free(&config);
 
     assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
 
@@ -541,7 +541,7 @@ main(void)
     expect_ui(path, "prompt", "{chat:}{rollout-idle:y}{rollout-active:z}",
               false);
     {
-        const char *values[SNJ_PROMPT_FIELD_COUNT] = {
+        const char *values[SNAG_PROMPT_FIELD_COUNT] = {
             "prov", "model", "high", "", "host", "0%", "rollout-idle",
             "12", "34", "56"};
         const char template[] =
@@ -554,13 +554,13 @@ main(void)
         };
         char expanded[128];
 
-        assert(snj_config_prompt_expand(template, 1u, values, 0xfdu,
+        assert(snag_config_prompt_expand(template, 1u, values, 0xfdu,
                                          expanded, sizeof(expanded)) == 0);
         assert(memcmp(expanded, expected, sizeof(expected)) == 0);
-        assert(snj_config_prompt_expand(template, 0u, values, 0xfdu,
+        assert(snag_config_prompt_expand(template, 0u, values, 0xfdu,
                                          expanded, sizeof(expanded)) == 0);
         assert(strcmp(expanded, "pre12:34:56 : ") == 0);
-        assert(snj_config_prompt_expand(
+        assert(snag_config_prompt_expand(
             "{chat:{operator}}{rollout-idle:x}{rollout-active:y}", 0u,
             values, 0xfdu, expanded, sizeof(expanded)) < 0);
     }
@@ -615,21 +615,21 @@ main(void)
     expect_invalid(path);
     write_bytes(path, "[tool]\nmax_timeout_ms=4294967295\n",
                 sizeof("[tool]\nmax_timeout_ms=4294967295\n") - 1u);
-    snj_config_init(&config);
-    assert(snj_config_load(&config, path, dotdir,
+    snag_config_init(&config);
+    assert(snag_config_load(&config, path, dotdir,
                            error, sizeof(error)) == 0);
     assert(config.max_timeout_ms == UINT32_MAX);
-    snj_config_free(&config);
+    snag_config_free(&config);
     write_bytes(path, "[tool]\nmax_timeout_ms=4294967296\n",
                 sizeof("[tool]\nmax_timeout_ms=4294967296\n") - 1u);
     expect_invalid(path);
     write_bytes(path, "[tool]\nmax_output_bytes=4294967295\n",
                 sizeof("[tool]\nmax_output_bytes=4294967295\n") - 1u);
-    snj_config_init(&config);
-    assert(snj_config_load(&config, path, dotdir,
+    snag_config_init(&config);
+    assert(snag_config_load(&config, path, dotdir,
                            error, sizeof(error)) == 0);
     assert(config.max_output_bytes == UINT32_MAX);
-    snj_config_free(&config);
+    snag_config_free(&config);
     write_bytes(path, "[tool]\nmax_output_bytes=4294967296\n",
                 sizeof("[tool]\nmax_output_bytes=4294967296\n") - 1u);
     expect_invalid(path);
@@ -757,17 +757,17 @@ main(void)
         expect_invalid(path);
     }
     {
-        char *large = malloc(SNJ_CONFIG_FILE_MAX + 1u);
+        char *large = malloc(SNAG_CONFIG_FILE_MAX + 1u);
         assert(large);
-        memset(large, '#', SNJ_CONFIG_FILE_MAX + 1u);
-        write_bytes(path, large, SNJ_CONFIG_FILE_MAX + 1u);
+        memset(large, '#', SNAG_CONFIG_FILE_MAX + 1u);
+        write_bytes(path, large, SNAG_CONFIG_FILE_MAX + 1u);
         free(large);
         expect_invalid(path);
     }
-    snj_config_init(&config);
-    assert(snj_config_load(&config, "relative.ini", dotdir,
+    snag_config_init(&config);
+    assert(snag_config_load(&config, "relative.ini", dotdir,
                            error, sizeof(error)) < 0);
-    snj_config_free(&config);
+    snag_config_free(&config);
 
     {
         static const char preserved[] =
@@ -802,7 +802,7 @@ main(void)
         assert(snprintf(path, sizeof(path), "%s/save.ini", temp) > 0);
         write_bytes(path, preserved, sizeof(preserved) - 1u);
         assert(chmod(path, 0640) == 0);
-        assert(snj_config_save_model(path, false, "second", "new-model",
+        assert(snag_config_save_model(path, false, "second", "new-model",
                                      "ultra", error, sizeof(error)) == 0);
         assert(stat(path, &st) == 0);
         assert((st.st_mode & 0777u) == 0640u);
@@ -819,28 +819,28 @@ main(void)
         assert(strstr(bytes, "provider = second\n") != NULL);
         assert(strstr(bytes, "model = new-model\r\n") != NULL);
         assert(strstr(bytes, "reasoning_effort = ultra\n") != NULL);
-        snj_config_init(&config);
-        assert(snj_config_load(&config, path, dotdir,
+        snag_config_init(&config);
+        assert(snag_config_load(&config, path, dotdir,
                                error, sizeof(error)) == 0);
         assert(strcmp(config.provider, "second") == 0);
         assert(strcmp(config.model, "new-model") == 0);
         assert(strcmp(config.reasoning_effort, "ultra") == 0);
-        snj_config_free(&config);
+        snag_config_free(&config);
 
         assert(snprintf(created, sizeof(created), "%s/new.ini", dotdir) > 0);
-        assert(snj_config_save_model(created, true, "default", "created-model",
+        assert(snag_config_save_model(created, true, "default", "created-model",
                                      "medium", error, sizeof(error)) == 0);
         assert(stat(created, &st) == 0);
         assert((st.st_mode & 0777u) == 0600u);
-        snj_config_init(&config);
-        assert(snj_config_load(&config, created, dotdir,
+        snag_config_init(&config);
+        assert(snag_config_load(&config, created, dotdir,
                                error, sizeof(error)) == 0);
         assert(strcmp(config.provider, "default") == 0);
         assert(strcmp(config.model, "created-model") == 0);
-        snj_config_free(&config);
+        snag_config_free(&config);
 
         assert(snprintf(created, sizeof(created), "%s/absent.ini", dotdir) > 0);
-        assert(snj_config_save_model(created, false, "default", "nope",
+        assert(snag_config_save_model(created, false, "default", "nope",
                                      "medium", error, sizeof(error)) < 0);
         assert(access(created, F_OK) < 0 && errno == ENOENT);
 
@@ -849,7 +849,7 @@ main(void)
         got = read(fd, bytes, sizeof(bytes));
         assert(got > 0);
         assert(close(fd) == 0);
-        assert(snj_config_save_model(path, false, "missing", "nope",
+        assert(snag_config_save_model(path, false, "missing", "nope",
                                      "medium", error, sizeof(error)) < 0);
         {
             char after[4096];

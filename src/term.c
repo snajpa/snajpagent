@@ -20,12 +20,12 @@
 static atomic_uint sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
 /* Only the existing terminal owner uses these privately reopened descriptions. */
-static _Thread_local struct snj_term *output_owner;
-static int redraw(struct snj_term *term);
-static int move_prompt_cursor(struct snj_term *term);
-static int position_prompt_cursor(struct snj_term *term, size_t row, size_t col);
+static _Thread_local struct snag_term *output_owner;
+static int redraw(struct snag_term *term);
+static int move_prompt_cursor(struct snag_term *term);
+static int position_prompt_cursor(struct snag_term *term, size_t row, size_t col);
 static size_t previous_cp(const unsigned char *s, size_t pos);
-static int compose_frame(struct snj_term *term, struct snj_buf *out, size_t *label_bytes,
+static int compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
                          size_t *cursor_row, size_t *cursor_col,
                          size_t *end_row, size_t *end_col);
 
@@ -46,7 +46,7 @@ mark_sigwinch(int signal_number)
 static size_t
 decode_utf8(const unsigned char *s, size_t len, uint32_t *cp)
 {
-    size_t need = snj_utf8_size(s[0]);
+    size_t need = snag_utf8_size(s[0]);
     uint32_t value;
 
     if (!need || len < need)
@@ -61,7 +61,7 @@ decode_utf8(const unsigned char *s, size_t len, uint32_t *cp)
             return 0u;
         value = (value << 6) | (uint32_t)(s[i] & 0x3fu);
     }
-    if (!snj_utf8_valid(s, need, true))
+    if (!snag_utf8_valid(s, need, true))
         return 0u;
     *cp = value;
     return need;
@@ -78,15 +78,15 @@ format_unsafe(uint32_t cp)
 }
 
 static int
-append_escape(struct snj_buf *out, uint32_t cp)
+append_escape(struct snag_buf *out, uint32_t cp)
 {
     if (cp <= 0xffu)
-        return snj_buf_printf(out, "\\x%02X", (unsigned int)cp);
-    return snj_buf_printf(out, "\\u{%X}", (unsigned int)cp);
+        return snag_buf_printf(out, "\\x%02X", (unsigned int)cp);
+    return snag_buf_printf(out, "\\u{%X}", (unsigned int)cp);
 }
 
 static int
-append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
+append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
             bool prompt, size_t indent, unsigned int columns,
             size_t stop, size_t *cursor_byte)
 {
@@ -110,21 +110,21 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
         }
         if (cp == '\n') {
             if (prompt) {
-                if (snj_buf_append(out, "\r\n", 2u) < 0)
+                if (snag_buf_append(out, "\r\n", 2u) < 0)
                     return -1;
                 for (size_t j = 0u; j < indent; ++j)
-                    if (snj_buf_putc(out, ' ') < 0)
+                    if (snag_buf_putc(out, ' ') < 0)
                         return -1;
                 col = indent;
                 if (columns >= 20u)
                     col %= columns;
-            } else if (snj_buf_putc(out, '\n') < 0) {
+            } else if (snag_buf_putc(out, '\n') < 0) {
                 return -1;
             }
         } else if (cp == '\t') {
             size_t spaces = 4u - (col % 4u);
             for (size_t j = 0u; j < spaces; ++j)
-                if (snj_buf_putc(out, ' ') < 0)
+                if (snag_buf_putc(out, ' ') < 0)
                     return -1;
             width = (int)spaces;
         } else if (invalid || cp < 0x20u || cp == 0x7fu ||
@@ -139,7 +139,7 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
                     return -1;
                 width = (int)(out->len - before);
             } else {
-                if (snj_buf_append(out, text + i, n) < 0)
+                if (snag_buf_append(out, text + i, n) < 0)
                     return -1;
                 width = w;
             }
@@ -165,7 +165,7 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
 }
 
 size_t
-snj_term_text_width(const char *value, size_t len)
+snag_term_text_width(const char *value, size_t len)
 {
     const unsigned char *text = (const unsigned char *)value;
     size_t width = 0u;
@@ -189,16 +189,16 @@ snj_term_text_width(const char *value, size_t len)
             width += spaces;
         } else if (cp < 0x20u || cp == 0x7fu ||
                    (cp >= 0x80u && cp <= 0x9fu) || format_unsafe(cp)) {
-            struct snj_buf out;
+            struct snag_buf out;
             size_t escaped;
 
-            snj_buf_init(&out, 32u);
+            snag_buf_init(&out, 32u);
             if (append_escape(&out, cp) < 0) {
-                snj_buf_free(&out);
+                snag_buf_free(&out);
                 return SIZE_MAX;
             }
             escaped = out.len;
-            snj_buf_free(&out);
+            snag_buf_free(&out);
             if (width > SIZE_MAX - escaped) {
                 errno = EOVERFLOW;
                 return SIZE_MAX;
@@ -207,16 +207,16 @@ snj_term_text_width(const char *value, size_t len)
         } else {
             w = cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;
             if (w < 0) {
-                struct snj_buf out;
+                struct snag_buf out;
                 size_t escaped;
 
-                snj_buf_init(&out, 32u);
+                snag_buf_init(&out, 32u);
                 if (append_escape(&out, cp) < 0) {
-                    snj_buf_free(&out);
+                    snag_buf_free(&out);
                     return SIZE_MAX;
                 }
                 escaped = out.len;
-                snj_buf_free(&out);
+                snag_buf_free(&out);
                 if (width > SIZE_MAX - escaped) {
                     errno = EOVERFLOW;
                     return SIZE_MAX;
@@ -235,10 +235,10 @@ snj_term_text_width(const char *value, size_t len)
 }
 
 int
-snj_term_write(int fd, const void *text, size_t len)
+snag_term_write(int fd, const void *text, size_t len)
 {
     const unsigned char *bytes = text;
-    struct snj_term *term = output_owner;
+    struct snag_term *term = output_owner;
     int target = term && fd >= STDOUT_FILENO && fd <= STDERR_FILENO ?
                  term->output_fd[fd - STDOUT_FILENO] : -1;
     struct pollfd pfd[2] = {{target >= 0 ? target : fd, POLLOUT, 0}, {-1, POLLIN, 0}};
@@ -286,9 +286,9 @@ snj_term_write(int fd, const void *text, size_t len)
 }
 
 int
-snj_term_write_safe(int fd, const char *text, size_t len)
+snag_term_write_safe(int fd, const char *text, size_t len)
 {
-    struct snj_buf out;
+    struct snag_buf out;
     size_t max;
     int rc;
 
@@ -297,47 +297,47 @@ snj_term_write_safe(int fd, const char *text, size_t len)
         return -1;
     }
     max = len * 8u + 32u;
-    snj_buf_init(&out, max);
+    snag_buf_init(&out, max);
     rc = append_safe(&out, (const unsigned char *)text, len, false, 0u, 0u,
                      len + 1u, NULL);
     if (rc == 0)
-        rc = snj_term_write(fd, out.data, out.len);
-    snj_buf_free(&out);
+        rc = snag_term_write(fd, out.data, out.len);
+    snag_buf_free(&out);
     return rc;
 }
 
 int
-snj_term_append_safe(struct snj_buf *out, const char *text, size_t len)
+snag_term_append_safe(struct snag_buf *out, const char *text, size_t len)
 {
     return append_safe(out, (const unsigned char *)text, len, false, 0u, 0u,
                        len + 1u, NULL);
 }
 
 void
-snj_term_init(struct snj_term *term)
+snag_term_init(struct snag_term *term)
 {
     memset(term, 0, sizeof(*term));
     term->output_fd[0] = term->output_fd[1] = -1;
-    snj_buf_init(&term->draft, SNJ_MAX_DIRECT_PROMPT + 1u);
-    snj_buf_init(&term->search_label, SNJ_MAX_DIRECT_PROMPT + 64u);
-    snj_buf_init(&term->search_query, SNJ_MAX_DIRECT_PROMPT + 1u);
-    snj_buf_init(&term->output_cell, SIZE_MAX);
-    snj_buf_init(&term->output_line, SIZE_MAX);
-    snj_buf_init(&term->painted_prompt, SIZE_MAX);
+    snag_buf_init(&term->draft, SNAG_MAX_DIRECT_PROMPT + 1u);
+    snag_buf_init(&term->search_label, SNAG_MAX_DIRECT_PROMPT + 64u);
+    snag_buf_init(&term->search_query, SNAG_MAX_DIRECT_PROMPT + 1u);
+    snag_buf_init(&term->output_cell, SIZE_MAX);
+    snag_buf_init(&term->output_line, SIZE_MAX);
+    snag_buf_init(&term->painted_prompt, SIZE_MAX);
     term->columns = 80u;
     term->history_pos = SIZE_MAX;
     term->search_pos = SIZE_MAX;
 }
 
 void
-snj_term_set_typing_pause(struct snj_term *term, uint32_t pause_ms)
+snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms)
 {
     if (term)
         term->typing_pause_ms = pause_ms;
 }
 
 void
-snj_term_set_color(struct snj_term *term, bool enabled, bool networked)
+snag_term_set_color(struct snag_term *term, bool enabled, bool networked)
 {
     if (!term)
         return;
@@ -346,7 +346,7 @@ snj_term_set_color(struct snj_term *term, bool enabled, bool networked)
 }
 
 uint32_t
-snj_term_typing_pause_remaining(const struct snj_term *term, uint64_t now_ms)
+snag_term_typing_pause_remaining(const struct snag_term *term, uint64_t now_ms)
 {
     uint64_t elapsed;
 
@@ -359,13 +359,13 @@ snj_term_typing_pause_remaining(const struct snj_term *term, uint64_t now_ms)
 }
 
 bool
-snj_term_typing_active(const struct snj_term *term)
+snag_term_typing_active(const struct snag_term *term)
 {
     return term && term->active && term->typing_active;
 }
 
 static void
-output_column_add(struct snj_term *term, size_t width)
+output_column_add(struct snag_term *term, size_t width)
 {
     if (width && term->output_columns + width > term->columns)
         term->output_columns = 0u;
@@ -373,21 +373,21 @@ output_column_add(struct snj_term *term, size_t width)
 }
 
 int
-snj_term_note_output(struct snj_term *term, const char *text, size_t len,
+snag_term_note_output(struct snag_term *term, const char *text, size_t len,
                      const char *style)
 {
-    struct snj_buf safe;
+    struct snag_buf safe;
     int rc = -1;
 
     if (!term || !len)
         return 0;
     term->output_seen = true;
-    term->last_output_ms = snj_monotonic_ms();
+    term->last_output_ms = snag_monotonic_ms();
     term->output_ended_lf = text[len - 1u] == '\n';
     if (!term->opened || !term->capable)
         return 0;
-    snj_buf_init(&safe, len * 8u + 32u);
-    if (snj_term_append_safe(&safe, text, len) < 0)
+    snag_buf_init(&safe, len * 8u + 32u);
+    if (snag_term_append_safe(&safe, text, len) < 0)
         goto out;
     for (size_t i = 0u; i < safe.len;) {
         uint32_t cp;
@@ -396,37 +396,37 @@ snj_term_note_output(struct snj_term *term, const char *text, size_t len,
 
         if (cp == '\n') {
             term->output_columns = 0u;
-            snj_buf_reset(&term->output_cell);
-            snj_buf_reset(&term->output_line);
+            snag_buf_reset(&term->output_cell);
+            snag_buf_reset(&term->output_line);
         } else {
             if (width > 0) {
                 output_column_add(term, (size_t)width);
                 term->output_cell_width = (size_t)width;
-                snj_buf_reset(&term->output_cell);
-                (void)snj_strcpy(term->output_cell_style,
+                snag_buf_reset(&term->output_cell);
+                (void)snag_strcpy(term->output_cell_style,
                                  sizeof(term->output_cell_style), style);
             }
-            if (snj_buf_append(&term->output_cell, safe.data + i, n) < 0 ||
-                snj_buf_append(&term->output_line, safe.data + i, n) < 0)
+            if (snag_buf_append(&term->output_cell, safe.data + i, n) < 0 ||
+                snag_buf_append(&term->output_line, safe.data + i, n) < 0)
                 goto out;
         }
         i += n;
     }
     rc = 0;
 out:
-    snj_buf_free(&safe);
+    snag_buf_free(&safe);
     return rc;
 }
 
 unsigned int
-snj_term_columns(const struct snj_term *term)
+snag_term_columns(const struct snag_term *term)
 {
     return term ? term->columns : 80u;
 }
 
 void
-snj_term_set_commands(struct snj_term *term,
-                      const struct snj_term_command *commands, size_t count)
+snag_term_set_commands(struct snag_term *term,
+                      const struct snag_term_command *commands, size_t count)
 {
     if (!term)
         return;
@@ -443,7 +443,7 @@ term_control_capable(void)
 }
 
 static void
-update_size(struct snj_term *term)
+update_size(struct snag_term *term)
 {
     struct winsize size;
 
@@ -468,7 +468,7 @@ update_size(struct snj_term *term)
 }
 
 static int
-set_raw(struct snj_term *term)
+set_raw(struct snag_term *term)
 {
     struct termios raw = term->saved;
 
@@ -483,23 +483,23 @@ set_raw(struct snj_term *term)
 }
 
 int
-snj_term_open(struct snj_term *term, char *error, size_t error_size)
+snag_term_open(struct snag_term *term, char *error, size_t error_size)
 {
     struct sigaction action;
 
     if (term->opened) {
         errno = EALREADY;
-        snj_errorf(error, error_size, "terminal already open: %s", strerror(errno));
+        snag_errorf(error, error_size, "terminal already open: %s", strerror(errno));
         return -1;
     }
     if (tcgetattr(STDIN_FILENO, &term->saved) < 0) {
-        snj_errorf(error, error_size, "cannot read terminal attributes: %s", strerror(errno));
+        snag_errorf(error, error_size, "cannot read terminal attributes: %s", strerror(errno));
         return -1;
     }
     term->capable = term_control_capable();
     update_size(term);
     if (term->capable && set_raw(term) < 0) {
-        snj_errorf(error, error_size, "cannot enter terminal input mode: %s", strerror(errno));
+        snag_errorf(error, error_size, "cannot enter terminal input mode: %s", strerror(errno));
         return -1;
     }
     memset(&action, 0, sizeof(action));
@@ -511,7 +511,7 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
             (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
         term->raw = false;
         errno = saved_errno;
-        snj_errorf(error, error_size, "cannot install terminal interrupt handler: %s", strerror(errno));
+        snag_errorf(error, error_size, "cannot install terminal interrupt handler: %s", strerror(errno));
         return -1;
     }
     term->sigint_installed = true;
@@ -526,7 +526,7 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
         term->raw = false;
         term->sigint_installed = false;
         errno = saved_errno;
-        snj_errorf(error, error_size, "cannot install terminal resize handler: %s", strerror(errno));
+        snag_errorf(error, error_size, "cannot install terminal resize handler: %s", strerror(errno));
         return -1;
     }
     term->sigwinch_installed = true;
@@ -534,7 +534,7 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
     sigwinch_pending = 0;
     term->opened = true;
     for (int fd = STDOUT_FILENO; fd <= STDERR_FILENO; ++fd) {
-        char path[SNJ_PATH_MAX_BYTES];
+        char path[SNAG_PATH_MAX_BYTES];
         struct stat original, owned;
         if (!isatty(fd))
             continue;
@@ -547,15 +547,15 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
             int saved_errno = copy < 0 ? errno : EIO;
             if (copy >= 0)
                 close(copy);
-            snj_term_close(term);
+            snag_term_close(term);
             errno = saved_errno;
-            snj_errorf(error, error_size, "cannot open private terminal output: %s", strerror(errno));
+            snag_errorf(error, error_size, "cannot open private terminal output: %s", strerror(errno));
             return -1;
         }
         term->output_fd[fd - STDOUT_FILENO] = copy;
     }
     output_owner = term;
-    if (term->capable && snj_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
+    if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
         int saved_errno = errno;
         (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
         (void)sigaction(SIGINT, &term->saved_sigint, NULL);
@@ -565,7 +565,7 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
         term->sigint_installed = false;
         term->sigwinch_installed = false;
         errno = saved_errno;
-        snj_errorf(error, error_size, "cannot enable bracketed paste: %s", strerror(errno));
+        snag_errorf(error, error_size, "cannot enable bracketed paste: %s", strerror(errno));
         return -1;
     }
     term->bracketed_paste = term->capable;
@@ -573,19 +573,19 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
 }
 
 int
-snj_term_external_begin(struct snj_term *term,
+snag_term_external_begin(struct snag_term *term,
                         char *error, size_t error_size)
 {
     if (!term || !term->opened) {
         errno = EINVAL;
-        snj_errorf(error, error_size, "terminal is not open: %s",
+        snag_errorf(error, error_size, "terminal is not open: %s",
                    strerror(errno));
         return -1;
     }
-    if (snj_term_hide(term) < 0)
+    if (snag_term_hide(term) < 0)
         goto fail;
     if (term->bracketed_paste &&
-        snj_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
+        snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
         goto fail;
     term->bracketed_paste = false;
     if (term->raw && tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved) < 0)
@@ -593,18 +593,18 @@ snj_term_external_begin(struct snj_term *term,
     term->raw = false;
     return 0;
 fail:
-    snj_errorf(error, error_size, "cannot release terminal for editor: %s",
+    snag_errorf(error, error_size, "cannot release terminal for editor: %s",
                strerror(errno));
     return -1;
 }
 
 int
-snj_term_external_end(struct snj_term *term,
+snag_term_external_end(struct snag_term *term,
                       char *error, size_t error_size)
 {
     if (!term || !term->opened) {
         errno = EINVAL;
-        snj_errorf(error, error_size, "terminal is not open: %s",
+        snag_errorf(error, error_size, "terminal is not open: %s",
                    strerror(errno));
         return -1;
     }
@@ -614,12 +614,12 @@ snj_term_external_end(struct snj_term *term,
     if (term->capable && set_raw(term) < 0)
         goto fail;
     if (term->capable &&
-        snj_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0)
+        snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0)
         goto fail;
     term->bracketed_paste = term->capable;
     return 0;
 fail:
-    snj_errorf(error, error_size, "cannot restore terminal after editor: %s",
+    snag_errorf(error, error_size, "cannot restore terminal after editor: %s",
                strerror(errno));
     return -1;
 }
@@ -637,66 +637,66 @@ move_cursor(size_t amount, char direction)
         errno = EOVERFLOW;
         return -1;
     }
-    return snj_term_write(STDERR_FILENO, sequence, (size_t)n);
+    return snag_term_write(STDERR_FILENO, sequence, (size_t)n);
 }
 
 static int
-materialize_prompt_wrap(struct snj_term *term)
+materialize_prompt_wrap(struct snag_term *term)
 {
     if (!term->rendered_cursor_pending_wrap)
         return 0;
-    if (snj_term_write(STDERR_FILENO, " \b", 2u) < 0)
+    if (snag_term_write(STDERR_FILENO, " \b", 2u) < 0)
         return -1;
     term->rendered_cursor_pending_wrap = false;
     return 0;
 }
 
 int
-snj_term_hide(struct snj_term *term)
+snag_term_hide(struct snag_term *term)
 {
-    struct snj_buf out;
+    struct snag_buf out;
     size_t max;
     int rc = -1;
 
     if (term->input_only || !term->opened || !term->prompt_visible)
         return 0;
-    snj_buf_reset(&term->painted_prompt);
+    snag_buf_reset(&term->painted_prompt);
     if (!term->capable) {
         term->prompt_visible = false;
-        return snj_term_write(STDERR_FILENO, "\n", 1u);
+        return snag_term_write(STDERR_FILENO, "\n", 1u);
     }
     if (term->rendered_rows > (SIZE_MAX - 256u) / 16u ||
-        !snj_size_add(term->rendered_rows * 16u + 256u, term->output_cell.len, &max)) {
+        !snag_size_add(term->rendered_rows * 16u + 256u, term->output_cell.len, &max)) {
         errno = EOVERFLOW;
         return -1;
     }
-    snj_buf_init(&out, max);
-    if ((term->rendered_cursor_pending_wrap && snj_buf_append(&out, " \b", 2u) < 0) ||
+    snag_buf_init(&out, max);
+    if ((term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0) ||
         (term->rendered_cursor_row + 1u < term->rendered_rows &&
-         snj_buf_printf(&out, "\033[%zuB",
+         snag_buf_printf(&out, "\033[%zuB",
             term->rendered_rows - term->rendered_cursor_row - 1u) < 0))
         goto out;
     for (size_t row = term->rendered_rows; row != 0u; --row)
-        if (snj_buf_append(&out, "\r\033[2K", 5u) < 0 ||
-            (row > 1u && snj_buf_append(&out, "\033[1A", 4u) < 0))
+        if (snag_buf_append(&out, "\r\033[2K", 5u) < 0 ||
+            (row > 1u && snag_buf_append(&out, "\033[1A", 4u) < 0))
             goto out;
-    if (snj_buf_putc(&out, '\r') < 0)
+    if (snag_buf_putc(&out, '\r') < 0)
         goto out;
     if (term->output_detour) {
         size_t column = term->output_columns < term->columns ?
                         term->output_columns : term->columns - term->output_cell_width;
-        if (snj_buf_append(&out, "\033[1A", 4u) < 0 ||
-            (column && snj_buf_printf(&out, "\033[%zuC", column) < 0))
+        if (snag_buf_append(&out, "\033[1A", 4u) < 0 ||
+            (column && snag_buf_printf(&out, "\033[%zuC", column) < 0))
             goto out;
         /* Restore VT pending-wrap by repainting the final output cell. */
         if (term->output_columns >= term->columns &&
-            (snj_buf_append(&out, term->output_cell_style,
+            (snag_buf_append(&out, term->output_cell_style,
                             strlen(term->output_cell_style)) < 0 ||
-             snj_buf_append(&out, term->output_cell.data, term->output_cell.len) < 0 ||
-             snj_buf_append(&out, "\033[0m", 4u) < 0))
+             snag_buf_append(&out, term->output_cell.data, term->output_cell.len) < 0 ||
+             snag_buf_append(&out, "\033[0m", 4u) < 0))
             goto out;
     }
-    if (snj_term_write(STDERR_FILENO, out.data, out.len) < 0)
+    if (snag_term_write(STDERR_FILENO, out.data, out.len) < 0)
         goto out;
     term->prompt_visible = false;
     term->rendered_rows = 0u;
@@ -707,16 +707,16 @@ snj_term_hide(struct snj_term *term)
     term->output_detour = false;
     rc = 0;
 out:
-    snj_buf_free(&out);
+    snag_buf_free(&out);
     return rc;
 }
 
 static int
-leave_prompt(struct snj_term *term)
+leave_prompt(struct snag_term *term)
 {
     if (!term->opened || !term->prompt_visible)
         return 0;
-    snj_buf_reset(&term->painted_prompt);
+    snag_buf_reset(&term->painted_prompt);
     if (term->capable &&
         (materialize_prompt_wrap(term) < 0 ||
          (term->rendered_cursor_row + 1u < term->rendered_rows &&
@@ -724,9 +724,9 @@ leave_prompt(struct snj_term *term)
                       'B') < 0)))
         return -1;
     if (term->capable && term->rendered_end_at_margin) {
-        if (snj_term_write(STDERR_FILENO, "\r", 1u) < 0)
+        if (snag_term_write(STDERR_FILENO, "\r", 1u) < 0)
             return -1;
-    } else if (snj_term_write(STDERR_FILENO,
+    } else if (snag_term_write(STDERR_FILENO,
                               term->capable ? "\r\n" : "\n",
                               term->capable ? 2u : 1u) < 0) {
         return -1;
@@ -741,12 +741,12 @@ leave_prompt(struct snj_term *term)
     term->output_ended_lf = true;
     term->output_detour = false;
     term->output_columns = 0u;
-    snj_buf_reset(&term->output_line);
+    snag_buf_reset(&term->output_line);
     return 0;
 }
 
 static void
-mark_input_activity(struct snj_term *term)
+mark_input_activity(struct snag_term *term)
 {
     if (!term->active)
         return;
@@ -754,7 +754,7 @@ mark_input_activity(struct snj_term *term)
     if (term->output_detour)
         term->output_seen = false;
     term->output_detour = false;
-    term->last_input_ms = snj_monotonic_ms();
+    term->last_input_ms = snag_monotonic_ms();
 }
 
 static int
@@ -781,7 +781,7 @@ prompt_render_max(const unsigned char *text, size_t len, size_t indent,
 }
 
 static const char *
-prompt_label(const struct snj_term *term, size_t *len)
+prompt_label(const struct snag_term *term, size_t *len)
 {
     if (term->searching) {
         *len = term->search_label.len;
@@ -792,10 +792,10 @@ prompt_label(const struct snj_term *term, size_t *len)
 }
 
 void
-snj_term_capture_prompt_clock(struct snj_term *term, time_t seconds)
+snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds)
 {
     struct tm local;
-    struct snj_prompt_clock *clock = &term->prompt_clock;
+    struct snag_prompt_clock *clock = &term->prompt_clock;
 
     if (clock->captured)
         return;
@@ -812,18 +812,18 @@ snj_term_capture_prompt_clock(struct snj_term *term, time_t seconds)
 }
 
 static int
-prepare_spinner(struct snj_term_spinner *spinner, const char *value)
+prepare_spinner(struct snag_term_spinner *spinner, const char *value)
 {
     size_t pos = value[0] == '\\' && value[1] == '0' ? 2u :
-                 snj_utf8_size((unsigned char)value[0]);
+                 snag_utf8_size((unsigned char)value[0]);
 
     memset(spinner, 0, sizeof(*spinner));
-    if (!snj_strcpy(spinner->value, sizeof(spinner->value), value))
+    if (!snag_strcpy(spinner->value, sizeof(spinner->value), value))
         return -1;
     spinner->inactive_len = value[0] == '\\' && value[1] == '0' ? 0u :
                             (unsigned char)pos;
     while (value[pos]) {
-        size_t n = snj_utf8_size((unsigned char)value[pos]);
+        size_t n = snag_utf8_size((unsigned char)value[pos]);
 
         if (!n || spinner->frame_count >= 16u)
             return -1;
@@ -835,28 +835,28 @@ prepare_spinner(struct snj_term_spinner *spinner, const char *value)
 }
 
 static int
-compose_prompt(const char *prompt, const struct snj_term_spinner *spinners,
+compose_prompt(const char *prompt, const struct snag_term_spinner *spinners,
                unsigned int states, uint64_t step, char *label,
-               struct snj_term_spinner next[SNJ_TERM_SPINNER_COUNT])
+               struct snag_term_spinner next[SNAG_TERM_SPINNER_COUNT])
 {
     size_t used = 0u;
 
-    memcpy(next, spinners, sizeof(*spinners) * SNJ_TERM_SPINNER_COUNT);
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i) {
+    memcpy(next, spinners, sizeof(*spinners) * SNAG_TERM_SPINNER_COUNT);
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
         next[i].present = false;
         next[i].current_len = 0u;
     }
     for (const unsigned char *p = (const unsigned char *)prompt; *p; ++p) {
-        if (*p >= SNJ_TERM_SPINNER_MARKER_BASE) {
-            unsigned int id = *p - SNJ_TERM_SPINNER_MARKER_BASE;
-            struct snj_term_spinner *cell;
+        if (*p >= SNAG_TERM_SPINNER_MARKER_BASE) {
+            unsigned int id = *p - SNAG_TERM_SPINNER_MARKER_BASE;
+            struct snag_term_spinner *cell;
             size_t offset = 0u, len;
 
-            if (id >= SNJ_TERM_SPINNER_SLOTS)
+            if (id >= SNAG_TERM_SPINNER_SLOTS)
                 return -1;
-            if (id == SNJ_TERM_SPINNER_PROVIDER &&
-                (states & (1u << SNJ_TERM_SPINNER_TOOL)))
-                id = SNJ_TERM_SPINNER_TOOL;
+            if (id == SNAG_TERM_SPINNER_PROVIDER &&
+                (states & (1u << SNAG_TERM_SPINNER_TOOL)))
+                id = SNAG_TERM_SPINNER_TOOL;
             cell = &next[id];
             len = cell->inactive_len;
 
@@ -869,13 +869,13 @@ compose_prompt(const char *prompt, const struct snj_term_spinner *spinners,
                 offset = cell->frame_offset[frame];
                 len = cell->frame_len[frame];
             }
-            if (used > SNJ_TERM_LABEL_BYTES - 1u - len)
+            if (used > SNAG_TERM_LABEL_BYTES - 1u - len)
                 return -1;
             memcpy(label + used, cell->value + offset, len);
             cell->current_len = (unsigned char)len;
             used += len;
         } else {
-            if (used == SNJ_TERM_LABEL_BYTES - 1u)
+            if (used == SNAG_TERM_LABEL_BYTES - 1u)
                 return -1;
             label[used++] = (char)*p;
         }
@@ -886,7 +886,7 @@ compose_prompt(const char *prompt, const struct snj_term_spinner *spinners,
 
 static int
 prompt_fits(const char *prompt,
-            const struct snj_term_spinner spinners[SNJ_TERM_SPINNER_COUNT])
+            const struct snag_term_spinner spinners[SNAG_TERM_SPINNER_COUNT])
 {
     size_t used = 0u;
     unsigned int seen = 0u;
@@ -894,17 +894,17 @@ prompt_fits(const char *prompt,
     for (const unsigned char *p = (const unsigned char *)prompt; *p; ++p) {
         size_t len = 1u;
 
-        if (*p >= SNJ_TERM_SPINNER_MARKER_BASE) {
-            unsigned int id = *p - SNJ_TERM_SPINNER_MARKER_BASE;
+        if (*p >= SNAG_TERM_SPINNER_MARKER_BASE) {
+            unsigned int id = *p - SNAG_TERM_SPINNER_MARKER_BASE;
 
-            if (id >= SNJ_TERM_SPINNER_SLOTS || (seen & (1u << id)))
+            if (id >= SNAG_TERM_SPINNER_SLOTS || (seen & (1u << id)))
                 return -1;
             seen |= 1u << id;
             len = 0u;
             for (unsigned int source = id; source <=
-                    (id == SNJ_TERM_SPINNER_PROVIDER ? SNJ_TERM_SPINNER_TOOL : id);
+                    (id == SNAG_TERM_SPINNER_PROVIDER ? SNAG_TERM_SPINNER_TOOL : id);
                     ++source) {
-                const struct snj_term_spinner *cell = &spinners[source];
+                const struct snag_term_spinner *cell = &spinners[source];
 
                 if (cell->inactive_len > len)
                     len = cell->inactive_len;
@@ -913,7 +913,7 @@ prompt_fits(const char *prompt,
                         len = cell->frame_len[i];
             }
         }
-        if (used > SNJ_TERM_LABEL_BYTES - 1u - len)
+        if (used > SNAG_TERM_LABEL_BYTES - 1u - len)
             return -1;
         used += len;
     }
@@ -921,18 +921,18 @@ prompt_fits(const char *prompt,
 }
 
 static void
-install_prompt(struct snj_term *term, const char *label,
-               const struct snj_term_spinner cells[SNJ_TERM_SPINNER_COUNT])
+install_prompt(struct snag_term *term, const char *label,
+               const struct snag_term_spinner cells[SNAG_TERM_SPINNER_COUNT])
 {
     memcpy(term->label, label, strlen(label) + 1u);
     memcpy(term->spinner, cells, sizeof(term->spinner));
 }
 
 static int
-update_spinners(struct snj_term *term, uint64_t step)
+update_spinners(struct snag_term *term, uint64_t step)
 {
-    struct snj_term_spinner next[SNJ_TERM_SPINNER_COUNT];
-    char label[SNJ_TERM_LABEL_BYTES];
+    struct snag_term_spinner next[SNAG_TERM_SPINNER_COUNT];
+    char label[SNAG_TERM_LABEL_BYTES];
     bool changed;
 
     if (term->input_only)
@@ -947,9 +947,9 @@ update_spinners(struct snj_term *term, uint64_t step)
 }
 
 static bool
-animated_spinners(const struct snj_term *term)
+animated_spinners(const struct snag_term *term)
 {
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
         if (term->spinner[i].present && term->spinner[i].frame_count > 1u &&
             (term->spinner_states & (1u << i)))
             return true;
@@ -957,7 +957,7 @@ animated_spinners(const struct snj_term *term)
 }
 
 static uint64_t
-spinner_step(const struct snj_term *term, uint64_t now)
+spinner_step(const struct snag_term *term, uint64_t now)
 {
     uint64_t elapsed = now >= term->spinner_epoch_ms ?
                        now - term->spinner_epoch_ms : 0u;
@@ -965,14 +965,14 @@ spinner_step(const struct snj_term *term, uint64_t now)
 }
 
 static int
-spinner_timeout(struct snj_term *term, int timeout_ms)
+spinner_timeout(struct snag_term *term, int timeout_ms)
 {
     uint64_t now, elapsed, step, boundary, wait;
 
     if (!term->prompt_visible || !term->capable || term->searching ||
         term->output_depth || !animated_spinners(term))
         return timeout_ms;
-    now = snj_monotonic_ms();
+    now = snag_monotonic_ms();
     elapsed = now >= term->spinner_epoch_ms ? now - term->spinner_epoch_ms : 0u;
     step = spinner_step(term, now);
     boundary = ((step + 1u) * 1000u + term->spinner_per_second - 1u) /
@@ -982,9 +982,9 @@ spinner_timeout(struct snj_term *term, int timeout_ms)
 }
 
 static int
-sync_prompt_layout_after_resize(struct snj_term *term)
+sync_prompt_layout_after_resize(struct snag_term *term)
 {
-    struct snj_buf scratch;
+    struct snag_buf scratch;
     size_t cursor_row = 0u, cursor_col = 0u;
     size_t end_row = 0u, end_col = 0u;
     size_t label_len;
@@ -1000,7 +1000,7 @@ sync_prompt_layout_after_resize(struct snj_term *term)
      * wrap before erase/movement commands use the recomputed row counts.
      */
     if (cursor_row != 0u && cursor_col == 0u &&
-        snj_term_write(STDERR_FILENO, " \b", 2u) < 0)
+        snag_term_write(STDERR_FILENO, " \b", 2u) < 0)
         goto out;
     term->rendered_rows = end_row + 1u;
     term->rendered_cursor_row = cursor_row;
@@ -1009,7 +1009,7 @@ sync_prompt_layout_after_resize(struct snj_term *term)
     term->rendered_cursor_pending_wrap = false;
     rc = 0;
 out:
-    snj_buf_free(&scratch);
+    snag_buf_free(&scratch);
     return rc;
 }
 
@@ -1020,7 +1020,7 @@ struct prompt_row {
 };
 
 static struct prompt_row
-prompt_row(const struct snj_buf *frame, size_t start, unsigned int columns)
+prompt_row(const struct snag_buf *frame, size_t start, unsigned int columns)
 {
     struct prompt_row row = {.start = start, .end = start};
 
@@ -1048,7 +1048,7 @@ prompt_row(const struct snj_buf *frame, size_t start, unsigned int columns)
 }
 
 static void
-frame_position(const struct snj_buf *frame, size_t offset, unsigned int columns,
+frame_position(const struct snag_buf *frame, size_t offset, unsigned int columns,
                 size_t *row, size_t *col)
 {
     size_t start = 0u;
@@ -1056,7 +1056,7 @@ frame_position(const struct snj_buf *frame, size_t offset, unsigned int columns,
     for (;;) {
         struct prompt_row line = prompt_row(frame, start, columns);
         if (offset <= line.end) {
-            *col = snj_term_text_width((char *)frame->data + start, offset - start);
+            *col = snag_term_text_width((char *)frame->data + start, offset - start);
             if (*col == columns) {
                 ++*row;
                 *col = 0u;
@@ -1069,14 +1069,14 @@ frame_position(const struct snj_buf *frame, size_t offset, unsigned int columns,
 }
 
 static int
-compose_frame(struct snj_term *term, struct snj_buf *out, size_t *label_bytes,
+compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
                size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col)
 {
     size_t label_len, cursor_byte = 0u, max;
     const char *label = prompt_label(term, &label_len);
-    size_t indent = snj_term_text_width(label, label_len);
+    size_t indent = snag_term_text_width(label, label_len);
 
-    snj_buf_init(out, 0u);
+    snag_buf_init(out, 0u);
     if (label_len > (SIZE_MAX - 32u) / 4u) {
         errno = EOVERFLOW;
         return -1;
@@ -1089,8 +1089,8 @@ compose_frame(struct snj_term *term, struct snj_buf *out, size_t *label_bytes,
     for (size_t start = 0u, pos = 0u; pos <= label_len; ++pos) {
         if (pos != label_len && label[pos] != '\n')
             continue;
-        if (snj_term_append_safe(out, label + start, pos - start) < 0 ||
-            (pos < label_len && snj_buf_append(out, "\\n", 2u) < 0))
+        if (snag_term_append_safe(out, label + start, pos - start) < 0 ||
+            (pos < label_len && snag_buf_append(out, "\\n", 2u) < 0))
             return -1;
         start = pos + 1u;
     }
@@ -1147,7 +1147,7 @@ colored_prefix(size_t label, size_t start, size_t end)
 }
 
 static bool
-same_prompt_cell(const struct snj_term *term, const struct snj_buf *next,
+same_prompt_cell(const struct snag_term *term, const struct snag_buf *next,
                  size_t label, size_t a, size_t ae, size_t b, size_t be)
 {
     size_t old_color = colored_prefix(term->painted_label_len, a, ae);
@@ -1164,16 +1164,16 @@ same_prompt_cell(const struct snj_term *term, const struct snj_buf *next,
 }
 
 static int
-prompt_move(struct snj_buf *out, size_t *row, size_t *col,
+prompt_move(struct snag_buf *out, size_t *row, size_t *col,
             size_t target_row, size_t target_col)
 {
     if (target_row != *row &&
-        snj_buf_printf(out, "\033[%zu%c", target_row > *row ? target_row - *row :
+        snag_buf_printf(out, "\033[%zu%c", target_row > *row ? target_row - *row :
                        *row - target_row, target_row > *row ? 'B' : 'A') < 0)
         return -1;
     if (target_col != *col &&
-        (snj_buf_putc(out, '\r') < 0 ||
-         (target_col && snj_buf_printf(out, "\033[%zuC", target_col) < 0)))
+        (snag_buf_putc(out, '\r') < 0 ||
+         (target_col && snag_buf_printf(out, "\033[%zuC", target_col) < 0)))
         return -1;
     *row = target_row;
     *col = target_col;
@@ -1181,21 +1181,21 @@ prompt_move(struct snj_buf *out, size_t *row, size_t *col,
 }
 
 static int
-prompt_span(struct snj_buf *out, const struct snj_term *term,
-            const struct snj_buf *frame, size_t label, size_t start, size_t end)
+prompt_span(struct snag_buf *out, const struct snag_term *term,
+            const struct snag_buf *frame, size_t label, size_t start, size_t end)
 {
     size_t colored = term->color ? colored_prefix(label, start, end) : 0u;
 
     if (colored &&
-        (snj_buf_append(out, term->networked ? "\033[1;35m" : "\033[1;36m", 7u) < 0 ||
-         snj_buf_append(out, frame->data + start, colored) < 0 ||
-         snj_buf_append(out, "\033[0m", 4u) < 0))
+        (snag_buf_append(out, term->networked ? "\033[1;35m" : "\033[1;36m", 7u) < 0 ||
+         snag_buf_append(out, frame->data + start, colored) < 0 ||
+         snag_buf_append(out, "\033[0m", 4u) < 0))
         return -1;
-    return snj_buf_append(out, frame->data + start + colored, end - start - colored);
+    return snag_buf_append(out, frame->data + start + colored, end - start - colored);
 }
 
 static bool
-same_prompt_layout(const struct snj_term *term, const struct snj_buf *next)
+same_prompt_layout(const struct snag_term *term, const struct snag_buf *next)
 {
     size_t a = 0u, b = 0u;
 
@@ -1216,10 +1216,10 @@ same_prompt_layout(const struct snj_term *term, const struct snj_buf *next)
 }
 
 static int
-paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
+paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
              size_t cursor_row, size_t cursor_col, size_t end_row, size_t end_col)
 {
-    struct snj_buf out;
+    struct snag_buf out;
     size_t row = term->prompt_visible ? term->rendered_cursor_row : 0u;
     size_t col = term->prompt_visible ? term->rendered_cursor_col : 0u;
     size_t old_rows = term->prompt_visible ? term->rendered_rows : 0u;
@@ -1229,12 +1229,12 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
     int rc = -1;
 
     if (frame->max > (SIZE_MAX - 256u) / 16u || old_rows > SIZE_MAX / 32u ||
-        !snj_size_add(frame->max * 16u + 256u, old_rows * 32u, &max)) {
+        !snag_size_add(frame->max * 16u + 256u, old_rows * 32u, &max)) {
         errno = EOVERFLOW;
         return -1;
     }
-    snj_buf_init(&out, max);
-    if (term->rendered_cursor_pending_wrap && snj_buf_append(&out, " \b", 2u) < 0)
+    snag_buf_init(&out, max);
+    if (term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0)
         goto out;
     if (stable) {
         size_t a = 0u, b = 0u, y = 0u;
@@ -1249,7 +1249,7 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
                 size_t bc = prompt_cell_end(frame->data, b, be);
                 if (!same_prompt_cell(term, frame, label, a, ac, b, bc))
                     break;
-                prefix += snj_term_text_width((char *)frame->data + b, bc - b);
+                prefix += snag_term_text_width((char *)frame->data + b, bc - b);
                 a = ac;
                 b = bc;
             }
@@ -1266,7 +1266,7 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
                 if (prompt_move(&out, &row, &col, y, prefix) < 0 ||
                     prompt_span(&out, term, frame, label, b, be) < 0)
                     goto out;
-                col += snj_term_text_width((char *)frame->data + b, be - b);
+                col += snag_term_text_width((char *)frame->data + b, be - b);
                 /* Materialize soft wrap with the next row's actual first cell.
                  * CR here would discard the terminal's reflow/join marker. */
                 if (col == term->columns) {
@@ -1278,16 +1278,16 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
                             size_t first = prompt_cell_end(frame->data, following.start, following.end);
                             if (prompt_span(&out, term, frame, label, following.start, first) < 0)
                                 goto out;
-                            col = snj_term_text_width((char *)frame->data + following.start,
+                            col = snag_term_text_width((char *)frame->data + following.start,
                                                        first - following.start);
-                        } else if (snj_buf_append(&out, " \b", 2u) < 0) {
+                        } else if (snag_buf_append(&out, " \b", 2u) < 0) {
                             goto out;
                         }
-                    } else if (snj_buf_putc(&out, '\r') < 0) {
+                    } else if (snag_buf_putc(&out, '\r') < 0) {
                         goto out;
                     }
                 }
-                if (next.width < old.width && snj_buf_append(&out, "\033[K", 3u) < 0)
+                if (next.width < old.width && snag_buf_append(&out, "\033[K", 3u) < 0)
                     goto out;
                 if (next.width < old.width && end_row && !end_col && row == end_row)
                     repair_wrap = true;
@@ -1318,21 +1318,21 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
             if (frame->data[i] != '\r' || frame->data[i + 1u] != '\n')
                 continue;
             if (prompt_span(&out, term, frame, label, start, i) < 0 ||
-                snj_buf_append(&out, "\033[K\r\n", 5u) < 0)
+                snag_buf_append(&out, "\033[K\r\n", 5u) < 0)
                 goto out;
             start = i + 2u;
             ++i;
         }
         if (prompt_span(&out, term, frame, label, start, frame->len) < 0 ||
-            (end_row && !end_col && snj_buf_append(&out, " \b", 2u) < 0) ||
-            ((end_col || old_rows > end_row) && snj_buf_append(&out, "\033[K", 3u) < 0))
+            (end_row && !end_col && snag_buf_append(&out, " \b", 2u) < 0) ||
+            ((end_col || old_rows > end_row) && snag_buf_append(&out, "\033[K", 3u) < 0))
             goto out;
         row = end_row;
         col = end_col;
         repair_wrap = end_row && !end_col && old_rows > end_row;
         for (size_t y = end_row + 1u; y < old_rows; ++y)
             if (prompt_move(&out, &row, &col, y, 0u) < 0 ||
-                snj_buf_append(&out, "\033[K", 3u) < 0)
+                snag_buf_append(&out, "\033[K", 3u) < 0)
                 goto out;
     }
     /* EL on an empty continuation row can clear the preceding soft-wrap
@@ -1343,15 +1343,15 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
         frame_position(frame, last, term->columns, &last_row, &last_col);
         if (prompt_move(&out, &row, &col, last_row, last_col) < 0 ||
             prompt_span(&out, term, frame, label, last, frame->len) < 0 ||
-            snj_buf_append(&out, " \b", 2u) < 0)
+            snag_buf_append(&out, " \b", 2u) < 0)
             goto out;
         row = end_row;
         col = 0u;
     }
     if (prompt_move(&out, &row, &col, cursor_row, cursor_col) < 0 ||
-        snj_term_write(STDERR_FILENO, out.data, out.len) < 0)
+        snag_term_write(STDERR_FILENO, out.data, out.len) < 0)
         goto out;
-    snj_buf_free(&term->painted_prompt);
+    snag_buf_free(&term->painted_prompt);
     term->painted_prompt = *frame;
     memset(frame, 0, sizeof(*frame));
     term->painted_label_len = label;
@@ -1366,17 +1366,17 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
     rc = 0;
 out:
     if (rc < 0)
-        snj_buf_reset(&term->painted_prompt);
-    snj_buf_free(&out);
+        snag_buf_reset(&term->painted_prompt);
+    snag_buf_free(&out);
     return rc;
 }
 
 static int
-redraw(struct snj_term *term)
+redraw(struct snag_term *term)
 {
-    struct snj_buf out;
-    struct snj_term_spinner cells[SNJ_TERM_SPINNER_COUNT];
-    char current[SNJ_TERM_LABEL_BYTES];
+    struct snag_buf out;
+    struct snag_term_spinner cells[SNAG_TERM_SPINNER_COUNT];
+    char current[SNAG_TERM_LABEL_BYTES];
     size_t cursor_row = 0u, cursor_col = 0u;
     size_t end_row = 0u, end_col = 0u;
     size_t label_len;
@@ -1388,14 +1388,14 @@ redraw(struct snj_term *term)
     if (term->prompt_template[0] &&
         compose_prompt(term->prompt_template, term->spinner,
                        term->spinner_states,
-                       spinner_step(term, snj_monotonic_ms()), current, cells) < 0)
+                       spinner_step(term, snag_monotonic_ms()), current, cells) < 0)
         return -1;
     if (term->prompt_template[0])
         install_prompt(term, current, cells);
     label = prompt_label(term, &label_len);
     if (term->active && !term->prompt_visible && term->output_seen) {
         if (!term->output_ended_lf &&
-            snj_term_write(STDERR_FILENO, term->capable ? "\r\n" : "\n",
+            snag_term_write(STDERR_FILENO, term->capable ? "\r\n" : "\n",
                            term->capable ? 2u : 1u) < 0)
             return -1;
         term->output_detour = term->capable && !term->output_ended_lf &&
@@ -1409,18 +1409,18 @@ redraw(struct snj_term *term)
         if (term->prompt_visible)
             return 0;
         if (fallback_rc == 0 && term->color &&
-            snj_term_write(STDERR_FILENO,
+            snag_term_write(STDERR_FILENO,
                            term->networked ? "\033[1;35m" : "\033[1;36m",
                            7u) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 &&
-            snj_term_write_safe(STDERR_FILENO, label, label_len) < 0)
+            snag_term_write_safe(STDERR_FILENO, label, label_len) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 && term->color &&
-            snj_term_write(STDERR_FILENO, "\033[0m", 4u) < 0)
+            snag_term_write(STDERR_FILENO, "\033[0m", 4u) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 && term->draft.len &&
-            snj_term_write_safe(STDERR_FILENO, (char *)term->draft.data,
+            snag_term_write_safe(STDERR_FILENO, (char *)term->draft.data,
                                 term->draft.len) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0)
@@ -1432,20 +1432,20 @@ redraw(struct snj_term *term)
         goto out;
     rc = paint_prompt(term, &out, label_len, cursor_row, cursor_col, end_row, end_col);
 out:
-    snj_buf_free(&out);
+    snag_buf_free(&out);
     return rc;
 }
 
 int
-snj_term_set_prompt(struct snj_term *term, bool active)
+snag_term_set_prompt(struct snag_term *term, bool active)
 {
     const char *label = active ? "» " : "› ";
 
-    return snj_term_set_prompt_label(term, active, label);
+    return snag_term_set_prompt_label(term, active, label);
 }
 
 int
-snj_term_set_prompt_label(struct snj_term *term, bool active,
+snag_term_set_prompt_label(struct snag_term *term, bool active,
                           const char *label)
 {
     size_t len;
@@ -1456,7 +1456,7 @@ snj_term_set_prompt_label(struct snj_term *term, bool active,
     }
     if (!term->capable &&
         (term->active != active || strcmp(term->label, label) != 0) &&
-        snj_term_hide(term) < 0)
+        snag_term_hide(term) < 0)
         return -1;
     term->active = active;
     if (!active)
@@ -1473,47 +1473,47 @@ snj_term_set_prompt_label(struct snj_term *term, bool active,
 }
 
 int
-snj_term_set_prompt_template(struct snj_term *term, bool active,
+snag_term_set_prompt_template(struct snag_term *term, bool active,
                              const char *label,
-                             const char *const spinners[SNJ_TERM_SPINNER_COUNT],
+                             const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                              uint32_t per_second, unsigned int states)
 {
-    struct snj_term_spinner configured[SNJ_TERM_SPINNER_COUNT];
-    struct snj_term_spinner cells[SNJ_TERM_SPINNER_COUNT];
-    char expanded[SNJ_TERM_LABEL_BYTES];
+    struct snag_term_spinner configured[SNAG_TERM_SPINNER_COUNT];
+    struct snag_term_spinner cells[SNAG_TERM_SPINNER_COUNT];
+    char expanded[SNAG_TERM_LABEL_BYTES];
     size_t len;
     bool unchanged;
 
     if (!term || !label || !(len = strlen(label)) ||
         len >= sizeof(term->prompt_template) || !spinners ||
         per_second < 1u || per_second > 60u ||
-        states >= (1u << SNJ_TERM_SPINNER_COUNT)) {
+        states >= (1u << SNAG_TERM_SPINNER_COUNT)) {
         errno = EINVAL;
         return -1;
     }
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
         if (!spinners[i] || prepare_spinner(&configured[i], spinners[i]) < 0)
             goto invalid;
     if (prompt_fits(label, configured) < 0)
         goto invalid;
     unchanged = strcmp(term->prompt_template, label) == 0 &&
                 term->spinner_states == states && term->spinner_per_second == per_second;
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT && unchanged; ++i)
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT && unchanged; ++i)
         unchanged = strcmp(term->spinner[i].value, spinners[i]) == 0;
     if (compose_prompt(label, configured, states,
-                       unchanged ? spinner_step(term, snj_monotonic_ms()) : 0u,
+                       unchanged ? spinner_step(term, snag_monotonic_ms()) : 0u,
                        expanded, cells) < 0)
         return -1;
     if (!term->capable &&
         (term->active != active || strcmp(term->label, expanded) != 0) &&
-        snj_term_hide(term) < 0)
+        snag_term_hide(term) < 0)
         return -1;
     memcpy(term->prompt_template, label, len + 1u);
     install_prompt(term, expanded, cells);
     term->spinner_states = states;
     term->spinner_per_second = per_second;
     if (!unchanged)
-        term->spinner_epoch_ms = snj_monotonic_ms();
+        term->spinner_epoch_ms = snag_monotonic_ms();
     term->active = active;
     if (!active)
         term->typing_active = false;
@@ -1528,27 +1528,27 @@ invalid:
 }
 
 int
-snj_term_set_spinner_states(struct snj_term *term, unsigned int states)
+snag_term_set_spinner_states(struct snag_term *term, unsigned int states)
 {
-    if (!term || states >= (1u << SNJ_TERM_SPINNER_COUNT)) {
+    if (!term || states >= (1u << SNAG_TERM_SPINNER_COUNT)) {
         errno = EINVAL;
         return -1;
     }
     if (!term->prompt_template[0] || term->spinner_states == states)
         return 0;
     term->spinner_states = states;
-    term->spinner_epoch_ms = snj_monotonic_ms();
+    term->spinner_epoch_ms = snag_monotonic_ms();
     return update_spinners(term, 0u);
 }
 
 const char *
-snj_term_prompt_label(const struct snj_term *term)
+snag_term_prompt_label(const struct snag_term *term)
 {
     return term ? term->label : NULL;
 }
 
 int
-snj_term_output_begin(struct snj_term *term, bool persistent)
+snag_term_output_begin(struct snag_term *term, bool persistent)
 {
     if (!term || !term->opened)
         return 0;
@@ -1564,7 +1564,7 @@ snj_term_output_begin(struct snj_term *term, bool persistent)
             rc = leave_prompt(term);
             term->typing_active = false;
         } else {
-            rc = snj_term_hide(term);
+            rc = snag_term_hide(term);
         }
         if (rc < 0) {
             --term->output_depth;
@@ -1575,7 +1575,7 @@ snj_term_output_begin(struct snj_term *term, bool persistent)
 }
 
 int
-snj_term_output_end(struct snj_term *term)
+snag_term_output_end(struct snag_term *term)
 {
     bool redraw_requested;
 
@@ -1595,7 +1595,7 @@ snj_term_output_end(struct snj_term *term)
 }
 
 static void
-history_reset_navigation(struct snj_term *term)
+history_reset_navigation(struct snag_term *term)
 {
     free(term->history_draft);
     term->history_draft = NULL;
@@ -1603,23 +1603,23 @@ history_reset_navigation(struct snj_term *term)
 }
 
 static void
-history_clear(struct snj_term *term)
+history_clear(struct snag_term *term)
 {
     history_reset_navigation(term);
-    snj_history_snapshot_free(&term->history);
+    snag_history_snapshot_free(&term->history);
 }
 
 static int
-replace_draft(struct snj_term *term, const char *text)
+replace_draft(struct snag_term *term, const char *text)
 {
     size_t len = strlen(text);
 
-    if (len > SNJ_MAX_DIRECT_PROMPT) {
+    if (len > SNAG_MAX_DIRECT_PROMPT) {
         errno = EOVERFLOW;
         return -1;
     }
-    snj_buf_reset(&term->draft);
-    if (snj_buf_append(&term->draft, text, len) < 0)
+    snag_buf_reset(&term->draft);
+    if (snag_buf_append(&term->draft, text, len) < 0)
         return -1;
     term->cursor = len;
     term->utf8_pending_len = 0u;
@@ -1627,7 +1627,7 @@ replace_draft(struct snj_term *term, const char *text)
 }
 
 int
-snj_term_restore_draft(struct snj_term *term, const char *text)
+snag_term_restore_draft(struct snag_term *term, const char *text)
 {
     term->prompt_wanted = true;
     mark_input_activity(term);
@@ -1635,7 +1635,7 @@ snj_term_restore_draft(struct snj_term *term, const char *text)
 }
 
 bool
-snj_term_consume_echoed_submission(struct snj_term *term, const char *label)
+snag_term_consume_echoed_submission(struct snag_term *term, const char *label)
 {
     bool match;
 
@@ -1647,17 +1647,17 @@ snj_term_consume_echoed_submission(struct snj_term *term, const char *label)
 }
 
 static int
-history_up(struct snj_term *term)
+history_up(struct snag_term *term)
 {
     if (term->history_pos == SIZE_MAX)
         term->history_refresh_requested = true;
     if (!term->history.count)
         return 0;
     if (term->history_pos == SIZE_MAX) {
-        if (snj_buf_terminate(&term->draft) < 0)
+        if (snag_buf_terminate(&term->draft) < 0)
             return -1;
-        term->history_draft = snj_strdup_checked((char *)term->draft.data,
-                                                 SNJ_MAX_DIRECT_PROMPT);
+        term->history_draft = snag_strdup_checked((char *)term->draft.data,
+                                                 SNAG_MAX_DIRECT_PROMPT);
         if (!term->history_draft)
             return -1;
         term->history_pos = term->history.count;
@@ -1668,7 +1668,7 @@ history_up(struct snj_term *term)
 }
 
 static int
-history_down(struct snj_term *term)
+history_down(struct snag_term *term)
 {
     char *draft;
 
@@ -1693,26 +1693,26 @@ history_down(struct snj_term *term)
 }
 
 static int
-search_label_update(struct snj_term *term)
+search_label_update(struct snag_term *term)
 {
     const char *prefix = term->search_failed ?
                          "(failed reverse-i-search)`" :
                          "(reverse-i-search)`";
 
-    snj_buf_reset(&term->search_label);
-    if (snj_buf_append(&term->search_label, prefix, strlen(prefix)) < 0 ||
-        snj_buf_append(&term->search_label, term->search_query.data,
+    snag_buf_reset(&term->search_label);
+    if (snag_buf_append(&term->search_label, prefix, strlen(prefix)) < 0 ||
+        snag_buf_append(&term->search_label, term->search_query.data,
                        term->search_query.len) < 0 ||
-        snj_buf_append(&term->search_label, "': ", 3u) < 0 ||
-        snj_buf_terminate(&term->search_label) < 0)
+        snag_buf_append(&term->search_label, "': ", 3u) < 0 ||
+        snag_buf_terminate(&term->search_label) < 0)
         return -1;
     return 0;
 }
 
 static int
-search_find(struct snj_term *term, size_t before)
+search_find(struct snag_term *term, size_t before)
 {
-    if (snj_buf_terminate(&term->search_query) < 0)
+    if (snag_buf_terminate(&term->search_query) < 0)
         return -1;
     while (before) {
         size_t i = --before;
@@ -1730,20 +1730,20 @@ search_find(struct snj_term *term, size_t before)
 }
 
 static int
-search_begin(struct snj_term *term)
+search_begin(struct snag_term *term)
 {
     if (term->searching)
         return search_find(term, term->search_pos);
     term->history_refresh_requested = true;
-    if (snj_buf_terminate(&term->draft) < 0)
+    if (snag_buf_terminate(&term->draft) < 0)
         return -1;
-    term->search_original = snj_strdup_checked((char *)term->draft.data,
-                                               SNJ_MAX_DIRECT_PROMPT);
+    term->search_original = snag_strdup_checked((char *)term->draft.data,
+                                               SNAG_MAX_DIRECT_PROMPT);
     if (!term->search_original)
         return -1;
     term->search_original_cursor = term->cursor;
-    snj_buf_reset(&term->search_query);
-    if (snj_buf_append(&term->search_query, term->draft.data,
+    snag_buf_reset(&term->search_query);
+    if (snag_buf_append(&term->search_query, term->draft.data,
                        term->draft.len) < 0) {
         free(term->search_original);
         term->search_original = NULL;
@@ -1756,14 +1756,14 @@ search_begin(struct snj_term *term)
 }
 
 int
-snj_term_history_set(struct snj_term *term,
-                     struct snj_history_snapshot *snapshot, bool refresh)
+snag_term_history_set(struct snag_term *term,
+                     struct snag_history_snapshot *snapshot, bool refresh)
 {
     size_t distance = term->history_pos == SIZE_MAX ? 0u :
                       term->history.count - term->history_pos;
     size_t matched = SIZE_MAX;
     if (!refresh && (term->searching || distance)) {
-        snj_history_snapshot_free(snapshot);
+        snag_history_snapshot_free(snapshot);
         return 0;
     }
     if (refresh && term->searching && !term->search_failed &&
@@ -1775,7 +1775,7 @@ snj_term_history_set(struct snj_term *term,
                 break;
             }
     }
-    snj_history_snapshot_free(&term->history);
+    snag_history_snapshot_free(&term->history);
     term->history = *snapshot;
     memset(snapshot, 0, sizeof(*snapshot));
     if (refresh && term->searching && matched != SIZE_MAX) {
@@ -1793,7 +1793,7 @@ snj_term_history_set(struct snj_term *term,
 }
 
 static int
-search_accept(struct snj_term *term, bool abort)
+search_accept(struct snag_term *term, bool abort)
 {
     char *original = term->search_original;
     size_t cursor = term->search_original_cursor;
@@ -1805,8 +1805,8 @@ search_accept(struct snj_term *term, bool abort)
     term->search_original = NULL;
     term->search_failed = false;
     term->search_pos = SIZE_MAX;
-    snj_buf_reset(&term->search_query);
-    snj_buf_reset(&term->search_label);
+    snag_buf_reset(&term->search_query);
+    snag_buf_reset(&term->search_label);
     history_reset_navigation(term);
     if (abort) {
         rc = replace_draft(term, original ? original : "");
@@ -1822,22 +1822,22 @@ search_accept(struct snj_term *term, bool abort)
 }
 
 static int
-search_insert(struct snj_term *term, const unsigned char *data, size_t len)
+search_insert(struct snag_term *term, const unsigned char *data, size_t len)
 {
     size_t before = term->search_failed ? 0u : term->search_pos + 1u;
 
-    if (len > SNJ_MAX_DIRECT_PROMPT - term->search_query.len) {
+    if (len > SNAG_MAX_DIRECT_PROMPT - term->search_query.len) {
         errno = EOVERFLOW;
         return -1;
     }
-    if (snj_buf_append(&term->search_query, data, len) < 0)
+    if (snag_buf_append(&term->search_query, data, len) < 0)
         return -1;
     mark_input_activity(term);
     return search_find(term, before);
 }
 
 static int
-search_backspace(struct snj_term *term)
+search_backspace(struct snag_term *term)
 {
     if (term->search_query.len)
         term->search_query.len = previous_cp(term->search_query.data,
@@ -1864,12 +1864,12 @@ next_cp(const unsigned char *s, size_t len, size_t pos)
 
     if (pos >= len)
         return len;
-    n = snj_utf8_size(s[pos]);
+    n = snag_utf8_size(s[pos]);
     return n && n <= len - pos ? pos + n : pos + 1u;
 }
 
 static int
-position_prompt_cursor(struct snj_term *term, size_t row, size_t col)
+position_prompt_cursor(struct snag_term *term, size_t row, size_t col)
 {
     if ((row != term->rendered_cursor_row ||
          col != term->rendered_cursor_col) &&
@@ -1882,7 +1882,7 @@ position_prompt_cursor(struct snj_term *term, size_t row, size_t col)
         move_cursor(row - term->rendered_cursor_row, 'B') < 0)
         return -1;
     if (col != term->rendered_cursor_col &&
-        (snj_term_write(STDERR_FILENO, "\r", 1u) < 0 ||
+        (snag_term_write(STDERR_FILENO, "\r", 1u) < 0 ||
          move_cursor(col, 'C') < 0))
         return -1;
     term->rendered_cursor_row = row;
@@ -1891,9 +1891,9 @@ position_prompt_cursor(struct snj_term *term, size_t row, size_t col)
 }
 
 static int
-move_prompt_cursor(struct snj_term *term)
+move_prompt_cursor(struct snag_term *term)
 {
-    struct snj_buf scratch;
+    struct snag_buf scratch;
     size_t cursor_row = 0u, cursor_col = 0u;
     size_t end_row = 0u, end_col = 0u;
     size_t label_len;
@@ -1906,18 +1906,18 @@ move_prompt_cursor(struct snj_term *term)
         goto out;
     rc = position_prompt_cursor(term, cursor_row, cursor_col);
 out:
-    snj_buf_free(&scratch);
+    snag_buf_free(&scratch);
     return rc;
 }
 
 static int
-insert_bytes(struct snj_term *term, const unsigned char *data, size_t len)
+insert_bytes(struct snag_term *term, const unsigned char *data, size_t len)
 {
-    if (len > SNJ_MAX_DIRECT_PROMPT - term->draft.len) {
+    if (len > SNAG_MAX_DIRECT_PROMPT - term->draft.len) {
         errno = EOVERFLOW;
         return -1;
     }
-    if (snj_buf_reserve(&term->draft, len) < 0)
+    if (snag_buf_reserve(&term->draft, len) < 0)
         return -1;
     memmove(term->draft.data + term->cursor + len,
             term->draft.data + term->cursor,
@@ -1931,7 +1931,7 @@ insert_bytes(struct snj_term *term, const unsigned char *data, size_t len)
 }
 
 static int
-delete_range(struct snj_term *term, size_t start, size_t end)
+delete_range(struct snag_term *term, size_t start, size_t end)
 {
     if (start > end || end > term->draft.len) {
         errno = EINVAL;
@@ -1953,7 +1953,7 @@ word_space(unsigned char c)
 }
 
 static size_t
-command_name_length(const struct snj_term_command *command)
+command_name_length(const struct snag_term_command *command)
 {
     size_t len = 0u;
 
@@ -1964,20 +1964,20 @@ command_name_length(const struct snj_term_command *command)
 }
 
 static int
-replace_completion(struct snj_term *term, const char *name, size_t name_len,
+replace_completion(struct snag_term *term, const char *name, size_t name_len,
                    size_t token_start, size_t token_end, bool space)
 {
     size_t tail_len = term->draft.len - token_end;
     size_t next_len;
 
-    if (!snj_size_add(name_len, tail_len, &next_len) ||
-        !snj_size_add(next_len, token_start + (size_t)space, &next_len) ||
-        next_len > SNJ_MAX_DIRECT_PROMPT) {
+    if (!snag_size_add(name_len, tail_len, &next_len) ||
+        !snag_size_add(next_len, token_start + (size_t)space, &next_len) ||
+        next_len > SNAG_MAX_DIRECT_PROMPT) {
         errno = EOVERFLOW;
         return -1;
     }
     if (next_len > term->draft.len &&
-        snj_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
+        snag_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
         return -1;
     memmove(term->draft.data + token_start + name_len + (size_t)space,
             term->draft.data + token_end,
@@ -1993,7 +1993,7 @@ replace_completion(struct snj_term *term, const char *name, size_t name_len,
 }
 
 static int
-complete_command_name(struct snj_term *term, bool *handled)
+complete_command_name(struct snag_term *term, bool *handled)
 {
     const char *match = NULL;
     size_t match_len = 0u;
@@ -2013,7 +2013,7 @@ complete_command_name(struct snj_term *term, bool *handled)
         return 0;
     *handled = true;
     for (size_t i = 0u; i < term->command_count; ++i) {
-        const struct snj_term_command *command = &term->commands[i];
+        const struct snag_term_command *command = &term->commands[i];
         size_t name_len;
         size_t common;
 
@@ -2045,11 +2045,11 @@ complete_command_name(struct snj_term *term, bool *handled)
 static bool
 nick_byte(unsigned char c)
 {
-    return c >= 0x80u || snj_irc_nick_char(c);
+    return c >= 0x80u || snag_irc_nick_char(c);
 }
 
 static int
-complete_mention(struct snj_term *term, bool *handled)
+complete_mention(struct snag_term *term, bool *handled)
 {
     const char *match = NULL;
     size_t start = term->cursor, end = term->cursor, common = 0u, first_len = 0u;
@@ -2072,8 +2072,8 @@ complete_mention(struct snj_term *term, bool *handled)
         size_t len = line ? (size_t)(line - nick) : strlen(nick), i = 0u;
 
         while (i < prefix && i < len &&
-               snj_irc_fold((unsigned char)nick[i]) ==
-               snj_irc_fold(term->draft.data[start + i]))
+               snag_irc_fold((unsigned char)nick[i]) ==
+               snag_irc_fold(term->draft.data[start + i]))
             ++i;
         if (i == prefix) {
             if (!match) {
@@ -2081,8 +2081,8 @@ complete_mention(struct snj_term *term, bool *handled)
                 common = first_len = len;
             } else {
                 while (i < common && i < len &&
-                       snj_irc_fold((unsigned char)nick[i]) ==
-                       snj_irc_fold((unsigned char)match[i]))
+                       snag_irc_fold((unsigned char)nick[i]) ==
+                       snag_irc_fold((unsigned char)match[i]))
                     ++i;
                 if (i != first_len || i != len)
                     unique = false;
@@ -2093,7 +2093,7 @@ complete_mention(struct snj_term *term, bool *handled)
     }
     if (!match)
         return 0;
-    while (common && !snj_utf8_valid((const unsigned char *)match, common, true))
+    while (common && !snag_utf8_valid((const unsigned char *)match, common, true))
         --common;
     if (common < prefix || (!unique && common == prefix))
         return 0;
@@ -2102,12 +2102,12 @@ complete_mention(struct snj_term *term, bool *handled)
 }
 
 static int
-suspend_terminal(struct snj_term *term)
+suspend_terminal(struct snag_term *term)
 {
-    if (snj_term_hide(term) < 0)
+    if (snag_term_hide(term) < 0)
         return -1;
     if (term->bracketed_paste &&
-        snj_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
+        snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
         return -1;
     term->bracketed_paste = false;
     if (tcflush(STDIN_FILENO, TCIFLUSH) < 0 ||
@@ -2118,7 +2118,7 @@ suspend_terminal(struct snj_term *term)
         return -1;
     if (set_raw(term) < 0)
         return -1;
-    if (term->capable && snj_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0)
+    if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0)
         return -1;
     term->bracketed_paste = term->capable;
     update_size(term);
@@ -2126,34 +2126,34 @@ suspend_terminal(struct snj_term *term)
 }
 
 static int
-complete_action(struct snj_term *term, enum snj_term_action action,
-                enum snj_term_action *out, char **text)
+complete_action(struct snag_term *term, enum snag_term_action action,
+                enum snag_term_action *out, char **text)
 {
     char *copy;
 
-    bool local = action == SNJ_TERM_SUBMIT &&
-                 snj_verbosity_command((const char *)term->draft.data, term->draft.len);
+    bool local = action == SNAG_TERM_SUBMIT &&
+                 snag_verbosity_command((const char *)term->draft.data, term->draft.len);
     if (local ? term->local_backlog : term->input_backlog)
-        return snj_term_write(STDERR_FILENO, "\a", 1u);
+        return snag_term_write(STDERR_FILENO, "\a", 1u);
     if (term->utf8_pending_len || !term->draft.len)
         return 0;
     if (term->capable) {
-        if (snj_term_hide(term) < 0)
+        if (snag_term_hide(term) < 0)
             return -1;
     } else {
         term->prompt_visible = false;
         term->line_submission_echoed = true;
     }
-    if (!snj_utf8_valid(term->draft.data, term->draft.len, true)) {
+    if (!snag_utf8_valid(term->draft.data, term->draft.len, true)) {
         errno = EILSEQ;
         return -1;
     }
-    if (snj_buf_terminate(&term->draft) < 0)
+    if (snag_buf_terminate(&term->draft) < 0)
         return -1;
-    copy = snj_strdup_checked((char *)term->draft.data, SNJ_MAX_DIRECT_PROMPT);
+    copy = snag_strdup_checked((char *)term->draft.data, SNAG_MAX_DIRECT_PROMPT);
     if (!copy)
         return -1;
-    snj_buf_reset(&term->draft);
+    snag_buf_reset(&term->draft);
     term->cursor = 0u;
     term->prompt_wanted = false;
     term->typing_active = false;
@@ -2165,7 +2165,7 @@ complete_action(struct snj_term *term, enum snj_term_action action,
 }
 
 static int
-feed_text_byte(struct snj_term *term, unsigned char byte)
+feed_text_byte(struct snag_term *term, unsigned char byte)
 {
     size_t expected;
 
@@ -2183,7 +2183,7 @@ feed_text_byte(struct snj_term *term, unsigned char byte)
         return -1;
     }
     term->utf8_pending[term->utf8_pending_len++] = byte;
-    expected = snj_utf8_size(term->utf8_pending[0]);
+    expected = snag_utf8_size(term->utf8_pending[0]);
     if (!expected || term->utf8_pending_len > expected) {
         term->utf8_pending_len = 0u;
         errno = EILSEQ;
@@ -2191,7 +2191,7 @@ feed_text_byte(struct snj_term *term, unsigned char byte)
     }
     if (term->utf8_pending_len < expected)
         return 0;
-    if (!snj_utf8_valid(term->utf8_pending, expected, true)) {
+    if (!snag_utf8_valid(term->utf8_pending, expected, true)) {
         term->utf8_pending_len = 0u;
         errno = EILSEQ;
         return -1;
@@ -2229,7 +2229,7 @@ static const struct escape_key keys[] = {
 };
 
 static int
-apply_key(struct snj_term *term, int key)
+apply_key(struct snag_term *term, int key)
 {
     if (term->searching && search_accept(term, false) < 0)
         return -1;
@@ -2266,7 +2266,7 @@ apply_key(struct snj_term *term, int key)
 }
 
 static int
-feed_escape(struct snj_term *term, unsigned char byte)
+feed_escape(struct snag_term *term, unsigned char byte)
 {
     bool prefix = false;
 
@@ -2292,7 +2292,7 @@ feed_escape(struct snj_term *term, unsigned char byte)
 }
 
 static int
-feed_paste(struct snj_term *term, unsigned char byte)
+feed_paste(struct snag_term *term, unsigned char byte)
 {
     static const unsigned char end[] = "\033[201~";
 
@@ -2321,17 +2321,17 @@ feed_paste(struct snj_term *term, unsigned char byte)
 }
 
 static int
-complete_exit(struct snj_term *term, enum snj_term_action *action)
+complete_exit(struct snag_term *term, enum snag_term_action *action)
 {
-    if (snj_term_hide(term) < 0)
+    if (snag_term_hide(term) < 0)
         return -1;
     term->prompt_wanted = false;
-    *action = SNJ_TERM_EXIT;
+    *action = SNAG_TERM_EXIT;
     return 1;
 }
 
 static int
-cancel_line(struct snj_term *term, enum snj_term_action *action)
+cancel_line(struct snag_term *term, enum snag_term_action *action)
 {
     bool interrupt = term->active && !term->searching && !term->draft.len;
 
@@ -2342,16 +2342,16 @@ cancel_line(struct snj_term *term, enum snj_term_action *action)
         if (move_prompt_cursor(term) < 0)
             return -1;
     }
-    if (!term->input_only && snj_term_write(STDERR_FILENO, "^C\n", 3u) < 0)
+    if (!term->input_only && snag_term_write(STDERR_FILENO, "^C\n", 3u) < 0)
         return -1;
     free(term->search_original);
     term->search_original = NULL;
     term->searching = false;
     term->search_failed = false;
     term->search_pos = SIZE_MAX;
-    snj_buf_reset(&term->search_query);
-    snj_buf_reset(&term->search_label);
-    snj_buf_reset(&term->draft);
+    snag_buf_reset(&term->search_query);
+    snag_buf_reset(&term->search_label);
+    snag_buf_reset(&term->draft);
     term->cursor = 0u;
     term->utf8_pending_len = 0u;
     term->escape_len = 0u;
@@ -2372,21 +2372,21 @@ cancel_line(struct snj_term *term, enum snj_term_action *action)
     term->output_ended_lf = true;
     term->output_detour = false;
     term->output_columns = 0u;
-    snj_buf_reset(&term->output_line);
+    snag_buf_reset(&term->output_line);
 logical:
     history_reset_navigation(term);
     term->prompt_clock.captured = false;
     term->prompt_wanted = false;
-    *action = interrupt ? SNJ_TERM_INTERRUPT : SNJ_TERM_CANCEL;
+    *action = interrupt ? SNAG_TERM_INTERRUPT : SNAG_TERM_CANCEL;
     return 1;
 }
 
 static int
-feed_byte(struct snj_term *term, unsigned char byte,
-          enum snj_term_action *action, char **text)
+feed_byte(struct snag_term *term, unsigned char byte,
+          enum snag_term_action *action, char **text)
 {
     if (byte == 0x03u) {
-        uint64_t now = snj_monotonic_ms();
+        uint64_t now = snag_monotonic_ms();
         if (!term->ctrl_c_count || now - term->ctrl_c_since_ms > 2000u) {
             term->ctrl_c_since_ms = now;
             term->ctrl_c_count = 0u;
@@ -2411,18 +2411,18 @@ feed_byte(struct snj_term *term, unsigned char byte,
         return -1;
     switch (byte) {
     case '\r':
-        return complete_action(term, SNJ_TERM_SUBMIT, action, text);
+        return complete_action(term, SNAG_TERM_SUBMIT, action, text);
     case '\n': {
         if (!term->capable)
-            return complete_action(term, SNJ_TERM_SUBMIT, action, text);
+            return complete_action(term, SNAG_TERM_SUBMIT, action, text);
         unsigned char lf = '\n';
         return insert_bytes(term, &lf, 1u);
     }
     case '\t':
         if (!term->draft.len) {
             if (term->input_backlog)
-                return snj_term_write(STDERR_FILENO, "\a", 1u);
-            *action = SNJ_TERM_VIEW;
+                return snag_term_write(STDERR_FILENO, "\a", 1u);
+            *action = SNAG_TERM_VIEW;
             return 1;
         }
         {
@@ -2436,7 +2436,7 @@ feed_byte(struct snj_term *term, unsigned char byte,
                 return rc;
         }
         if (term->active)
-            return complete_action(term, SNJ_TERM_QUEUE, action, text);
+            return complete_action(term, SNAG_TERM_QUEUE, action, text);
         else {
             unsigned char spaces[4] = {' ', ' ', ' ', ' '};
             size_t count = 4u - (term->cursor % 4u);
@@ -2450,9 +2450,9 @@ feed_byte(struct snj_term *term, unsigned char byte,
                          next_cp(term->draft.data, term->draft.len,
                                  term->cursor)) : 0;
     case 0x0cu:
-        if (snj_term_hide(term) < 0)
+        if (snag_term_hide(term) < 0)
             return -1;
-        if (term->capable && snj_term_write(STDERR_FILENO,
+        if (term->capable && snag_term_write(STDERR_FILENO,
                                             "\033[2J\033[H", 7u) < 0)
             return -1;
         return redraw(term);
@@ -2486,7 +2486,7 @@ feed_byte(struct snj_term *term, unsigned char byte,
 }
 
 static int
-consume_resize(struct snj_term *term)
+consume_resize(struct snag_term *term)
 {
     bool was_capable;
     bool now_capable;
@@ -2515,7 +2515,7 @@ consume_resize(struct snj_term *term)
             return -1;
         if (!now_capable)
             term->capable = true;
-        if (snj_term_hide(term) < 0) {
+        if (snag_term_hide(term) < 0) {
             term->capable = now_capable;
             return -1;
         }
@@ -2527,32 +2527,32 @@ consume_resize(struct snj_term *term)
 }
 
 int
-snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
-              enum snj_term_action *action, char **text)
+snag_term_poll(struct snag_term *term, int timeout_ms, int wake_fd,
+              enum snag_term_action *action, char **text)
 {
     struct pollfd pfd[2] = {{STDIN_FILENO, POLLIN, 0},
                            {wake_fd, POLLIN, 0}};
     ssize_t count;
     int rc;
 
-    *action = SNJ_TERM_NONE;
+    *action = SNAG_TERM_NONE;
     *text = NULL;
     if (!term->input_only && term->cancel_pending) {
         term->cancel_pending = false;
-        if (snj_term_hide(term) < 0 ||
-            snj_term_write(STDERR_FILENO, "\n^C\n", 4u) < 0)
+        if (snag_term_hide(term) < 0 ||
+            snag_term_write(STDERR_FILENO, "\n^C\n", 4u) < 0)
             return -1;
         term->output_seen = false;
         term->output_ended_lf = true;
         term->output_detour = false;
         term->output_columns = 0u;
-        snj_buf_reset(&term->output_line);
+        snag_buf_reset(&term->output_line);
     }
     if (consume_resize(term) < 0)
         return -1;
     if (term->prompt_visible && term->capable && !term->searching &&
         !term->output_depth && animated_spinners(term) &&
-        update_spinners(term, spinner_step(term, snj_monotonic_ms())) < 0)
+        update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0)
         return -1;
     if (sigint_pending) {
         (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
@@ -2568,7 +2568,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
         bool reveal = timeout_ms != 0 && term->active && term->prompt_wanted &&
                       !term->prompt_visible && !term->output_depth &&
                       !term->defer_redraw;
-        uint64_t now = snj_monotonic_ms();
+        uint64_t now = snag_monotonic_ms();
         uint64_t quiet = now >= term->last_output_ms ? now - term->last_output_ms : 0u;
         int reveal_wait = quiet < 150u ? (int)(150u - quiet) : 0;
         if (reveal && (timeout_ms < 0 || timeout_ms > reveal_wait))
@@ -2589,16 +2589,16 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
             return search_accept(term, false);
         }
         if (rc == 0 && reveal &&
-            snj_monotonic_ms() - term->last_output_ms >= 150u && redraw(term) < 0)
+            snag_monotonic_ms() - term->last_output_ms >= 150u && redraw(term) < 0)
             return -1;
         if (rc == 0 && animated_spinners(term) &&
-            update_spinners(term, spinner_step(term, snj_monotonic_ms())) < 0)
+            update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0)
             return -1;
         if (rc <= 0)
             return rc;
         if (!(pfd[0].revents & POLLIN)) {
             if (pfd[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-                *action = SNJ_TERM_EXIT;
+                *action = SNAG_TERM_EXIT;
                 return 1;
             }
             return 0;
@@ -2617,7 +2617,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
         if (count < 0)
             return -1;
         if (count == 0) {
-            *action = SNJ_TERM_EXIT;
+            *action = SNAG_TERM_EXIT;
             return 1;
         }
         term->input_len = (size_t)count;
@@ -2635,14 +2635,14 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
 }
 
 void
-snj_term_close(struct snj_term *term)
+snag_term_close(struct snag_term *term)
 {
     if (!term)
         return;
     if (term->opened) {
-        (void)snj_term_hide(term);
+        (void)snag_term_hide(term);
         if (term->bracketed_paste)
-            (void)snj_term_write(STDERR_FILENO, "\033[?2004l", 8u);
+            (void)snag_term_write(STDERR_FILENO, "\033[?2004l", 8u);
         if (term->raw)
             (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
     }
@@ -2653,12 +2653,12 @@ snj_term_close(struct snj_term *term)
     history_clear(term);
     free(term->search_original);
     free(term->nicks);
-    snj_buf_free(&term->search_label);
-    snj_buf_free(&term->search_query);
-    snj_buf_free(&term->draft);
-    snj_buf_free(&term->output_cell);
-    snj_buf_free(&term->output_line);
-    snj_buf_free(&term->painted_prompt);
+    snag_buf_free(&term->search_label);
+    snag_buf_free(&term->search_query);
+    snag_buf_free(&term->draft);
+    snag_buf_free(&term->output_cell);
+    snag_buf_free(&term->output_line);
+    snag_buf_free(&term->painted_prompt);
     if (output_owner == term)
         output_owner = NULL;
     for (size_t i = 0u; i < 2u; ++i)

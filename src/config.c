@@ -38,12 +38,12 @@ enum section {
 };
 
 struct parse_state {
-    struct snj_config *config;
+    struct snag_config *config;
     enum section section;
     unsigned int seen_sections;
     unsigned int seen_keys[SECTION_COUNT];
-    unsigned int seen_provider_keys[SNJ_CONFIG_PROVIDER_MAX];
-    unsigned int seen_model_limit_keys[SNJ_CONFIG_MODEL_LIMIT_MAX];
+    unsigned int seen_provider_keys[SNAG_CONFIG_PROVIDER_MAX];
+    unsigned int seen_model_limit_keys[SNAG_CONFIG_MODEL_LIMIT_MAX];
     size_t provider_index;
     size_t model_limit_index;
     bool providers_started;
@@ -80,22 +80,22 @@ invalid:
 }
 
 static void
-provider_init(struct snj_provider_config *provider, const char *name)
+provider_init(struct snag_provider_config *provider, const char *name)
 {
     memset(provider, 0, sizeof(*provider));
     (void)snprintf(provider->name, sizeof(provider->name), "%s", name);
     provider->connect_timeout_ms = 30000u;
     provider->idle_timeout_ms = 120000u;
     provider->request_timeout_ms = 1800000u;
-    provider->auto_compact_input_tokens = SNJ_CONFIG_COMPACT_AUTO;
-    provider->exact_token_count = SNJ_TOKEN_COUNT_AUTO;
+    provider->auto_compact_input_tokens = SNAG_CONFIG_COMPACT_AUTO;
+    provider->exact_token_count = SNAG_TOKEN_COUNT_AUTO;
     provider->native_compaction = true;
     memcpy(provider->base_url, "https://api.openai.com", 23u);
     memcpy(provider->api_key_env, "OPENAI_API_KEY", 15u);
 }
 
 void
-snj_config_init(struct snj_config *config)
+snag_config_init(struct snag_config *config)
 {
     static const char prompt[] =
         "{chat:{goal_spinner}{activity_spinner} {hour:02}:{minute:02}:{second:02} "
@@ -112,7 +112,7 @@ snj_config_init(struct snj_config *config)
     config->provider_count = 1u;
     config->max_goal_prompt_bytes = 256u * 1024u;
     config->read_agents_md = true;
-    config->color = SNJ_COLOR_AUTO;
+    config->color = SNAG_COLOR_AUTO;
     config->markdown = true;
     config->resume_history_turns = 2u;
     config->typing_pause_ms = 500u;
@@ -124,16 +124,16 @@ snj_config_init(struct snj_config *config)
     config->prompt_spinner_per_second = 8u;
     memcpy(config->irc_listen, "localhost:6667", 15u);
     config->irc_history_lines = 200u;
-    config->shell = snj_strdup_checked("/bin/sh", SNJ_CONFIG_PATH_MAX);
+    config->shell = snag_strdup_checked("/bin/sh", SNAG_CONFIG_PATH_MAX);
     config->default_yield_ms = 10000u;
     config->default_timeout_ms = 0u;
     config->max_timeout_ms = 86400000u;
-    config->max_output_tokens = SNJ_DEFAULT_TOOL_OUTPUT_TOKENS;
+    config->max_output_tokens = SNAG_DEFAULT_TOOL_OUTPUT_TOKENS;
     config->max_output_bytes = 0u;
 }
 
 void
-snj_config_free(struct snj_config *config)
+snag_config_free(struct snag_config *config)
 {
     free(config->shell);
     for (size_t i = 0; i < config->secret_env_count; ++i)
@@ -218,16 +218,16 @@ parse_bool(const char *text, bool *out)
 }
 
 static int
-parse_token_count(const char *text, enum snj_token_count_mode *out)
+parse_token_count(const char *text, enum snag_token_count_mode *out)
 {
     bool enabled;
 
     if (strcmp(text, "auto") == 0)
-        *out = SNJ_TOKEN_COUNT_AUTO;
+        *out = SNAG_TOKEN_COUNT_AUTO;
     else if (parse_bool(text, &enabled) < 0)
         return -1;
     else
-        *out = enabled ? SNJ_TOKEN_COUNT_STRICT : SNJ_TOKEN_COUNT_OFF;
+        *out = enabled ? SNAG_TOKEN_COUNT_STRICT : SNAG_TOKEN_COUNT_OFF;
     return 0;
 }
 
@@ -236,7 +236,7 @@ utf8_char_len(const unsigned char *s, size_t len)
 {
     size_t n = s[0] < 0x80u ? 1u : s[0] < 0xe0u ? 2u :
                s[0] < 0xf0u ? 3u : 4u;
-    return n <= len && snj_utf8_valid(s, n, true) ? n : 0u;
+    return n <= len && snag_utf8_valid(s, n, true) ? n : 0u;
 }
 
 static bool
@@ -250,12 +250,12 @@ unsafe_prompt_cp(wchar_t cp)
 }
 
 static int
-parse_spinner(char dst[SNJ_CONFIG_SPINNER_MAX], const char *value)
+parse_spinner(char dst[SNAG_CONFIG_SPINNER_MAX], const char *value)
 {
     size_t len = strlen(value), pos, frames = 0u, previous = SIZE_MAX;
 
     if (len < 3u || value[0] != '"' || value[len - 1u] != '"' ||
-        len - 2u >= SNJ_CONFIG_SPINNER_MAX ||
+        len - 2u >= SNAG_CONFIG_SPINNER_MAX ||
         memchr(value + 1u, '"', len - 2u))
         goto invalid;
     --len;
@@ -275,7 +275,7 @@ parse_spinner(char dst[SNJ_CONFIG_SPINNER_MAX], const char *value)
         mbstate_t state = {0};
         wchar_t cp;
 
-        if (!n || ++frames > SNJ_CONFIG_SPINNER_FRAMES_MAX ||
+        if (!n || ++frames > SNAG_CONFIG_SPINNER_FRAMES_MAX ||
             mbrtowc(&cp, value + pos, n, &state) != n || wcwidth(cp) != 1 ||
             unsafe_prompt_cp(cp) || (previous != SIZE_MAX &&
             n == utf8_char_len((const unsigned char *)value + previous,
@@ -295,8 +295,8 @@ invalid:
 
 static int
 prompt_body(const char *text, size_t len,
-            const char *const values[SNJ_PROMPT_FIELD_COUNT],
-            unsigned char marker, struct snj_buf *out)
+            const char *const values[SNAG_PROMPT_FIELD_COUNT],
+            unsigned char marker, struct snag_buf *out)
 {
     static const char *const fields[] = {"provider", "model", "effort",
         "operator", "host", "context", "mode", "hour", "minute", "second",
@@ -313,7 +313,7 @@ prompt_body(const char *text, size_t len,
             if (++i >= len || (text[i] != '\\' && text[i] != '{' &&
                               text[i] != '}'))
                 goto invalid;
-            if (out && snj_buf_putc(out, (unsigned char)text[i]) < 0)
+            if (out && snag_buf_putc(out, (unsigned char)text[i]) < 0)
                 return -1;
         } else if (c == '{') {
             const char *end = memchr(text + i + 1u, '}', len - i - 1u);
@@ -330,14 +330,14 @@ prompt_body(const char *text, size_t len,
                     memcmp(fields[field], text + i + 1u, field_len) != 0))
                 ++field;
             if (!end || field == sizeof(fields) / sizeof(fields[0]) ||
-                (field >= SNJ_PROMPT_FIELD_COUNT &&
-                 (spinners & (1u << (field - SNJ_PROMPT_FIELD_COUNT)))))
+                (field >= SNAG_PROMPT_FIELD_COUNT &&
+                 (spinners & (1u << (field - SNAG_PROMPT_FIELD_COUNT)))))
                 goto invalid;
             if (format) {
-                bool clock = field >= SNJ_PROMPT_HOUR &&
-                             field <= SNJ_PROMPT_SECOND;
+                bool clock = field >= SNAG_PROMPT_HOUR &&
+                             field <= SNAG_PROMPT_SECOND;
 
-                if (field != SNJ_PROMPT_CONTEXT && !clock)
+                if (field != SNAG_PROMPT_CONTEXT && !clock)
                     goto invalid;
                 ++format;
                 if (format < end && *format == '0') {
@@ -350,16 +350,16 @@ prompt_body(const char *text, size_t len,
                     goto invalid;
                 for (; format < end; ++format) {
                     if (*format < '0' || *format > '9' ||
-                        width > (SNJ_TERM_LABEL_BYTES - 2u -
+                        width > (SNAG_TERM_LABEL_BYTES - 2u -
                                  (unsigned int)(*format - '0')) / 10u)
                         goto invalid;
                     width = width * 10u + (unsigned int)(*format - '0');
                 }
             }
-            if (field >= SNJ_PROMPT_FIELD_COUNT) {
-                spinners |= 1u << (field - SNJ_PROMPT_FIELD_COUNT);
-                if (out && snj_buf_putc(out,
-                        marker + field - SNJ_PROMPT_FIELD_COUNT) < 0)
+            if (field >= SNAG_PROMPT_FIELD_COUNT) {
+                spinners |= 1u << (field - SNAG_PROMPT_FIELD_COUNT);
+                if (out && snag_buf_putc(out,
+                        marker + field - SNAG_PROMPT_FIELD_COUNT) < 0)
                     return -1;
             } else if (out) {
                 size_t value_len = strlen(values[field]);
@@ -367,15 +367,15 @@ prompt_body(const char *text, size_t len,
                 if (values[field][0] == '-')
                     fill = ' ';
                 for (size_t pad = value_len; pad < width; ++pad)
-                    if (snj_buf_putc(out, fill) < 0)
+                    if (snag_buf_putc(out, fill) < 0)
                         return -1;
-                if (snj_buf_append(out, values[field], value_len) < 0)
+                if (snag_buf_append(out, values[field], value_len) < 0)
                     return -1;
             }
             i = (size_t)(end - text);
         } else if (c == '}') {
             goto invalid;
-        } else if (out && snj_buf_putc(out, c) < 0) {
+        } else if (out && snag_buf_putc(out, c) < 0) {
             return -1;
         }
     }
@@ -387,9 +387,9 @@ invalid:
 
 static int
 parse_prompt(const char *text, unsigned int selected,
-             const char *const values[SNJ_PROMPT_FIELD_COUNT],
+             const char *const values[SNAG_PROMPT_FIELD_COUNT],
              unsigned char marker,
-             struct snj_buf *out)
+             struct snag_buf *out)
 {
     static const char *const names[] = {"chat:", "rollout-idle:",
                                         "rollout-active:"};
@@ -407,14 +407,14 @@ parse_prompt(const char *text, unsigned int selected,
             if (++i >= len || (text[i] != '\\' && text[i] != '{' &&
                               text[i] != '}'))
                 goto invalid;
-            if (out && snj_buf_putc(out, (unsigned char)text[i]) < 0)
+            if (out && snag_buf_putc(out, (unsigned char)text[i]) < 0)
                 return -1;
             continue;
         }
         if (c == '}')
             goto invalid;
         if (c != '{') {
-            if (out && snj_buf_putc(out, c) < 0)
+            if (out && snag_buf_putc(out, c) < 0)
                 return -1;
             continue;
         }
@@ -451,12 +451,12 @@ validate_prompt(const char *text)
 }
 
 int
-snj_config_prompt_expand(const char *text, unsigned int mode,
-                         const char *const values[SNJ_PROMPT_FIELD_COUNT],
+snag_config_prompt_expand(const char *text, unsigned int mode,
+                         const char *const values[SNAG_PROMPT_FIELD_COUNT],
                          unsigned char marker,
                          char *label, size_t label_size)
 {
-    struct snj_buf out;
+    struct snag_buf out;
     int rc = -1;
 
     if (!text || mode >= 3u || !values || !label || label_size < 2u ||
@@ -464,14 +464,14 @@ snj_config_prompt_expand(const char *text, unsigned int mode,
         errno = EINVAL;
         return -1;
     }
-    snj_buf_init(&out, label_size);
+    snag_buf_init(&out, label_size);
     if (parse_prompt(text, mode, values, marker, &out) < 0 || !out.len ||
-        snj_buf_putc(&out, ' ') < 0 || snj_buf_terminate(&out) < 0)
+        snag_buf_putc(&out, ' ') < 0 || snag_buf_terminate(&out) < 0)
         goto out;
     memcpy(label, out.data, out.len + 1u);
     rc = 0;
 out:
-    snj_buf_free(&out);
+    snag_buf_free(&out);
     return rc;
 }
 
@@ -526,7 +526,7 @@ invalid:
 }
 
 static int
-parse_secret_env(struct snj_config *config, const char *value)
+parse_secret_env(struct snag_config *config, const char *value)
 {
     char *copy;
     char *cursor;
@@ -538,7 +538,7 @@ parse_secret_env(struct snj_config *config, const char *value)
     config->secret_env_count = 0u;
     if (!*value)
         return 0;
-    copy = snj_strdup_checked(value, SNJ_CONFIG_FILE_MAX);
+    copy = snag_strdup_checked(value, SNAG_CONFIG_FILE_MAX);
     if (!copy)
         return -1;
     cursor = copy;
@@ -548,9 +548,9 @@ parse_secret_env(struct snj_config *config, const char *value)
         if (comma)
             *comma = '\0';
         name = trim(cursor);
-        if (!*name || strlen(name) > SNJ_CONFIG_ENV_NAME_MAX ||
+        if (!*name || strlen(name) > SNAG_CONFIG_ENV_NAME_MAX ||
             !env_name_valid(name) ||
-            config->secret_env_count >= SNJ_CONFIG_SECRET_ENV_MAX) {
+            config->secret_env_count >= SNAG_CONFIG_SECRET_ENV_MAX) {
             free(copy);
             errno = EINVAL;
             return -1;
@@ -562,7 +562,7 @@ parse_secret_env(struct snj_config *config, const char *value)
                 return -1;
             }
         config->secret_env[config->secret_env_count] =
-            snj_strdup_checked(name, SNJ_CONFIG_ENV_NAME_MAX);
+            snag_strdup_checked(name, SNAG_CONFIG_ENV_NAME_MAX);
         if (!config->secret_env[config->secret_env_count]) {
             free(copy);
             return -1;
@@ -579,10 +579,10 @@ parse_secret_env(struct snj_config *config, const char *value)
 static int
 set_provider_section(struct parse_state *state, const char *name)
 {
-    struct snj_config *config = state->config;
+    struct snag_config *config = state->config;
     const unsigned char *p = (const unsigned char *)name;
 
-    if (!*p || strlen(name) > SNJ_CONFIG_PROVIDER_NAME_MAX)
+    if (!*p || strlen(name) > SNAG_CONFIG_PROVIDER_NAME_MAX)
         goto invalid;
     for (; *p; ++p)
         if (!((*p >= 'A' && *p <= 'Z') ||
@@ -598,7 +598,7 @@ set_provider_section(struct parse_state *state, const char *name)
     for (size_t i = 0; i < config->provider_count; ++i)
         if (strcmp(config->providers[i].name, name) == 0)
             goto invalid;
-    if (config->provider_count >= SNJ_CONFIG_PROVIDER_MAX)
+    if (config->provider_count >= SNAG_CONFIG_PROVIDER_MAX)
         goto invalid;
     state->provider_index = config->provider_count++;
     provider_init(&config->providers[state->provider_index], name);
@@ -614,7 +614,7 @@ provider_name_valid(const char *name)
 {
     const unsigned char *p = (const unsigned char *)name;
 
-    if (!*p || strlen(name) > SNJ_CONFIG_PROVIDER_NAME_MAX)
+    if (!*p || strlen(name) > SNAG_CONFIG_PROVIDER_NAME_MAX)
         return false;
     for (; *p; ++p)
         if (!((*p >= 'A' && *p <= 'Z') ||
@@ -628,16 +628,16 @@ provider_name_valid(const char *name)
 static int
 set_model_limit_section(struct parse_state *state, char *name)
 {
-    struct snj_config *config = state->config;
-    struct snj_model_limit_config *limit;
+    struct snag_config *config = state->config;
+    struct snag_model_limit_config *limit;
     char *slash = strchr(name, '/');
 
     if (!slash || slash == name || !slash[1] ||
-        (size_t)(slash - name) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
-        strlen(slash + 1u) >= SNJ_CONFIG_MODEL_MAX ||
-        !snj_utf8_valid((const unsigned char *)(slash + 1u),
+        (size_t)(slash - name) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
+        strlen(slash + 1u) >= SNAG_CONFIG_MODEL_MAX ||
+        !snag_utf8_valid((const unsigned char *)(slash + 1u),
                         strlen(slash + 1u), true) ||
-        config->model_limit_count >= SNJ_CONFIG_MODEL_LIMIT_MAX)
+        config->model_limit_count >= SNAG_CONFIG_MODEL_LIMIT_MAX)
         goto invalid;
     *slash = '\0';
     if (!provider_name_valid(name))
@@ -708,10 +708,10 @@ claim_key(struct parse_state *state, unsigned int bit)
 static int
 parse_agent(struct parse_state *state, const char *key, const char *value)
 {
-    struct snj_config *config = state->config;
+    struct snag_config *config = state->config;
     if (strcmp(key, "provider") == 0) {
         if (claim_key(state, 4u) < 0 ||
-            strlen(value) > SNJ_CONFIG_PROVIDER_NAME_MAX)
+            strlen(value) > SNAG_CONFIG_PROVIDER_NAME_MAX)
             goto invalid;
         return copy_value(config->provider, sizeof(config->provider), value);
     }
@@ -740,7 +740,7 @@ invalid:
 static int
 parse_provider(struct parse_state *state, const char *key, const char *value)
 {
-    struct snj_provider_config *provider =
+    struct snag_provider_config *provider =
         &state->config->providers[state->provider_index];
     if (strcmp(key, "connect_timeout_ms") == 0)
         return claim_key(state, 0u) < 0 ? -1 :
@@ -755,11 +755,11 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
         if (claim_key(state, 10u) < 0)
             return -1;
         if (strcmp(value, "env") == 0)
-            provider->auth = SNJ_AUTH_ENV;
+            provider->auth = SNAG_AUTH_ENV;
         else if (strcmp(value, "api_key") == 0)
-            provider->auth = SNJ_AUTH_API_KEY;
+            provider->auth = SNAG_AUTH_API_KEY;
         else if (strcmp(value, "chatgpt") == 0)
-            provider->auth = SNJ_AUTH_CHATGPT;
+            provider->auth = SNAG_AUTH_CHATGPT;
         else
             goto invalid;
         return 0;
@@ -768,7 +768,7 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
         if (claim_key(state, 3u) < 0)
             return -1;
         if (strcmp(value, "auto") == 0) {
-            provider->auto_compact_input_tokens = SNJ_CONFIG_COMPACT_AUTO;
+            provider->auto_compact_input_tokens = SNAG_CONFIG_COMPACT_AUTO;
             return 0;
         }
         return parse_u32(value, 0u, 4000000u,
@@ -780,7 +780,7 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
                              sizeof(provider->base_url), value);
     if (strcmp(key, "api_key_env") == 0) {
         if (claim_key(state, 5u) < 0 ||
-            strlen(value) > SNJ_CONFIG_ENV_NAME_MAX ||
+            strlen(value) > SNAG_CONFIG_ENV_NAME_MAX ||
             !env_name_valid(value))
             goto invalid;
         return copy_value(provider->api_key_env,
@@ -811,12 +811,12 @@ static int
 parse_model_limit(struct parse_state *state, const char *key,
                   const char *value)
 {
-    struct snj_model_limit_config *limit =
+    struct snag_model_limit_config *limit =
         &state->config->model_limits[state->model_limit_index];
 
     if (strcmp(key, "context_window_tokens") == 0) {
         if (claim_key(state, 0u) < 0 ||
-            parse_u64(value, 1u, SNJ_CONFIG_TOKEN_LIMIT_MAX,
+            parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
                       &limit->context_window_tokens) < 0)
             return -1;
         limit->context_window_known = true;
@@ -824,7 +824,7 @@ parse_model_limit(struct parse_state *state, const char *key,
     }
     if (strcmp(key, "max_input_tokens") == 0) {
         if (claim_key(state, 1u) < 0 ||
-            parse_u64(value, 1u, SNJ_CONFIG_TOKEN_LIMIT_MAX,
+            parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
                       &limit->max_input_tokens) < 0)
             return -1;
         limit->max_input_known = true;
@@ -832,7 +832,7 @@ parse_model_limit(struct parse_state *state, const char *key,
     }
     if (strcmp(key, "max_output_tokens") == 0) {
         if (claim_key(state, 2u) < 0 ||
-            parse_u64(value, 1u, SNJ_CONFIG_TOKEN_LIMIT_MAX,
+            parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
                       &limit->max_output_tokens) < 0)
             return -1;
         limit->max_output_known = true;
@@ -845,17 +845,17 @@ parse_model_limit(struct parse_state *state, const char *key,
 static int
 parse_ui(struct parse_state *state, const char *key, const char *value)
 {
-    struct snj_config *config = state->config;
+    struct snag_config *config = state->config;
     uint32_t parsed;
     if (strcmp(key, "color") == 0) {
         if (claim_key(state, 1u) < 0)
             return -1;
         if (strcmp(value, "auto") == 0)
-            config->color = SNJ_COLOR_AUTO;
+            config->color = SNAG_COLOR_AUTO;
         else if (strcmp(value, "always") == 0)
-            config->color = SNJ_COLOR_ALWAYS;
+            config->color = SNAG_COLOR_ALWAYS;
         else if (strcmp(value, "never") == 0)
-            config->color = SNJ_COLOR_NEVER;
+            config->color = SNAG_COLOR_NEVER;
         else {
             errno = EINVAL;
             return -1;
@@ -899,7 +899,7 @@ parse_ui(struct parse_state *state, const char *key, const char *value)
 static int
 parse_irc(struct parse_state *state, const char *key, const char *value)
 {
-    struct snj_config *config = state->config;
+    struct snag_config *config = state->config;
 
     if (strcmp(key, "listen") == 0) {
         if (claim_key(state, 0u) < 0 ||
@@ -910,7 +910,7 @@ parse_irc(struct parse_state *state, const char *key, const char *value)
         return 0;
     }
     if (strcmp(key, "client") == 0) {
-        if (config->irc_client_count >= SNJ_CONFIG_IRC_CLIENT_MAX)
+        if (config->irc_client_count >= SNAG_CONFIG_IRC_CLIENT_MAX)
             goto invalid;
         for (size_t i = 0; i < config->irc_client_count; ++i)
             if (strcmp(config->irc_clients[i], value) == 0)
@@ -952,12 +952,12 @@ invalid:
 static int
 parse_tool(struct parse_state *state, const char *key, const char *value)
 {
-    struct snj_config *config = state->config;
+    struct snag_config *config = state->config;
     char *copy;
     if (strcmp(key, "shell") == 0) {
         if (claim_key(state, 0u) < 0 || value[0] != '/')
             goto invalid;
-        copy = snj_strdup_checked(value, SNJ_CONFIG_PATH_MAX);
+        copy = snag_strdup_checked(value, SNAG_CONFIG_PATH_MAX);
         if (!copy)
             return -1;
         free(config->shell);
@@ -982,7 +982,7 @@ parse_tool(struct parse_state *state, const char *key, const char *value)
                parse_u32(value, 0u, UINT32_MAX, &config->max_output_bytes);
     if (strcmp(key, "max_output_tokens") == 0)
         return claim_key(state, 6u) < 0 ? -1 :
-               parse_u32(value, 1u, (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
+               parse_u32(value, 1u, (uint32_t)SNAG_CONFIG_TOKEN_LIMIT_MAX,
                          &config->max_output_tokens);
 invalid:
     errno = EINVAL;
@@ -1019,7 +1019,7 @@ invalid:
 }
 
 static int
-parse_file(struct snj_config *config, char *text, char *error, size_t error_size)
+parse_file(struct snag_config *config, char *text, char *error, size_t error_size)
 {
     struct parse_state state;
     char *line = text;
@@ -1047,7 +1047,7 @@ parse_file(struct snj_config *config, char *text, char *error, size_t error_size
                 rc = parse_assignment(&state, clean);
             }
             if (rc < 0) {
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "invalid configuration at line %u", number);
                 return -1;
             }
@@ -1061,50 +1061,50 @@ parse_file(struct snj_config *config, char *text, char *error, size_t error_size
 }
 
 char *
-snj_config_path(const char *explicit_path, const char *dotdir,
+snag_config_path(const char *explicit_path, const char *dotdir,
                 char *error, size_t error_size)
 {
-    struct snj_buf path;
+    struct snag_buf path;
     char *result = NULL;
 
     if (explicit_path) {
         if (explicit_path[0] != '/' ||
-            strlen(explicit_path) > SNJ_CONFIG_PATH_MAX) {
-            snj_errorf(error, error_size,
+            strlen(explicit_path) > SNAG_CONFIG_PATH_MAX) {
+            snag_errorf(error, error_size,
                       "--config requires an absolute path within the supported limit");
             errno = EINVAL;
             return NULL;
         }
-        result = snj_strdup_checked(explicit_path, SNJ_CONFIG_PATH_MAX);
+        result = snag_strdup_checked(explicit_path, SNAG_CONFIG_PATH_MAX);
         if (!result)
-            snj_errorf(error, error_size, "configuration path is unavailable");
+            snag_errorf(error, error_size, "configuration path is unavailable");
         return result;
     }
-    snj_buf_init(&path, SNJ_CONFIG_PATH_MAX);
+    snag_buf_init(&path, SNAG_CONFIG_PATH_MAX);
     if (!dotdir || dotdir[0] != '/')
         goto invalid;
-    if (snj_buf_printf(&path, "%s/config.ini", dotdir) < 0)
+    if (snag_buf_printf(&path, "%s/config.ini", dotdir) < 0)
         goto unavailable;
-    if (snj_buf_terminate(&path) < 0)
+    if (snag_buf_terminate(&path) < 0)
         goto unavailable;
     result = (char *)path.data;
     path.data = NULL;
-    snj_buf_free(&path);
+    snag_buf_free(&path);
     return result;
 invalid:
-    snj_errorf(error, error_size,
+    snag_errorf(error, error_size,
               "configuration requires an absolute dotdir");
     errno = EINVAL;
-    snj_buf_free(&path);
+    snag_buf_free(&path);
     return NULL;
 unavailable:
-    snj_errorf(error, error_size, "configuration path exceeds the supported limit");
-    snj_buf_free(&path);
+    snag_errorf(error, error_size, "configuration path exceeds the supported limit");
+    snag_buf_free(&path);
     return NULL;
 }
 
 static int
-read_config(const char *path, bool require_file, struct snj_buf *text,
+read_config(const char *path, bool require_file, struct snag_buf *text,
             struct stat *file_stat, char *error, size_t error_size)
 {
     struct stat st;
@@ -1115,13 +1115,13 @@ read_config(const char *path, bool require_file, struct snj_buf *text,
     if (fd < 0) {
         if (!require_file && errno == ENOENT)
             return 1;
-        snj_errorf(error, error_size, "cannot open configuration %s: %s",
+        snag_errorf(error, error_size, "cannot open configuration %s: %s",
                   path, strerror(errno));
         return -1;
     }
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
-        (uintmax_t)st.st_size > SNJ_CONFIG_FILE_MAX) {
-        snj_errorf(error, error_size,
+        (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
+        snag_errorf(error, error_size,
                   "configuration must be a regular file no larger than 64 KiB");
         errno = EINVAL;
         goto out;
@@ -1134,25 +1134,25 @@ read_config(const char *path, bool require_file, struct snj_buf *text,
         if (got < 0) {
             if (errno == EINTR)
                 continue;
-            snj_errorf(error, error_size, "cannot read configuration: %s",
+            snag_errorf(error, error_size, "cannot read configuration: %s",
                       strerror(errno));
             goto out;
         }
         if (got == 0)
             break;
-        if (snj_buf_append(text, chunk, (size_t)got) < 0) {
-            snj_errorf(error, error_size, "configuration exceeds 64 KiB");
+        if (snag_buf_append(text, chunk, (size_t)got) < 0) {
+            snag_errorf(error, error_size, "configuration exceeds 64 KiB");
             goto out;
         }
     }
-    if (!snj_utf8_valid(text->data, text->len, true)) {
-        snj_errorf(error, error_size,
+    if (!snag_utf8_valid(text->data, text->len, true)) {
+        snag_errorf(error, error_size,
                   "configuration must be valid UTF-8 without NUL bytes");
         errno = EILSEQ;
         goto out;
     }
-    if (snj_buf_terminate(text) < 0) {
-        snj_errorf(error, error_size, "cannot terminate configuration buffer");
+    if (snag_buf_terminate(text) < 0) {
+        snag_errorf(error, error_size, "cannot terminate configuration buffer");
         goto out;
     }
     rc = 0;
@@ -1166,7 +1166,7 @@ out:
 }
 
 static int
-validate_shell(struct snj_config *config, char *error, size_t error_size)
+validate_shell(struct snag_config *config, char *error, size_t error_size)
 {
     char *resolved;
     struct stat st;
@@ -1175,7 +1175,7 @@ validate_shell(struct snj_config *config, char *error, size_t error_size)
     resolved = realpath(config->shell, NULL);
     if (!resolved)
         goto invalid;
-    if (strlen(resolved) > SNJ_CONFIG_PATH_MAX || stat(resolved, &st) < 0 ||
+    if (strlen(resolved) > SNAG_CONFIG_PATH_MAX || stat(resolved, &st) < 0 ||
         !S_ISREG(st.st_mode) || access(resolved, X_OK) < 0) {
         free(resolved);
         goto invalid;
@@ -1184,33 +1184,33 @@ validate_shell(struct snj_config *config, char *error, size_t error_size)
     config->shell = resolved;
     return 0;
 invalid:
-    snj_errorf(error, error_size,
+    snag_errorf(error, error_size,
               "configured shell must resolve to an executable regular file");
     errno = EINVAL;
     return -1;
 }
 
 int
-snj_config_load(struct snj_config *config, const char *explicit_path,
+snag_config_load(struct snag_config *config, const char *explicit_path,
                 const char *dotdir,
                 char *error, size_t error_size)
 {
-    struct snj_buf text;
+    struct snag_buf text;
     char *owned_path = NULL;
     const char *path = explicit_path;
     int read_rc;
     int rc = -1;
 
     if (!config->shell) {
-        snj_errorf(error, error_size, "cannot initialize configuration defaults");
+        snag_errorf(error, error_size, "cannot initialize configuration defaults");
         errno = ENOMEM;
         return -1;
     }
-    owned_path = snj_config_path(explicit_path, dotdir, error, error_size);
+    owned_path = snag_config_path(explicit_path, dotdir, error, error_size);
     if (!owned_path)
         return -1;
     path = owned_path;
-    snj_buf_init(&text, SNJ_CONFIG_FILE_MAX + 1u);
+    snag_buf_init(&text, SNAG_CONFIG_FILE_MAX + 1u);
     read_rc = read_config(path, explicit_path != NULL, &text, NULL,
                           error, error_size);
     if (read_rc < 0)
@@ -1219,17 +1219,17 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
                                    error, error_size) < 0)
         goto out;
     for (size_t i = 0; i < config->provider_count; ++i) {
-        if (config->providers[i].auth == SNJ_AUTH_CHATGPT &&
-            strcmp(config->providers[i].base_url, SNJ_CHATGPT_BASE) != 0) {
-            snj_errorf(error, error_size,
-                       "chatgpt authentication requires " SNJ_CHATGPT_BASE);
+        if (config->providers[i].auth == SNAG_AUTH_CHATGPT &&
+            strcmp(config->providers[i].base_url, SNAG_CHATGPT_BASE) != 0) {
+            snag_errorf(error, error_size,
+                       "chatgpt authentication requires " SNAG_CHATGPT_BASE);
             errno = EINVAL;
             goto out;
         }
     }
     for (size_t i = 0; i < config->model_limit_count; ++i) {
-        const struct snj_model_limit_config *limit = &config->model_limits[i];
-        if (!snj_config_provider(config, limit->provider) ||
+        const struct snag_model_limit_config *limit = &config->model_limits[i];
+        if (!snag_config_provider(config, limit->provider) ||
             (!limit->context_window_known && !limit->max_input_known &&
              !limit->max_output_known) ||
             (limit->context_window_known && limit->max_input_known &&
@@ -1240,7 +1240,7 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
              limit->max_output_known &&
              limit->max_input_tokens >
                  limit->context_window_tokens - limit->max_output_tokens)) {
-            snj_errorf(error, error_size,
+            snag_errorf(error, error_size,
                       "invalid model-limit section for %s/%s",
                       limit->provider, limit->model);
             errno = EINVAL;
@@ -1248,15 +1248,15 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
         }
     }
     if (config->default_timeout_ms > config->max_timeout_ms) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "tool default_timeout_ms cannot exceed max_timeout_ms");
         errno = EINVAL;
         goto out;
     }
     if (validate_shell(config, error, error_size) < 0)
         goto out;
-    if (config->provider[0] && !snj_config_provider(config, config->provider)) {
-        snj_errorf(error, error_size,
+    if (config->provider[0] && !snag_config_provider(config, config->provider)) {
+        snag_errorf(error, error_size,
                   "configured agent provider is not defined");
         errno = EINVAL;
         goto out;
@@ -1264,7 +1264,7 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
     rc = 0;
 out:
     free(owned_path);
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     return rc;
 }
 
@@ -1332,15 +1332,15 @@ line_has_key(const unsigned char *line, size_t len, const char *key)
 }
 
 static int
-append_assignment(struct snj_buf *out, const char *key, const char *value,
+append_assignment(struct snag_buf *out, const char *key, const char *value,
                   const unsigned char *ending, size_t ending_len)
 {
-    return snj_buf_printf(out, "%s = %s", key, value) < 0 ||
-           snj_buf_append(out, ending, ending_len) < 0 ? -1 : 0;
+    return snag_buf_printf(out, "%s = %s", key, value) < 0 ||
+           snag_buf_append(out, ending, ending_len) < 0 ? -1 : 0;
 }
 
 static int
-append_missing_model_settings(struct snj_buf *out, bool seen[3],
+append_missing_model_settings(struct snag_buf *out, bool seen[3],
                               const char *provider, const char *model,
                               const char *effort)
 {
@@ -1349,7 +1349,7 @@ append_missing_model_settings(struct snj_buf *out, bool seen[3],
     const char *values[3] = {provider, model, effort};
 
     if (out->len && out->data[out->len - 1u] != '\n' &&
-        snj_buf_putc(out, '\n') < 0)
+        snag_buf_putc(out, '\n') < 0)
         return -1;
     for (size_t i = 0u; i < 3u; ++i)
         if (!seen[i] && append_assignment(out, keys[i], values[i],
@@ -1359,7 +1359,7 @@ append_missing_model_settings(struct snj_buf *out, bool seen[3],
 }
 
 static int
-replace_model_settings(const struct snj_buf *input, struct snj_buf *output,
+replace_model_settings(const struct snag_buf *input, struct snag_buf *output,
                        const char *provider, const char *model,
                        const char *effort)
 {
@@ -1402,7 +1402,7 @@ replace_model_settings(const struct snj_buf *input, struct snj_buf *output,
                 goto next_line;
             }
         }
-        if (snj_buf_append(output, line, len) < 0)
+        if (snag_buf_append(output, line, len) < 0)
             return -1;
 next_line:
         offset += len;
@@ -1414,9 +1414,9 @@ next_line:
     } else if (!saw_agent) {
         static const char heading[] = "[agent]\n";
         if (output->len && output->data[output->len - 1u] != '\n' &&
-            snj_buf_putc(output, '\n') < 0)
+            snag_buf_putc(output, '\n') < 0)
             return -1;
-        if (snj_buf_append(output, heading, sizeof(heading) - 1u) < 0 ||
+        if (snag_buf_append(output, heading, sizeof(heading) - 1u) < 0 ||
             append_missing_model_settings(output, seen, provider,
                                           model, effort) < 0)
             return -1;
@@ -1433,10 +1433,10 @@ same_file(const struct stat *left, const struct stat *right)
 }
 
 static int
-validate_config_text(const struct snj_buf *text,
+validate_config_text(const struct snag_buf *text,
                      char *error, size_t error_size)
 {
-    struct snj_config candidate;
+    struct snag_config candidate;
     char *copy;
     int rc = -1;
 
@@ -1445,15 +1445,15 @@ validate_config_text(const struct snj_buf *text,
         return -1;
     memcpy(copy, text->data, text->len);
     copy[text->len] = '\0';
-    snj_config_init(&candidate);
+    snag_config_init(&candidate);
     if (!candidate.shell) {
-        snj_errorf(error, error_size, "cannot initialize configuration defaults");
+        snag_errorf(error, error_size, "cannot initialize configuration defaults");
         goto out;
     }
     if (parse_file(&candidate, copy, error, error_size) < 0)
         goto out;
     if (candidate.default_timeout_ms > candidate.max_timeout_ms) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "tool default_timeout_ms cannot exceed max_timeout_ms");
         errno = EINVAL;
         goto out;
@@ -1461,31 +1461,31 @@ validate_config_text(const struct snj_buf *text,
     if (validate_shell(&candidate, error, error_size) < 0)
         goto out;
     if (candidate.provider[0] &&
-        !snj_config_provider(&candidate, candidate.provider)) {
-        snj_errorf(error, error_size, "configured agent provider is not defined");
+        !snag_config_provider(&candidate, candidate.provider)) {
+        snag_errorf(error, error_size, "configured agent provider is not defined");
         errno = EINVAL;
         goto out;
     }
     rc = 0;
 out:
-    snj_config_free(&candidate);
+    snag_config_free(&candidate);
     free(copy);
     return rc;
 }
 
 static int
-provider_settings(struct snj_buf *output, const struct snj_provider_config *p)
+provider_settings(struct snag_buf *output, const struct snag_provider_config *p)
 {
-    const char *auth = p->auth == SNJ_AUTH_CHATGPT ? "chatgpt" :
-                       p->auth == SNJ_AUTH_API_KEY ? "api_key" : "env";
-    return snj_buf_printf(output,
+    const char *auth = p->auth == SNAG_AUTH_CHATGPT ? "chatgpt" :
+                       p->auth == SNAG_AUTH_API_KEY ? "api_key" : "env";
+    return snag_buf_printf(output,
         "auth = %s\nbase_url = %s\napi_key_env = %s\nnative_compaction = %s\n",
         auth, p->base_url, p->api_key_env, p->native_compaction ? "true" : "false");
 }
 
 static int
-replace_provider_settings(const struct snj_buf *input, struct snj_buf *output,
-                           const struct snj_provider_config *provider,
+replace_provider_settings(const struct snag_buf *input, struct snag_buf *output,
+                           const struct snag_provider_config *provider,
                            bool existing)
 {
     size_t at = 0u;
@@ -1493,7 +1493,7 @@ replace_provider_settings(const struct snj_buf *input, struct snj_buf *output,
 
     while (at < input->len) {
         size_t end = at;
-        char line[SNJ_CONFIG_FILE_MAX + 1u];
+        char line[SNAG_CONFIG_FILE_MAX + 1u];
         char *s, *equal;
         while (end < input->len && input->data[end] != '\n')
             ++end;
@@ -1512,8 +1512,8 @@ replace_provider_settings(const struct snj_buf *input, struct snj_buf *output,
                     selected = strcmp(name, provider->name) == 0;
                 }
             }
-            if (snj_buf_append(output, input->data + at, end - at) < 0 ||
-                snj_buf_putc(output, '\n') < 0)
+            if (snag_buf_append(output, input->data + at, end - at) < 0 ||
+                snag_buf_putc(output, '\n') < 0)
                 return -1;
             if (selected) {
                 found = true;
@@ -1529,7 +1529,7 @@ replace_provider_settings(const struct snj_buf *input, struct snj_buf *output,
                 replaced = strcmp(s, "auth") == 0 || strcmp(s, "base_url") == 0 ||
                     strcmp(s, "api_key_env") == 0 || strcmp(s, "native_compaction") == 0;
             }
-            if (!replaced && snj_buf_append(output, input->data + at,
+            if (!replaced && snag_buf_append(output, input->data + at,
                     end - at + (end < input->len ? 1u : 0u)) < 0)
                 return -1;
         }
@@ -1537,13 +1537,13 @@ replace_provider_settings(const struct snj_buf *input, struct snj_buf *output,
     }
     if (!found) {
         if (existing && !any && strcmp(provider->name, "default") != 0) {
-            struct snj_provider_config implicit;
+            struct snag_provider_config implicit;
             provider_init(&implicit, "default");
-            if (snj_buf_printf(output, "\n[provider default]\n") < 0 ||
+            if (snag_buf_printf(output, "\n[provider default]\n") < 0 ||
                 provider_settings(output, &implicit) < 0)
                 return -1;
         }
-        if (snj_buf_printf(output, "\n[provider %s]\n", provider->name) < 0 ||
+        if (snag_buf_printf(output, "\n[provider %s]\n", provider->name) < 0 ||
             provider_settings(output, provider) < 0)
             return -1;
     }
@@ -1551,21 +1551,21 @@ replace_provider_settings(const struct snj_buf *input, struct snj_buf *output,
 }
 
 int
-snj_config_validate_provider(const struct snj_provider_config *provider,
+snag_config_validate_provider(const struct snag_provider_config *provider,
                              char *error, size_t error_size)
 {
-    struct snj_buf text;
+    struct snag_buf text;
     int rc = -1;
     if (!provider || !provider_name_valid(provider->name) ||
-        (provider->auth == SNJ_AUTH_CHATGPT && strcmp(provider->base_url, SNJ_CHATGPT_BASE))) {
-        snj_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
+        (provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE))) {
+        snag_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
         return -1;
     }
-    snj_buf_init(&text, SNJ_CONFIG_FILE_MAX);
-    if (snj_buf_printf(&text, "[provider %s]\n", provider->name) == 0 &&
+    snag_buf_init(&text, SNAG_CONFIG_FILE_MAX);
+    if (snag_buf_printf(&text, "[provider %s]\n", provider->name) == 0 &&
         provider_settings(&text, provider) == 0)
         rc = validate_config_text(&text, error, error_size);
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     return rc;
 }
 
@@ -1573,14 +1573,14 @@ static int
 save_config_settings(const char *path, bool allow_create,
                       const char *provider, const char *model,
                       const char *effort,
-                      const struct snj_provider_config *provider_config,
+                      const struct snag_provider_config *provider_config,
                       char *error, size_t error_size)
 {
-    struct snj_buf input;
-    struct snj_buf output;
+    struct snag_buf input;
+    struct snag_buf output;
     struct stat before;
     struct stat current;
-    char id[SNJ_ID_HEX_LEN + 1u];
+    char id[SNAG_ID_HEX_LEN + 1u];
     char temp[64] = {0};
     char leaf[NAME_MAX + 1u];
     char *path_copy = NULL;
@@ -1592,30 +1592,30 @@ save_config_settings(const char *path, bool allow_create,
     int saved;
 
     memset(&before, 0, sizeof(before));
-    snj_buf_init(&input, SNJ_CONFIG_FILE_MAX + 1u);
-    snj_buf_init(&output, SNJ_CONFIG_FILE_MAX);
-    if (!path || path[0] != '/' || strlen(path) > SNJ_CONFIG_PATH_MAX ||
-        !provider || !*provider || strlen(provider) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
-        !model || (!provider_config && !*model) || strlen(model) >= SNJ_CONFIG_MODEL_MAX ||
-        !effort || !*effort || strlen(effort) >= SNJ_CONFIG_EFFORT_MAX ||
+    snag_buf_init(&input, SNAG_CONFIG_FILE_MAX + 1u);
+    snag_buf_init(&output, SNAG_CONFIG_FILE_MAX);
+    if (!path || path[0] != '/' || strlen(path) > SNAG_CONFIG_PATH_MAX ||
+        !provider || !*provider || strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
+        !model || (!provider_config && !*model) || strlen(model) >= SNAG_CONFIG_MODEL_MAX ||
+        !effort || !*effort || strlen(effort) >= SNAG_CONFIG_EFFORT_MAX ||
         strchr(provider, '\n') || strchr(provider, '\r') ||
         strchr(model, '\n') || strchr(model, '\r') ||
         strchr(effort, '\n') || strchr(effort, '\r')) {
-        snj_errorf(error, error_size, "refusing to save invalid model settings");
+        snag_errorf(error, error_size, "refusing to save invalid model settings");
         errno = EINVAL;
         goto out;
     }
-    path_copy = snj_strdup_checked(path, SNJ_CONFIG_PATH_MAX);
+    path_copy = snag_strdup_checked(path, SNAG_CONFIG_PATH_MAX);
     if (!path_copy)
         goto out;
     slash = strrchr(path_copy, '/');
     if (!slash || !slash[1]) {
-        snj_errorf(error, error_size, "configuration path has no file name");
+        snag_errorf(error, error_size, "configuration path has no file name");
         errno = EINVAL;
         goto out;
     }
     if (strlen(slash + 1u) > NAME_MAX) {
-        snj_errorf(error, error_size, "configuration file name is too long");
+        snag_errorf(error, error_size, "configuration file name is too long");
         errno = ENAMETOOLONG;
         goto out;
     }
@@ -1626,13 +1626,13 @@ save_config_settings(const char *path, bool allow_create,
         *slash = '\0';
     parent_fd = open(path_copy, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (parent_fd < 0) {
-        snj_errorf(error, error_size, "cannot open configuration directory: %s",
+        snag_errorf(error, error_size, "cannot open configuration directory: %s",
                   strerror(errno));
         goto out;
     }
     /* Serialize cooperating writers without a second persistent state file. */
     if (flock(parent_fd, LOCK_EX | LOCK_NB) < 0) {
-        snj_errorf(error, error_size, "configuration directory is being updated; try again");
+        snag_errorf(error, error_size, "configuration directory is being updated; try again");
         goto out;
     }
     read_rc = read_config(path, !allow_create, &input, &before,
@@ -1642,38 +1642,38 @@ save_config_settings(const char *path, bool allow_create,
     if ((provider_config ?
          replace_provider_settings(&input, &output, provider_config, read_rc == 0) :
          replace_model_settings(&input, &output, provider, model, effort)) < 0) {
-        snj_errorf(error, error_size, "configuration update exceeds 64 KiB");
+        snag_errorf(error, error_size, "configuration update exceeds 64 KiB");
         goto out;
     }
     if (provider_config && *model) {
-        struct snj_buf selected;
-        snj_buf_init(&selected, SNJ_CONFIG_FILE_MAX);
+        struct snag_buf selected;
+        snag_buf_init(&selected, SNAG_CONFIG_FILE_MAX);
         if (replace_model_settings(&output, &selected, provider, model, effort) < 0) {
-            snj_buf_free(&selected);
+            snag_buf_free(&selected);
             goto out;
         }
-        snj_buf_free(&output);
+        snag_buf_free(&output);
         output = selected;
     }
     if (validate_config_text(&output, error, error_size) < 0)
         goto out;
-    if (snj_random_id(id) < 0)
+    if (snag_random_id(id) < 0)
         goto out;
     (void)snprintf(temp, sizeof(temp), ".snajpagent-config-%s.tmp", id);
     fd = openat(parent_fd, temp,
                 O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0 || fchmod(fd, read_rc == 0 ? before.st_mode & 07777u : 0600u) < 0 ||
-        snj_write_full(fd, output.data, output.len) < 0 ||
-        snj_sync_file(fd) < 0) {
+        snag_write_full(fd, output.data, output.len) < 0 ||
+        snag_sync_file(fd) < 0) {
         saved = errno;
-        snj_errorf(error, error_size, "cannot write configuration: %s",
+        snag_errorf(error, error_size, "cannot write configuration: %s",
                   strerror(saved));
         errno = saved;
         goto out;
     }
     if (close(fd) < 0) {
         fd = -1;
-        snj_errorf(error, error_size, "cannot close configuration: %s",
+        snag_errorf(error, error_size, "cannot close configuration: %s",
                   strerror(errno));
         goto out;
     }
@@ -1681,22 +1681,22 @@ save_config_settings(const char *path, bool allow_create,
     if (read_rc == 0) {
         if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) < 0 ||
             !same_file(&before, &current)) {
-            snj_errorf(error, error_size,
+            snag_errorf(error, error_size,
                       "configuration changed while it was being saved");
             errno = EAGAIN;
             goto out;
         }
     } else if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) == 0 ||
                errno != ENOENT) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "configuration appeared while it was being saved");
         errno = EAGAIN;
         goto out;
     }
     if (renameat(parent_fd, temp, parent_fd, leaf) < 0 ||
-        snj_sync_dir(parent_fd) < 0) {
+        snag_sync_dir(parent_fd) < 0) {
         saved = errno;
-        snj_errorf(error, error_size, "cannot install configuration: %s",
+        snag_errorf(error, error_size, "cannot install configuration: %s",
                   strerror(saved));
         errno = saved;
         goto out;
@@ -1713,14 +1713,14 @@ out:
         (void)close(parent_fd);
     }
     free(path_copy);
-    snj_buf_free(&output);
-    snj_buf_free(&input);
+    snag_buf_free(&output);
+    snag_buf_free(&input);
     errno = saved;
     return rc;
 }
 
 int
-snj_config_save_model(const char *path, bool allow_create,
+snag_config_save_model(const char *path, bool allow_create,
                       const char *provider, const char *model, const char *effort,
                       char *error, size_t error_size)
 {
@@ -1729,16 +1729,16 @@ snj_config_save_model(const char *path, bool allow_create,
 }
 
 int
-snj_config_save_provider(const char *path, bool allow_create,
-                         const struct snj_provider_config *provider,
+snag_config_save_provider(const char *path, bool allow_create,
+                         const struct snag_provider_config *provider,
                          const char *initial_model, const char *effort,
                          char *error, size_t error_size)
 {
     if (!provider || !provider_name_valid(provider->name) ||
-        (provider->auth == SNJ_AUTH_CHATGPT && strcmp(provider->base_url, SNJ_CHATGPT_BASE)) ||
+        (provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
         strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r') ||
         strchr(provider->api_key_env, '\n') || strchr(provider->api_key_env, '\r')) {
-        snj_errorf(error, error_size, "invalid provider settings");
+        snag_errorf(error, error_size, "invalid provider settings");
         return -1;
     }
     return save_config_settings(path, allow_create, provider->name,
@@ -1746,8 +1746,8 @@ snj_config_save_provider(const char *path, bool allow_create,
         provider, error, error_size);
 }
 
-const struct snj_provider_config *
-snj_config_provider(const struct snj_config *config, const char *name)
+const struct snag_provider_config *
+snag_config_provider(const struct snag_config *config, const char *name)
 {
     if (!config || config->provider_count == 0u)
         return NULL;
@@ -1760,7 +1760,7 @@ snj_config_provider(const struct snj_config *config, const char *name)
 }
 
 bool
-snj_config_provider_is_openrouter(const struct snj_provider_config *provider)
+snag_config_provider_is_openrouter(const struct snag_provider_config *provider)
 {
     static const char host[] = "openrouter.ai";
     const char *url = provider ? provider->base_url : "";
@@ -1794,8 +1794,8 @@ snj_config_provider_is_openrouter(const struct snj_provider_config *provider)
     return *suffix == '\0' || *suffix == '/';
 }
 
-const struct snj_model_limit_config *
-snj_config_model_limit(const struct snj_config *config, const char *provider,
+const struct snag_model_limit_config *
+snag_config_model_limit(const struct snag_config *config, const char *provider,
                        const char *model)
 {
     if (!config || !provider || !model)

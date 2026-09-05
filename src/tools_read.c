@@ -21,8 +21,8 @@
 #define RO_DEPTH 32u
 
 struct read_query {
-    struct snj_buf output;
-    snj_tool_pump_fn pump;
+    struct snag_buf output;
+    snag_tool_pump_fn pump;
     void *opaque;
     regex_t regex;
     const char *pattern;
@@ -75,13 +75,13 @@ static int
 open_path(const char *workspace, const char *path)
 {
     char *copy, *part, *save = NULL;
-    struct snj_buf full;
+    struct snag_buf full;
     int fd = -1;
 
-    snj_buf_init(&full, 8192u);
-    if (snj_buf_printf(&full, "%s%s%s", path[0] == '/' ? "" : workspace,
+    snag_buf_init(&full, 8192u);
+    if (snag_buf_printf(&full, "%s%s%s", path[0] == '/' ? "" : workspace,
                        path[0] == '/' ? "" : "/", path) < 0 ||
-        snj_buf_terminate(&full) < 0)
+        snag_buf_terminate(&full) < 0)
         goto out;
     copy = (char *)full.data;
     fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -92,7 +92,7 @@ open_path(const char *workspace, const char *path)
         fd = next;
     }
 out:
-    snj_buf_free(&full);
+    snag_buf_free(&full);
     return fd;
 }
 
@@ -105,7 +105,7 @@ number_arg(const json_t *args, const char *name, uint64_t fallback,
     *value = fallback;
     if (json_is_null(v))
         return true;
-    return snj_json_integer_u64(args, name, value) == 0 &&
+    return snag_json_integer_u64(args, name, value) == 0 &&
            *value >= min && *value <= max;
 }
 
@@ -147,7 +147,7 @@ emit_line(struct read_query *q, const char *path, uint64_t line,
         q->more = true;
         return 1;
     }
-    if (snj_buf_printf(&q->output, "%s:%llu:%s\n", path,
+    if (snag_buf_printf(&q->output, "%s:%llu:%s\n", path,
                        (unsigned long long)line, text) < 0)
         return -1;
     ++q->emitted;
@@ -191,7 +191,7 @@ scan_file(struct read_query *q, int fd, const char *path)
         if (c == EOF && !len)
             break;
         if (memchr(line, 0, len) || (len < RO_LINE &&
-            !snj_utf8_valid((unsigned char *)line, len, true))) {
+            !snag_utf8_valid((unsigned char *)line, len, true))) {
             if (q->grep) {
                 q->output.len = saved_len;
                 q->seen = saved_seen;
@@ -217,7 +217,7 @@ scan_file(struct read_query *q, int fd, const char *path)
                     rc = -1;
                     break;
                 }
-                rc = snj_buf_printf(&q->output, "%llu:%s%s",
+                rc = snag_buf_printf(&q->output, "%llu:%s%s",
                     (unsigned long long)number, line, c == '\n' ? "\n" : "");
             }
             if (number == q->end || rc < 0)
@@ -279,7 +279,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
             q->problem = "Directory entry limit reached; narrow the path.";
             break;
         }
-        if (!snj_utf8_valid((unsigned char *)entry->d_name,
+        if (!snag_utf8_valid((unsigned char *)entry->d_name,
                             strlen(entry->d_name), true)) {
             q->problem = "Non-UTF-8 filename; directory inspection is incomplete.";
             break;
@@ -298,7 +298,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
     if (count)
         qsort(names, count, sizeof(*names), compare_names);
     for (size_t i = 0; i < count && rc == 0; ++i) {
-        struct snj_buf child;
+        struct snag_buf child;
         const char *type;
 
         if (checkpoint(q) < 0 ||
@@ -306,11 +306,11 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
             rc = -1;
             break;
         }
-        snj_buf_init(&child, 8192u);
-        rc = snj_buf_printf(&child, "%s%s%s", path,
+        snag_buf_init(&child, 8192u);
+        rc = snag_buf_printf(&child, "%s%s%s", path,
                             path[strlen(path) - 1u] == '/' ? "" : "/", names[i]);
         if (rc == 0)
-            rc = snj_buf_terminate(&child);
+            rc = snag_buf_terminate(&child);
         type = S_ISDIR(st.st_mode) ? "directory" : S_ISREG(st.st_mode) ? "file" :
                S_ISLNK(st.st_mode) ? "symlink (not followed)" : "special (not opened)";
         if (q->grep && !S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode))
@@ -322,7 +322,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
                     q->more = true;
                     rc = 1;
                 } else {
-                    rc = snj_buf_printf(&q->output, "%s\t%s\n", child.data, type);
+                    rc = snag_buf_printf(&q->output, "%s\t%s\n", child.data, type);
                     ++q->emitted;
                 }
             }
@@ -338,7 +338,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
                 rc = -1;
             } else rc = walk(q, next, (char *)child.data, depth + 1u);
         }
-        snj_buf_free(&child);
+        snag_buf_free(&child);
     }
 out:
     for (size_t i = 0; i < count; ++i)
@@ -349,8 +349,8 @@ out:
 }
 
 int
-snj_tools_read_only(const struct snj_response_item *call, const char *workspace,
-                    snj_tool_pump_fn pump, void *opaque, json_t **result)
+snag_tools_read_only(const struct snag_response_item *call, const char *workspace,
+                    snag_tool_pump_fn pump, void *opaque, json_t **result)
 {
     static const char *const read_keys[] = {"path", "start_line", "end_line"};
     static const char *const list_keys[] = {"path", "recursive", "offset", "limit"};
@@ -370,16 +370,16 @@ snj_tools_read_only(const struct snj_response_item *call, const char *workspace,
     }
     *result = NULL;
     args = call->arguments;
-    path = snj_json_string(args, "path");
+    path = snag_json_string(args, "path");
     q.read = strcmp(call->name, "read_file") == 0;
     q.grep = strcmp(call->name, "grep") == 0;
     q.pump = pump;
     q.opaque = opaque;
-    snj_buf_init(&q.output, RO_OUTPUT + 1024u);
+    snag_buf_init(&q.output, RO_OUTPUT + 1024u);
     q.problem = "Invalid native inspection arguments.";
-    if (!snj_read_only_tool(call->name) || !workspace || !path || !*path ||
+    if (!snag_read_only_tool(call->name) || !workspace || !path || !*path ||
         strlen(path) > 4096u ||
-        !snj_json_exact_keys(args, q.read ? read_keys : q.grep ? grep_keys : list_keys,
+        !snag_json_exact_keys(args, q.read ? read_keys : q.grep ? grep_keys : list_keys,
                              q.read ? 3u : q.grep ? 7u : 4u))
         goto out;
     if (q.read) {
@@ -395,7 +395,7 @@ snj_tools_read_only(const struct snj_response_item *call, const char *workspace,
     q.offset = (size_t)offset;
     q.limit = (size_t)limit;
     if (q.grep) {
-        q.pattern = snj_json_string(args, "pattern");
+        q.pattern = snag_json_string(args, "pattern");
         if (!q.pattern || strlen(q.pattern) > 4096u ||
             !bool_arg(args, "ignore_case", false, &q.ignore_case) ||
             !bool_arg(args, "literal", false, &q.literal))
@@ -420,20 +420,20 @@ snj_tools_read_only(const struct snj_response_item *call, const char *workspace,
     rc = walk(&q, fd, path, 0u);
 out:
     if (rc < 0) {
-        *result = snj_tool_result_terminal(false, q.problem ? q.problem :
+        *result = snag_tool_result_terminal(false, q.problem ? q.problem :
             "Native inspection failed; results are incomplete (path changed, I/O or resource error).");
     } else {
-        if (!q.read && snj_buf_printf(&q.output,
+        if (!q.read && snag_buf_printf(&q.output,
                 "\n%s; returned=%zu; next_offset=%zu; skipped_nontext_or_special=%zu\n",
                 q.more ? "More results (repeat with next_offset)" : "Complete",
                 q.emitted, q.offset + q.emitted, q.skipped) < 0)
             goto cleanup;
-        if (snj_buf_terminate(&q.output) == 0)
-            *result = snj_tool_result_terminal(true, (char *)q.output.data);
+        if (snag_buf_terminate(&q.output) == 0)
+            *result = snag_tool_result_terminal(true, (char *)q.output.data);
     }
 cleanup:
     if (q.compiled)
         regfree(&q.regex);
-    snj_buf_free(&q.output);
+    snag_buf_free(&q.output);
     return !*result ? -1 : q.interrupted == 2 ? 2 : 0;
 }

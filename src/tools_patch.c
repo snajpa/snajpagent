@@ -7,7 +7,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include "snj_jansson.h"
+#include "snag_jansson.h"
 #include <limits.h>
 #include <stdbool.h>
 #include <stdarg.h>
@@ -79,7 +79,7 @@ struct patch_op {
     size_t hunk_cap;
     char *old_bytes;
     size_t old_len;
-    struct snj_buf new_bytes;
+    struct snag_buf new_bytes;
     bool eol_crlf;
     bool final_nl;
     mode_t mode;
@@ -161,7 +161,7 @@ op_free(struct patch_op *op)
         hunk_free(&op->hunks[i]);
     free(op->hunks);
     free(op->old_bytes);
-    snj_buf_free(&op->new_bytes);
+    snag_buf_free(&op->new_bytes);
     memset(op, 0, sizeof(*op));
 }
 
@@ -198,7 +198,7 @@ patch_set_add(struct patch_set *set, struct patch_op **out)
     }
     *out = &set->ops[set->count++];
     memset(*out, 0, sizeof(**out));
-    snj_buf_init(&(*out)->new_bytes, PATCH_FILE_MAX);
+    snag_buf_init(&(*out)->new_bytes, PATCH_FILE_MAX);
     return 0;
 }
 
@@ -255,34 +255,34 @@ path_valid(const char *path, char *error, size_t error_size)
     const char *component = path;
 
     if (!len || len > PATCH_PATH_MAX || path[0] == '/' ||
-        !snj_utf8_valid((const unsigned char *)path, len, true)) {
-        snj_errorf(error, error_size, "patch path is not a bounded relative UTF-8 path");
+        !snag_utf8_valid((const unsigned char *)path, len, true)) {
+        snag_errorf(error, error_size, "patch path is not a bounded relative UTF-8 path");
         errno = EINVAL;
         return -1;
     }
     if (len >= 2u && ((path[0] >= 'A' && path[0] <= 'Z') ||
                       (path[0] >= 'a' && path[0] <= 'z')) &&
         path[1] == ':') {
-        snj_errorf(error, error_size, "patch path uses a drive-prefix form");
+        snag_errorf(error, error_size, "patch path uses a drive-prefix form");
         errno = EINVAL;
         return -1;
     }
     if (starts_with(path, "//")) {
-        snj_errorf(error, error_size, "patch path uses a UNC-like form");
+        snag_errorf(error, error_size, "patch path uses a UNC-like form");
         errno = EINVAL;
         return -1;
     }
     while (*p) {
         if ((unsigned char)*p < 0x20u || (unsigned char)*p == 0x7fu ||
             *p == '\\') {
-            snj_errorf(error, error_size, "patch path contains a rejected byte");
+            snag_errorf(error, error_size, "patch path contains a rejected byte");
             errno = EINVAL;
             return -1;
         }
         if (*p == '/') {
             if (p == component || (p - component == 1 && component[0] == '.') ||
                 (p - component == 2 && component[0] == '.' && component[1] == '.')) {
-                snj_errorf(error, error_size, "patch path contains an invalid component");
+                snag_errorf(error, error_size, "patch path contains an invalid component");
                 errno = EINVAL;
                 return -1;
             }
@@ -292,7 +292,7 @@ path_valid(const char *path, char *error, size_t error_size)
     }
     if (p == component || (p - component == 1 && component[0] == '.') ||
         (p - component == 2 && component[0] == '.' && component[1] == '.')) {
-        snj_errorf(error, error_size, "patch path contains an invalid final component");
+        snag_errorf(error, error_size, "patch path contains an invalid final component");
         errno = EINVAL;
         return -1;
     }
@@ -303,59 +303,59 @@ static int
 normalize_patch_text(const char *patch, size_t len, char **out,
                      char *error, size_t error_size)
 {
-    struct snj_buf buf;
+    struct snag_buf buf;
     size_t line_len = 0;
     int rc = -1;
 
     *out = NULL;
-    if (len > PATCH_TEXT_MAX || !snj_utf8_valid((const unsigned char *)patch,
+    if (len > PATCH_TEXT_MAX || !snag_utf8_valid((const unsigned char *)patch,
                                                 len, true)) {
-        snj_errorf(error, error_size, "patch must be bounded UTF-8 without NUL");
+        snag_errorf(error, error_size, "patch must be bounded UTF-8 without NUL");
         errno = EINVAL;
         return -1;
     }
-    snj_buf_init(&buf, PATCH_TEXT_MAX + 1u);
+    snag_buf_init(&buf, PATCH_TEXT_MAX + 1u);
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)patch[i];
         if (c == '\r') {
             if (i + 1u >= len || patch[i + 1u] != '\n') {
-                snj_errorf(error, error_size, "patch contains a bare carriage return");
+                snag_errorf(error, error_size, "patch contains a bare carriage return");
                 errno = EINVAL;
                 goto out_free;
             }
             if (line_len > PATCH_LINE_MAX) {
-                snj_errorf(error, error_size, "patch line exceeds 1 MiB");
+                snag_errorf(error, error_size, "patch line exceeds 1 MiB");
                 errno = EOVERFLOW;
                 goto out_free;
             }
-            if (snj_buf_putc(&buf, '\n') < 0)
+            if (snag_buf_putc(&buf, '\n') < 0)
                 goto out_free;
             line_len = 0;
             ++i;
         } else {
-            if (snj_buf_putc(&buf, c) < 0)
+            if (snag_buf_putc(&buf, c) < 0)
                 goto out_free;
             if (c == '\n') {
                 if (line_len > PATCH_LINE_MAX) {
-                    snj_errorf(error, error_size, "patch line exceeds 1 MiB");
+                    snag_errorf(error, error_size, "patch line exceeds 1 MiB");
                     errno = EOVERFLOW;
                     goto out_free;
                 }
                 line_len = 0;
             } else if (++line_len > PATCH_LINE_MAX) {
-                snj_errorf(error, error_size, "patch line exceeds 1 MiB");
+                snag_errorf(error, error_size, "patch line exceeds 1 MiB");
                 errno = EOVERFLOW;
                 goto out_free;
             }
         }
     }
-    if (snj_buf_terminate(&buf) < 0)
+    if (snag_buf_terminate(&buf) < 0)
         goto out_free;
     *out = (char *)buf.data;
     memset(&buf, 0, sizeof(buf));
     rc = 0;
 out_free:
-    snj_buf_free(&buf);
+    snag_buf_free(&buf);
     return rc;
 }
 
@@ -395,7 +395,7 @@ split_lines(char *text, char ***out_lines, size_t *out_count,
     }
     if (count < 2u) {
         free(lines);
-        snj_errorf(error, error_size, "patch is missing required frame");
+        snag_errorf(error, error_size, "patch is missing required frame");
         errno = EINVAL;
         return -1;
     }
@@ -410,7 +410,7 @@ check_duplicate_path(const struct patch_set *set, const char *path,
 {
     for (size_t i = 0; i < set->count; ++i) {
         if (strcmp(set->ops[i].path, path) == 0) {
-            snj_errorf(error, error_size, "patch contains duplicate target path");
+            snag_errorf(error, error_size, "patch contains duplicate target path");
             errno = EINVAL;
             return -1;
         }
@@ -426,7 +426,7 @@ parse_hunk_header(const char *line, enum hunk_type *type,
     if (strcmp(line, "@@") == 0)
         return 0;
     if (!starts_with(line, "@@ ") || line[3] == '\0') {
-        snj_errorf(error, error_size, "invalid hunk header");
+        snag_errorf(error, error_size, "invalid hunk header");
         errno = EINVAL;
         return -1;
     }
@@ -445,7 +445,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
 
     if (strcmp(lines[0], "*** Begin Patch") != 0 ||
         strcmp(lines[line_count - 1u], "*** End Patch") != 0) {
-        snj_errorf(error, error_size, "patch frame must begin and end exactly");
+        snag_errorf(error, error_size, "patch frame must begin and end exactly");
         errno = EINVAL;
         return -1;
     }
@@ -460,13 +460,13 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 patch_set_add(set, &op) < 0)
                 return -1;
             op->type = OP_ADD;
-            op->path = snj_strdup_checked(path, PATCH_PATH_MAX);
+            op->path = snag_strdup_checked(path, PATCH_PATH_MAX);
             if (!op->path)
                 return -1;
             ++i;
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 if (lines[i][0] != '+') {
-                    snj_errorf(error, error_size, "add-file body lines must start with +");
+                    snag_errorf(error, error_size, "add-file body lines must start with +");
                     errno = EINVAL;
                     return -1;
                 }
@@ -482,12 +482,12 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 patch_set_add(set, &op) < 0)
                 return -1;
             op->type = OP_DELETE;
-            op->path = snj_strdup_checked(path, PATCH_PATH_MAX);
+            op->path = snag_strdup_checked(path, PATCH_PATH_MAX);
             if (!op->path)
                 return -1;
             ++i;
             if (i + 1u < line_count && !is_file_header(lines[i])) {
-                snj_errorf(error, error_size, "delete-file sections cannot have a body");
+                snag_errorf(error, error_size, "delete-file sections cannot have a body");
                 errno = EINVAL;
                 return -1;
             }
@@ -498,7 +498,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 patch_set_add(set, &op) < 0)
                 return -1;
             op->type = OP_UPDATE;
-            op->path = snj_strdup_checked(path, PATCH_PATH_MAX);
+            op->path = snag_strdup_checked(path, PATCH_PATH_MAX);
             if (!op->path)
                 return -1;
             ++i;
@@ -514,14 +514,14 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                        !is_hunk_header(lines[i])) {
                     if (hunk->type == HUNK_START || hunk->type == HUNK_END) {
                         if (lines[i][0] != '+') {
-                            snj_errorf(error, error_size,
+                            snag_errorf(error, error_size,
                                       "anchored hunks may contain only + lines");
                             errno = EINVAL;
                             return -1;
                         }
                     } else if (lines[i][0] != ' ' && lines[i][0] != '-' &&
                                lines[i][0] != '+') {
-                        snj_errorf(error, error_size,
+                        snag_errorf(error, error_size,
                                   "update hunk body lines must start with space, -, or +");
                         errno = EINVAL;
                         return -1;
@@ -547,32 +547,32 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 }
                 if ((hunk->type == HUNK_START || hunk->type == HUNK_END) &&
                     hunk->new_lines.n == 0u) {
-                    snj_errorf(error, error_size,
+                    snag_errorf(error, error_size,
                               "anchored hunks must insert at least one line");
                     errno = EINVAL;
                     return -1;
                 }
                 if (hunk->type == HUNK_NORMAL &&
                     (!hunk->changed || hunk->old_lines.n == 0u)) {
-                    snj_errorf(error, error_size,
+                    snag_errorf(error, error_size,
                               "normal hunks need a nonempty old pattern and a change");
                     errno = EINVAL;
                     return -1;
                 }
             }
             if (op->hunk_count == 0u) {
-                snj_errorf(error, error_size, "update-file sections need at least one hunk");
+                snag_errorf(error, error_size, "update-file sections need at least one hunk");
                 errno = EINVAL;
                 return -1;
             }
         } else {
-            snj_errorf(error, error_size, "expected a file operation header");
+            snag_errorf(error, error_size, "expected a file operation header");
             errno = EINVAL;
             return -1;
         }
     }
     if (set->count == 0u) {
-        snj_errorf(error, error_size, "patch contains no file operations");
+        snag_errorf(error, error_size, "patch contains no file operations");
         errno = EINVAL;
         return -1;
     }
@@ -580,11 +580,11 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
 }
 
 static int
-append_joined_lines(struct snj_buf *out, const struct line_vec *lines)
+append_joined_lines(struct snag_buf *out, const struct line_vec *lines)
 {
     for (size_t i = 0; i < lines->n; ++i) {
-        if (snj_buf_append(out, lines->v[i], strlen(lines->v[i])) < 0 ||
-            snj_buf_putc(out, '\n') < 0)
+        if (snag_buf_append(out, lines->v[i], strlen(lines->v[i])) < 0 ||
+            snag_buf_putc(out, '\n') < 0)
             return -1;
     }
     return 0;
@@ -593,17 +593,17 @@ append_joined_lines(struct snj_buf *out, const struct line_vec *lines)
 static int
 read_fd_all(int fd, char **out, size_t *out_len)
 {
-    struct snj_buf buf;
+    struct snag_buf buf;
     unsigned char tmp[8192];
     int rc = -1;
 
     *out = NULL;
     *out_len = 0;
-    snj_buf_init(&buf, PATCH_FILE_MAX + 1u);
+    snag_buf_init(&buf, PATCH_FILE_MAX + 1u);
     for (;;) {
         ssize_t n = read(fd, tmp, sizeof(tmp));
         if (n > 0) {
-            if (snj_buf_append(&buf, tmp, (size_t)n) < 0)
+            if (snag_buf_append(&buf, tmp, (size_t)n) < 0)
                 goto out_free;
             continue;
         }
@@ -613,14 +613,14 @@ read_fd_all(int fd, char **out, size_t *out_len)
             continue;
         goto out_free;
     }
-    if (snj_buf_terminate(&buf) < 0)
+    if (snag_buf_terminate(&buf) < 0)
         goto out_free;
     *out = (char *)buf.data;
     *out_len = buf.len;
     memset(&buf, 0, sizeof(buf));
     rc = 0;
 out_free:
-    snj_buf_free(&buf);
+    snag_buf_free(&buf);
     return rc;
 }
 
@@ -641,7 +641,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
         if (!slash) {
             if (len > NAME_MAX) {
                 close(dir_fd);
-                snj_errorf(error, error_size, "patch path component is too long");
+                snag_errorf(error, error_size, "patch path component is too long");
                 errno = ENAMETOOLONG;
                 return -1;
             }
@@ -651,7 +651,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
         }
         if (len > NAME_MAX) {
             close(dir_fd);
-            snj_errorf(error, error_size, "patch path component is too long");
+            snag_errorf(error, error_size, "patch path component is too long");
             errno = ENAMETOOLONG;
             return -1;
         }
@@ -664,7 +664,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
                              O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
             if (next_fd < 0) {
                 close(dir_fd);
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "patch parent directory cannot be opened without following symlinks");
                 return -1;
             }
@@ -689,20 +689,20 @@ read_target_file(int root_fd, struct patch_op *op,
         return -1;
     fd = openat(parent_fd, leaf, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) {
-        snj_errorf(error, error_size, "patch target %s cannot be opened", op->path);
+        snag_errorf(error, error_size, "patch target %s cannot be opened", op->path);
         goto out;
     }
     if (fstat(fd, &op->st) < 0)
         goto out;
     if (!S_ISREG(op->st.st_mode) || op->st.st_size > (off_t)PATCH_FILE_MAX) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "patch target %s is not a regular file within 16 MiB", op->path);
         errno = EINVAL;
         goto out;
     }
     op->mode = op->st.st_mode & 07777u;
     if (read_fd_all(fd, &op->old_bytes, &op->old_len) < 0) {
-        snj_errorf(error, error_size, "patch target %s cannot be read", op->path);
+        snag_errorf(error, error_size, "patch target %s cannot be read", op->path);
         goto out;
     }
     rc = 0;
@@ -725,12 +725,12 @@ validate_add_target(int root_fd, struct patch_op *op,
     if (parent_fd < 0)
         return -1;
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-        snj_errorf(error, error_size, "add target %s already exists", op->path);
+        snag_errorf(error, error_size, "add target %s already exists", op->path);
         errno = EEXIST;
         goto out;
     }
     if (errno != ENOENT) {
-        snj_errorf(error, error_size, "add target %s cannot be checked", op->path);
+        snag_errorf(error, error_size, "add target %s cannot be checked", op->path);
         goto out;
     }
     rc = 0;
@@ -750,11 +750,11 @@ validate_delete_target(int root_fd, struct patch_op *op,
     if (parent_fd < 0)
         return -1;
     if (fstatat(parent_fd, leaf, &op->st, AT_SYMLINK_NOFOLLOW) < 0) {
-        snj_errorf(error, error_size, "delete target %s cannot be checked", op->path);
+        snag_errorf(error, error_size, "delete target %s cannot be checked", op->path);
         goto out;
     }
     if (!S_ISREG(op->st.st_mode)) {
-        snj_errorf(error, error_size, "delete target %s is not a regular file", op->path);
+        snag_errorf(error, error_size, "delete target %s is not a regular file", op->path);
         errno = EINVAL;
         goto out;
     }
@@ -771,8 +771,8 @@ parse_file_lines(const char *bytes, size_t len, struct line_vec *lines,
     enum { STYLE_NONE, STYLE_LF, STYLE_CRLF } style = STYLE_NONE;
     size_t start = 0;
 
-    if (!snj_utf8_valid((const unsigned char *)bytes, len, true)) {
-        snj_errorf(error, error_size, "update target is not strict UTF-8 without NUL");
+    if (!snag_utf8_valid((const unsigned char *)bytes, len, true)) {
+        snag_errorf(error, error_size, "update target is not strict UTF-8 without NUL");
         errno = EINVAL;
         return -1;
     }
@@ -780,7 +780,7 @@ parse_file_lines(const char *bytes, size_t len, struct line_vec *lines,
     for (size_t i = 0; i < len; ++i) {
         if (bytes[i] == '\r') {
             if (i + 1u >= len || bytes[i + 1u] != '\n' || style == STYLE_LF) {
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "update target has mixed or bare carriage-return line endings");
                 errno = EINVAL;
                 return -1;
@@ -793,7 +793,7 @@ parse_file_lines(const char *bytes, size_t len, struct line_vec *lines,
             *final_nl = true;
         } else if (bytes[i] == '\n') {
             if (style == STYLE_CRLF) {
-                snj_errorf(error, error_size, "update target has mixed line endings");
+                snag_errorf(error, error_size, "update target has mixed line endings");
                 errno = EINVAL;
                 return -1;
             }
@@ -843,7 +843,7 @@ find_unique_match(const struct line_vec *lines, size_t cursor,
             break;
     }
     if (matches != 1u) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   matches ? "update hunk match is ambiguous" :
                             "update hunk did not match");
         errno = EINVAL;
@@ -854,15 +854,15 @@ find_unique_match(const struct line_vec *lines, size_t cursor,
 }
 
 static int
-append_line_with_eol(struct snj_buf *out, const char *line, bool crlf)
+append_line_with_eol(struct snag_buf *out, const char *line, bool crlf)
 {
-    if (snj_buf_append(out, line, strlen(line)) < 0)
+    if (snag_buf_append(out, line, strlen(line)) < 0)
         return -1;
-    return crlf ? snj_buf_append(out, "\r\n", 2u) : snj_buf_putc(out, '\n');
+    return crlf ? snag_buf_append(out, "\r\n", 2u) : snag_buf_putc(out, '\n');
 }
 
 static int
-append_line_range(struct snj_buf *out, const struct line_vec *lines,
+append_line_range(struct snag_buf *out, const struct line_vec *lines,
                   size_t begin, size_t end, bool crlf)
 {
     for (size_t i = begin; i < end; ++i)
@@ -872,13 +872,13 @@ append_line_range(struct snj_buf *out, const struct line_vec *lines,
 }
 
 static int
-append_new_lines(struct snj_buf *out, const struct line_vec *lines, bool crlf)
+append_new_lines(struct snag_buf *out, const struct line_vec *lines, bool crlf)
 {
     return append_line_range(out, lines, 0u, lines->n, crlf);
 }
 
 static int
-remove_final_eol(struct snj_buf *out, bool crlf)
+remove_final_eol(struct snag_buf *out, bool crlf)
 {
     size_t n = crlf ? 2u : 1u;
     if (out->len < n)
@@ -899,17 +899,17 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
     if (parse_file_lines(op->old_bytes, op->old_len, &lines, &op->eol_crlf,
                          &op->final_nl, error, error_size) < 0)
         goto out;
-    snj_buf_reset(&op->new_bytes);
+    snag_buf_reset(&op->new_bytes);
     for (size_t i = 0; i < op->hunk_count; ++i) {
         struct patch_hunk *hunk = &op->hunks[i];
         if (end_seen) {
-            snj_errorf(error, error_size, "hunks cannot follow an @end insertion");
+            snag_errorf(error, error_size, "hunks cannot follow an @end insertion");
             errno = EINVAL;
             goto out;
         }
         if (hunk->type == HUNK_START) {
             if (start_seen || cursor != 0u || (lines.n == 0u && end_seen)) {
-                snj_errorf(error, error_size, "conflicting @start insertion");
+                snag_errorf(error, error_size, "conflicting @start insertion");
                 errno = EINVAL;
                 goto out;
             }
@@ -921,7 +921,7 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
         }
         if (hunk->type == HUNK_END) {
             if (end_seen || (lines.n == 0u && start_seen)) {
-                snj_errorf(error, error_size, "conflicting @end insertion");
+                snag_errorf(error, error_size, "conflicting @end insertion");
                 errno = EINVAL;
                 goto out;
             }
@@ -961,7 +961,7 @@ out:
 static int
 compute_add_bytes(struct patch_op *op)
 {
-    snj_buf_reset(&op->new_bytes);
+    snag_buf_reset(&op->new_bytes);
     return append_joined_lines(&op->new_bytes, &op->add_lines);
 }
 
@@ -986,7 +986,7 @@ validate_and_compute(struct patch_set *set, int root_fd,
                 return -1;
         }
         if (set->total_file_bytes > PATCH_TOTAL_MAX) {
-            snj_errorf(error, error_size,
+            snag_errorf(error, error_size,
                       "patch input and output files exceed 48 MiB total");
             errno = EOVERFLOW;
             return -1;
@@ -1006,11 +1006,11 @@ same_identity(const struct stat *a, const struct stat *b)
 static int
 make_temp_file(int parent_fd, char temp[NAME_MAX + 1u])
 {
-    char id[SNJ_ID_HEX_LEN + 1u];
+    char id[SNAG_ID_HEX_LEN + 1u];
     int fd;
 
     for (unsigned int attempt = 0; attempt < 32u; ++attempt) {
-        if (snj_random_id(id) < 0)
+        if (snag_random_id(id) < 0)
             return -1;
         (void)snprintf(temp, NAME_MAX + 1u,
                        "." SNAJPAGENT_NAME "-patch-%s.tmp", id);
@@ -1027,7 +1027,7 @@ make_temp_file(int parent_fd, char temp[NAME_MAX + 1u])
 }
 
 static int
-write_temp_file(int parent_fd, const struct snj_buf *bytes, mode_t mode,
+write_temp_file(int parent_fd, const struct snag_buf *bytes, mode_t mode,
                 char temp[NAME_MAX + 1u])
 {
     int fd = make_temp_file(parent_fd, temp);
@@ -1035,8 +1035,8 @@ write_temp_file(int parent_fd, const struct snj_buf *bytes, mode_t mode,
 
     if (fd < 0)
         return -1;
-    if (fchmod(fd, mode) < 0 || snj_write_full(fd, bytes->data, bytes->len) < 0 ||
-        snj_sync_file(fd) < 0) {
+    if (fchmod(fd, mode) < 0 || snag_write_full(fd, bytes->data, bytes->len) < 0 ||
+        snag_sync_file(fd) < 0) {
         saved = errno;
         close(fd);
         (void)unlinkat(parent_fd, temp, 0);
@@ -1074,25 +1074,25 @@ install_add(int root_fd, const struct patch_op *op,
     if (parent_fd < 0)
         return -1;
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-        snj_errorf(error, error_size, "add target %s appeared before install", op->path);
+        snag_errorf(error, error_size, "add target %s appeared before install", op->path);
         errno = EEXIST;
         goto out;
     }
     if (errno != ENOENT)
         goto out;
     if (write_temp_file(parent_fd, &op->new_bytes, add_mode_from_umask(), temp) < 0) {
-        snj_errorf(error, error_size, "add target %s could not be staged", op->path);
+        snag_errorf(error, error_size, "add target %s could not be staged", op->path);
         goto out;
     }
     if (linkat(parent_fd, temp, parent_fd, leaf, 0) < 0) {
         saved = errno;
         (void)unlinkat(parent_fd, temp, 0);
         errno = saved;
-        snj_errorf(error, error_size, "add target %s could not be installed", op->path);
+        snag_errorf(error, error_size, "add target %s could not be installed", op->path);
         goto out;
     }
-    if (unlinkat(parent_fd, temp, 0) < 0 || snj_sync_dir(parent_fd) < 0) {
-        snj_errorf(error, error_size, "add target %s directory sync failed", op->path);
+    if (unlinkat(parent_fd, temp, 0) < 0 || snag_sync_dir(parent_fd) < 0) {
+        snag_errorf(error, error_size, "add target %s directory sync failed", op->path);
         goto out;
     }
     rc = 0;
@@ -1116,12 +1116,12 @@ install_update(int root_fd, const struct patch_op *op,
         return -1;
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
         !same_identity(&op->st, &st)) {
-        snj_errorf(error, error_size, "update target %s changed before install", op->path);
+        snag_errorf(error, error_size, "update target %s changed before install", op->path);
         errno = ESTALE;
         goto out;
     }
     if (write_temp_file(parent_fd, &op->new_bytes, op->mode, temp) < 0) {
-        snj_errorf(error, error_size, "update target %s could not be staged", op->path);
+        snag_errorf(error, error_size, "update target %s could not be staged", op->path);
         goto out;
     }
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
@@ -1129,18 +1129,18 @@ install_update(int root_fd, const struct patch_op *op,
         saved = errno;
         (void)unlinkat(parent_fd, temp, 0);
         errno = saved ? saved : ESTALE;
-        snj_errorf(error, error_size, "update target %s changed before rename", op->path);
+        snag_errorf(error, error_size, "update target %s changed before rename", op->path);
         goto out;
     }
     if (renameat(parent_fd, temp, parent_fd, leaf) < 0) {
         saved = errno;
         (void)unlinkat(parent_fd, temp, 0);
         errno = saved;
-        snj_errorf(error, error_size, "update target %s could not be installed", op->path);
+        snag_errorf(error, error_size, "update target %s could not be installed", op->path);
         goto out;
     }
-    if (snj_sync_dir(parent_fd) < 0) {
-        snj_errorf(error, error_size, "update target %s directory sync failed", op->path);
+    if (snag_sync_dir(parent_fd) < 0) {
+        snag_errorf(error, error_size, "update target %s directory sync failed", op->path);
         goto out;
     }
     rc = 0;
@@ -1162,12 +1162,12 @@ install_delete(int root_fd, const struct patch_op *op,
         return -1;
     if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
         !same_identity(&op->st, &st)) {
-        snj_errorf(error, error_size, "delete target %s changed before install", op->path);
+        snag_errorf(error, error_size, "delete target %s changed before install", op->path);
         errno = ESTALE;
         goto out;
     }
-    if (unlinkat(parent_fd, leaf, 0) < 0 || snj_sync_dir(parent_fd) < 0) {
-        snj_errorf(error, error_size, "delete target %s could not be removed", op->path);
+    if (unlinkat(parent_fd, leaf, 0) < 0 || snag_sync_dir(parent_fd) < 0) {
+        snag_errorf(error, error_size, "delete target %s could not be removed", op->path);
         goto out;
     }
     rc = 0;
@@ -1214,18 +1214,18 @@ out:
 }
 
 static json_t *
-patch_result_buf(const char *status, struct snj_buf *text,
+patch_result_buf(const char *status, struct snag_buf *text,
                  uint64_t duration_ms)
 {
-    if (snj_buf_terminate(text) < 0)
+    if (snag_buf_terminate(text) < 0)
         return NULL;
-    return snj_tool_result(status, NULL, (const char *)text->data,
+    return snag_tool_result(status, NULL, (const char *)text->data,
                            strcmp(status, "succeeded") == 0 ? 0 : -1,
                            duration_ms);
 }
 
 static int
-preview_appendn(struct snj_buf *out, size_t *used, bool *truncated,
+preview_appendn(struct snag_buf *out, size_t *used, bool *truncated,
                 const char *data, size_t len)
 {
     static const char marker[] = "... diff preview truncated ...\n";
@@ -1235,21 +1235,21 @@ preview_appendn(struct snj_buf *out, size_t *used, bool *truncated,
     if (len > PATCH_PREVIEW_MAX - *used) {
         size_t marker_len = sizeof(marker) - 1u;
         if (marker_len <= PATCH_PREVIEW_MAX - *used) {
-            if (snj_buf_append(out, marker, marker_len) < 0)
+            if (snag_buf_append(out, marker, marker_len) < 0)
                 return -1;
             *used += marker_len;
         }
         *truncated = true;
         return 0;
     }
-    if (len && snj_buf_append(out, data, len) < 0)
+    if (len && snag_buf_append(out, data, len) < 0)
         return -1;
     *used += len;
     return 0;
 }
 
 static int
-preview_printf(struct snj_buf *out, size_t *used, bool *truncated,
+preview_printf(struct snag_buf *out, size_t *used, bool *truncated,
                const char *fmt, ...)
 {
     va_list ap;
@@ -1287,7 +1287,7 @@ preview_printf(struct snj_buf *out, size_t *used, bool *truncated,
 }
 
 static int
-append_hunk_preview(struct snj_buf *out, size_t *used, bool *truncated,
+append_hunk_preview(struct snag_buf *out, size_t *used, bool *truncated,
                     const struct patch_hunk *hunk)
 {
     const char *header = hunk->type == HUNK_START ? "@@ @start" :
@@ -1303,7 +1303,7 @@ append_hunk_preview(struct snj_buf *out, size_t *used, bool *truncated,
 }
 
 static int
-append_patch_preview(struct snj_buf *out, const struct patch_set *set)
+append_patch_preview(struct snag_buf *out, const struct patch_set *set)
 {
     size_t used = 0;
     bool truncated = false;
@@ -1341,7 +1341,7 @@ append_patch_preview(struct snj_buf *out, const struct patch_set *set)
 }
 
 static int
-append_summary(struct snj_buf *out, const struct patch_set *set)
+append_summary(struct snag_buf *out, const struct patch_set *set)
 {
     size_t adds = 0, updates = 0, deletes = 0;
     size_t lines_add = 0, lines_del = 0;
@@ -1356,19 +1356,19 @@ append_summary(struct snj_buf *out, const struct patch_set *set)
         lines_add += set->ops[i].added_lines;
         lines_del += set->ops[i].removed_lines;
     }
-    if (snj_buf_printf(out,
+    if (snag_buf_printf(out,
             "Patch applied. files=%zu added=%zu updated=%zu deleted=%zu lines_added=%zu lines_removed=%zu\n",
             set->count, adds, updates, deletes, lines_add, lines_del) < 0)
         return -1;
     for (size_t i = 0; i < set->count; ++i) {
         const char *kind = set->ops[i].type == OP_ADD ? "add" :
                            set->ops[i].type == OP_UPDATE ? "update" : "delete";
-        if (snj_buf_printf(out, "%s %s", kind, set->ops[i].path) < 0)
+        if (snag_buf_printf(out, "%s %s", kind, set->ops[i].path) < 0)
             return -1;
         if (set->ops[i].type != OP_DELETE &&
-            snj_buf_printf(out, " (%zu bytes)", set->ops[i].new_bytes.len) < 0)
+            snag_buf_printf(out, " (%zu bytes)", set->ops[i].new_bytes.len) < 0)
             return -1;
-        if (snj_buf_putc(out, '\n') < 0)
+        if (snag_buf_putc(out, '\n') < 0)
             return -1;
     }
     return append_patch_preview(out, set);
@@ -1396,11 +1396,11 @@ workdir_valid(const char *workdir, size_t len, const char *session_workspace,
               char *error, size_t error_size)
 {
     struct stat st;
-    if (!len || len > SNJ_PATH_MAX_BYTES || workdir[0] != '/' ||
+    if (!len || len > SNAG_PATH_MAX_BYTES || workdir[0] != '/' ||
         strcmp(workdir, session_workspace) != 0 ||
-        !snj_utf8_valid((const unsigned char *)workdir, len, true) ||
+        !snag_utf8_valid((const unsigned char *)workdir, len, true) ||
         stat(workdir, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "apply_patch workdir must be the session workspace directory");
         errno = EINVAL;
         return -1;
@@ -1409,7 +1409,7 @@ workdir_valid(const char *workdir, size_t len, const char *session_workspace,
 }
 
 int
-snj_tools_apply_patch(const struct snj_response_item *call,
+snag_tools_apply_patch(const struct snag_response_item *call,
                       const char *session_workspace,
                       json_t **result,
                       char *error, size_t error_size)
@@ -1422,28 +1422,28 @@ snj_tools_apply_patch(const struct snj_response_item *call,
     char **lines = NULL;
     size_t line_count = 0;
     struct patch_set set = {0};
-    struct snj_buf summary;
-    uint64_t started = snj_time_ms();
+    struct snag_buf summary;
+    uint64_t started = snag_time_ms();
     int root_fd = -1;
     int rc = -1;
 
     if (!result) {
-        snj_errorf(error, error_size, "invalid apply_patch result destination");
+        snag_errorf(error, error_size, "invalid apply_patch result destination");
         errno = EINVAL;
         return -1;
     }
     *result = NULL;
-    snj_buf_init(&summary, PATCH_MODEL_MAX);
+    snag_buf_init(&summary, PATCH_MODEL_MAX);
     if (!call || !session_workspace ||
         !json_bounded_string(call->arguments, "patch", PATCH_TEXT_MAX,
                              &patch, &patch_len) ||
-        !json_bounded_string(call->arguments, "workdir", SNJ_PATH_MAX_BYTES,
+        !json_bounded_string(call->arguments, "workdir", SNAG_PATH_MAX_BYTES,
                              &workdir, &workdir_len)) {
-        snj_errorf(error, error_size, "invalid apply_patch arguments");
-        if (snj_buf_printf(&summary, "Patch rejected: invalid apply_patch arguments.\n") < 0)
+        snag_errorf(error, error_size, "invalid apply_patch arguments");
+        if (snag_buf_printf(&summary, "Patch rejected: invalid apply_patch arguments.\n") < 0)
             goto out;
         *result = patch_result_buf("patch_rejected", &summary,
-                                   snj_time_ms() - started);
+                                   snag_time_ms() - started);
         rc = *result ? 0 : -1;
         goto out;
     }
@@ -1455,46 +1455,46 @@ snj_tools_apply_patch(const struct snj_response_item *call,
                     error, error_size) < 0 ||
         parse_patch_lines(lines, line_count, &set,
                           error, error_size) < 0) {
-        if (snj_buf_printf(&summary, "Patch rejected: %s.\n",
+        if (snag_buf_printf(&summary, "Patch rejected: %s.\n",
                            error[0] ? error : "invalid patch") < 0)
             goto out;
         *result = patch_result_buf("patch_rejected", &summary,
-                                   snj_time_ms() - started);
+                                   snag_time_ms() - started);
         rc = *result ? 0 : -1;
         goto out;
     }
     root_fd = open(workdir, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
     if (root_fd < 0) {
-        snj_errorf(error, error_size, "patch workdir cannot be opened safely");
-        if (snj_buf_printf(&summary, "Patch failed during I/O: %s.\n", error) < 0)
+        snag_errorf(error, error_size, "patch workdir cannot be opened safely");
+        if (snag_buf_printf(&summary, "Patch failed during I/O: %s.\n", error) < 0)
             goto out;
         *result = patch_result_buf("io_failed", &summary,
-                                   snj_time_ms() - started);
+                                   snag_time_ms() - started);
         rc = *result ? 0 : -1;
         goto out;
     }
     if (validate_and_compute(&set, root_fd, error, error_size) < 0) {
-        if (snj_buf_printf(&summary, "Patch rejected: %s.\n",
+        if (snag_buf_printf(&summary, "Patch rejected: %s.\n",
                            error[0] ? error : "validation failed") < 0)
             goto out;
         *result = patch_result_buf("patch_rejected", &summary,
-                                   snj_time_ms() - started);
+                                   snag_time_ms() - started);
         rc = *result ? 0 : -1;
         goto out;
     }
     if (install_patch(&set, root_fd, error, error_size) < 0) {
-        if (snj_buf_printf(&summary, "Patch failed during I/O: %s.\n",
+        if (snag_buf_printf(&summary, "Patch failed during I/O: %s.\n",
                            error[0] ? error : "installation failed") < 0)
             goto out;
         *result = patch_result_buf("io_failed", &summary,
-                                   snj_time_ms() - started);
+                                   snag_time_ms() - started);
         rc = *result ? 0 : -1;
         goto out;
     }
     if (append_summary(&summary, &set) < 0)
         goto out;
     *result = patch_result_buf("succeeded", &summary,
-                               snj_time_ms() - started);
+                               snag_time_ms() - started);
     rc = *result ? 0 : -1;
 out:
     if (root_fd >= 0)
@@ -1502,6 +1502,6 @@ out:
     free(lines);
     free(normalized);
     patch_set_free(&set);
-    snj_buf_free(&summary);
+    snag_buf_free(&summary);
     return rc;
 }

@@ -6,22 +6,22 @@
 
 #include <stddef.h>
 
-#define SNJ_WIRE_BODY_MAX (2u * 1024u * 1024u)
-#define SNJ_WIRE_HEADER_MAX (16u * 1024u)
-#define SNJ_WIRE_URL_MAX (16u * 1024u)
-#define SNJ_WIRE_SECRET_MAX 16384u
-#define SNJ_WIRE_SECRET_COUNT_MAX 81u
+#define SNAG_WIRE_BODY_MAX (2u * 1024u * 1024u)
+#define SNAG_WIRE_HEADER_MAX (16u * 1024u)
+#define SNAG_WIRE_URL_MAX (16u * 1024u)
+#define SNAG_WIRE_SECRET_MAX 16384u
+#define SNAG_WIRE_SECRET_COUNT_MAX 81u
 
-struct snj_wire_secrets {
+struct snag_wire_secrets {
     const char *const *values;
     size_t count;
 };
 
-int snj_wire_json_redact(const unsigned char *data, size_t len,
-                         const struct snj_wire_secrets *secrets,
-                         struct snj_buf *out, char *error, size_t error_size);
-int snj_wire_header_redact(const unsigned char *line, size_t len,
-                           const struct snj_wire_secrets *secrets,
-                           struct snj_buf *out);
+int snag_wire_json_redact(const unsigned char *data, size_t len,
+                         const struct snag_wire_secrets *secrets,
+                         struct snag_buf *out, char *error, size_t error_size);
+int snag_wire_header_redact(const unsigned char *line, size_t len,
+                           const struct snag_wire_secrets *secrets,
+                           struct snag_buf *out);
 
 #endif

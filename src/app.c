@@ -44,7 +44,7 @@ struct app_signal_handlers {
 };
 
 static atomic_int pending_shutdown_signal;
-static _Atomic(struct snj_ui *) shutdown_ui;
+static _Atomic(struct snag_ui *) shutdown_ui;
 
 static void
 mark_shutdown_signal(int signal_number)
@@ -53,7 +53,7 @@ mark_shutdown_signal(int signal_number)
     int saved = errno;
     (void)atomic_compare_exchange_strong(&pending_shutdown_signal,
                                          &expected, signal_number);
-    snj_ui_signal(atomic_load(&shutdown_ui));
+    snag_ui_signal(atomic_load(&shutdown_ui));
     errno = saved;
 }
 
@@ -110,81 +110,81 @@ capture_shutdown_signal(struct app_state *app)
 static int
 app_error(struct app_state *app, const char *message)
 {
-    return snj_ui_text(&app->ui, SNJ_UI_ERROR, message);
+    return snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
 }
 static int
 app_warning(struct app_state *app, const char *message)
 {
-    return snj_ui_text(&app->ui, SNJ_UI_WARNING, message);
+    return snag_ui_text(&app->ui, SNAG_UI_WARNING, message);
 }
 static void
 history_warning(struct app_state *app)
 {
-    if (snj_ui_history_warning(&app->ui))
+    if (snag_ui_history_warning(&app->ui))
         (void)app_warning(app, "prompt history is unavailable or contained damaged records");
 }
 static void
 remember_input(struct app_state *app, const char *text)
 {
-    (void)snj_ui_history_add(&app->ui, text);
+    (void)snag_ui_history_add(&app->ui, text);
     history_warning(app);
 }
 static int
 app_hostf(struct app_state *app, const char *fmt, ...)
 {
-    struct snj_buf text;
+    struct snag_buf text;
     va_list ap;
     int needed;
     int rc;
-    snj_buf_init(&text, 4u * 1024u * 1024u);
+    snag_buf_init(&text, 4u * 1024u * 1024u);
     va_start(ap, fmt);
     needed = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
     if (needed < 0 || (size_t)needed > text.max) {
-        snj_buf_free(&text);
+        snag_buf_free(&text);
         errno = EOVERFLOW;
         return -1;
     }
-    if (snj_buf_reserve(&text, (size_t)needed + 1u) < 0) {
-        snj_buf_free(&text);
+    if (snag_buf_reserve(&text, (size_t)needed + 1u) < 0) {
+        snag_buf_free(&text);
         return -1;
     }
     va_start(ap, fmt);
     (void)vsnprintf((char *)text.data, (size_t)needed + 1u, fmt, ap);
     va_end(ap);
     text.len = (size_t)needed;
-    rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
-    snj_buf_free(&text);
+    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+    snag_buf_free(&text);
     return rc;
 }
 static int
 app_runtimef(struct app_state *app, const char *fmt, ...)
 {
-    struct snj_buf text;
+    struct snag_buf text;
     va_list ap;
     int needed;
     int rc;
-    if (!snj_ui_enabled(&app->ui, SNJ_PRESENT_DEBUG))
+    if (!snag_ui_enabled(&app->ui, SNAG_PRESENT_DEBUG))
         return 0;
-    snj_buf_init(&text, 4u * 1024u * 1024u);
+    snag_buf_init(&text, 4u * 1024u * 1024u);
     va_start(ap, fmt);
     needed = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
     if (needed < 0 || (size_t)needed > text.max) {
-        snj_buf_free(&text);
+        snag_buf_free(&text);
         errno = EOVERFLOW;
         return -1;
     }
-    if (snj_buf_reserve(&text, (size_t)needed + 1u) < 0) {
-        snj_buf_free(&text);
+    if (snag_buf_reserve(&text, (size_t)needed + 1u) < 0) {
+        snag_buf_free(&text);
         return -1;
     }
     va_start(ap, fmt);
     (void)vsnprintf((char *)text.data, (size_t)needed + 1u, fmt, ap);
     va_end(ap);
     text.len = (size_t)needed;
-    rc = snj_ui_text(&app->ui, SNJ_UI_RUNTIME, (const char *)text.data);
-    snj_buf_free(&text);
+    rc = snag_ui_text(&app->ui, SNAG_UI_RUNTIME, (const char *)text.data);
+    snag_buf_free(&text);
     return rc;
 }
 static void
@@ -196,18 +196,18 @@ usage_number(char out[32], bool known, uint64_t value)
         (void)snprintf(out, 32u, "?");
 }
 static const char *
-graph_outcome_name(enum snj_graph_outcome outcome)
+graph_outcome_name(enum snag_graph_outcome outcome)
 {
     switch (outcome) {
-    case SNJ_GRAPH_CALLS: return "calls";
-    case SNJ_GRAPH_FINAL: return "final";
-    case SNJ_GRAPH_REFUSAL: return "refusal";
-    case SNJ_GRAPH_NONPRODUCTIVE: return "nonproductive";
-    case SNJ_GRAPH_CONFLICT: return "conflict";
+    case SNAG_GRAPH_CALLS: return "calls";
+    case SNAG_GRAPH_FINAL: return "final";
+    case SNAG_GRAPH_REFUSAL: return "refusal";
+    case SNAG_GRAPH_NONPRODUCTIVE: return "nonproductive";
+    case SNAG_GRAPH_CONFLICT: return "conflict";
     }
     return "unknown";
 }
-static const struct snj_term_command commands[] = {
+static const struct snag_term_command commands[] = {
     {"/help", "commands and keys"},
     {"/?", "commands and keys (alias for /help)"},
     {"/status", "session and next-turn settings"},
@@ -246,43 +246,43 @@ resolve_effort(const char *preference)
 {
     if (!preference || strcmp(preference, "default") == 0)
         return "medium";
-    if (!*preference || strlen(preference) >= SNJ_CONFIG_EFFORT_MAX ||
-        !snj_utf8_valid((const unsigned char *)preference,
+    if (!*preference || strlen(preference) >= SNAG_CONFIG_EFFORT_MAX ||
+        !snag_utf8_valid((const unsigned char *)preference,
                         strlen(preference), true))
         return NULL;
     return preference;
 }
-static const struct snj_provider_config *
+static const struct snag_provider_config *
 next_provider(const struct app_state *app)
 {
     if (app->staged_provider)
         return app->staged_provider;
-    return snj_config_provider(app->config,
+    return snag_config_provider(app->config,
         app->session.default_provider[0] ? app->session.default_provider : NULL);
 }
 
 static void
 provider_capacity_source_sha256(
-    const struct snj_provider_config *provider,
-    char digest[SNJ_SHA256_HEX_LEN + 1u])
+    const struct snag_provider_config *provider,
+    char digest[SNAG_SHA256_HEX_LEN + 1u])
 {
-    char source[SNJ_CONFIG_URL_MAX + 16u];
-    const char *protocol = snj_provider_catalog_protocol(provider);
+    char source[SNAG_CONFIG_URL_MAX + 16u];
+    const char *protocol = snag_provider_catalog_protocol(provider);
     size_t protocol_len = strlen(protocol);
     size_t base_url_len = strlen(provider->base_url);
 
     memcpy(source, protocol, protocol_len);
     source[protocol_len] = '\n';
     memcpy(source + protocol_len + 1u, provider->base_url, base_url_len);
-    snj_sha256_hex(source, protocol_len + 1u + base_url_len, digest);
+    snag_sha256_hex(source, protocol_len + 1u + base_url_len, digest);
 }
 
 static bool
 capacity_ceiling_matches(const struct app_state *app,
-                         const struct snj_provider_config *provider,
+                         const struct snag_provider_config *provider,
                          const char *model)
 {
-    char source_hash[SNJ_SHA256_HEX_LEN + 1u];
+    char source_hash[SNAG_SHA256_HEX_LEN + 1u];
 
     if (!app->session.capacity_ceiling_valid ||
         strcmp(app->session.capacity_ceiling_provider, provider->name) != 0 ||
@@ -295,9 +295,9 @@ capacity_ceiling_matches(const struct app_state *app,
 
 static void
 apply_capacity_ceiling(const struct app_state *app,
-                       const struct snj_provider_config *provider,
+                       const struct snag_provider_config *provider,
                        const char *model,
-                       struct snj_model_capacity *capacity)
+                       struct snag_model_capacity *capacity)
 {
     if (capacity_ceiling_matches(app, provider, model) &&
         (!capacity->hard_input_known ||
@@ -306,24 +306,24 @@ apply_capacity_ceiling(const struct app_state *app,
         capacity->hard_input_tokens =
             app->session.capacity_ceiling_input_tokens;
         capacity->hard_input_known = true;
-        capacity->source = SNJ_CAPACITY_OBSERVED;
+        capacity->source = SNAG_CAPACITY_OBSERVED;
     }
 }
 
 void
-snj_app_record_model_accounting(struct app_state *app,
-                                enum snj_count_capability capability,
+snag_app_record_model_accounting(struct app_state *app,
+                                enum snag_count_capability capability,
                                 uint64_t model_input_bytes,
                                 uint64_t input_tokens,
                                 uint64_t hard_input_tokens)
 {
     char error[256] = {0};
 
-    if (capability != SNJ_COUNT_UNKNOWN)
+    if (capability != SNAG_COUNT_UNKNOWN)
         app->turn_capacity.count_capability = capability;
-    if (snj_model_cache_record(&app->store, &app->model_cache,
+    if (snag_model_cache_record(&app->store, &app->model_cache,
             app->turn_provider,
-            snj_provider_catalog_protocol(app->turn_provider),
+            snag_provider_catalog_protocol(app->turn_provider),
             app->turn_model, capability, model_input_bytes, input_tokens,
             hard_input_tokens, error, sizeof(error)) < 0)
         (void)app_warning(app, error[0] ? error :
@@ -331,28 +331,28 @@ snj_app_record_model_accounting(struct app_state *app,
 }
 
 int
-snj_app_capacity_resolve(struct app_state *app,
-                         const struct snj_provider_config *provider,
+snag_app_capacity_resolve(struct app_state *app,
+                         const struct snag_provider_config *provider,
                          const char *model,
-                         struct snj_model_capacity *capacity,
+                         struct snag_model_capacity *capacity,
                          char *error, size_t error_size)
 {
     int cache_rc;
 
     if (!app || !provider || !model || !capacity) {
-        snj_errorf(error, error_size, "invalid model capacity selection");
+        snag_errorf(error, error_size, "invalid model capacity selection");
         errno = EINVAL;
         return -1;
     }
-    snj_model_cache_free(&app->model_cache);
+    snag_model_cache_free(&app->model_cache);
     app->capacity_cache_error[0] = '\0';
-    cache_rc = snj_model_cache_load(&app->store, &app->model_cache,
+    cache_rc = snag_model_cache_load(&app->store, &app->model_cache,
                                     app->capacity_cache_error,
                                     sizeof(app->capacity_cache_error));
     if (cache_rc == 1)
         app->capacity_cache_error[0] = '\0';
-    cache_rc = snj_model_capacity_resolve(&app->model_cache, app->config,
-        provider, model, snj_provider_catalog_protocol(provider), capacity,
+    cache_rc = snag_model_capacity_resolve(&app->model_cache, app->config,
+        provider, model, snag_provider_catalog_protocol(provider), capacity,
         error, error_size);
     if (cache_rc == 0)
         apply_capacity_ceiling(app, provider, model, capacity);
@@ -367,15 +367,15 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
     const char *effort_preference = app->staged_effort ? app->staged_effort :
                                                         app->session.default_effort;
     const char *effort = resolve_effort(effort_preference);
-    const struct snj_provider_config *provider = next_provider(app);
+    const struct snag_provider_config *provider = next_provider(app);
     if (!provider) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "selected provider is not present in the current configuration");
         errno = ENOENT;
         return -1;
     }
     if (!effort) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "reasoning effort is empty, oversized, or invalid UTF-8");
         errno = ENOTSUP;
         return -1;
@@ -383,7 +383,7 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
     app->turn_model = model;
     app->turn_effort = effort;
     app->turn_provider = provider;
-    if (snj_app_capacity_resolve(app, provider, model, &app->turn_capacity,
+    if (snag_app_capacity_resolve(app, provider, model, &app->turn_capacity,
                                  error, error_size) < 0)
         return -1;
     return 0;
@@ -396,24 +396,24 @@ consume_staged_settings(struct app_state *app)
     app->staged_provider = NULL;
 }
 int
-snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
+snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
                      char *error, size_t error_size)
 {
     uint64_t seq;
     off_t offset = app->session.log_end;
-    if (snj_session_commit(&app->session, type, data, &seq,
+    if (snag_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;
-    struct snj_render_source source = {offset, (size_t)(app->session.log_end - offset)};
-    if (snj_ui_durable(&app->ui, app->session.log_fd, source, type,
+    struct snag_render_source source = {offset, (size_t)(app->session.log_end - offset)};
+    if (snag_ui_durable(&app->ui, app->session.log_fd, source, type,
                        app->config->default_timeout_ms, app->config->max_output_bytes) < 0 ||
-        snj_ui_event(&app->ui, seq, type) < 0) {
-        snj_errorf(error, error_size, "durable event output failed");
+        snag_ui_event(&app->ui, seq, type) < 0) {
+        snag_errorf(error, error_size, "durable event output failed");
         return -1;
     }
     return 0;
 }
-#define commit_event snj_app_commit_event
+#define commit_event snag_app_commit_event
 static const char *next_model(const struct app_state *app);
 static const char *next_effort(const struct app_state *app);
 static int
@@ -426,7 +426,7 @@ render_queue(struct app_state *app)
         (void)snprintf(label, sizeof(label), "%zu %.8s%s › ", i + 1u,
                        app->session.pending_queue[i].queue_id,
                        app->session.pending_queue[i].read_only ? " /ro" : "");
-        if (snj_ui_submitted(&app->ui, label,
+        if (snag_ui_submitted(&app->ui, label,
                                  app->session.pending_queue[i].text, false) < 0)
             return -1;
     }
@@ -437,14 +437,14 @@ static int
 format_context_meter(struct app_state *app, bool active,
                      char meter[32u])
 {
-    const struct snj_provider_config *provider = active ? app->turn_provider :
+    const struct snag_provider_config *provider = active ? app->turn_provider :
                                                         next_provider(app);
     const char *model = active ? app->turn_model : next_model(app);
     const char *effort = active ? app->turn_effort :
                                   resolve_effort(next_effort(app));
-    struct snj_model_capacity resolved;
-    const struct snj_model_capacity *capacity = &app->turn_capacity;
-    char provider_source_hash[SNJ_SHA256_HEX_LEN + 1u];
+    struct snag_model_capacity resolved;
+    const struct snag_model_capacity *capacity = &app->turn_capacity;
+    char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
     uint64_t used;
     uint64_t hard;
     unsigned int percent;
@@ -457,7 +457,7 @@ format_context_meter(struct app_state *app, bool active,
     if (!active) {
         char error[256] = {0};
 
-        if (snj_app_capacity_resolve(app, provider, model, &resolved,
+        if (snag_app_capacity_resolve(app, provider, model, &resolved,
                                      error, sizeof(error)) < 0)
             return -1;
         capacity = &resolved;
@@ -498,20 +498,20 @@ static unsigned int prompt_spinner_states(const struct app_state *app, bool acti
 static int
 set_input_prompt(struct app_state *app, bool active)
 {
-    const struct snj_provider_config *provider = active ? app->turn_provider :
+    const struct snag_provider_config *provider = active ? app->turn_provider :
                                                         next_provider(app);
     const char *model = active ? app->turn_model : next_model(app);
     const char *effort = active ? app->turn_effort :
                                   resolve_effort(next_effort(app));
-    char hostname[256u], meter[32u], label[SNJ_TERM_LABEL_BYTES];
-    const char *values[SNJ_PROMPT_HOUR];
-    const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
+    char hostname[256u], meter[32u], label[SNAG_TERM_LABEL_BYTES];
+    const char *values[SNAG_PROMPT_HOUR];
+    const char *spinners[SNAG_TERM_SPINNER_COUNT] = {
         app->config->prompt_spinner_goal,
         app->config->prompt_spinner_provider,
         app->config->prompt_spinner_tool
     };
     unsigned int states = prompt_spinner_states(app, active);
-    unsigned int selected = app->ui.view == SNJ_RENDER_CHAT ?
+    unsigned int selected = app->ui.view == SNAG_RENDER_CHAT ?
                             0u : active ? 2u : 1u;
 
     if (!provider || !model || !effort ||
@@ -520,7 +520,7 @@ set_input_prompt(struct app_state *app, bool active)
     if (gethostname(hostname, sizeof(hostname)) < 0)
         memcpy(hostname, "localhost", sizeof("localhost"));
     hostname[sizeof(hostname) - 1u] = '\0';
-    if (!snj_utf8_valid((const unsigned char *)hostname, strlen(hostname), true))
+    if (!snag_utf8_valid((const unsigned char *)hostname, strlen(hostname), true))
         memcpy(hostname, "localhost", sizeof("localhost"));
     for (size_t i = 0u; hostname[i]; ++i)
         if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
@@ -528,49 +528,49 @@ set_input_prompt(struct app_state *app, bool active)
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
-    values[3] = app->networked ? snj_irc_operator_nick(app->irc) : "";
+    values[3] = app->networked ? snag_irc_operator_nick(app->irc) : "";
     values[4] = hostname;
     values[5] = meter;
     values[6] = selected == 0u ? "chat" :
                 selected == 1u ? "rollout-idle" : "rollout-active";
     if (app->queue_edit_id[0]) {
-        struct snj_buf out;
+        struct snag_buf out;
 
-        snj_buf_init(&out, SNJ_TERM_LABEL_BYTES);
-        for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_SLOTS; ++i)
-            if (snj_buf_putc(&out, SNJ_TERM_SPINNER_MARKER_BASE + i) < 0)
+        snag_buf_init(&out, SNAG_TERM_LABEL_BYTES);
+        for (unsigned int i = 0u; i < SNAG_TERM_SPINNER_SLOTS; ++i)
+            if (snag_buf_putc(&out, SNAG_TERM_SPINNER_MARKER_BASE + i) < 0)
                 goto fail;
-        if (snj_buf_printf(&out, "%4s edit %zu ›", meter, app->queue_edit_number) < 0)
+        if (snag_buf_printf(&out, "%4s edit %zu ›", meter, app->queue_edit_number) < 0)
             goto fail;
-        if (!out.len || snj_buf_putc(&out, ' ') < 0 ||
-            snj_buf_terminate(&out) < 0)
+        if (!out.len || snag_buf_putc(&out, ' ') < 0 ||
+            snag_buf_terminate(&out) < 0)
             goto fail;
         memcpy(label, out.data, out.len + 1u);
-        snj_buf_free(&out);
-        return snj_ui_prompt(&app->ui, active, label, spinners,
+        snag_buf_free(&out);
+        return snag_ui_prompt(&app->ui, active, label, spinners,
             app->config->prompt_spinner_per_second, states);
 fail:
-        snj_buf_free(&out);
+        snag_buf_free(&out);
         return -1;
     }
-    return snj_ui_composer(&app->ui, active, app->config->prompt, values,
+    return snag_ui_composer(&app->ui, active, app->config->prompt, values,
         selected, spinners, app->config->prompt_spinner_per_second, states);
 }
 
 static int
-validate_prompt_values(struct snj_ui *ui, const struct snj_config *config,
-                       const struct snj_provider_config *provider,
+validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
+                       const struct snag_provider_config *provider,
                        const char *model, const char *effort,
                        bool networked)
 {
     char hostname[256u];
-    const char *values[SNJ_PROMPT_FIELD_COUNT];
-    const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
+    const char *values[SNAG_PROMPT_FIELD_COUNT];
+    const char *spinners[SNAG_TERM_SPINNER_COUNT] = {
         config->prompt_spinner_goal,
         config->prompt_spinner_provider,
         config->prompt_spinner_tool
     };
-    char label[SNJ_TERM_LABEL_BYTES];
+    char label[SNAG_TERM_LABEL_BYTES];
     int rc = -1;
 
     if (!provider || !model || !effort)
@@ -578,7 +578,7 @@ validate_prompt_values(struct snj_ui *ui, const struct snj_config *config,
     if (gethostname(hostname, sizeof(hostname)) < 0)
         memcpy(hostname, "localhost", sizeof("localhost"));
     hostname[sizeof(hostname) - 1u] = '\0';
-    if (!snj_utf8_valid((const unsigned char *)hostname, strlen(hostname), true))
+    if (!snag_utf8_valid((const unsigned char *)hostname, strlen(hostname), true))
         memcpy(hostname, "localhost", sizeof("localhost"));
     for (size_t i = 0u; hostname[i]; ++i)
         if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
@@ -589,15 +589,15 @@ validate_prompt_values(struct snj_ui *ui, const struct snj_config *config,
     values[3] = networked ? config->irc_operator_nick : "";
     values[4] = hostname;
     values[5] = "100%";
-    values[SNJ_PROMPT_HOUR] = "23";
-    values[SNJ_PROMPT_MINUTE] = "59";
-    values[SNJ_PROMPT_SECOND] = "60";
+    values[SNAG_PROMPT_HOUR] = "23";
+    values[SNAG_PROMPT_MINUTE] = "59";
+    values[SNAG_PROMPT_SECOND] = "60";
     for (unsigned int mode = 0u; mode < 3u; ++mode) {
         values[6] = mode == 0u ? "chat" : mode == 1u ?
                     "rollout-idle" : "rollout-active";
-        if (snj_config_prompt_expand(config->prompt, mode, values,
-                SNJ_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0 ||
-            snj_ui_validate_prompt(ui, label, spinners,
+        if (snag_config_prompt_expand(config->prompt, mode, values,
+                SNAG_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0 ||
+            snag_ui_validate_prompt(ui, label, spinners,
                 config->prompt_spinner_per_second) < 0)
             goto out;
     }
@@ -608,52 +608,52 @@ out:
 
 static int
 validate_prompt_candidate(struct app_state *app,
-                          const struct snj_config *config)
+                          const struct snag_config *config)
 {
-    const struct snj_provider_config *provider = snj_config_provider(
+    const struct snag_provider_config *provider = snag_config_provider(
         config, app->session.default_provider[0] ?
         app->session.default_provider : NULL);
 
     return validate_prompt_values(&app->ui, config, provider, next_model(app),
                                   resolve_effort(next_effort(app)),
-                                  snj_irc_enabled(config));
+                                  snag_irc_enabled(config));
 }
 
 static unsigned int
 prompt_spinner_states(const struct app_state *app, bool active)
 {
-    return (app->session.goal_status == SNJ_GOAL_ACTIVE ?
-            1u << SNJ_TERM_SPINNER_GOAL : 0u) |
+    return (app->session.goal_status == SNAG_GOAL_ACTIVE ?
+            1u << SNAG_TERM_SPINNER_GOAL : 0u) |
            (active && !app->tool_active ?
-            1u << SNJ_TERM_SPINNER_PROVIDER : 0u) |
-           (app->tool_active ? 1u << SNJ_TERM_SPINNER_TOOL : 0u);
+            1u << SNAG_TERM_SPINNER_PROVIDER : 0u) |
+           (app->tool_active ? 1u << SNAG_TERM_SPINNER_TOOL : 0u);
 }
 
 static int
 tick_irc(struct app_state *app, char *error, size_t error_size)
 {
-    struct snj_buf nicks;
+    struct snag_buf nicks;
     int rc;
 
-    if (snj_irc_tick(app->irc, 0, error, error_size) < 0)
+    if (snag_irc_tick(app->irc, 0, error, error_size) < 0)
         return -1;
-    snj_buf_init(&nicks, (SNJ_CONFIG_IRC_CLIENT_MAX + 1u) * 4096u);
-    rc = snj_irc_take_nicks(app->irc, &nicks);
+    snag_buf_init(&nicks, (SNAG_CONFIG_IRC_CLIENT_MAX + 1u) * 4096u);
+    rc = snag_irc_take_nicks(app->irc, &nicks);
     if (rc > 0)
-        rc = snj_ui_nicks(&app->ui, (const char *)nicks.data);
-    snj_buf_free(&nicks);
+        rc = snag_ui_nicks(&app->ui, (const char *)nicks.data);
+    snag_buf_free(&nicks);
     if (rc < 0)
         return -1;
-    if (!snj_irc_identity_changed(app->irc))
+    if (!snag_irc_identity_changed(app->irc))
         return 0;
-    if (snj_app_irc_snapshot(app, "nick", error, error_size) < 0)
+    if (snag_app_irc_snapshot(app, "nick", error, error_size) < 0)
         return -1;
     if (!app->ui.opened || !app->ui.prompt_wanted)
         return 0;
     return set_input_prompt(app, app->ui.active);
 }
 
-static struct snj_queued_turn *
+static struct snag_queued_turn *
 queued_by_id(struct app_state *app, const char *queue_id, size_t *index)
 {
     for (size_t i = 0; i < app->session.pending_queue_count; ++i) {
@@ -670,12 +670,12 @@ static int
 begin_queue_edit(struct app_state *app, size_t number, bool active,
                  char *error, size_t error_size)
 {
-    struct snj_queued_turn *queued;
-    struct snj_buf draft;
+    struct snag_queued_turn *queued;
+    struct snag_buf draft;
     int draft_rc;
 
     if (number == 0u || number > app->session.pending_queue_count) {
-        snj_errorf(error, error_size, "queue item %zu does not exist", number);
+        snag_errorf(error, error_size, "queue item %zu does not exist", number);
         return 1;
     }
     queued = &app->session.pending_queue[number - 1u];
@@ -683,21 +683,21 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
     app->queue_edit_number = number;
     app->queue_edit_was_armed = app->queue_armed;
     app->queue_armed = false;
-    snj_buf_init(&draft, SNJ_MAX_QUEUED_TEXT + 8u);
-    draft_rc = snj_buf_printf(&draft, "%s%s", queued->read_only ? "/ro " :
+    snag_buf_init(&draft, SNAG_MAX_QUEUED_TEXT + 8u);
+    draft_rc = snag_buf_printf(&draft, "%s%s", queued->read_only ? "/ro " :
                               queued->text[0] == '/' ? "/" : "", queued->text);
     if (draft_rc == 0)
-        draft_rc = snj_buf_terminate(&draft);
+        draft_rc = snag_buf_terminate(&draft);
     if (draft_rc == 0 && set_input_prompt(app, active) == 0)
-        draft_rc = snj_ui_restore_draft(&app->ui, (char *)draft.data);
+        draft_rc = snag_ui_restore_draft(&app->ui, (char *)draft.data);
     else draft_rc = -1;
-    snj_buf_free(&draft);
+    snag_buf_free(&draft);
     if (draft_rc < 0) {
         app->queue_armed = app->queue_edit_was_armed;
         app->queue_edit_id[0] = '\0';
         app->queue_edit_number = 0u;
         app->queue_edit_was_armed = false;
-        snj_errorf(error, error_size, "queue editor could not be displayed");
+        snag_errorf(error, error_size, "queue editor could not be displayed");
         return -1;
     }
     return 0;
@@ -707,46 +707,46 @@ static int
 finish_queue_edit(struct app_state *app, const char *text, bool active,
                   char *error, size_t error_size)
 {
-    struct snj_queued_turn *queued;
+    struct snag_queued_turn *queued;
     const char *original = text;
     bool read_only;
     size_t len;
     bool restore_armed = app->queue_edit_was_armed;
     int rc = 0;
 
-    text = snj_prompt_parse(text, &read_only);
+    text = snag_prompt_parse(text, &read_only);
     len = strlen(text);
 
     queued = queued_by_id(app, app->queue_edit_id, NULL);
     if (!queued) {
-        snj_errorf(error, error_size, "the queued turn being edited no longer exists");
-        (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
+        snag_errorf(error, error_size, "the queued turn being edited no longer exists");
+        (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
         error[0] = '\0';
         rc = 1;
         goto clear;
     }
-    if (!len || len > SNJ_MAX_QUEUED_TEXT ||
-        !snj_utf8_valid((const unsigned char *)text, len, true)) {
-        snj_errorf(error, error_size,
+    if (!len || len > SNAG_MAX_QUEUED_TEXT ||
+        !snag_utf8_valid((const unsigned char *)text, len, true)) {
+        snag_errorf(error, error_size,
                   "queued text must be nonempty valid UTF-8 within 256 KiB");
-        (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
+        (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
         error[0] = '\0';
         if (set_input_prompt(app, active) < 0 ||
-            snj_ui_restore_draft(&app->ui, original) < 0)
+            snag_ui_restore_draft(&app->ui, original) < 0)
             return -1;
         return 1;
     }
     if ((strcmp(queued->text, text) != 0 || queued->read_only != read_only) &&
         commit_event(app, "future_turn_edited",
-                     snj_app_future_turn_edited_data(queued->queue_id, text, read_only),
+                     snag_app_future_turn_edited_data(queued->queue_id, text, read_only),
                      error, error_size) < 0) {
         if (set_input_prompt(app, active) == 0)
-            (void)snj_ui_restore_draft(&app->ui, original);
+            (void)snag_ui_restore_draft(&app->ui, original);
         return -1;
     }
-    if (snj_ui_submitted(&app->ui,
+    if (snag_ui_submitted(&app->ui,
             app->ui.label, original, false) < 0) {
-        snj_errorf(error, error_size, "edited turn acknowledgement could not be rendered");
+        snag_errorf(error, error_size, "edited turn acknowledgement could not be rendered");
         return -1;
     }
 clear:
@@ -764,42 +764,42 @@ static int
 queue_future_turn(struct app_state *app, const char *text, bool arm,
                   char *error, size_t error_size)
 {
-    char queue_id[SNJ_ID_HEX_LEN + 1u];
+    char queue_id[SNAG_ID_HEX_LEN + 1u];
     bool read_only;
-    const char *queued_text = snj_prompt_parse(text, &read_only);
+    const char *queued_text = snag_prompt_parse(text, &read_only);
     size_t len;
     if (!app->session.active_turn) {
-        snj_errorf(error, error_size, "/queue TEXT is valid only while a turn is active");
+        snag_errorf(error, error_size, "/queue TEXT is valid only while a turn is active");
         errno = EINVAL;
         return 1;
     }
     if (text[0] == '/' && !read_only) {
         if (text[1] != '/') {
-            snj_errorf(error, error_size,
+            snag_errorf(error, error_size,
                       "queued text starting with / must use // for a literal slash");
             errno = EINVAL;
             return 1;
         }
     }
     len = strlen(queued_text);
-    if (!len || len > SNJ_MAX_QUEUED_TEXT ||
-        !snj_utf8_valid((const unsigned char *)queued_text, len, true)) {
-        snj_errorf(error, error_size,
+    if (!len || len > SNAG_MAX_QUEUED_TEXT ||
+        !snag_utf8_valid((const unsigned char *)queued_text, len, true)) {
+        snag_errorf(error, error_size,
                   "queued text must be nonempty valid UTF-8 within 256 KiB");
         errno = EINVAL;
         return 1;
     }
-    if (snj_random_id(queue_id) < 0) {
-        snj_errorf(error, error_size, "cryptographic queue id generation failed");
+    if (snag_random_id(queue_id) < 0) {
+        snag_errorf(error, error_size, "cryptographic queue id generation failed");
         return -1;
     }
     if (commit_event(app, "future_turn_queued",
-                     snj_app_future_turn_queued_data(app->session.active_turn_id,
+                     snag_app_future_turn_queued_data(app->session.active_turn_id,
                                              queue_id, queued_text, read_only),
                      error, error_size) < 0)
         return -1;
-    if (snj_ui_submitted(&app->ui, "next › ", text, false) < 0) {
-        snj_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
+    if (snag_ui_submitted(&app->ui, "next › ", text, false) < 0) {
+        snag_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
         return -1;
     }
     if (arm)
@@ -810,12 +810,12 @@ static int
 remove_queued_turns(struct app_state *app, size_t index, bool all,
                     char *error, size_t error_size)
 {
-    bool remove[SNJ_MAX_PENDING_TURNS] = {false};
+    bool remove[SNAG_MAX_PENDING_TURNS] = {false};
     size_t matches;
 
     if (app->session.pending_queue_count == 0u ||
         (!all && index >= app->session.pending_queue_count)) {
-        snj_errorf(error, error_size, "future-turn queue is empty");
+        snag_errorf(error, error_size, "future-turn queue is empty");
         return 1;
     }
     if (all) {
@@ -827,7 +827,7 @@ remove_queued_turns(struct app_state *app, size_t index, bool all,
         matches = 1u;
     }
     if (commit_event(app, "future_turn_cancelled",
-                     snj_app_future_turn_cancelled_data(&app->session, remove),
+                     snag_app_future_turn_cancelled_data(&app->session, remove),
                      error, error_size) < 0)
         return -1;
     if (app->session.pending_queue_count == 0u)
@@ -859,8 +859,8 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
         *handled = false;
         return 0;
     }
-    if (snj_app_parse_queue_argument(argument, &kind, &number) < 0) {
-        snj_errorf(error, error_size,
+    if (snag_app_parse_queue_argument(argument, &kind, &number) < 0) {
+        snag_errorf(error, error_size,
                   "queue action expects clear, pop, N delete, Nd, N edit, or Ne");
         return 1;
     }
@@ -869,14 +869,14 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
         return render_queue(app);
     case QUEUE_COMMAND_ADD:
         if (!active) {
-            snj_errorf(error, error_size,
+            snag_errorf(error, error_size,
                       "/queue TEXT is active-only; submit it during a running turn");
             return 1;
         }
         return queue_future_turn(app, argument, true, error, error_size);
     case QUEUE_COMMAND_DELETE:
         if (number == 0u || number > app->session.pending_queue_count) {
-            snj_errorf(error, error_size, "queue item %zu does not exist", number);
+            snag_errorf(error, error_size, "queue item %zu does not exist", number);
             return 1;
         }
         return remove_queued_turns(app, number - 1u, false,
@@ -887,7 +887,7 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
         return remove_queued_turns(app, 0u, true, error, error_size);
     case QUEUE_COMMAND_POP:
         if (app->session.pending_queue_count == 0u) {
-            snj_errorf(error, error_size, "future-turn queue is empty");
+            snag_errorf(error, error_size, "future-turn queue is empty");
             return 1;
         }
         return remove_queued_turns(app,
@@ -910,17 +910,17 @@ next_effort(const struct app_state *app)
 }
 
 static int
-append_capacity_value(struct snj_buf *text, const char *name,
+append_capacity_value(struct snag_buf *text, const char *name,
                       bool known, uint64_t value)
 {
     return known ?
-        snj_buf_printf(text, " · %s=%llu", name,
+        snag_buf_printf(text, " · %s=%llu", name,
                        (unsigned long long)value) :
-        snj_buf_printf(text, " · %s=unknown", name);
+        snag_buf_printf(text, " · %s=unknown", name);
 }
 
 static int
-append_advertised_capacity(struct snj_buf *text, const json_t *model)
+append_advertised_capacity(struct snag_buf *text, const json_t *model)
 {
     static const struct {
         const char *key;
@@ -938,11 +938,11 @@ append_advertised_capacity(struct snj_buf *text, const json_t *model)
 
     if (!json_is_object(limits))
         return 0;
-    if (snj_buf_append(text, "\nadvertised", 11u) < 0)
+    if (snag_buf_append(text, "\nadvertised", 11u) < 0)
         return -1;
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
         uint64_t value = 0u;
-        bool known = snj_json_integer_u64((json_t *)limits,
+        bool known = snag_json_integer_u64((json_t *)limits,
                                           fields[i].key, &value) == 0;
         if (append_capacity_value(text, fields[i].name, known, value) < 0)
             return -1;
@@ -951,17 +951,17 @@ append_advertised_capacity(struct snj_buf *text, const json_t *model)
 }
 
 static int
-append_compact_threshold(struct snj_buf *text,
-                         const struct snj_provider_config *provider,
-                         const struct snj_model_capacity *capacity)
+append_compact_threshold(struct snag_buf *text,
+                         const struct snag_provider_config *provider,
+                         const struct snag_model_capacity *capacity)
 {
     const char *mode = provider->auto_compact_input_tokens ==
-        SNJ_CONFIG_COMPACT_AUTO ?
+        SNAG_CONFIG_COMPACT_AUTO ?
             (capacity->hard_input_known ? "auto" : "auto fallback") :
             (provider->auto_compact_input_tokens ? "fixed" : "off");
 
-    return snj_buf_printf(text, " · compact=%llu (%s)",
-        (unsigned long long)snj_model_compact_threshold(provider, capacity),
+    return snag_buf_printf(text, " · compact=%llu (%s)",
+        (unsigned long long)snag_model_compact_threshold(provider, capacity),
         mode);
 }
 
@@ -969,11 +969,11 @@ static int
 render_status(struct app_state *app)
 {
     const char *id = app->session.id;
-    const struct snj_provider_config *provider = next_provider(app);
-    const struct snj_model_limit_config *configured = NULL;
+    const struct snag_provider_config *provider = next_provider(app);
+    const struct snag_model_limit_config *configured = NULL;
     const json_t *advertised = NULL;
-    struct snj_model_capacity capacity;
-    struct snj_buf text;
+    struct snag_model_capacity capacity;
+    struct snag_buf text;
     bool ceiling_selection_matches;
     bool ceiling_source_matches;
     char error[256] = {0};
@@ -982,11 +982,11 @@ render_status(struct app_state *app)
     if (!provider)
         return app_error(app,
             "selected provider is not present in the current configuration");
-    if (snj_app_capacity_resolve(app, provider, next_model(app), &capacity,
+    if (snag_app_capacity_resolve(app, provider, next_model(app), &capacity,
                                  error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error :
                          "model capacity could not be resolved");
-    configured = snj_config_model_limit(app->config, provider->name,
+    configured = snag_config_model_limit(app->config, provider->name,
                                         next_model(app));
     ceiling_selection_matches = app->session.capacity_ceiling_valid &&
         strcmp(app->session.capacity_ceiling_provider, provider->name) == 0 &&
@@ -994,10 +994,10 @@ render_status(struct app_state *app)
     ceiling_source_matches = ceiling_selection_matches &&
         capacity_ceiling_matches(app, provider, next_model(app));
     if (capacity.source_bound)
-        advertised = snj_model_cache_find(&app->model_cache, provider->name,
+        advertised = snag_model_cache_find(&app->model_cache, provider->name,
                                           next_model(app));
-    snj_buf_init(&text, 64u * 1024u);
-    if (snj_buf_printf(&text,
+    snag_buf_init(&text, 64u * 1024u);
+    if (snag_buf_printf(&text,
         "session: %s\n"
         "state: %s\n"
         "tools: %s\n"
@@ -1023,7 +1023,7 @@ render_status(struct app_state *app)
         (unsigned long long)app->session.turn_count,
         app->session.pending_queue_count,
         app->session.pending_queue_count && !app->queue_armed ? " paused" : "",
-        snj_ui_verbosity(&app->ui), snj_capacity_source_name(capacity.source)) < 0 ||
+        snag_ui_verbosity(&app->ui), snag_capacity_source_name(capacity.source)) < 0 ||
         append_capacity_value(&text, "hard-input",
                               capacity.hard_input_known,
                               capacity.hard_input_tokens) < 0 ||
@@ -1033,13 +1033,13 @@ render_status(struct app_state *app)
         append_compact_threshold(&text, provider, &capacity) < 0)
         goto out;
     if (capacity.effective_context_window_known &&
-        snj_buf_printf(&text, " · effective=%u%%%s",
+        snag_buf_printf(&text, " · effective=%u%%%s",
                        capacity.effective_context_window_percent,
                        capacity.effective_context_window_derived ?
                            " (derived client policy)" : " (advertised)") < 0)
         goto out;
     if (configured) {
-        if (snj_buf_append(&text, "\nconfigured", 11u) < 0 ||
+        if (snag_buf_append(&text, "\nconfigured", 11u) < 0 ||
             append_capacity_value(&text, "context",
                 configured->context_window_known,
                 configured->context_window_tokens) < 0 ||
@@ -1054,15 +1054,15 @@ render_status(struct app_state *app)
     if (append_advertised_capacity(&text, advertised) < 0)
         goto out;
     if (capacity.cache_source_mismatch &&
-        snj_buf_append(&text,
+        snag_buf_append(&text,
             "\ncatalog source: mismatch; advertised limits ignored",
             strlen("\ncatalog source: mismatch; advertised limits ignored")) < 0)
         goto out;
     if (app->capacity_cache_error[0] &&
-        snj_buf_printf(&text, "\ncatalog: %s", app->capacity_cache_error) < 0)
+        snag_buf_printf(&text, "\ncatalog: %s", app->capacity_cache_error) < 0)
         goto out;
     if (app->session.capacity_ceiling_valid) {
-        if (snj_buf_printf(&text,
+        if (snag_buf_printf(&text,
                 "\nobserved ceiling: hard-input=%llu · provider=%s · model=%s · binding=%s%s",
                 (unsigned long long)
                     app->session.capacity_ceiling_input_tokens,
@@ -1073,22 +1073,22 @@ render_status(struct app_state *app)
                                                 "different selection",
                 ceiling_source_matches ? "" : "; ignored") < 0)
             goto out;
-    } else if (snj_buf_append(&text, "\nobserved ceiling: unknown",
+    } else if (snag_buf_append(&text, "\nobserved ceiling: unknown",
                               strlen("\nobserved ceiling: unknown")) < 0) {
         goto out;
     }
-    if (snj_buf_printf(&text,
+    if (snag_buf_printf(&text,
             "\naccounting: policy=%s · exact-count=%s · estimate=%s",
-            provider->exact_token_count == SNJ_TOKEN_COUNT_AUTO ? "auto" :
-            provider->exact_token_count == SNJ_TOKEN_COUNT_STRICT ? "exact" :
+            provider->exact_token_count == SNAG_TOKEN_COUNT_AUTO ? "auto" :
+            provider->exact_token_count == SNAG_TOKEN_COUNT_STRICT ? "exact" :
             "off",
-            capacity.count_capability == SNJ_COUNT_SUPPORTED ? "supported" :
-            capacity.count_capability == SNJ_COUNT_UNSUPPORTED ? "unsupported" :
+            capacity.count_capability == SNAG_COUNT_SUPPORTED ? "supported" :
+            capacity.count_capability == SNAG_COUNT_UNSUPPORTED ? "unsupported" :
             "unknown", capacity.observed_tokens_per_million_bytes ? "learned" :
             "none") < 0)
         goto out;
     if (app->session.usage_anchor_valid) {
-        if (snj_buf_printf(&text,
+        if (snag_buf_printf(&text,
                 "\nobserved usage: input=%llu tokens · model-input=%llu bytes · provider=%s · model=%s · effort=%s",
                 (unsigned long long)app->session.usage_anchor_input_tokens,
                 (unsigned long long)app->session.usage_anchor_model_input_bytes,
@@ -1096,15 +1096,15 @@ render_status(struct app_state *app)
                 app->session.usage_anchor_model,
                 app->session.usage_anchor_effort) < 0)
             goto out;
-    } else if (snj_buf_append(&text, "\nobserved usage: unknown",
+    } else if (snag_buf_append(&text, "\nobserved usage: unknown",
                               strlen("\nobserved usage: unknown")) < 0) {
         goto out;
     }
-    if (snj_buf_terminate(&text) < 0)
+    if (snag_buf_terminate(&text) < 0)
         goto out;
-    rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
+    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
 out:
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     return rc;
 }
 static int
@@ -1118,12 +1118,12 @@ render_help(struct app_state *app)
         "Empty Tab switch view · Tab complete/indent/queue (chat: @nick) · "
         "Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
     const char *keys = app->networked ? network_keys : ordinary_keys;
-    struct snj_buf text;
+    struct snag_buf text;
     int rc = -1;
 
-    snj_buf_init(&text, 64u * 1024u);
+    snag_buf_init(&text, 64u * 1024u);
     for (size_t i = 0u; i < command_count(app); ++i)
-        if (snj_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
+        if (snag_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
                            commands[i].description) < 0)
             goto out;
     static const char levels[] =
@@ -1132,13 +1132,13 @@ render_help(struct app_state *app)
         "2 previews: 1024 argument / 512 output characters, reasoning summaries\n"
         "3 full retained tools · 4 debug · 5 redacted protocol · 6 wire\n"
         "Chat is unchanged. Debug traces are live in /rollout only.";
-    if (snj_buf_append(&text, keys, strlen(keys)) < 0 ||
-        snj_buf_append(&text, levels, sizeof(levels) - 1u) < 0 ||
-        snj_buf_terminate(&text) < 0)
+    if (snag_buf_append(&text, keys, strlen(keys)) < 0 ||
+        snag_buf_append(&text, levels, sizeof(levels) - 1u) < 0 ||
+        snag_buf_terminate(&text) < 0)
         goto out;
-    rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
+    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
 out:
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     return rc;
 }
 static int
@@ -1159,51 +1159,51 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
         return -1;
     }
     for (size_t i = 0; i < app->config->provider_count; ++i) {
-        const struct snj_provider_config *provider = &app->config->providers[i];
+        const struct snag_provider_config *provider = &app->config->providers[i];
         json_t *models = NULL;
         json_t *entry = NULL;
         char detail[256] = {0};
 
-        if (snj_app_provider_models(app, provider, &models,
+        if (snag_app_provider_models(app, provider, &models,
                                     detail, sizeof(detail)) < 0) {
-            snj_errorf(error, error_size, "cannot refresh provider %s: %s",
+            snag_errorf(error, error_size, "cannot refresh provider %s: %s",
                       provider->name, detail[0] ? detail : strerror(errno));
             goto out;
         }
         entry = json_object();
         if (!entry) {
             json_decref(models);
-            snj_errorf(error, error_size, "cannot assemble model cache");
+            snag_errorf(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
             goto out;
         }
-        if (snj_json_set_new(entry, "models", models) < 0) {
+        if (snag_json_set_new(entry, "models", models) < 0) {
             models = NULL;
             json_decref(entry);
-            snj_errorf(error, error_size, "cannot assemble model cache");
+            snag_errorf(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
             goto out;
         }
         models = NULL;
-        if (snj_json_set_new(entry, "base_url",
+        if (snag_json_set_new(entry, "base_url",
                              json_string(provider->base_url)) < 0 ||
-            snj_json_set_new(entry, "name", json_string(provider->name)) < 0 ||
-            snj_json_set_new(entry, "protocol",
-                json_string(snj_provider_catalog_protocol(provider))) < 0) {
+            snag_json_set_new(entry, "name", json_string(provider->name)) < 0 ||
+            snag_json_set_new(entry, "protocol",
+                json_string(snag_provider_catalog_protocol(provider))) < 0) {
             json_decref(entry);
-            snj_errorf(error, error_size, "cannot assemble model cache");
+            snag_errorf(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
             goto out;
         }
         if (json_array_append_new(providers, entry) < 0) {
             entry = NULL;
-            snj_errorf(error, error_size, "cannot assemble model cache");
+            snag_errorf(error, error_size, "cannot assemble model cache");
             errno = ENOMEM;
             goto out;
         }
         entry = NULL;
     }
-    if (snj_model_cache_replace(&app->store, providers, snj_time_ms(),
+    if (snag_model_cache_replace(&app->store, providers, snag_time_ms(),
                                 &app->model_cache, error, error_size) < 0)
         goto out;
     rc = 0;
@@ -1218,10 +1218,10 @@ load_model_cache(struct app_state *app, bool refresh,
     int rc;
     if (refresh)
         return refresh_model_cache(app, error, error_size);
-    rc = snj_model_cache_load(&app->store, &app->model_cache,
+    rc = snag_model_cache_load(&app->store, &app->model_cache,
                               error, error_size);
     if (rc == 1) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "model cache is empty; use /model cache while idle");
         errno = ENOENT;
         return -1;
@@ -1229,11 +1229,11 @@ load_model_cache(struct app_state *app, bool refresh,
     return rc;
 }
 static int
-append_catalog_limits(struct snj_buf *text, const json_t *model)
+append_catalog_limits(struct snag_buf *text, const json_t *model)
 {
     const json_t *limits = model ? json_object_get(model, "limits") : NULL;
     const char *count = model ?
-        snj_json_string(model, "count_capability") : NULL;
+        snag_json_string(model, "count_capability") : NULL;
     static const struct {
         const char *key;
         const char *label;
@@ -1250,18 +1250,18 @@ append_catalog_limits(struct snj_buf *text, const json_t *model)
         return 0;
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
         uint64_t value;
-        if (snj_json_integer_u64((json_t *)limits, fields[i].key, &value) < 0)
+        if (snag_json_integer_u64((json_t *)limits, fields[i].key, &value) < 0)
             continue;
-        if (snj_buf_printf(text, "%s%s=%llu",
+        if (snag_buf_printf(text, "%s%s=%llu",
                            any ? "," : " · ", fields[i].label,
                            (unsigned long long)value) < 0)
             return -1;
         any = true;
     }
     if (count)
-        (void)snj_json_integer_u64(model, "observed_model_input_bytes",
+        (void)snag_json_integer_u64(model, "observed_model_input_bytes",
                                    &observed);
-    if (count && snj_buf_printf(text, " · count=%s · estimate=%s", count,
+    if (count && snag_buf_printf(text, " · count=%s · estimate=%s", count,
                                 observed ? "learned" : "none") < 0)
         return -1;
     return 0;
@@ -1270,9 +1270,9 @@ append_catalog_limits(struct snj_buf *text, const json_t *model)
 static int
 render_model_catalog(struct app_state *app)
 {
-    const struct snj_provider_config *selected = next_provider(app);
-    struct snj_model_capacity capacity;
-    struct snj_buf text;
+    const struct snag_provider_config *selected = next_provider(app);
+    struct snag_model_capacity capacity;
+    struct snag_buf text;
     char error[256] = {0};
     char timestamp[64];
     time_t seconds;
@@ -1283,13 +1283,13 @@ render_model_catalog(struct app_state *app)
     if (!selected)
         return app_error(app,
             "selected provider is not present in the current configuration");
-    if (snj_app_capacity_resolve(app, selected, next_model(app), &capacity,
+    if (snag_app_capacity_resolve(app, selected, next_model(app), &capacity,
                                  error, sizeof(error)) < 0)
         return app_error(app, error);
     seconds = (time_t)(app->model_cache.updated_at_ms / 1000u);
-    count = snj_model_cache_entry_count(&app->model_cache);
-    snj_buf_init(&text, 16u * 1024u * 1024u);
-    if (snj_buf_printf(&text, "selected: %s / %s / %s%s",
+    count = snag_model_cache_entry_count(&app->model_cache);
+    snag_buf_init(&text, 16u * 1024u * 1024u);
+    if (snag_buf_printf(&text, "selected: %s / %s / %s%s",
                        selected->name, next_model(app),
                        resolve_effort(next_effort(app)) ?
                            resolve_effort(next_effort(app)) : next_effort(app),
@@ -1301,31 +1301,31 @@ render_model_catalog(struct app_state *app)
         const char *provider;
         const char *model;
         const char *effort;
-        if (snj_model_cache_entry(&app->model_cache, index,
+        if (snag_model_cache_entry(&app->model_cache, index,
                                   resolve_effort(app->config->reasoning_effort),
                                   &provider, &model, &effort) != 0 ||
-            snj_buf_printf(&text, "\n%zu. %s / %s / %s",
+            snag_buf_printf(&text, "\n%zu. %s / %s / %s",
                            index, provider, model, effort) < 0)
             goto out;
         if (append_catalog_limits(&text,
-                snj_model_cache_find(&app->model_cache, provider, model)) < 0)
+                snag_model_cache_find(&app->model_cache, provider, model)) < 0)
             goto out;
     }
     if (gmtime_r(&seconds, &broken) &&
         strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ",
                  &broken) != 0u) {
-        if (snj_buf_printf(&text, "\ncache updated: %s", timestamp) < 0)
+        if (snag_buf_printf(&text, "\ncache updated: %s", timestamp) < 0)
             goto out;
-    } else if (snj_buf_printf(&text, "\ncache updated: %llu ms since epoch",
+    } else if (snag_buf_printf(&text, "\ncache updated: %llu ms since epoch",
                               (unsigned long long)
                                   app->model_cache.updated_at_ms) < 0) {
         goto out;
     }
-    if (snj_buf_terminate(&text) < 0)
+    if (snag_buf_terminate(&text) < 0)
         goto out;
-    rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
+    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
 out:
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     return rc;
 }
 static bool
@@ -1364,7 +1364,7 @@ trim_selector_part(char *part)
 }
 static int
 commit_model_selection(struct app_state *app,
-                       const struct snj_provider_config *provider,
+                       const struct snag_provider_config *provider,
                        const char *model, const char *effort,
                        bool known_in_cache, bool save)
 {
@@ -1372,7 +1372,7 @@ commit_model_selection(struct app_state *app,
     char error[256] = {0};
     int rc;
 
-    if (save && snj_config_save_model(app->config_path,
+    if (save && snag_config_save_model(app->config_path,
             app->config_allow_create, provider->name, model, effort,
             error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error :
@@ -1383,7 +1383,7 @@ commit_model_selection(struct app_state *app,
         strcmp(app->session.default_model, model) != 0 ||
         strcmp(app->session.default_effort, effort) != 0) {
         if (commit_event(app, "model_selection_changed",
-                snj_app_model_selection_changed_data(
+                snag_app_model_selection_changed_data(
                     old_provider, provider->name,
                     app->session.default_model, model,
                     app->session.default_effort, effort),
@@ -1416,7 +1416,7 @@ commit_model_selection(struct app_state *app,
 static int
 select_cached_model(struct app_state *app, const char *value, bool save)
 {
-    const struct snj_provider_config *provider_config;
+    const struct snag_provider_config *provider_config;
     const char *provider;
     const char *model;
     const char *effort;
@@ -1428,12 +1428,12 @@ select_cached_model(struct app_state *app, const char *value, bool save)
         return 1;
     if (load_model_cache(app, false, error, sizeof(error)) < 0)
         return app_error(app, error);
-    entry_rc = snj_model_cache_entry(&app->model_cache, index,
+    entry_rc = snag_model_cache_entry(&app->model_cache, index,
                                      resolve_effort(app->config->reasoning_effort),
                                      &provider, &model, &effort);
     if (entry_rc != 0)
         return app_error(app, "model index is not in the displayed cache");
-    provider_config = snj_config_provider(app->config, provider);
+    provider_config = snag_config_provider(app->config, provider);
     if (!provider_config)
         return app_error(app,
             "cached provider is not configured; use /model cache");
@@ -1443,10 +1443,10 @@ select_cached_model(struct app_state *app, const char *value, bool save)
 static int
 select_typed_model(struct app_state *app, const char *value, bool save)
 {
-    const struct snj_provider_config *provider;
+    const struct snag_provider_config *provider;
     const char *model;
     const char *effort;
-    char *copy = snj_strdup_checked(value, SNJ_CONFIG_PATH_MAX);
+    char *copy = snag_strdup_checked(value, SNAG_CONFIG_PATH_MAX);
     char *parts[3];
     size_t count = 0u;
     bool known_in_cache = false;
@@ -1473,8 +1473,8 @@ select_typed_model(struct app_state *app, const char *value, bool save)
             goto out;
         }
     }
-    provider = count == 3u ? snj_config_provider(app->config, parts[0]) :
-                             snj_config_provider(app->config, NULL);
+    provider = count == 3u ? snag_config_provider(app->config, parts[0]) :
+                             snag_config_provider(app->config, NULL);
     if (!provider) {
         (void)app_error(app, count == 3u ?
             "model selector names an unconfigured provider" :
@@ -1483,8 +1483,8 @@ select_typed_model(struct app_state *app, const char *value, bool save)
     }
     model = parts[count == 3u ? 1u : 0u];
     effort = count >= 2u ? parts[count - 1u] : next_effort(app);
-    if (strlen(model) >= SNJ_CONFIG_MODEL_MAX ||
-        !snj_utf8_valid((const unsigned char *)model, strlen(model), true) ||
+    if (strlen(model) >= SNAG_CONFIG_MODEL_MAX ||
+        !snag_utf8_valid((const unsigned char *)model, strlen(model), true) ||
         !resolve_effort(effort)) {
         (void)app_error(app,
             "model or effort exceeds the supported structural bounds");
@@ -1492,13 +1492,13 @@ select_typed_model(struct app_state *app, const char *value, bool save)
     }
     {
         char ignored[256] = {0};
-        if (snj_model_cache_load(&app->store, &app->model_cache,
+        if (snag_model_cache_load(&app->store, &app->model_cache,
                                  ignored, sizeof(ignored)) == 0) {
-            const json_t *cached = snj_model_cache_find(&app->model_cache,
+            const json_t *cached = snag_model_cache_find(&app->model_cache,
                                                         provider->name, model);
             known_in_cache = cached != NULL;
             if (count == 1u)
-                effort = snj_model_cache_best_effort(cached,
+                effort = snag_model_cache_best_effort(cached,
                                                       resolve_effort(effort));
         }
     }
@@ -1541,7 +1541,7 @@ change_model(struct app_state *app, const char *value, bool active)
     int rc;
 
     if (value) {
-        copy = snj_strdup_checked(value, SNJ_CONFIG_PATH_MAX);
+        copy = snag_strdup_checked(value, SNAG_CONFIG_PATH_MAX);
         if (!copy)
             return app_error(app, "model selector is too long");
         selector = trim_selector_part(copy);
@@ -1581,14 +1581,14 @@ change_model(struct app_state *app, const char *value, bool active)
 
 struct config_snapshot {
     bool exists;
-    char sha256[SNJ_SHA256_HEX_LEN + 1u];
+    char sha256[SNAG_SHA256_HEX_LEN + 1u];
 };
 
 static int
 snapshot_config(const char *path, struct config_snapshot *snapshot,
                 char *error, size_t error_size)
 {
-    struct snj_sha256 digest;
+    struct snag_sha256 digest;
     struct stat st;
     unsigned char hash[32];
     int fd;
@@ -1598,30 +1598,30 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
     if (fd < 0) {
         if (errno == ENOENT)
             return 0;
-        snj_errorf(error, error_size, "cannot open configuration %s: %s",
+        snag_errorf(error, error_size, "cannot open configuration %s: %s",
                   path, strerror(errno));
         return -1;
     }
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
-        (uintmax_t)st.st_size > SNJ_CONFIG_FILE_MAX) {
-        snj_errorf(error, error_size,
+        (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
+        snag_errorf(error, error_size,
                   "configuration must be a regular file no larger than 64 KiB");
         errno = EINVAL;
         (void)close(fd);
         return -1;
     }
-    snj_sha256_init(&digest);
+    snag_sha256_init(&digest);
     for (;;) {
         unsigned char bytes[4096];
         ssize_t got = read(fd, bytes, sizeof(bytes));
         if (got > 0) {
-            snj_sha256_update(&digest, bytes, (size_t)got);
+            snag_sha256_update(&digest, bytes, (size_t)got);
             continue;
         }
         if (got < 0 && errno == EINTR)
             continue;
         if (got < 0) {
-            snj_errorf(error, error_size, "cannot read configuration: %s",
+            snag_errorf(error, error_size, "cannot read configuration: %s",
                       strerror(errno));
             (void)close(fd);
             return -1;
@@ -1629,11 +1629,11 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
         break;
     }
     if (close(fd) < 0) {
-        snj_errorf(error, error_size, "cannot close configuration: %s",
+        snag_errorf(error, error_size, "cannot close configuration: %s",
                   strerror(errno));
         return -1;
     }
-    snj_sha256_final(&digest, hash);
+    snag_sha256_final(&digest, hash);
     for (size_t i = 0u; i < sizeof(hash); ++i)
         (void)snprintf(snapshot->sha256 + i * 2u, 3u, "%02x", hash[i]);
     snapshot->exists = true;
@@ -1648,33 +1648,33 @@ same_config_snapshot(const struct config_snapshot *left,
            (!left->exists || strcmp(left->sha256, right->sha256) == 0);
 }
 
-static enum snj_color_mode
+static enum snag_color_mode
 configured_color(const struct app_state *app,
-                 const struct snj_config *config)
+                 const struct snag_config *config)
 {
-    if (app->cli->color == SNJ_CLI_COLOR_AUTO)
-        return SNJ_COLOR_AUTO;
-    if (app->cli->color == SNJ_CLI_COLOR_ALWAYS)
-        return SNJ_COLOR_ALWAYS;
-    if (app->cli->color == SNJ_CLI_COLOR_NEVER)
-        return SNJ_COLOR_NEVER;
+    if (app->cli->color == SNAG_CLI_COLOR_AUTO)
+        return SNAG_COLOR_AUTO;
+    if (app->cli->color == SNAG_CLI_COLOR_ALWAYS)
+        return SNAG_COLOR_ALWAYS;
+    if (app->cli->color == SNAG_CLI_COLOR_NEVER)
+        return SNAG_COLOR_NEVER;
     return config->color;
 }
 
 static bool
 configured_markdown(const struct app_state *app,
-                    const struct snj_config *config)
+                    const struct snag_config *config)
 {
-    if (app->cli->markdown == SNJ_CLI_MARKDOWN_ENABLED)
+    if (app->cli->markdown == SNAG_CLI_MARKDOWN_ENABLED)
         return true;
-    if (app->cli->markdown == SNJ_CLI_MARKDOWN_DISABLED)
+    if (app->cli->markdown == SNAG_CLI_MARKDOWN_DISABLED)
         return false;
     return config->markdown;
 }
 
 static bool
-irc_config_equal(const struct snj_config *left,
-                 const struct snj_config *right)
+irc_config_equal(const struct snag_config *left,
+                 const struct snag_config *right)
 {
     if (left->irc_listen_explicit != right->irc_listen_explicit ||
         strcmp(left->irc_listen, right->irc_listen) != 0 ||
@@ -1694,19 +1694,19 @@ irc_config_equal(const struct snj_config *left,
 }
 
 static int
-open_configured_irc(struct app_state *app, const struct snj_config *config,
+open_configured_irc(struct app_state *app, const struct snag_config *config,
                     char *error, size_t error_size)
 {
-    if (!snj_irc_enabled(config)) {
+    if (!snag_irc_enabled(config)) {
         app->irc = NULL;
         return 0;
     }
-    if (snj_irc_open(&app->irc, config, app->session.workspace,
-                     snj_app_irc_event, snj_app_irc_trace, app,
+    if (snag_irc_open(&app->irc, config, app->session.workspace,
+                     snag_app_irc_event, snag_app_irc_trace, app,
                      error, error_size) < 0)
         return -1;
-    if (snj_app_irc_restore(app, error, error_size) < 0) {
-        snj_irc_close(app->irc);
+    if (snag_app_irc_restore(app, error, error_size) < 0) {
+        snag_irc_close(app->irc);
         app->irc = NULL;
         return -1;
     }
@@ -1716,8 +1716,8 @@ open_configured_irc(struct app_state *app, const struct snj_config *config,
 static int
 reload_config(struct app_state *app, char *error, size_t error_size)
 {
-    struct snj_config candidate;
-    struct snj_config previous;
+    struct snag_config candidate;
+    struct snag_config previous;
     const char *selected_provider = app->session.default_provider[0] ?
         app->session.default_provider : NULL;
     bool old_networked;
@@ -1725,34 +1725,34 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     bool replace_irc;
     int rc = 1;
 
-    snj_config_init(&candidate);
+    snag_config_init(&candidate);
     if (!candidate.shell) {
-        snj_errorf(error, error_size, "cannot initialize configuration defaults");
+        snag_errorf(error, error_size, "cannot initialize configuration defaults");
         goto out;
     }
-    if (snj_config_load(&candidate,
+    if (snag_config_load(&candidate,
             app->config_allow_create ? NULL : app->config_path,
             app->store.root_path, error, error_size) < 0 ||
-        snj_irc_apply_cli(&candidate, app->cli, error, error_size) < 0)
+        snag_irc_apply_cli(&candidate, app->cli, error, error_size) < 0)
         goto out;
-    if (!snj_config_provider(&candidate, selected_provider)) {
-        snj_errorf(error, error_size,
+    if (!snag_config_provider(&candidate, selected_provider)) {
+        snag_errorf(error, error_size,
                   "reloaded configuration does not define the selected provider");
         errno = EINVAL;
         goto out;
     }
     if (validate_prompt_candidate(app, &candidate) < 0) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "reloaded prompt cannot be rendered with the current selection");
         errno = EINVAL;
         goto out;
     }
-    old_networked = snj_irc_enabled(app->config);
-    new_networked = snj_irc_enabled(&candidate);
+    old_networked = snag_irc_enabled(app->config);
+    new_networked = snag_irc_enabled(&candidate);
     replace_irc = old_networked != new_networked ||
                   (old_networked && !irc_config_equal(app->config, &candidate));
     if (replace_irc) {
-        snj_irc_close(app->irc);
+        snag_irc_close(app->irc);
         app->irc = NULL;
         if (open_configured_irc(app, &candidate, error, error_size) < 0) {
             char replacement_error[256];
@@ -1764,14 +1764,14 @@ reload_config(struct app_state *app, char *error, size_t error_size)
                 open_configured_irc(app, app->config,
                                     rollback_error,
                                     sizeof(rollback_error)) < 0) {
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "%s; prior IRC configuration could not be restored: %s",
                           replacement_error,
                           rollback_error[0] ? rollback_error : "unknown error");
                 rc = -1;
                 goto out;
             }
-            snj_errorf(error, error_size, "%s; previous configuration remains active",
+            snag_errorf(error, error_size, "%s; previous configuration remains active",
                       replacement_error);
             goto out;
         }
@@ -1780,26 +1780,26 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     *app->config = candidate;
     memset(&candidate, 0, sizeof(candidate));
     app->networked = new_networked;
-    app->turn_provider = snj_config_provider(app->config, selected_provider);
+    app->turn_provider = snag_config_provider(app->config, selected_provider);
     app->staged_provider = NULL;
-    snj_ui_color(&app->ui, configured_color(app, app->config));
-    snj_ui_markdown(&app->ui,
+    snag_ui_color(&app->ui, configured_color(app, app->config));
+    snag_ui_markdown(&app->ui,
                             configured_markdown(app, app->config));
-    snj_ui_networked(&app->ui, app->networked,
+    snag_ui_networked(&app->ui, app->networked,
                              app->networked ?
                                  app->config->irc_model_nick : NULL);
-    snj_ui_commands(&app->ui, commands, command_count(app));
-    snj_ui_typing_pause(&app->ui, app->config->typing_pause_ms);
-    snj_config_free(&previous);
+    snag_ui_commands(&app->ui, commands, command_count(app));
+    snag_ui_typing_pause(&app->ui, app->config->typing_pause_ms);
+    snag_config_free(&previous);
     if (replace_irc && app->networked &&
         app->config->irc_listen_explicit &&
-        snj_app_irc_snapshot(app, "join", error, error_size) < 0) {
+        snag_app_irc_snapshot(app, "join", error, error_size) < 0) {
         rc = -1;
         goto out;
     }
     rc = 0;
 out:
-    snj_config_free(&candidate);
+    snag_config_free(&candidate);
     return rc;
 }
 
@@ -1812,11 +1812,11 @@ run_config_editor(struct app_state *app, int *status,
     pid_t got;
 
     if (!editor || !*editor) {
-        snj_errorf(error, error_size, "$EDITOR is not set");
+        snag_errorf(error, error_size, "$EDITOR is not set");
         errno = ENOENT;
         return 1;
     }
-    if (snj_ui_external(&app->ui, true, error, error_size) < 0)
+    if (snag_ui_external(&app->ui, true, error, error_size) < 0)
         return -1;
     child = fork();
     if (child == 0) {
@@ -1828,18 +1828,18 @@ run_config_editor(struct app_state *app, int *status,
         _exit(127);
     }
     if (child < 0) {
-        snj_errorf(error, error_size, "cannot start $EDITOR: %s",
+        snag_errorf(error, error_size, "cannot start $EDITOR: %s",
                   strerror(errno));
-        (void)snj_ui_external(&app->ui, false, NULL, 0u);
+        (void)snag_ui_external(&app->ui, false, NULL, 0u);
         return -1;
     }
     do {
         got = waitpid(child, status, 0);
     } while (got < 0 && errno == EINTR);
-    if (snj_ui_external(&app->ui, false, error, error_size) < 0)
+    if (snag_ui_external(&app->ui, false, error, error_size) < 0)
         return -1;
     if (got != child) {
-        snj_errorf(error, error_size, "cannot wait for $EDITOR: %s",
+        snag_errorf(error, error_size, "cannot wait for $EDITOR: %s",
                   strerror(errno));
         return -1;
     }
@@ -1898,7 +1898,7 @@ change_effort(struct app_state *app, const char *value, bool active)
                             app->staged_effort != NULL);
     if (active)
         return app_error(app, "/effort LEVEL is idle-only; interrupt or wait");
-    copy = snj_strdup_checked(value, SNJ_CONFIG_EFFORT_MAX - 1u);
+    copy = snag_strdup_checked(value, SNAG_CONFIG_EFFORT_MAX - 1u);
     if (copy)
         effort = trim_selector_part(copy);
     if (!effort || !resolve_effort(effort)) {
@@ -1910,7 +1910,7 @@ change_effort(struct app_state *app, const char *value, bool active)
     if (strcmp(effort, app->session.default_effort) != 0) {
         error[0] = '\0';
         if (commit_event(app, "effort_changed",
-                snj_app_preference_changed_data("old_effort",
+                snag_app_preference_changed_data("old_effort",
                                         app->session.default_effort,
                                         "new_effort", effort),
                 error, sizeof(error)) < 0) {
@@ -1924,11 +1924,11 @@ change_effort(struct app_state *app, const char *value, bool active)
     return show_setting(app, "effort", app->session.default_effort, false);
 }
 static int
-select_view(struct app_state *app, enum snj_render_view view, bool active)
+select_view(struct app_state *app, enum snag_render_view view, bool active)
 {
     if (!app->networked)
         return 0;
-    if (snj_ui_set_view(&app->ui, view) < 0 ||
+    if (snag_ui_set_view(&app->ui, view) < 0 ||
         set_input_prompt(app, active) < 0)
         return -1;
     return 0;
@@ -1936,12 +1936,12 @@ select_view(struct app_state *app, enum snj_render_view view, bool active)
 static int
 toggle_view(struct app_state *app)
 {
-    enum snj_render_view view;
+    enum snag_render_view view;
 
     if (!app->networked)
         return 0;
-    view = app->ui.view == SNJ_RENDER_CHAT ?
-           SNJ_RENDER_ROLLOUT : SNJ_RENDER_CHAT;
+    view = app->ui.view == SNAG_RENDER_CHAT ?
+           SNAG_RENDER_ROLLOUT : SNAG_RENDER_CHAT;
     return select_view(app, view, app->session.active_turn);
 }
 static int
@@ -1957,15 +1957,15 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     if (strcmp(line, "/status") == 0)
         return render_status(app);
     if (strcmp(line, "/history") == 0)
-        return snj_ui_history(&app->ui, &app->session);
+        return snag_ui_history(&app->ui, &app->session);
     if (app->networked && strcmp(line, "/chat") == 0) {
-        int rc = select_view(app, SNJ_RENDER_CHAT, active);
+        int rc = select_view(app, SNAG_RENDER_CHAT, active);
 
         *prompt_ready = rc == 0;
         return rc;
     }
     if (app->networked && strcmp(line, "/rollout") == 0) {
-        int rc = select_view(app, SNJ_RENDER_ROLLOUT, active);
+        int rc = select_view(app, SNAG_RENDER_ROLLOUT, active);
 
         *prompt_ready = rc == 0;
         return rc;
@@ -1981,24 +1981,24 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     if (strncmp(line, "/effort ", 8u) == 0)
         return change_effort(app, line + 8u, active);
     if (strcmp(line, "/goal") == 0 || strncmp(line, "/goal ", 6u) == 0)
-        return snj_app_goal_command(app, line, active);
+        return snag_app_goal_command(app, line, active);
     if (app->networked &&
         (strcmp(line, "/names") == 0 || strcmp(line, "/topic") == 0)) {
-        struct snj_buf state;
+        struct snag_buf state;
         int rc;
 
-        snj_buf_init(&state, SNJ_MAX_IRC_SNAPSHOT);
-        rc = snj_irc_snapshot(app->irc, &state, error, sizeof(error));
+        snag_buf_init(&state, SNAG_MAX_IRC_SNAPSHOT);
+        rc = snag_irc_snapshot(app->irc, &state, error, sizeof(error));
         if (rc == 0)
-            rc = snj_buf_terminate(&state);
+            rc = snag_buf_terminate(&state);
         if (rc == 0)
-            rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)state.data);
-        snj_buf_free(&state);
+            rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)state.data);
+        snag_buf_free(&state);
         return rc < 0 ? app_error(app, error[0] ? error :
                                   "IRC state could not be displayed") : 0;
     }
     if (app->networked && strncmp(line, "/topic ", 7u) == 0) {
-        if (snj_irc_set_operator_topic(app->irc, line + 7u,
+        if (snag_irc_set_operator_topic(app->irc, line + 7u,
                                        error, sizeof(error)) < 0)
             return app_error(app, error[0] ? error :
                               "IRC topic could not be changed");
@@ -2008,10 +2008,10 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     return 0;
 }
 int
-snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
+snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
 {
     struct app_state *app = opaque;
-    enum snj_term_action action = SNJ_TERM_NONE;
+    enum snag_term_action action = SNAG_TERM_NONE;
     char *line = NULL;
     char error[256];
     int rc;
@@ -2024,7 +2024,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     if (app->networked) {
         error[0] = '\0';
         if (tick_irc(app, error, sizeof(error)) < 0) {
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                 error[0] ? error : "IRC event loop failed");
             return -1;
         }
@@ -2033,7 +2033,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (app->execute || app->input_closed)
         return 0;
-    rc = snj_ui_poll(&app->ui, (int)timeout_ms, true, &action, &line);
+    rc = snag_ui_poll(&app->ui, (int)timeout_ms, true, &action, &line);
     history_warning(app);
     if (rc < 0) {
         int input_errno = errno;
@@ -2042,7 +2042,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
             free(line);
             return 2;
         }
-        (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
+        (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
             errno == EOVERFLOW ? "active submission exceeds 1 MiB" :
             errno == EILSEQ ? "active submission contains invalid UTF-8" :
             "active input could not be read");
@@ -2052,20 +2052,20 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         if (app->networked) {
             error[0] = '\0';
             if (tick_irc(app, error, sizeof(error)) < 0) {
-                (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
+                (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                     error[0] ? error : "IRC event loop failed");
                 return -1;
             }
         }
         return 0;
     }
-    if (action == SNJ_TERM_EXIT) {
+    if (action == SNAG_TERM_EXIT) {
         app->input_closed = true;
         app->interrupt_requested = true;
         free(line);
         return 2;
     }
-    if ((action == SNJ_TERM_CANCEL || action == SNJ_TERM_INTERRUPT) &&
+    if ((action == SNAG_TERM_CANCEL || action == SNAG_TERM_INTERRUPT) &&
         app->queue_edit_id[0]) {
         app->queue_armed = app->queue_edit_was_armed;
         app->queue_edit_id[0] = '\0';
@@ -2073,17 +2073,17 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         app->queue_edit_was_armed = false;
         return set_input_prompt(app, true);
     }
-    if (action == SNJ_TERM_CANCEL) {
+    if (action == SNAG_TERM_CANCEL) {
         return set_input_prompt(app, true);
     }
-    if (action == SNJ_TERM_INTERRUPT) {
+    if (action == SNAG_TERM_INTERRUPT) {
         app->interrupt_requested = true;
         free(line);
         return set_input_prompt(app, true) < 0 ? -1 : 2;
     }
-    if (action == SNJ_TERM_VIEW) {
+    if (action == SNAG_TERM_VIEW) {
         if (app->queue_edit_id[0]) {
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                 "queue replacement must be nonempty");
             return 0;
         }
@@ -2096,13 +2096,13 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     if (app->queue_edit_id[0]) {
         rc = finish_queue_edit(app, line, true, error, sizeof(error));
         if (rc != 0 && error[0])
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
-    } else if (action == SNJ_TERM_QUEUE) {
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
+    } else if (action == SNAG_TERM_QUEUE) {
         rc = queue_future_turn(app, line, true, error, sizeof(error));
         if (rc != 0) {
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
             if (set_input_prompt(app, true) < 0 ||
-                snj_ui_restore_draft(&app->ui, line) < 0)
+                snag_ui_restore_draft(&app->ui, line) < 0)
                 rc = -1;
         } else rc = set_input_prompt(app, true);
     } else {
@@ -2111,13 +2111,13 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         bool prompt_ready = false;
         bool read_only;
 
-        (void)snj_prompt_parse(line, &read_only);
+        (void)snag_prompt_parse(line, &read_only);
         if (read_only) {
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                 "/ro cannot steer an active turn; press Tab or use /queue /ro QUERY");
             rc = set_input_prompt(app, true);
             if (rc == 0)
-                rc = snj_ui_restore_draft(&app->ui, line);
+                rc = snag_ui_restore_draft(&app->ui, line);
             goto active_done;
         }
         if (single_line && line[0] == '/' && line[1] != '/') {
@@ -2130,7 +2130,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
             rc = handle_queue_command(app, line, true, &handled,
                                       error, sizeof(error));
             if (rc != 0 && error[0])
-                (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
+                (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
             if (rc < 0)
                 goto active_done;
         }
@@ -2139,43 +2139,43 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 set_input_prompt(app, true) < 0)
                 rc = -1;
         } else if (single_line && line[0] == '/' && line[1] != '/') {
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                 "that command is unavailable while a turn is active");
             rc = set_input_prompt(app, true);
         } else {
             const char *text = line[0] == '/' && line[1] == '/' ? line + 1 : line;
-            char steering_id[SNJ_ID_HEX_LEN + 1u];
+            char steering_id[SNAG_ID_HEX_LEN + 1u];
             size_t len = strlen(text);
-            if (!len || len > SNJ_MAX_STEERING_TEXT) {
-                (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
+            if (!len || len > SNAG_MAX_STEERING_TEXT) {
+                (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                     "active-turn input must be nonempty valid UTF-8 within 256 KiB");
                 rc = 0;
             } else if (app->networked &&
-                       app->ui.input_view == SNJ_RENDER_CHAT) {
+                       app->ui.input_view == SNAG_RENDER_CHAT) {
                 error[0] = '\0';
-                rc = snj_irc_send_operator(app->irc, text,
+                rc = snag_irc_send_operator(app->irc, text,
                                            error, sizeof(error));
                 if (rc < 0) {
-                    (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
+                    (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                         error[0] ? error : "IRC message could not be queued");
                     if (set_input_prompt(app, true) == 0)
-                        (void)snj_ui_restore_draft(&app->ui, line);
+                        (void)snag_ui_restore_draft(&app->ui, line);
                 } else rc = set_input_prompt(app, true);
-            } else if (snj_random_id(steering_id) < 0) {
+            } else if (snag_random_id(steering_id) < 0) {
                 rc = -1;
             } else {
                 rc = commit_event(app, "steering_added",
-                        snj_app_steering_added_data(app->session.active_turn_id,
+                        snag_app_steering_added_data(app->session.active_turn_id,
                                             steering_id, text),
                         error, sizeof(error));
-                if (rc == 0 && snj_ui_submitted(&app->ui,
+                if (rc == 0 && snag_ui_submitted(&app->ui,
                         app->ui.label, text, true) < 0)
                     rc = -1;
                 if (rc < 0) {
-                    (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error[0] ? error :
+                    (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error[0] ? error :
                                                "active-turn input could not be persisted");
                     if (set_input_prompt(app, true) == 0)
-                        (void)snj_ui_restore_draft(&app->ui, line);
+                        (void)snag_ui_restore_draft(&app->ui, line);
                 } else {
                     app->steering_requested = true;
                     rc = set_input_prompt(app, true);
@@ -2197,9 +2197,9 @@ commit_pending_result(struct app_state *app, const char *turn_id,
                       const char *call_id, json_t *result,
                       char *error, size_t error_size)
 {
-    json_t *data = snj_app_tool_finished_data(turn_id, call_id, result);
+    json_t *data = snag_app_tool_finished_data(turn_id, call_id, result);
     if (!data) {
-        snj_errorf(error, error_size, "cannot allocate tool completion event");
+        snag_errorf(error, error_size, "cannot allocate tool completion event");
         return -1;
     }
     return commit_event(app, "tool_finished", data, error, error_size);
@@ -2211,12 +2211,12 @@ terminalize_pending(struct app_state *app, const char *turn_id,
 {
     size_t count = app->session.pending_call_count;
     for (size_t i = 0; i < count; ++i) {
-        struct snj_pending_call *call = &app->session.pending_calls[i];
+        struct snag_pending_call *call = &app->session.pending_calls[i];
         json_t *result;
         if (call->finished)
             continue;
-        result = call->started ? snj_tool_result_outcome_unknown("owner_lost") :
-                                snj_tool_result_not_run(unstarted_reason);
+        result = call->started ? snag_tool_result_outcome_unknown("owner_lost") :
+                                snag_tool_result_not_run(unstarted_reason);
         if (!result || commit_pending_result(app, turn_id, call->call_id, result,
                                              error, error_size) < 0)
             return -1;
@@ -2228,7 +2228,7 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
                               const char *cause, bool user_interrupt,
                               char *error, size_t error_size)
 {
-    char handle[SNJ_ID_HEX_LEN + 1u];
+    char handle[SNAG_ID_HEX_LEN + 1u];
     json_t *result = NULL;
     json_t *data;
     if (!app->session.active_process_handle[0])
@@ -2236,15 +2236,15 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
     memcpy(handle, app->session.active_process_handle, sizeof(handle));
 #ifdef SNAJPAGENT_TEST_FIXTURE
     (void)user_interrupt;
-    result = snj_tool_result_outcome_unknown("owner_lost");
+    result = snag_tool_result_outcome_unknown("owner_lost");
 #else
-    if (snj_tools_close_managed(handle, user_interrupt, snj_app_active_input_pump, app, snj_ui_wake_fd(&app->ui),
+    if (snag_tools_close_managed(handle, user_interrupt, snag_app_active_input_pump, app, snag_ui_wake_fd(&app->ui),
                                 &result, error, error_size) < 0)
         return -1;
 #endif
-    data = snj_app_process_closed_data(turn_id, handle, cause, result);
+    data = snag_app_process_closed_data(turn_id, handle, cause, result);
     if (!data) {
-        snj_errorf(error, error_size, "cannot allocate process closure event");
+        snag_errorf(error, error_size, "cannot allocate process closure event");
         return -1;
     }
     return commit_event(app, "process_closed", data, error, error_size);
@@ -2257,7 +2257,7 @@ fail_turn(struct app_state *app, const char *turn_id, const char *cause,
     return close_active_process_for_turn(app, turn_id, cause, false,
                                          error, error_size) < 0 ||
            commit_event(app, "turn_failed",
-                        snj_app_turn_failed_data(turn_id, class_name, message),
+                        snag_app_turn_failed_data(turn_id, class_name, message),
                         error, error_size) < 0 ? -1 : 0;
 }
 
@@ -2270,7 +2270,7 @@ interrupt_turn(struct app_state *app, const char *turn_id,
     return close_active_process_for_turn(app, turn_id, cause, user_interrupt,
                                          error, error_size) < 0 ||
            commit_event(app, "turn_interrupted",
-                        snj_app_turn_interrupted_data(turn_id, origin, reason),
+                        snag_app_turn_interrupted_data(turn_id, origin, reason),
                         error, error_size) < 0 ? -1 : 0;
 }
 
@@ -2281,11 +2281,11 @@ fail_response(struct app_state *app, const char *turn_id,
               unsigned int retry_count, const char *cause,
               char *error, size_t error_size)
 {
-    json_t *data = snj_app_response_failed_data(
+    json_t *data = snag_app_response_failed_data(
         turn_id, response_id, cycle, class_name, message, partial, retry_count);
 
     if (!data) {
-        snj_errorf(error, error_size, "cannot allocate response failure event");
+        snag_errorf(error, error_size, "cannot allocate response failure event");
         return -1;
     }
     return commit_event(app, "response_failed", data, error, error_size) < 0 ||
@@ -2296,7 +2296,7 @@ fail_response(struct app_state *app, const char *turn_id,
 static int
 recover_session(struct app_state *app, char *error, size_t error_size)
 {
-    char turn_id[SNJ_ID_HEX_LEN + 1u];
+    char turn_id[SNAG_ID_HEX_LEN + 1u];
     const char *message;
     bool has_steering;
     if (!app->session.active_turn)
@@ -2305,7 +2305,7 @@ recover_session(struct app_state *app, char *error, size_t error_size)
     has_steering = app->session.pending_steering_count != 0u;
     if (app->session.response_open) {
         if (commit_event(app, "response_interrupted",
-                         snj_app_response_interrupted_data(turn_id,
+                         snag_app_response_interrupted_data(turn_id,
                                                    app->session.active_response_id,
                                                    app->session.active_cycle,
                                                    "recovery", "process_lost",
@@ -2318,7 +2318,7 @@ recover_session(struct app_state *app, char *error, size_t error_size)
         return app_warning(app, "recovered an interrupted turn");
     }
     if (app->session.response_complete) {
-        if (app->session.response_outcome == SNJ_GRAPH_CONFLICT) {
+        if (app->session.response_outcome == SNAG_GRAPH_CONFLICT) {
             message = "provider response had conflicting terminal actions";
             if (terminalize_pending(app, turn_id, "protocol_conflict",
                                     error, error_size) < 0 ||
@@ -2328,7 +2328,7 @@ recover_session(struct app_state *app, char *error, size_t error_size)
             return app_warning(app, "recovered a protocol-conflicted turn");
         }
         if (has_steering) {
-            if (app->session.response_outcome == SNJ_GRAPH_CALLS &&
+            if (app->session.response_outcome == SNAG_GRAPH_CALLS &&
                 terminalize_pending(app, turn_id, "superseded_by_steering",
                                     error, error_size) < 0)
                 return -1;
@@ -2340,8 +2340,8 @@ recover_session(struct app_state *app, char *error, size_t error_size)
                 "recovered a turn whose pending active-turn input could not be resumed automatically");
         }
         switch (app->session.response_outcome) {
-        case SNJ_GRAPH_FINAL:
-        case SNJ_GRAPH_REFUSAL:
+        case SNAG_GRAPH_FINAL:
+        case SNAG_GRAPH_REFUSAL:
             if (app->session.active_process_handle[0] != '\0') {
                 message = "recovered terminal response while a managed process was unresolved";
                 if (fail_turn(app, turn_id, "protocol_failure",
@@ -2350,13 +2350,13 @@ recover_session(struct app_state *app, char *error, size_t error_size)
                 return app_warning(app, "recovered a terminal response that violated managed process ordering");
             }
             if (commit_event(app, "turn_completed",
-                             snj_app_turn_completed_data(turn_id,
+                             snag_app_turn_completed_data(turn_id,
                                                  app->session.final_response_id,
                                                  app->session.final_item_id),
                              error, error_size) < 0)
                 return -1;
             return app_warning(app, "recovered a durably completed turn");
-        case SNJ_GRAPH_CALLS:
+        case SNAG_GRAPH_CALLS:
             if (terminalize_pending(app, turn_id, "recovery_unstarted",
                                     error, error_size) < 0 ||
                 interrupt_turn(app, turn_id, "internal_failure", false,
@@ -2364,9 +2364,9 @@ recover_session(struct app_state *app, char *error, size_t error_size)
                                error, error_size) < 0)
                 return -1;
             return app_warning(app, "recovered a turn with unfinished tool work");
-        case SNJ_GRAPH_CONFLICT:
+        case SNAG_GRAPH_CONFLICT:
             break;
-        case SNJ_GRAPH_NONPRODUCTIVE:
+        case SNAG_GRAPH_NONPRODUCTIVE:
             message = "provider completed without a final answer, refusal, or tool call";
             if (fail_turn(app, turn_id, "protocol_failure",
                           "protocol", message, error, error_size) < 0)
@@ -2374,7 +2374,7 @@ recover_session(struct app_state *app, char *error, size_t error_size)
             return app_warning(app, "recovered a nonproductive response");
         }
     }
-    if (app->session.response_terminal == SNJ_RESPONSE_TERMINAL_FAILED) {
+    if (app->session.response_terminal == SNAG_RESPONSE_TERMINAL_FAILED) {
         message = "provider response had already failed before process recovery";
         if (fail_turn(app, turn_id, "provider_failure",
                       "provider", message, error, error_size) < 0)
@@ -2389,23 +2389,23 @@ recover_session(struct app_state *app, char *error, size_t error_size)
 }
 static int
 execute_calls(struct app_state *app, const char *turn_id,
-              const struct snj_response_graph *graph,
-              const struct snj_credential *credential,
+              const struct snag_response_graph *graph,
+              const struct snag_credential *credential,
               char *error, size_t error_size)
 {
     for (size_t i = 0; i < graph->count; ++i) {
-        const struct snj_response_item *call = &graph->items[i];
-        char digest[SNJ_SHA256_HEX_LEN + 1u];
+        const struct snag_response_item *call = &graph->items[i];
+        char digest[SNAG_SHA256_HEX_LEN + 1u];
         json_t *result = NULL;
         char tool_error[256];
-        if (call->kind != SNJ_ITEM_TOOL_CALL)
+        if (call->kind != SNAG_ITEM_TOOL_CALL)
             continue;
-        if (snj_tool_action_digest(call, app->session.workspace, digest) < 0) {
-            snj_errorf(error, error_size, "cannot digest tool action");
+        if (snag_tool_action_digest(call, app->session.workspace, digest) < 0) {
+            snag_errorf(error, error_size, "cannot digest tool action");
             return -1;
         }
         if (commit_event(app, "tool_started",
-                         snj_app_tool_started_data(turn_id, call->call_id, digest,
+                         snag_app_tool_started_data(turn_id, call->call_id, digest,
                                            app->session.workspace),
                          error, error_size) < 0)
             return -1;
@@ -2414,29 +2414,29 @@ execute_calls(struct app_state *app, const char *turn_id,
             int run_rc;
 
             app->tool_active = true;
-            if (snj_ui_spinner_states(&app->ui,
+            if (snag_ui_spinner_states(&app->ui,
                     prompt_spinner_states(app, true)) < 0) {
                 app->tool_active = false;
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "tool status could not be displayed");
                 return -1;
             }
-            run_rc = snj_app_tool_run(app, call, credential, &result, tool_error,
+            run_rc = snag_app_tool_run(app, call, credential, &result, tool_error,
                                       sizeof(tool_error));
             app->tool_active = false;
-            if (snj_ui_spinner_states(&app->ui,
+            if (snag_ui_spinner_states(&app->ui,
                     prompt_spinner_states(app, true)) < 0) {
                 if (result)
                     json_decref(result);
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "provider status could not be restored");
                 return -1;
             }
             if (run_rc == 2 || app->interrupt_requested) {
                 if (!result)
-                    result = snj_tool_result_not_run("turn_cancelled");
+                    result = snag_tool_result_not_run("turn_cancelled");
                 if (!result ||
-                    snj_tools_attach_output_limit(call, app->config,
+                    snag_tools_attach_output_limit(call, app->config,
                                                   result) < 0 ||
                     commit_pending_result(app, turn_id, call->call_id, result,
                                           error, error_size) < 0 ||
@@ -2446,7 +2446,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                                    "user", "cancelled",
                                    error, error_size) < 0)
                     return -1;
-                snj_errorf(error, error_size, "turn cancelled");
+                snag_errorf(error, error_size, "turn cancelled");
                 return 2;
             }
             if (run_rc < 0) {
@@ -2457,19 +2457,19 @@ execute_calls(struct app_state *app, const char *turn_id,
                 if (!tool_error[0])
                     (void)snprintf(tool_error, sizeof(tool_error),
                                    "tool adapter failed");
-                result = snj_tool_result_terminal(false, tool_error);
+                result = snag_tool_result_terminal(false, tool_error);
             }
         }
         if (!result)
             return -1;
-        if (snj_tools_attach_output_limit(call, app->config, result) < 0) {
+        if (snag_tools_attach_output_limit(call, app->config, result) < 0) {
             json_decref(result);
-            snj_errorf(error, error_size,
+            snag_errorf(error, error_size,
                       "command output token limit could not be retained");
             return -1;
         }
         {
-            const char *status = snj_json_string(result, "status");
+            const char *status = snag_json_string(result, "status");
             bool yielded = status && strcmp(status, "running") == 0;
             if (commit_pending_result(app, turn_id, call->call_id, result,
                                       error, error_size) < 0)
@@ -2493,9 +2493,9 @@ silent_turn_data(const char *turn_id, const char *response_id,
     json_t *data = json_object();
 
     if (!data ||
-        snj_json_set_new(data, "reason", json_string(reason)) < 0 ||
-        snj_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
-        snj_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
+        snag_json_set_new(data, "reason", json_string(reason)) < 0 ||
+        snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
+        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
         if (data)
             json_decref(data);
         return NULL;
@@ -2505,41 +2505,41 @@ silent_turn_data(const char *turn_id, const char *response_id,
 
 static int
 run_turn(struct app_state *app, const char *prompt,
-         const struct snj_queued_turn *queued, bool goal_turn, bool read_only)
+         const struct snag_queued_turn *queued, bool goal_turn, bool read_only)
 {
-    char turn_id[SNJ_ID_HEX_LEN + 1u];
-    char response_id[SNJ_ID_HEX_LEN + 1u];
-    char input_hash[SNJ_SHA256_HEX_LEN + 1u];
-    char request_hash[SNJ_SHA256_HEX_LEN + 1u];
-    char count_request_hash[SNJ_SHA256_HEX_LEN + 1u];
+    char turn_id[SNAG_ID_HEX_LEN + 1u];
+    char response_id[SNAG_ID_HEX_LEN + 1u];
+    char input_hash[SNAG_SHA256_HEX_LEN + 1u];
+    char request_hash[SNAG_SHA256_HEX_LEN + 1u];
+    char count_request_hash[SNAG_SHA256_HEX_LEN + 1u];
     char error[256];
     uint64_t input_tokens_bound = 0;
     uint64_t model_input_bytes = 0;
     uint64_t request_input_bytes = 0;
     uint64_t request_input_count = 0;
-    char request_input_hash[SNJ_SHA256_HEX_LEN + 1u];
-    char provider_source_hash[SNJ_SHA256_HEX_LEN + 1u];
-    char rejected_request_hash[SNJ_SHA256_HEX_LEN + 1u] = {0};
-    char over_budget_request_hash[SNJ_SHA256_HEX_LEN + 1u] = {0};
+    char request_input_hash[SNAG_SHA256_HEX_LEN + 1u];
+    char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
+    char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
+    char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     unsigned int hard_compaction_attempts = 0u;
     bool capacity_recovery_used = false;
     char *turn_prompt;
-    struct snj_credential credential;
-    size_t prompt_max = queued ? SNJ_MAX_QUEUED_TEXT : SNJ_MAX_DIRECT_PROMPT;
+    struct snag_credential credential;
+    size_t prompt_max = queued ? SNAG_MAX_QUEUED_TEXT : SNAG_MAX_DIRECT_PROMPT;
     int result = 4;
-    snj_credential_clear(&credential);
+    snag_credential_clear(&credential);
     app->last_turn_refused = false;
     app->irc_turn_replied = false;
     error[0] = '\0';
     if (!*prompt || strlen(prompt) > prompt_max ||
-        !snj_utf8_valid((const unsigned char *)prompt, strlen(prompt), true)) {
+        !snag_utf8_valid((const unsigned char *)prompt, strlen(prompt), true)) {
         (void)app_error(app, queued ?
             "queued prompt must be nonempty valid UTF-8 within 256 KiB" :
             "prompt must be nonempty valid UTF-8 within 1 MiB");
         return 2;
     }
     if (read_only && app->networked && !app->execute &&
-        select_view(app, SNJ_RENDER_ROLLOUT, false) < 0)
+        select_view(app, SNAG_RENDER_ROLLOUT, false) < 0)
         return 6;
     if (prepare_turn_settings(app, error, sizeof(error)) < 0) {
         (void)app_error(app, error);
@@ -2547,21 +2547,21 @@ run_turn(struct app_state *app, const char *prompt,
     }
     provider_capacity_source_sha256(app->turn_provider, provider_source_hash);
 #ifndef SNAJPAGENT_TEST_FIXTURE
-    if (snj_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
-                      &credential, snj_app_active_input_pump, app,
+    if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
+                      &credential, snag_app_active_input_pump, app,
                       error, sizeof(error)) < 0) {
         (void)app_error(app, error);
-        snj_credential_clear(&credential);
+        snag_credential_clear(&credential);
         return 2;
     }
 #endif
-    turn_prompt = snj_strdup_checked(prompt, prompt_max);
+    turn_prompt = snag_strdup_checked(prompt, prompt_max);
     if (!turn_prompt) {
         (void)app_error(app, "cannot retain turn input");
         return 3;
     }
     if (app->config->read_agents_md) {
-        if (snj_instructions_discover(&app->turn_instructions,
+        if (snag_instructions_discover(&app->turn_instructions,
                                       app->session.workspace,
                                       error, sizeof(error)) < 0) {
             (void)app_error(app, error);
@@ -2569,15 +2569,15 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
     } else {
-        snj_instructions_free(&app->turn_instructions);
+        snag_instructions_free(&app->turn_instructions);
     }
-    if (snj_random_id(turn_id) < 0) {
+    if (snag_random_id(turn_id) < 0) {
         (void)app_error(app, "cryptographic turn id generation failed");
         result = 3;
         goto out;
     }
     if (commit_event(app, "turn_started",
-                     snj_app_turn_started_data(app, turn_prompt, turn_id, queued,
+                     snag_app_turn_started_data(app, turn_prompt, turn_id, queued,
                                                goal_turn, read_only),
                      error, sizeof(error)) < 0) {
         (void)app_error(app, error);
@@ -2599,31 +2599,31 @@ run_turn(struct app_state *app, const char *prompt,
         goto out;
     }
     for (unsigned int cycle = 1u; cycle != 0u; ++cycle) {
-        struct snj_response_graph graph;
-        struct snj_graph_decision decision;
+        struct snag_response_graph graph;
+        struct snag_graph_decision decision;
         json_t *steering = NULL;
         json_t *create_request = NULL;
         json_t *count_request = NULL;
         const char *count_method = "qualified_upper_bound";
-        struct snj_buf request_body;
+        struct snag_buf request_body;
         uint64_t response_begin_ms;
         unsigned int provider_retry_count = 0u;
-        struct snj_provider_failure provider_failure;
+        struct snag_provider_failure provider_failure;
         int provider_rc;
         memset(&provider_failure, 0, sizeof(provider_failure));
         error[0] = '\0';
-        if (snj_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
+        if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
             (void)app_error(app, error[0] ? error :
                             "urgent IRC input could not be admitted");
             result = 3;
             goto out;
         }
-        snj_response_graph_init(&graph);
-        snj_buf_init(&request_body, SNJ_WIRE_BODY_MAX);
-        steering = snj_app_steering_snapshot(&app->session);
+        snag_response_graph_init(&graph);
+        snag_buf_init(&request_body, SNAG_WIRE_BODY_MAX);
+        steering = snag_app_steering_snapshot(&app->session);
         error[0] = '\0';
-        if (!steering || snj_random_id(response_id) < 0 ||
-            snj_app_request_digests(app, turn_prompt, steering, cycle, &credential,
+        if (!steering || snag_random_id(response_id) < 0 ||
+            snag_app_request_digests(app, turn_prompt, steering, cycle, &credential,
                             input_hash, request_hash, count_request_hash,
                             &input_tokens_bound,
                             &model_input_bytes, &request_input_bytes,
@@ -2632,11 +2632,11 @@ run_turn(struct app_state *app, const char *prompt,
                             &count_method,
                             &request_body, &create_request, &count_request,
                             error, sizeof(error)) < 0) {
-            snj_app_response_cycle_release(app, &graph, &steering,
+            snag_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
             if (commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "context",
+                             snag_app_turn_failed_data(turn_id, "context",
                                  error[0] ? error :
                                  "response context projection failed"),
                              error, sizeof(error)) < 0) {
@@ -2649,11 +2649,11 @@ run_turn(struct app_state *app, const char *prompt,
             }
             goto out;
         }
-        provider_rc = snj_app_provider_count(app, count_request, &credential,
+        provider_rc = snag_app_provider_count(app, count_request, &credential,
             model_input_bytes, &input_tokens_bound, &count_method,
             error, sizeof(error));
         if (provider_rc == 1 && app->steering_requested) {
-            snj_app_response_cycle_release(app, &graph, &steering,
+            snag_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
             app->steering_requested = false;
@@ -2661,7 +2661,7 @@ run_turn(struct app_state *app, const char *prompt,
             continue;
         }
         if (provider_rc == 2 && app->interrupt_requested) {
-            snj_app_response_cycle_release(app, &graph, &steering,
+            snag_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
             if (interrupt_turn(app, turn_id, "user_interrupt", true,
@@ -2676,12 +2676,12 @@ run_turn(struct app_state *app, const char *prompt,
             }
             goto out;
         }
-        if (provider_rc != 0 && provider_rc != SNJ_APP_COUNT_SKIPPED) {
-            snj_app_response_cycle_release(app, &graph, &steering,
+        if (provider_rc != 0 && provider_rc != SNAG_APP_COUNT_SKIPPED) {
+            snag_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
             if (commit_event(app, "turn_failed",
-                             snj_app_turn_failed_data(turn_id, "provider",
+                             snag_app_turn_failed_data(turn_id, "provider",
                                  error[0] ? error :
                                  "input-token count failed"),
                              error, sizeof(error)) < 0) {
@@ -2695,7 +2695,7 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (app->networked && app->irc_urgent.len) {
-            snj_app_response_cycle_release(app, &graph, &steering,
+            snag_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
             --cycle;
@@ -2719,11 +2719,11 @@ run_turn(struct app_state *app, const char *prompt,
                         "context compaction repeated an over-budget request",
                     (unsigned long long)input_tokens_bound, count_method,
                     (unsigned long long)app->turn_capacity.hard_input_tokens);
-                snj_app_response_cycle_release(app, &graph, &steering,
+                snag_app_response_cycle_release(app, &graph, &steering,
                                                &create_request, &count_request,
                                                &request_body);
                 if (commit_event(app, "turn_failed",
-                        snj_app_turn_failed_data(turn_id, "context", failure),
+                        snag_app_turn_failed_data(turn_id, "context", failure),
                         error, sizeof(error)) < 0) {
                     (void)app_error(app, error);
                     result = 3;
@@ -2736,11 +2736,11 @@ run_turn(struct app_state *app, const char *prompt,
             if (over_hard)
                 memcpy(over_budget_request_hash, request_hash,
                        sizeof(over_budget_request_hash));
-            compact_rc = snj_app_compact_before_response(app, &credential,
+            compact_rc = snag_app_compact_before_response(app, &credential,
                     input_tokens_bound, count_method, &compacted,
                     error, sizeof(error));
             if (compact_rc == 1 && app->steering_requested) {
-                snj_app_response_cycle_release(app, &graph, &steering,
+                snag_app_response_cycle_release(app, &graph, &steering,
                                                &create_request, &count_request,
                                                &request_body);
                 app->steering_requested = false;
@@ -2748,13 +2748,13 @@ run_turn(struct app_state *app, const char *prompt,
                 continue;
             }
             if (compact_rc == 2 && app->interrupt_requested) {
-                snj_app_response_cycle_release(app, &graph, &steering,
+                snag_app_response_cycle_release(app, &graph, &steering,
                                                &create_request, &count_request,
                                                &request_body);
                 if (close_active_process_for_turn(app, turn_id,
                         "user_interrupt", true, error, sizeof(error)) < 0 ||
                     commit_event(app, "turn_interrupted",
-                        snj_app_turn_interrupted_data(turn_id, "user",
+                        snag_app_turn_interrupted_data(turn_id, "user",
                                                       "cancelled"),
                         error, sizeof(error)) < 0) {
                     (void)app_error(app, error[0] ? error :
@@ -2767,11 +2767,11 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             if (compact_rc != 0) {
-                snj_app_response_cycle_release(app, &graph, &steering,
+                snag_app_response_cycle_release(app, &graph, &steering,
                                                &create_request, &count_request,
                                                &request_body);
                 if (commit_event(app, "turn_failed",
-                                 snj_app_turn_failed_data(turn_id,
+                                 snag_app_turn_failed_data(turn_id,
                                      over_hard ? "context" : "provider",
                                      error[0] ? error :
                                      "pre-response compaction failed"),
@@ -2788,7 +2788,7 @@ run_turn(struct app_state *app, const char *prompt,
             if (compacted) {
                 if (over_hard)
                     ++hard_compaction_attempts;
-                snj_app_response_cycle_release(app, &graph, &steering,
+                snag_app_response_cycle_release(app, &graph, &steering,
                                                &create_request, &count_request,
                                                &request_body);
                 --cycle;
@@ -2799,11 +2799,11 @@ run_turn(struct app_state *app, const char *prompt,
             strcmp(rejected_request_hash, request_hash) == 0) {
             static const char failure[] =
                 "capacity recovery produced an identical provider request";
-            snj_app_response_cycle_release(app, &graph, &steering,
+            snag_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
             if (commit_event(app, "turn_failed",
-                    snj_app_turn_failed_data(turn_id, "context", failure),
+                    snag_app_turn_failed_data(turn_id, "context", failure),
                     error, sizeof(error)) < 0) {
                 (void)app_error(app, error);
                 result = 3;
@@ -2814,7 +2814,7 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (commit_event(app, "response_started",
-                         snj_app_response_started_data(turn_id, response_id, cycle,
+                         snag_app_response_started_data(turn_id, response_id, cycle,
                                                app->session.compact_id,
                                                app->turn_model,
                                                input_hash, request_hash,
@@ -2834,7 +2834,7 @@ run_turn(struct app_state *app, const char *prompt,
                                                &app->turn_capacity,
                                                steering),
                          error, sizeof(error)) < 0) {
-            snj_app_response_cycle_release(app, &graph, &steering,
+            snag_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
             (void)app_error(app, error[0] ? error :
@@ -2843,7 +2843,7 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (!app->execute && set_input_prompt(app, true) < 0) {
-            snj_app_response_cycle_release(app, &graph, &steering,
+            snag_app_response_cycle_release(app, &graph, &steering,
                                            &create_request, &count_request,
                                            &request_body);
             (void)app_error(app, "context meter could not be displayed");
@@ -2859,20 +2859,20 @@ run_turn(struct app_state *app, const char *prompt,
             json_decref(steering);
             if (create_request)
                 json_decref(create_request);
-            snj_buf_free(&request_body);
-            snj_response_graph_free(&graph);
+            snag_buf_free(&request_body);
+            snag_response_graph_free(&graph);
             (void)app_error(app, "response runtime facts could not be rendered");
             result = 6;
             goto out;
         }
         if (request_body.len &&
-            snj_ui_protocol(&app->ui, "request.body",
+            snag_ui_protocol(&app->ui, "request.body",
                                 (const char *)request_body.data,
                                 request_body.len) < 0) {
             json_t *partial = json_array();
             static const char failure[] =
                 "request diagnostics could not be rendered";
-            snj_buf_free(&request_body);
+            snag_buf_free(&request_body);
             if (create_request)
                 json_decref(create_request);
             json_decref(steering);
@@ -2880,28 +2880,28 @@ run_turn(struct app_state *app, const char *prompt,
                                           "output", failure, partial, 0u,
                                           "output_failure", error,
                                           sizeof(error)) < 0) {
-                snj_response_graph_free(&graph);
+                snag_response_graph_free(&graph);
                 (void)app_error(app, error[0] ? error :
                                 "diagnostic output failure could not be persisted");
                 result = 3;
                 goto out;
             }
-            snj_response_graph_free(&graph);
+            snag_response_graph_free(&graph);
             (void)app_error(app, failure);
             result = 6;
             goto out;
         }
-        snj_buf_free(&request_body);
+        snag_buf_free(&request_body);
         app->stream_graph = &graph;
-        snj_app_reset_stream(app);
-        response_begin_ms = snj_time_ms();
+        snag_app_reset_stream(app);
+        response_begin_ms = snag_time_ms();
         error[0] = '\0';
-        provider_rc = snj_app_provider_run(app, turn_prompt, steering, cycle,
+        provider_rc = snag_app_provider_run(app, turn_prompt, steering, cycle,
                                    create_request, &credential, &graph,
                                    &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
         if (provider_rc == 0) {
-            int control_rc = snj_app_active_input_pump(app, 0u);
+            int control_rc = snag_app_active_input_pump(app, 0u);
             if (control_rc != 0)
                 provider_rc = control_rc;
         }
@@ -2910,59 +2910,59 @@ run_turn(struct app_state *app, const char *prompt,
         if ((provider_rc == 1 && app->steering_requested) ||
             (provider_rc == 2 && app->interrupt_requested) ||
             provider_failure.output_correction !=
-                SNJ_OUTPUT_CORRECTION_NONE) {
-            if (snj_app_abort_stream_item(app) < 0)
+                SNAG_OUTPUT_CORRECTION_NONE) {
+            if (snag_app_abort_stream_item(app) < 0)
                 app->stream_failed = true;
-        } else if (snj_app_finish_stream_item(app) < 0) {
+        } else if (snag_app_finish_stream_item(app) < 0) {
             app->stream_failed = true;
         }
         if (provider_rc == 1 && app->steering_requested && !app->stream_failed) {
-            json_t *partial = snj_app_partial_public_json(app);
+            json_t *partial = snag_app_partial_public_json(app);
             if (!partial ||
                 commit_event(app, "response_interrupted",
-                    snj_app_response_interrupted_data(turn_id, response_id, cycle,
+                    snag_app_response_interrupted_data(turn_id, response_id, cycle,
                                               "steering", "steered", partial),
                     error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                        "active-turn response could not be persisted");
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             continue;
         }
         if (provider_rc == 2 && app->interrupt_requested && !app->stream_failed) {
-            json_t *partial = snj_app_partial_public_json(app);
+            json_t *partial = snag_app_partial_public_json(app);
             if (!partial ||
                 commit_event(app, "response_interrupted",
-                    snj_app_response_interrupted_data(turn_id, response_id, cycle,
+                    snag_app_response_interrupted_data(turn_id, response_id, cycle,
                                               "user", "cancelled", partial),
                     error, sizeof(error)) < 0 ||
                 interrupt_turn(app, turn_id, "user_interrupt", true,
                                "user", "cancelled",
                                error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                 "interruption could not be persisted");
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_warning(app, "turn interrupted");
             result = app->execute ? 6 : 1;
             goto out;
         }
         if (provider_failure.output_correction !=
-                SNJ_OUTPUT_CORRECTION_NONE && !app->stream_failed) {
+                SNAG_OUTPUT_CORRECTION_NONE && !app->stream_failed) {
             static const char repeated[] =
                 "assistant output remained invalid after one model-facing correction";
             const char *correction =
                 provider_failure.output_correction ==
-                    SNJ_OUTPUT_CORRECTION_EMPTY ?
-                    SNJ_EMPTY_OUTPUT_CORRECTION :
-                    SNJ_OVERSIZED_OUTPUT_CORRECTION;
-            char correction_id[SNJ_ID_HEX_LEN + 1u];
+                    SNAG_OUTPUT_CORRECTION_EMPTY ?
+                    SNAG_EMPTY_OUTPUT_CORRECTION :
+                    SNAG_OVERSIZED_OUTPUT_CORRECTION;
+            char correction_id[SNAG_ID_HEX_LEN + 1u];
 
             if (app->session.output_correction_used) {
                 app->stream_failed = true;
@@ -2972,31 +2972,31 @@ run_turn(struct app_state *app, const char *prompt,
             } else {
                 json_t *partial;
 
-                if (snj_random_id(correction_id) < 0)
+                if (snag_random_id(correction_id) < 0)
                     partial = NULL;
                 else
-                    partial = snj_app_partial_public_json(app);
+                    partial = snag_app_partial_public_json(app);
                 if (!partial ||
                     commit_event(app, "response_output_correction",
-                        snj_app_response_output_correction_data(
+                        snag_app_response_output_correction_data(
                             turn_id, response_id, cycle, correction_id,
                             correction, partial),
                         error, sizeof(error)) < 0) {
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
                                                    NULL, NULL);
                     (void)app_error(app, error[0] ? error :
                         "assistant output correction could not be persisted");
                     result = 3;
                     goto out;
                 }
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
                                                NULL);
                 continue;
             }
         }
         if (provider_rc < 0 || app->stream_failed) {
             bool capacity_failure = provider_rc < 0 &&
-                snj_provider_failure_is_capacity(&provider_failure);
+                snag_provider_failure_is_capacity(&provider_failure);
             bool replay_safe = capacity_failure && !app->stream_failed &&
                 app->partial_count == 0u && graph.count == 0u &&
                 !app->stream_item_seen;
@@ -3015,7 +3015,7 @@ run_turn(struct app_state *app, const char *prompt,
                            (error[0] ? error : "provider response failed"));
             if (replay_safe && !capacity_recovery_used) {
                 bool compacted = false;
-                char provider_source_hash[SNJ_SHA256_HEX_LEN + 1u];
+                char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
 
                 provider_capacity_source_sha256(app->turn_provider,
                                                 provider_source_hash);
@@ -3024,11 +3024,11 @@ run_turn(struct app_state *app, const char *prompt,
                     (void)snprintf(failure, sizeof(failure),
                                    "provider rejected an identical context request twice");
                 } else if (commit_event(app, "response_capacity_rejected",
-                        snj_app_response_capacity_rejected_data(
+                        snag_app_response_capacity_rejected_data(
                             turn_id, response_id, cycle, request_hash,
                             &provider_failure, &app->turn_capacity,
                             provider_source_hash), error, sizeof(error)) < 0) {
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
                                                    NULL, NULL);
                     (void)app_error(app, error[0] ? error :
                         "capacity rejection could not be persisted");
@@ -3044,7 +3044,7 @@ run_turn(struct app_state *app, const char *prompt,
                         app, app->turn_provider, app->turn_model);
                     if (provider_failure.requested_input_known ||
                         ceiling_matches)
-                        snj_app_record_model_accounting(app, SNJ_COUNT_UNKNOWN,
+                        snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
                             provider_failure.requested_input_known ?
                                 model_input_bytes : 0u,
                             provider_failure.requested_input_known ?
@@ -3055,12 +3055,12 @@ run_turn(struct app_state *app, const char *prompt,
                     apply_capacity_ceiling(app, app->turn_provider,
                                            app->turn_model,
                                            &app->turn_capacity);
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
                                                    NULL, NULL);
                     for (;;) {
                         error[0] = '\0';
                         recovery_rc =
-                            snj_app_compact_after_capacity_rejection(
+                            snag_app_compact_after_capacity_rejection(
                                 app, &credential, &compacted,
                                 error, sizeof(error));
                         if (recovery_rc == 1 && app->steering_requested) {
@@ -3072,7 +3072,7 @@ run_turn(struct app_state *app, const char *prompt,
                                     "user_interrupt", true,
                                     error, sizeof(error)) < 0 ||
                                 commit_event(app, "turn_interrupted",
-                                    snj_app_turn_interrupted_data(
+                                    snag_app_turn_interrupted_data(
                                         turn_id, "user", "cancelled"),
                                     error, sizeof(error)) < 0) {
                                 (void)app_error(app, error[0] ? error :
@@ -3095,7 +3095,7 @@ run_turn(struct app_state *app, const char *prompt,
                         error[0] ? ": " : "", 190,
                         error[0] ? error : "");
                     if (commit_event(app, "turn_failed",
-                            snj_app_turn_failed_data(turn_id, "context", failure),
+                            snag_app_turn_failed_data(turn_id, "context", failure),
                             error, sizeof(error)) < 0) {
                         (void)app_error(app, error);
                         result = 3;
@@ -3106,14 +3106,14 @@ run_turn(struct app_state *app, const char *prompt,
                     goto out;
                 }
             }
-            partial = snj_app_partial_public_json(app);
+            partial = snag_app_partial_public_json(app);
             if (!partial) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "failed response prefix could not be retained");
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             if (fail_response(app, turn_id, response_id, cycle, class_name,
                               failure, partial, provider_retry_count,
                               app->stream_failed ?
@@ -3130,28 +3130,28 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (!app->execute) {
-            int input_rc = snj_app_active_input_pump(app, 0u);
+            int input_rc = snag_app_active_input_pump(app, 0u);
             if (input_rc < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "active input could not be processed");
                 result = 3;
                 goto out;
             }
         }
-        if (snj_response_graph_classify(&graph, &decision,
+        if (snag_response_graph_classify(&graph, &decision,
                                         error, sizeof(error)) < 0) {
             char failure[256];
             json_t *partial;
             (void)snprintf(failure, sizeof(failure), "%s",
                            error[0] ? error : "invalid provider response graph");
-            partial = snj_app_partial_public_json(app);
+            partial = snag_app_partial_public_json(app);
             if (!partial) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "invalid response prefix could not be retained");
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             if (fail_response(app, turn_id, response_id, cycle, "protocol",
                               failure, partial, provider_retry_count,
                               "protocol_failure", error, sizeof(error)) < 0) {
@@ -3164,20 +3164,20 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (commit_event(app, "response_completed",
-                         snj_app_response_completed_data(turn_id, response_id, cycle, &graph),
+                         snag_app_response_completed_data(turn_id, response_id, cycle, &graph),
                          error, sizeof(error)) < 0) {
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_error(app, error);
             result = 3;
             goto out;
         }
         if (graph.usage.input_known && graph.usage.input_tokens != 0u &&
             strcmp(count_method, "exact") != 0)
-            snj_app_record_model_accounting(app, SNJ_COUNT_UNKNOWN,
+            snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
                 model_input_bytes, graph.usage.input_tokens, 0u);
         error[0] = '\0';
-        if (snj_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+        if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_error(app, error[0] ? error :
                             "urgent IRC input could not be admitted");
             result = 3;
@@ -3200,34 +3200,34 @@ run_turn(struct app_state *app, const char *prompt,
                     "response › %s completed · provider=%s · outcome=%s · items=%zu · duration=%llums · tokens=%s/%s/%s/%s",
                     response_id, graph.provider_response_id,
                     graph_outcome_name(decision.outcome), graph.count,
-                    (unsigned long long)(snj_time_ms() - response_begin_ms),
+                    (unsigned long long)(snag_time_ms() - response_begin_ms),
                     input_tokens, output_tokens, reasoning_tokens,
                     total_tokens) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "response runtime facts could not be rendered");
                 result = 6;
                 goto out;
             }
         }
         {
-            enum snj_managed_continuation managed =
-                snj_app_managed_continuation_classify(app, &graph, &decision);
+            enum snag_managed_continuation managed =
+                snag_app_managed_continuation_classify(app, &graph, &decision);
 
-            if (managed == SNJ_MANAGED_CONTINUATION_HANDLE_MISMATCH) {
+            if (managed == SNAG_MANAGED_CONTINUATION_HANDLE_MISMATCH) {
                 if (terminalize_pending(app, turn_id,
                                         "managed_process_handle_mismatch",
                                         error, sizeof(error)) < 0) {
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
                                                    NULL, NULL);
                     (void)app_error(app, error);
                     result = 3;
                     goto out;
                 }
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
                                                NULL);
                 continue;
             }
-            if (managed == SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION) {
+            if (managed == SNAG_MANAGED_CONTINUATION_ORDERING_VIOLATION) {
                 static const char message[] =
                     "provider response violated unresolved managed process ordering";
                 if ((app->session.pending_call_count != 0u &&
@@ -3236,130 +3236,130 @@ run_turn(struct app_state *app, const char *prompt,
                                          error, sizeof(error)) < 0) ||
                     fail_turn(app, turn_id, "protocol_failure",
                               "protocol", message, error, sizeof(error)) < 0) {
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
                                                    NULL, NULL);
                     (void)app_error(app, error);
                     result = 3;
                     goto out;
                 }
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
                                                NULL);
                 (void)app_error(app, message);
                 result = 4;
                 goto out;
             }
         }
-        if (decision.outcome == SNJ_GRAPH_CONFLICT) {
+        if (decision.outcome == SNAG_GRAPH_CONFLICT) {
             const char *message = decision.message ? decision.message :
                 "provider response contained conflicting actions";
             if (terminalize_pending(app, turn_id, "protocol_conflict",
                                     error, sizeof(error)) < 0 ||
                 fail_turn(app, turn_id, "protocol_failure",
                           "protocol", message, error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_error(app, message);
             result = 4;
             goto out;
         }
         if (app->session.pending_steering_count != 0u) {
-            if (decision.outcome == SNJ_GRAPH_CALLS &&
+            if (decision.outcome == SNAG_GRAPH_CALLS &&
                 terminalize_pending(app, turn_id, "superseded_by_steering",
                                     error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             continue;
         }
         if (app->networked && !app->session.active_read_only &&
             app->irc_turn_local_operator &&
             !app->irc_turn_replied && !app->session.irc_reply_reminded &&
-            (decision.outcome == SNJ_GRAPH_NONPRODUCTIVE ||
-             decision.outcome == SNJ_GRAPH_FINAL ||
-             decision.outcome == SNJ_GRAPH_REFUSAL)) {
-            char steering_id[SNJ_ID_HEX_LEN + 1u];
+            (decision.outcome == SNAG_GRAPH_NONPRODUCTIVE ||
+             decision.outcome == SNAG_GRAPH_FINAL ||
+             decision.outcome == SNAG_GRAPH_REFUSAL)) {
+            char steering_id[SNAG_ID_HEX_LEN + 1u];
 
-            if (snj_random_id(steering_id) < 0 ||
+            if (snag_random_id(steering_id) < 0 ||
                 commit_event(app, "irc_reply_reminder",
-                    snj_app_steering_added_data(turn_id, steering_id,
-                        SNJ_IRC_REPLY_REMINDER_TEXT),
+                    snag_app_steering_added_data(turn_id, steering_id,
+                        SNAG_IRC_REPLY_REMINDER_TEXT),
                     error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                snag_app_response_cycle_release(app, &graph, NULL, NULL,
                                                NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                 "IRC reply reminder could not be persisted");
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL,
+            snag_app_response_cycle_release(app, &graph, NULL, NULL,
                                            NULL, NULL);
             continue;
         }
-        if (app->networked && decision.outcome == SNJ_GRAPH_NONPRODUCTIVE) {
+        if (app->networked && decision.outcome == SNAG_GRAPH_NONPRODUCTIVE) {
             if (commit_event(app, "turn_completed_silent",
                     silent_turn_data(turn_id, response_id,
                         app->irc_turn_local_operator && !app->irc_turn_replied ?
                         "reply_reminder_exhausted" : "room_update_quiet"),
                     error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL,
+                snag_app_response_cycle_release(app, &graph, NULL, NULL,
                                                NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                 "quiet IRC turn could not be completed");
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             result = 0;
             goto out;
         }
-        if (decision.outcome == SNJ_GRAPH_FINAL ||
-            decision.outcome == SNJ_GRAPH_REFUSAL) {
-            const struct snj_response_item *final = &graph.items[decision.final_index];
+        if (decision.outcome == SNAG_GRAPH_FINAL ||
+            decision.outcome == SNAG_GRAPH_REFUSAL) {
+            const struct snag_response_item *final = &graph.items[decision.final_index];
             if (commit_event(app, "turn_completed",
-                             snj_app_turn_completed_data(turn_id, response_id,
+                             snag_app_turn_completed_data(turn_id, response_id,
                                                  final->local_item_id),
                              error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
             }
-            app->last_turn_refused = decision.outcome == SNJ_GRAPH_REFUSAL;
+            app->last_turn_refused = decision.outcome == SNAG_GRAPH_REFUSAL;
             if (app_runtimef(app,
                     "turn › %s completed · response=%s · item=%s",
                     turn_id, response_id, final->local_item_id) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "turn runtime facts could not be rendered");
                 result = 6;
                 goto out;
             }
             if (app->execute &&
-                snj_ui_raw(&app->ui, STDOUT_FILENO, final->text,
+                snag_ui_raw(&app->ui, STDOUT_FILENO, final->text,
                                strlen(final->text)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "final answer could not be written to stdout");
                 result = 6;
                 goto out;
             }
-            if (snj_app_compact_after_turn(app, input_tokens_bound, count_method,
+            if (snag_app_compact_after_turn(app, input_tokens_bound, count_method,
                                            error, sizeof(error)) < 0)
                 (void)app_warning(app, error);
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             result = 0;
             goto out;
         }
-        if (decision.outcome == SNJ_GRAPH_CALLS) {
+        if (decision.outcome == SNAG_GRAPH_CALLS) {
             int tool_rc;
             tool_rc = execute_calls(app, turn_id, &graph, &credential,
                                     error, sizeof(error));
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             if (tool_rc < 0) {
                 (void)app_error(app, error);
                 result = 3;
@@ -3382,12 +3382,12 @@ run_turn(struct app_state *app, const char *prompt,
                 "provider response was not actionable";
             if (fail_turn(app, turn_id, "protocol_failure",
                           "protocol", message, error, sizeof(error)) < 0) {
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
             }
-            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_error(app, message);
             result = 4;
             goto out;
@@ -3406,19 +3406,19 @@ run_turn(struct app_state *app, const char *prompt,
     }
 out:
     app->stream_graph = NULL;
-    snj_app_clear_partial_public(app);
+    snag_app_clear_partial_public(app);
     if (!app->execute && result != 6 &&
         set_input_prompt(app, false) < 0)
         result = 6;
-    snj_credential_clear(&credential);
-    snj_instructions_free(&app->turn_instructions);
+    snag_credential_clear(&credential);
+    snag_instructions_free(&app->turn_instructions);
     free(turn_prompt);
     return result;
 }
 
 static int
 run_tracked_turn(struct app_state *app, const char *prompt,
-                 const struct snj_queued_turn *queued, bool goal_turn,
+                 const struct snag_queued_turn *queued, bool goal_turn,
                  bool read_only)
 {
     char error[256] = {0};
@@ -3426,7 +3426,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     const char *message = NULL;
     int rc = run_turn(app, prompt, queued, goal_turn, read_only);
 
-    if (app->session.goal_status != SNJ_GOAL_ACTIVE)
+    if (app->session.goal_status != SNAG_GOAL_ACTIVE)
         return rc;
     if (app->input_closed) {
         reason = "input_closed";
@@ -3439,7 +3439,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     }
     if (!reason)
         return rc;
-    if (snj_app_goal_pause(app, reason, error, sizeof(error)) < 0) {
+    if (snag_app_goal_pause(app, reason, error, sizeof(error)) < 0) {
         (void)app_error(app, error[0] ? error : "goal pause could not be saved");
         return 3;
     }
@@ -3455,14 +3455,14 @@ resolve_workspace_path(const char *path, const char *label,
     char *resolved = realpath(path, NULL);
     struct stat st;
     if (!resolved) {
-        snj_errorf(error, error_size, "cannot resolve %s workspace %s: %s",
+        snag_errorf(error, error_size, "cannot resolve %s workspace %s: %s",
                   label, path, strerror(errno));
         return NULL;
     }
-    if (strlen(resolved) > SNJ_PATH_MAX_BYTES ||
-        !snj_utf8_valid((const unsigned char *)resolved, strlen(resolved), true) ||
+    if (strlen(resolved) > SNAG_PATH_MAX_BYTES ||
+        !snag_utf8_valid((const unsigned char *)resolved, strlen(resolved), true) ||
         stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        snj_errorf(error, error_size, "%s workspace must be an existing UTF-8 directory",
+        snag_errorf(error, error_size, "%s workspace must be an existing UTF-8 directory",
                   label);
         free(resolved);
         errno = EINVAL;
@@ -3476,21 +3476,21 @@ current_workspace(char *error, size_t error_size)
     return resolve_workspace_path(".", "current", error, error_size);
 }
 char *
-snj_app_dotdir(const char *override, char *error, size_t error_size)
+snag_app_dotdir(const char *override, char *error, size_t error_size)
 {
     const char *home = getenv("HOME");
     char *path;
     size_t len;
 
     if (override)
-        path = snj_strdup_checked(override, SNJ_PATH_MAX_BYTES);
+        path = snag_strdup_checked(override, SNAG_PATH_MAX_BYTES);
     else if (home && home[0] == '/') {
         size_t home_len = strlen(home);
         bool slash = home_len != 0u && home[home_len - 1u] == '/';
         const char *suffix = slash ? "." SNAJPAGENT_NAME :
                                      "/." SNAJPAGENT_NAME;
         size_t suffix_len = strlen(suffix);
-        if (home_len > SNJ_PATH_MAX_BYTES - suffix_len) {
+        if (home_len > SNAG_PATH_MAX_BYTES - suffix_len) {
             errno = ENAMETOOLONG;
             path = NULL;
         } else {
@@ -3502,7 +3502,7 @@ snj_app_dotdir(const char *override, char *error, size_t error_size)
         }
     }
     else {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "HOME is unavailable for the default dotdir; use --dotdir DIR");
         errno = EINVAL;
         return NULL;
@@ -3513,8 +3513,8 @@ snj_app_dotdir(const char *override, char *error, size_t error_size)
     while (len > 1u && path[len - 1u] == '/')
         path[--len] = '\0';
     if (path[0] != '/' ||
-        !snj_utf8_valid((const unsigned char *)path, len, true)) {
-        snj_errorf(error, error_size,
+        !snag_utf8_valid((const unsigned char *)path, len, true)) {
+        snag_errorf(error, error_size,
                   "dotdir must be an absolute UTF-8 path within the supported limit");
         free(path);
         errno = EINVAL;
@@ -3535,12 +3535,12 @@ resolved_program_path(const char *program)
     if (strchr(program, '/')) {
         char *resolved = realpath(program, NULL);
 
-        if (resolved && strlen(resolved) <= SNJ_PATH_MAX_BYTES &&
-            snj_utf8_valid((const unsigned char *)resolved,
+        if (resolved && strlen(resolved) <= SNAG_PATH_MAX_BYTES &&
+            snag_utf8_valid((const unsigned char *)resolved,
                            strlen(resolved), true))
             return resolved;
         free(resolved);
-        return snj_strdup_checked(program, SNJ_PATH_MAX_BYTES);
+        return snag_strdup_checked(program, SNAG_PATH_MAX_BYTES);
     }
     path = getenv("PATH");
     if (path) {
@@ -3552,8 +3552,8 @@ resolved_program_path(const char *program)
             const char *dir = dir_len ? start : ".";
             size_t actual_dir_len = dir_len ? dir_len : 1u;
 
-            if (actual_dir_len <= SNJ_PATH_MAX_BYTES &&
-                program_len <= SNJ_PATH_MAX_BYTES - actual_dir_len - 1u) {
+            if (actual_dir_len <= SNAG_PATH_MAX_BYTES &&
+                program_len <= SNAG_PATH_MAX_BYTES - actual_dir_len - 1u) {
                 size_t size = actual_dir_len + 1u + program_len + 1u;
                 char *candidate = malloc(size);
 
@@ -3567,8 +3567,8 @@ resolved_program_path(const char *program)
                     resolved = access(candidate, X_OK) == 0 ?
                                realpath(candidate, NULL) : NULL;
                     free(candidate);
-                    if (resolved && strlen(resolved) <= SNJ_PATH_MAX_BYTES &&
-                        snj_utf8_valid((const unsigned char *)resolved,
+                    if (resolved && strlen(resolved) <= SNAG_PATH_MAX_BYTES &&
+                        snag_utf8_valid((const unsigned char *)resolved,
                                        strlen(resolved), true))
                         return resolved;
                     free(resolved);
@@ -3579,47 +3579,47 @@ resolved_program_path(const char *program)
             start = end + 1u;
         }
     }
-    return snj_strdup_checked(program, SNJ_PATH_MAX_BYTES);
+    return snag_strdup_checked(program, SNAG_PATH_MAX_BYTES);
 }
 
 static int
-append_command_literal(struct snj_buf *command, const char *word)
+append_command_literal(struct snag_buf *command, const char *word)
 {
-    if (command->len && snj_buf_putc(command, ' ') < 0)
+    if (command->len && snag_buf_putc(command, ' ') < 0)
         return -1;
-    return snj_buf_append(command, word, strlen(word));
+    return snag_buf_append(command, word, strlen(word));
 }
 
 static int
-append_command_argument(struct snj_buf *command, const char *argument)
+append_command_argument(struct snag_buf *command, const char *argument)
 {
     const unsigned char *p = (const unsigned char *)argument;
 
-    if (command->len && snj_buf_putc(command, ' ') < 0)
+    if (command->len && snag_buf_putc(command, ' ') < 0)
         return -1;
-    if (snj_buf_putc(command, '\'') < 0)
+    if (snag_buf_putc(command, '\'') < 0)
         return -1;
     while (*p) {
         if (*p == '\'') {
-            if (snj_buf_append(command, "'\\''", 4u) < 0)
+            if (snag_buf_append(command, "'\\''", 4u) < 0)
                 return -1;
         } else if (*p == '\n' || (*p >= 0x20u && *p <= 0x7eu)) {
-            if (snj_buf_putc(command, *p) < 0)
+            if (snag_buf_putc(command, *p) < 0)
                 return -1;
         } else {
-            if (snj_buf_putc(command, '\'') < 0 ||
-                snj_buf_printf(command, "\"$(printf '\\%03o')\"",
+            if (snag_buf_putc(command, '\'') < 0 ||
+                snag_buf_printf(command, "\"$(printf '\\%03o')\"",
                                (unsigned int)*p) < 0 ||
-                snj_buf_putc(command, '\'') < 0)
+                snag_buf_putc(command, '\'') < 0)
                 return -1;
         }
         ++p;
     }
-    return snj_buf_putc(command, '\'');
+    return snag_buf_putc(command, '\'');
 }
 
 static int
-append_command_option(struct snj_buf *command, const char *option,
+append_command_option(struct snag_buf *command, const char *option,
                       const char *argument)
 {
     return append_command_literal(command, option) < 0 ||
@@ -3628,11 +3628,11 @@ append_command_option(struct snj_buf *command, const char *option,
 
 static int
 build_resume_command(const struct app_state *app, const char *program,
-                     const char *dotdir, struct snj_buf *command)
+                     const char *dotdir, struct snag_buf *command)
 {
     char *resolved = resolved_program_path(program);
-    const struct snj_cli *cli = app->cli;
-    const struct snj_config *config = app->config;
+    const struct snag_cli *cli = app->cli;
+    const struct snag_config *config = app->config;
     int rc = -1;
 
     if (!resolved)
@@ -3644,27 +3644,27 @@ build_resume_command(const struct app_state *app, const char *program,
         append_command_option(command, "--config", cli->config_path) < 0)
         goto out;
     switch (cli->color) {
-    case SNJ_CLI_COLOR_UNSET: break;
-    case SNJ_CLI_COLOR_AUTO:
+    case SNAG_CLI_COLOR_UNSET: break;
+    case SNAG_CLI_COLOR_AUTO:
         if (append_command_literal(command, "--color=auto") < 0)
             goto out;
         break;
-    case SNJ_CLI_COLOR_ALWAYS:
+    case SNAG_CLI_COLOR_ALWAYS:
         if (append_command_literal(command, "--color=always") < 0)
             goto out;
         break;
-    case SNJ_CLI_COLOR_NEVER:
+    case SNAG_CLI_COLOR_NEVER:
         if (append_command_literal(command, "--color=never") < 0)
             goto out;
         break;
     }
-    if (cli->markdown == SNJ_CLI_MARKDOWN_ENABLED &&
+    if (cli->markdown == SNAG_CLI_MARKDOWN_ENABLED &&
         append_command_literal(command, "--markdown") < 0)
         goto out;
-    if (cli->markdown == SNJ_CLI_MARKDOWN_DISABLED &&
+    if (cli->markdown == SNAG_CLI_MARKDOWN_DISABLED &&
         append_command_literal(command, "--no-markdown") < 0)
         goto out;
-    for (unsigned int i = 0u; i < snj_ui_verbosity(&app->ui); ++i)
+    for (unsigned int i = 0u; i < snag_ui_verbosity(&app->ui); ++i)
         if (append_command_literal(command, "-v") < 0)
             goto out;
     if (app->staged_model &&
@@ -3708,22 +3708,22 @@ static void
 write_resume_command(struct app_state *app, const char *program,
                      const char *dotdir)
 {
-    struct snj_buf command;
+    struct snag_buf command;
 
     if (!dotdir || !app->session.id[0] || app->session.delete_requested)
         return;
-    snj_buf_init(&command, RESUME_COMMAND_MAX);
+    snag_buf_init(&command, RESUME_COMMAND_MAX);
     if (build_resume_command(app, program, dotdir, &command) == 0)
-        (void)snj_ui_resume_hint(&app->ui, (char *)command.data,
+        (void)snag_ui_resume_hint(&app->ui, (char *)command.data,
                                      command.len);
-    snj_buf_free(&command);
+    snag_buf_free(&command);
 }
 
 static int
 list_row(void *opaque, const char *text, size_t len)
 {
     struct app_state *app = opaque;
-    return snj_ui_raw(&app->ui, app->cli->list ? STDOUT_FILENO : STDERR_FILENO,
+    return snag_ui_raw(&app->ui, app->cli->list ? STDOUT_FILENO : STDERR_FILENO,
                       text, len);
 }
 
@@ -3731,28 +3731,28 @@ static int
 pick_session(struct app_state *app, const char *workspace,
              char *error, size_t error_size)
 {
-    const char *frames[SNJ_TERM_SPINNER_COUNT] = {" ", " ", " "};
-    enum snj_term_action action;
+    const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
+    enum snag_term_action action;
     char *prefix = NULL;
     int rc = -1;
 
-    if (snj_store_list(&app->store, workspace, app->cli->all, false,
+    if (snag_store_list(&app->store, workspace, app->cli->all, false,
                        list_row, app, error, error_size) < 0 ||
-        snj_ui_open(&app->ui, error, error_size) < 0 ||
-        snj_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0)
+        snag_ui_open(&app->ui, error, error_size) < 0 ||
+        snag_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0)
         return -1;
     do {
-        rc = snj_ui_poll(&app->ui, -1, false, &action, &prefix);
+        rc = snag_ui_poll(&app->ui, -1, false, &action, &prefix);
     } while (rc == 0);
     if (rc < 0 ||
-        action != SNJ_TERM_SUBMIT || !prefix) {
-        snj_errorf(error, error_size, "session selection cancelled");
+        action != SNAG_TERM_SUBMIT || !prefix) {
+        snag_errorf(error, error_size, "session selection cancelled");
         rc = -1;
-    } else if (strlen(prefix) < 8u || strlen(prefix) > SNJ_ID_HEX_LEN) {
-        snj_errorf(error, error_size, "enter an 8..32 character session id prefix");
+    } else if (strlen(prefix) < 8u || strlen(prefix) > SNAG_ID_HEX_LEN) {
+        snag_errorf(error, error_size, "enter an 8..32 character session id prefix");
         rc = -1;
     } else {
-        rc = snj_session_open(&app->store, &app->session, prefix,
+        rc = snag_session_open(&app->store, &app->session, prefix,
                               error, error_size);
     }
     free(prefix);
@@ -3762,7 +3762,7 @@ static int
 run_queued_chain(struct app_state *app)
 {
     while (app->queue_armed && app->session.pending_queue_count != 0u) {
-        const struct snj_queued_turn *queued = &app->session.pending_queue[0];
+        const struct snag_queued_turn *queued = &app->session.pending_queue[0];
         int turn_rc = run_tracked_turn(app, queued->text, queued, false,
                                        queued->read_only);
         if (turn_rc != 0) {
@@ -3791,7 +3791,7 @@ run_ready_chains(struct app_state *app)
              ((!app->queue_armed || app->session.pending_queue_count == 0u) &&
               app->goal_armed && app->irc_background.len))) {
             bool local_operator = false;
-            char *prompt = snj_app_irc_take_pending(app, &local_operator,
+            char *prompt = snag_app_irc_take_pending(app, &local_operator,
                                                      true);
             if (prompt) {
                 app->irc_turn_local_operator = local_operator;
@@ -3811,8 +3811,8 @@ run_ready_chains(struct app_state *app)
             continue;
         }
         if (app->goal_armed && app->session.pending_queue_count == 0u &&
-            app->session.goal_status == SNJ_GOAL_ACTIVE) {
-            turn_rc = run_tracked_turn(app, SNJ_GOAL_CONTINUATION_TEXT,
+            app->session.goal_status == SNAG_GOAL_ACTIVE) {
+            turn_rc = run_tracked_turn(app, SNAG_GOAL_CONTINUATION_TEXT,
                                       NULL, true, false);
             if (turn_rc != 0)
                 return turn_rc;
@@ -3830,7 +3830,7 @@ interactive_loop(struct app_state *app, const char *initial)
     if (set_input_prompt(app, false) < 0)
         return 6;
     for (;;) {
-        enum snj_term_action action = SNJ_TERM_NONE;
+        enum snag_term_action action = SNAG_TERM_NONE;
         bool prompt_ready = false;
         if (capture_shutdown_signal(app))
             return 0;
@@ -3838,7 +3838,7 @@ interactive_loop(struct app_state *app, const char *initial)
             return 0;
         if (!prompt && app->networked) {
             bool local_operator = false;
-            char *irc_prompt = snj_app_irc_take_pending(
+            char *irc_prompt = snag_app_irc_take_pending(
                 app, &local_operator, false);
 
             if (irc_prompt) {
@@ -3860,7 +3860,7 @@ interactive_loop(struct app_state *app, const char *initial)
             }
         }
         if (!prompt) {
-            int poll_rc = snj_ui_poll(&app->ui,
+            int poll_rc = snag_ui_poll(&app->ui,
                                         app->networked ? 25 : -1,
                                         false, &action, &owned);
             history_warning(app);
@@ -3889,11 +3889,11 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             if (poll_rc == 0)
                 continue;
-            if (action == SNJ_TERM_EXIT) {
+            if (action == SNAG_TERM_EXIT) {
                 free(owned);
                 return 0;
             }
-            if (action == SNJ_TERM_CANCEL) {
+            if (action == SNAG_TERM_CANCEL) {
                 if (app->queue_edit_id[0]) {
                     app->queue_armed = app->queue_edit_was_armed;
                     app->queue_edit_id[0] = '\0';
@@ -3904,14 +3904,14 @@ interactive_loop(struct app_state *app, const char *initial)
                     return 6;
                 continue;
             }
-            if (action == SNJ_TERM_VIEW) {
+            if (action == SNAG_TERM_VIEW) {
                 if (app->queue_edit_id[0])
                     (void)app_error(app, "queue replacement must be nonempty");
                 else if (toggle_view(app) < 0)
                     return 6;
                 continue;
             }
-            if (action != SNJ_TERM_SUBMIT || !owned) {
+            if (action != SNAG_TERM_SUBMIT || !owned) {
                 free(owned);
                 owned = NULL;
                 if (set_input_prompt(app, false) < 0)
@@ -3937,7 +3937,7 @@ interactive_loop(struct app_state *app, const char *initial)
             continue;
         }
         if (!app->networked) {
-            if (snj_ui_submitted(&app->ui,
+            if (snag_ui_submitted(&app->ui,
                     app->ui.label, prompt, true) < 0) {
                 free(owned);
                 return 6;
@@ -3946,7 +3946,7 @@ interactive_loop(struct app_state *app, const char *initial)
         {
             bool single_line = strchr(prompt, '\n') == NULL;
             bool read_only;
-            const char *query = snj_prompt_parse(prompt, &read_only);
+            const char *query = snag_prompt_parse(prompt, &read_only);
             bool handled = false;
             int local_rc = 0;
             if (single_line && prompt[0] == '/' && prompt[1] != '/')
@@ -3965,7 +3965,7 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 bool exit_now = false;
-                local_rc = snj_app_lifecycle_command(app, prompt, &handled, &exit_now);
+                local_rc = snag_app_lifecycle_command(app, prompt, &handled, &exit_now);
                 if (local_rc < 0 || exit_now) { free(owned); return local_rc < 0 ? 3 : 0; }
             }
             if (handled) {
@@ -3992,12 +3992,12 @@ interactive_loop(struct app_state *app, const char *initial)
             } else if (!read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
             } else if (!read_only && app->networked &&
-                       (owned ? app->ui.input_view : app->ui.view) == SNJ_RENDER_CHAT) {
+                       (owned ? app->ui.input_view : app->ui.view) == SNAG_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
                 char irc_error[256] = {0};
 
-                if (snj_irc_send_operator(app->irc, actual, irc_error,
+                if (snag_irc_send_operator(app->irc, actual, irc_error,
                                           sizeof(irc_error)) < 0)
                     (void)app_error(app, irc_error[0] ? irc_error :
                                     "IRC message could not be queued");
@@ -4016,7 +4016,7 @@ interactive_loop(struct app_state *app, const char *initial)
                 }
 
                 if (app->networked &&
-                    snj_ui_submitted(&app->ui,
+                    snag_ui_submitted(&app->ui,
                         app->ui.label, actual, true) < 0) {
                     free(owned);
                     return 6;
@@ -4047,17 +4047,17 @@ interactive_loop(struct app_state *app, const char *initial)
     }
 }
 static int
-render_room_history(void *opaque, const struct snj_irc_event *event)
+render_room_history(void *opaque, const struct snag_irc_event *event)
 {
-    return snj_ui_irc_event(opaque, event);
+    return snag_ui_irc_event(opaque, event);
 }
 
 int
-snj_app_run(const struct snj_cli *cli, const char *program)
+snag_app_run(const struct snag_cli *cli, const char *program)
 {
     struct app_state app;
     struct app_signal_handlers signal_handlers;
-    struct snj_config config;
+    struct snag_config config;
     char error[256];
     char *dotdir = NULL;
     char *config_path = NULL;
@@ -4069,26 +4069,26 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     bool signal_handlers_installed = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
-    snj_buf_init(&app.irc_urgent, SNJ_MAX_STEERING_TEXT + 1u);
-    snj_buf_init(&app.irc_background, SNJ_MAX_STEERING_TEXT + 1u);
-    snj_config_init(&config);
-    snj_instructions_init(&app.turn_instructions);
-    snj_model_cache_init(&app.model_cache);
-    snj_store_init(&app.store);
-    snj_session_init(&app.session);
-    if (snj_ui_init(&app.ui) < 0)
+    snag_buf_init(&app.irc_urgent, SNAG_MAX_STEERING_TEXT + 1u);
+    snag_buf_init(&app.irc_background, SNAG_MAX_STEERING_TEXT + 1u);
+    snag_config_init(&config);
+    snag_instructions_init(&app.turn_instructions);
+    snag_model_cache_init(&app.model_cache);
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    if (snag_ui_init(&app.ui) < 0)
         return 3;
     atomic_store(&shutdown_ui, &app.ui);
-    snj_ui_color(&app.ui,
-        cli->color == SNJ_CLI_COLOR_NEVER ? SNJ_COLOR_NEVER :
-        cli->color == SNJ_CLI_COLOR_ALWAYS ? SNJ_COLOR_ALWAYS :
-                                              SNJ_COLOR_AUTO);
+    snag_ui_color(&app.ui,
+        cli->color == SNAG_CLI_COLOR_NEVER ? SNAG_COLOR_NEVER :
+        cli->color == SNAG_CLI_COLOR_ALWAYS ? SNAG_COLOR_ALWAYS :
+                                              SNAG_COLOR_AUTO);
     app.cli = cli;
     app.config = &config;
     app.config_allow_create = cli->config_path == NULL;
     app.execute = cli->execute;
     if (install_shutdown_handlers(&signal_handlers) < 0) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                                    "cannot install shutdown signal handlers");
         rc = 2;
         goto out;
@@ -4100,63 +4100,63 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         if (!locale_name || !codeset ||
             (strcasecmp(codeset, "UTF-8") != 0 &&
              strcasecmp(codeset, "UTF8") != 0)) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                                        "a UTF-8 locale is required");
             rc = 2;
             goto out;
         }
     }
     error[0] = '\0';
-    dotdir = snj_app_dotdir(cli->dotdir, error, sizeof(error));
+    dotdir = snag_app_dotdir(cli->dotdir, error, sizeof(error));
     if (!dotdir) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                                    error[0] ? error : "dotdir is unavailable");
         rc = 2;
         goto out;
     }
-    if (snj_config_load(&config, cli->config_path, dotdir,
+    if (snag_config_load(&config, cli->config_path, dotdir,
                         error, sizeof(error)) < 0) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         rc = 2;
         goto out;
     }
-    config_path = snj_config_path(cli->config_path, dotdir,
+    config_path = snag_config_path(cli->config_path, dotdir,
                                   error, sizeof(error));
     if (!config_path) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         rc = 2;
         goto out;
     }
     app.config_path = config_path;
     {
-        enum snj_color_mode color = config.color;
-        if (cli->color == SNJ_CLI_COLOR_AUTO)
-            color = SNJ_COLOR_AUTO;
-        else if (cli->color == SNJ_CLI_COLOR_ALWAYS)
-            color = SNJ_COLOR_ALWAYS;
-        else if (cli->color == SNJ_CLI_COLOR_NEVER)
-            color = SNJ_COLOR_NEVER;
-        snj_ui_color(&app.ui, color);
+        enum snag_color_mode color = config.color;
+        if (cli->color == SNAG_CLI_COLOR_AUTO)
+            color = SNAG_COLOR_AUTO;
+        else if (cli->color == SNAG_CLI_COLOR_ALWAYS)
+            color = SNAG_COLOR_ALWAYS;
+        else if (cli->color == SNAG_CLI_COLOR_NEVER)
+            color = SNAG_COLOR_NEVER;
+        snag_ui_color(&app.ui, color);
     }
-    snj_ui_markdown(&app.ui,
-        cli->markdown == SNJ_CLI_MARKDOWN_ENABLED ? true :
-        cli->markdown == SNJ_CLI_MARKDOWN_DISABLED ? false : config.markdown);
+    snag_ui_markdown(&app.ui,
+        cli->markdown == SNAG_CLI_MARKDOWN_ENABLED ? true :
+        cli->markdown == SNAG_CLI_MARKDOWN_DISABLED ? false : config.markdown);
     if (!cli->execute && !cli->list &&
-        snj_irc_apply_cli(&config, cli, error, sizeof(error)) < 0) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+        snag_irc_apply_cli(&config, cli, error, sizeof(error)) < 0) {
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         rc = 2;
         goto out;
     }
-    app.networked = !cli->execute && !cli->list && snj_irc_enabled(&config);
-    snj_ui_commands(&app.ui, commands, command_count(&app));
-    snj_ui_networked(&app.ui, app.networked,
+    app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
+    snag_ui_commands(&app.ui, commands, command_count(&app));
+    snag_ui_networked(&app.ui, app.networked,
                              app.networked ? config.irc_model_nick : NULL);
-    snj_ui_typing_pause(&app.ui, config.typing_pause_ms);
-    if (snj_ui_set_verbosity(&app.ui, cli->verbosity) < 0)
+    snag_ui_typing_pause(&app.ui, config.typing_pause_ms);
+    if (snag_ui_set_verbosity(&app.ui, cli->verbosity) < 0)
         goto out;
     if (!cli->execute && !cli->list &&
         (isatty(STDIN_FILENO) != 1 || isatty(STDERR_FILENO) != 1)) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
             "interactive mode requires terminal stdin and stderr; use -e for scripts");
         rc = 2;
         goto out;
@@ -4165,25 +4165,25 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         new_model = effective_model(cli->model ? cli->model : config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
     if ((!cli->resume || cli->effort) && !resolve_effort(new_effort)) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
             "reasoning effort is empty, oversized, or invalid UTF-8");
         rc = 2;
         goto out;
     }
-    if (snj_store_open(&app.store, dotdir, error, sizeof(error)) < 0) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+    if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) {
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         goto out;
     }
     workspace = current_workspace(error, sizeof(error));
     if (!workspace) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         goto out;
     }
     if (cli->list) {
-        rc = snj_store_list(&app.store, workspace, cli->all, true, list_row, &app,
+        rc = snag_store_list(&app.store, workspace, cli->all, true, list_row, &app,
                             error, sizeof(error)) < 0 ? 3 : 0;
         if (rc)
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         goto out;
     }
     if (cli->resume) {
@@ -4191,52 +4191,52 @@ snj_app_run(const struct snj_cli *cli, const char *program)
             relocated_workspace = resolve_workspace_path(cli->workspace, "relocation",
                                                          error, sizeof(error));
             if (!relocated_workspace) {
-                (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+                (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
                 rc = 2;
                 goto out;
             }
         }
         if (cli->resume_id)
-            rc = snj_session_open(&app.store, &app.session, cli->resume_id,
+            rc = snag_session_open(&app.store, &app.session, cli->resume_id,
                                   error, sizeof(error));
         else if (cli->last)
-            rc = snj_session_open_last(&app.store, &app.session, workspace,
+            rc = snag_session_open_last(&app.store, &app.session, workspace,
                                        cli->all, error, sizeof(error));
         else
             rc = pick_session(&app, workspace, error, sizeof(error));
         if (rc == 1) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_WARNING, error);
+            (void)snag_ui_text(&app.ui, SNAG_UI_WARNING, error);
             rc = 0;
             goto out;
         }
         if (rc < 0) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
             rc = 3;
             goto out;
         }
         if (!cli->execute && validate_prompt_values(&app.ui, &config,
-                snj_config_provider(&config, app.session.default_provider),
+                snag_config_provider(&config, app.session.default_provider),
                 cli->model ? new_model : app.session.default_model,
                 resolve_effort(cli->effort ? cli->effort :
                                app.session.default_effort),
                 app.networked) < 0) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                 "configured prompt cannot be rendered with the current selection");
             rc = 2;
             goto out;
         }
-        if (app.session.archived && snj_session_unarchive(&app.session, NULL, error, sizeof(error)) < 0) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error); rc = 3; goto out;
+        if (app.session.archived && snag_session_unarchive(&app.session, NULL, error, sizeof(error)) < 0) {
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error); rc = 3; goto out;
         }
         if (recover_session(&app, error, sizeof(error)) < 0) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
             rc = 3;
             goto out;
         }
-        if (app.session.goal_status == SNJ_GOAL_ACTIVE) {
-            if (snj_app_goal_pause(&app, "session_resumed",
+        if (app.session.goal_status == SNAG_GOAL_ACTIVE) {
+            if (snag_app_goal_pause(&app, "session_resumed",
                                    error, sizeof(error)) < 0) {
-                (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+                (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
                 rc = 3;
                 goto out;
             }
@@ -4245,12 +4245,12 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         if (relocated_workspace &&
             strcmp(relocated_workspace, app.session.workspace) != 0 &&
             commit_event(&app, "workspace_changed",
-                         snj_app_preference_changed_data("old_workspace",
+                         snag_app_preference_changed_data("old_workspace",
                                                 app.session.workspace,
                                                 "new_workspace",
                                                 relocated_workspace),
                          error, sizeof(error)) < 0) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
             rc = 3;
             goto out;
         }
@@ -4261,21 +4261,21 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         app.turn_provider = next_provider(&app);
     } else {
         const char *selected_workspace = cli->workspace ? cli->workspace : workspace;
-        const struct snj_provider_config *selected_provider =
-            snj_config_provider(&config,
+        const struct snag_provider_config *selected_provider =
+            snag_config_provider(&config,
                                 config.provider[0] ? config.provider : NULL);
         if (!cli->execute && validate_prompt_values(
                 &app.ui, &config, selected_provider, new_model,
                 resolve_effort(new_effort), app.networked) < 0) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                 "configured prompt cannot be rendered with the current selection");
             rc = 2;
             goto out;
         }
-        if (snj_session_create(&app.store, &app.session, selected_workspace,
+        if (snag_session_create(&app.store, &app.session, selected_workspace,
                                selected_provider->name, new_model, new_effort,
                                error, sizeof(error)) < 0) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
             goto out;
         }
         app.turn_model = app.session.default_model;
@@ -4283,13 +4283,13 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         app.turn_provider = selected_provider;
     }
     if (app.networked) {
-        if (snj_irc_open(&app.irc, &config, app.session.workspace,
-                         snj_app_irc_event, snj_app_irc_trace, &app,
+        if (snag_irc_open(&app.irc, &config, app.session.workspace,
+                         snag_app_irc_event, snag_app_irc_trace, &app,
                          error, sizeof(error)) < 0 ||
-            snj_app_irc_restore(&app, error, sizeof(error)) < 0 ||
+            snag_app_irc_restore(&app, error, sizeof(error)) < 0 ||
             (config.irc_listen_explicit &&
-             snj_app_irc_snapshot(&app, "join", error, sizeof(error)) < 0)) {
-            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error[0] ? error :
+             snag_app_irc_snapshot(&app, "join", error, sizeof(error)) < 0)) {
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error[0] ? error :
                                    "IRC startup failed");
             rc = 3;
             goto out;
@@ -4297,24 +4297,24 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     }
     if (cli->execute) {
         bool read_only;
-        const char *query = snj_prompt_parse(cli->prompt, &read_only);
+        const char *query = snag_prompt_parse(cli->prompt, &read_only);
         rc = run_tracked_turn(&app, query, NULL, false, read_only);
         if (rc == 0 && (app.queue_armed || app.goal_armed))
             rc = run_ready_chains(&app);
         goto out;
     }
-    if (snj_ui_open(&app.ui, error, sizeof(error)) < 0) {
-        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
+    if (snag_ui_open(&app.ui, error, sizeof(error)) < 0) {
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         rc = 3;
         goto out;
     }
-    (void)snj_ui_history_open(&app.ui, dotdir);
+    (void)snag_ui_history_open(&app.ui, dotdir);
     history_warning(&app);
-    if (snj_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||
-        (app.networked && snj_irc_replay_hosted_history(
+    if (snag_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||
+        (app.networked && snag_irc_replay_hosted_history(
             app.irc, render_room_history, &app.ui) < 0) ||
         (cli->resume && config.resume_history_turns != 0u && !app.networked &&
-         snj_ui_history(&app.ui, &app.session) < 0) ||
+         snag_ui_history(&app.ui, &app.session) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u &&
          app_warning(&app,
              "queued future turns are paused; use /next to continue FIFO") < 0) ||
@@ -4327,25 +4327,25 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     rc = interactive_loop(&app, cli->prompt);
 out:
     (void)capture_shutdown_signal(&app);
-    (void)snj_ui_text(&app.ui, SNJ_UI_CLOSE, NULL);
-    snj_irc_close(app.irc);
+    (void)snag_ui_text(&app.ui, SNAG_UI_CLOSE, NULL);
+    snag_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);
     atomic_store(&shutdown_ui, NULL);
-    snj_ui_free(&app.ui);
+    snag_ui_free(&app.ui);
     (void)capture_shutdown_signal(&app);
     if (signal_handlers_installed)
         restore_shutdown_handlers(&signal_handlers);
-    snj_buf_free(&app.irc_urgent);
-    snj_buf_free(&app.irc_background);
+    snag_buf_free(&app.irc_urgent);
+    snag_buf_free(&app.irc_background);
     free(config_path);
     free(dotdir);
     free(relocated_workspace);
     free(workspace);
-    snj_instructions_free(&app.turn_instructions);
-    snj_model_cache_free(&app.model_cache);
-    snj_session_close(&app.session);
-    snj_store_close(&app.store);
-    snj_config_free(&config);
+    snag_instructions_free(&app.turn_instructions);
+    snag_model_cache_free(&app.model_cache);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_config_free(&config);
     if (app.shutdown_signal > 0 && app.shutdown_signal < 128)
         rc = 128 + app.shutdown_signal;
     return rc;

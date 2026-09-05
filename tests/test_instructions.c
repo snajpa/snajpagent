@@ -36,7 +36,7 @@ main(void)
     char leaf[4096];
     char path[4096];
     char error[256];
-    struct snj_instruction_set set;
+    struct snag_instruction_set set;
     json_t *metadata;
 
     assert(mkdtemp(temp));
@@ -66,32 +66,32 @@ main(void)
     assert(snprintf(path, sizeof(path), "%s/AGENTS.md", leaf) > 0);
     write_file(path, "leaf guidance\n");
 
-    snj_instructions_init(&set);
-    assert(snj_instructions_discover(&set, leaf, error, sizeof(error)) == 0);
+    snag_instructions_init(&set);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) == 0);
     assert(set.count == 4u);
     assert(strstr(set.sources[0].text, "global override") != NULL);
     assert(strstr(set.sources[1].text, "root guidance") != NULL);
     assert(strstr(set.sources[2].text, "sub override") != NULL);
     assert(strstr(set.sources[3].text, "leaf guidance") != NULL);
     assert(set.bytes == strlen("global override\nroot guidance\nsub override\nleaf guidance\n"));
-    metadata = snj_instructions_metadata_json(&set);
+    metadata = snag_instructions_metadata_json(&set);
     assert(metadata);
-    assert(snj_instructions_metadata_valid(metadata, error, sizeof(error)) == 0);
-    assert(snj_instructions_match_metadata(&set, metadata, error, sizeof(error)) == 0);
+    assert(snag_instructions_metadata_valid(metadata, error, sizeof(error)) == 0);
+    assert(snag_instructions_match_metadata(&set, metadata, error, sizeof(error)) == 0);
     json_decref(metadata);
-    snj_instructions_free(&set);
+    snag_instructions_free(&set);
 
     assert(snprintf(path, sizeof(path), "%s/AGENTS.override.md", leaf) > 0);
     write_file(path, "bad\xff\n");
-    assert(snj_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
     assert(errno == EILSEQ || errno == EINVAL);
     (void)unlink(path);
     assert(snprintf(path, sizeof(path), "%s/.git", sub) > 0);
     assert(symlink("../repo/.git", path) == 0);
-    assert(snj_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
     assert(errno == EINVAL);
     (void)unlink(path);
-    snj_instructions_free(&set);
+    snag_instructions_free(&set);
 
     puts("test_instructions: ok");
     return 0;

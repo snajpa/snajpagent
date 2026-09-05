@@ -91,8 +91,8 @@ unresolved managed process retains exclusive `write_stdin` control.
   fields so an event log cannot silently switch profiles or counts mid-turn;
 - dependency/vendoring state is now explicit and machine-checked: `DEPENDENCIES.md`
   records that no third-party implementation or upstream header source is
-  vendored, `src/snj_jansson.h` prevents accidental `src/jansson.h` shadowing,
-  `src/snj_jansson_abi.h` is inventoried as a first-party declarations-only
+  vendored, `src/snag_jansson.h` prevents accidental `src/jansson.h` shadowing,
+  `src/snag_jansson_abi.h` is inventoried as a first-party declarations-only
   fallback for minimal system-Jansson runtime roots, `make depscheck` enforces
   the policy, and `make depclosurecheck` validates the concrete current-host
   executable closure and can emit JSON evidence for release records; `make

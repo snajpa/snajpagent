@@ -23,9 +23,9 @@ enum ui_kind {
 };
 
 struct ui_snapshot {
-    enum snj_render_view view;
+    enum snag_render_view view;
     bool opened, prompt_wanted, active;
-    char label[SNJ_TERM_LABEL_BYTES];
+    char label[SNAG_TERM_LABEL_BYTES];
     uint64_t turn_generation;
 };
 
@@ -33,8 +33,8 @@ struct ui_prompt {
     bool active;
     uint32_t rate;
     unsigned int states, mode;
-    char frames[SNJ_TERM_SPINNER_COUNT][80];
-    char *values[SNJ_PROMPT_HOUR];
+    char frames[SNAG_TERM_SPINNER_COUNT][80];
+    char *values[SNAG_PROMPT_HOUR];
 };
 
 struct ui_message {
@@ -44,22 +44,22 @@ struct ui_message {
     size_t len;
     uint64_t sequence;
     struct ui_snapshot snapshot;
-    struct snj_buf delivered;
+    struct snag_buf delivered;
     char error[256];
     int result, saved_errno;
     atomic_bool done;
     union {
-        enum snj_ui_operation operation;
+        enum snag_ui_operation operation;
         unsigned int value;
         struct ui_prompt prompt;
-        struct { int fd; enum snj_presentation kind; } public;
+        struct { int fd; enum snag_presentation kind; } public;
         struct { uint64_t turns; size_t queued; bool resumed; } orientation;
-        struct snj_irc_event irc;
-        struct { int fd; struct snj_render_source source;
+        struct snag_irc_event irc;
+        struct { int fd; struct snag_render_source source;
                  uint32_t timeout_ms, max_output_bytes; } durable;
         uint64_t seq;
-        struct { struct snj_term_command *items; size_t count; } commands;
-        struct { struct snj_history_snapshot entries; bool refresh; } history;
+        struct { struct snag_term_command *items; size_t count; } commands;
+        struct { struct snag_history_snapshot entries; bool refresh; } history;
     } data;
 };
 
@@ -72,14 +72,14 @@ struct ui_queue {
 };
 
 struct ui_action {
-    enum snj_term_action action;
+    enum snag_term_action action;
     char *text;
     int error;
     bool history_refresh, steering, local;
     struct ui_snapshot snapshot;
 };
 
-struct snj_ui_runtime {
+struct snag_ui_runtime {
     struct ui_queue commands, actions;
     pthread_t thread, engine;
     sigset_t saved_mask;
@@ -92,13 +92,13 @@ struct snj_ui_runtime {
     uint64_t sequence;
 };
 
-struct snj_ui_display {
-    struct snj_render render;
-    struct snj_term term;
+struct snag_ui_display {
+    struct snag_render render;
+    struct snag_term term;
     struct ui_prompt prompt;
     char *prompt_source;
     struct ui_message commands;
-    struct snj_ui_runtime *runtime;
+    struct snag_ui_runtime *runtime;
     uint64_t turn_generation;
     bool suspended;
     bool input_closed, backlog_warned;
@@ -108,9 +108,9 @@ struct snj_ui_display {
 };
 
 static int
-set_level(struct snj_ui_display *display, unsigned int level)
+set_level(struct snag_ui_display *display, unsigned int level)
 {
-    if (!snj_verbosity_name(level)) {
+    if (!snag_verbosity_name(level)) {
         errno = EINVAL;
         return -1;
     }
@@ -120,7 +120,7 @@ set_level(struct snj_ui_display *display, unsigned int level)
 }
 
 static void
-verbosity_command(struct snj_ui_display *display, const char *text)
+verbosity_command(struct snag_ui_display *display, const char *text)
 {
     const char *value = text + 8u;
     while (isspace((unsigned char)*value))
@@ -138,8 +138,8 @@ verbosity_command(struct snj_ui_display *display, const char *text)
     }
     (void)snprintf(display->feedback, sizeof(display->feedback),
         "verbosity: %u (%s)%s", display->render.verbosity,
-        snj_verbosity_name(display->render.verbosity),
-        display->render.view == SNJ_RENDER_CHAT ? " · work detail is in /rollout" : "");
+        snag_verbosity_name(display->render.verbosity),
+        display->render.view == SNAG_RENDER_CHAT ? " · work detail is in /rollout" : "");
 }
 
 static void
@@ -218,9 +218,9 @@ queue_pop(struct ui_queue *queue)
 }
 
 static void
-take_snapshot(struct snj_ui_display *display, struct ui_snapshot *snapshot)
+take_snapshot(struct snag_ui_display *display, struct ui_snapshot *snapshot)
 {
-    snapshot->view = snj_render_view(&display->render);
+    snapshot->view = snag_render_view(&display->render);
     snapshot->opened = display->term.opened;
     snapshot->prompt_wanted = display->term.prompt_wanted;
     snapshot->active = display->term.active;
@@ -229,7 +229,7 @@ take_snapshot(struct snj_ui_display *display, struct ui_snapshot *snapshot)
 }
 
 static void
-adopt_snapshot(struct snj_ui *ui, const struct ui_snapshot *snapshot)
+adopt_snapshot(struct snag_ui *ui, const struct ui_snapshot *snapshot)
 {
     ui->view = snapshot->view;
     ui->opened = snapshot->opened;
@@ -243,7 +243,7 @@ static void
 message_free(struct ui_message *message)
 {
     if (message->kind == UI_HISTORY_SNAPSHOT)
-        snj_history_snapshot_free(&message->data.history.entries);
+        snag_history_snapshot_free(&message->data.history.entries);
     if (message->kind == UI_COMMANDS) {
         for (size_t i = 0u; i < message->data.commands.count; ++i) {
             free((char *)message->data.commands.items[i].syntax);
@@ -254,57 +254,57 @@ message_free(struct ui_message *message)
     free(message->text);
     free(message->label);
     if (message->kind == UI_PROMPT)
-        for (size_t i = 0u; i < SNJ_PROMPT_HOUR; ++i)
+        for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
             free(message->data.prompt.values[i]);
 }
 
 static int
-apply_prompt(struct snj_ui_display *display)
+apply_prompt(struct snag_ui_display *display)
 {
     struct ui_prompt *prompt = &display->prompt;
-    const char *frames[SNJ_TERM_SPINNER_COUNT];
-    const char *values[SNJ_PROMPT_FIELD_COUNT];
-    const struct snj_prompt_clock *clock = &display->term.prompt_clock;
-    char hour[12], minute[12], second[12], label[SNJ_TERM_LABEL_BYTES];
+    const char *frames[SNAG_TERM_SPINNER_COUNT];
+    const char *values[SNAG_PROMPT_FIELD_COUNT];
+    const struct snag_prompt_clock *clock = &display->term.prompt_clock;
+    char hour[12], minute[12], second[12], label[SNAG_TERM_LABEL_BYTES];
     const char *text = display->prompt_source;
 
-    snj_term_capture_prompt_clock(&display->term, time(NULL));
+    snag_term_capture_prompt_clock(&display->term, time(NULL));
     if (prompt->values[0]) {
         (void)snprintf(hour, sizeof(hour), clock->valid ? "%u" : "--", clock->hour);
         (void)snprintf(minute, sizeof(minute), clock->valid ? "%u" : "--", clock->minute);
         (void)snprintf(second, sizeof(second), clock->valid ? "%u" : "--", clock->second);
-        for (size_t i = 0u; i < SNJ_PROMPT_HOUR; ++i)
+        for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
             values[i] = prompt->values[i];
-        values[SNJ_PROMPT_HOUR] = hour;
-        values[SNJ_PROMPT_MINUTE] = minute;
-        values[SNJ_PROMPT_SECOND] = second;
-        if (snj_config_prompt_expand(text, prompt->mode, values,
-                SNJ_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0)
+        values[SNAG_PROMPT_HOUR] = hour;
+        values[SNAG_PROMPT_MINUTE] = minute;
+        values[SNAG_PROMPT_SECOND] = second;
+        if (snag_config_prompt_expand(text, prompt->mode, values,
+                SNAG_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0)
             return -1;
         text = label;
     }
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
         frames[i] = prompt->frames[i];
-    return snj_term_set_prompt_template(&display->term, prompt->active, text,
+    return snag_term_set_prompt_template(&display->term, prompt->active, text,
                                         frames, prompt->rate, prompt->states);
 }
 
 static int
-apply_text(struct snj_ui_display *display, const struct ui_message *message)
+apply_text(struct snag_ui_display *display, const struct ui_message *message)
 {
-    struct snj_render *render = &display->render;
-    struct snj_term *term = &display->term;
+    struct snag_render *render = &display->render;
+    struct snag_term *term = &display->term;
 
     switch (message->data.operation) {
-    case SNJ_UI_HOST: return snj_render_host(render, message->text);
-    case SNJ_UI_RUNTIME: return snj_render_runtime(render, message->text);
-    case SNJ_UI_ERROR: return snj_render_error_ctx(render, message->text);
-    case SNJ_UI_WARNING: return snj_render_warning_ctx(render, message->text);
-    case SNJ_UI_ROLLOUT_END: return snj_render_rollout_end(render);
-    case SNJ_UI_ROLLOUT_ABORT: return snj_render_rollout_abort(render);
-    case SNJ_UI_CLOSE:
-        snj_render_attach_term(render, NULL);
-        snj_term_close(term);
+    case SNAG_UI_HOST: return snag_render_host(render, message->text);
+    case SNAG_UI_RUNTIME: return snag_render_runtime(render, message->text);
+    case SNAG_UI_ERROR: return snag_render_error_ctx(render, message->text);
+    case SNAG_UI_WARNING: return snag_render_warning_ctx(render, message->text);
+    case SNAG_UI_ROLLOUT_END: return snag_render_rollout_end(render);
+    case SNAG_UI_ROLLOUT_ABORT: return snag_render_rollout_abort(render);
+    case SNAG_UI_CLOSE:
+        snag_render_attach_term(render, NULL);
+        snag_term_close(term);
         return 0;
     }
     errno = EINVAL;
@@ -312,28 +312,28 @@ apply_text(struct snj_ui_display *display, const struct ui_message *message)
 }
 
 static int
-apply_message(struct snj_ui_display *display, struct ui_message *message,
+apply_message(struct snag_ui_display *display, struct ui_message *message,
               char *error, size_t error_size)
 {
-    struct snj_render *render = &display->render;
-    struct snj_term *term = &display->term;
+    struct snag_render *render = &display->render;
+    struct snag_term *term = &display->term;
 
     switch (message->kind) {
     case UI_LEVEL: return set_level(display, message->data.value);
     case UI_TEXT: return apply_text(display, message);
     case UI_COLOR: {
         bool previous = render->color_stderr;
-        snj_render_set_color(render, (enum snj_color_mode)message->data.value);
+        snag_render_set_color(render, (enum snag_color_mode)message->data.value);
         return previous != render->color_stderr && display->prompt_source ?
             apply_prompt(display) : 0;
     }
     case UI_MARKDOWN:
-        snj_render_set_markdown(render, message->data.value != 0u);
+        snag_render_set_markdown(render, message->data.value != 0u);
         return 0;
     case UI_NETWORKED:
-        snj_render_set_networked(render, message->data.value != 0u,
+        snag_render_set_networked(render, message->data.value != 0u,
                                 message->text);
-        term->chat = render->view == SNJ_RENDER_CHAT;
+        term->chat = render->view == SNAG_RENDER_CHAT;
         return 0;
     case UI_NICKS:
         free(term->nicks);
@@ -343,33 +343,33 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
     case UI_COMMANDS:
         message_free(&display->commands);
         display->commands = *message;
-        snj_term_set_commands(term, message->data.commands.items,
+        snag_term_set_commands(term, message->data.commands.items,
                              message->data.commands.count);
         message->data.commands.items = NULL;
         message->data.commands.count = 0u;
         return 0;
     case UI_PAUSE:
-        snj_term_set_typing_pause(term, message->data.value);
+        snag_term_set_typing_pause(term, message->data.value);
         return 0;
     case UI_OPEN:
-        if (snj_term_open(term, error, error_size) < 0)
+        if (snag_term_open(term, error, error_size) < 0)
             return -1;
-        snj_render_attach_term(render, term);
+        snag_render_attach_term(render, term);
         return 0;
     case UI_EXTERNAL:
         display->suspended = message->data.value != 0u;
         return message->data.value ?
-            snj_term_external_begin(term, error, error_size) :
-            snj_term_external_end(term, error, error_size);
+            snag_term_external_begin(term, error, error_size) :
+            snag_term_external_end(term, error, error_size);
     case UI_PROMPT: {
         term->defer_redraw = true;
-        if (snj_render_before_prompt(render) < 0)
+        if (snag_render_before_prompt(render) < 0)
             return -1;
         term->defer_redraw = false;
         if (message->data.prompt.active && !term->active)
             ++display->turn_generation;
         free(display->prompt_source);
-        for (size_t i = 0u; i < SNJ_PROMPT_HOUR; ++i)
+        for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
             free(display->prompt.values[i]);
         display->prompt = message->data.prompt;
         display->prompt_source = message->text;
@@ -378,58 +378,58 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
         return apply_prompt(display);
     }
     case UI_VALIDATE: {
-        const char *frames[SNJ_TERM_SPINNER_COUNT];
-        struct snj_term probe;
+        const char *frames[SNAG_TERM_SPINNER_COUNT];
+        struct snag_term probe;
         int rc;
-        for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
+        for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
             frames[i] = message->data.prompt.frames[i];
-        snj_term_init(&probe);
-        rc = snj_term_set_prompt_template(&probe, false, message->text,
+        snag_term_init(&probe);
+        rc = snag_term_set_prompt_template(&probe, false, message->text,
                     frames, message->data.prompt.rate,
-                    (1u << SNJ_TERM_SPINNER_COUNT) - 1u);
-        snj_term_close(&probe);
+                    (1u << SNAG_TERM_SPINNER_COUNT) - 1u);
+        snag_term_close(&probe);
         return rc;
     }
     case UI_SPINNERS:
         display->prompt.states = message->data.value;
-        return snj_term_set_spinner_states(term, message->data.value);
-    case UI_DRAFT: return snj_term_restore_draft(term, message->text);
+        return snag_term_set_spinner_states(term, message->data.value);
+    case UI_DRAFT: return snag_term_restore_draft(term, message->text);
     case UI_VIEW:
         term->defer_redraw = true;
-        term->chat = message->data.value == SNJ_RENDER_CHAT;
-        return snj_render_set_view(render,
-                                  (enum snj_render_view)message->data.value);
+        term->chat = message->data.value == SNAG_RENDER_CHAT;
+        return snag_render_set_view(render,
+                                  (enum snag_render_view)message->data.value);
     case UI_SUBMITTED:
         return message->data.value ?
-            snj_render_input_submitted(render, message->label, message->text) :
-            snj_render_submitted(render, message->label, message->text);
+            snag_render_input_submitted(render, message->label, message->text) :
+            snag_render_submitted(render, message->label, message->text);
     case UI_PUBLIC_BEGIN:
-        return snj_render_rollout_begin(render, message->data.public.fd,
+        return snag_render_rollout_begin(render, message->data.public.fd,
                                         message->label, message->data.public.kind);
     case UI_ORIENTATION:
-        return snj_render_orientation(render, message->text, message->label,
+        return snag_render_orientation(render, message->text, message->label,
                     message->data.orientation.turns,
                     message->data.orientation.queued,
                     message->data.orientation.resumed);
     case UI_HISTORY:
-        return snj_render_history(render, message->label, message->text);
-    case UI_IRC: return snj_render_irc_event(render, &message->data.irc);
+        return snag_render_history(render, message->label, message->text);
+    case UI_IRC: return snag_render_irc_event(render, &message->data.irc);
     case UI_DURABLE:
-        return snj_render_durable(render, message->data.durable.fd,
+        return snag_render_durable(render, message->data.durable.fd,
             message->data.durable.source, message->text,
             message->data.durable.timeout_ms, message->data.durable.max_output_bytes);
     case UI_EVENT:
-        return snj_render_event(render, message->data.seq, message->text);
+        return snag_render_event(render, message->data.seq, message->text);
     case UI_RESUME:
-        return snj_render_resume_hint(render, message->text, message->len);
+        return snag_render_resume_hint(render, message->text, message->len);
     case UI_PROTOCOL:
-        return snj_render_protocol(render, message->label, message->text,
+        return snag_render_protocol(render, message->label, message->text,
                                    message->len);
     case UI_TRANSPORT:
-        return snj_render_transport(render, (char)message->data.value,
+        return snag_render_transport(render, (char)message->data.value,
                                     message->text, message->len);
     case UI_HISTORY_SNAPSHOT:
-        return snj_term_history_set(term, &message->data.history.entries,
+        return snag_term_history_set(term, &message->data.history.entries,
                                     message->data.history.refresh);
     case UI_STOP: return 0;
     case UI_PUBLIC: case UI_RAW: break; /* Sliced by apply_display. */
@@ -439,10 +439,10 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
 }
 
 static int
-read_input(struct snj_ui_display *display, int timeout_ms)
+read_input(struct snag_ui_display *display, int timeout_ms)
 {
-    struct snj_ui_runtime *runtime = display->runtime;
-    struct snj_term *term = &display->term;
+    struct snag_ui_runtime *runtime = display->runtime;
+    struct snag_term *term = &display->term;
     struct ui_action *item;
     int rc;
 
@@ -458,21 +458,21 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         display->backlog_warned = false;
     else if (!display->backlog_warned && !term->input_only) {
         display->backlog_warned = true;
-        if (snj_render_warning_ctx(&display->render,
+        if (snag_render_warning_ctx(&display->render,
                 "input backlog is full; draft retained, retry Enter shortly") < 0)
             return -1;
     }
     item = calloc(1u, sizeof(*item));
     if (!item)
         return -1;
-    rc = snj_term_poll(term, timeout_ms, runtime->commands.wake[0],
+    rc = snag_term_poll(term, timeout_ms, runtime->commands.wake[0],
                        &item->action, &item->text);
     take_snapshot(display, &item->snapshot);
-    if (item->action == SNJ_TERM_CANCEL || item->action == SNJ_TERM_INTERRUPT ||
-        item->action == SNJ_TERM_SUBMIT || item->action == SNJ_TERM_QUEUE) {
+    if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT ||
+        item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
         bool deferred = term->defer_redraw;
-        term->defer_redraw = deferred || item->action == SNJ_TERM_SUBMIT ||
-                             item->action == SNJ_TERM_QUEUE;
+        term->defer_redraw = deferred || item->action == SNAG_TERM_SUBMIT ||
+                             item->action == SNAG_TERM_QUEUE;
         if (!term->input_only && display->prompt_source && apply_prompt(display) < 0) {
             free(item->text);
             free(item);
@@ -488,29 +488,29 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         term->history_refresh_requested = false;
         item->history_refresh = true;
     }
-    if (item->action == SNJ_TERM_SUBMIT && item->text &&
-        snj_verbosity_command(item->text, strlen(item->text))) {
+    if (item->action == SNAG_TERM_SUBMIT && item->text &&
+        snag_verbosity_command(item->text, strlen(item->text))) {
         verbosity_command(display, item->text);
         item->local = true;
-        item->action = SNJ_TERM_NONE;
+        item->action = SNAG_TERM_NONE;
         term->prompt_wanted = true;
         display->local = item;
         display->local_acknowledged = false;
         return 0;
     }
-    if (item->action == SNJ_TERM_INTERRUPT) {
+    if (item->action == SNAG_TERM_INTERRUPT) {
         atomic_store(&runtime->interrupt, display->turn_generation);
-    } else if (item->action == SNJ_TERM_EXIT) {
+    } else if (item->action == SNAG_TERM_EXIT) {
         atomic_store(&runtime->exit_requested, true);
         display->input_closed = true;
-    } else if (item->action == SNJ_TERM_CANCEL && term->input_backlog) {
+    } else if (item->action == SNAG_TERM_CANCEL && term->input_backlog) {
         atomic_store(&runtime->cancel, true);
-    } else if (item->action != SNJ_TERM_NONE || item->local ||
+    } else if (item->action != SNAG_TERM_NONE || item->local ||
                item->history_refresh || item->error) {
-        if (item->action == SNJ_TERM_SUBMIT || item->action == SNJ_TERM_QUEUE) {
+        if (item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
             term->prompt_wanted = true;
-            if (item->action == SNJ_TERM_SUBMIT && item->snapshot.active &&
-                item->snapshot.view == SNJ_RENDER_ROLLOUT && item->text &&
+            if (item->action == SNAG_TERM_SUBMIT && item->snapshot.active &&
+                item->snapshot.view == SNAG_RENDER_ROLLOUT && item->text &&
                 (item->text[0] != '/' || item->text[1] == '/')) {
                 item->steering = true;
                 atomic_fetch_add(&runtime->steering_pending, 1u);
@@ -521,7 +521,7 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         atomic_store(&runtime->fatal, item->error ? item->error : EOVERFLOW);
     }
     {
-        bool notify = item->action != SNJ_TERM_NONE || item->error;
+        bool notify = item->action != SNAG_TERM_NONE || item->error;
         free(item->text);
         free(item);
         if (notify)
@@ -531,7 +531,7 @@ read_input(struct snj_ui_display *display, int timeout_ms)
 }
 
 static int
-local_feedback(struct snj_ui_display *display)
+local_feedback(struct snag_ui_display *display)
 {
     struct ui_action *item = display->local;
     int rc = 0;
@@ -540,9 +540,9 @@ local_feedback(struct snj_ui_display *display)
         return 0;
     if (!display->local_acknowledged) {
         display->painting_feedback = true;
-        rc = snj_render_submitted(&display->render, item->snapshot.label, item->text);
+        rc = snag_render_submitted(&display->render, item->snapshot.label, item->text);
         if (rc == 0)
-            rc = snj_render_host(&display->render, display->feedback);
+            rc = snag_render_host(&display->render, display->feedback);
         display->painting_feedback = false;
         display->local_acknowledged = true;
     }
@@ -560,7 +560,7 @@ output_input_checkpoint(void *opaque)
 static int
 render_input_checkpoint(void *opaque)
 {
-    struct snj_ui_display *display = opaque;
+    struct snag_ui_display *display = opaque;
     int rc = read_input(display, 0);
     display->render.suppress_optional = atomic_load(&display->runtime->exit_requested) ||
         atomic_load(&display->runtime->interrupt) ||
@@ -569,7 +569,7 @@ render_input_checkpoint(void *opaque)
 }
 
 static bool
-public_stopped(struct snj_ui_runtime *runtime)
+public_stopped(struct snag_ui_runtime *runtime)
 {
     return atomic_load(&runtime->exit_requested) ||
            atomic_load(&runtime->interrupt) ||
@@ -577,9 +577,9 @@ public_stopped(struct snj_ui_runtime *runtime)
 }
 
 static int
-apply_display(struct snj_ui_display *display, struct ui_message *message)
+apply_display(struct snag_ui_display *display, struct ui_message *message)
 {
-    struct snj_ui_runtime *runtime = display->runtime;
+    struct snag_ui_runtime *runtime = display->runtime;
     size_t offset = 0u;
     bool raw = message->kind == UI_RAW;
 
@@ -594,14 +594,14 @@ apply_display(struct snj_ui_display *display, struct ui_message *message)
         if (render_input_checkpoint(display) < 0)
             return -1;
         while (!raw && !public_stopped(runtime) &&
-               snj_term_typing_pause_remaining(&display->term, snj_monotonic_ms()))
+               snag_term_typing_pause_remaining(&display->term, snag_monotonic_ms()))
             if (read_input(display, 16) < 0)
                 return -1;
         if (!raw && public_stopped(runtime))
             return 0;
-        if (raw ? snj_term_write((int)message->data.value,
+        if (raw ? snag_term_write((int)message->data.value,
                                  message->text + offset, amount) < 0 :
-            snj_render_rollout(&display->render, message->text + offset, amount,
+            snag_render_rollout(&display->render, message->text + offset, amount,
                                 &message->delivered) < 0)
             return -1;
         offset += amount;
@@ -612,15 +612,15 @@ apply_display(struct snj_ui_display *display, struct ui_message *message)
 static void *
 presentation_main(void *opaque)
 {
-    struct snj_ui_runtime *runtime = opaque;
-    struct snj_ui_display display = {.runtime = runtime};
+    struct snag_ui_runtime *runtime = opaque;
+    struct snag_ui_display display = {.runtime = runtime};
     sigset_t signals;
     uint64_t sequence = 0u;
 
-    snj_term_init(&display.term);
+    snag_term_init(&display.term);
     display.term.input_checkpoint = output_input_checkpoint;
     display.term.input_opaque = &display;
-    snj_render_init(&display.render, 0u);
+    snag_render_init(&display.render, 0u);
     display.render.checkpoint = render_input_checkpoint;
     display.render.checkpoint_opaque = &display;
     sigemptyset(&signals);
@@ -640,7 +640,7 @@ presentation_main(void *opaque)
             atomic_store(&runtime->fatal, errno ? errno : EIO);
         if (!message)
             continue;
-        snj_buf_init(&message->delivered, message->len + 4u);
+        snag_buf_init(&message->delivered, message->len + 4u);
         message->result = message->sequence == ++sequence ?
             apply_display(&display, message) : -1;
         message->saved_errno = errno;
@@ -658,31 +658,31 @@ presentation_main(void *opaque)
                 break;
         }
     }
-    snj_render_free(&display.render);
+    snag_render_free(&display.render);
     if (display.local) {
         free(display.local->text);
         free(display.local);
     }
-    snj_term_close(&display.term);
+    snag_term_close(&display.term);
     message_free(&display.commands);
     free(display.prompt_source);
-    for (size_t i = 0u; i < SNJ_PROMPT_HOUR; ++i)
+    for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
         free(display.prompt.values[i]);
     return NULL;
 }
 
 static int
-request(struct snj_ui *ui, struct ui_message *message, const char *label,
-        const char *text, size_t len, struct snj_buf *delivered,
+request(struct snag_ui *ui, struct ui_message *message, const char *label,
+        const char *text, size_t len, struct snag_buf *delivered,
         char *error, size_t error_size)
 {
     int rc = -1, saved;
-    struct snj_ui_runtime *runtime = ui->runtime;
+    struct snag_ui_runtime *runtime = ui->runtime;
     struct pollfd pfd = {runtime->actions.wake[0], POLLIN, 0};
     assert(pthread_equal(pthread_self(), runtime->engine));
     message->len = len;
     atomic_init(&message->done, false);
-    if (label && !(message->label = snj_strdup_checked(label, SIZE_MAX)))
+    if (label && !(message->label = snag_strdup_checked(label, SIZE_MAX)))
         goto out;
     if (text) {
         if (len == SIZE_MAX || !(message->text = malloc(len + 1u)))
@@ -706,10 +706,10 @@ request(struct snj_ui *ui, struct ui_message *message, const char *label,
     if (error && error_size)
         (void)snprintf(error, error_size, "%s", message->error);
     if (delivered && message->delivered.len &&
-        snj_buf_append(delivered, message->delivered.data,
+        snag_buf_append(delivered, message->delivered.data,
                        message->delivered.len) < 0)
         rc = -1;
-    snj_buf_free(&message->delivered);
+    snag_buf_free(&message->delivered);
     if (rc < 0 && message->saved_errno)
         errno = message->saved_errno;
 out:
@@ -720,16 +720,16 @@ out:
 }
 
 static int
-send_message(struct snj_ui *ui, struct ui_message *message, const char *text)
+send_message(struct snag_ui *ui, struct ui_message *message, const char *text)
 {
     return request(ui, message, NULL, text, text ? strlen(text) : 0u,
                    NULL, NULL, 0u);
 }
 
 int
-snj_ui_init(struct snj_ui *ui)
+snag_ui_init(struct snag_ui *ui)
 {
-    struct snj_ui_runtime *runtime;
+    struct snag_ui_runtime *runtime;
     sigset_t signals;
     int rc;
     memset(ui, 0, sizeof(*ui));
@@ -744,7 +744,7 @@ snj_ui_init(struct snj_ui *ui)
     atomic_init(&runtime->steering_pending, 0u);
     atomic_init(&runtime->pause_until, 0u);
     atomic_init(&runtime->level, 0u);
-    atomic_init(&runtime->view, SNJ_RENDER_ROLLOUT);
+    atomic_init(&runtime->view, SNAG_RENDER_ROLLOUT);
     if (queue_open(&runtime->commands) < 0)
         goto fail;
     if (queue_open(&runtime->actions) < 0)
@@ -764,7 +764,7 @@ snj_ui_init(struct snj_ui *ui)
         goto actions;
     }
     ui->runtime = runtime;
-    ui->view = SNJ_RENDER_ROLLOUT;
+    ui->view = SNAG_RENDER_ROLLOUT;
     return 0;
 actions:
     (void)close(runtime->actions.wake[0]);
@@ -778,9 +778,9 @@ fail:
 }
 
 void
-snj_ui_free(struct snj_ui *ui)
+snag_ui_free(struct snag_ui *ui)
 {
-    struct snj_ui_runtime *runtime = ui->runtime;
+    struct snag_ui_runtime *runtime = ui->runtime;
     struct ui_message message = {.kind = UI_STOP};
     struct ui_action *action;
     if (!runtime)
@@ -798,21 +798,21 @@ snj_ui_free(struct snj_ui *ui)
     (void)pthread_sigmask(SIG_SETMASK, &runtime->saved_mask, NULL);
     free(runtime);
     ui->runtime = NULL;
-    snj_history_free(&ui->history);
+    snag_history_free(&ui->history);
 }
 
 int
-snj_ui_text(struct snj_ui *ui, enum snj_ui_operation op, const char *text)
+snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text)
 {
     struct ui_message message = {.kind = UI_TEXT, .data.operation = op};
     return send_message(ui, &message, text);
 }
 
 int
-snj_ui_set_verbosity(struct snj_ui *ui, unsigned int level)
+snag_ui_set_verbosity(struct snag_ui *ui, unsigned int level)
 {
     struct ui_message message = {.kind = UI_LEVEL, .data.value = level};
-    if (!snj_verbosity_name(level)) {
+    if (!snag_verbosity_name(level)) {
         errno = EINVAL;
         return -1;
     }
@@ -820,34 +820,34 @@ snj_ui_set_verbosity(struct snj_ui *ui, unsigned int level)
 }
 
 unsigned int
-snj_ui_verbosity(const struct snj_ui *ui)
+snag_ui_verbosity(const struct snag_ui *ui)
 {
     return ui && ui->runtime ? atomic_load(&ui->runtime->level) : 0u;
 }
 
 bool
-snj_ui_enabled(const struct snj_ui *ui, enum snj_presentation kind)
+snag_ui_enabled(const struct snag_ui *ui, enum snag_presentation kind)
 {
-    return ui && ui->runtime && snj_presentation_enabled(kind,
-        snj_ui_verbosity(ui), (enum snj_render_view)atomic_load(&ui->runtime->view));
+    return ui && ui->runtime && snag_presentation_enabled(kind,
+        snag_ui_verbosity(ui), (enum snag_render_view)atomic_load(&ui->runtime->view));
 }
 
 int
-snj_ui_color(struct snj_ui *ui, enum snj_color_mode mode)
+snag_ui_color(struct snag_ui *ui, enum snag_color_mode mode)
 {
     struct ui_message message = {.kind = UI_COLOR, .data.value = mode};
     return send_message(ui, &message, NULL);
 }
 
 int
-snj_ui_markdown(struct snj_ui *ui, bool enabled)
+snag_ui_markdown(struct snag_ui *ui, bool enabled)
 {
     struct ui_message message = {.kind = UI_MARKDOWN, .data.value = enabled};
     return send_message(ui, &message, NULL);
 }
 
 int
-snj_ui_networked(struct snj_ui *ui, bool enabled, const char *nick)
+snag_ui_networked(struct snag_ui *ui, bool enabled, const char *nick)
 {
     struct ui_message message = {
         .kind = UI_NETWORKED, .data.value = enabled
@@ -856,14 +856,14 @@ snj_ui_networked(struct snj_ui *ui, bool enabled, const char *nick)
 }
 
 int
-snj_ui_nicks(struct snj_ui *ui, const char *nicks)
+snag_ui_nicks(struct snag_ui *ui, const char *nicks)
 {
     struct ui_message message = {.kind = UI_NICKS};
     return send_message(ui, &message, nicks);
 }
 
 int
-snj_ui_commands(struct snj_ui *ui, const struct snj_term_command *commands,
+snag_ui_commands(struct snag_ui *ui, const struct snag_term_command *commands,
                 size_t count)
 {
     struct ui_message message = {.kind = UI_COMMANDS};
@@ -873,9 +873,9 @@ snj_ui_commands(struct snj_ui *ui, const struct snj_term_command *commands,
     message.data.commands.count = count;
     for (size_t i = 0u; i < count; ++i) {
         message.data.commands.items[i].syntax =
-            snj_strdup_checked(commands[i].syntax, 4096u);
+            snag_strdup_checked(commands[i].syntax, 4096u);
         message.data.commands.items[i].description =
-            snj_strdup_checked(commands[i].description, 4096u);
+            snag_strdup_checked(commands[i].description, 4096u);
         if (!message.data.commands.items[i].syntax ||
             !message.data.commands.items[i].description) {
             message_free(&message);
@@ -886,24 +886,24 @@ snj_ui_commands(struct snj_ui *ui, const struct snj_term_command *commands,
 }
 
 int
-snj_ui_typing_pause(struct snj_ui *ui, uint32_t ms)
+snag_ui_typing_pause(struct snag_ui *ui, uint32_t ms)
 {
     struct ui_message message = {.kind = UI_PAUSE, .data.value = ms};
     return send_message(ui, &message, NULL);
 }
 
 uint32_t
-snj_ui_pause_remaining(struct snj_ui *ui)
+snag_ui_pause_remaining(struct snag_ui *ui)
 {
     uint64_t until = atomic_load(&ui->runtime->pause_until);
-    uint64_t now = snj_monotonic_ms();
+    uint64_t now = snag_monotonic_ms();
     if (public_stopped(ui->runtime))
         return 0u;
     return until > now ? (uint32_t)(until - now) : 0u;
 }
 
 int
-snj_ui_open(struct snj_ui *ui, char *error, size_t error_size)
+snag_ui_open(struct snag_ui *ui, char *error, size_t error_size)
 {
     struct ui_message message = {.kind = UI_OPEN};
     if (ui->opened)
@@ -912,24 +912,24 @@ snj_ui_open(struct snj_ui *ui, char *error, size_t error_size)
 }
 
 int
-snj_ui_external(struct snj_ui *ui, bool begin, char *error, size_t error_size)
+snag_ui_external(struct snag_ui *ui, bool begin, char *error, size_t error_size)
 {
     struct ui_message message = {.kind = UI_EXTERNAL, .data.value = begin};
     return request(ui, &message, NULL, NULL, 0u, NULL, error, error_size);
 }
 
 static int
-send_prompt(struct snj_ui *ui, enum ui_kind kind, bool active, const char *label,
-              const char *const spinners[SNJ_TERM_SPINNER_COUNT],
+send_prompt(struct snag_ui *ui, enum ui_kind kind, bool active, const char *label,
+              const char *const spinners[SNAG_TERM_SPINNER_COUNT],
               uint32_t per_second, unsigned int states,
-              const char *const values[SNJ_PROMPT_HOUR], unsigned int mode)
+              const char *const values[SNAG_PROMPT_HOUR], unsigned int mode)
 {
     struct ui_message message = {
         .kind = kind,
         .data.prompt = {.active = active, .rate = per_second, .states = states,
                         .mode = mode}
     };
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i) {
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
         if (strlen(spinners[i]) >= sizeof(message.data.prompt.frames[i])) {
             errno = EOVERFLOW;
             return -1;
@@ -937,8 +937,8 @@ send_prompt(struct snj_ui *ui, enum ui_kind kind, bool active, const char *label
         memcpy(message.data.prompt.frames[i], spinners[i],
                strlen(spinners[i]) + 1u);
     }
-    for (size_t i = 0u; values && i < SNJ_PROMPT_HOUR; ++i) {
-        message.data.prompt.values[i] = snj_strdup_checked(values[i], SNJ_TERM_LABEL_BYTES);
+    for (size_t i = 0u; values && i < SNAG_PROMPT_HOUR; ++i) {
+        message.data.prompt.values[i] = snag_strdup_checked(values[i], SNAG_TERM_LABEL_BYTES);
         if (!message.data.prompt.values[i]) {
             message_free(&message);
             return -1;
@@ -948,17 +948,17 @@ send_prompt(struct snj_ui *ui, enum ui_kind kind, bool active, const char *label
 }
 
 int
-snj_ui_prompt(struct snj_ui *ui, bool active, const char *label,
-              const char *const spinners[SNJ_TERM_SPINNER_COUNT],
+snag_ui_prompt(struct snag_ui *ui, bool active, const char *label,
+              const char *const spinners[SNAG_TERM_SPINNER_COUNT],
               uint32_t per_second, unsigned int states)
 {
     return send_prompt(ui, UI_PROMPT, active, label, spinners, per_second, states, NULL, 0u);
 }
 
 int
-snj_ui_composer(struct snj_ui *ui, bool active, const char *format,
-                 const char *const values[SNJ_PROMPT_HOUR], unsigned int mode,
-                 const char *const spinners[SNJ_TERM_SPINNER_COUNT],
+snag_ui_composer(struct snag_ui *ui, bool active, const char *format,
+                 const char *const values[SNAG_PROMPT_HOUR], unsigned int mode,
+                 const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                  uint32_t per_second, unsigned int states)
 {
     return send_prompt(ui, UI_PROMPT, active, format, spinners, per_second,
@@ -966,47 +966,47 @@ snj_ui_composer(struct snj_ui *ui, bool active, const char *format,
 }
 
 int
-snj_ui_validate_prompt(struct snj_ui *ui, const char *label,
-                       const char *const spinners[SNJ_TERM_SPINNER_COUNT],
+snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
+                       const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                        uint32_t per_second)
 {
     return send_prompt(ui, UI_VALIDATE, false, label, spinners, per_second, 0u, NULL, 0u);
 }
 
 int
-snj_ui_simple_prompt(struct snj_ui *ui, bool active)
+snag_ui_simple_prompt(struct snag_ui *ui, bool active)
 {
-    const char *frames[SNJ_TERM_SPINNER_COUNT] = {" ", " ", " "};
-    return snj_ui_prompt(ui, active, active ? "» " : "› ", frames, 1u, 0u);
+    const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
+    return snag_ui_prompt(ui, active, active ? "» " : "› ", frames, 1u, 0u);
 }
 
 int
-snj_ui_spinner_states(struct snj_ui *ui, unsigned int states)
+snag_ui_spinner_states(struct snag_ui *ui, unsigned int states)
 {
     struct ui_message message = {.kind = UI_SPINNERS, .data.value = states};
     return send_message(ui, &message, NULL);
 }
 
 int
-snj_ui_restore_draft(struct snj_ui *ui, const char *text)
+snag_ui_restore_draft(struct snag_ui *ui, const char *text)
 {
     struct ui_message message = {.kind = UI_DRAFT};
     return send_message(ui, &message, text);
 }
 
-static int history_snapshot(struct snj_ui *ui, bool refresh);
+static int history_snapshot(struct snag_ui *ui, bool refresh);
 
 int
-snj_ui_poll(struct snj_ui *ui, int timeout_ms,
-            bool active, enum snj_term_action *action, char **text)
+snag_ui_poll(struct snag_ui *ui, int timeout_ms,
+            bool active, enum snag_term_action *action, char **text)
 {
-    struct snj_ui_runtime *runtime = ui->runtime;
+    struct snag_ui_runtime *runtime = ui->runtime;
     struct pollfd pfd = {runtime->actions.wake[0], POLLIN, 0};
     struct ui_action *item;
-    uint64_t deadline = snj_monotonic_ms() + (timeout_ms > 0 ? (uint32_t)timeout_ms : 0u);
+    uint64_t deadline = snag_monotonic_ms() + (timeout_ms > 0 ? (uint32_t)timeout_ms : 0u);
 
     assert(pthread_equal(pthread_self(), runtime->engine));
-    *action = SNJ_TERM_NONE;
+    *action = SNAG_TERM_NONE;
     *text = NULL;
     for (;;) {
         drain_wake(&runtime->actions);
@@ -1016,16 +1016,16 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             return -1;
         }
         if (atomic_exchange(&runtime->exit_requested, false)) {
-            *action = SNJ_TERM_EXIT;
+            *action = SNAG_TERM_EXIT;
             return 1;
         }
         uint64_t interrupted = atomic_exchange(&runtime->interrupt, 0u);
         if (interrupted && interrupted == ui->turn_generation) {
-            *action = SNJ_TERM_INTERRUPT;
+            *action = SNAG_TERM_INTERRUPT;
             return 1;
         }
         if (atomic_exchange(&runtime->cancel, false)) {
-            *action = SNJ_TERM_CANCEL;
+            *action = SNAG_TERM_CANCEL;
             return 1;
         }
         size_t tail = atomic_load_explicit(&runtime->actions.tail, memory_order_relaxed);
@@ -1033,7 +1033,7 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             NULL : runtime->actions.items[tail % UI_QUEUE_CAPACITY];
         /* Defer idle submissions, not view/edit controls or the wait deadline. */
         if (item && active && !item->snapshot.active &&
-            (item->action == SNJ_TERM_SUBMIT || item->action == SNJ_TERM_QUEUE))
+            (item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE))
             item = NULL;
         else
             item = queue_pop(&runtime->actions);
@@ -1041,7 +1041,7 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             wake_owner(&runtime->commands);
             break;
         }
-        uint64_t now = snj_monotonic_ms();
+        uint64_t now = snag_monotonic_ms();
         if (timeout_ms >= 0 && now >= deadline)
             return 0;
         int remaining = timeout_ms < 0 ? -1 : (int)(deadline - now);
@@ -1055,7 +1055,7 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
     memcpy(ui->submitted_label, item->snapshot.label,
            sizeof(ui->submitted_label));
     if (item->local) {
-        (void)snj_ui_history_add(ui, item->text);
+        (void)snag_ui_history_add(ui, item->text);
         free(item->text);
         item->text = NULL;
     }
@@ -1064,7 +1064,7 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
     if (item->steering)
         atomic_fetch_sub(&runtime->steering_pending, 1u);
     if (item->history_refresh) {
-        (void)snj_history_refresh(&ui->history);
+        (void)snag_history_refresh(&ui->history);
         if (history_snapshot(ui, true) < 0)
             item->error = errno;
     }
@@ -1076,17 +1076,17 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             return -1;
         }
     }
-    return *action != SNJ_TERM_NONE;
+    return *action != SNAG_TERM_NONE;
 }
 
 int
-snj_ui_wake_fd(const struct snj_ui *ui)
+snag_ui_wake_fd(const struct snag_ui *ui)
 {
     return ui && ui->runtime ? ui->runtime->actions.wake[0] : -1;
 }
 
 void
-snj_ui_signal(struct snj_ui *ui)
+snag_ui_signal(struct snag_ui *ui)
 {
     if (ui) {
         atomic_store(&ui->runtime->exit_requested, true);
@@ -1095,14 +1095,14 @@ snj_ui_signal(struct snj_ui *ui)
 }
 
 int
-snj_ui_set_view(struct snj_ui *ui, enum snj_render_view view)
+snag_ui_set_view(struct snag_ui *ui, enum snag_render_view view)
 {
     struct ui_message message = {.kind = UI_VIEW, .data.value = view};
     return send_message(ui, &message, NULL);
 }
 
 int
-snj_ui_submitted(struct snj_ui *ui, const char *label, const char *text, bool input)
+snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text, bool input)
 {
     struct ui_message message = {.kind = UI_SUBMITTED, .data.value = input};
     if (label == ui->label && ui->submitted_label[0])
@@ -1111,8 +1111,8 @@ snj_ui_submitted(struct snj_ui *ui, const char *label, const char *text, bool in
 }
 
 int
-snj_ui_public_begin(struct snj_ui *ui, int fd, const char *label,
-                     enum snj_presentation kind)
+snag_ui_public_begin(struct snag_ui *ui, int fd, const char *label,
+                     enum snag_presentation kind)
 {
     struct ui_message message = {
         .kind = UI_PUBLIC_BEGIN, .data.public = {.fd = fd, .kind = kind}
@@ -1121,15 +1121,15 @@ snj_ui_public_begin(struct snj_ui *ui, int fd, const char *label,
 }
 
 int
-snj_ui_public(struct snj_ui *ui, const char *text, size_t len,
-              struct snj_buf *delivered)
+snag_ui_public(struct snag_ui *ui, const char *text, size_t len,
+              struct snag_buf *delivered)
 {
     struct ui_message message = {.kind = UI_PUBLIC};
     return request(ui, &message, NULL, text, len, delivered, NULL, 0u);
 }
 
 int
-snj_ui_orientation(struct snj_ui *ui, const struct snj_session *session,
+snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
                    bool resumed)
 {
     struct ui_message message = {
@@ -1142,7 +1142,7 @@ snj_ui_orientation(struct snj_ui *ui, const struct snj_session *session,
 }
 
 int
-snj_ui_history(struct snj_ui *ui, const struct snj_session *session)
+snag_ui_history(struct snag_ui *ui, const struct snag_session *session)
 {
     struct ui_message message = {.kind = UI_HISTORY};
     return request(ui, &message, session->last_user, session->last_assistant,
@@ -1151,14 +1151,14 @@ snj_ui_history(struct snj_ui *ui, const struct snj_session *session)
 }
 
 int
-snj_ui_irc_event(struct snj_ui *ui, const struct snj_irc_event *event)
+snag_ui_irc_event(struct snag_ui *ui, const struct snag_irc_event *event)
 {
     struct ui_message message = {.kind = UI_IRC, .data.irc = *event};
     return send_message(ui, &message, NULL);
 }
 
 int
-snj_ui_durable(struct snj_ui *ui, int fd, struct snj_render_source source,
+snag_ui_durable(struct snag_ui *ui, int fd, struct snag_render_source source,
                  const char *type, uint32_t timeout_ms, uint32_t max_output_bytes)
 {
     struct ui_message message = {.kind = UI_DURABLE,
@@ -1167,68 +1167,68 @@ snj_ui_durable(struct snj_ui *ui, int fd, struct snj_render_source source,
 }
 
 int
-snj_ui_event(struct snj_ui *ui, uint64_t seq, const char *type)
+snag_ui_event(struct snag_ui *ui, uint64_t seq, const char *type)
 {
     struct ui_message message = {.kind = UI_EVENT, .data.seq = seq};
     return send_message(ui, &message, type);
 }
 
 int
-snj_ui_resume_hint(struct snj_ui *ui, const char *text, size_t len)
+snag_ui_resume_hint(struct snag_ui *ui, const char *text, size_t len)
 {
     struct ui_message message = {.kind = UI_RESUME};
     return request(ui, &message, NULL, text, len, NULL, NULL, 0u);
 }
 
 int
-snj_ui_protocol(struct snj_ui *ui, const char *label, const char *text, size_t len)
+snag_ui_protocol(struct snag_ui *ui, const char *label, const char *text, size_t len)
 {
     struct ui_message message = {.kind = UI_PROTOCOL};
     return request(ui, &message, label, text, len, NULL, NULL, 0u);
 }
 
 int
-snj_ui_transport(struct snj_ui *ui, char direction, const char *text, size_t len)
+snag_ui_transport(struct snag_ui *ui, char direction, const char *text, size_t len)
 {
     struct ui_message message = {.kind = UI_TRANSPORT, .data.value = direction};
     return request(ui, &message, NULL, text, len, NULL, NULL, 0u);
 }
 
 int
-snj_ui_raw(struct snj_ui *ui, int fd, const char *text, size_t len)
+snag_ui_raw(struct snag_ui *ui, int fd, const char *text, size_t len)
 {
     struct ui_message message = {.kind = UI_RAW, .data.value = (unsigned int)fd};
     return request(ui, &message, NULL, text, len, NULL, NULL, 0u);
 }
 
 static int
-history_snapshot(struct snj_ui *ui, bool refresh)
+history_snapshot(struct snag_ui *ui, bool refresh)
 {
     struct ui_message message = {
         .kind = UI_HISTORY_SNAPSHOT, .data.history.refresh = refresh
     };
-    if (snj_history_snapshot_copy(&message.data.history.entries,
+    if (snag_history_snapshot_copy(&message.data.history.entries,
                                  &ui->history.snapshot) < 0)
         return -1;
     return send_message(ui, &message, NULL);
 }
 
 int
-snj_ui_history_open(struct snj_ui *ui, const char *dotdir)
+snag_ui_history_open(struct snag_ui *ui, const char *dotdir)
 {
-    int rc = snj_history_open(&ui->history, dotdir);
+    int rc = snag_history_open(&ui->history, dotdir);
     return history_snapshot(ui, false) < 0 ? -1 : rc;
 }
 
 int
-snj_ui_history_add(struct snj_ui *ui, const char *text)
+snag_ui_history_add(struct snag_ui *ui, const char *text)
 {
-    int rc = snj_history_add(&ui->history, text);
+    int rc = snag_history_add(&ui->history, text);
     return history_snapshot(ui, false) < 0 ? -1 : rc;
 }
 
 bool
-snj_ui_history_warning(struct snj_ui *ui)
+snag_ui_history_warning(struct snag_ui *ui)
 {
-    return snj_history_take_warning(&ui->history);
+    return snag_history_take_warning(&ui->history);
 }

@@ -6,7 +6,7 @@ licensed GPL-2.0-only, with no later-version option and no linking exception.
 Project design notes live under design/. System Jansson and system libcurl are
 build/runtime dependencies; no third-party
 Jansson or libcurl implementation source or upstream header source is vendored.
-`src/snj_jansson_abi.h` is a GPL-2.0-only first-party declaration shim for
+`src/snag_jansson_abi.h` is a GPL-2.0-only first-party declaration shim for
 minimal build roots that provide the Jansson runtime library without the
 development header; it contains no third-party implementation code and is
 inventoried by `make depscheck`. `make depclosurecheck` captures and validates

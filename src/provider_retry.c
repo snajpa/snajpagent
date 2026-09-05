@@ -3,18 +3,18 @@
 
 #include <limits.h>
 
-#define SNJ_PROVIDER_BACKOFF_BASE_MS 250u
-#define SNJ_PROVIDER_BACKOFF_MAX_MS 2000u
+#define SNAG_PROVIDER_BACKOFF_BASE_MS 250u
+#define SNAG_PROVIDER_BACKOFF_MAX_MS 2000u
 
 bool
-snj_provider_http_status_retryable(long status)
+snag_provider_http_status_retryable(long status)
 {
     return status == 408 || status == 429 ||
            (status >= 500 && status <= 599 && status != 501);
 }
 
 int
-snj_provider_retry_after_parse(const unsigned char *value, size_t len,
+snag_provider_retry_after_parse(const unsigned char *value, size_t len,
                                uint32_t *delay_ms)
 {
     uint64_t seconds = 0u;
@@ -39,24 +39,24 @@ snj_provider_retry_after_parse(const unsigned char *value, size_t len,
         return -1;
     while (i < len && (value[i] == ' ' || value[i] == '\t'))
         ++i;
-    if (i != len || seconds > SNJ_PROVIDER_RETRY_AFTER_MAX_MS / 1000u)
+    if (i != len || seconds > SNAG_PROVIDER_RETRY_AFTER_MAX_MS / 1000u)
         return -1;
     *delay_ms = (uint32_t)seconds * 1000u;
     return 0;
 }
 
 uint32_t
-snj_provider_retry_delay_ms(unsigned int retries_done,
+snag_provider_retry_delay_ms(unsigned int retries_done,
                             bool retry_after_present,
                             uint32_t retry_after_ms)
 {
-    uint32_t delay = SNJ_PROVIDER_BACKOFF_BASE_MS;
+    uint32_t delay = SNAG_PROVIDER_BACKOFF_BASE_MS;
 
-    if (retry_after_present && retry_after_ms <= SNJ_PROVIDER_RETRY_AFTER_MAX_MS)
+    if (retry_after_present && retry_after_ms <= SNAG_PROVIDER_RETRY_AFTER_MAX_MS)
         return retry_after_ms;
-    while (retries_done > 0u && delay < SNJ_PROVIDER_BACKOFF_MAX_MS) {
-        if (delay > SNJ_PROVIDER_BACKOFF_MAX_MS / 2u) {
-            delay = SNJ_PROVIDER_BACKOFF_MAX_MS;
+    while (retries_done > 0u && delay < SNAG_PROVIDER_BACKOFF_MAX_MS) {
+        if (delay > SNAG_PROVIDER_BACKOFF_MAX_MS / 2u) {
+            delay = SNAG_PROVIDER_BACKOFF_MAX_MS;
             break;
         }
         delay *= 2u;

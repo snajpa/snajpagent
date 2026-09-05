@@ -5,9 +5,9 @@
 #include <string.h>
 
 void
-snj_secret_set_build(struct snj_secret_set *set,
-                     const struct snj_config *config,
-                     const struct snj_credential *credential)
+snag_secret_set_build(struct snag_secret_set *set,
+                     const struct snag_config *config,
+                     const struct snag_credential *credential)
 {
     size_t count = 0u;
 
@@ -16,14 +16,14 @@ snj_secret_set_build(struct snj_secret_set *set,
         set->values[count++] = credential->value;
     if (config) {
         for (size_t i = 0; i < config->provider_count &&
-             count < SNJ_SECRET_VALUES_MAX; ++i) {
+             count < SNAG_SECRET_VALUES_MAX; ++i) {
             const char *value = getenv(config->providers[i].api_key_env);
             size_t len;
             bool duplicate = false;
             if (!value)
                 continue;
-            len = strnlen(value, SNJ_WIRE_SECRET_MAX + 1u);
-            if (!len || len > SNJ_WIRE_SECRET_MAX)
+            len = strnlen(value, SNAG_WIRE_SECRET_MAX + 1u);
+            if (!len || len > SNAG_WIRE_SECRET_MAX)
                 continue;
             for (size_t j = 0; j < count; ++j)
                 if (strcmp(set->values[j], value) == 0) {
@@ -34,13 +34,13 @@ snj_secret_set_build(struct snj_secret_set *set,
                 set->values[count++] = value;
         }
         for (size_t i = 0; i < config->secret_env_count &&
-             count < SNJ_SECRET_VALUES_MAX; ++i) {
+             count < SNAG_SECRET_VALUES_MAX; ++i) {
             const char *value = getenv(config->secret_env[i]);
             size_t len;
             if (!value)
                 continue;
-            len = strnlen(value, SNJ_WIRE_SECRET_MAX + 1u);
-            if (!len || len > SNJ_WIRE_SECRET_MAX)
+            len = strnlen(value, SNAG_WIRE_SECRET_MAX + 1u);
+            if (!len || len > SNAG_WIRE_SECRET_MAX)
                 continue;
             set->values[count++] = value;
         }

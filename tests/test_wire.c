@@ -7,7 +7,7 @@
 #include <string.h>
 
 static int
-contains(const struct snj_buf *buf, const void *needle, size_t len)
+contains(const struct snag_buf *buf, const void *needle, size_t len)
 {
     if (!len)
         return 1;
@@ -18,7 +18,7 @@ contains(const struct snj_buf *buf, const void *needle, size_t len)
 }
 
 static void
-expect_text(const struct snj_buf *buf, const char *expected)
+expect_text(const struct snag_buf *buf, const char *expected)
 {
     assert(buf->len == strlen(expected));
     assert(memcmp(buf->data, expected, buf->len) == 0);
@@ -28,17 +28,17 @@ static void
 test_json(void)
 {
     static const char *const secret_values[] = {"sk-test-secret", "needle"};
-    const struct snj_wire_secrets secrets = {secret_values, 2u};
+    const struct snag_wire_secrets secrets = {secret_values, 2u};
     static const unsigned char body[] =
         "{\"usage\":{\"input_tokens\":9},\"authorization\":\"Bearer bad\","
         "\"nested\":{\"encrypted_content\":\"opaque\","
         "\"text\":\"before needle after\"},\"real\":1.25,"
         "\"key\":\"sk-test-secret\"}";
-    struct snj_buf out;
+    struct snag_buf out;
     char error[256];
 
-    snj_buf_init(&out, SNJ_WIRE_BODY_MAX);
-    assert(snj_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
+    snag_buf_init(&out, SNAG_WIRE_BODY_MAX);
+    assert(snag_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
                                 error, sizeof(error)) == 0);
     expect_text(&out,
         "{\"authorization\":\"<redacted:authorization>\","
@@ -48,83 +48,83 @@ test_json(void)
         "\"real\":1.25,\"usage\":{\"input_tokens\":9}}");
     assert(!contains(&out, "sk-test-secret", 14u));
     assert(!contains(&out, "needle", 6u));
-    snj_buf_free(&out);
+    snag_buf_free(&out);
 }
 
 static void
 test_max_secret_count(void)
 {
-    char values[SNJ_WIRE_SECRET_COUNT_MAX][16];
-    const char *secrets_array[SNJ_WIRE_SECRET_COUNT_MAX];
-    struct snj_wire_secrets secrets = {secrets_array,
-                                       SNJ_WIRE_SECRET_COUNT_MAX};
+    char values[SNAG_WIRE_SECRET_COUNT_MAX][16];
+    const char *secrets_array[SNAG_WIRE_SECRET_COUNT_MAX];
+    struct snag_wire_secrets secrets = {secrets_array,
+                                       SNAG_WIRE_SECRET_COUNT_MAX};
     static const unsigned char body[] = "{\"text\":\"secret-80\"}";
-    struct snj_buf out;
+    struct snag_buf out;
     char error[256];
 
-    for (size_t i = 0; i < SNJ_WIRE_SECRET_COUNT_MAX; ++i) {
+    for (size_t i = 0; i < SNAG_WIRE_SECRET_COUNT_MAX; ++i) {
         assert(snprintf(values[i], sizeof(values[i]), "secret-%02zu", i) > 0);
         secrets_array[i] = values[i];
     }
-    snj_buf_init(&out, SNJ_WIRE_BODY_MAX);
-    assert(snj_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
+    snag_buf_init(&out, SNAG_WIRE_BODY_MAX);
+    assert(snag_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
                                 error, sizeof(error)) == 0);
     expect_text(&out, "{\"text\":\"<redacted:secret>\"}");
-    snj_buf_free(&out);
+    snag_buf_free(&out);
 }
 
 static void
 test_invalid_json(void)
 {
-    struct snj_buf out;
+    struct snag_buf out;
     char error[256];
     static const unsigned char duplicate[] = "{\"x\":1,\"x\":2}";
 
-    snj_buf_init(&out, SNJ_WIRE_BODY_MAX);
+    snag_buf_init(&out, SNAG_WIRE_BODY_MAX);
     errno = 0;
-    assert(snj_wire_json_redact(duplicate, sizeof(duplicate) - 1u, NULL, &out,
+    assert(snag_wire_json_redact(duplicate, sizeof(duplicate) - 1u, NULL, &out,
                                 error, sizeof(error)) < 0);
     assert(errno == EINVAL);
-    snj_buf_free(&out);
+    snag_buf_free(&out);
 }
 
 static void
 test_secret_object_key_fails_closed(void)
 {
     static const char *const secret_values[] = {"secret-key"};
-    const struct snj_wire_secrets secrets = {secret_values, 1u};
+    const struct snag_wire_secrets secrets = {secret_values, 1u};
     static const unsigned char body[] = "{\"secret-key\":1}";
-    struct snj_buf out;
+    struct snag_buf out;
     char error[256];
 
-    snj_buf_init(&out, SNJ_WIRE_BODY_MAX);
-    assert(snj_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
+    snag_buf_init(&out, SNAG_WIRE_BODY_MAX);
+    assert(snag_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
                                 error, sizeof(error)) < 0);
     assert(errno == EACCES);
     assert(out.len == 0u);
-    snj_buf_free(&out);
+    snag_buf_free(&out);
 }
 
 static void
 test_headers(void)
 {
     static const char *const secret_values[] = {"hidden"};
-    const struct snj_wire_secrets secrets = {secret_values, 1u};
-    struct snj_buf out;
+    const struct snag_wire_secrets secrets = {secret_values, 1u};
+    struct snag_buf out;
 
-    snj_buf_init(&out, SNJ_WIRE_HEADER_MAX * 2u);
-    assert(snj_wire_header_redact((const unsigned char *)
+    snag_buf_init(&out, SNAG_WIRE_HEADER_MAX * 2u);
+    assert(snag_wire_header_redact((const unsigned char *)
         "Authorization: Bearer sk-anything",
         sizeof("Authorization: Bearer sk-anything") - 1u, &secrets, &out) == 0);
     expect_text(&out, "authorization: <redacted:bearer>");
-    assert(snj_wire_header_redact((const unsigned char *)
+    assert(snag_wire_header_redact((const unsigned char *)
         "Set-Cookie: sid=bad", sizeof("Set-Cookie: sid=bad") - 1u, &secrets, &out) == 0);
     expect_text(&out, "set-cookie: <redacted:cookie>");
-    assert(snj_wire_header_redact((const unsigned char *)
+    assert(snag_wire_header_redact((const unsigned char *)
         "X-Trace: visible-hidden-tail",
         sizeof("X-Trace: visible-hidden-tail") - 1u, &secrets, &out) == 0);
     expect_text(&out, "x-trace: visible-<redacted:secret>-tail");
-    snj_buf_free(&out);
+    snag_buf_free(&out);
 }
 
 int

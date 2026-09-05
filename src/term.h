@@ -12,17 +12,17 @@
 #include <termios.h>
 #include <time.h>
 
-#define SNJ_TERM_SPINNER_COUNT 3u
-#define SNJ_TERM_SPINNER_SLOTS 2u
-#define SNJ_TERM_SPINNER_MARKER_BASE 0xfdu
+#define SNAG_TERM_SPINNER_COUNT 3u
+#define SNAG_TERM_SPINNER_SLOTS 2u
+#define SNAG_TERM_SPINNER_MARKER_BASE 0xfdu
 
-enum snj_term_spinner_id {
-    SNJ_TERM_SPINNER_GOAL,
-    SNJ_TERM_SPINNER_PROVIDER,
-    SNJ_TERM_SPINNER_TOOL
+enum snag_term_spinner_id {
+    SNAG_TERM_SPINNER_GOAL,
+    SNAG_TERM_SPINNER_PROVIDER,
+    SNAG_TERM_SPINNER_TOOL
 };
 
-struct snj_prompt_clock {
+struct snag_prompt_clock {
     bool captured;
     bool valid;
     int hour;
@@ -30,7 +30,7 @@ struct snj_prompt_clock {
     int second;
 };
 
-struct snj_term_spinner {
+struct snag_term_spinner {
     char value[80];
     size_t label_offset;
     size_t frame_offset[16];
@@ -41,22 +41,22 @@ struct snj_term_spinner {
     bool present;
 };
 
-enum snj_term_action {
-    SNJ_TERM_NONE,
-    SNJ_TERM_SUBMIT,
-    SNJ_TERM_QUEUE,
-    SNJ_TERM_VIEW,
-    SNJ_TERM_CANCEL,
-    SNJ_TERM_INTERRUPT,
-    SNJ_TERM_EXIT
+enum snag_term_action {
+    SNAG_TERM_NONE,
+    SNAG_TERM_SUBMIT,
+    SNAG_TERM_QUEUE,
+    SNAG_TERM_VIEW,
+    SNAG_TERM_CANCEL,
+    SNAG_TERM_INTERRUPT,
+    SNAG_TERM_EXIT
 };
 
-struct snj_term_command {
+struct snag_term_command {
     const char *syntax;
     const char *description;
 };
 
-struct snj_term {
+struct snag_term {
     int (*input_checkpoint)(void *);
     void *input_opaque;
     int output_fd[2];
@@ -64,12 +64,12 @@ struct snj_term {
     struct termios saved;
     struct sigaction saved_sigint;
     struct sigaction saved_sigwinch;
-    struct snj_buf draft;
-    struct snj_buf search_label;
-    struct snj_buf search_query;
-    struct snj_buf output_cell;
-    struct snj_buf output_line;
-    struct snj_buf painted_prompt;
+    struct snag_buf draft;
+    struct snag_buf search_label;
+    struct snag_buf search_query;
+    struct snag_buf output_cell;
+    struct snag_buf output_line;
+    struct snag_buf painted_prompt;
     size_t painted_label_len;
     unsigned int painted_columns;
     unsigned int painted_style;
@@ -77,11 +77,11 @@ struct snj_term {
     size_t output_columns;
     size_t output_cell_width;
     char output_cell_style[64u];
-    struct snj_history_snapshot history;
+    struct snag_history_snapshot history;
     char *history_draft;
     char *search_original;
     char *nicks;
-    const struct snj_term_command *commands;
+    const struct snag_term_command *commands;
     size_t cursor;
     size_t command_count;
     size_t history_pos;
@@ -105,10 +105,10 @@ struct snj_term {
     size_t input_pos;
     size_t input_len;
     size_t paste_end_match;
-    char label[SNJ_TERM_LABEL_BYTES];
-    char prompt_template[SNJ_TERM_LABEL_BYTES];
-    struct snj_prompt_clock prompt_clock;
-    struct snj_term_spinner spinner[SNJ_TERM_SPINNER_COUNT];
+    char label[SNAG_TERM_LABEL_BYTES];
+    char prompt_template[SNAG_TERM_LABEL_BYTES];
+    struct snag_prompt_clock prompt_clock;
+    struct snag_term_spinner spinner[SNAG_TERM_SPINNER_COUNT];
     uint64_t spinner_epoch_ms;
     uint32_t spinner_per_second;
     unsigned int spinner_states;
@@ -140,47 +140,47 @@ struct snj_term {
     bool local_backlog;
 };
 
-void snj_term_init(struct snj_term *term);
-void snj_term_capture_prompt_clock(struct snj_term *term, time_t seconds);
-void snj_term_set_commands(struct snj_term *term,
-                           const struct snj_term_command *commands,
+void snag_term_init(struct snag_term *term);
+void snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds);
+void snag_term_set_commands(struct snag_term *term,
+                           const struct snag_term_command *commands,
                            size_t count);
-int snj_term_open(struct snj_term *term, char *error, size_t error_size);
-void snj_term_close(struct snj_term *term);
-int snj_term_external_begin(struct snj_term *term,
+int snag_term_open(struct snag_term *term, char *error, size_t error_size);
+void snag_term_close(struct snag_term *term);
+int snag_term_external_begin(struct snag_term *term,
                             char *error, size_t error_size);
-int snj_term_external_end(struct snj_term *term,
+int snag_term_external_end(struct snag_term *term,
                           char *error, size_t error_size);
-int snj_term_set_prompt(struct snj_term *term, bool active);
-int snj_term_set_prompt_label(struct snj_term *term, bool active,
+int snag_term_set_prompt(struct snag_term *term, bool active);
+int snag_term_set_prompt_label(struct snag_term *term, bool active,
                               const char *label);
-int snj_term_set_prompt_template(struct snj_term *term, bool active,
+int snag_term_set_prompt_template(struct snag_term *term, bool active,
                                  const char *label,
-                                 const char *const spinners[SNJ_TERM_SPINNER_COUNT],
+                                 const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                                  uint32_t per_second, unsigned int states);
-int snj_term_set_spinner_states(struct snj_term *term, unsigned int states);
-const char *snj_term_prompt_label(const struct snj_term *term);
-int snj_term_hide(struct snj_term *term);
-int snj_term_output_begin(struct snj_term *term, bool persistent);
-int snj_term_output_end(struct snj_term *term);
-int snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
-                  enum snj_term_action *action, char **text);
-int snj_term_history_set(struct snj_term *term,
-                         struct snj_history_snapshot *snapshot, bool refresh);
-int snj_term_restore_draft(struct snj_term *term, const char *text);
-void snj_term_set_typing_pause(struct snj_term *term, uint32_t pause_ms);
-void snj_term_set_color(struct snj_term *term, bool enabled, bool networked);
-uint32_t snj_term_typing_pause_remaining(const struct snj_term *term,
+int snag_term_set_spinner_states(struct snag_term *term, unsigned int states);
+const char *snag_term_prompt_label(const struct snag_term *term);
+int snag_term_hide(struct snag_term *term);
+int snag_term_output_begin(struct snag_term *term, bool persistent);
+int snag_term_output_end(struct snag_term *term);
+int snag_term_poll(struct snag_term *term, int timeout_ms, int wake_fd,
+                  enum snag_term_action *action, char **text);
+int snag_term_history_set(struct snag_term *term,
+                         struct snag_history_snapshot *snapshot, bool refresh);
+int snag_term_restore_draft(struct snag_term *term, const char *text);
+void snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms);
+void snag_term_set_color(struct snag_term *term, bool enabled, bool networked);
+uint32_t snag_term_typing_pause_remaining(const struct snag_term *term,
                                          uint64_t now_ms);
-bool snj_term_typing_active(const struct snj_term *term);
-int snj_term_note_output(struct snj_term *term, const char *text, size_t len,
+bool snag_term_typing_active(const struct snag_term *term);
+int snag_term_note_output(struct snag_term *term, const char *text, size_t len,
                          const char *style);
-unsigned int snj_term_columns(const struct snj_term *term);
-size_t snj_term_text_width(const char *text, size_t len);
-bool snj_term_consume_echoed_submission(struct snj_term *term,
+unsigned int snag_term_columns(const struct snag_term *term);
+size_t snag_term_text_width(const char *text, size_t len);
+bool snag_term_consume_echoed_submission(struct snag_term *term,
                                         const char *label);
-int snj_term_write_safe(int fd, const char *text, size_t len);
-int snj_term_append_safe(struct snj_buf *out, const char *text, size_t len);
-int snj_term_write(int fd, const void *text, size_t len);
+int snag_term_write_safe(int fd, const char *text, size_t len);
+int snag_term_append_safe(struct snag_buf *out, const char *text, size_t len);
+int snag_term_write(int fd, const void *text, size_t len);
 
 #endif

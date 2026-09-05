@@ -3,18 +3,18 @@
 #include "json.h"
 
 #include <errno.h>
-#include "snj_jansson.h"
+#include "snag_jansson.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 
 static int
-secrets_valid(const struct snj_wire_secrets *secrets)
+secrets_valid(const struct snag_wire_secrets *secrets)
 {
     if (!secrets)
         return 0;
-    if (secrets->count > SNJ_WIRE_SECRET_COUNT_MAX ||
+    if (secrets->count > SNAG_WIRE_SECRET_COUNT_MAX ||
         (secrets->count && !secrets->values)) {
         errno = EINVAL;
         return -1;
@@ -26,7 +26,7 @@ secrets_valid(const struct snj_wire_secrets *secrets)
             return -1;
         }
         len = strlen(secrets->values[i]);
-        if (!len || len > SNJ_WIRE_SECRET_MAX) {
+        if (!len || len > SNAG_WIRE_SECRET_MAX) {
             errno = EINVAL;
             return -1;
         }
@@ -36,7 +36,7 @@ secrets_valid(const struct snj_wire_secrets *secrets)
 
 static size_t
 secret_at(const unsigned char *data, size_t len, size_t offset,
-          const struct snj_wire_secrets *secrets)
+          const struct snag_wire_secrets *secrets)
 {
     size_t best = 0u;
 
@@ -54,7 +54,7 @@ secret_at(const unsigned char *data, size_t len, size_t offset,
 
 static bool
 contains_secret(const unsigned char *data, size_t len,
-                const struct snj_wire_secrets *secrets)
+                const struct snag_wire_secrets *secrets)
 {
     for (size_t i = 0; i < len; ++i)
         if (secret_at(data, len, i, secrets))
@@ -63,15 +63,15 @@ contains_secret(const unsigned char *data, size_t len,
 }
 
 static int
-append_redacted(struct snj_buf *out, const unsigned char *data, size_t len,
-                const struct snj_wire_secrets *secrets, bool json_string)
+append_redacted(struct snag_buf *out, const unsigned char *data, size_t len,
+                const struct snag_wire_secrets *secrets, bool json_string)
 {
     static const char marker[] = "<redacted:secret>";
 
     for (size_t i = 0; i < len;) {
         size_t matched = secret_at(data, len, i, secrets);
         if (matched) {
-            if (snj_buf_append(out, marker, sizeof(marker) - 1u) < 0)
+            if (snag_buf_append(out, marker, sizeof(marker) - 1u) < 0)
                 return -1;
             i += matched;
             continue;
@@ -80,22 +80,22 @@ append_redacted(struct snj_buf *out, const unsigned char *data, size_t len,
             unsigned char c = data[i++];
             static const char hex[] = "0123456789abcdef";
             if (c == '"' || c == '\\') {
-                if (snj_buf_putc(out, '\\') < 0 || snj_buf_putc(out, c) < 0)
+                if (snag_buf_putc(out, '\\') < 0 || snag_buf_putc(out, c) < 0)
                     return -1;
             } else if (c <= 0x1fu) {
                 unsigned char escaped[6] = {'\\', 'u', '0', '0',
                     (unsigned char)hex[c >> 4], (unsigned char)hex[c & 15u]};
-                if (snj_buf_append(out, escaped, sizeof(escaped)) < 0)
+                if (snag_buf_append(out, escaped, sizeof(escaped)) < 0)
                     return -1;
-            } else if (snj_buf_putc(out, c) < 0) {
+            } else if (snag_buf_putc(out, c) < 0) {
                 return -1;
             }
         } else {
             unsigned char c = data[i++];
             if (c >= 0x20u && c <= 0x7eu) {
-                if (snj_buf_putc(out, c) < 0)
+                if (snag_buf_putc(out, c) < 0)
                     return -1;
-            } else if (snj_buf_printf(out, "\\x%02x", (unsigned int)c) < 0) {
+            } else if (snag_buf_printf(out, "\\x%02x", (unsigned int)c) < 0) {
                 return -1;
             }
         }
@@ -129,25 +129,25 @@ key_redaction(const char *key, size_t len)
 }
 
 static int encode_value(const json_t *value,
-                        const struct snj_wire_secrets *secrets,
-                        struct snj_buf *out, unsigned int depth);
+                        const struct snag_wire_secrets *secrets,
+                        struct snag_buf *out, unsigned int depth);
 
 static int
-encode_string(struct snj_buf *out, const char *text, size_t len,
-              const struct snj_wire_secrets *secrets)
+encode_string(struct snag_buf *out, const char *text, size_t len,
+              const struct snag_wire_secrets *secrets)
 {
-    if (snj_buf_putc(out, '"') < 0 ||
+    if (snag_buf_putc(out, '"') < 0 ||
         append_redacted(out, (const unsigned char *)text, len, secrets, true) < 0)
         return -1;
-    return snj_buf_putc(out, '"');
+    return snag_buf_putc(out, '"');
 }
 
 static int
-encode_object(const json_t *value, const struct snj_wire_secrets *secrets,
-              struct snj_buf *out, unsigned int depth)
+encode_object(const json_t *value, const struct snag_wire_secrets *secrets,
+              struct snag_buf *out, unsigned int depth)
 {
     size_t count = json_object_size(value);
-    struct snj_key_ref *keys = NULL;
+    struct snag_key_ref *keys = NULL;
     void *iter;
     size_t used = 0u;
     int rc = -1;
@@ -178,15 +178,15 @@ encode_object(const json_t *value, const struct snj_wire_secrets *secrets,
     if (used != count)
         goto out;
     if (count)
-        qsort(keys, count, sizeof(*keys), snj_key_ref_compare);
-    if (snj_buf_putc(out, '{') < 0)
+        qsort(keys, count, sizeof(*keys), snag_key_ref_compare);
+    if (snag_buf_putc(out, '{') < 0)
         goto out;
     for (size_t i = 0; i < count; ++i) {
         json_t *member = json_object_getn(value, keys[i].name, keys[i].len);
         const char *replacement = key_redaction(keys[i].name, keys[i].len);
-        if ((i && snj_buf_putc(out, ',') < 0) ||
+        if ((i && snag_buf_putc(out, ',') < 0) ||
             encode_string(out, keys[i].name, keys[i].len, NULL) < 0 ||
-            snj_buf_putc(out, ':') < 0 || !member)
+            snag_buf_putc(out, ':') < 0 || !member)
             goto out;
         if (replacement) {
             if (encode_string(out, replacement, strlen(replacement), NULL) < 0)
@@ -195,7 +195,7 @@ encode_object(const json_t *value, const struct snj_wire_secrets *secrets,
             goto out;
         }
     }
-    if (snj_buf_putc(out, '}') < 0)
+    if (snag_buf_putc(out, '}') < 0)
         goto out;
     rc = 0;
 out:
@@ -204,23 +204,23 @@ out:
 }
 
 static int
-encode_array(const json_t *value, const struct snj_wire_secrets *secrets,
-             struct snj_buf *out, unsigned int depth)
+encode_array(const json_t *value, const struct snag_wire_secrets *secrets,
+             struct snag_buf *out, unsigned int depth)
 {
     size_t count = json_array_size(value);
-    if (snj_buf_putc(out, '[') < 0)
+    if (snag_buf_putc(out, '[') < 0)
         return -1;
     for (size_t i = 0; i < count; ++i) {
-        if ((i && snj_buf_putc(out, ',') < 0) ||
+        if ((i && snag_buf_putc(out, ',') < 0) ||
             encode_value(json_array_get(value, i), secrets, out, depth + 1u) < 0)
             return -1;
     }
-    return snj_buf_putc(out, ']');
+    return snag_buf_putc(out, ']');
 }
 
 static int
-encode_value(const json_t *value, const struct snj_wire_secrets *secrets,
-             struct snj_buf *out, unsigned int depth)
+encode_value(const json_t *value, const struct snag_wire_secrets *secrets,
+             struct snag_buf *out, unsigned int depth)
 {
     char number[64];
     int n;
@@ -245,11 +245,11 @@ encode_value(const json_t *value, const struct snj_wire_secrets *secrets,
         n = snprintf(number, sizeof(number), "%.17g", json_real_value(value));
         break;
     case JSON_TRUE:
-        return snj_buf_append(out, "true", 4u);
+        return snag_buf_append(out, "true", 4u);
     case JSON_FALSE:
-        return snj_buf_append(out, "false", 5u);
+        return snag_buf_append(out, "false", 5u);
     case JSON_NULL:
-        return snj_buf_append(out, "null", 4u);
+        return snag_buf_append(out, "null", 4u);
     default:
         errno = EINVAL;
         return -1;
@@ -258,30 +258,30 @@ encode_value(const json_t *value, const struct snj_wire_secrets *secrets,
         errno = EOVERFLOW;
         return -1;
     }
-    return snj_buf_append(out, number, (size_t)n);
+    return snag_buf_append(out, number, (size_t)n);
 }
 
 int
-snj_wire_json_redact(const unsigned char *data, size_t len,
-                     const struct snj_wire_secrets *secrets,
-                     struct snj_buf *out, char *error, size_t error_size)
+snag_wire_json_redact(const unsigned char *data, size_t len,
+                     const struct snag_wire_secrets *secrets,
+                     struct snag_buf *out, char *error, size_t error_size)
 {
     json_t *value;
     int rc;
 
     if (!out || secrets_valid(secrets) < 0) {
-        snj_errorf(error, error_size, "invalid diagnostic secret set");
+        snag_errorf(error, error_size, "invalid diagnostic secret set");
         return -1;
     }
-    value = snj_json_load_strict(data, len, SNJ_WIRE_BODY_MAX,
+    value = snag_json_load_strict(data, len, SNAG_WIRE_BODY_MAX,
                                  error, error_size);
     if (!value)
         return -1;
-    snj_buf_reset(out);
+    snag_buf_reset(out);
     rc = encode_value(value, secrets, out, 0u);
     json_decref(value);
     if (rc < 0) {
-        snj_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
+        snag_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
         return -1;
     }
     return 0;
@@ -303,16 +303,16 @@ header_name_valid(const unsigned char *name, size_t len)
 }
 
 int
-snj_wire_header_redact(const unsigned char *line, size_t len,
-                       const struct snj_wire_secrets *secrets,
-                       struct snj_buf *out)
+snag_wire_header_redact(const unsigned char *line, size_t len,
+                       const struct snag_wire_secrets *secrets,
+                       struct snag_buf *out)
 {
     const unsigned char *colon;
     size_t name_len;
     size_t value_start;
     const char *replacement;
 
-    if (!line || !out || !len || len > SNJ_WIRE_HEADER_MAX ||
+    if (!line || !out || !len || len > SNAG_WIRE_HEADER_MAX ||
         secrets_valid(secrets) < 0) {
         errno = EINVAL;
         return -1;
@@ -330,15 +330,15 @@ snj_wire_header_redact(const unsigned char *line, size_t len,
     value_start = name_len + 1u;
     while (value_start < len && (line[value_start] == ' ' || line[value_start] == '\t'))
         ++value_start;
-    snj_buf_reset(out);
+    snag_buf_reset(out);
     for (size_t i = 0; i < name_len; ++i) {
         unsigned char c = line[i];
         if (c >= 'A' && c <= 'Z')
             c = (unsigned char)(c - 'A' + 'a');
-        if (snj_buf_putc(out, c) < 0)
+        if (snag_buf_putc(out, c) < 0)
             return -1;
     }
-    if (snj_buf_append(out, ": ", 2u) < 0)
+    if (snag_buf_append(out, ": ", 2u) < 0)
         return -1;
     replacement = key_redaction((const char *)line, name_len);
     if (replacement) {
@@ -346,7 +346,7 @@ snj_wire_header_redact(const unsigned char *line, size_t len,
             len - value_start >= 7u &&
             strncasecmp((const char *)line + value_start, "Bearer ", 7u) == 0)
             replacement = "<redacted:bearer>";
-        return snj_buf_append(out, replacement, strlen(replacement));
+        return snag_buf_append(out, replacement, strlen(replacement));
     }
     return append_redacted(out, line + value_start, len - value_start,
                            secrets, false);

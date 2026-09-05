@@ -4,10 +4,10 @@
 
 #include "turn.h"
 
-#include "snj_jansson.h"
+#include "snag_jansson.h"
 #include <stddef.h>
 
-int snj_tools_apply_patch(const struct snj_response_item *call,
+int snag_tools_apply_patch(const struct snag_response_item *call,
                           const char *session_workspace,
                           json_t **result,
                           char *error, size_t error_size);

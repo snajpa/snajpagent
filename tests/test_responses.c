@@ -7,17 +7,17 @@
 #include <string.h>
 
 struct emitted {
-    struct snj_buf text;
+    struct snag_buf text;
     size_t calls;
     size_t last_index;
-    enum snj_item_kind last_kind;
-    enum snj_item_phase last_phase;
+    enum snag_item_kind last_kind;
+    enum snag_item_phase last_phase;
     char last_provider_id[64];
 };
 
 static int
-capture_emit(void *opaque, size_t output_index, enum snj_item_kind kind,
-             enum snj_item_phase phase, const char *provider_item_id,
+capture_emit(void *opaque, size_t output_index, enum snag_item_kind kind,
+             enum snag_item_phase phase, const char *provider_item_id,
              const char *text, size_t len)
 {
     struct emitted *emitted = opaque;
@@ -30,35 +30,35 @@ capture_emit(void *opaque, size_t output_index, enum snj_item_kind kind,
         (void)snprintf(emitted->last_provider_id,
                        sizeof(emitted->last_provider_id), "%s",
                        provider_item_id);
-    return snj_buf_append(&emitted->text, text, len);
+    return snag_buf_append(&emitted->text, text, len);
 }
 
 static int
-parse_stream(const char *wire, size_t chunk, struct snj_response_graph *graph,
+parse_stream(const char *wire, size_t chunk, struct snag_response_graph *graph,
              struct emitted *emitted, char *error, size_t error_size)
 {
-    struct snj_responses_stream responses;
-    struct snj_sse_parser sse;
+    struct snag_responses_stream responses;
+    struct snag_sse_parser sse;
     size_t len = strlen(wire);
     int rc = 0;
 
-    snj_responses_stream_init(&responses, capture_emit, emitted);
-    snj_sse_init(&sse, snj_responses_sse_record, &responses);
+    snag_responses_stream_init(&responses, capture_emit, emitted);
+    snag_sse_init(&sse, snag_responses_sse_record, &responses);
     for (size_t offset = 0; offset < len && rc == 0;) {
         size_t take = chunk && chunk < len - offset ? chunk : len - offset;
-        rc = snj_sse_feed(&sse, wire + offset, take, error, error_size);
+        rc = snag_sse_feed(&sse, wire + offset, take, error, error_size);
         offset += take;
     }
     if (rc == 0)
-        rc = snj_sse_finish(&sse, error, error_size);
+        rc = snag_sse_finish(&sse, error, error_size);
     if (rc == 0)
-        rc = snj_responses_stream_finish(&responses, graph,
+        rc = snag_responses_stream_finish(&responses, graph,
                                           error, error_size);
     else if (responses.failed)
         (void)snprintf(error, error_size, "%s",
-                       snj_responses_stream_error(&responses));
-    snj_sse_free(&sse);
-    snj_responses_stream_free(&responses);
+                       snag_responses_stream_error(&responses));
+    snag_sse_free(&sse);
+    snag_responses_stream_free(&responses);
     return rc;
 }
 
@@ -85,19 +85,19 @@ test_deltas_survive_empty_terminal_output(void)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ping\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"total_tokens\":16,\"output_tokens_details\":{\"reasoning_tokens\":2}},\"output\":[]}}\n\n"
         "data: [DONE]\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, SNJ_MAX_PUBLIC_ITEM + 1u);
+    snag_buf_init(&emitted.text, SNAG_MAX_PUBLIC_ITEM + 1u);
     assert(parse_stream(wire, 1u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
     assert(strcmp(graph.provider_response_id, "resp_ping") == 0);
-    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNJ_PHASE_FINAL_ANSWER);
+    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
+    assert(graph.items[0].phase == SNAG_PHASE_FINAL_ANSWER);
     assert(strcmp(graph.items[0].text, "haha") == 0);
     assert(emitted.calls == 2u);
     assert(emitted.text.len == 4u);
@@ -106,8 +106,8 @@ test_deltas_survive_empty_terminal_output(void)
     assert(graph.usage.output_known && graph.usage.output_tokens == 4u);
     assert(graph.usage.reasoning_known && graph.usage.reasoning_tokens == 2u);
     assert(graph.usage.total_known && graph.usage.total_tokens == 16u);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -116,27 +116,27 @@ test_terminal_snapshot_can_supply_unseen_items(void)
     static const char wire[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_snapshot\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_snapshot\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_comment\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"Working. \",\"annotations\":[]},{\"type\":\"output_text\",\"text\":\"Done.\",\"annotations\":[]}]},{\"id\":\"msg_final\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\",\"annotations\":[]}]}]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     if (parse_stream(wire, 17u, &graph, &emitted,
                      error, sizeof(error)) != 0) {
         fprintf(stderr, "snapshot parse: %s\n", error);
         assert(0);
     }
     assert(graph.count == 2u);
-    assert(graph.items[0].phase == SNJ_PHASE_COMMENTARY);
+    assert(graph.items[0].phase == SNAG_PHASE_COMMENTARY);
     assert(strcmp(graph.items[0].text, "Working. Done.") == 0);
-    assert(graph.items[1].phase == SNJ_PHASE_FINAL_ANSWER);
+    assert(graph.items[1].phase == SNAG_PHASE_FINAL_ANSWER);
     assert(strcmp(graph.items[1].text, "answer") == 0);
     assert(emitted.last_index == 1u);
-    assert(emitted.last_phase == SNJ_PHASE_FINAL_ANSWER);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    assert(emitted.last_phase == SNAG_PHASE_FINAL_ANSWER);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -161,22 +161,22 @@ test_empty_public_items_get_specific_correction(void)
     const char *const wires[] = {streamed, snapshot, refusal, no_content};
 
     for (size_t i = 0; i < sizeof(wires) / sizeof(wires[0]); ++i) {
-        struct snj_response_graph graph;
+        struct snag_response_graph graph;
         struct emitted emitted;
         char error[256] = {0};
 
-        snj_response_graph_init(&graph);
+        snag_response_graph_init(&graph);
         memset(&emitted, 0, sizeof(emitted));
-        snj_buf_init(&emitted.text, 1024u);
+        snag_buf_init(&emitted.text, 1024u);
         assert(parse_stream(wires[i], 1u, &graph, &emitted,
                             error, sizeof(error)) == 1);
-        assert(strcmp(error, SNJ_EMPTY_OUTPUT_CORRECTION) == 0);
+        assert(strcmp(error, SNAG_EMPTY_OUTPUT_CORRECTION) == 0);
         assert(graph.count == 0u);
         assert(graph.provider_response_id == NULL);
         assert(emitted.calls == 0u);
         assert(emitted.text.len == 0u);
-        snj_buf_free(&emitted.text);
-        snj_response_graph_free(&graph);
+        snag_buf_free(&emitted.text);
+        snag_response_graph_free(&graph);
     }
 }
 
@@ -195,35 +195,35 @@ test_oversized_public_items_get_specific_correction(void)
     memset(delta, 'x', delta_len);
     delta[delta_len] = '\0';
     for (size_t kind = 0; kind < 2u; ++kind) {
-        struct snj_response_graph graph;
+        struct snag_response_graph graph;
         struct emitted emitted;
-        struct snj_buf wire;
+        struct snag_buf wire;
         char error[256] = {0};
 
-        snj_buf_init(&wire, SNJ_MAX_RESPONSE_GRAPH);
-        assert(snj_buf_printf(&wire,
+        snag_buf_init(&wire, SNAG_MAX_RESPONSE_GRAPH);
+        assert(snag_buf_printf(&wire,
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_large\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
             "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_large\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
             "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"%s\",\"%s\":\"\"}}\n\n",
             part_types[kind],
             kind == 0u ? "text" : "refusal") == 0);
         for (size_t i = 0; i < 3u; ++i)
-            assert(snj_buf_printf(&wire,
+            assert(snag_buf_printf(&wire,
                 "data: {\"type\":\"%s\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"%s\":\"%s\"}\n\n",
                 event_types[kind], delta_keys[kind], delta) == 0);
-        assert(snj_buf_terminate(&wire) == 0);
-        snj_response_graph_init(&graph);
+        assert(snag_buf_terminate(&wire) == 0);
+        snag_response_graph_init(&graph);
         memset(&emitted, 0, sizeof(emitted));
-        snj_buf_init(&emitted.text, SNJ_MAX_PUBLIC_ITEM);
+        snag_buf_init(&emitted.text, SNAG_MAX_PUBLIC_ITEM);
         assert(parse_stream((const char *)wire.data, 8191u, &graph, &emitted,
                             error, sizeof(error)) < 0);
-        assert(strcmp(error, SNJ_OVERSIZED_OUTPUT_CORRECTION) == 0);
+        assert(strcmp(error, SNAG_OVERSIZED_OUTPUT_CORRECTION) == 0);
         assert(graph.count == 0u);
         assert(emitted.calls == 2u);
         assert(emitted.text.len == 2u * delta_len);
-        snj_buf_free(&emitted.text);
-        snj_response_graph_free(&graph);
-        snj_buf_free(&wire);
+        snag_buf_free(&emitted.text);
+        snag_response_graph_free(&graph);
+        snag_buf_free(&wire);
     }
     free(delta);
 }
@@ -240,20 +240,20 @@ test_structured_keepalives_do_not_end_response(void)
         "data: {\"type\":\"keepalive\",\"time_ms\":123}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 7u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(strcmp(graph.provider_response_id, "resp_keepalive") == 0);
     assert(graph.count == 0u);
     assert(emitted.calls == 0u);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -284,23 +284,23 @@ test_unused_response_events_are_ignored(void)
         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}]}}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_citation\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 11u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
+    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
     assert(strcmp(graph.items[0].text, "Source.") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.text.len == 7u);
     assert(memcmp(emitted.text.data, "Source.", 7u) == 0);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -309,20 +309,20 @@ test_terminal_snapshot_ignores_unused_text_metadata(void)
     static const char wire[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_file\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_file\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_file\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"See file.\",\"annotations\":{\"unused\":true},\"logprobs\":\"unused\"}]}]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 13u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
     assert(strcmp(graph.items[0].text, "See file.") == 0);
     assert(emitted.calls == 1u);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -345,27 +345,27 @@ test_unused_annotation_shapes_are_ignored(void)
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n";
 
     for (size_t i = 0; i < sizeof(bad_suffixes) / sizeof(bad_suffixes[0]); ++i) {
-        struct snj_response_graph graph;
+        struct snag_response_graph graph;
         struct emitted emitted;
-        struct snj_buf wire;
+        struct snag_buf wire;
         char error[256] = {0};
 
-        snj_buf_init(&wire, 8192u);
-        assert(snj_buf_append(&wire, prefix, strlen(prefix)) == 0);
-        assert(snj_buf_append(&wire, bad_suffixes[i],
+        snag_buf_init(&wire, 8192u);
+        assert(snag_buf_append(&wire, prefix, strlen(prefix)) == 0);
+        assert(snag_buf_append(&wire, bad_suffixes[i],
                               strlen(bad_suffixes[i])) == 0);
-        assert(snj_buf_append(&wire, finish, strlen(finish)) == 0);
-        assert(snj_buf_terminate(&wire) == 0);
-        snj_response_graph_init(&graph);
+        assert(snag_buf_append(&wire, finish, strlen(finish)) == 0);
+        assert(snag_buf_terminate(&wire) == 0);
+        snag_response_graph_init(&graph);
         memset(&emitted, 0, sizeof(emitted));
-        snj_buf_init(&emitted.text, 1024u);
+        snag_buf_init(&emitted.text, 1024u);
         assert(parse_stream((char *)wire.data, 7u, &graph, &emitted,
                             error, sizeof(error)) == 0);
         assert(graph.count == 1u);
         assert(strcmp(graph.items[0].text, "x") == 0);
-        snj_buf_free(&emitted.text);
-        snj_response_graph_free(&graph);
-        snj_buf_free(&wire);
+        snag_buf_free(&emitted.text);
+        snag_response_graph_free(&graph);
+        snag_buf_free(&wire);
     }
 }
 
@@ -387,30 +387,30 @@ test_phase_absent_text_becomes_visible_final(void)
         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"pong\",\"annotations\":[]}]}}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_pong\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     if (parse_stream(wire, 9u, &graph, &emitted,
                      error, sizeof(error)) != 0) {
         fprintf(stderr, "phase-absent text parse: %s\n", error);
         assert(0);
     }
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNJ_PHASE_FINAL_ANSWER);
+    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
+    assert(graph.items[0].phase == SNAG_PHASE_FINAL_ANSWER);
     assert(strcmp(graph.items[0].provider_item_id, "msg_pong") == 0);
     assert(strcmp(graph.items[0].text, "pong") == 0);
     assert(emitted.calls == 1u);
-    assert(emitted.last_phase == SNJ_PHASE_COMMENTARY);
+    assert(emitted.last_phase == SNAG_PHASE_COMMENTARY);
     assert(strcmp(emitted.last_provider_id, "msg_pong") == 0);
     assert(emitted.text.len == 4u);
     assert(memcmp(emitted.text.data, "pong", 4u) == 0);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -428,26 +428,26 @@ test_phase_absent_text_before_tool_stays_commentary(void)
         "event: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_2\",\"output_index\":1,\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n"
         "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"fc_2\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_2\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}}\n\n"
         "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_call_text\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     if (parse_stream(wire, 23u, &graph, &emitted,
                      error, sizeof(error)) != 0) {
         fprintf(stderr, "phase-absent text+tool parse: %s\n", error);
         assert(0);
     }
     assert(graph.count == 2u);
-    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNJ_PHASE_COMMENTARY);
+    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
+    assert(graph.items[0].phase == SNAG_PHASE_COMMENTARY);
     assert(strcmp(graph.items[0].text, "Checking.") == 0);
-    assert(graph.items[1].kind == SNJ_ITEM_TOOL_CALL);
+    assert(graph.items[1].kind == SNAG_ITEM_TOOL_CALL);
     assert(strcmp(graph.items[1].provider_call_id, "call_2") == 0);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -472,18 +472,18 @@ test_empty_reasoning_item_is_internal_only(void)
         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 19u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNJ_PHASE_FINAL_ANSWER);
+    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
+    assert(graph.items[0].phase == SNAG_PHASE_FINAL_ANSWER);
     assert(strcmp(graph.items[0].provider_item_id,
                   "msg_after_reasoning") == 0);
     assert(strcmp(graph.items[0].text, "ok") == 0);
@@ -492,8 +492,8 @@ test_empty_reasoning_item_is_internal_only(void)
     assert(strcmp(emitted.last_provider_id, "msg_after_reasoning") == 0);
     assert(emitted.text.len == 2u);
     assert(memcmp(emitted.text.data, "ok", 2u) == 0);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -524,18 +524,18 @@ test_web_search_item_is_internal_only(void)
         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_web\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 23u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNJ_PHASE_FINAL_ANSWER);
+    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
+    assert(graph.items[0].phase == SNAG_PHASE_FINAL_ANSWER);
     assert(strcmp(graph.items[0].provider_item_id, "msg_after_web") == 0);
     assert(strcmp(graph.items[0].text, "done") == 0);
     assert(emitted.calls == 1u);
@@ -543,8 +543,8 @@ test_web_search_item_is_internal_only(void)
     assert(strcmp(emitted.last_provider_id, "msg_after_web") == 0);
     assert(emitted.text.len == 4u);
     assert(memcmp(emitted.text.data, "done", 4u) == 0);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -562,22 +562,22 @@ test_future_items_and_content_are_inert(void)
         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"text\":\"visible\"}\n\n"
         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"future_content_result\"},{\"type\":\"output_text\",\"text\":\"visible\"}]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_inert\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 17u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
+    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
     assert(strcmp(graph.items[0].text, "visible") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_index == 1u);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -586,19 +586,19 @@ test_inert_only_response_has_empty_graph(void)
     static const char wire[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":\"completed\",\"output\":[{\"type\":\"future_action\",\"name\":\"exec_command\",\"arguments\":{}},{\"id\":\"msg_empty\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"future_content\",\"text\":\"hidden\"}]}]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 19u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 0u);
     assert(emitted.calls == 0u);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -612,24 +612,24 @@ test_function_call_arguments(void)
         "event: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_1\",\"output_index\":0,\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\"}\n\n"
         "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\"}}\n\n"
         "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_call\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 31u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNJ_ITEM_TOOL_CALL);
+    assert(graph.items[0].kind == SNAG_ITEM_TOOL_CALL);
     assert(strcmp(graph.items[0].provider_call_id, "call_1") == 0);
     assert(strcmp(graph.items[0].name, "exec_command") == 0);
-    assert(strcmp(snj_json_string(graph.items[0].arguments, "command"),
+    assert(strcmp(snag_json_string(graph.items[0].arguments, "command"),
                   "printf hi") == 0);
     assert(emitted.calls == 0u);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -638,21 +638,21 @@ test_refusal(void)
     static const char wire[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_refuse\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_refuse\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_refuse\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"I cannot do that.\"}]}]}}\n\n";
-    struct snj_response_graph graph;
+    struct snag_response_graph graph;
     struct emitted emitted;
     char error[256] = {0};
 
-    snj_response_graph_init(&graph);
+    snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
-    snj_buf_init(&emitted.text, 1024u);
+    snag_buf_init(&emitted.text, 1024u);
     assert(parse_stream(wire, 0u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNJ_ITEM_REFUSAL);
+    assert(graph.items[0].kind == SNAG_ITEM_REFUSAL);
     assert(strcmp(graph.items[0].text, "I cannot do that.") == 0);
-    assert(emitted.last_kind == SNJ_ITEM_REFUSAL);
-    snj_buf_free(&emitted.text);
-    snj_response_graph_free(&graph);
+    assert(emitted.last_kind == SNAG_ITEM_REFUSAL);
+    snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
 }
 
 static void
@@ -675,19 +675,19 @@ test_protocol_conflicts_fail_closed(void)
     };
 
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
-        struct snj_response_graph graph;
+        struct snag_response_graph graph;
         struct emitted emitted;
         char error[256] = {0};
 
-        snj_response_graph_init(&graph);
+        snag_response_graph_init(&graph);
         memset(&emitted, 0, sizeof(emitted));
-        snj_buf_init(&emitted.text, 1024u);
+        snag_buf_init(&emitted.text, 1024u);
         assert(parse_stream(bad[i], 7u, &graph, &emitted,
                             error, sizeof(error)) < 0);
         assert(error[0]);
         assert(graph.count == 0u);
-        snj_buf_free(&emitted.text);
-        snj_response_graph_free(&graph);
+        snag_buf_free(&emitted.text);
+        snag_response_graph_free(&graph);
     }
 }
 
@@ -698,20 +698,20 @@ test_structured_capacity_failure(void)
         "{\"type\":\"response.failed\",\"response\":{\"error\":{"
         "\"code\":\"context_length_exceeded\",\"message\":\"too large\","
         "\"context_length\":272000,\"requested_tokens\":300000}}}";
-    struct snj_responses_stream stream;
-    struct snj_sse_record record;
+    struct snag_responses_stream stream;
+    struct snag_sse_record record;
     json_t *root;
-    struct snj_provider_failure failure;
+    struct snag_provider_failure failure;
 
-    snj_responses_stream_init(&stream, NULL, NULL);
+    snag_responses_stream_init(&stream, NULL, NULL);
     memset(&record, 0, sizeof(record));
-    record.kind = SNJ_SSE_EVENT;
+    record.kind = SNAG_SSE_EVENT;
     record.event = (const unsigned char *)"response.failed";
     record.event_len = strlen("response.failed");
     record.data = (const unsigned char *)payload;
     record.data_len = strlen(payload);
-    assert(snj_responses_sse_record(&stream, &record) < 0);
-    assert(snj_provider_failure_is_capacity(&stream.provider_failure));
+    assert(snag_responses_sse_record(&stream, &record) < 0);
+    assert(snag_provider_failure_is_capacity(&stream.provider_failure));
     assert(strcmp(stream.provider_failure.message, "too large") == 0);
     assert(stream.provider_failure.context_limit_known);
     assert(stream.provider_failure.context_limit_tokens == 272000u);
@@ -720,27 +720,27 @@ test_structured_capacity_failure(void)
     {
         uint64_t ceiling = 0u;
 
-        assert(snj_provider_failure_safety_ceiling(
+        assert(snag_provider_failure_safety_ceiling(
             &stream.provider_failure, true, 128000u, &ceiling));
         assert(ceiling == 144000u);
         memset(&failure, 0, sizeof(failure));
-        assert(!snj_provider_failure_safety_ceiling(
+        assert(!snag_provider_failure_safety_ceiling(
             &failure, false, 0u, &ceiling));
     }
-    snj_responses_stream_free(&stream);
+    snag_responses_stream_free(&stream);
 
     {
         static const char ordinary[] =
             "{\"error\":{\"code\":\"rate_limit_exceeded\","
             "\"message\":\"later\"}}";
         char json_error[128] = {0};
-        root = snj_json_load_strict((const unsigned char *)ordinary,
+        root = snag_json_load_strict((const unsigned char *)ordinary,
                                     strlen(ordinary), sizeof(ordinary),
                                     json_error, sizeof(json_error));
     }
     assert(root);
-    assert(snj_provider_failure_from_json(root, &failure) == 0);
-    assert(!snj_provider_failure_is_capacity(&failure));
+    assert(snag_provider_failure_from_json(root, &failure) == 0);
+    assert(!snag_provider_failure_is_capacity(&failure));
     assert(strcmp(failure.code, "rate_limit_exceeded") == 0);
     json_decref(root);
 
@@ -749,13 +749,13 @@ test_structured_capacity_failure(void)
             "{\"type\":\"error\",\"code\":\"context_length_exceeded\","
             "\"message\":\"top-level failure\",\"max_context_tokens\":42}";
         char json_error[128] = {0};
-        root = snj_json_load_strict((const unsigned char *)top_level,
+        root = snag_json_load_strict((const unsigned char *)top_level,
                                     strlen(top_level), sizeof(top_level),
                                     json_error, sizeof(json_error));
     }
     assert(root);
-    assert(snj_provider_failure_from_json(root, &failure) == 0);
-    assert(snj_provider_failure_is_capacity(&failure));
+    assert(snag_provider_failure_from_json(root, &failure) == 0);
+    assert(snag_provider_failure_is_capacity(&failure));
     assert(strcmp(failure.message, "top-level failure") == 0);
     assert(failure.context_limit_known);
     assert(failure.context_limit_tokens == 42u);

@@ -8,54 +8,54 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SNJ_MAX_RESPONSE_PARTS 96u
-struct snj_provider_failure {
+#define SNAG_MAX_RESPONSE_PARTS 96u
+struct snag_provider_failure {
     char code[64];
     char message[256];
     uint64_t context_limit_tokens;
     uint64_t requested_input_tokens;
     bool context_limit_known;
     bool requested_input_known;
-    enum snj_output_correction output_correction;
+    enum snag_output_correction output_correction;
 };
 
-typedef int (*snj_responses_emit_fn)(void *opaque, size_t output_index,
-                                     enum snj_item_kind kind,
-                                     enum snj_item_phase phase,
+typedef int (*snag_responses_emit_fn)(void *opaque, size_t output_index,
+                                     enum snag_item_kind kind,
+                                     enum snag_item_phase phase,
                                      const char *provider_item_id,
                                      const char *text, size_t len);
 
-enum snj_wire_item_kind {
-    SNJ_WIRE_ITEM_NONE,
-    SNJ_WIRE_ITEM_MESSAGE,
-    SNJ_WIRE_ITEM_FUNCTION_CALL,
-    SNJ_WIRE_ITEM_INERT
+enum snag_wire_item_kind {
+    SNAG_WIRE_ITEM_NONE,
+    SNAG_WIRE_ITEM_MESSAGE,
+    SNAG_WIRE_ITEM_FUNCTION_CALL,
+    SNAG_WIRE_ITEM_INERT
 };
 
-enum snj_wire_part_kind {
-    SNJ_WIRE_PART_NONE,
-    SNJ_WIRE_PART_TEXT,
-    SNJ_WIRE_PART_REFUSAL,
-    SNJ_WIRE_PART_INERT
+enum snag_wire_part_kind {
+    SNAG_WIRE_PART_NONE,
+    SNAG_WIRE_PART_TEXT,
+    SNAG_WIRE_PART_REFUSAL,
+    SNAG_WIRE_PART_INERT
 };
 
-struct snj_wire_part {
-    enum snj_wire_part_kind kind;
-    struct snj_buf text;
+struct snag_wire_part {
+    enum snag_wire_part_kind kind;
+    struct snag_buf text;
     bool present;
     bool value_seen;
     bool complete;
 };
 
-struct snj_wire_item {
-    enum snj_wire_item_kind kind;
+struct snag_wire_item {
+    enum snag_wire_item_kind kind;
     char *id;
     char *phase;
     bool phase_present;
     char *name;
     char *call_id;
-    struct snj_buf arguments;
-    struct snj_wire_part *parts;
+    struct snag_buf arguments;
+    struct snag_wire_part *parts;
     size_t part_count;
     size_t part_cap;
     bool present;
@@ -64,39 +64,39 @@ struct snj_wire_item {
     bool complete;
 };
 
-struct snj_responses_stream {
-    struct snj_wire_item items[SNJ_MAX_RESPONSE_ITEMS];
+struct snag_responses_stream {
+    struct snag_wire_item items[SNAG_MAX_RESPONSE_ITEMS];
     size_t item_count;
     size_t part_count;
     size_t aggregate_bytes;
     char *response_id;
-    struct snj_response_usage usage;
-    snj_responses_emit_fn emit;
+    struct snag_response_usage usage;
+    snag_responses_emit_fn emit;
     void *opaque;
     bool created;
     bool terminal;
     bool failed;
-    enum snj_output_correction output_correction;
-    struct snj_provider_failure provider_failure;
+    enum snag_output_correction output_correction;
+    struct snag_provider_failure provider_failure;
     char error[256];
 };
 
-void snj_responses_stream_init(struct snj_responses_stream *stream,
-                               snj_responses_emit_fn emit, void *opaque);
-void snj_responses_stream_free(struct snj_responses_stream *stream);
-int snj_responses_sse_record(void *opaque,
-                             const struct snj_sse_record *record);
-int snj_responses_stream_finish(struct snj_responses_stream *stream,
-                                struct snj_response_graph *graph,
+void snag_responses_stream_init(struct snag_responses_stream *stream,
+                               snag_responses_emit_fn emit, void *opaque);
+void snag_responses_stream_free(struct snag_responses_stream *stream);
+int snag_responses_sse_record(void *opaque,
+                             const struct snag_sse_record *record);
+int snag_responses_stream_finish(struct snag_responses_stream *stream,
+                                struct snag_response_graph *graph,
                                 char *error, size_t error_size);
-const char *snj_responses_stream_error(const struct snj_responses_stream *stream);
-bool snj_provider_failure_is_capacity(
-    const struct snj_provider_failure *failure);
-bool snj_provider_failure_safety_ceiling(
-    const struct snj_provider_failure *failure,
+const char *snag_responses_stream_error(const struct snag_responses_stream *stream);
+bool snag_provider_failure_is_capacity(
+    const struct snag_provider_failure *failure);
+bool snag_provider_failure_safety_ceiling(
+    const struct snag_provider_failure *failure,
     bool requested_output_known, uint64_t requested_output_tokens,
     uint64_t *ceiling_tokens);
-int snj_provider_failure_from_json(const json_t *root,
-                                   struct snj_provider_failure *failure);
+int snag_provider_failure_from_json(const json_t *root,
+                                   struct snag_provider_failure *failure);
 
 #endif

@@ -9,7 +9,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include "snj_jansson.h"
+#include "snag_jansson.h"
 #include <limits.h>
 #include <poll.h>
 #if defined(__linux__)
@@ -35,35 +35,35 @@
 #define O_CLOEXEC 0
 #endif
 
-#define SNJ_TOOL_COMMAND_MAX (256u * 1024u)
-#define SNJ_TOOL_STDIN_MAX (1024u * 1024u)
-#define SNJ_TOOL_POLL_MS 50u
-#define SNJ_TOOL_YIELD_MAX_MS 600000u
-#define SNJ_TOOL_CLOSE_GRACE_MS 2000u
-#define SNJ_TOOL_REDACTOR_MAX (8192u + SNJ_WIRE_SECRET_MAX)
+#define SNAG_TOOL_COMMAND_MAX (256u * 1024u)
+#define SNAG_TOOL_STDIN_MAX (1024u * 1024u)
+#define SNAG_TOOL_POLL_MS 50u
+#define SNAG_TOOL_YIELD_MAX_MS 600000u
+#define SNAG_TOOL_CLOSE_GRACE_MS 2000u
+#define SNAG_TOOL_REDACTOR_MAX (8192u + SNAG_WIRE_SECRET_MAX)
 
 extern char **environ;
 
 struct capture_stream {
-    struct snj_buf data;
+    struct snag_buf data;
 };
 
 struct capture_redactor {
-    struct snj_buf pending;
+    struct snag_buf pending;
     struct capture_stream *stream;
-    const struct snj_wire_secrets *secrets;
+    const struct snag_wire_secrets *secrets;
     size_t max_secret;
 };
 
 struct managed_secret_set {
-    char storage[SNJ_SECRET_VALUES_MAX][SNJ_WIRE_SECRET_MAX + 1u];
-    const char *values[SNJ_SECRET_VALUES_MAX];
-    struct snj_wire_secrets wire;
+    char storage[SNAG_SECRET_VALUES_MAX][SNAG_WIRE_SECRET_MAX + 1u];
+    const char *values[SNAG_SECRET_VALUES_MAX];
+    struct snag_wire_secrets wire;
 };
 
 struct managed_process {
     bool active;
-    char handle[SNJ_ID_HEX_LEN + 1u];
+    char handle[SNAG_ID_HEX_LEN + 1u];
     pid_t pid;
     bool pty;
     unsigned short pty_rows;
@@ -145,7 +145,7 @@ static bool
 command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out)
 {
     if (!json_u32_member(arguments, "max_output_tokens", ceiling, 1u,
-                         (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX, out))
+                         (uint32_t)SNAG_CONFIG_TOKEN_LIMIT_MAX, out))
         return false;
     if (*out > ceiling)
         *out = ceiling;
@@ -159,7 +159,7 @@ text_arg_valid(const char *text, size_t max)
     if (!text || text == (const char *)-1)
         return false;
     len = strlen(text);
-    return len <= max && snj_utf8_valid((const unsigned char *)text, len, true);
+    return len <= max && snag_utf8_valid((const unsigned char *)text, len, true);
 }
 
 static bool
@@ -171,8 +171,8 @@ absolute_dir_arg_valid(const char *path)
     if (!path || path == (const char *)-1 || path[0] != '/')
         return false;
     len = strlen(path);
-    return len <= SNJ_PATH_MAX_BYTES &&
-           snj_utf8_valid((const unsigned char *)path, len, true) &&
+    return len <= SNAG_PATH_MAX_BYTES &&
+           snag_utf8_valid((const unsigned char *)path, len, true) &&
            stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
@@ -190,7 +190,7 @@ make_pipe(int p[2])
 {
     if (pipe(p) < 0)
         return -1;
-    if (snj_fd_cloexec(p[0]) < 0 || snj_fd_cloexec(p[1]) < 0) {
+    if (snag_fd_cloexec(p[0]) < 0 || snag_fd_cloexec(p[1]) < 0) {
         int saved = errno;
         (void)close(p[0]);
         (void)close(p[1]);
@@ -204,13 +204,13 @@ static void
 capture_init(struct capture_stream *stream)
 {
     memset(stream, 0, sizeof(*stream));
-    snj_buf_init(&stream->data, SIZE_MAX);
+    snag_buf_init(&stream->data, SIZE_MAX);
 }
 
 static void
 capture_free(struct capture_stream *stream)
 {
-    snj_buf_free(&stream->data);
+    snag_buf_free(&stream->data);
     memset(stream, 0, sizeof(*stream));
 }
 
@@ -222,12 +222,12 @@ capture_append(struct capture_stream *stream, const unsigned char *data,
         errno = EINVAL;
         return -1;
     }
-    return snj_buf_append(&stream->data, data, len);
+    return snag_buf_append(&stream->data, data, len);
 }
 
 static size_t
 secret_at(const unsigned char *data, size_t len, size_t offset,
-          const struct snj_wire_secrets *secrets)
+          const struct snag_wire_secrets *secrets)
 {
     size_t best = 0;
 
@@ -301,10 +301,10 @@ redactor_drain(struct capture_redactor *redactor, bool final)
 
 static void
 redactor_init(struct capture_redactor *redactor, struct capture_stream *stream,
-              const struct snj_wire_secrets *secrets)
+              const struct snag_wire_secrets *secrets)
 {
     memset(redactor, 0, sizeof(*redactor));
-    snj_buf_init(&redactor->pending, SNJ_TOOL_REDACTOR_MAX);
+    snag_buf_init(&redactor->pending, SNAG_TOOL_REDACTOR_MAX);
     redactor->stream = stream;
     redactor->secrets = secrets;
     if (secrets) {
@@ -322,7 +322,7 @@ redactor_init(struct capture_redactor *redactor, struct capture_stream *stream,
 static void
 redactor_free(struct capture_redactor *redactor)
 {
-    snj_buf_free(&redactor->pending);
+    snag_buf_free(&redactor->pending);
     memset(redactor, 0, sizeof(*redactor));
 }
 
@@ -330,7 +330,7 @@ static int
 redactor_feed(struct capture_redactor *redactor,
               const unsigned char *data, size_t len)
 {
-    if (len && snj_buf_append(&redactor->pending, data, len) < 0)
+    if (len && snag_buf_append(&redactor->pending, data, len) < 0)
         return -1;
     return redactor_drain(redactor, false);
 }
@@ -351,7 +351,7 @@ static const char b64[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static int
-append_base64(struct snj_buf *out, const unsigned char *data, size_t len)
+append_base64(struct snag_buf *out, const unsigned char *data, size_t len)
 {
     size_t i = 0;
     while (i + 3u <= len) {
@@ -364,7 +364,7 @@ append_base64(struct snj_buf *out, const unsigned char *data, size_t len)
             (unsigned char)b64[(v >> 6) & 63u],
             (unsigned char)b64[v & 63u]
         };
-        if (snj_buf_append(out, enc, sizeof(enc)) < 0)
+        if (snag_buf_append(out, enc, sizeof(enc)) < 0)
             return -1;
         i += 3u;
     }
@@ -377,7 +377,7 @@ append_base64(struct snj_buf *out, const unsigned char *data, size_t len)
         enc[1] = (unsigned char)b64[(v >> 12) & 63u];
         enc[2] = (i + 1u < len) ? (unsigned char)b64[(v >> 6) & 63u] : '=';
         enc[3] = '=';
-        if (snj_buf_append(out, enc, sizeof(enc)) < 0)
+        if (snag_buf_append(out, enc, sizeof(enc)) < 0)
             return -1;
     }
     return 0;
@@ -386,36 +386,36 @@ append_base64(struct snj_buf *out, const unsigned char *data, size_t len)
 static json_t *
 excerpt_json(const struct capture_stream *stream)
 {
-    struct snj_buf encoded;
+    struct snag_buf encoded;
     json_t *out = json_object();
     bool textual;
     int rc = -1;
 
     if (!out)
         return NULL;
-    snj_buf_init(&encoded, SIZE_MAX);
-    textual = snj_utf8_valid(stream->data.data, stream->data.len, true);
+    snag_buf_init(&encoded, SIZE_MAX);
+    textual = snag_utf8_valid(stream->data.data, stream->data.len, true);
     if (textual) {
-        if (snj_buf_append(&encoded, stream->data.data, stream->data.len) < 0)
+        if (snag_buf_append(&encoded, stream->data.data, stream->data.len) < 0)
             goto out;
     } else if (append_base64(&encoded, stream->data.data, stream->data.len) < 0) {
         goto out;
     }
-    if (snj_json_set_new(out, "discarded_bytes",
+    if (snag_json_set_new(out, "discarded_bytes",
                          json_integer(0)) < 0 ||
-        snj_json_set_new(out, "encoding",
+        snag_json_set_new(out, "encoding",
                          json_string(textual ? "utf8" : "base64")) < 0 ||
-        snj_json_set_new(out, "original_bytes",
+        snag_json_set_new(out, "original_bytes",
                          json_integer((json_int_t)stream->data.len)) < 0 ||
-        snj_json_set_new(out, "retained",
+        snag_json_set_new(out, "retained",
                          json_stringn(encoded.len ? (const char *)encoded.data : "",
                                       encoded.len)) < 0 ||
-        snj_json_set_new(out, "retained_bytes",
+        snag_json_set_new(out, "retained_bytes",
                          json_integer((json_int_t)stream->data.len)) < 0)
         goto out;
     rc = 0;
 out:
-    snj_buf_free(&encoded);
+    snag_buf_free(&encoded);
     if (rc < 0) {
         json_decref(out);
         return NULL;
@@ -424,24 +424,24 @@ out:
 }
 
 static int
-append_stream_text(struct snj_buf *out, const char *label,
+append_stream_text(struct snag_buf *out, const char *label,
                    const struct capture_stream *stream)
 {
     if (!stream->data.len)
         return 0;
-    if (snj_buf_printf(out, "%s%s:\n", out->len ? "\n" : "", label) < 0)
+    if (snag_buf_printf(out, "%s%s:\n", out->len ? "\n" : "", label) < 0)
         return -1;
-    if (snj_utf8_valid(stream->data.data, stream->data.len, true)) {
-        if (snj_buf_append(out, stream->data.data, stream->data.len) < 0)
+    if (snag_utf8_valid(stream->data.data, stream->data.len, true)) {
+        if (snag_buf_append(out, stream->data.data, stream->data.len) < 0)
             return -1;
         if (stream->data.data[stream->data.len - 1u] != '\n' &&
-            snj_buf_putc(out, '\n') < 0)
+            snag_buf_putc(out, '\n') < 0)
             return -1;
     } else {
-        if (snj_buf_printf(out, "<%llu binary bytes; base64 follows>\n",
+        if (snag_buf_printf(out, "<%llu binary bytes; base64 follows>\n",
                            (unsigned long long)stream->data.len) < 0 ||
             append_base64(out, stream->data.data, stream->data.len) < 0 ||
-            snj_buf_putc(out, '\n') < 0)
+            snag_buf_putc(out, '\n') < 0)
             return -1;
     }
     return 0;
@@ -453,23 +453,23 @@ model_text_for(const char *status, const char *reason, int exit_code,
                const struct capture_stream *stdout_stream,
                const struct capture_stream *stderr_stream)
 {
-    struct snj_buf text;
+    struct snag_buf text;
     char *out = NULL;
 
-    snj_buf_init(&text, SIZE_MAX);
+    snag_buf_init(&text, SIZE_MAX);
     if (strcmp(status, "succeeded") == 0) {
-        if (snj_buf_printf(&text, "Process exited with code %d.\n", exit_code) < 0)
+        if (snag_buf_printf(&text, "Process exited with code %d.\n", exit_code) < 0)
             goto done;
     } else if (strcmp(status, "failed") == 0) {
-        if (snj_buf_printf(&text, "Process exited with code %d.\n", exit_code) < 0)
+        if (snag_buf_printf(&text, "Process exited with code %d.\n", exit_code) < 0)
             goto done;
     } else if (strcmp(status, "signaled") == 0) {
-        if (snj_buf_printf(&text, "Process was terminated by signal %d.\n",
+        if (snag_buf_printf(&text, "Process was terminated by signal %d.\n",
                            signal_number) < 0)
             goto done;
     } else if (strcmp(status, "cancelled") == 0) {
         const char *msg = "Process was cancelled by the user.\n";
-        if (snj_buf_append(&text, msg, strlen(msg)) < 0)
+        if (snag_buf_append(&text, msg, strlen(msg)) < 0)
             goto done;
     } else if (strcmp(status, "running") == 0) {
         const char *msg;
@@ -480,31 +480,31 @@ model_text_for(const char *status, const char *reason, int exit_code,
             msg = "Command is still running because steering arrived. Use write_stdin with the active handle to wait for, interact with, or terminate it after considering the steer.\n";
         else
             msg = "Process is still running.\n";
-        if (snj_buf_append(&text, msg, strlen(msg)) < 0)
+        if (snag_buf_append(&text, msg, strlen(msg)) < 0)
             goto done;
     } else if (strcmp(status, "io_failed") == 0) {
         const char *msg = "Tool I/O failed.\n";
-        if (snj_buf_append(&text, msg, strlen(msg)) < 0)
+        if (snag_buf_append(&text, msg, strlen(msg)) < 0)
             goto done;
-    } else if (snj_buf_printf(&text, "Tool status: %s.\n", status) < 0) {
+    } else if (snag_buf_printf(&text, "Tool status: %s.\n", status) < 0) {
         goto done;
     }
     if (append_stream_text(&text, "stdout", stdout_stream) < 0 ||
         append_stream_text(&text, "stderr", stderr_stream) < 0)
         goto done;
-    if (snj_buf_terminate(&text) < 0)
+    if (snag_buf_terminate(&text) < 0)
         goto done;
     out = (char *)text.data;
     memset(&text, 0, sizeof(text));
 done:
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     return out;
 }
 
 static int
 result_set(json_t *object, const char *key, json_t *value)
 {
-    return snj_json_set_new(object, key, value);
+    return snag_json_set_new(object, key, value);
 }
 
 static json_t *
@@ -592,7 +592,7 @@ proxy_with_userinfo(const char *entry)
 }
 
 static bool
-remove_env_entry(const char *entry, const struct snj_config *config)
+remove_env_entry(const char *entry, const struct snag_config *config)
 {
     static const char *const proxy_names[] = {
         "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
@@ -616,7 +616,7 @@ remove_env_entry(const char *entry, const struct snj_config *config)
 }
 
 static char **
-filtered_environment(const struct snj_config *config)
+filtered_environment(const struct snag_config *config)
 {
     size_t count = 0;
     size_t kept = 0;
@@ -858,16 +858,16 @@ saturating_deadline(uint64_t start, uint32_t delta_ms)
 
 static void
 managed_secret_set_build(struct managed_secret_set *set,
-                         const struct snj_config *config,
-                         const struct snj_credential *credential)
+                         const struct snag_config *config,
+                         const struct snag_credential *credential)
 {
     size_t count = 0u;
 
     memset(set, 0, sizeof(*set));
-    if (credential && credential->len && count < SNJ_SECRET_VALUES_MAX) {
+    if (credential && credential->len && count < SNAG_SECRET_VALUES_MAX) {
         size_t len = credential->len;
-        if (len > SNJ_WIRE_SECRET_MAX)
-            len = SNJ_WIRE_SECRET_MAX;
+        if (len > SNAG_WIRE_SECRET_MAX)
+            len = SNAG_WIRE_SECRET_MAX;
         memcpy(set->storage[count], credential->value, len);
         set->storage[count][len] = '\0';
         set->values[count] = set->storage[count];
@@ -875,14 +875,14 @@ managed_secret_set_build(struct managed_secret_set *set,
     }
     if (config) {
         for (size_t i = 0; i < config->provider_count &&
-             count < SNJ_SECRET_VALUES_MAX; ++i) {
+             count < SNAG_SECRET_VALUES_MAX; ++i) {
             const char *value = getenv(config->providers[i].api_key_env);
             size_t len;
             bool duplicate = false;
             if (!value)
                 continue;
-            len = strnlen(value, SNJ_WIRE_SECRET_MAX + 1u);
-            if (!len || len > SNJ_WIRE_SECRET_MAX)
+            len = strnlen(value, SNAG_WIRE_SECRET_MAX + 1u);
+            if (!len || len > SNAG_WIRE_SECRET_MAX)
                 continue;
             for (size_t j = 0; j < count; ++j)
                 if (strcmp(set->values[j], value) == 0) {
@@ -897,13 +897,13 @@ managed_secret_set_build(struct managed_secret_set *set,
             ++count;
         }
         for (size_t i = 0; i < config->secret_env_count &&
-             count < SNJ_SECRET_VALUES_MAX; ++i) {
+             count < SNAG_SECRET_VALUES_MAX; ++i) {
             const char *value = getenv(config->secret_env[i]);
             size_t len;
             if (!value)
                 continue;
-            len = strnlen(value, SNJ_WIRE_SECRET_MAX + 1u);
-            if (!len || len > SNJ_WIRE_SECRET_MAX)
+            len = strnlen(value, SNAG_WIRE_SECRET_MAX + 1u);
+            if (!len || len > SNAG_WIRE_SECRET_MAX)
                 continue;
             memcpy(set->storage[count], value, len);
             set->storage[count][len] = '\0';
@@ -992,7 +992,7 @@ managed_reap_once(struct managed_process *proc, char *error, size_t error_size)
         if (errno == ECHILD) {
             proc->child_done = true;
         } else {
-            snj_errorf(error, error_size, "tool process wait failed: %s",
+            snag_errorf(error, error_size, "tool process wait failed: %s",
                       strerror(errno));
             return -1;
         }
@@ -1028,7 +1028,7 @@ managed_make_result(struct managed_process *proc, const char *status,
                     const char *handle, json_t **result,
                     char *error, size_t error_size)
 {
-    uint64_t ended = snj_time_ms();
+    uint64_t ended = snag_time_ms();
     uint64_t duration = ended >= proc->started_ms ? ended - proc->started_ms : 0u;
 
     *result = result_json(status, reason, exit_code, signal_number, duration,
@@ -1040,7 +1040,7 @@ managed_make_result(struct managed_process *proc, const char *status,
             json_decref(*result);
             *result = NULL;
         }
-        snj_errorf(error, error_size, "cannot allocate tool result");
+        snag_errorf(error, error_size, "cannot allocate tool result");
         return -1;
     }
     return 0;
@@ -1114,10 +1114,10 @@ managed_write_pty_input(struct managed_process *proc, const char *input,
 static int
 managed_drive(struct managed_process *proc, const char *input, size_t input_len,
               bool input_supplied, bool close_after_input, uint32_t yield_ms,
-              snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+              snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
               json_t **result, char *error, size_t error_size)
 {
-    uint64_t yield_deadline = yield_ms ? saturating_deadline(snj_time_ms(), yield_ms) : UINT64_MAX;
+    uint64_t yield_deadline = yield_ms ? saturating_deadline(snag_time_ms(), yield_ms) : UINT64_MAX;
     size_t input_written = 0u;
     bool yield_enabled = yield_ms > 0u;
     bool handoff_requested = false;
@@ -1133,8 +1133,8 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
         int stdout_index = -1;
         int stderr_index = -1;
         int stdin_index = -1;
-        uint64_t now = snj_time_ms();
-        int timeout = (int)SNJ_TOOL_POLL_MS;
+        uint64_t now = snag_time_ms();
+        int timeout = (int)SNAG_TOOL_POLL_MS;
         bool input_done = managed_input_done(proc, input_supplied,
                                              input_len, input_written,
                                              close_after_input, pty_eof_sent);
@@ -1225,7 +1225,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
         if (pr < 0) {
             if (errno == EINTR)
                 continue;
-            snj_errorf(error, error_size, "tool process polling failed: %s",
+            snag_errorf(error, error_size, "tool process polling failed: %s",
                       strerror(errno));
             return -1;
         }
@@ -1236,7 +1236,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
                 if (managed_write_pty_input(proc, input, input_len,
                                             &input_written, close_after_input,
                                             &pty_eof_sent) < 0) {
-                    snj_errorf(error, error_size, "tool PTY stdin write failed");
+                    snag_errorf(error, error_size, "tool PTY stdin write failed");
                     return -1;
                 }
             }
@@ -1247,7 +1247,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
                          drain_fd(proc->stdout_fd, &proc->stdout_redactor,
                                   &proc->stdout_open);
                 if (dr < 0) {
-                    snj_errorf(error, error_size,
+                    snag_errorf(error, error_size,
                               proc->pty ? "tool PTY capture failed" :
                                           "tool stdout capture failed");
                     return -1;
@@ -1264,7 +1264,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
         if (stderr_index >= 0 && fds[stderr_index].revents) {
             if (drain_fd(proc->stderr_fd, &proc->stderr_redactor,
                          &proc->stderr_open) < 0) {
-                snj_errorf(error, error_size, "tool stderr capture failed");
+                snag_errorf(error, error_size, "tool stderr capture failed");
                 return -1;
             }
             if (!proc->stderr_open)
@@ -1274,7 +1274,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
             if (write_stdin_chunk(&proc->stdin_fd, input, input_len,
                                   &input_written, &proc->stdin_open,
                                   close_after_input) < 0) {
-                snj_errorf(error, error_size, "tool stdin write failed");
+                snag_errorf(error, error_size, "tool stdin write failed");
                 return -1;
             }
         }
@@ -1290,9 +1290,9 @@ run_exec_command_managed(const char *command, const char *workdir,
                          const char *stdin_text, uint32_t timeout_ms,
                          uint32_t yield_ms, uint32_t max_output_tokens,
                          bool pty,
-                         const struct snj_config *config,
-                         const struct snj_credential *credential,
-                         snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+                         const struct snag_config *config,
+                         const struct snag_credential *credential,
+                         snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                          json_t **result, char *error, size_t error_size)
 {
     int in_pipe[2] = {-1, -1};
@@ -1313,7 +1313,7 @@ run_exec_command_managed(const char *command, const char *workdir,
             "Another managed process is still running; close or finish it before starting a new yielded process.",
             -1, NULL);
         if (!*result) {
-            snj_errorf(error, error_size, "cannot allocate tool result");
+            snag_errorf(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
@@ -1322,38 +1322,38 @@ run_exec_command_managed(const char *command, const char *workdir,
     if (pty) {
         if (open_pty_pair(&pty_master, &pty_slave,
                           &pty_rows, &pty_cols) < 0) {
-            snj_errorf(error, error_size, "cannot create tool PTY: %s",
+            snag_errorf(error, error_size, "cannot create tool PTY: %s",
                       strerror(errno));
             goto out;
         }
-        if (snj_fd_cloexec(pty_master) < 0 || snj_fd_cloexec(pty_slave) < 0 ||
+        if (snag_fd_cloexec(pty_master) < 0 || snag_fd_cloexec(pty_slave) < 0 ||
             set_nonblock(pty_master) < 0) {
-            snj_errorf(error, error_size, "cannot configure tool PTY: %s",
+            snag_errorf(error, error_size, "cannot configure tool PTY: %s",
                       strerror(errno));
             goto out;
         }
     } else {
         if (make_pipe(in_pipe) < 0 || make_pipe(out_pipe) < 0 ||
             make_pipe(err_pipe) < 0) {
-            snj_errorf(error, error_size, "cannot create tool pipes: %s",
+            snag_errorf(error, error_size, "cannot create tool pipes: %s",
                       strerror(errno));
             goto out;
         }
         if (set_nonblock(in_pipe[1]) < 0 || set_nonblock(out_pipe[0]) < 0 ||
             set_nonblock(err_pipe[0]) < 0) {
-            snj_errorf(error, error_size, "cannot configure tool pipes: %s",
+            snag_errorf(error, error_size, "cannot configure tool pipes: %s",
                       strerror(errno));
             goto out;
         }
     }
     env = filtered_environment(config);
     if (!env) {
-        snj_errorf(error, error_size, "cannot allocate tool environment");
+        snag_errorf(error, error_size, "cannot allocate tool environment");
         goto out;
     }
     pid = fork();
     if (pid < 0) {
-        snj_errorf(error, error_size, "cannot fork tool process: %s", strerror(errno));
+        snag_errorf(error, error_size, "cannot fork tool process: %s", strerror(errno));
         goto out;
     }
     if (pid == 0) {
@@ -1403,11 +1403,11 @@ run_exec_command_managed(const char *command, const char *workdir,
     proc->stdin_open = true;
     proc->stdout_open = true;
     proc->stderr_open = !pty;
-    proc->started_ms = snj_time_ms();
+    proc->started_ms = snag_time_ms();
     proc->deadline_ms = saturating_deadline(proc->started_ms, timeout_ms);
     proc->max_output_tokens = max_output_tokens;
-    if (snj_random_id(proc->handle) < 0) {
-        snj_errorf(error, error_size, "cannot allocate managed process handle");
+    if (snag_random_id(proc->handle) < 0) {
+        snag_errorf(error, error_size, "cannot allocate managed process handle");
         goto out_active;
     }
     managed_secret_set_build(&proc->secrets, config, credential);
@@ -1442,13 +1442,13 @@ out:
 }
 
 static int
-run_write_stdin(const struct snj_response_item *call,
-                const struct snj_config *config,
-                snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+run_write_stdin(const struct snag_response_item *call,
+                const struct snag_config *config,
+                snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                 json_t **result, char *error, size_t error_size)
 {
-    const char *handle = snj_json_string(call->arguments, "handle");
-    const char *data = snj_json_string(call->arguments, "data");
+    const char *handle = snag_json_string(call->arguments, "handle");
+    const char *data = snag_json_string(call->arguments, "data");
     uint32_t yield_ms;
     bool eof;
     bool terminate;
@@ -1460,17 +1460,17 @@ run_write_stdin(const struct snj_response_item *call,
         "max_output_tokens"
     };
 
-    if (!handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN)) {
-        snj_errorf(error, error_size, "invalid write_stdin arguments");
+    if (!handle || !snag_hex_is_lower(handle, SNAG_ID_HEX_LEN)) {
+        snag_errorf(error, error_size, "invalid write_stdin arguments");
         errno = EINVAL;
         return -1;
     }
-    if (!snj_json_exact_keys(call->arguments, keys, 6u) ||
-        !text_arg_valid(data, SNJ_TOOL_STDIN_MAX) ||
+    if (!snag_json_exact_keys(call->arguments, keys, 6u) ||
+        !text_arg_valid(data, SNAG_TOOL_STDIN_MAX) ||
         !json_bool_member(call->arguments, "eof", false, &eof) ||
         !json_bool_member(call->arguments, "terminate", false, &terminate) ||
         !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
-                         0u, SNJ_TOOL_YIELD_MAX_MS, &yield_ms) ||
+                         0u, SNAG_TOOL_YIELD_MAX_MS, &yield_ms) ||
         !command_output_limit(call->arguments, config->max_output_tokens,
                                &max_output_tokens)) {
         *result = simple_result(proc->active ? "running" : "failed", NULL,
@@ -1479,7 +1479,7 @@ run_write_stdin(const struct snj_response_item *call,
             proc->active ? -1 : 1, proc->active ? proc->handle : NULL);
         if (!*result) {
             managed_cleanup();
-            snj_errorf(error, error_size, "cannot allocate tool result");
+            snag_errorf(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
@@ -1489,7 +1489,7 @@ run_write_stdin(const struct snj_response_item *call,
             "No active managed process matches the supplied handle.", 1,
             NULL);
         if (!*result) {
-            snj_errorf(error, error_size, "cannot allocate tool result");
+            snag_errorf(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
@@ -1501,14 +1501,14 @@ run_write_stdin(const struct snj_response_item *call,
             -1, proc->handle);
         if (!*result) {
             managed_cleanup();
-            snj_errorf(error, error_size, "cannot allocate tool result");
+            snag_errorf(error, error_size, "cannot allocate tool result");
             return -1;
         }
         return 0;
     }
     proc->max_output_tokens = max_output_tokens;
     if (terminate)
-        return snj_tools_close_managed(handle, false, pump, pump_opaque, wake_fd,
+        return snag_tools_close_managed(handle, false, pump, pump_opaque, wake_fd,
                                        result, error, error_size);
     {
         int rc;
@@ -1526,15 +1526,15 @@ run_write_stdin(const struct snj_response_item *call,
 }
 
 static int
-run_exec_command(const struct snj_response_item *call,
-                 const struct snj_config *config,
-                 const struct snj_credential *credential,
+run_exec_command(const struct snag_response_item *call,
+                 const struct snag_config *config,
+                 const struct snag_credential *credential,
                  const char *session_workspace,
-                 snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+                 snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                  json_t **result, char *error, size_t error_size)
 {
-    const char *command = snj_json_string(call->arguments, "command");
-    const char *workdir = snj_json_string(call->arguments, "workdir");
+    const char *command = snag_json_string(call->arguments, "command");
+    const char *workdir = snag_json_string(call->arguments, "workdir");
     const char *stdin_text = json_nullable_string(call->arguments, "stdin");
     uint32_t timeout_ms;
     uint32_t yield_ms;
@@ -1546,9 +1546,9 @@ run_exec_command(const struct snj_response_item *call,
     };
 
     (void)session_workspace;
-    if (!snj_json_exact_keys(call->arguments, keys, 7u) ||
-        !text_arg_valid(command, SNJ_TOOL_COMMAND_MAX) ||
-        (stdin_text && !text_arg_valid(stdin_text, SNJ_TOOL_STDIN_MAX)) ||
+    if (!snag_json_exact_keys(call->arguments, keys, 7u) ||
+        !text_arg_valid(command, SNAG_TOOL_COMMAND_MAX) ||
+        (stdin_text && !text_arg_valid(stdin_text, SNAG_TOOL_STDIN_MAX)) ||
         !absolute_dir_arg_valid(workdir) ||
         !json_bool_member(call->arguments, "pty", false, &pty) ||
         !json_u32_member(call->arguments, "timeout_ms",
@@ -1556,10 +1556,10 @@ run_exec_command(const struct snj_response_item *call,
                          config->max_timeout_ms, &timeout_ms) ||
         !json_u32_member(call->arguments, "yield_ms",
                          config->default_yield_ms, 0u,
-                         SNJ_TOOL_YIELD_MAX_MS, &yield_ms) ||
+                         SNAG_TOOL_YIELD_MAX_MS, &yield_ms) ||
         !command_output_limit(call->arguments, config->max_output_tokens,
                                &max_output_tokens)) {
-        snj_errorf(error, error_size, "invalid exec_command arguments");
+        snag_errorf(error, error_size, "invalid exec_command arguments");
         errno = EINVAL;
         return -1;
     }
@@ -1571,8 +1571,8 @@ run_exec_command(const struct snj_response_item *call,
 }
 
 int
-snj_tools_attach_output_limit(const struct snj_response_item *call,
-                              const struct snj_config *config,
+snag_tools_attach_output_limit(const struct snag_response_item *call,
+                              const struct snag_config *config,
                               json_t *result)
 {
     uint32_t max_output_tokens;
@@ -1611,8 +1611,8 @@ simple_result(const char *status, const char *reason, const char *message,
 }
 
 int
-snj_tools_close_managed(const char *handle, bool user_interrupt,
-                        snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+snag_tools_close_managed(const char *handle, bool user_interrupt,
+                        snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                         json_t **result, char *error, size_t error_size)
 {
     struct managed_process *proc = &managed_process;
@@ -1621,15 +1621,15 @@ snj_tools_close_managed(const char *handle, bool user_interrupt,
 
     if (result)
         *result = NULL;
-    if (!handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN) || !result) {
-        snj_errorf(error, error_size, "invalid managed process closure");
+    if (!handle || !snag_hex_is_lower(handle, SNAG_ID_HEX_LEN) || !result) {
+        snag_errorf(error, error_size, "invalid managed process closure");
         errno = EINVAL;
         return -1;
     }
     if (!proc->active || strcmp(proc->handle, handle) != 0) {
-        *result = snj_tool_result_outcome_unknown("owner_lost");
+        *result = snag_tool_result_outcome_unknown("owner_lost");
         if (!*result) {
-            snj_errorf(error, error_size, "cannot allocate process closure result");
+            snag_errorf(error, error_size, "cannot allocate process closure result");
             return -1;
         }
         return 0;
@@ -1642,8 +1642,8 @@ snj_tools_close_managed(const char *handle, bool user_interrupt,
         proc->kill_sent = true;
         kill_child_group(proc->pid, user_interrupt ? SIGINT : SIGTERM);
     }
-    now = snj_time_ms();
-    close_deadline = saturating_deadline(now, SNJ_TOOL_CLOSE_GRACE_MS);
+    now = snag_time_ms();
+    close_deadline = saturating_deadline(now, SNAG_TOOL_CLOSE_GRACE_MS);
     proc->deadline_ms = close_deadline;
     if (managed_drive(proc, "", 0u, false, false, 0u, pump, pump_opaque, wake_fd,
                       result, error, error_size) < 0) {
@@ -1654,20 +1654,20 @@ snj_tools_close_managed(const char *handle, bool user_interrupt,
 }
 
 int
-snj_tools_run(const struct snj_response_item *call,
-              const struct snj_config *config,
-              const struct snj_credential *credential,
+snag_tools_run(const struct snag_response_item *call,
+              const struct snag_config *config,
+              const struct snag_credential *credential,
               const char *session_workspace,
-              snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+              snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
               json_t **result, char *error, size_t error_size)
 {
     int rc;
 
     if (result)
         *result = NULL;
-    if (!call || call->kind != SNJ_ITEM_TOOL_CALL || !config ||
+    if (!call || call->kind != SNAG_ITEM_TOOL_CALL || !config ||
         !session_workspace || !result) {
-        snj_errorf(error, error_size, "invalid tool invocation");
+        snag_errorf(error, error_size, "invalid tool invocation");
         errno = EINVAL;
         return -1;
     }
@@ -1678,15 +1678,15 @@ snj_tools_run(const struct snj_response_item *call,
         rc = run_write_stdin(call, config, pump, pump_opaque, wake_fd, result,
                              error, error_size);
     else if (strcmp(call->name, "apply_patch") == 0)
-        return snj_tools_apply_patch(call, session_workspace, result,
+        return snag_tools_apply_patch(call, session_workspace, result,
                                      error, error_size);
     else {
-        snj_errorf(error, error_size, "unknown tool name");
+        snag_errorf(error, error_size, "unknown tool name");
         errno = EINVAL;
         return -1;
     }
     if (rc >= 0 && *result &&
-        snj_tools_attach_output_limit(call, config, *result) < 0) {
+        snag_tools_attach_output_limit(call, config, *result) < 0) {
         json_decref(*result);
         *result = NULL;
         return -1;

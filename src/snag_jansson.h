@@ -10,12 +10,12 @@
  * as a vendored Jansson implementation or shadow a system <jansson.h>.
  */
 #if defined(SNAJPAGENT_FORCE_LOCAL_JANSSON_ABI)
-#include "snj_jansson_abi.h"
+#include "snag_jansson_abi.h"
 #elif defined(__has_include)
 #if __has_include(<jansson.h>)
 #include <jansson.h>
 #else
-#include "snj_jansson_abi.h"
+#include "snag_jansson_abi.h"
 #endif
 #else
 #include <jansson.h>

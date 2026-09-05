@@ -19,10 +19,10 @@ stream_fail(struct app_state *app, int error_number, const char *message)
 }
 
 void
-snj_app_clear_partial_public(struct app_state *app)
+snag_app_clear_partial_public(struct app_state *app)
 {
     for (size_t i = 0; i < app->partial_count; ++i)
-        snj_buf_free(&app->partial[i].text);
+        snag_buf_free(&app->partial[i].text);
     memset(app->partial, 0, sizeof(app->partial));
     app->partial_count = 0;
     app->partial_bytes = 0;
@@ -30,27 +30,27 @@ snj_app_clear_partial_public(struct app_state *app)
 
 static struct partial_public_item *
 partial_public_target(struct app_state *app, size_t graph_index,
-                      enum snj_item_kind kind, enum snj_item_phase phase,
+                      enum snag_item_kind kind, enum snag_item_phase phase,
                       const char *provider_item_id, bool *created)
 {
     struct partial_public_item *item;
     size_t id_len;
 
     *created = false;
-    if (!provider_item_id || kind == SNJ_ITEM_OPAQUE ||
-        phase == SNJ_PHASE_NONE || graph_index >= SNJ_MAX_RESPONSE_ITEMS) {
+    if (!provider_item_id || kind == SNAG_ITEM_OPAQUE ||
+        phase == SNAG_PHASE_NONE || graph_index >= SNAG_MAX_RESPONSE_ITEMS) {
         errno = EPROTO;
         return NULL;
     }
     id_len = strlen(provider_item_id);
-    if (!id_len || id_len > SNJ_MAX_PROVIDER_ID ||
-        !snj_utf8_valid((const unsigned char *)provider_item_id, id_len, true)) {
+    if (!id_len || id_len > SNAG_MAX_PROVIDER_ID ||
+        !snag_utf8_valid((const unsigned char *)provider_item_id, id_len, true)) {
         errno = EPROTO;
         return NULL;
     }
     if (app->partial_count == 0u ||
         app->partial[app->partial_count - 1u].graph_index != graph_index) {
-        if (app->partial_count >= SNJ_MAX_RESPONSE_ITEMS) {
+        if (app->partial_count >= SNAG_MAX_RESPONSE_ITEMS) {
             errno = EOVERFLOW;
             return NULL;
         }
@@ -59,13 +59,13 @@ partial_public_target(struct app_state *app, size_t graph_index,
         item->graph_index = graph_index;
         item->kind = kind;
         item->phase = phase;
-        if (snj_random_id(item->local_item_id) < 0) {
+        if (snag_random_id(item->local_item_id) < 0) {
             memset(item, 0, sizeof(*item));
             --app->partial_count;
             return NULL;
         }
         memcpy(item->provider_item_id, provider_item_id, id_len + 1u);
-        snj_buf_init(&item->text, SNJ_MAX_PUBLIC_ITEM);
+        snag_buf_init(&item->text, SNAG_MAX_PUBLIC_ITEM);
         *created = true;
     } else {
         item = &app->partial[app->partial_count - 1u];
@@ -79,7 +79,7 @@ partial_public_target(struct app_state *app, size_t graph_index,
 }
 
 json_t *
-snj_app_partial_public_json(const struct app_state *app)
+snag_app_partial_public_json(const struct app_state *app)
 {
     json_t *array = json_array();
 
@@ -91,15 +91,15 @@ snj_app_partial_public_json(const struct app_state *app)
 
         item = json_object();
         if (!item ||
-            snj_json_set_new(item, "kind",
-                             json_string(snj_item_kind_name(partial->kind))) < 0 ||
-            snj_json_set_new(item, "local_item_id",
+            snag_json_set_new(item, "kind",
+                             json_string(snag_item_kind_name(partial->kind))) < 0 ||
+            snag_json_set_new(item, "local_item_id",
                              json_string(partial->local_item_id)) < 0 ||
-            snj_json_set_new(item, "phase",
-                             json_string(snj_item_phase_name(partial->phase))) < 0 ||
-            snj_json_set_new(item, "provider_item_id",
+            snag_json_set_new(item, "phase",
+                             json_string(snag_item_phase_name(partial->phase))) < 0 ||
+            snag_json_set_new(item, "provider_item_id",
                              json_string(partial->provider_item_id)) < 0 ||
-            snj_json_set_new(item, "text",
+            snag_json_set_new(item, "text",
                              json_stringn((const char *)partial->text.data,
                                           partial->text.len)) < 0) {
             if (item)
@@ -117,12 +117,12 @@ fail:
 }
 
 int
-snj_app_finish_stream_item(struct app_state *app)
+snag_app_finish_stream_item(struct app_state *app)
 {
     if (!app->stream_item_active)
         return 0;
     app->stream_item_active = false;
-    if (snj_ui_text(&app->ui, SNJ_UI_ROLLOUT_END, NULL) < 0) {
+    if (snag_ui_text(&app->ui, SNAG_UI_ROLLOUT_END, NULL) < 0) {
         return stream_fail(app, errno,
                            "public output item could not be finished");
     }
@@ -130,12 +130,12 @@ snj_app_finish_stream_item(struct app_state *app)
 }
 
 int
-snj_app_abort_stream_item(struct app_state *app)
+snag_app_abort_stream_item(struct app_state *app)
 {
     if (!app->stream_item_active)
         return 0;
     app->stream_item_active = false;
-    if (snj_ui_text(&app->ui, SNJ_UI_ROLLOUT_ABORT, NULL) < 0) {
+    if (snag_ui_text(&app->ui, SNAG_UI_ROLLOUT_ABORT, NULL) < 0) {
         return stream_fail(app, errno,
                            "steered public output item could not be closed");
     }
@@ -143,8 +143,8 @@ snj_app_abort_stream_item(struct app_state *app)
 }
 
 static int
-stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
-                   enum snj_item_phase phase, const char *provider_item_id,
+stream_public_core(void *opaque, size_t item_index, enum snag_item_kind kind,
+                   enum snag_item_phase phase, const char *provider_item_id,
                    const char *text, size_t len)
 {
     struct app_state *app = opaque;
@@ -156,15 +156,15 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     int fd = STDOUT_FILENO;
     const char *label = NULL;
 
-    if (snj_app_active_input_pump(app, 0u) < 0)
+    if (snag_app_active_input_pump(app, 0u) < 0)
         return stream_fail(app, errno, "active input failed before public output");
     while (len && !app->steering_requested && !app->interrupt_requested) {
-        uint32_t remaining = snj_ui_pause_remaining(&app->ui);
+        uint32_t remaining = snag_ui_pause_remaining(&app->ui);
         int input_rc;
 
         if (!remaining)
             break;
-        input_rc = snj_app_active_input_pump(
+        input_rc = snag_app_active_input_pump(
             app, remaining > 20u ? 20u : remaining);
         if (input_rc < 0) {
             return stream_fail(app, errno,
@@ -179,7 +179,7 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
         if (app->stream_item_seen && item_index <= app->stream_item_index)
             return stream_fail(app, EPROTO,
                                "public output indexes did not increase");
-        if (snj_app_finish_stream_item(app) < 0)
+        if (snag_app_finish_stream_item(app) < 0)
             return -1;
         app->stream_item_seen = true;
         app->stream_item_index = item_index;
@@ -187,11 +187,11 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
         app->stream_phase = phase;
         app->stream_item_hidden = false;
 
-        if (kind == SNJ_ITEM_REASONING_SUMMARY) {
+        if (kind == SNAG_ITEM_REASONING_SUMMARY) {
             fd = STDERR_FILENO;
             label = "reason › ";
-        } else if (kind == SNJ_ITEM_ASSISTANT || kind == SNJ_ITEM_REFUSAL) {
-            if (app->execute && phase == SNJ_PHASE_FINAL_ANSWER)
+        } else if (kind == SNAG_ITEM_ASSISTANT || kind == SNAG_ITEM_REFUSAL) {
+            if (app->execute && phase == SNAG_PHASE_FINAL_ANSWER)
                 app->stream_item_hidden = true;
             else if (app->execute)
                 fd = STDERR_FILENO;
@@ -199,9 +199,9 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
             app->stream_item_hidden = true;
         }
         if (!app->stream_item_hidden) {
-            if (snj_ui_public_begin(&app->ui, fd, label,
-                    kind == SNJ_ITEM_REASONING_SUMMARY ? SNJ_PRESENT_REASONING :
-                                                        SNJ_PRESENT_CONVERSATION) < 0) {
+            if (snag_ui_public_begin(&app->ui, fd, label,
+                    kind == SNAG_ITEM_REASONING_SUMMARY ? SNAG_PRESENT_REASONING :
+                                                        SNAG_PRESENT_CONVERSATION) < 0) {
                 return stream_fail(app, errno,
                                    "public output item could not be started");
             }
@@ -213,7 +213,7 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     }
     if (app->stream_item_hidden)
         return 0;
-    if (app->partial_bytes > SNJ_MAX_RESPONSE_GRAPH) {
+    if (app->partial_bytes > SNAG_MAX_RESPONSE_GRAPH) {
         return stream_fail(app, EOVERFLOW,
                            "partial public output exceeds its bound");
     }
@@ -227,19 +227,19 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     }
     partial_before = partial->text.len;
     partial_max = partial->text.max;
-    remaining = SNJ_MAX_RESPONSE_GRAPH - app->partial_bytes;
+    remaining = SNAG_MAX_RESPONSE_GRAPH - app->partial_bytes;
     if (partial->text.len > SIZE_MAX - remaining) {
         errno = EOVERFLOW;
         goto fail_partial;
     }
     if (partial->text.max > partial->text.len + remaining)
         partial->text.max = partial->text.len + remaining;
-    if (snj_ui_public(&app->ui, text, len, &partial->text) < 0)
+    if (snag_ui_public(&app->ui, text, len, &partial->text) < 0)
         goto fail_partial;
     partial->text.max = partial_max;
     app->partial_bytes += partial->text.len - partial_before;
     if (partial_created && partial->text.len == 0u) {
-        snj_buf_free(&partial->text);
+        snag_buf_free(&partial->text);
         memset(partial, 0, sizeof(*partial));
         --app->partial_count;
     }
@@ -248,7 +248,7 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
 fail_partial:
     partial->text.max = partial_max;
     if (partial_created && partial->text.len == 0u) {
-        snj_buf_free(&partial->text);
+        snag_buf_free(&partial->text);
         memset(partial, 0, sizeof(*partial));
         --app->partial_count;
     }
@@ -260,8 +260,8 @@ fail_partial:
 
 #ifdef SNAJPAGENT_TEST_FIXTURE
 int
-snj_app_stream_public(void *opaque, size_t item_index, enum snj_item_kind kind,
-              enum snj_item_phase phase, const char *text, size_t len)
+snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind,
+              enum snag_item_phase phase, const char *text, size_t len)
 {
     struct app_state *app = opaque;
     const char *provider_item_id = NULL;
@@ -275,8 +275,8 @@ snj_app_stream_public(void *opaque, size_t item_index, enum snj_item_kind kind,
 
 #ifndef SNAJPAGENT_TEST_FIXTURE
 int
-snj_app_stream_public_response(void *opaque, size_t item_index, enum snj_item_kind kind,
-                       enum snj_item_phase phase, const char *provider_item_id,
+snag_app_stream_public_response(void *opaque, size_t item_index, enum snag_item_kind kind,
+                       enum snag_item_phase phase, const char *provider_item_id,
                        const char *text, size_t len)
 {
     return stream_public_core(opaque, item_index, kind, phase, provider_item_id,
@@ -285,11 +285,11 @@ snj_app_stream_public_response(void *opaque, size_t item_index, enum snj_item_ki
 #endif
 
 void
-snj_app_response_cycle_release(struct app_state *app,
-                               struct snj_response_graph *graph,
+snag_app_response_cycle_release(struct app_state *app,
+                               struct snag_response_graph *graph,
                                json_t **steering, json_t **create_request,
                                json_t **count_request,
-                               struct snj_buf *request_body)
+                               struct snag_buf *request_body)
 {
     if (steering && *steering) {
         json_decref(*steering);
@@ -304,22 +304,22 @@ snj_app_response_cycle_release(struct app_state *app,
         *count_request = NULL;
     }
     if (request_body)
-        snj_buf_free(request_body);
+        snag_buf_free(request_body);
     if (graph)
-        snj_response_graph_free(graph);
+        snag_response_graph_free(graph);
     if (app) {
         app->stream_graph = NULL;
-        snj_app_clear_partial_public(app);
+        snag_app_clear_partial_public(app);
     }
 }
 
 void
-snj_app_reset_stream(struct app_state *app)
+snag_app_reset_stream(struct app_state *app)
 {
-    snj_app_clear_partial_public(app);
+    snag_app_clear_partial_public(app);
     app->stream_item_index = 0;
-    app->stream_kind = SNJ_ITEM_OPAQUE;
-    app->stream_phase = SNJ_PHASE_NONE;
+    app->stream_kind = SNAG_ITEM_OPAQUE;
+    app->stream_phase = SNAG_PHASE_NONE;
     app->stream_item_active = false;
     app->stream_item_seen = false;
     app->stream_item_hidden = false;
