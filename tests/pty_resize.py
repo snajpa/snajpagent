@@ -84,7 +84,7 @@ try:
     os.write(fd, b"\r")
     answer_end = wait(b"fixture answer", start=typed_end)
     terminal_end = wait(b"turn_completed synced", start=answer_end)
-    idle_end = wait(b"\r" + accounted_prompt, start=terminal_end)
+    idle_end = wait(accounted_prompt, start=terminal_end)
     narrow_start = len(buf)
     set_winsize(10)
     wait(accounted_prompt, start=narrow_start)
