@@ -2581,6 +2581,8 @@ render_irc_markdown(struct snj_render *render,
     body.markdown = true;
     body.markdown_prose_bullets = false;
     body.term = render->term;
+    body.checkpoint = render->checkpoint;
+    body.checkpoint_opaque = render->checkpoint_opaque;
     if (snj_render_public_begin(&body, STDERR_FILENO, NULL) < 0)
         return -1;
     body.public_column = column;

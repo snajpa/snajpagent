@@ -6,6 +6,12 @@
 
 - Allow the existing provider-hosted web search in `/ro` queries alongside
   native file inspection, while keeping all other local tool dispatch blocked.
+- Isolate the editor and renderer on one presentation thread in every runtime
+  mode. Keep engine work, history locks, provider/tool waits, and durable sync
+  off that thread; use bounded queues and input-aware rendering checkpoints.
+- Restore exit on five consecutive Ctrl-C presses within two seconds,
+  including while busy or input admission is full. Other input resets the
+  sequence; ordinary draft cancellation and durable interruption are preserved.
 
 - Add minimum numeric prompt widths (`{context:4}`, `{hour:2}`) and clock-only
   zero padding (`{hour:02}:{minute:02}:{second:02}`). Default context uses four

@@ -25,7 +25,6 @@ struct ui_snapshot {
     enum snj_render_view view;
     bool opened, prompt_wanted, active;
     char label[SNJ_TERM_LABEL_BYTES];
-    uint64_t generation;
     uint64_t turn_generation;
 };
 
@@ -52,7 +51,6 @@ struct ui_message {
     union {
         enum snj_ui_operation operation;
         unsigned int value;
-        struct { bool enabled; } network;
         struct ui_prompt prompt;
         struct { int fd; bool rollout; } public;
         struct { uint64_t turns; size_t queued; bool resumed; } orientation;
@@ -98,7 +96,6 @@ struct snj_ui_display {
     char *prompt_source;
     struct ui_message commands;
     struct snj_ui_runtime *runtime;
-    uint64_t generation;
     uint64_t turn_generation;
     bool suspended;
     bool input_closed, backlog_warned;
@@ -186,7 +183,6 @@ take_snapshot(struct snj_ui_display *display, struct ui_snapshot *snapshot)
     snapshot->opened = display->term.opened;
     snapshot->prompt_wanted = display->term.prompt_wanted;
     snapshot->active = display->term.active;
-    snapshot->generation = display->generation;
     snapshot->turn_generation = display->turn_generation;
     memcpy(snapshot->label, display->term.label, sizeof(snapshot->label));
 }
@@ -279,7 +275,7 @@ apply_text(struct snj_ui_display *display, const struct ui_message *message)
 
 static int
 apply_message(struct snj_ui_display *display, struct ui_message *message,
-              struct snj_buf *delivered, char *error, size_t error_size)
+              char *error, size_t error_size)
 {
     struct snj_render *render = &display->render;
     struct snj_term *term = &display->term;
@@ -294,7 +290,7 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
         snj_render_set_markdown(render, message->data.value != 0u);
         return 0;
     case UI_NETWORKED:
-        snj_render_set_networked(render, message->data.network.enabled,
+        snj_render_set_networked(render, message->data.value != 0u,
                                 message->text);
         return 0;
     case UI_COMMANDS:
@@ -319,7 +315,6 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
             snj_term_external_begin(term, error, error_size) :
             snj_term_external_end(term, error, error_size);
     case UI_PROMPT: {
-        ++display->generation;
         if (message->data.prompt.active && !term->active)
             ++display->turn_generation;
         free(display->prompt_source);
@@ -362,10 +357,6 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
                                     message->label) :
             snj_render_public_begin(render, message->data.public.fd,
                                    message->label);
-    case UI_PUBLIC:
-        return message->data.public.rollout ?
-            snj_render_rollout(render, message->text, message->len, delivered) :
-            snj_render_public(render, message->text, message->len, delivered);
     case UI_ORIENTATION:
         return snj_render_orientation(render, message->text, message->label,
                     message->data.orientation.turns,
@@ -393,13 +384,11 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
     case UI_TRANSPORT:
         return snj_render_transport(render, (char)message->data.value,
                                     message->text, message->len);
-    case UI_RAW:
-        return snj_term_write((int)message->data.value,
-                             message->text, message->len);
     case UI_HISTORY_SNAPSHOT:
         return snj_term_history_set(term, &message->data.history.entries,
                                     message->data.history.refresh);
     case UI_STOP: return 0;
+    case UI_PUBLIC: case UI_RAW: break; /* Sliced by apply_display. */
     }
     errno = EINVAL;
     return -1;
@@ -439,7 +428,6 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         bool deferred = term->defer_redraw;
         term->defer_redraw = item->action == SNJ_TERM_SUBMIT ||
                              item->action == SNJ_TERM_QUEUE;
-        ++display->generation;
         if (apply_prompt(display) < 0) {
             free(item->text);
             free(item);
@@ -478,6 +466,7 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         }
         if (queue_push(&runtime->actions, item))
             return 0;
+        atomic_store(&runtime->fatal, item->error ? item->error : EOVERFLOW);
     }
     {
         bool notify = item->action != SNJ_TERM_NONE || item->error;
@@ -529,7 +518,7 @@ apply_display(struct snj_ui_display *display, struct ui_message *message)
     if (message->kind == UI_VIEW) {
         int rc;
         display->term.defer_redraw = true;
-        rc = apply_message(display, message, &message->delivered,
+        rc = apply_message(display, message,
                             message->error, sizeof(message->error));
         display->term.defer_redraw = false;
         return rc;
@@ -550,7 +539,7 @@ apply_display(struct snj_ui_display *display, struct ui_message *message)
         }
         return 0;
     }
-    return apply_message(display, message, &message->delivered,
+    return apply_message(display, message,
                          message->error, sizeof(message->error));
 }
 
@@ -762,7 +751,7 @@ int
 snj_ui_networked(struct snj_ui *ui, bool enabled, const char *nick)
 {
     struct ui_message message = {
-        .kind = UI_NETWORKED, .data.network.enabled = enabled
+        .kind = UI_NETWORKED, .data.value = enabled
     };
     return send_message(ui, &message, nick);
 }
@@ -958,7 +947,6 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             return -1;
         }
     }
-    ui->input_active = item->snapshot.active;
     ui->input_view = item->snapshot.view;
     memcpy(ui->submitted_label, item->snapshot.label,
            sizeof(ui->submitted_label));

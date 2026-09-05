@@ -642,10 +642,14 @@ test_client_reconnect(void)
     snj_irc_close(client);
     tick(server, 10u);
     client = NULL;
+    client_capture.events[SNJ_IRC_HISTORY_READY] = 0u;
     assert(snj_irc_open(&client, &client_config, "/client", capture_event,
                         capture_trace, &client_capture,
                         error, sizeof(error)) == 0);
-    pump_pair(server, client, 200u);
+    for (unsigned int i = 0u; i < 2000u &&
+         !client_capture.events[SNJ_IRC_HISTORY_READY]; ++i)
+        pump_pair(server, client, 1u);
+    assert(client_capture.events[SNJ_IRC_HISTORY_READY] != 0u);
     assert(client_capture.last_message.historical);
     assert(strcmp(client_capture.last_message.nick, "remoteagent") == 0);
     assert(strcmp(client_capture.last_message.text, payload) == 0);

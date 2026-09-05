@@ -16,7 +16,6 @@ struct snj_ui {
     uint64_t turn_generation;
     char label[SNJ_TERM_LABEL_BYTES];
     char submitted_label[SNJ_TERM_LABEL_BYTES];
-    bool input_active;
     enum snj_render_view input_view;
 };
 
