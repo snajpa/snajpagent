@@ -44,6 +44,7 @@
 #define PATCH_MODEL_MAX (512u * 1024u)
 #define PATCH_PREVIEW_MAX (128u * 1024u)
 
+/* Vectors borrow NUL-terminated lines from the patch or target buffer. */
 struct line_vec {
     char **v;
     size_t n;
@@ -72,7 +73,7 @@ struct patch_hunk {
 
 struct patch_op {
     enum patch_op_type type;
-    char *path;
+    const char *path;
     struct line_vec add_lines;
     struct patch_hunk *hunks;
     size_t hunk_count;
@@ -101,16 +102,13 @@ line_vec_free(struct line_vec *vec)
 {
     if (!vec)
         return;
-    for (size_t i = 0; i < vec->n; ++i)
-        free(vec->v[i]);
     free(vec->v);
     memset(vec, 0, sizeof(*vec));
 }
 
 static int
-line_vec_pushn(struct line_vec *vec, const char *s, size_t len)
+line_vec_push(struct line_vec *vec, char *line)
 {
-    char *copy;
     char **newv;
     size_t newcap;
 
@@ -126,19 +124,8 @@ line_vec_pushn(struct line_vec *vec, const char *s, size_t len)
         vec->v = newv;
         vec->cap = newcap;
     }
-    copy = malloc(len + 1u);
-    if (!copy)
-        return -1;
-    memcpy(copy, s, len);
-    copy[len] = '\0';
-    vec->v[vec->n++] = copy;
+    vec->v[vec->n++] = line;
     return 0;
-}
-
-static int
-line_vec_push(struct line_vec *vec, const char *s)
-{
-    return line_vec_pushn(vec, s, strlen(s));
 }
 
 static void
@@ -155,7 +142,6 @@ op_free(struct patch_op *op)
 {
     if (!op)
         return;
-    free(op->path);
     line_vec_free(&op->add_lines);
     for (size_t i = 0; i < op->hunk_count; ++i)
         hunk_free(&op->hunks[i]);
@@ -303,105 +289,78 @@ static int
 normalize_patch_text(const char *patch, size_t len, char **out,
                      char *error, size_t error_size)
 {
-    struct snag_buf buf;
+    char *text;
+    size_t written = 0;
     size_t line_len = 0;
-    int rc = -1;
 
     *out = NULL;
-    if (len > PATCH_TEXT_MAX || !snag_utf8_valid((const unsigned char *)patch,
-                                                len, true)) {
+    if (len > PATCH_TEXT_MAX ||
+        !snag_utf8_valid((const unsigned char *)patch, len, true)) {
         snag_errorf(error, error_size, "patch must be bounded UTF-8 without NUL");
         errno = EINVAL;
         return -1;
     }
-    snag_buf_init(&buf, PATCH_TEXT_MAX + 1u);
+    text = malloc(len + 1u);
+    if (!text)
+        return -1;
     for (size_t i = 0; i < len; ++i) {
-        unsigned char c = (unsigned char)patch[i];
+        char c = patch[i];
+
         if (c == '\r') {
-            if (i + 1u >= len || patch[i + 1u] != '\n') {
+            if (i + 1u >= len || patch[++i] != '\n') {
                 snag_errorf(error, error_size, "patch contains a bare carriage return");
                 errno = EINVAL;
-                goto out_free;
+                free(text);
+                return -1;
             }
-            if (line_len > PATCH_LINE_MAX) {
-                snag_errorf(error, error_size, "patch line exceeds 1 MiB");
-                errno = EOVERFLOW;
-                goto out_free;
-            }
-            if (snag_buf_putc(&buf, '\n') < 0)
-                goto out_free;
-            line_len = 0;
-            ++i;
-        } else {
-            if (snag_buf_putc(&buf, c) < 0)
-                goto out_free;
-            if (c == '\n') {
-                if (line_len > PATCH_LINE_MAX) {
-                    snag_errorf(error, error_size, "patch line exceeds 1 MiB");
-                    errno = EOVERFLOW;
-                    goto out_free;
-                }
-                line_len = 0;
-            } else if (++line_len > PATCH_LINE_MAX) {
-                snag_errorf(error, error_size, "patch line exceeds 1 MiB");
-                errno = EOVERFLOW;
-                goto out_free;
-            }
+            c = '\n';
         }
+        line_len = c == '\n' ? 0u : line_len + 1u;
+        if (line_len > PATCH_LINE_MAX) {
+            snag_errorf(error, error_size, "patch line exceeds 1 MiB");
+            errno = EOVERFLOW;
+            free(text);
+            return -1;
+        }
+        text[written++] = c;
     }
-    if (snag_buf_terminate(&buf) < 0)
-        goto out_free;
-    *out = (char *)buf.data;
-    memset(&buf, 0, sizeof(buf));
-    rc = 0;
-out_free:
-    snag_buf_free(&buf);
-    return rc;
+    text[written] = '\0';
+    *out = text;
+    return 0;
 }
 
 static int
 split_lines(char *text, char ***out_lines, size_t *out_count,
             char *error, size_t error_size)
 {
-    char **lines = NULL;
-    size_t count = 0;
-    size_t cap = 0;
+    struct line_vec lines = {0};
     char *start = text;
 
     *out_lines = NULL;
     *out_count = 0;
     for (char *p = text;; ++p) {
-        if (*p != '\n' && *p != '\0')
+        bool end = *p == '\0';
+
+        if (*p != '\n' && !end)
             continue;
-        if (count == cap) {
-            size_t newcap = cap ? cap * 2u : 16u;
-            char **newlines = realloc(lines, newcap * sizeof(*newlines));
-            if (!newlines) {
-                free(lines);
-                return -1;
-            }
-            lines = newlines;
-            cap = newcap;
-        }
-        if (*p == '\n') {
-            *p = '\0';
-            lines[count++] = start;
-            start = p + 1;
-            continue;
-        }
-        if (p != start)
-            lines[count++] = start;
-        break;
+        *p = '\0';
+        if ((!end || p != start) && line_vec_push(&lines, start) < 0)
+            goto fail;
+        if (end)
+            break;
+        start = p + 1;
     }
-    if (count < 2u) {
-        free(lines);
+    if (lines.n < 2u) {
         snag_errorf(error, error_size, "patch is missing required frame");
         errno = EINVAL;
-        return -1;
+        goto fail;
     }
-    *out_lines = lines;
-    *out_count = count;
+    *out_lines = lines.v;
+    *out_count = lines.n;
     return 0;
+fail:
+    line_vec_free(&lines);
+    return -1;
 }
 
 static int
@@ -460,9 +419,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 patch_set_add(set, &op) < 0)
                 return -1;
             op->type = OP_ADD;
-            op->path = snag_strdup_checked(path, PATCH_PATH_MAX);
-            if (!op->path)
-                return -1;
+            op->path = path;
             ++i;
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 if (lines[i][0] != '+') {
@@ -482,9 +439,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 patch_set_add(set, &op) < 0)
                 return -1;
             op->type = OP_DELETE;
-            op->path = snag_strdup_checked(path, PATCH_PATH_MAX);
-            if (!op->path)
-                return -1;
+            op->path = path;
             ++i;
             if (i + 1u < line_count && !is_file_header(lines[i])) {
                 snag_errorf(error, error_size, "delete-file sections cannot have a body");
@@ -498,9 +453,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 patch_set_add(set, &op) < 0)
                 return -1;
             op->type = OP_UPDATE;
-            op->path = snag_strdup_checked(path, PATCH_PATH_MAX);
-            if (!op->path)
-                return -1;
+            op->path = path;
             ++i;
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 struct patch_hunk *hunk;
@@ -765,7 +718,7 @@ out:
 }
 
 static int
-parse_file_lines(const char *bytes, size_t len, struct line_vec *lines,
+parse_file_lines(char *bytes, size_t len, struct line_vec *lines,
                  bool *crlf, bool *final_nl, char *error, size_t error_size)
 {
     enum { STYLE_NONE, STYLE_LF, STYLE_CRLF } style = STYLE_NONE;
@@ -776,37 +729,28 @@ parse_file_lines(const char *bytes, size_t len, struct line_vec *lines,
         errno = EINVAL;
         return -1;
     }
-    *final_nl = false;
+    *final_nl = len && bytes[len - 1u] == '\n';
     for (size_t i = 0; i < len; ++i) {
-        if (bytes[i] == '\r') {
-            if (i + 1u >= len || bytes[i + 1u] != '\n' || style == STYLE_LF) {
-                snag_errorf(error, error_size,
-                          "update target has mixed or bare carriage-return line endings");
-                errno = EINVAL;
-                return -1;
-            }
-            style = STYLE_CRLF;
-            if (line_vec_pushn(lines, bytes + start, i - start) < 0)
-                return -1;
-            i += 1u;
-            start = i + 1u;
-            *final_nl = true;
-        } else if (bytes[i] == '\n') {
-            if (style == STYLE_CRLF) {
-                snag_errorf(error, error_size, "update target has mixed line endings");
-                errno = EINVAL;
-                return -1;
-            }
-            style = STYLE_LF;
-            if (line_vec_pushn(lines, bytes + start, i - start) < 0)
-                return -1;
-            start = i + 1u;
-            *final_nl = true;
-        } else {
-            *final_nl = false;
+        bool is_crlf = bytes[i] == '\r';
+
+        if (!is_crlf && bytes[i] != '\n')
+            continue;
+        if ((is_crlf && (i + 1u >= len || bytes[i + 1u] != '\n')) ||
+            (style != STYLE_NONE && (style == STYLE_CRLF) != is_crlf)) {
+            snag_errorf(error, error_size,
+                        "update target has mixed or bare carriage-return line endings");
+            errno = EINVAL;
+            return -1;
         }
+        style = is_crlf ? STYLE_CRLF : STYLE_LF;
+        bytes[i] = '\0';
+        if (line_vec_push(lines, bytes + start) < 0)
+            return -1;
+        if (is_crlf)
+            ++i;
+        start = i + 1u;
     }
-    if (start < len && line_vec_pushn(lines, bytes + start, len - start) < 0)
+    if (start < len && line_vec_push(lines, bytes + start) < 0)
         return -1;
     *crlf = style == STYLE_CRLF;
     return 0;
@@ -1499,9 +1443,9 @@ snag_tools_apply_patch(const struct snag_response_item *call,
 out:
     if (root_fd >= 0)
         close(root_fd);
+    patch_set_free(&set);
     free(lines);
     free(normalized);
-    patch_set_free(&set);
     snag_buf_free(&summary);
     return rc;
 }

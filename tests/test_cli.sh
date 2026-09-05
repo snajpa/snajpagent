@@ -604,9 +604,10 @@ cases = [
     "[tool]\ndefault_timeout_ms=5000\nmax_timeout_ms=4000\n",
     "[tool]\nmax_timeout_ms=4294967296\n",
     "[tool]\nmax_output_bytes=4294967296\n",
-    "[tool]\ndefault_max_output_tokens=0\n",
-    "[tool]\ndefault_max_output_tokens=4000000001\n",
-    "[tool]\ndefault_max_output_tokens=1\ndefault_max_output_tokens=2\n",
+    "[tool]\ndefault_max_output_tokens=6000\n",
+    "[tool]\nmax_output_tokens=0\n",
+    "[tool]\nmax_output_tokens=4000000001\n",
+    "[tool]\nmax_output_tokens=1\nmax_output_tokens=2\n",
     "[tool]\nsecret_env=A,A\n",
     "[provider]\nbase_url=ftp://example.test\n",
     "[provider]\nbase_url=https://example.test/a?b\n",
@@ -640,7 +641,8 @@ for config in cases:
                             capture_output=True, timeout=10)
     assert result.returncode == 2, (config, result)
     assert not result.stdout, (config, result.stdout)
-    assert b"configuration" in result.stderr, (config, result.stderr)
+    assert result.stderr.startswith(b"snajpagent: "), (config, result.stderr)
+    assert b"--resume" not in result.stderr, (config, result.stderr)
 assert set((pathlib.Path(dotdir) / "sessions").iterdir()) == sessions
 PY
 

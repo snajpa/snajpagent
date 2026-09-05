@@ -665,22 +665,17 @@ snag_tool_action_digest(const struct snag_response_item *call,
                        const char *resolved_workdir,
                        char out[SNAG_SHA256_HEX_LEN + 1u])
 {
-    json_t *action = json_object();
-    int rc = -1;
+    json_t *action;
+    int rc;
 
-    if (!call || call->kind != SNAG_ITEM_TOOL_CALL || !resolved_workdir ||
-        !action ||
-        snag_json_set_new(action, "arguments",
-                         json_deep_copy(call->arguments)) < 0 ||
-        snag_json_set_new(action, "name", json_string(call->name)) < 0 ||
-        snag_json_set_new(action, "resolved_workdir",
-                         json_string(resolved_workdir)) < 0 ||
-        snag_json_digest(action, out) < 0)
-        goto out;
-    rc = 0;
-out:
-    if (action)
-        json_decref(action);
+    if (!call || call->kind != SNAG_ITEM_TOOL_CALL || !resolved_workdir)
+        return -1;
+    action = json_pack("{s:O,s:s,s:s}", "arguments", call->arguments,
+                       "name", call->name, "resolved_workdir", resolved_workdir);
+    if (!action)
+        return -1;
+    rc = snag_json_digest(action, out);
+    json_decref(action);
     return rc;
 }
 
@@ -875,43 +870,23 @@ out:
     return rc;
 }
 
-static json_t *
-empty_excerpt(void)
-{
-    json_t *out = json_object();
-    if (!out ||
-        snag_json_set_new(out, "discarded_bytes", json_integer(0)) < 0 ||
-        snag_json_set_new(out, "encoding", json_string("utf8")) < 0 ||
-        snag_json_set_new(out, "original_bytes", json_integer(0)) < 0 ||
-        snag_json_set_new(out, "retained", json_string("")) < 0 ||
-        snag_json_set_new(out, "retained_bytes", json_integer(0)) < 0) {
-        if (out)
-            json_decref(out);
-        return NULL;
-    }
-    return out;
-}
-
 json_t *
 snag_tool_result(const char *status, const char *reason,
                 const char *model_text, int exit_code, uint64_t duration_ms)
 {
-    json_t *out = json_object();
-    if (!out ||
-        snag_json_set_new(out, "duration_ms",
-                         json_integer((json_int_t)duration_ms)) < 0 ||
-        snag_json_set_new(out, "exit_code",
-                         exit_code >= 0 ? json_integer(exit_code) : json_null()) < 0 ||
-        snag_json_set_new(out, "handle", json_null()) < 0 ||
-        snag_json_set_new(out, "model_text", json_string(model_text)) < 0 ||
-        snag_json_set_new(out, "reason",
-                         reason ? json_string(reason) : json_null()) < 0 ||
-        snag_json_set_new(out, "signal", json_null()) < 0 ||
-        snag_json_set_new(out, "status", json_string(status)) < 0 ||
-        snag_json_set_new(out, "stderr", empty_excerpt()) < 0 ||
-        snag_json_set_new(out, "stdout", empty_excerpt()) < 0) {
-        if (out)
-            json_decref(out);
+    json_t *out = json_pack(
+        "{s:I,s:n,s:n,s:s,s:s?,s:n,s:s,"
+        "s:{s:i,s:s,s:i,s:s,s:i},s:{s:i,s:s,s:i,s:s,s:i}}",
+        "duration_ms", (json_int_t)duration_ms, "exit_code", "handle",
+        "model_text", model_text, "reason", reason, "signal", "status", status,
+        "stderr", "discarded_bytes", 0, "encoding", "utf8", "original_bytes", 0,
+            "retained", "", "retained_bytes", 0,
+        "stdout", "discarded_bytes", 0, "encoding", "utf8", "original_bytes", 0,
+            "retained", "", "retained_bytes", 0);
+
+    if (out && exit_code >= 0 &&
+        snag_json_set_new(out, "exit_code", json_integer(exit_code)) < 0) {
+        json_decref(out);
         return NULL;
     }
     return out;
