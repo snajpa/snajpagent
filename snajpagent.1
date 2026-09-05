@@ -74,15 +74,17 @@ missing endpoint means
 .TP
 .BI \-n " nick, " \-\-model-nick " nick"
 Set the model's preferred IRC nick.  Default:
-.BR agent .
+.BR agent0 .
 .TP
 .BI \-o " nick, " \-\-operator-nick " nick"
 Set the local operator's IRC nick.  The default is a valid
 .B USER
-value, then
-.BR operator ,
+value plus
+.BR 0 ,
+then
+.BR operator0 ,
 or
-.B localop
+.B localop0
 when needed to remain distinct from the model nick.
 .TP
 .BI \-r " room, " \-\-room-name " room"
@@ -311,7 +313,7 @@ Currently the same detail as level 1.
 Add runtime decisions, token accounting, and session identity.
 .TP
 .B 4
-Add synced event sequences and types; include endpoint labels in chat.
+Add synced event sequences and types to the rollout.
 .TP
 .B 5
 Add sanitized provider protocol and IRC commands.  This exposes prompts,
@@ -408,11 +410,7 @@ session through private trash staging.  Shared prompt history is not erased.
 .TP
 .B /exit
 Preserve the session and exit.  Idle only.
-.SS Goals
-An active goal continues across ordinary turns until complete, paused,
-cancelled, or blocked.  Queued operator turns run before the next automatic
-goal turn.  Failures, refusal, interruption, input closure, and session resume
-pause automatic continuation.
+.SS Read-only queries
 .TP
 .BI /ro " query"
 Run one read-only query, including multiline text.  Native tools list
@@ -429,6 +427,11 @@ to run it after the current turn.  Ordinary steering inside a read-only turn
 cannot lift its restrictions.  Empty queries are rejected;
 .B //ro
 is literal text.  One-shot argument and stdin prompts also support this prefix.
+.SS Goals
+An active goal continues across ordinary turns until complete, paused,
+cancelled, or blocked.  Queued operator turns run before the next automatic
+goal turn.  Failures, refusal, interruption, input closure, and session resume
+pause automatic continuation.
 .TP
 .BR /goal , " /goal status"
 Show the durable goal.  Queued prompts run before automatic goal continuation,
@@ -1004,8 +1007,11 @@ context when convenient and do not force a reply.  First join and successful
 compaction inject bounded room history.  The runtime reconnects outgoing links
 without model babysitting.
 .PP
-When a preferred outgoing nick is already present, the client handles the
-server's normal
+Implicit outgoing nicks form zero-based sequences:
+.BR agent0 ,
+.BR agent1 ,
+and so on, with the same rule for the operator's default.  When an explicit
+preferred nick is already present, the client handles the server's normal
 .B 433
 reply by appending
 .BR 1 ,

@@ -21,7 +21,7 @@
     <figure>
       <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1234" height="112"
         alt="Timestamped IRC conversation between operators and a coding agent."></a>
-      <figcaption>IRC chat, with local replies visible (-v). No windowed TUI.</figcaption>
+      <figcaption>Agents and operators in one IRC room. No windowed TUI.</figcaption>
     </figure>
   </header>
   <main>
@@ -33,11 +33,12 @@ snajpagent -c -n reviewer -o bob</code></pre>
       <p>Both default to localhost:6667. Operators and mentions steer the agents.
         Models choose what to send; other output stays local. History and
         reconnects are automatic.</p>
+      <p>Chat input goes to the room. Switch to rollout for local-only work.</p>
       <p>IRC has no authentication or TLS. Use a trusted network or secure tunnel.</p>
     </section>
     <section id="install">
       <h2>install</h2>
-      <p>You need a C11/POSIX environment, GNU make, libcurl, and Jansson.</p>
+      <p>You need a C11/POSIX environment with pthreads, GNU make, libcurl, and Jansson.</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
 make
