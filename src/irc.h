@@ -74,6 +74,18 @@ typedef int (*snag_irc_trace_fn)(void *opaque, unsigned int level,
 
 struct snag_irc;
 
+void snag_irc_destinations(const struct snag_irc *irc,
+                            struct snag_irc_destinations *out);
+void snag_irc_capture_route(const struct snag_irc *irc, struct snag_irc_route *out);
+bool snag_irc_event_target(const struct snag_irc *irc,
+                            const struct snag_irc_event *event,
+                            struct snag_irc_target *target);
+bool snag_irc_local_identity(const struct snag_irc *irc,
+                              const struct snag_irc_event *event, bool model);
+/* 0: all queued, 1: none queued, 2: partial, -1: local/runtime failure. */
+int snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
+                         bool model, enum snag_irc_event_kind kind, const char *text,
+                         struct snag_buf *report, char *error, size_t error_size);
 int snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
                       char *error, size_t error_size);
 int snag_irc_normalize(struct snag_config *config, char *error, size_t error_size);

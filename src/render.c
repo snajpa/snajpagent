@@ -2724,6 +2724,7 @@ render_irc_event_now(struct snag_render *render,
 {
     char when[16u];
     char prefix[768u];
+    char source[SNAG_CONFIG_IRC_ENDPOINT_MAX + SNAG_CONFIG_IRC_ROOM_MAX + 32u] = {0};
     time_t seconds;
     struct tm tm;
     const char *nick_color;
@@ -2737,6 +2738,20 @@ render_irc_event_now(struct snag_render *render,
         return -1;
     }
     irc_markdown_lifecycle(render, event);
+    if (render->term && render->term->destinations) {
+        const struct snag_irc_destinations *destinations = render->term->destinations;
+        const struct snag_irc_destination *origin = NULL;
+        for (size_t i = 0u; i < destinations->count; ++i)
+            if (strcmp(destinations->items[i].endpoint, event->endpoint) == 0 &&
+                strcmp(destinations->items[i].room, event->room) == 0)
+                origin = &destinations->items[i];
+        if (origin && event->local)
+            own_agent = strcmp(origin->model, event->nick) == 0;
+        if (origin && destinations->count > 1u)
+            (void)snprintf(source, sizeof(source), "[%u] ", origin->target.id);
+        else if (!origin && strcmp(event->endpoint, "local") != 0)
+            (void)snprintf(source, sizeof(source), "[%s %s] ", event->endpoint, event->room);
+    }
     seconds = (time_t)(event->timestamp_ms / 1000u);
     if (!localtime_r(&seconds, &tm) ||
         strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
@@ -2749,7 +2764,7 @@ render_irc_event_now(struct snag_render *render,
         return -1;
     if (colored && irc_piece(render, "\033[2m", false) < 0)
         goto out;
-    n = snprintf(prefix, sizeof(prefix), "%s%s ", when,
+    n = snprintf(prefix, sizeof(prefix), "%s%s%s ", source, when,
                  event->historical ? " history" : "");
     if (n < 0 || (size_t)n >= sizeof(prefix) ||
         irc_piece(render, prefix, true) < 0)
@@ -2775,8 +2790,8 @@ render_irc_event_now(struct snag_render *render,
             char visible[1024u];
             size_t column;
 
-            n = snprintf(visible, sizeof(visible), "%s%s %s%s%s %s ",
-                         when, event->historical ? " history" : "",
+            n = snprintf(visible, sizeof(visible), "%s%s%s %s%s%s %s ",
+                         source, when, event->historical ? " history" : "",
                          event->kind == SNAG_IRC_NOTICE ? "-" : "",
                          event->op ? "@" : "", event->nick,
                          event->kind == SNAG_IRC_NOTICE ? "-" : "›");

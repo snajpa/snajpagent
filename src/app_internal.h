@@ -38,6 +38,9 @@ struct app_state {
     struct snag_session session;
     struct snag_ui ui;
     struct snag_irc *irc;
+    struct snag_irc_destinations irc_destinations;
+    struct snag_irc_route irc_request_route;
+    bool irc_destinations_ready;
     struct snag_buf irc_urgent;
     struct snag_buf irc_background;
     struct snag_instruction_set turn_instructions;
@@ -97,6 +100,7 @@ enum {
     SNAG_APP_COUNT_SKIPPED = 3
 };
 
+int snag_app_sync_destinations(struct app_state *app);
 int snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
                          char *error, size_t error_size);
 int snag_app_capacity_resolve(struct app_state *app,

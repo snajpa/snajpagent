@@ -181,6 +181,22 @@ out:
 }
 
 int
+snag_app_sync_destinations(struct app_state *app)
+{
+    struct snag_irc_destinations current;
+
+    snag_irc_destinations(app->irc, &current);
+    if (app->irc_destinations_ready &&
+        memcmp(&current, &app->irc_destinations, sizeof(current)) == 0)
+        return 0;
+    if (snag_ui_destinations(&app->ui, &current) < 0)
+        return -1;
+    app->irc_destinations = current;
+    app->irc_destinations_ready = true;
+    return 0;
+}
+
+int
 snag_app_irc_snapshot(struct app_state *app, const char *reason,
                      char *error, size_t error_size)
 {
@@ -192,6 +208,8 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason,
         errno = EINVAL;
         return -1;
     }
+    if (snag_app_sync_destinations(app) < 0)
+        return -1;
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
     rc = strcmp(reason, "join") != 0 && strcmp(reason, "compaction") != 0 ?
         snag_irc_state(app->irc, &snapshot, error, error_size) :
@@ -234,6 +252,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
 
     if (!app || !event)
         return -1;
+    if (snag_app_sync_destinations(app) < 0)
+        return -1;
     if (snag_app_commit_event(app, "irc_event", irc_event_data(event),
                              error, sizeof(error)) < 0)
         return -1;
@@ -247,10 +267,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         snag_ui_text(&app->ui, SNAG_UI_WARNING, event->text) < 0)
         return -1;
     chat = event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE;
-    own_agent = event->local &&
-        strcmp(event->nick, snag_irc_model_nick(app->irc)) == 0;
-    local_operator = event->local &&
-        strcmp(event->nick, snag_irc_operator_nick(app->irc)) == 0;
+    own_agent = snag_irc_local_identity(app->irc, event, true);
+    local_operator = snag_irc_local_identity(app->irc, event, false);
     if (own_agent) {
         if (app->session.active_turn && event->kind == SNAG_IRC_MESSAGE)
             app->irc_turn_replied = true;
@@ -483,6 +501,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
     app->request_networked = snag_irc_enabled(app->config) &&
                              !app->session.active_read_only;
     app->request_routing_revision = snag_irc_routing_revision(app->irc);
+    snag_irc_capture_route(app->irc, &app->irc_request_route);
     rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
         cycle, steering, app->turn_capacity.max_output_tokens,
         app->turn_capacity.max_output_tokens, app->config,

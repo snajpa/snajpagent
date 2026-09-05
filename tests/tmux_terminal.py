@@ -298,6 +298,7 @@ class FakeResponses:
                 body = self.function_body(
                     sequence, call_id, "irc_send", {
                         "notice": False,
+                        "destination": None,
                         "text": sent_text,
                     },
                 ).encode()

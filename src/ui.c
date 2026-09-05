@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 enum ui_kind {
-    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_DESTINATIONS, UI_COMMANDS, UI_PAUSE,
+    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_DESTINATIONS, UI_SELECT, UI_COMMANDS, UI_PAUSE,
     UI_OPEN, UI_EXTERNAL, UI_PROMPT, UI_SPINNERS, UI_DRAFT,
     UI_VIEW, UI_SUBMITTED, UI_PUBLIC_BEGIN, UI_PUBLIC, UI_VALIDATE,
     UI_ORIENTATION, UI_HISTORY, UI_IRC, UI_DURABLE, UI_EVENT,
@@ -272,6 +272,14 @@ apply_prompt(struct snag_ui_display *display)
         (void)snprintf(second, sizeof(second), clock->valid ? "%u" : "--", clock->second);
         for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
             values[i] = prompt->values[i];
+        if (prompt->mode == 0u && display->term.destinations)
+            for (size_t i = 0u; i < display->term.destinations->count; ++i) {
+                const struct snag_irc_destination *destination =
+                    &display->term.destinations->items[i];
+                if (destination->target.id == display->term.destination.id &&
+                    destination->operator[0])
+                    values[SNAG_PROMPT_OPERATOR] = destination->operator;
+            }
         values[SNAG_PROMPT_HOUR] = hour;
         values[SNAG_PROMPT_MINUTE] = minute;
         values[SNAG_PROMPT_SECOND] = second;
@@ -338,7 +346,13 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
         message->text = NULL;
         return 0;
     case UI_DESTINATIONS:
-        return snag_term_set_destinations(term, message->data.destinations);
+        if (snag_term_set_destinations(term, message->data.destinations) < 0)
+            return -1;
+        return display->prompt_source ? apply_prompt(display) : 0;
+    case UI_SELECT:
+        if (snag_term_select_destination(term, message->data.value) < 0)
+            return -1;
+        return display->prompt_source ? apply_prompt(display) : 0;
     case UI_COMMANDS:
         snag_term_set_commands(term, message->data.commands.items,
                              message->data.commands.count);
@@ -501,6 +515,11 @@ read_input(struct snag_ui_display *display, int timeout_ms)
             else
                 (void)snprintf(display->feedback, sizeof(display->feedback),
                                "destination %u is unavailable; use /names", id);
+            if (!term->input_only && display->prompt_source && apply_prompt(display) < 0) {
+                free(item->text);
+                free(item);
+                return -1;
+            }
             take_snapshot(display, &item->snapshot);
             item->local = true;
             item->action = SNAG_TERM_NONE;
@@ -890,6 +909,13 @@ snag_ui_destinations(struct snag_ui *ui,
     struct ui_message message = {
         .kind = UI_DESTINATIONS, .data.destinations = destinations
     };
+    return send_message(ui, &message, NULL);
+}
+
+int
+snag_ui_select_destination(struct snag_ui *ui, uint32_t id)
+{
+    struct ui_message message = {.kind = UI_SELECT, .data.value = id};
     return send_message(ui, &message, NULL);
 }
 

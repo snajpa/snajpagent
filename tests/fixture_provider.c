@@ -218,6 +218,7 @@ add_irc_send_call(struct snag_response_graph *graph, unsigned int cycle,
 
     if (!args ||
         snag_json_set_new(args, "notice", json_false()) < 0 ||
+        snag_json_set_new(args, "destination", json_null()) < 0 ||
         snag_json_set_new(args, "text", json_string(text)) < 0 ||
         snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
                  index) < 0 ||

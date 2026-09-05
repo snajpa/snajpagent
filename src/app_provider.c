@@ -412,13 +412,41 @@ tool_input_pump(void *opaque, unsigned int timeout_ms)
 }
 #endif
 
+static bool
+irc_tool_route(const struct app_state *app, const json_t *destination,
+                struct snag_irc_route *route)
+{
+    const char *text = json_is_string(destination) ? json_string_value(destination) : NULL;
+    uint32_t id;
+    size_t body;
+    char selector[16u];
+
+    memset(route, 0, sizeof(*route));
+    if ((json_is_null(destination) && app->irc_request_route.count == 1u) ||
+        (text && strcmp(text, "all") == 0)) {
+        *route = app->irc_request_route;
+        return route->count != 0u;
+    }
+    if (!text || strlen(text) > 10u)
+        return false;
+    (void)snprintf(selector, sizeof(selector), "/%s", text);
+    if (snag_irc_target_parse(selector, strlen(selector), &id, &body) != SNAG_IRC_TARGET_SELECT)
+        return false;
+    for (size_t i = 0u; i < app->irc_request_route.count; ++i)
+        if (app->irc_request_route.targets[i].id == id) {
+            route->targets[route->count++] = app->irc_request_route.targets[i];
+            return true;
+        }
+    return false;
+}
+
 int
 snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                  const struct snag_credential *credential, json_t **result,
                  char *error, size_t error_size)
 {
-    static const char *const send_keys[] = {"notice", "text"};
-    static const char *const topic_keys[] = {"topic"};
+    static const char *const send_keys[] = {"destination", "notice", "text"};
+    static const char *const topic_keys[] = {"destination", "topic"};
 
     if (app->session.active_read_only) {
         if (call && snag_read_only_tool(call->name))
@@ -446,9 +474,6 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
 
         if (!app->request_networked)
             failure = "IRC tools were not available in this request.";
-        else if (strcmp(call->name, "irc_state") != 0 &&
-            app->request_routing_revision != snag_irc_routing_revision(app->irc))
-            failure = "Not performed: IRC destinations changed after this request was built. Nothing was sent; inspect irc_state before deciding a new action.";
         if (failure) {
             *result = snag_tool_result_terminal(false, failure);
             return *result ? 0 : -1;
@@ -475,47 +500,40 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         snag_buf_free(&state);
         return rc < 0 || !*result ? -1 : 0;
     }
-    if (call && call->name && strcmp(call->name, "irc_send") == 0) {
-        const char *text = snag_json_string(call->arguments, "text");
+    if (call && call->name &&
+        (strcmp(call->name, "irc_send") == 0 || strcmp(call->name, "irc_topic") == 0)) {
+        bool topic = strcmp(call->name, "irc_topic") == 0;
+        const char *text = snag_json_string(call->arguments, topic ? "topic" : "text");
         json_t *notice_value = json_object_get(call->arguments, "notice");
-        bool notice;
+        struct snag_irc_route route;
+        struct snag_buf report;
         int rc;
 
         *result = NULL;
-        if (!app->irc ||
-            !snag_json_exact_keys(call->arguments, send_keys, 2u) ||
-            !text || !*text || strlen(text) > SNAG_MAX_PUBLIC_ITEM ||
+        if (!snag_json_exact_keys(call->arguments, topic ? topic_keys : send_keys, topic ? 2u : 3u) ||
+            !text || (!topic && !*text) || strlen(text) > SNAG_MAX_PUBLIC_ITEM ||
             !snag_utf8_valid((const unsigned char *)text, strlen(text), true) ||
-            (!json_is_null(notice_value) &&
+            (!topic && !json_is_null(notice_value) &&
              !json_is_true(notice_value) && !json_is_false(notice_value))) {
             *result = snag_tool_result_terminal(false,
-                                                "irc_send arguments are invalid");
+                "IRC arguments are invalid; select destination and valid text");
             return *result ? 0 : -1;
         }
-        notice = json_is_true(notice_value);
-        rc = notice ? snag_irc_send_agent_notice(app->irc, text, error, error_size) :
-                      snag_irc_send_agent(app->irc, text, error, error_size);
-        *result = snag_tool_result_terminal(rc == 0,
-            rc == 0 ? (notice ? "IRC notice sent" : "IRC message sent") :
-            (error[0] ? error : "IRC message could not be sent"));
-        return *result ? 0 : -1;
-    }
-    if (call && call->name && strcmp(call->name, "irc_topic") == 0) {
-        const char *topic = snag_json_string(call->arguments, "topic");
-        int rc;
-
-        *result = NULL;
-        if (!app->irc ||
-            !snag_json_exact_keys(call->arguments, topic_keys, 1u) || !topic) {
+        if (!irc_tool_route(app, json_object_get(call->arguments, "destination"), &route)) {
             *result = snag_tool_result_terminal(false,
-                                                "irc_topic arguments are invalid");
+                "Select a destination number string from irc_state, or all to broadcast. "
+                "Null is valid only for a sole destination. No message was sent.");
             return *result ? 0 : -1;
         }
-        rc = snag_irc_set_agent_topic(app->irc, topic, error, error_size);
-        *result = snag_tool_result_terminal(rc == 0,
-            rc == 0 ? "IRC topic changed" :
-            (error[0] ? error : "IRC topic could not be changed"));
-        return *result ? 0 : -1;
+        snag_buf_init(&report, 8192u);
+        rc = snag_irc_send_route(app->irc, &route, true,
+            topic ? SNAG_IRC_TOPIC : json_is_true(notice_value) ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE,
+            text, &report, error, error_size);
+        if (rc >= 0 && snag_buf_terminate(&report) == 0)
+            *result = snag_tool_result_terminal(rc == 0,
+                report.len > 1u ? (const char *)report.data : error);
+        snag_buf_free(&report);
+        return rc < 0 || !*result ? -1 : 0;
     }
 #ifdef SNAJPAGENT_TEST_FIXTURE
     (void)credential;

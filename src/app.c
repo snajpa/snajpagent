@@ -203,10 +203,12 @@ static const struct snag_term_command commands[] = {
     {"/chat", "show IRC room activity"},
     {"/rollout", "show local model activity"},
     {"/topic [TEXT]", "show or change the IRC room topic"},
-    {"/names", "show IRC endpoints, room members, and operator flags"},
+    {"/names", "show numbered IRC destinations, selection, room members, and modes"},
     {"/server [start [ENDPOINT]|stop]", "show, start, or stop hosting only"},
     {"/connect [ENDPOINT]", "add an outgoing connection (default localhost:6667)"},
-    {"/disconnect [ENDPOINT]", "remove one or all outgoing connections; preserve hosting"}
+    {"/disconnect [ENDPOINT]", "remove one or all outgoing connections; preserve hosting"},
+    {"/N [TEXT]", "select destination N, or send there once without selecting"},
+    {"/all TEXT", "broadcast once to all current destinations"}
 };
 
 static size_t
@@ -609,11 +611,10 @@ prompt_spinner_states(const struct app_state *app, bool active)
 static int
 tick_irc(struct app_state *app, char *error, size_t error_size)
 {
-    struct snag_buf nicks;
     uint64_t revision = snag_irc_routing_revision(app->irc);
-    int rc;
 
-    if (snag_irc_tick(app->irc, 0, error, error_size) < 0)
+    if (snag_irc_tick(app->irc, 0, error, error_size) < 0 ||
+        snag_app_sync_destinations(app) < 0)
         return -1;
     if (revision != snag_irc_routing_revision(app->irc)) {
         app->irc_urgent_local_operator = false;
@@ -621,13 +622,6 @@ tick_irc(struct app_state *app, char *error, size_t error_size)
         if (snag_app_irc_snapshot(app, "topology", error, error_size) < 0)
             return -1;
     }
-    snag_buf_init(&nicks, (SNAG_CONFIG_IRC_CLIENT_MAX + 1u) * 4096u);
-    rc = snag_irc_take_nicks(app->irc, &nicks);
-    if (rc > 0)
-        rc = snag_ui_nicks(&app->ui, (const char *)nicks.data);
-    snag_buf_free(&nicks);
-    if (rc < 0)
-        return -1;
     if (!snag_irc_identity_changed(app->irc))
         return 0;
     if (snag_app_irc_snapshot(app, "nick", error, error_size) < 0)
@@ -2054,6 +2048,55 @@ network_command(struct app_state *app, const char *line, bool *handled)
 }
 
 static int
+send_operator_routed(struct app_state *app, const char *line, const char *text,
+                     enum snag_irc_event_kind kind)
+{
+    struct snag_buf report;
+    char error[256] = {0};
+    int rc;
+    bool show = app->ui.input_route.count > 1u;
+
+    snag_buf_init(&report, 8192u);
+    rc = snag_irc_send_route(app->irc, &app->ui.input_route, false, kind,
+                              text, &report, error, sizeof(error));
+    for (size_t i = 0u; i < app->irc_destinations.count; ++i)
+        if (app->irc_destinations.items[i].target.id == app->ui.selection.id &&
+            !app->irc_destinations.items[i].joined)
+            show = true;
+    if (rc != 0 || show) {
+        if (snag_buf_terminate(&report) < 0 ||
+            snag_ui_text(&app->ui, rc == 0 ? SNAG_UI_HOST : SNAG_UI_WARNING,
+                report.len > 1u ? (const char *)report.data : error) < 0)
+            rc = -1;
+    }
+    snag_buf_free(&report);
+    if (rc == 1)
+        return snag_ui_restore_draft(&app->ui, line);
+    return rc < 0 ? -1 : 0;
+}
+
+static int
+handle_destination_command(struct app_state *app, const char *line, bool *handled)
+{
+    uint32_t id;
+    size_t body;
+    enum snag_irc_target_command command = snag_irc_target_parse(line, strlen(line), &id, &body);
+
+    *handled = command != SNAG_IRC_TARGET_NONE;
+    if (command == SNAG_IRC_TARGET_NONE)
+        return 0;
+    if (command == SNAG_IRC_TARGET_INVALID) {
+        if (app_error(app, "use /N to select, /N TEXT to send once, or /all TEXT") < 0)
+            return -1;
+        return snag_ui_restore_draft(&app->ui, line);
+    }
+    if (command == SNAG_IRC_TARGET_SELECT)
+        return snag_ui_select_destination(&app->ui, id) < 0 ?
+            app_error(app, "destination unavailable; use /names") : 0;
+    return send_operator_routed(app, line, line + body, SNAG_IRC_MESSAGE);
+}
+
+static int
 handle_common_command(struct app_state *app, const char *line, bool active,
                       bool *handled, bool *prompt_ready)
 {
@@ -2105,7 +2148,9 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         int rc;
 
         snag_buf_init(&state, SNAG_MAX_IRC_SNAPSHOT);
-        rc = snag_irc_state(app->irc, &state, error, sizeof(error));
+        rc = snag_buf_printf(&state, "selected destination: %u\n", app->ui.selection.id);
+        if (rc == 0)
+            rc = snag_irc_state(app->irc, &state, error, sizeof(error));
         if (rc == 0)
             rc = snag_buf_terminate(&state);
         if (rc == 0)
@@ -2115,11 +2160,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
                                   "IRC state could not be displayed") : 0;
     }
     if (strncmp(line, "/topic ", 7u) == 0) {
-        if (snag_irc_set_operator_topic(app->irc, line + 7u,
-                                       error, sizeof(error)) < 0)
-            return app_error(app, error[0] ? error :
-                              "IRC topic could not be changed");
-        return 0;
+        return send_operator_routed(app, line, line + 7u, SNAG_IRC_TOPIC);
     }
     *handled = false;
     return 0;
@@ -2245,7 +2286,10 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 rc = snag_ui_restore_draft(&app->ui, line);
             goto active_done;
         }
-        if (single_line && line[0] == '/' && line[1] != '/') {
+        rc = handle_destination_command(app, line, &handled);
+        if (rc < 0)
+            goto active_done;
+        if (!handled && single_line && line[0] == '/' && line[1] != '/') {
             rc = handle_common_command(app, line, true, &handled,
                                        &prompt_ready);
             if (rc < 0)
@@ -2277,8 +2321,7 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 rc = 0;
             } else if (app->ui.input_view == SNAG_RENDER_CHAT) {
                 error[0] = '\0';
-                rc = snag_irc_send_operator(app->irc, text,
-                                           error, sizeof(error));
+                rc = send_operator_routed(app, line, text, SNAG_IRC_MESSAGE);
                 if (rc < 0) {
                     (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                         error[0] ? error : "IRC message could not be queued");
@@ -4069,7 +4112,8 @@ interactive_loop(struct app_state *app, const char *initial)
             const char *query = snag_prompt_parse(prompt, &read_only);
             bool handled = false;
             int local_rc = 0;
-            if (single_line && prompt[0] == '/' && prompt[1] != '/')
+            local_rc = handle_destination_command(app, prompt, &handled);
+            if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/')
                 local_rc = handle_common_command(app, prompt, false, &handled,
                                                  &prompt_ready);
             if (local_rc < 0) { free(owned); return 3; }
@@ -4115,18 +4159,9 @@ interactive_loop(struct app_state *app, const char *initial)
                        (owned ? app->ui.input_view : app->ui.view) == SNAG_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
-                char irc_error[256] = {0};
-
-                if (snag_irc_send_operator(app->irc, actual, irc_error,
-                                          sizeof(irc_error)) < 0) {
-                    (void)app_error(app, irc_error[0] ? irc_error :
-                                    "IRC message could not be queued");
-                    if (set_input_prompt(app, false) < 0 ||
-                        snag_ui_restore_draft(&app->ui, prompt) < 0) {
-                        free(owned);
-                        return 6;
-                    }
-                    prompt_ready = true;
+                if (send_operator_routed(app, prompt, actual, SNAG_IRC_MESSAGE) < 0) {
+                    free(owned);
+                    return 3;
                 }
             } else {
                 const char *actual = query;

@@ -1126,10 +1126,11 @@ web_search_tool_schema(const char *type)
 static json_t *
 irc_send_tool_schema(void)
 {
-    static const char *const required[] = {"notice", "text"};
+    static const char *const required[] = {"destination", "notice", "text"};
     json_t *properties = json_object();
 
     if (!properties ||
+        snag_json_set_new(properties, "destination", nullable_string_schema()) < 0 ||
         snag_json_set_new(properties, "notice", nullable_bool_schema()) < 0 ||
         snag_json_set_new(properties, "text", string_schema()) < 0) {
         if (properties)
@@ -1139,6 +1140,9 @@ irc_send_tool_schema(void)
     return tool_schema("irc_send",
         "Send bounded room chat as the agent identity. This is the only way "
         "model text reaches the room; assistant response text remains local. "
+        "Set destination to a numbered destination string from irc_state, "
+        "or all for an explicit broadcast. Null selects the sole destination "
+        "only when there is exactly one. Sends never follow operator UI selection. "
         "Set notice true only for a non-reply informational notice. "
         "Connection, join, and retry work is owned by the runtime.", properties,
         required_array(required, sizeof(required) / sizeof(required[0])));
@@ -1156,10 +1160,11 @@ irc_state_tool_schema(void)
 static json_t *
 irc_topic_tool_schema(void)
 {
-    static const char *const required[] = {"topic"};
+    static const char *const required[] = {"destination", "topic"};
     json_t *properties = json_object();
 
     if (!properties ||
+        snag_json_set_new(properties, "destination", nullable_string_schema()) < 0 ||
         snag_json_set_new(properties, "topic", string_schema()) < 0) {
         if (properties)
             json_decref(properties);
@@ -1167,7 +1172,9 @@ irc_topic_tool_schema(void)
     }
     return tool_schema("irc_topic",
         "Change the room topic as the agent identity; this succeeds only "
-        "where that identity currently has channel operator mode.",
+        "where that identity currently has channel operator mode. Destination "
+        "is a numbered string from irc_state, all for explicit broadcast, "
+        "or null only when exactly one destination exists.",
         properties,
         required_array(required, sizeof(required) / sizeof(required[0])));
 }
@@ -1850,7 +1857,11 @@ snag_context_build(struct snag_session *session, const char *model,
             "messages, and membership/topic notifications "
             "are conversational context and may be left unanswered. Assistant "
             "speech remains in the local rollout; irc_send is the only way "
-            "you address the room. Coding tools act only on the local "
+            "you address a room. Select its numbered destination from the "
+            "snapshot; reply to the originating room, not another room. "
+            "All is an explicit broadcast, never an automatic default. "
+            "A queued send is not proof of remote receipt. "
+            "Coding tools act only on the local "
             "workspace. The runtime owns sockets, joining, history, and "
             "reconnect: do not poll or babysit them. Use irc_state for cached state, "
             "and irc_topic only when the agent has +o. A local operator mention turn "
