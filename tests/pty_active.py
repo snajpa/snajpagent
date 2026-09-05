@@ -1690,8 +1690,10 @@ def test_config_editor_reload():
     os.environ["SNAJPAGENT_EDITOR_PLAN"] = str(plan)
     os.environ["SNAJPAGENT_EDITOR_SEEN"] = str(seen)
     try:
+        before = session_ids()
         child = Child(["--config", str(config)])
         child.wait(PROMPT)
+        session_id = new_session(before)
 
         plan.write_text("unchanged", encoding="utf-8")
         child.send(b"/config\r")
@@ -1742,6 +1744,18 @@ def test_config_editor_reload():
         child.wait(PROMPT, start=end)
         peer = IRCClient(network_port, "reloadpeer")
         peer.close()
+        # Membership notifications start a turn; /config is idle-only.
+        deadline = time.monotonic() + 8.0
+        while True:
+            log = events(session_id)
+            turns = [event["data"]["turn_id"] for event in log
+                     if event["type"] == "turn_started" and
+                     "event=quit sender=reloadpeer" in event["data"]["text"]]
+            if any(event["type"] == "turn_completed" and
+                   event["data"]["turn_id"] in turns for event in log):
+                break
+            assert time.monotonic() < deadline, bytes(child.buf)
+            child.drain(0.05)
         plan.write_text(str(valid_one), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
