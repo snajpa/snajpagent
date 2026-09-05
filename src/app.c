@@ -541,14 +541,11 @@ fail:
 }
 
 static int
-validate_prompt_candidate(struct app_state *app,
-                          const struct snj_config *config)
+validate_prompt_values(const struct snj_config *config,
+                       const struct snj_provider_config *provider,
+                       const char *model, const char *effort,
+                       bool networked)
 {
-    const struct snj_provider_config *provider = snj_config_provider(
-        config, app->session.default_provider[0] ?
-        app->session.default_provider : NULL);
-    const char *model = next_model(app);
-    const char *effort = resolve_effort(next_effort(app));
     char hostname[256u];
     const char *values[7];
     const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
@@ -573,7 +570,7 @@ validate_prompt_candidate(struct app_state *app,
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
-    values[3] = snj_irc_enabled(config) ? config->irc_operator_nick : "";
+    values[3] = networked ? config->irc_operator_nick : "";
     values[4] = hostname;
     values[5] = "100%";
     snj_term_init(&probe);
@@ -591,6 +588,19 @@ validate_prompt_candidate(struct app_state *app,
 out:
     snj_term_close(&probe);
     return rc;
+}
+
+static int
+validate_prompt_candidate(struct app_state *app,
+                          const struct snj_config *config)
+{
+    const struct snj_provider_config *provider = snj_config_provider(
+        config, app->session.default_provider[0] ?
+        app->session.default_provider : NULL);
+
+    return validate_prompt_values(config, provider, next_model(app),
+                                  resolve_effort(next_effort(app)),
+                                  snj_irc_enabled(config));
 }
 
 static unsigned int
@@ -4107,6 +4117,17 @@ snj_app_run(const struct snj_cli *cli, const char *program)
             rc = 3;
             goto out;
         }
+        if (!cli->execute && validate_prompt_values(&config,
+                snj_config_provider(&config, app.session.default_provider),
+                cli->model ? new_model : app.session.default_model,
+                resolve_effort(cli->effort ? cli->effort :
+                               app.session.default_effort),
+                app.networked) < 0) {
+            (void)snj_render_error_ctx(&app.render,
+                "configured prompt cannot be rendered with the current selection");
+            rc = 2;
+            goto out;
+        }
         if (app.session.archived && snj_session_unarchive(&app.session, NULL, error, sizeof(error)) < 0) {
             (void)snj_render_error_ctx(&app.render, error); rc = 3; goto out;
         }
@@ -4146,6 +4167,14 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         const struct snj_provider_config *selected_provider =
             snj_config_provider(&config,
                                 config.provider[0] ? config.provider : NULL);
+        if (!cli->execute && validate_prompt_values(
+                &config, selected_provider, new_model,
+                resolve_effort(new_effort), app.networked) < 0) {
+            (void)snj_render_error_ctx(&app.render,
+                "configured prompt cannot be rendered with the current selection");
+            rc = 2;
+            goto out;
+        }
         if (snj_session_create(&app.store, &app.session, selected_workspace,
                                selected_provider->name, new_model, new_effort,
                                error, sizeof(error)) < 0) {

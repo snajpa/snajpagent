@@ -608,6 +608,8 @@ def write_config(path, read_agents, pause_ms=300, markdown=None):
     path.write_text(
         f"[agent]\nread_agents_md = {'true' if read_agents else 'false'}\n"
         f"[ui]\ntyping_pause_ms = {pause_ms}\nverbosity = 0\n"
+        'prompt_spinner_provider = " ◴"\n'
+        'prompt_spinner_tool = " ⠋"\n'
         f"{markdown_line}",
         encoding="utf-8",
     )
@@ -1018,7 +1020,7 @@ def run_render_case(binary, root):
                 f"repeated editing did not restart the typing pause:\n{paused_again}"
             )
 
-        final = terminal.wait("control:\n  \\x1B[31m", timeout=5.0)
+        final = terminal.wait("control:\\x1B[31m", timeout=5.0)
         if time.monotonic() - repeat_pause_started < 1.2:
             raise AssertionError("repeated typing pause ended too early")
         if f"{exact_margin}\n\nsupercalifragilisticexpialidocious" in final:

@@ -342,6 +342,25 @@ def test_static_zero_width_spinner_has_no_refresh():
         child.kill()
 
 
+def test_initial_unrenderable_prompt_is_rejected_atomically():
+    config = (Path(os.environ["SNAJPAGENT_TEST_ROOT"]) /
+              "config" / "initial-unrenderable.ini")
+    before = session_ids()
+
+    config.write_text(
+        "[ui]\n"
+        "prompt = {chat:x}{rollout-idle:" + ("x" * 600) +
+        "}{rollout-active:z}\n",
+        encoding="utf-8",
+    )
+    child = Child(["--config", str(config)])
+    child.wait(
+        b"configured prompt cannot be rendered with the current selection"
+    )
+    child.finish(expected=2, expect_resume=False)
+    assert session_ids() == before
+
+
 def test_incremental_multiline_delete_clears_old_tail():
     child = Child([])
     try:
@@ -2813,6 +2832,7 @@ def test_network_chat_and_managed_mention():
 test_incremental_prompt_edit_and_utf8_cursor_column()
 test_incremental_active_prompt_keeps_status_stable()
 test_static_zero_width_spinner_has_no_refresh()
+test_initial_unrenderable_prompt_is_rejected_atomically()
 test_incremental_multiline_delete_clears_old_tail()
 test_incremental_wrapped_long_prompt_multiline_indent()
 test_steering()
