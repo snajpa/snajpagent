@@ -2100,9 +2100,14 @@ complete_action(struct snag_term *term, enum snag_term_action action,
                 enum snag_term_action *out, char **text)
 {
     char *copy;
+    uint32_t target;
+    size_t body;
+    enum snag_irc_target_command destination = snag_irc_target_parse(
+        (const char *)term->draft.data, term->draft.len, &target, &body);
 
     bool local = action == SNAG_TERM_SUBMIT &&
-                 snag_verbosity_command((const char *)term->draft.data, term->draft.len);
+                 (destination == SNAG_IRC_TARGET_SELECT ||
+                  snag_verbosity_command((const char *)term->draft.data, term->draft.len));
     if (local ? term->local_backlog : term->input_backlog)
         return snag_term_write(STDERR_FILENO, "\a", 1u);
     if (term->utf8_pending_len || !term->draft.len)

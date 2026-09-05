@@ -595,6 +595,16 @@ test_destination_editor(void)
     snag_term_destination_route(&term, "/all hello", &route);
     assert(route.count == 0u);
     snag_term_close(&term);
+    snag_term_init(&term);
+    assert(snag_term_restore_draft(&term, "/17") == 0);
+    term.local_backlog = true;
+    term.input[0] = '\r';
+    term.input_len = 1u;
+    enum snag_term_action action;
+    char *text = NULL;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+    assert(action == SNAG_TERM_NONE && !text && term.draft.len == 3u);
+    snag_term_close(&term);
 }
 
 static size_t
