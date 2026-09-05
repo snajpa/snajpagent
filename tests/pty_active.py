@@ -3548,8 +3548,8 @@ def test_network_chat_and_managed_mention():
         if event["type"] == "response_started" and
         event["data"]["turn_id"] == zero_turn["data"]["turn_id"]
     ]
-    assert len(zero_reminders) == 1
-    assert len(zero_responses) == 2
+    assert not zero_reminders
+    assert len(zero_responses) == 1
 
     managed_turn = next(
         event for event in turns if "network_managed" in event["data"]["text"]
