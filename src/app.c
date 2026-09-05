@@ -2107,11 +2107,11 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
 
         (void)snj_prompt_parse(line, &read_only);
         if (read_only) {
-            (void)snj_render_error_ctx(&app->render,
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
                 "/ro cannot steer an active turn; press Tab or use /queue /ro QUERY");
             rc = set_input_prompt(app, true);
             if (rc == 0)
-                rc = snj_term_restore_draft(&app->term, line);
+                rc = snj_ui_restore_draft(&app->ui, line);
             goto active_done;
         }
         if (single_line && line[0] == '/' && line[1] != '/') {

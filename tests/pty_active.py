@@ -3530,7 +3530,7 @@ def test_editor_during_blocked_engine():
         if tasks.exists():
             assert len(list(tasks.iterdir())) == 2
         child.drain(0.4)
-        assert len(set(re.findall("[◴◷◶◵]".encode(), child.buf[after:]))) > 1
+        assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1
         fcntl.ioctl(child.fd, termios.TIOCSWINSZ,
                     struct.pack("HHHH", 24, 48, 0, 0))
         child.send(b"responsive-draft")
