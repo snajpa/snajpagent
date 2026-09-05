@@ -2501,8 +2501,7 @@ irc_markdown_lifecycle(struct snj_render *render,
 
 static int
 render_irc_markdown(struct snj_render *render,
-                    const struct snj_irc_event *event, size_t column,
-                    const char *suffix)
+                    const struct snj_irc_event *event, size_t column)
 {
     struct snj_irc_markdown_state *saved =
         irc_markdown_state(render, event, false);
@@ -2540,9 +2539,6 @@ render_irc_markdown(struct snj_render *render,
         memset(saved, 0, sizeof(*saved));
     }
     body.markdown_rendering = false;
-    if (suffix[0] &&
-        snj_render_public(&body, suffix, strlen(suffix), NULL) < 0)
-        goto out;
     if (!body.public_item_bytes && public_write(&body, "\n", 1u) < 0)
         goto out;
     rc = snj_render_public_end(&body);
@@ -2559,7 +2555,6 @@ render_irc_event_now(struct snj_render *render,
 {
     char when[16u];
     char prefix[768u];
-    char suffix[384u] = {0};
     time_t seconds;
     struct tm tm;
     const char *nick_color;
@@ -2573,8 +2568,6 @@ render_irc_event_now(struct snj_render *render,
         return -1;
     }
     irc_markdown_lifecycle(render, event);
-    if (own_agent && render->verbosity < 1u)
-        return 0;
     seconds = (time_t)(event->timestamp_ms / 1000u);
     if (!localtime_r(&seconds, &tm) ||
         strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
@@ -2623,13 +2616,8 @@ render_irc_event_now(struct snj_render *render,
             column = snj_term_text_width(visible, (size_t)n);
             if (column == SIZE_MAX)
                 goto out;
-            if (render->verbosity >= 4u && event->endpoint[0]) {
-                n = snprintf(suffix, sizeof(suffix), " [%s]", event->endpoint);
-                if (n < 0 || (size_t)n >= sizeof(suffix))
-                    goto out;
-            }
             if (render_irc_markdown(render, event,
-                    column % snj_term_columns(render->term), suffix) < 0)
+                    column % snj_term_columns(render->term)) < 0)
                 goto out;
             rc = 0;
             goto out;
@@ -2637,9 +2625,12 @@ render_irc_event_now(struct snj_render *render,
         if (irc_piece(render, event->text, true) < 0)
             goto out;
     } else {
-        n = snprintf(prefix, sizeof(prefix), "· %s%s%s %s",
+        const char *word = event->kind == SNJ_IRC_TOPIC && !event->nick[0] ?
+                           "topic" : irc_event_word(event->kind);
+
+        n = snprintf(prefix, sizeof(prefix), "· %s%s%s%s",
                      event->op ? "@" : "", event->nick,
-                     event->nick[0] ? " " : "", irc_event_word(event->kind));
+                     event->nick[0] ? " " : "", word);
         if (n < 0 || (size_t)n >= sizeof(prefix) ||
             irc_piece(render, prefix, true) < 0)
             goto out;
@@ -2650,14 +2641,6 @@ render_irc_event_now(struct snj_render *render,
              irc_piece(render, event->text, true) < 0))
             goto out;
     }
-    if (render->verbosity >= 4u && event->endpoint[0] &&
-        (colored && irc_piece(render, "\033[2m", false) < 0))
-        goto out;
-    if (render->verbosity >= 4u && event->endpoint[0] &&
-        (irc_piece(render, " [", true) < 0 ||
-         irc_piece(render, event->endpoint, true) < 0 ||
-         irc_piece(render, "]", true) < 0))
-        goto out;
     if (colored && irc_piece(render, "\033[0m", false) < 0)
         goto out;
     if (irc_piece(render, "\n", false) < 0)

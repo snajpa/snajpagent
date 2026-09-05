@@ -138,8 +138,13 @@ still get appended numeric collision suffixes.
 Repeat `-c ENDPOINT` to join multiple servers, or combine it with `-s ENDPOINT`.
 Text entered in chat goes to the rooms and local model. Text entered in rollout
 stays local, starting or steering a local model turn without sending an IRC
-message. The local model's own room echoes are hidden without `-v`; remote
-messages remain visible.
+message. Chat shows the same room messages and retained history for every
+participant at every verbosity level, including each model's own sends.
+Verbosity adds local rollout and diagnostic detail; it never hides chat.
+Each message carries up to 4,096 UTF-8 bytes (at least 1,024 Unicode code
+points); longer text splits at word boundaries where possible. Snajpagent's
+extended IRC wire format permits 8,192-byte lines, including CRLF, advertised
+as `LINELEN=8192`. Peers must support that extension for long messages.
 
 ## Trust and reference
 

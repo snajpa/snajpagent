@@ -12,6 +12,13 @@
   numeric padding. The pre-1.0 `{time}` field is removed; update explicit
   templates to the component fields (no compatibility alias).
 
+- Show all public IRC messages and room history, including each agent's own
+  sends, at every verbosity level. Preserve private rollout and suppress only
+  live wire echoes, not retained messages from the accepted local nickname.
+- Raise IRC message payloads to 4,096 UTF-8 bytes and the advertised wire-line
+  limit to 8,192 bytes including CRLF. Preserve full history and durable text,
+  prefer word boundaries when splitting, and tidy actorless notifications.
+
 - Refresh the README, complete command/configuration manual, and minimal static
   website against the current UI and runtime. Replace the terminal screenshots
   with current real-provider sessions.

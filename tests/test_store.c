@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store.h"
 #include "instructions.h"
+#include "irc.h"
 #include "snajpagent.h"
 
 #include <assert.h>
@@ -275,6 +276,41 @@ main(void)
     assert(strcmp(session.workspace, workspace2) == 0);
     assert(strcmp(session.default_model, "gpt-5.5-2026-04-23-alt") == 0);
     assert(strcmp(session.default_effort, "high") == 0);
+
+    {
+        char text[SNJ_IRC_TEXT_MAX + 2u];
+        json_t *event;
+        json_t *oversized;
+
+        memset(text, 'x', sizeof(text) - 1u);
+        text[sizeof(text) - 1u] = '\0';
+        event = json_object();
+        assert(event);
+        assert(snj_json_set_new(event, "endpoint", json_string("local")) == 0);
+        assert(snj_json_set_new(event, "historical", json_false()) == 0);
+        assert(snj_json_set_new(event, "kind", json_string("message")) == 0);
+        assert(snj_json_set_new(event, "local", json_true()) == 0);
+        assert(snj_json_set_new(event, "nick", json_string("agent")) == 0);
+        assert(snj_json_set_new(event, "op", json_false()) == 0);
+        assert(snj_json_set_new(event, "room", json_string("#lab")) == 0);
+        assert(snj_json_set_new(event, "text", json_string(text)) == 0);
+        assert(snj_json_set_new(event, "timestamp_ms", json_integer(1000)) == 0);
+        oversized = json_deep_copy(event);
+        assert(oversized);
+        durable_seq = session.next_seq;
+        durable_end = session.log_end;
+        assert(snj_session_commit(&session, "irc_event", oversized, NULL,
+                                  error, sizeof(error)) < 0);
+        assert(session.next_seq == durable_seq && session.log_end == durable_end);
+        text[SNJ_IRC_TEXT_MAX] = '\0';
+        assert(snj_json_set_new(event, "text", json_string(text)) == 0);
+        assert(snj_session_commit(&session, "irc_event", event, NULL,
+                                  error, sizeof(error)) == 0);
+        snj_session_close(&session);
+        snj_session_init(&session);
+        assert(snj_session_open(&store, &session, id, error, sizeof(error)) == 0);
+        assert(session.next_seq == durable_seq + 1u);
+    }
 
     {
         const char *goal1 = "11111111111111111111111111111111";

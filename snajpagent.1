@@ -277,7 +277,13 @@ tool call.  Interruption retains the current provider/tool indicator until the
 turn closes; there is no separate interruption glyph.  The template and spinners are configurable under
 .BR [ui] .
 .SS Verbosity
-Verbosity controls detail within a view, not which view is selected.
+Verbosity controls local rollout and diagnostics, not chat-message visibility
+or which view is selected.  All participants see the same room messages and
+retained history at every level, including their own sends.
+Each message carries up to 4096 UTF-8 bytes (at least 1024 Unicode code points).
+Longer text splits at word boundaries when possible.  The extended IRC wire
+limit is 8192 bytes including CRLF, advertised as LINELEN=8192;
+peers must support that extension for long messages.
 .TP
 .B 0
 Model text in the rollout; timestamped room traffic in chat.  Rollout milestones
@@ -295,7 +301,6 @@ Result display is unlimited unless
 .B max_output_bytes
 is set under
 .BR [tool] .
-Chat also shows this process's own model-nick room echoes.
 .TP
 .B 2
 Currently the same detail as level 1.
@@ -640,7 +645,8 @@ Render supported terminal Markdown.  Default:
 .B resume_history_turns
 Resume-history switch, parsed from 0 through 100.  Zero disables display; any
 nonzero value shows the single most recent retained user and assistant
-exchange.  Default: 2.  Network chat shows it only from verbosity 1.
+exchange on a non-networked resume.  Default: 2.  Network chat uses actual
+room history instead of privately generated assistant text.
 .TP
 .B typing_pause_ms
 Output pause after an input edit, 0 through 5000.  Default: 500.

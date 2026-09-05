@@ -44,6 +44,7 @@ DEFAULT_ACCOUNTED_IDLE_PROMPT = "default/gpt-5.5-2026-04-23/medium   ?%   ›"
 DEFAULT_ACTIVE_PROMPT = "default/gpt-5.5-2026-04-23/medium   ?% ◴ »"
 DEFAULT_GOAL_ACTIVE_PROMPT = "default/gpt-5.5-2026-04-23/medium   ?%◆◴ »"
 MACHINE_HOSTNAME = socket.gethostname()
+IRC_SECOND_MESSAGE = "integration two from twoop " + "long chat text " * 80 + "end"
 EMPTY_OUTPUT_CORRECTION = (
     "You tried to send an empty assistant message. "
     "Send nonempty text or take another action."
@@ -1609,7 +1610,7 @@ def validate_irc_events(dotdir):
     _, events = read_events(dotdir)
     expected_messages = [
         ("oneop", "integration one from oneop", True),
-        ("twoop", "integration two from twoop", True),
+        ("twoop", IRC_SECOND_MESSAGE, True),
     ]
     for suffix in ("one", "two"):
         expected_messages.extend(
@@ -1740,8 +1741,8 @@ def run_irc_case(binary, root):
             terminal.wait(f"{operator}@{MACHINE_HOSTNAME}   :")
 
         ordered = [terminals[name] for name in ("host", "one", "two")]
-        terminals["host"].wait("@twoop  joined")
-        terminals["one"].wait("twoop  joined")
+        terminals["host"].wait("@twoop joined")
+        terminals["one"].wait("twoop joined")
         terminals["one"].wait("set mode · +o twoop")
         terminals["two"].wait("history synchronized")
         wait_irc_idle(ordered)
@@ -1762,56 +1763,51 @@ def run_irc_case(binary, root):
         for terminal in ordered:
             terminal.wait(first)
         provider.wait_models(first)
-        for name, terminal in terminals.items():
-            own = {"host": "hostbot", "one": "onebot", "two": "twobot"}[name]
+        for terminal in terminals.values():
             for agent in ("hostbot", "onebot", "twobot"):
-                if agent != own:
-                    terminal.wait(f"{agent} heard one")
+                terminal.wait(f"{agent} heard one")
         wait_irc_idle(ordered)
 
         terminals["two"].submit("/verbose 1")
         terminals["two"].wait("verbosity: 1")
         wait_current_prompt(terminals["two"], "twoop")
-        second = "integration two from twoop"
+        second = IRC_SECOND_MESSAGE
         terminals["two"].submit(second)
         for terminal in ordered:
-            terminal.wait(second)
+            terminal.wait(second, join_wrapped=True)
         provider.wait_models(second)
-        for name, terminal in terminals.items():
-            own = {"host": "hostbot", "one": "onebot", "two": "twobot"}[name]
+        for terminal in terminals.values():
             for agent in ("hostbot", "onebot", "twobot"):
-                if agent != own or name == "two":
-                    terminal.wait(f"{agent} heard two")
+                terminal.wait(f"{agent} heard two")
         wait_irc_idle(ordered)
 
         terminals["two"].submit("/topic shared integration topic")
         for terminal in ordered:
-            terminal.wait("@twoop  set topic · shared integration topic")
+            terminal.wait("@twoop set topic · shared integration topic")
         wait_irc_idle(ordered)
 
-        for name, _model, own, operator, _args in specs:
+        for name, _model, _own, operator, _args in specs:
             terminal = terminals[name]
-            screen = wait_current_prompt(terminal, operator)
+            wait_current_prompt(terminal, operator)
+            screen = terminal.capture(join_wrapped=True)
             assert_chat_line(screen, "oneop", first, operator=True)
             assert_chat_line(screen, "twoop", second, operator=True)
             for suffix in ("one", "two"):
                 for agent in ("hostbot", "onebot", "twobot"):
                     count = screen.count(f"{agent} heard {suffix}")
-                    expected = 1 if agent != own or (name == "two" and suffix == "two") else 0
-                    if count != expected:
+                    if count != 1:
                         raise AssertionError(
                             f"{name} rendered {agent} reply {suffix} {count} times; "
-                            f"expected {expected}\n{screen}"
+                            f"expected once\n{screen}"
                         )
-                    if expected:
-                        assert_chat_line(screen, agent, f"{agent} heard {suffix}")
+                    assert_chat_line(screen, agent, f"{agent} heard {suffix}")
             if "**hostbot**" in screen or "`one`" in screen or "`two`" in screen:
                 raise AssertionError(f"{name} retained model Markdown markers:\n{screen}")
             if EMPTY_OUTPUT_CORRECTION in screen:
                 raise AssertionError(
                     f"{name} rendered a model-facing output correction:\n{screen}"
                 )
-            if screen.count("@twoop  set topic · shared integration topic") != 1:
+            if screen.count("@twoop set topic · shared integration topic") != 1:
                 raise AssertionError(f"{name} did not render the topic change once")
             validate_irc_events(terminal.dotdir)
         validate_irc_styles(terminals["host"], "onebot")

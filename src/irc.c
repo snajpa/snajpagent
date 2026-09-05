@@ -24,11 +24,11 @@
 #define IRC_MEMBERS_MAX 128u
 #define IRC_REPLAY_MEMBERS_MAX \
     (IRC_MEMBERS_MAX * (SNJ_CONFIG_IRC_CLIENT_MAX + 1u))
-#define IRC_INPUT_MAX 2048u
-#define IRC_OUTPUT_MAX (600u * 1024u)
+#define IRC_INPUT_MAX 8192u
+#define IRC_OUTPUT_MAX (6u * 1024u * 1024u)
 #define IRC_PENDING_MAX (2u * 1024u * 1024u + 64u * 1024u)
-#define IRC_LINE_MAX 510u
-#define IRC_TEXT_CHUNK 280u
+#define IRC_LINE_MAX (IRC_INPUT_MAX - 2u)
+#define IRC_TOPIC_MAX 280u
 #define IRC_RETRY_MS 1000u
 
 enum link_role {
@@ -121,6 +121,7 @@ struct snj_irc {
 };
 
 static size_t utf8_chunk(const char *text, size_t len, size_t max);
+static size_t chat_chunk(const char *text, size_t len);
 static int set_nonblocking(int fd);
 
 static int
@@ -766,12 +767,6 @@ remember_event(struct snj_irc *irc, const struct snj_irc_event *event)
         irc->history_start = (irc->history_start + 1u) % irc->history_limit;
     }
     irc->history[index] = *event;
-    {
-        size_t len = strlen(irc->history[index].text);
-        size_t keep = utf8_chunk(irc->history[index].text, len,
-                                 IRC_TEXT_CHUNK);
-        irc->history[index].text[keep] = '\0';
-    }
 }
 
 static int
@@ -1201,8 +1196,9 @@ server_welcome(struct snj_irc *irc, struct irc_conn *peer)
     peer->registered = true;
     if (queue_line(peer, ":%s 001 %s :Welcome to " SNAJPAGENT_NAME " IRC",
                    irc->server_name, peer->nick) < 0 ||
-        queue_line(peer, ":%s 005 %s CHANTYPES=# PREFIX=(o)@ SAJROOM=%s :are supported",
-                   irc->server_name, peer->nick, irc->room) < 0 ||
+        queue_line(peer, ":%s 005 %s CHANTYPES=# PREFIX=(o)@ SAJROOM=%s "
+                   "LINELEN=%u :are supported", irc->server_name, peer->nick,
+                   irc->room, IRC_INPUT_MAX) < 0 ||
         queue_line(peer, ":%s 376 %s :End of MOTD", irc->server_name,
                    peer->nick) < 0)
         return -1;
@@ -1273,9 +1269,8 @@ server_chat(struct snj_irc *irc, struct irc_conn *peer,
             queue_line(peer, ":%s 412 %s :No safe text to send",
                        irc->server_name, peer->nick);
     for (size_t offset = 0u, len = strlen(clean); offset < len;) {
-        char chunk[IRC_TEXT_CHUNK + 1u];
-        size_t take = utf8_chunk(clean + offset, len - offset,
-                                 IRC_TEXT_CHUNK);
+        char chunk[SNJ_IRC_TEXT_MAX + 1u];
+        size_t take = chat_chunk(clean + offset, len - offset);
 
         if (!take)
             return -1;
@@ -1310,7 +1305,7 @@ server_topic(struct snj_irc *irc, struct irc_conn *peer,
         return queue_line(peer, ":%s 482 %s %s :You're not channel operator",
                           irc->server_name, peer->nick, irc->room);
     topic = message->params[1];
-    if (strlen(topic) > IRC_TEXT_CHUNK || strchr(topic, '\r') ||
+    if (strlen(topic) > IRC_TOPIC_MAX || strchr(topic, '\r') ||
         strchr(topic, '\n') ||
         !snj_utf8_valid((const unsigned char *)topic, strlen(topic), true))
         return queue_line(peer, ":%s 417 %s :Topic is too long",
@@ -1498,7 +1493,7 @@ server_dispatch(struct snj_irc *irc, struct irc_conn *peer, char *line)
         if (peer->joined && message.param_count &&
             irc_casecmp(message.params[0], irc->room) == 0) {
             const char *reason = message.param_count > 1u ? message.params[1] : "";
-            char clean[IRC_TEXT_CHUNK + 1u];
+            char clean[SNJ_IRC_TEXT_MAX + 1u];
             if (sanitize_text(clean, sizeof(clean), reason) < 0)
                 clean[0] = '\0';
             if (server_broadcast(irc, ":%s!%s@%s PART %s :%s", peer->nick,
@@ -1685,14 +1680,14 @@ link_flush_pending(struct irc_conn *link)
                                    link->pending.len - offset);
         size_t len;
         const char *command;
-        char text[IRC_TEXT_CHUNK + 1u];
+        char text[SNJ_IRC_TEXT_MAX + 1u];
 
         if (!lf) {
             errno = EPROTO;
             return -1;
         }
         len = (size_t)(lf - (link->pending.data + offset));
-        if (len < 2u || len > IRC_TEXT_CHUNK + 1u ||
+        if (len < 2u || len > SNJ_IRC_TEXT_MAX + 1u ||
             (link->pending.data[offset] != 'M' &&
              link->pending.data[offset] != 'N')) {
             errno = EPROTO;
@@ -1725,8 +1720,9 @@ link_emit(struct snj_irc *irc, struct irc_conn *link,
                link->historical, false);
     if (timestamp_ms)
         event.timestamp_ms = timestamp_ms;
-    if (kind == SNJ_IRC_TOPIC)
-        (void)snprintf(link->topic, sizeof(link->topic), "%s", event.text);
+    if (kind == SNJ_IRC_TOPIC &&
+        !snj_strcpy(link->topic, sizeof(link->topic), event.text))
+        return 1;
     return emit_event(irc, &event, true);
 }
 
@@ -1935,10 +1931,12 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
         irc_casecmp(message.params[0], link->room) == 0) {
         struct irc_member *member;
         for (size_t i = 0u; i < irc->link_count; ++i)
-            if (irc->links[i].joined &&
+            if (!link->historical && irc->links[i].joined &&
                 endpoint_equal(irc->links[i].endpoint, link->endpoint) &&
                 irc_casecmp(sender, irc->links[i].nick) == 0)
                 return 0;
+        if (strlen(message.params[1]) > SNJ_IRC_TEXT_MAX)
+            return 1;
         member = member_find(link, sender);
         return link_emit(irc, link,
             strcmp(message.command, "NOTICE") == 0 ? SNJ_IRC_NOTICE :
@@ -2187,7 +2185,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     } else {
         derive_room(irc->room);
     }
-    if (strlen(workspace) > IRC_TEXT_CHUNK ||
+    if (strlen(workspace) > IRC_TOPIC_MAX ||
         sanitize_text(irc->topic, sizeof(irc->topic), workspace) < 0) {
         snj_errorf(error, error_size, "IRC launch path is too long for a topic");
         errno = ENAMETOOLONG;
@@ -2380,19 +2378,31 @@ role_is_op(const struct snj_irc *irc, enum link_role role)
     return false;
 }
 
+static size_t
+chat_chunk(const char *text, size_t len)
+{
+    size_t take = utf8_chunk(text, len, SNJ_IRC_TEXT_MAX);
+
+    if (take < len)
+        for (size_t i = take; i > 0u; --i)
+            if (text[i - 1u] == ' ')
+                return i;
+    return take;
+}
+
 static int
 send_chat_line(struct snj_irc *irc, const char *nick, enum link_role role,
                enum snj_irc_event_kind kind,
                const char *text, size_t len)
 {
-    char clean[IRC_TEXT_CHUNK + 1u];
+    char clean[SNJ_IRC_TEXT_MAX + 1u];
     struct snj_irc_event event;
     const char *room = irc->listener >= 0 ? irc->room : "";
 
-    if (!len || len > IRC_TEXT_CHUNK)
+    if (!len || len > SNJ_IRC_TEXT_MAX)
         return 0;
     {
-        char raw[IRC_TEXT_CHUNK + 1u];
+        char raw[SNJ_IRC_TEXT_MAX + 1u];
         memcpy(raw, text, len);
         raw[len] = '\0';
         if (sanitize_text(clean, sizeof(clean), raw) < 0)
@@ -2442,7 +2452,7 @@ send_chat(struct snj_irc *irc, const char *nick, enum link_role role,
         size_t line_len = newline ? (size_t)(newline - cursor) : remaining;
 
         while (line_len) {
-            size_t chunk = utf8_chunk(cursor, line_len, IRC_TEXT_CHUNK);
+            size_t chunk = chat_chunk(cursor, line_len);
             if (!chunk || send_chat_line(irc, nick, role, kind,
                                          cursor, chunk) < 0)
                 goto fail;
@@ -2494,7 +2504,7 @@ set_topic_as(struct snj_irc *irc, const char *topic, enum link_role role,
     char clean[sizeof(irc->topic)];
     size_t destinations = 0u;
 
-    if (!irc || !topic || strlen(topic) > IRC_TEXT_CHUNK ||
+    if (!irc || !topic || strlen(topic) > IRC_TOPIC_MAX ||
         strchr(topic, '\r') || strchr(topic, '\n') ||
         !snj_utf8_valid((const unsigned char *)topic, strlen(topic), true)) {
         snj_errorf(error, error_size, "IRC topic is invalid or too long");

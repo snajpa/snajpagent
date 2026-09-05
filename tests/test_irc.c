@@ -22,6 +22,8 @@ struct capture {
     unsigned int protocol_traces;
     unsigned int transport_traces;
     struct snj_irc_event last_message;
+    struct snj_irc_event last_notice;
+    char message_text[2u * SNJ_IRC_TEXT_MAX + 1u];
     struct snj_irc_event last_nick;
     struct snj_irc_event last_connected;
     bool slow_quit;
@@ -34,8 +36,16 @@ capture_event(void *opaque, const struct snj_irc_event *event)
 
     assert(event->kind <= SNJ_IRC_HISTORY_READY);
     ++capture->events[event->kind];
-    if (event->kind == SNJ_IRC_MESSAGE)
+    if (event->kind == SNJ_IRC_MESSAGE) {
+        size_t used = strlen(capture->message_text);
+        size_t len = strlen(event->text);
+
+        if (len < sizeof(capture->message_text) - used)
+            memcpy(capture->message_text + used, event->text, len + 1u);
         capture->last_message = *event;
+    }
+    if (event->kind == SNJ_IRC_NOTICE)
+        capture->last_notice = *event;
     if (event->kind == SNJ_IRC_NICK)
         capture->last_nick = *event;
     if (event->kind == SNJ_IRC_CONNECTED)
@@ -372,6 +382,7 @@ test_server(void)
     struct snj_irc *server;
     unsigned short port = free_port();
     char wire[128u * 1024u];
+    char traffic[SNJ_IRC_TEXT_MAX + 1u];
     char error[256] = {0};
     int human;
     int history;
@@ -392,6 +403,7 @@ test_server(void)
     register_peer(server, human, "human", false, wire, sizeof(wire));
     assert(strstr(wire, " 001 human ") != NULL);
     assert(strstr(wire, "SAJROOM=#lab") != NULL);
+    assert(strstr(wire, "LINELEN=8192") != NULL);
     assert(strstr(wire, " 332 human #lab :/workspace") != NULL);
     assert(strstr(wire, "MODE #lab +o human") != NULL);
     assert(strstr(wire, " = #lab :agent") != NULL);
@@ -501,8 +513,8 @@ test_server(void)
     tick(server, 5u);
 
     bad = connect_local(port, false);
-    memset(wire, 'x', 600u);
-    memcpy(wire + 600u, "\r\n", 3u);
+    memset(wire, 'x', 8191u);
+    memcpy(wire + 8191u, "\r\n", 3u);
     send_text(bad, wire);
     tick(server, 10u);
     assert(close(bad) == 0);
@@ -513,10 +525,10 @@ test_server(void)
 
     slow = connect_local(port, true);
     register_peer(server, slow, "slow", false, wire, sizeof(wire));
+    memset(traffic, 'x', sizeof(traffic) - 1u);
+    traffic[sizeof(traffic) - 1u] = '\0';
     for (unsigned int i = 0u; i < 20000u && !capture.slow_quit; ++i) {
-        assert(snj_irc_send_agent(server,
-            "bounded slow-peer traffic 012345678901234567890123456789",
-            error, sizeof(error)) == 0);
+        assert(snj_irc_send_agent(server, traffic, error, sizeof(error)) == 0);
         tick(server, 1u);
         (void)drain(human, wire, sizeof(wire));
     }
@@ -564,16 +576,24 @@ test_client_reconnect(void)
     unsigned short port = free_port();
     char address[64u];
     char error[256] = {0};
+    char payload[SNJ_IRC_TEXT_MAX + 1u];
+    char long_text[SNJ_IRC_TEXT_MAX + 32u];
     uint64_t history_before;
     uint64_t history_after;
+    unsigned int messages;
 
     init_server_config(&server_config, port);
+    server_config.irc_history_lines = 1000u;
     server = open_server(&server_config, &server_capture);
+    for (size_t i = 0u; i < SNJ_IRC_TEXT_MAX; i += 4u)
+        memcpy(payload + i, "\xf0\x9f\x8c\x99", 4u);
+    payload[SNJ_IRC_TEXT_MAX] = '\0';
     history_before = snj_time_ms();
-    assert(snj_irc_send_agent(server, "timestamped history",
-                              error, sizeof(error)) == 0);
+    for (unsigned int i = 0u; i < 1000u; ++i)
+        assert(snj_irc_send_agent(server, payload, error, sizeof(error)) == 0);
     history_after = snj_time_ms();
     snj_config_init(&client_config);
+    client_config.irc_history_lines = 1000u;
     memset(&cli, 0, sizeof(cli));
     endpoint(address, port);
     client_config.irc_client_count = 1u;
@@ -589,13 +609,62 @@ test_client_reconnect(void)
     pump_pair(server, client, 200u);
     assert(client_capture.events[SNJ_IRC_HISTORY_READY] != 0u);
     assert(server_capture.events[SNJ_IRC_JOIN] >= 2u);
-    assert(strcmp(client_capture.last_message.text,
-                  "timestamped history") == 0);
+    assert(strcmp(client_capture.last_message.text, payload) == 0);
+    assert(client_capture.events[SNJ_IRC_MESSAGE] >= 990u);
     assert(client_capture.last_message.historical);
     assert(client_capture.last_message.timestamp_ms % 1000u == 0u);
     assert(client_capture.last_message.timestamp_ms >=
            history_before / 1000u * 1000u);
     assert(client_capture.last_message.timestamp_ms <= history_after);
+    snj_buf_init(&snapshot, SNJ_MAX_IRC_SNAPSHOT);
+    assert(snj_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
+    assert(snapshot.len > 4u * 1000u * 1000u);
+    snj_buf_free(&snapshot);
+
+    messages = client_capture.events[SNJ_IRC_MESSAGE];
+    assert(snj_irc_send_agent(client, payload, error, sizeof(error)) == 0);
+    pump_pair(server, client, 20u);
+    assert(client_capture.events[SNJ_IRC_MESSAGE] == messages + 1u);
+    assert(strcmp(server_capture.last_message.text, payload) == 0);
+    assert(strcmp(server_capture.last_message.nick, "remoteagent") == 0);
+    snj_irc_close(client);
+    tick(server, 10u);
+    client = NULL;
+    assert(snj_irc_open(&client, &client_config, "/client", capture_event,
+                        capture_trace, &client_capture,
+                        error, sizeof(error)) == 0);
+    pump_pair(server, client, 200u);
+    assert(client_capture.last_message.historical);
+    assert(strcmp(client_capture.last_message.nick, "remoteagent") == 0);
+    assert(strcmp(client_capture.last_message.text, payload) == 0);
+
+    assert(snj_irc_send_agent_notice(client, payload, error, sizeof(error)) == 0);
+    pump_pair(server, client, 20u);
+    assert(strcmp(server_capture.last_notice.text, payload) == 0);
+    assert(strcmp(client_capture.last_notice.text, payload) == 0);
+
+    memset(long_text, 'a', SNJ_IRC_TEXT_MAX - 4u);
+    memcpy(long_text + SNJ_IRC_TEXT_MAX - 4u, " remaining artifact gaps", 25u);
+    server_capture.message_text[0] = '\0';
+    client_capture.message_text[0] = '\0';
+    messages = server_capture.events[SNJ_IRC_MESSAGE];
+    assert(snj_irc_send_agent(server, long_text, error, sizeof(error)) == 0);
+    pump_pair(server, client, 20u);
+    assert(server_capture.events[SNJ_IRC_MESSAGE] == messages + 2u);
+    assert(strcmp(client_capture.last_message.text, "remaining artifact gaps") == 0);
+    assert(strcmp(server_capture.message_text, long_text) == 0);
+    assert(strcmp(client_capture.message_text, long_text) == 0);
+
+    memset(long_text, 'b', SNJ_IRC_TEXT_MAX - 1u);
+    memcpy(long_text + SNJ_IRC_TEXT_MAX - 1u, "\xf0\x9f\x8c\x99" "end", 8u);
+    server_capture.message_text[0] = '\0';
+    client_capture.message_text[0] = '\0';
+    assert(snj_irc_send_agent(client, long_text, error, sizeof(error)) == 0);
+    pump_pair(server, client, 20u);
+    assert(strcmp(server_capture.last_message.text, "\xf0\x9f\x8c\x99" "end") == 0);
+    assert(strcmp(server_capture.message_text, long_text) == 0);
+    assert(strcmp(client_capture.message_text, long_text) == 0);
+
     assert(snj_irc_send_operator(client, "remote hello",
                                  error, sizeof(error)) == 0);
     pump_pair(server, client, 20u);

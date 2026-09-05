@@ -10,6 +10,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define SNJ_IRC_TEXT_MAX 4096u
+
 enum snj_irc_event_kind {
     SNJ_IRC_CONNECTED,
     SNJ_IRC_DISCONNECTED,
@@ -30,7 +32,7 @@ struct snj_irc_event {
     char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
     char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
-    char text[513u];
+    char text[SNJ_IRC_TEXT_MAX + 1u];
     bool op;
     bool historical;
     bool local;

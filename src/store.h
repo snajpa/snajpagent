@@ -17,7 +17,7 @@
 #define SNJ_MAX_QUEUED_TEXT (256u * 1024u)
 #define SNJ_MAX_PENDING_TURNS 128u
 #define SNJ_MAX_PENDING_QUEUE_TEXT (16u * 1024u * 1024u)
-#define SNJ_MAX_IRC_SNAPSHOT (2u * 1024u * 1024u)
+#define SNJ_MAX_IRC_SNAPSHOT (8u * 1024u * 1024u)
 #define SNJ_IRC_REPLY_REMINDER_TEXT \
     "Use irc_send to reply to the local operator in the IRC room before " \
     "ending this turn."

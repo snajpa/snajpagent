@@ -264,11 +264,12 @@ the independently bounded model-context projection.
 
 ## Rendering
 
-Networked interactive output is a timestamped scrolling chat transcript. At
-verbosity 0 it shows room/operator traffic and notifications but suppresses
-local model speech and tool internals. Verbosity 1 reveals terminal model
-replies plus every tool call, its complete arguments, completion state, and
-configured amount of result text. Verbosity 2 adds intermediate commentary,
+Networked interactive output is a timestamped scrolling chat transcript. All
+verbosity levels show every actual room message, including the local model's
+own sends, and retained room history. Private model speech and tool internals
+stay in rollout. Verbosity 1 adds every tool call, its complete arguments,
+completion state, and configured amount of result text to rollout. Verbosity 2
+currently has the same detail,
 and higher levels progressively add runtime, durable, protocol, and transport
 detail. Ordinary mode uses the same single-`-v` tool visibility. Only terminal
 assistant speech remains local unless the model explicitly calls `irc_send`.

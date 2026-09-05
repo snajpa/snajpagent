@@ -2470,15 +2470,15 @@ def test_network_collision_prompts():
             assert b"root01" not in client.buf
         peer = IRCClient(port, "visitor", agent=True)
         for child in children:
-            child.wait(b"visitor  joined")
+            child.wait(b"visitor joined")
             child.drain()
         starts = [len(child.buf) for child in children]
         peer.sock.sendall(b"NICK visitor2\r\n")
         peer.wait(b" NICK :visitor2\r\n")
         for child, start in zip(children, starts):
-            child.wait("visitor  is now known as · visitor2".encode(), start=start)
+            child.wait("visitor is now known as · visitor2".encode(), start=start)
             child.drain()
-            assert child.buf[start:].count(b"visitor  is now known as") == 1
+            assert child.buf[start:].count(b"visitor is now known as") == 1
     finally:
         try:
             if peer:
@@ -2541,8 +2541,8 @@ def test_network_live_nick_prompt():
         status_end = child.wait(b"verbosity: 0", start=start)
         child.wait(chat_prompt("operator8"), start=status_end)
         child.drain()
-        assert child.buf[start:].count(b"operator7  is now known as") == 1
-        assert child.buf[start:].count(b"agent7  is now known as") == 1
+        assert child.buf[start:].count(b"operator7 is now known as") == 1
+        assert child.buf[start:].count(b"agent7 is now known as") == 1
         # Local input is attributed to the accepted operator and the model's
         # request context includes a fresh snapshot with both accepted nicks.
         start = len(child.buf)
@@ -2578,7 +2578,7 @@ def test_network_live_nick_prompt():
         assert any("model nick: agent9\noperator nick: operator9\n" in text
                    for text in snapshots)
         assert b"model-output-one" not in child.buf
-        assert b"network stream acknowledged" not in child.buf
+        assert child.buf.count(b"network stream acknowledged") == 1
         # Nick notifications may start a background turn after this one.
         # EOF gracefully finishes it; /exit is an idle-only command.
         child.send(b"\x04")

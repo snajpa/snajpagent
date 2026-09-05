@@ -4276,8 +4276,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     (void)snj_term_history_open(&app.term, dotdir);
     history_warning(&app);
     if (snj_render_orientation(&app.render, &app.session, cli->resume) < 0 ||
-        (cli->resume && config.resume_history_turns != 0u &&
-         (!app.networked || app.render.verbosity >= 1u) &&
+        (cli->resume && config.resume_history_turns != 0u && !app.networked &&
          snj_render_history(&app.render, &app.session) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u &&
          app_warning(&app,

@@ -105,8 +105,12 @@ server directly. Other command-line scalar values override configured values.
 
 `history_lines` bounds both the server's in-memory room history and the fresh
 history snapshot projected after compaction. It accepts 1 through 1000 and
-defaults to 200. IRC's 512-byte wire-line limit and the configured line count
-jointly bound retained history memory.
+defaults to 200. Each message carries at most 4,096 UTF-8 bytes, enough for at
+least 1,024 four-byte Unicode code points. Longer text prefers a space boundary
+without dropping bytes; an unbroken word is split only at a UTF-8 boundary.
+The configured history count jointly bounds retained history memory. A full
+1,000-message history fits the 8 MiB snapshot and 6 MiB output-queue bounds.
+The separate topic limit remains 280 bytes.
 
 Nicks are nonempty and at most 30 bytes, while room names are at most 50
 bytes, valid UTF-8, free of spaces, commas, controls, and IRC separators. The
@@ -145,7 +149,8 @@ separate trusted tunnel or proxy.
 ## IRC Wire Behavior
 
 The implementation is a bounded IRC server/client subset, not a second agent
-RPC protocol. It uses CRLF framing, the 512-byte IRC line maximum, RFC-style
+RPC protocol. It uses CRLF framing, an 8,192-byte extended line maximum
+including CRLF (advertised as `LINELEN=8192`), RFC-style
 case folding, nonblocking sockets, and the normal commands needed by current
 IRC clients:
 
@@ -197,15 +202,17 @@ chat entry has a local `HH:MM:SS` display time, sender or event marker, and
 readable IRC-client-style spacing; the composer remains at the bottom while
 output is safely redrawn around it. Chat view shows:
 
-- timestamped operator and remote-room messages with the sender nick;
+- all timestamped room messages, including the local model's own sends, with
+  the accepted sender nick, independent of verbosity;
 - a visible `@` marker on nicks that currently carry `+o`;
 - joins, leaves, reconnects, topic changes, and other room notifications; and
 - the local operator composer and actionable errors.
 
 Model text is buffered during generation and remains local rollout content.
 Only a successful `irc_send` call sends model-authored text to IRC as a message
-or notice from the model nick. Chat view does not render this process's own
-model text or local tool activity at normal verbosity. Final responses,
+or notice from the model nick. Every participant sees that same message once
+in chat at every verbosity level. Private model text and tool activity remain
+in rollout. Final responses,
 refusals, public text emitted on an intermediate tool cycle, raw tool calls,
 tool results, provider traffic, request bodies, and internal agent activity
 are never sent to the room implicitly.
@@ -270,8 +277,8 @@ appended to model text.
 Networked mode keeps IRC debugging behind the more useful agent/tool detail.
 Its additional local-only ladder is:
 
-- verbosity 1: the local model's `irc_send` echoes in chat; reasoning summaries
-  and all tool calls, arguments, completion state, and result text in rollout,
+- verbosity 1: reasoning summaries and all tool calls, arguments, completion
+  state, and result text in rollout,
   up to `[tool] max_output_bytes` (`0` means unlimited display);
 - verbosity 2: currently the same as verbosity 1;
 - verbosity 3: runtime and provider-cycle detail;
@@ -518,8 +525,9 @@ pass and focused local smoke checks demonstrate all of the following:
 2. localhost server startup on port 6667, one advertised/default room, default
    path topic, automatic client joins, operator `+o`, agent non-op membership,
    topic changes, ordinary chat, and bounded history delivery;
-3. distinct operator and agent transcript lines, chat view suppressing local
-   model/tool output at normal verbosity, rollout view showing ordinary local
+3. distinct operator and agent transcript lines, identical public chat-message
+   visibility at all verbosity levels, private model/tool output kept in
+   rollout, rollout view showing ordinary local
    model output, useful agent/tool detail before lower-priority IRC debugging,
    safe terminal rendering, and `auto`/`always`/`never` color behavior in
    networked and non-networked modes;

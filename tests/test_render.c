@@ -681,7 +681,7 @@ test_input_model_boundaries(void)
 }
 
 static size_t
-capture_static_markdown(char *out, size_t out_size)
+capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
 {
     struct snj_render render;
     struct snj_irc_event event;
@@ -695,7 +695,7 @@ capture_static_markdown(char *out, size_t out_size)
     saved = dup(STDERR_FILENO);
     assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
     close(fds[1]);
-    snj_render_init(&render, 1u);
+    snj_render_init(&render, verbosity);
     render.stderr_terminal = true;
     snj_render_set_color(&render, SNJ_COLOR_NEVER);
     snj_render_set_networked(&render, true, "agent");
@@ -1062,7 +1062,7 @@ capture_resume_hint(enum snj_color_mode color, char *out, size_t out_size)
 }
 
 static void
-test_append_only_views(void)
+test_append_only_views(unsigned int verbosity)
 {
     struct snj_render render;
     struct snj_irc_event event = {0};
@@ -1077,9 +1077,10 @@ test_append_only_views(void)
     saved = dup(STDERR_FILENO);
     assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
     close(fds[1]);
-    snj_render_init(&render, 1u);
+    snj_render_init(&render, verbosity);
     snj_render_set_color(&render, SNJ_COLOR_NEVER);
     snj_render_set_networked(&render, true, "agent");
+    render.verbosity = 1u;
     event.kind = SNJ_IRC_MESSAGE;
     event.timestamp_ms = 1000u;
     memcpy(event.nick, "peer", 5u);
@@ -1131,14 +1132,14 @@ test_append_only_views(void)
     errno = 0;
     assert(snj_render_set_view(&render, (enum snj_render_view)-1) < 0);
     assert(errno == EINVAL);
-    render.verbosity = 0u;
+    render.verbosity = verbosity;
     event.local = true;
     memcpy(event.nick, "agent", 6u);
-    memcpy(event.text, "private-before-rename", 22u);
+    memcpy(event.text, "public-before-rename", 21u);
     assert(snj_render_irc_event(&render, &event) == 0);
     memcpy(render.model_nick, "agent2", 7u);
     memcpy(event.nick, "agent2", 7u);
-    memcpy(event.text, "private-after-rename", 21u);
+    memcpy(event.text, "public-after-rename", 20u);
     assert(snj_render_irc_event(&render, &event) == 0);
     event.local = false;
     memcpy(event.nick, "agent", 6u);
@@ -1146,9 +1147,31 @@ test_append_only_views(void)
     assert(snj_render_irc_event(&render, &event) == 0);
     assert(snj_render_set_view(&render, SNJ_RENDER_CHAT) == 0);
     used = drain_available(fds[0], output, sizeof(output), used);
-    assert(strstr(output, "private-before-rename") == NULL);
-    assert(strstr(output, "private-after-rename") == NULL);
+    assert(count_text(output, "agent › public-before-rename") == 1u);
+    assert(count_text(output, "agent2 › public-after-rename") == 1u);
     assert(count_text(output, "peer-with-old-nick") == 1u);
+    event.historical = true;
+    memcpy(event.nick, "agent2", 7u);
+    memcpy(event.text, "retained-own-message", 21u);
+    assert(snj_render_irc_event(&render, &event) == 0);
+    event.historical = false;
+    event.local = true;
+    event.kind = SNJ_IRC_NOTICE;
+    memcpy(event.text, "own-public-notice", 18u);
+    assert(snj_render_irc_event(&render, &event) == 0);
+    event.local = false;
+    event.nick[0] = '\0';
+    event.kind = SNJ_IRC_TOPIC;
+    memcpy(event.text, "/workspace", 11u);
+    assert(snj_render_irc_event(&render, &event) == 0);
+    event.kind = SNJ_IRC_HISTORY_READY;
+    event.text[0] = '\0';
+    assert(snj_render_irc_event(&render, &event) == 0);
+    used = drain_available(fds[0], output, sizeof(output), used);
+    assert(count_text(output, "history agent2 › retained-own-message") == 1u);
+    assert(count_text(output, "-agent2 - own-public-notice") == 1u);
+    assert(strstr(output, "· topic · /workspace\n") != NULL);
+    assert(strstr(output, "· history synchronized\n") != NULL);
     assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
     assert(snj_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     errno = 0;
@@ -1254,7 +1277,13 @@ main(void)
                             output, sizeof(output), NULL) == strlen("• **"));
     assert(strcmp(output, "• **") == 0);
 
-    assert(capture_static_markdown(output, sizeof(output)) > 0u);
+    assert(capture_static_markdown(0u, output, sizeof(output)) > 0u);
+    for (unsigned int verbosity = 1u; verbosity <= 6u; ++verbosity) {
+        char other[8192u];
+
+        assert(capture_static_markdown(verbosity, other, sizeof(other)) > 0u);
+        assert(strcmp(output, other) == 0);
+    }
     assert(strstr(output, "00:00:01 agent › answer and code\n") != NULL);
     assert(strstr(output, "00:00:01 agent › • actual list item\n") != NULL);
     assert(strstr(output, "@operator › **literal operator**\n") != NULL);
@@ -1275,7 +1304,8 @@ main(void)
     test_prompt_spinners();
     test_markdown_streaming();
     test_markdown_tables();
-    test_append_only_views();
+    for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity)
+        test_append_only_views(verbosity);
 
     assert(capture_lifecycle(0u, SNJ_COLOR_NEVER,
                              output, sizeof(output)) > 0u);

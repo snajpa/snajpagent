@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
 #include "instructions.h"
+#include "irc.h"
 #include "snajpagent.h"
 #include <dirent.h>
 #include <errno.h>
@@ -769,7 +770,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !irc_kind_valid(kind) ||
             !irc_field_valid(room, SNJ_CONFIG_IRC_ROOM_MAX + 1u, true) ||
             !irc_field_valid(nick, SNJ_CONFIG_IRC_NICK_MAX, true) ||
-            !irc_field_valid(text, 512u, true) ||
+            !irc_field_valid(text, SNJ_IRC_TEXT_MAX, true) ||
             !json_is_boolean(historical) || !json_is_boolean(local) ||
             !json_is_boolean(op) ||
             snj_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 ||
