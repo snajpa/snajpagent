@@ -1084,6 +1084,7 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     struct snj_term_spinner cells[SNJ_TERM_SPINNER_COUNT];
     char expanded[SNJ_TERM_LABEL_BYTES];
     size_t len;
+    bool unchanged;
 
     if (!term || !label || !(len = strlen(label)) ||
         len >= sizeof(term->prompt_template) || !spinners ||
@@ -1098,7 +1099,9 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     if (prompt_fits(label, configured) < 0 ||
         compose_prompt(label, configured, states, 0u, expanded, cells) < 0)
         goto invalid;
-    if (snj_term_hide(term) < 0)
+    unchanged = term->prompt_visible && term->prompt_wanted &&
+                term->active == active && strcmp(term->label, expanded) == 0;
+    if (!unchanged && snj_term_hide(term) < 0)
         return -1;
     memcpy(term->prompt_template, label, len + 1u);
     install_prompt(term, expanded, cells);
@@ -1112,7 +1115,7 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     term->line_submission_echoed = false;
     if (term->output_depth)
         term->redraw_after_output = true;
-    return term->defer_redraw ? 0 : redraw(term);
+    return term->defer_redraw || unchanged ? 0 : redraw(term);
 invalid:
     errno = EINVAL;
     return -1;

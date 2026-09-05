@@ -734,6 +734,23 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         }
         return 0;
     }
+    if (strcmp(prompt, "render_flood") == 0) {
+        struct snj_buf text;
+        int rc = -1;
+        snj_buf_init(&text, 128u * 1024u);
+        if (snj_buf_printf(&text, "| row | text |\n| --- | --- |\n") < 0)
+            goto flood_done;
+        for (unsigned int i = 0u; i < 2048u; ++i)
+            if (snj_buf_printf(&text, "| row-%04u | **bold** and `code` |\n", i) < 0)
+                goto flood_done;
+        if (snj_buf_printf(&text, "\nflood-end\n") == 0 &&
+            snj_buf_terminate(&text) == 0)
+            rc = emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                SNJ_PHASE_FINAL_ANSWER, "msg_flood", (char *)text.data, 0);
+flood_done:
+        snj_buf_free(&text);
+        return rc;
+    }
     if (strcmp(prompt, "engine_blocked") == 0) {
         static const char text[] = "engine-block-start engine-block-end";
         size_t index = graph->count;

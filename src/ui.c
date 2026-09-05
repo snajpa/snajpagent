@@ -260,7 +260,6 @@ apply_text(struct snj_ui_display *display, const struct ui_message *message)
     case SNJ_UI_RUNTIME: return snj_render_runtime(render, message->text);
     case SNJ_UI_ERROR: return snj_render_error_ctx(render, message->text);
     case SNJ_UI_WARNING: return snj_render_warning_ctx(render, message->text);
-    case SNJ_UI_BEFORE_PROMPT: return snj_render_before_prompt(render);
     case SNJ_UI_PUBLIC_END: return snj_render_public_end(render);
     case SNJ_UI_PUBLIC_ABORT: return snj_render_public_abort(render);
     case SNJ_UI_ROLLOUT_END: return snj_render_rollout_end(render);
@@ -316,6 +315,9 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
             snj_term_external_begin(term, error, error_size) :
             snj_term_external_end(term, error, error_size);
     case UI_PROMPT: {
+        term->defer_redraw = true;
+        if (snj_render_before_prompt(render) < 0)
+            return -1;
         term->defer_redraw = false;
         if (message->data.prompt.active && !term->active)
             ++display->turn_generation;
@@ -931,10 +933,12 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
         size_t tail = atomic_load_explicit(&runtime->actions.tail, memory_order_relaxed);
         item = tail == atomic_load_explicit(&runtime->actions.head, memory_order_acquire) ?
             NULL : runtime->actions.items[tail % UI_QUEUE_CAPACITY];
-        /* Idle input must not become steering merely because the engine was busy. */
-        if (item && active && !item->snapshot.active)
-            return 0;
-        item = queue_pop(&runtime->actions);
+        /* Defer idle submissions, not view/edit controls or the wait deadline. */
+        if (item && active && !item->snapshot.active &&
+            (item->action == SNJ_TERM_SUBMIT || item->action == SNJ_TERM_QUEUE))
+            item = NULL;
+        else
+            item = queue_pop(&runtime->actions);
         if (item) {
             wake_owner(&runtime->commands);
             break;

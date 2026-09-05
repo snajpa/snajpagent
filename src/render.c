@@ -167,22 +167,33 @@ write_role_block(struct snj_render *render, int fd, const char *color,
                  const char *text, size_t len, size_t colored_len,
                  bool terminal_safe, bool persistent)
 {
+    bool deferred = render->term && render->term->defer_redraw;
+    int rc = 0;
+
     if (!len)
         return write_role_chunk(render, fd, color, text, len, colored_len,
                                  terminal_safe, persistent);
     while (len) {
         size_t amount = text_slice(text, len);
         size_t colored = colored_len < amount ? colored_len : amount;
+        if (render->term)
+            render->term->defer_redraw = deferred || len > amount;
         if (write_role_chunk(render, fd, color, text, amount, colored,
-                              terminal_safe, persistent) < 0)
-            return -1;
+                              terminal_safe, persistent) < 0) {
+            rc = -1;
+            break;
+        }
         text += amount;
         len -= amount;
         colored_len -= colored;
-        if (len && render_checkpoint(render) < 0)
-            return -1;
+        if (len && render_checkpoint(render) < 0) {
+            rc = -1;
+            break;
+        }
     }
-    return 0;
+    if (render->term)
+        render->term->defer_redraw = deferred;
+    return rc;
 }
 
 static void

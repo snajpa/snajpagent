@@ -511,8 +511,7 @@ set_input_prompt(struct app_state *app, bool active)
                             0u : active ? 2u : 1u;
 
     if (!provider || !model || !effort ||
-        format_context_meter(app, active, meter) < 0 ||
-        snj_ui_text(&app->ui, SNJ_UI_BEFORE_PROMPT, NULL) < 0)
+        format_context_meter(app, active, meter) < 0)
         return -1;
     if (gethostname(hostname, sizeof(hostname)) < 0)
         memcpy(hostname, "localhost", sizeof("localhost"));

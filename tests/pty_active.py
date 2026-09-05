@@ -3520,6 +3520,36 @@ def test_history_lock_keeps_editing_live():
         child.kill()
 
 
+def test_editor_during_render_flood():
+    for mode in ("--markdown", "--no-markdown"):
+        before = session_ids()
+        child = Child([mode])
+        try:
+            child.wait_idle_prompt()
+            child.send(b"render_flood\r")
+            start = child.wait(b"row-0000")
+            child.send(b"live-draft")
+            deadline = time.monotonic() + 0.25
+            while b"live-draft" not in re.sub(
+                    rb"\x1b\[[0-?]*[ -/]*[@-~]|\r", b"", child.buf[start:]):
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, "rendering stopped local editing"
+                child.read_once(remaining)
+            end = child.wait(b"flood-end", start=start)
+            child.wait_idle_prompt(start=end)
+            child.send(b"\x03")
+            child.drain(0.1)
+            child.exit_now()
+        finally:
+            child.kill()
+        completed = one(events(new_session(before)), "response_completed")
+        text = completed["data"]["items"][0]["text"]
+        expected = "| row | text |\n| --- | --- |\n" + "".join(
+            f"| row-{i:04} | **bold** and `code` |\n" for i in range(2048)
+        ) + "\nflood-end\n"
+        assert text == expected
+
+
 def test_editor_during_blocked_engine():
     child = Child([])
     failure = None
@@ -3559,6 +3589,7 @@ def test_editor_during_blocked_engine():
 
 
 if __name__ == "__main__":
+    test_editor_during_render_flood()
     test_editor_during_blocked_engine()
     test_five_ctrl_c_exit()
     test_ctrl_c_sequence_reset()
