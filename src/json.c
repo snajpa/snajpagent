@@ -49,10 +49,10 @@ encode_string(struct snag_buf *out, const char *s, size_t len)
 }
 
 static int encode_value(const json_t *value, struct snag_buf *out,
-                        unsigned int depth);
+                        unsigned int depth, bool allow_real);
 
 static int
-encode_object(const json_t *value, struct snag_buf *out, unsigned int depth)
+encode_object(const json_t *value, struct snag_buf *out, unsigned int depth, bool allow_real)
 {
     size_t count = json_object_size(value);
     struct snag_key_ref *keys = NULL;
@@ -93,7 +93,7 @@ encode_object(const json_t *value, struct snag_buf *out, unsigned int depth)
         if ((i && snag_buf_putc(out, ',') < 0) ||
             encode_string(out, keys[i].name, keys[i].len) < 0 ||
             snag_buf_putc(out, ':') < 0 || !member ||
-            encode_value(member, out, depth + 1u) < 0)
+            encode_value(member, out, depth + 1u, allow_real) < 0)
             goto out;
     }
     if (snag_buf_putc(out, '}') < 0)
@@ -105,7 +105,7 @@ out:
 }
 
 static int
-encode_array(const json_t *value, struct snag_buf *out, unsigned int depth)
+encode_array(const json_t *value, struct snag_buf *out, unsigned int depth, bool allow_real)
 {
     size_t count = json_array_size(value);
 
@@ -114,14 +114,14 @@ encode_array(const json_t *value, struct snag_buf *out, unsigned int depth)
     for (size_t i = 0; i < count; ++i) {
         json_t *member = json_array_get(value, i);
         if ((i && snag_buf_putc(out, ',') < 0) || !member ||
-            encode_value(member, out, depth + 1u) < 0)
+            encode_value(member, out, depth + 1u, allow_real) < 0)
             return -1;
     }
     return snag_buf_putc(out, ']');
 }
 
 static int
-encode_value(const json_t *value, struct snag_buf *out, unsigned int depth)
+encode_value(const json_t *value, struct snag_buf *out, unsigned int depth, bool allow_real)
 {
     char number[64];
     int n;
@@ -132,20 +132,16 @@ encode_value(const json_t *value, struct snag_buf *out, unsigned int depth)
     }
     switch (json_typeof(value)) {
     case JSON_OBJECT:
-        return encode_object(value, out, depth);
+        return encode_object(value, out, depth, allow_real);
     case JSON_ARRAY:
-        return encode_array(value, out, depth);
+        return encode_array(value, out, depth, allow_real);
     case JSON_STRING:
         return encode_string(out, json_string_value(value),
                              json_string_length(value));
     case JSON_INTEGER:
         n = snprintf(number, sizeof(number), "%lld",
                      (long long)json_integer_value(value));
-        if (n <= 0 || (size_t)n >= sizeof(number)) {
-            errno = EOVERFLOW;
-            return -1;
-        }
-        return snag_buf_append(out, number, (size_t)n);
+        break;
     case JSON_TRUE:
         return snag_buf_append(out, "true", 4u);
     case JSON_FALSE:
@@ -153,17 +149,35 @@ encode_value(const json_t *value, struct snag_buf *out, unsigned int depth)
     case JSON_NULL:
         return snag_buf_append(out, "null", 4u);
     case JSON_REAL:
+        if (allow_real) {
+            n = snprintf(number, sizeof(number), "%.17g", json_real_value(value));
+            break;
+        }
+        /* Durable canonical values must never contain floating point. */
+        /* fall through */
     default:
         errno = EINVAL;
         return -1;
     }
+    if (n <= 0 || (size_t)n >= sizeof(number)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return snag_buf_append(out, number, (size_t)n);
 }
 
 int
 snag_json_canonical(const json_t *value, struct snag_buf *out)
 {
     snag_buf_reset(out);
-    return encode_value(value, out, 0u);
+    return encode_value(value, out, 0u, false);
+}
+
+int
+snag_json_diagnostic(const json_t *value, struct snag_buf *out)
+{
+    snag_buf_reset(out);
+    return encode_value(value, out, 0u, true);
 }
 
 static int

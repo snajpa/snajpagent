@@ -64,7 +64,7 @@ contains_secret(const unsigned char *data, size_t len,
 
 static int
 append_redacted(struct snag_buf *out, const unsigned char *data, size_t len,
-                const struct snag_wire_secrets *secrets, bool json_string)
+                const struct snag_wire_secrets *secrets, bool header)
 {
     static const char marker[] = "<redacted:secret>";
 
@@ -76,28 +76,12 @@ append_redacted(struct snag_buf *out, const unsigned char *data, size_t len,
             i += matched;
             continue;
         }
-        if (json_string) {
-            unsigned char c = data[i++];
-            static const char hex[] = "0123456789abcdef";
-            if (c == '"' || c == '\\') {
-                if (snag_buf_putc(out, '\\') < 0 || snag_buf_putc(out, c) < 0)
-                    return -1;
-            } else if (c <= 0x1fu) {
-                unsigned char escaped[6] = {'\\', 'u', '0', '0',
-                    (unsigned char)hex[c >> 4], (unsigned char)hex[c & 15u]};
-                if (snag_buf_append(out, escaped, sizeof(escaped)) < 0)
-                    return -1;
-            } else if (snag_buf_putc(out, c) < 0) {
+        unsigned char c = data[i++];
+        if (header && (c < 0x20u || c > 0x7eu)) {
+            if (snag_buf_printf(out, "\\x%02x", (unsigned int)c) < 0)
                 return -1;
-            }
-        } else {
-            unsigned char c = data[i++];
-            if (c >= 0x20u && c <= 0x7eu) {
-                if (snag_buf_putc(out, c) < 0)
-                    return -1;
-            } else if (snag_buf_printf(out, "\\x%02x", (unsigned int)c) < 0) {
-                return -1;
-            }
+        } else if (snag_buf_putc(out, c) < 0) {
+            return -1;
         }
     }
     return 0;
@@ -128,137 +112,44 @@ key_redaction(const char *key, size_t len)
     return NULL;
 }
 
-static int encode_value(const json_t *value,
-                        const struct snag_wire_secrets *secrets,
-                        struct snag_buf *out, unsigned int depth);
-
-static int
-encode_string(struct snag_buf *out, const char *text, size_t len,
-              const struct snag_wire_secrets *secrets)
+/* Mutate only the private parsed diagnostic tree, returning an owned reference.
+ * Keys containing a secret fail closed: redacting them could merge members. */
+static json_t *
+redact_value(json_t *value, const struct snag_wire_secrets *secrets)
 {
-    if (snag_buf_putc(out, '"') < 0 ||
-        append_redacted(out, (const unsigned char *)text, len, secrets, true) < 0)
-        return -1;
-    return snag_buf_putc(out, '"');
-}
-
-static int
-encode_object(const json_t *value, const struct snag_wire_secrets *secrets,
-              struct snag_buf *out, unsigned int depth)
-{
-    size_t count = json_object_size(value);
-    struct snag_key_ref *keys = NULL;
-    void *iter;
-    size_t used = 0u;
-    int rc = -1;
-
-    if (count) {
-        if (count > SIZE_MAX / sizeof(*keys)) {
-            errno = EOVERFLOW;
-            return -1;
-        }
-        keys = calloc(count, sizeof(*keys));
-        if (!keys)
-            return -1;
+    if (json_is_string(value)) {
+        struct snag_buf text;
+        json_t *redacted = NULL;
+        snag_buf_init(&text, SNAG_WIRE_BODY_MAX);
+        if (append_redacted(&text, (const unsigned char *)json_string_value(value),
+                            json_string_length(value), secrets, false) == 0)
+            redacted = json_stringn(text.data ? (char *)text.data : "", text.len);
+        snag_buf_free(&text);
+        return redacted;
     }
-    for (iter = json_object_iter((json_t *)value); iter;
-         iter = json_object_iter_next((json_t *)value, iter)) {
-        if (used >= count)
-            goto out;
-        keys[used].name = json_object_iter_key(iter);
-        keys[used].len = json_object_iter_key_len(iter);
-        if (!keys[used].name ||
-            contains_secret((const unsigned char *)keys[used].name,
-                            keys[used].len, secrets)) {
-            errno = EACCES;
-            goto out;
+    if (json_is_object(value)) {
+        for (void *iter = json_object_iter(value); iter;
+             iter = json_object_iter_next(value, iter)) {
+            const char *key = json_object_iter_key(iter);
+            size_t len = json_object_iter_key_len(iter);
+            const char *replacement = key_redaction(key, len);
+            if (contains_secret((const unsigned char *)key, len, secrets)) {
+                errno = EACCES;
+                return NULL;
+            }
+            json_t *child = replacement ? json_string(replacement) :
+                redact_value(json_object_iter_value(iter), secrets);
+            if (!child || json_object_set_new(value, key, child) < 0)
+                return NULL;
         }
-        ++used;
-    }
-    if (used != count)
-        goto out;
-    if (count)
-        qsort(keys, count, sizeof(*keys), snag_key_ref_compare);
-    if (snag_buf_putc(out, '{') < 0)
-        goto out;
-    for (size_t i = 0; i < count; ++i) {
-        json_t *member = json_object_getn(value, keys[i].name, keys[i].len);
-        const char *replacement = key_redaction(keys[i].name, keys[i].len);
-        if ((i && snag_buf_putc(out, ',') < 0) ||
-            encode_string(out, keys[i].name, keys[i].len, NULL) < 0 ||
-            snag_buf_putc(out, ':') < 0 || !member)
-            goto out;
-        if (replacement) {
-            if (encode_string(out, replacement, strlen(replacement), NULL) < 0)
-                goto out;
-        } else if (encode_value(member, secrets, out, depth + 1u) < 0) {
-            goto out;
+    } else if (json_is_array(value)) {
+        for (size_t i = 0; i < json_array_size(value); ++i) {
+            json_t *child = redact_value(json_array_get(value, i), secrets);
+            if (!child || json_array_set_new(value, i, child) < 0)
+                return NULL;
         }
     }
-    if (snag_buf_putc(out, '}') < 0)
-        goto out;
-    rc = 0;
-out:
-    free(keys);
-    return rc;
-}
-
-static int
-encode_array(const json_t *value, const struct snag_wire_secrets *secrets,
-             struct snag_buf *out, unsigned int depth)
-{
-    size_t count = json_array_size(value);
-    if (snag_buf_putc(out, '[') < 0)
-        return -1;
-    for (size_t i = 0; i < count; ++i) {
-        if ((i && snag_buf_putc(out, ',') < 0) ||
-            encode_value(json_array_get(value, i), secrets, out, depth + 1u) < 0)
-            return -1;
-    }
-    return snag_buf_putc(out, ']');
-}
-
-static int
-encode_value(const json_t *value, const struct snag_wire_secrets *secrets,
-             struct snag_buf *out, unsigned int depth)
-{
-    char number[64];
-    int n;
-
-    if (!value || depth > 48u) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    switch (json_typeof(value)) {
-    case JSON_OBJECT:
-        return encode_object(value, secrets, out, depth);
-    case JSON_ARRAY:
-        return encode_array(value, secrets, out, depth);
-    case JSON_STRING:
-        return encode_string(out, json_string_value(value),
-                             json_string_length(value), secrets);
-    case JSON_INTEGER:
-        n = snprintf(number, sizeof(number), "%lld",
-                     (long long)json_integer_value(value));
-        break;
-    case JSON_REAL:
-        n = snprintf(number, sizeof(number), "%.17g", json_real_value(value));
-        break;
-    case JSON_TRUE:
-        return snag_buf_append(out, "true", 4u);
-    case JSON_FALSE:
-        return snag_buf_append(out, "false", 5u);
-    case JSON_NULL:
-        return snag_buf_append(out, "null", 4u);
-    default:
-        errno = EINVAL;
-        return -1;
-    }
-    if (n <= 0 || (size_t)n >= sizeof(number)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    return snag_buf_append(out, number, (size_t)n);
+    return json_incref(value);
 }
 
 int
@@ -278,7 +169,9 @@ snag_wire_json_redact(const unsigned char *data, size_t len,
     if (!value)
         return -1;
     snag_buf_reset(out);
-    rc = encode_value(value, secrets, out, 0u);
+    json_t *redacted = redact_value(value, secrets);
+    rc = redacted ? snag_json_diagnostic(redacted, out) : -1;
+    json_decref(redacted);
     json_decref(value);
     if (rc < 0) {
         snag_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
@@ -349,5 +242,5 @@ snag_wire_header_redact(const unsigned char *line, size_t len,
         return snag_buf_append(out, replacement, strlen(replacement));
     }
     return append_redacted(out, line + value_start, len - value_start,
-                           secrets, false);
+                           secrets, true);
 }
