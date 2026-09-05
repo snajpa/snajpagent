@@ -845,7 +845,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
              !steering_matches_snapshot(builder, correction_id, text)) ||
             append_interrupted_prefix(builder, data, error, error_size) < 0) {
             snj_errorf(error, error_size,
-                      "invalid response-output correction context");
+                       "invalid response-output correction context");
             errno = EINVAL;
             return -1;
         }
@@ -1702,7 +1702,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             strcmp(turn_id, builder->active_turn_id) != 0 || !text ||
             append_interrupted_prefix(builder, data, error, error_size) < 0) {
             snj_errorf(error, error_size,
-                      "invalid compact response-output correction");
+                       "invalid compact response-output correction");
             errno = EINVAL;
             return -1;
         }
