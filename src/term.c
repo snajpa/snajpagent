@@ -972,7 +972,7 @@ prompt_row(const struct snag_buf *frame, size_t start, unsigned int columns)
 
     while (row.end < frame->len) {
         uint32_t cp;
-        size_t n = decode_utf8(frame->data + row.end, frame->len - row.end, &cp);
+        size_t n = snag_utf8_decode(frame->data + row.end, frame->len - row.end, &cp);
         int width = wcwidth((wchar_t)cp);
 
         if (cp == '\r') {
@@ -1060,10 +1060,10 @@ static size_t
 prompt_cell_end(const unsigned char *data, size_t start, size_t end)
 {
     uint32_t cp;
-    size_t pos = start + decode_utf8(data + start, end - start, &cp);
+    size_t pos = start + snag_utf8_decode(data + start, end - start, &cp);
 
     while (pos < end) {
-        size_t n = decode_utf8(data + pos, end - pos, &cp);
+        size_t n = snag_utf8_decode(data + pos, end - pos, &cp);
         if (wcwidth((wchar_t)cp) != 0)
             break;
         pos += n;
@@ -1078,7 +1078,7 @@ prompt_cell_start(const unsigned char *data, size_t start, size_t end)
     size_t pos = previous_cp(data, end);
 
     while (pos > start) {
-        (void)decode_utf8(data + pos, end - pos, &cp);
+        (void)snag_utf8_decode(data + pos, end - pos, &cp);
         if (wcwidth((wchar_t)cp) != 0)
             break;
         pos = previous_cp(data, pos);
