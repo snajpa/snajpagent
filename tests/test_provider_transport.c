@@ -313,7 +313,7 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
                 status = 401u;
                 body = "{\"error\":{\"message\":\"not authorized\"}}";
             } else {
-                body = "{\"models\":[{\"slug\":\"gpt-5.6-luna\",\"visibility\":\"list\",\"default_reasoning_level\":\"high\",\"supported_reasoning_levels\":[{\"effort\":\"high\"}]}]}";
+                body = "{\"models\":[{\"slug\":\"gpt-5.6-luna\",\"visibility\":\"list\",\"priority\":0,\"default_reasoning_level\":\"high\",\"supported_reasoning_levels\":[{\"effort\":\"high\"}]}]}";
             }
         } else {
             if (strcmp(request.path, "/oauth/token") ||
@@ -1385,6 +1385,8 @@ test_provider_auth(void)
                 &credential, NULL, NULL, error, sizeof(error)) == 0);
             int rc = snj_provider_models_list(&config, &config.providers[0], &credential,
                 NULL, NULL, NULL, &models, error, sizeof(error));
+            if (rc < 0 && mode == MODEL_AUTH_401)
+                (void)fprintf(stderr, "auth fixture failed: %s\n", error);
             assert((rc == 0) == (mode == MODEL_AUTH_401));
             if (rc == 0)
                 assert(json_array_size(models) == 1u);

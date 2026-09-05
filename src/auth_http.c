@@ -16,6 +16,13 @@
 #define AUTH_CLIENT "app_EMoamEEZ73f0CkXaXp7hrann"
 
 static const char *
+auth_string(const json_t *object, const char *key)
+{
+    const char *value = snj_json_string(object, key);
+    return value ? value : "";
+}
+
+static const char *
 auth_issuer(void)
 {
 #if defined(SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS) || defined(SNAJPAGENT_TEST_FIXTURE)
@@ -144,7 +151,7 @@ token_claims(const char *token)
 {
     static const char alphabet[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    const char *p = strchr(token, '.');
+    const char *p = token ? strchr(token, '.') : NULL;
     struct snj_buf decoded;
     unsigned int value = 0u, bits = 0u;
     char error[128];
@@ -181,7 +188,7 @@ snj_auth_token_response(json_t *response, struct snj_auth_tokens *tokens,
 {
     struct snj_auth_tokens next;
     json_t *access = NULL, *identity = NULL;
-    const char *refresh = snj_json_string(response, "refresh_token");
+    const char *refresh = auth_string(response, "refresh_token");
     const char *account;
     uint64_t expires = 0u, lifetime = 0u;
     int rc = -1;
@@ -196,10 +203,10 @@ snj_auth_token_response(json_t *response, struct snj_auth_tokens *tokens,
         goto out;
     access = token_claims(next.credential.value);
     identity = token_claims(snj_json_string(response, "id_token"));
-    account = snj_json_string(json_object_get(identity, "https://api.openai.com/auth"),
+    account = auth_string(json_object_get(identity, "https://api.openai.com/auth"),
                               "chatgpt_account_id");
     if (!*account)
-        account = snj_json_string(json_object_get(access, "https://api.openai.com/auth"),
+        account = auth_string(json_object_get(access, "https://api.openai.com/auth"),
                                   "chatgpt_account_id");
     if (!*account)
         account = tokens->credential.account_id;
@@ -282,13 +289,13 @@ snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
         post_json("/api/accounts/deviceauth/usercode", request, &response,
                    &status, pump, opaque, error, error_size) < 0)
         goto out;
-    if (status != 200 || !*snj_json_string(response, "device_auth_id") ||
-        !*snj_json_string(response, "user_code")) {
+    if (status != 200 || !*auth_string(response, "device_auth_id") ||
+        !*auth_string(response, "user_code")) {
         snj_errorf(error, error_size, "device login unavailable; enable device-code login in ChatGPT security/workspace settings (HTTP %ld)", status);
         goto out;
     }
     if (snj_json_integer_u64(response, "interval", &interval) < 0) {
-        const char *s = snj_json_string(response, "interval");
+        const char *s = auth_string(response, "interval");
         char *end;
         unsigned long n = strtoul(s, &end, 10);
         interval = *s && !*end ? (uint64_t)n : 5u;
@@ -339,11 +346,11 @@ snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
             }
         }
     }
-    authorization = curl_easy_escape(NULL, snj_json_string(code, "authorization_code"), 0);
-    verifier = curl_easy_escape(NULL, snj_json_string(code, "code_verifier"), 0);
+    authorization = curl_easy_escape(NULL, auth_string(code, "authorization_code"), 0);
+    verifier = curl_easy_escape(NULL, auth_string(code, "code_verifier"), 0);
     (void)snprintf(callback, sizeof(callback), "%s/deviceauth/callback", auth_issuer());
     redirect = curl_easy_escape(NULL, callback, 0);
-    if (!*snj_json_string(code, "authorization_code") || !*snj_json_string(code, "code_verifier") ||
+    if (!*auth_string(code, "authorization_code") || !*auth_string(code, "code_verifier") ||
         !authorization || !verifier || !redirect ||
         snj_buf_printf(&body, "grant_type=authorization_code&client_id=%s&code=%s&code_verifier=%s&redirect_uri=%s",
                         AUTH_CLIENT, authorization, verifier, redirect) < 0 ||

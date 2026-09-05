@@ -167,6 +167,7 @@ read_tokens(int dir, const struct snj_provider_config *provider,
     char path[SNJ_CONFIG_PROVIDER_NAME_MAX + 8u], error[128];
     struct snj_buf text;
     json_t *value = NULL;
+    const char *kind, *base;
     struct stat st;
     int fd, rc = -1;
 
@@ -191,9 +192,11 @@ read_tokens(int dir, const struct snj_provider_config *provider,
     }
     value = snj_json_load_strict(text.data, text.len, AUTH_FILE_MAX,
                                 error, sizeof(error));
+    kind = snj_json_string(value, "kind");
+    base = snj_json_string(value, "base_url");
     if (!snj_json_exact_keys(value, keys, sizeof(keys) / sizeof(keys[0])) ||
-        strcmp(snj_json_string(value, "kind"), snj_auth_kind_name(provider->auth)) ||
-        strcmp(snj_json_string(value, "base_url"), provider->base_url) ||
+        !kind || !base || strcmp(kind, snj_auth_kind_name(provider->auth)) ||
+        strcmp(base, provider->base_url) ||
         !token_copy(tokens->credential.value, sizeof(tokens->credential.value),
                      snj_json_string(value, "access_token"), false) ||
         !token_copy(tokens->refresh_token, sizeof(tokens->refresh_token),

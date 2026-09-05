@@ -522,6 +522,10 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             count_request = responses_compact_count_request(
                 request, model, effort, &app->turn_capacity);
         }
+        if (provider_request && app->turn_provider->auth == SNJ_AUTH_CHATGPT &&
+            app->turn_provider->native_compaction &&
+            snj_json_set_new(provider_request, "instructions", json_string("")) < 0)
+            goto out;
         if (!provider_request || !count_request) {
             snprintf(error, error_size,
                      "cannot build bounded compaction provider request");
