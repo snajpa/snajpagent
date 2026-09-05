@@ -1200,9 +1200,9 @@ capture_color(enum snj_color_mode mode, bool networked,
     {
         struct snj_render_block block;
         assert(snj_render_prepare_tool_start(&block, &call, "/tmp",
-                                             default_timeout_ms) == 0);
+                                             default_timeout_ms, verbosity, 0u) == 0);
         assert(snj_render_tool_block(&render, &block) == 0);
-        snj_buf_free(&block.text);
+        snj_render_block_free(&block);
     }
     json_decref(arguments);
     result = json_object();
@@ -1216,9 +1216,9 @@ capture_color(enum snj_color_mode mode, bool networked,
     {
         struct snj_render_block block;
         assert(snj_render_prepare_tool_finish(&block, call.name, result,
-                                              max_output_bytes) == 0);
+                                              max_output_bytes, verbosity, 0u) == 0);
         assert(snj_render_tool_block(&render, &block) == 0);
-        snj_buf_free(&block.text);
+        snj_render_block_free(&block);
     }
     json_decref(result);
     memset(&event, 0, sizeof(event));
@@ -1303,6 +1303,202 @@ capture_resume_hint(enum snj_color_mode color, char *out, size_t out_size)
 }
 
 static void
+test_tool_previews(void)
+{
+    char text[1100];
+    struct snj_render_block block;
+    struct snj_response_item call = {.name = "arbitrary_tool"};
+
+    memset(text, 'x', sizeof(text) - 1u);
+    text[sizeof(text) - 1u] = '\0';
+    assert(snj_presentation_limit(SNJ_PRESENT_ARGUMENTS, 1u) == 0u);
+    assert(snj_presentation_limit(SNJ_PRESENT_OUTPUT, 1u) == 0u);
+    assert(snj_presentation_limit(SNJ_PRESENT_ARGUMENTS, 2u) == 1024u);
+    assert(snj_presentation_limit(SNJ_PRESENT_OUTPUT, 2u) == 512u);
+    assert(snj_presentation_limit(SNJ_PRESENT_OUTPUT, 3u) == SIZE_MAX);
+    for (unsigned int level = 0u; level <= SNJ_VERBOSITY_MAX; ++level) {
+        assert(snj_presentation_enabled(SNJ_PRESENT_CHAT, level, SNJ_RENDER_CHAT));
+        assert(!snj_presentation_enabled(SNJ_PRESENT_TOOL, level, SNJ_RENDER_CHAT));
+        assert(snj_presentation_enabled(SNJ_PRESENT_DEBUG, level, SNJ_RENDER_ROLLOUT) ==
+               (level >= 4u));
+    }
+    for (size_t n = 1023u; n <= 1025u; ++n) {
+        call.arguments = json_object();
+        assert(call.arguments);
+        assert(json_object_set_new(call.arguments, "x", json_stringn(text, n - 8u)) == 0);
+        for (unsigned int level = 1u; level <= 3u; ++level) {
+            assert(snj_render_prepare_tool_start(&block, &call, "/work", 0u, level, 40u) == 0);
+            assert(block.body.len == (level == 1u ? 0u : level == 2u && n > 1024u ? 1024u : n));
+            assert(block.truncated == (level == 2u && n > 1024u));
+            assert(block.context.len == 0u || level == 3u);
+            assert(block.text.len <= 512u);
+            assert(snj_term_text_width((char *)block.text.data, block.text.len - 1u) < 40u);
+            assert(memchr(block.text.data, '\n', block.text.len) == block.text.data + block.text.len - 1u);
+            snj_render_block_free(&block);
+        }
+        json_decref(call.arguments);
+    }
+    for (size_t n = 511u; n <= 513u; ++n) {
+        json_t *result = json_object();
+        assert(result);
+        assert(json_object_set_new(result, "model_text", json_stringn(text, n)) == 0);
+        for (unsigned int level = 1u; level <= 3u; ++level) {
+            assert(snj_render_prepare_tool_finish(&block, call.name, result, 0u, level, 0u) == 0);
+            assert(block.body.len == (level == 1u ? 0u : level == 2u && n > 512u ? 512u : n));
+            assert(block.truncated == (level == 2u && n > 512u));
+            assert(snj_buf_terminate(&block.text) == 0);
+            assert(!strstr((char *)block.text.data, "0ms"));
+            snj_render_block_free(&block);
+        }
+        json_decref(result);
+    }
+    call.arguments = json_string("line\n\t界é");
+    assert(call.arguments);
+    assert(snj_render_prepare_tool_start(&block, &call, "/work", 0u, 2u, 20u) == 0);
+    assert(snj_utf8_valid(block.text.data, block.text.len, true));
+    assert(snj_utf8_valid(block.body.data, block.body.len, true));
+    assert(memchr(block.text.data, '\n', block.text.len) == block.text.data + block.text.len - 1u);
+    snj_render_block_free(&block);
+    json_decref(call.arguments);
+}
+
+static struct snj_render_source
+append_event(FILE *file, const char *text)
+{
+    struct snj_render_source source = {ftello(file), strlen(text)};
+    assert(source.offset >= 0);
+    assert(fwrite(text, 1u, source.len, file) == source.len);
+    assert(fflush(file) == 0);
+    return source;
+}
+
+static void
+test_semantic_history(void)
+{
+    for (unsigned int level = 0u; level <= 3u; ++level) {
+        char path[] = "build/verbosity-log-XXXXXX";
+        int log_fd = mkstemp(path);
+        assert(log_fd >= 0 && unlink(path) == 0);
+        FILE *file = fdopen(log_fd, "w+");
+        struct snj_render render;
+        struct snj_buf response, finish;
+        char args[1401], result[801], output[8192] = {0};
+        int fds[2], saved = dup(STDERR_FILENO);
+        assert(file && saved >= 0 && pipe(fds) == 0);
+        assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
+        assert(dup2(fds[1], STDERR_FILENO) >= 0);
+        close(fds[1]);
+        memset(args, 'A', sizeof(args) - 1u);
+        args[sizeof(args) - 1u] = '\0';
+        memset(result, 'R', sizeof(result) - 1u);
+        result[sizeof(result) - 1u] = '\0';
+        snj_buf_init(&response, 4096u);
+        snj_buf_init(&finish, 4096u);
+        assert(snj_buf_printf(&response,
+            "{\"data\":{\"items\":[{\"name\":\"future_tool\",\"call_id\":\"one\","
+            "\"arguments\":\"%s\"},{\"text\":\"retained-reason\"}]}}\n", args) == 0);
+        assert(snj_buf_terminate(&response) == 0);
+        assert(snj_buf_printf(&finish, "{\"data\":{\"call_id\":\"one\",\"result\":{"
+                              "\"status\":\"failed\",\"model_text\":\"%s\"}}}\n", result) == 0);
+        assert(snj_buf_terminate(&finish) == 0);
+        snj_render_init(&render, 6u);
+        snj_render_set_color(&render, SNJ_COLOR_NEVER);
+        snj_render_set_networked(&render, true, "agent");
+        assert(snj_render_rollout_begin(&render, STDERR_FILENO, "reason › ",
+                                        SNJ_PRESENT_REASONING) == 0);
+        assert(snj_render_rollout(&render, "retained-reason", 15u, NULL) == 0);
+        assert(snj_render_rollout_end(&render) == 0);
+        struct snj_render_source source = append_event(file, (char *)response.data);
+        assert(snj_render_durable(&render, fileno(file), source, "response_completed", 0u, 0u) == 0);
+        source = append_event(file, "{\"data\":{\"call_id\":\"one\",\"resolved_workdir\":\"/work\"}}\n");
+        assert(snj_render_durable(&render, fileno(file), source, "tool_started", 0u, 0u) == 0);
+        source = append_event(file, (char *)finish.data);
+        assert(snj_render_durable(&render, fileno(file), source, "tool_finished", 0u, 0u) == 0);
+        assert(snj_render_runtime(&render, "hidden-debug") == 0);
+        assert(snj_render_protocol(&render, "hidden", "hidden-protocol", 15u) == 0);
+        render.verbosity = level;
+        assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
+        size_t used = drain_available(fds[0], output, sizeof(output), 0u);
+        assert((strstr(output, "future_tool") != NULL) == (level >= 1u));
+        assert((strstr(output, "retained-reason") != NULL) == (level >= 2u));
+        assert((strstr(output, "RRRR") != NULL) == (level >= 2u));
+        assert((strstr(output, "[arguments truncated]") != NULL) == (level == 2u));
+        assert((strstr(output, "[output truncated]") != NULL) == (level == 2u));
+        assert(!strstr(output, "hidden-debug") && !strstr(output, "hidden-protocol"));
+        render.verbosity = 6u;
+        assert(snj_render_set_view(&render, SNJ_RENDER_CHAT) == 0);
+        assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
+        (void)drain_available(fds[0], output, sizeof(output), used);
+        assert(count_text(output, "future_tool") == (level ? 2u : 0u));
+        snj_render_free(&render);
+        snj_buf_free(&response);
+        snj_buf_free(&finish);
+        fclose(file);
+        assert(dup2(saved, STDERR_FILENO) >= 0);
+        close(saved);
+        close(fds[0]);
+    }
+}
+
+struct downgrade {
+    struct snj_render *render;
+    unsigned int calls, level;
+};
+
+static int
+downgrade_checkpoint(void *opaque)
+{
+    struct downgrade *change = opaque;
+    if (++change->calls == 2u)
+        change->render->verbosity = change->level;
+    return 0;
+}
+
+static void
+test_live_downgrade(void)
+{
+    struct snj_render render;
+    struct snj_render_block block;
+    struct downgrade change = {&render, 0u, 2u};
+    char payload[5000], output[8192] = {0};
+    int fds[2], saved = dup(STDERR_FILENO);
+    assert(saved >= 0 && pipe(fds) == 0);
+    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
+    assert(dup2(fds[1], STDERR_FILENO) >= 0);
+    close(fds[1]);
+    memset(payload, 'Q', sizeof(payload));
+    memcpy(payload + sizeof(payload) - 12u, "secret-tail", 12u);
+    json_t *result = json_object();
+    assert(result && json_object_set_new(result, "model_text", json_string(payload)) == 0);
+    assert(snj_render_prepare_tool_finish(&block, "future", result, 0u, 3u, 0u) == 0);
+    snj_render_init(&render, 3u);
+    snj_render_set_color(&render, SNJ_COLOR_NEVER);
+    render.checkpoint = downgrade_checkpoint;
+    render.checkpoint_opaque = &change;
+    assert(snj_render_tool_block(&render, &block) == 0);
+    (void)drain_available(fds[0], output, sizeof(output), 0u);
+    assert(strstr(output, "[output truncated]") && !strstr(output, "secret-tail"));
+    assert(block.body.len == sizeof(payload) - 1u);
+    snj_render_block_free(&block);
+    json_decref(result);
+    snj_render_free(&render);
+
+    snj_render_init(&render, 5u);
+    snj_render_set_color(&render, SNJ_COLOR_NEVER);
+    change.calls = 0u;
+    change.level = 0u;
+    render.checkpoint = downgrade_checkpoint;
+    render.checkpoint_opaque = &change;
+    assert(snj_render_protocol(&render, "live", payload, strlen(payload)) == 0);
+    (void)drain_available(fds[0], output, sizeof(output), 0u);
+    assert(strstr(output, "[display omitted]") && !strstr(output, "secret-tail"));
+    snj_render_free(&render);
+    assert(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    close(fds[0]);
+}
+
+static void
 test_append_only_views(unsigned int verbosity)
 {
     struct snj_render render;
@@ -1330,7 +1526,7 @@ test_append_only_views(unsigned int verbosity)
     assert(snj_render_event(&render, 1u, "goal_started") == 0);
     assert(snj_render_event(&render, 2u, "compaction_completed") == 0);
     snj_buf_init(&delivered, 1024u);
-    assert(snj_render_rollout_begin(&render, STDERR_FILENO, "agent › ") == 0);
+    assert(snj_render_rollout_begin(&render, STDERR_FILENO, "agent › ", SNJ_PRESENT_CONVERSATION) == 0);
     assert(snj_render_rollout(&render, "hidden-prefix ", 14u, &delivered) == 0);
     used = drain_available(fds[0], output, sizeof(output), used);
     assert(strstr(output, "chat-one") != NULL);
@@ -1340,7 +1536,7 @@ test_append_only_views(unsigned int verbosity)
 
     assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
     assert(snj_render_rollout(&render, "live-suffix ", 12u, &delivered) == 0);
-    render.verbosity = 3u;
+    render.verbosity = 4u;
     assert(snj_render_runtime(&render, "queued-runtime") == 0);
     memcpy(event.text, "chat-two", 9u);
     assert(snj_render_irc_event(&render, &event) == 0);
@@ -1348,7 +1544,7 @@ test_append_only_views(unsigned int verbosity)
     assert(strstr(output,
                   "── rollout ──\n• Goal set\n• Compacted\n"
                   "agent › hidden-prefix live-suffix ") != NULL);
-    assert(strstr(output, "queued-runtime") == NULL);
+    assert(strstr(output, "queued-runtime") != NULL);
     assert(strstr(output, "chat-two") == NULL);
 
     assert(snj_render_set_view(&render, SNJ_RENDER_CHAT) == 0);
@@ -1359,7 +1555,7 @@ test_append_only_views(unsigned int verbosity)
     assert(strstr(output, "── chat ──\n") != NULL);
     assert(strstr(output, "chat-two") != NULL);
     assert(strstr(output, "── rollout ──\nhidden-tail\n") != NULL);
-    assert(strstr(output, "hidden-tail\nqueued-runtime\n") != NULL);
+    assert(count_text(output, "queued-runtime") == 1u);
     assert(count_text(output, "hidden-prefix") == 1u);
     assert(count_text(output, "live-suffix") == 1u);
     assert(count_text(output, "hidden-tail") == 1u);
@@ -1416,10 +1612,10 @@ test_append_only_views(unsigned int verbosity)
     assert(snj_render_set_view(&render, SNJ_RENDER_ROLLOUT) == 0);
     assert(snj_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     errno = 0;
-    assert(snj_render_rollout_begin(&render, STDERR_FILENO, NULL) < 0);
+    assert(snj_render_rollout_begin(&render, STDERR_FILENO, NULL, SNJ_PRESENT_CONVERSATION) < 0);
     assert(errno == EBUSY);
     assert(snj_render_public_abort(&render) == 0);
-    assert(snj_render_rollout_begin(&render, STDERR_FILENO, NULL) == 0);
+    assert(snj_render_rollout_begin(&render, STDERR_FILENO, NULL, SNJ_PRESENT_CONVERSATION) == 0);
     assert(snj_render_rollout_abort(&render) == 0);
     assert(snj_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data,
@@ -1547,6 +1743,9 @@ main(void)
     test_mention_completion();
     test_markdown_streaming();
     test_markdown_tables();
+    test_tool_previews();
+    test_semantic_history();
+    test_live_downgrade();
     for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity)
         test_append_only_views(verbosity);
 
@@ -1561,9 +1760,9 @@ main(void)
     assert(capture_lifecycle(4u, SNJ_COLOR_NEVER,
                              output, sizeof(output)) > 0u);
     assert(strstr(output,
-                  "• Compacted · event › 1 compaction_completed synced\n"));
+                  "• Compacted\nevent › 1 compaction_completed synced\n"));
     assert(strstr(output,
-                  "• Goal cleared · event › 5 goal_cancelled synced\n"));
+                  "• Goal cleared\nevent › 5 goal_cancelled synced\n"));
     assert(strstr(output, "event › 6 turn_completed synced\n"));
     assert(capture_lifecycle(0u, SNJ_COLOR_ALWAYS,
                              output, sizeof(output)) > 0u);
@@ -1593,33 +1792,34 @@ main(void)
     assert(strstr(output, "\033[1;31m" SNAJPAGENT_NAME
                   ": broken\n\033[0m") != NULL);
     assert(strstr(output, "\033[34mstatus\n\033[0m") != NULL);
+    assert(strstr(output, "\033[1;32m• Compacted\n\033[0m") != NULL);
+    assert(strstr(output, "event › 7 compaction_completed synced\n") != NULL);
     assert(strstr(output,
-                  "\033[1;32m• Compacted · event › 7 "
-                  "compaction_completed synced\n\033[0m") != NULL);
-    assert(strstr(output,
-                  "\033[33m→ exec\033[0m  timeout=2500ms  'printf plain'\n") != NULL);
+                  "\033[33m→ exec_command\033[0m  {\"command\":\"printf plain\"") != NULL);
+    assert(strstr(output, "  timeout: 2500ms\n") != NULL);
     assert(strstr(output, "\033[1;36magent \033[0m› answer") != NULL);
     assert(capture_color(SNJ_COLOR_NEVER, true, 6u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strchr(output, '\033') == NULL);
-    assert(strstr(output, "→ exec  timeout=none  'printf plain'\n") != NULL);
+    assert(strstr(output, "→ exec_command") == NULL);
     assert(capture_color(SNJ_COLOR_NEVER, false, 1u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
-    assert(strstr(output, "→ exec  timeout=none  'printf plain'\n") != NULL);
-    assert(strstr(output, "  arguments: {\"command\":\"printf plain\"") != NULL);
-    assert(strstr(output, "  output:\nfixture tool output: café\n") != NULL);
+    assert(strstr(output, "→ exec_command  {\"command\":\"printf plain\"") != NULL);
+    assert(strstr(output, "  arguments:") == NULL);
+    assert(strstr(output, "  output:") == NULL);
+    assert(strstr(output, "fixture tool output") == NULL);
     assert(capture_color(SNJ_COLOR_NEVER, true, 1u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
-    assert(strstr(output, "→ exec  timeout=none  'printf plain'\n") != NULL);
-    assert(strstr(output, "  arguments:") != NULL);
-    assert(strstr(output, "fixture tool output: café") != NULL);
-    assert(capture_color(SNJ_COLOR_NEVER, false, 1u, -1, 4000u, 8u,
+    assert(strstr(output, "→ exec_command") == NULL);
+    assert(strstr(output, "  arguments:") == NULL);
+    assert(strstr(output, "fixture tool output: café") == NULL);
+    assert(capture_color(SNJ_COLOR_NEVER, false, 3u, -1, 4000u, 8u,
                          output, sizeof(output)) > 0u);
     assert(strstr(output,
-                  "→ exec  timeout=4000ms  'printf plain'\n") != NULL);
+                  "  timeout: 4000ms\n") != NULL);
     assert(strstr(output, "  arguments:") != NULL);
     assert(strstr(output, "  output:\nfixture ") != NULL);
-    assert(strstr(output, "output bytes hidden by max_output_bytes") != NULL);
+    assert(strstr(output, "[output truncated]") != NULL);
     assert(strstr(output, "fixture tool output: café") == NULL);
 
     assert(setenv("NO_COLOR", "1", 1) == 0);

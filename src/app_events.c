@@ -308,7 +308,7 @@ snj_app_irc_trace(void *opaque, unsigned int level, char direction,
         errno = EINVAL;
         return -1;
     }
-    if (app->ui.verbosity < level)
+    if (!snj_ui_enabled(&app->ui, level == 6u ? SNJ_PRESENT_WIRE : SNJ_PRESENT_PROTOCOL))
         return 0;
     snj_buf_init(&safe, 4u * SNJ_IRC_LINE_MAX);
     for (size_t i = 0u; i < len; ++i) {
@@ -562,7 +562,7 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
             *create_request = json_incref(projection.create_request);
         if (count_request)
             *count_request = json_incref(projection.count_request);
-        if (app->ui.verbosity >= 5u && request_body) {
+        if (snj_ui_enabled(&app->ui, SNJ_PRESENT_PROTOCOL) && request_body) {
             struct snj_buf encoded;
             struct snj_secret_set secrets;
 

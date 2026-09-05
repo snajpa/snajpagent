@@ -41,8 +41,13 @@ Presentation checks input/resize and due spinners before bounded output work,
 at most every 16 ms while editing/animating and 25 ms during other activity.
 Long text and view catch-up are sliced; Markdown and literal output share the
 same renderer. Inactive operation waits for real input, wakeups, or deadlines.
-Inherited terminal descriptors are never made nonblocking. A stalled terminal,
-kernel, or unscheduled process is outside this userspace guarantee.
+Inherited descriptors are never made nonblocking. The UI privately reopens each
+terminal output descriptor with `O_NONBLOCK`, verifies its device identity and
+writes bounded slices to it. Redirected stdout stays redirected. Output waits
+also service input-only checkpoints: editing and priority intent are consumed
+without recursively painting. Deferred feedback and draft painting resume when
+the terminal drains; a refusing consumer cannot display text before that.
+Prompt label/visibility and verbosity never decide whether input is polled.
 
 Provider and managed-process waits include the action wake descriptor. A single
 libcurl-multi driver serves create/count/compact/catalog requests. Indivisible

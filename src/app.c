@@ -164,7 +164,7 @@ app_runtimef(struct app_state *app, const char *fmt, ...)
     va_list ap;
     int needed;
     int rc;
-    if (app->ui.verbosity < 3u)
+    if (!snj_ui_enabled(&app->ui, SNJ_PRESENT_DEBUG))
         return 0;
     snj_buf_init(&text, 4u * 1024u * 1024u);
     va_start(ap, fmt);
@@ -400,10 +400,14 @@ snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
                      char *error, size_t error_size)
 {
     uint64_t seq;
+    off_t offset = app->session.log_end;
     if (snj_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;
-    if (snj_ui_event(&app->ui, seq, type) < 0) {
+    struct snj_render_source source = {offset, (size_t)(app->session.log_end - offset)};
+    if (snj_ui_durable(&app->ui, app->session.log_fd, source, type,
+                       app->config->default_timeout_ms, app->config->max_output_bytes) < 0 ||
+        snj_ui_event(&app->ui, seq, type) < 0) {
         snj_errorf(error, error_size, "durable event output failed");
         return -1;
     }
@@ -964,7 +968,7 @@ append_compact_threshold(struct snj_buf *text,
 static int
 render_status(struct app_state *app)
 {
-    const char *id = app->ui.verbosity >= 3u ? app->session.id : NULL;
+    const char *id = app->session.id;
     const struct snj_provider_config *provider = next_provider(app);
     const struct snj_model_limit_config *configured = NULL;
     const json_t *advertised = NULL;
@@ -1019,7 +1023,7 @@ render_status(struct app_state *app)
         (unsigned long long)app->session.turn_count,
         app->session.pending_queue_count,
         app->session.pending_queue_count && !app->queue_armed ? " paused" : "",
-        app->ui.verbosity, snj_capacity_source_name(capacity.source)) < 0 ||
+        snj_ui_verbosity(&app->ui), snj_capacity_source_name(capacity.source)) < 0 ||
         append_capacity_value(&text, "hard-input",
                               capacity.hard_input_known,
                               capacity.hard_input_tokens) < 0 ||
@@ -1122,7 +1126,14 @@ render_help(struct app_state *app)
         if (snj_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
                            commands[i].description) < 0)
             goto out;
+    static const char levels[] =
+        "\n\nVerbosity (-v count = /verbose N):\n"
+        "0 conversation · 1 compact tool rows, no output\n"
+        "2 previews: 1024 argument / 512 output characters, reasoning summaries\n"
+        "3 full retained tools · 4 debug · 5 redacted protocol · 6 wire\n"
+        "Chat is unchanged. Debug traces are live in /rollout only.";
     if (snj_buf_append(&text, keys, strlen(keys)) < 0 ||
+        snj_buf_append(&text, levels, sizeof(levels) - 1u) < 0 ||
         snj_buf_terminate(&text) < 0)
         goto out;
     rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
@@ -1637,18 +1648,6 @@ same_config_snapshot(const struct config_snapshot *left,
            (!left->exists || strcmp(left->sha256, right->sha256) == 0);
 }
 
-static unsigned int
-configured_verbosity(const struct app_state *app,
-                     const struct snj_config *config)
-{
-    unsigned int value = config->verbosity;
-    if (value < 6u) {
-        unsigned int room = 6u - value;
-        value += app->cli->verbosity < room ? app->cli->verbosity : room;
-    }
-    return value;
-}
-
 static enum snj_color_mode
 configured_color(const struct app_state *app,
                  const struct snj_config *config)
@@ -1786,7 +1785,6 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     snj_ui_color(&app->ui, configured_color(app, app->config));
     snj_ui_markdown(&app->ui,
                             configured_markdown(app, app->config));
-    app->ui.verbosity = configured_verbosity(app, app->config);
     snj_ui_networked(&app->ui, app->networked,
                              app->networked ?
                                  app->config->irc_model_nick : NULL);
@@ -1926,16 +1924,6 @@ change_effort(struct app_state *app, const char *value, bool active)
     return show_setting(app, "effort", app->session.default_effort, false);
 }
 static int
-change_verbosity(struct app_state *app, const char *value)
-{
-    if (!value)
-        return app_hostf(app, "verbosity: %u", app->ui.verbosity);
-    if (value[0] < '0' || value[0] > '6' || value[1] != '\0')
-        return app_error(app, "/verbose expects one integer from 0 through 6");
-    app->ui.verbosity = (unsigned int)(value[0] - '0');
-    return app_hostf(app, "verbosity: %u", app->ui.verbosity);
-}
-static int
 select_view(struct app_state *app, enum snj_render_view view, bool active)
 {
     if (!app->networked)
@@ -1982,10 +1970,6 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         *prompt_ready = rc == 0;
         return rc;
     }
-    if (strcmp(line, "/verbose") == 0)
-        return change_verbosity(app, NULL);
-    if (strncmp(line, "/verbose ", 9u) == 0)
-        return change_verbosity(app, line + 9u);
     if (strcmp(line, "/model") == 0)
         return change_model(app, NULL, active);
     if (strncmp(line, "/model ", 7u) == 0)
@@ -2425,12 +2409,6 @@ execute_calls(struct app_state *app, const char *turn_id,
                                            app->session.workspace),
                          error, error_size) < 0)
             return -1;
-        if (snj_ui_tool_start(&app->ui, call,
-                                  app->session.workspace,
-                                  app->config->default_timeout_ms) < 0) {
-            snj_errorf(error, error_size, "tool activity could not be rendered");
-            return -1;
-        }
         tool_error[0] = '\0';
         {
             int run_rc;
@@ -2493,25 +2471,9 @@ execute_calls(struct app_state *app, const char *turn_id,
         {
             const char *status = snj_json_string(result, "status");
             bool yielded = status && strcmp(status, "running") == 0;
-            json_t *render_result = app->ui.verbosity >= 1u ?
-                                    json_incref(result) : NULL;
             if (commit_pending_result(app, turn_id, call->call_id, result,
-                                      error, error_size) < 0) {
-                if (render_result)
-                    json_decref(render_result);
+                                      error, error_size) < 0)
                 return -1;
-            }
-            if (render_result &&
-                snj_ui_tool_finish(&app->ui, call->name,
-                                       render_result,
-                                       app->config->max_output_bytes) < 0) {
-                json_decref(render_result);
-                snj_errorf(error, error_size,
-                          "tool result could not be rendered");
-                return -1;
-            }
-            if (render_result)
-                json_decref(render_result);
             if (yielded &&
                 terminalize_pending(app, turn_id,
                                     "process_interaction_required",
@@ -3702,7 +3664,7 @@ build_resume_command(const struct app_state *app, const char *program,
     if (cli->markdown == SNJ_CLI_MARKDOWN_DISABLED &&
         append_command_literal(command, "--no-markdown") < 0)
         goto out;
-    for (unsigned int i = 0u; i < cli->verbosity; ++i)
+    for (unsigned int i = 0u; i < snj_ui_verbosity(&app->ui); ++i)
         if (append_command_literal(command, "-v") < 0)
             goto out;
     if (app->staged_model &&
@@ -4103,7 +4065,6 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     char *relocated_workspace = NULL;
     const char *new_model = NULL;
     const char *new_effort;
-    unsigned int effective_verbosity;
     bool goal_paused_on_resume = false;
     bool signal_handlers_installed = false;
     int rc = 3;
@@ -4191,8 +4152,8 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     snj_ui_networked(&app.ui, app.networked,
                              app.networked ? config.irc_model_nick : NULL);
     snj_ui_typing_pause(&app.ui, config.typing_pause_ms);
-    effective_verbosity = configured_verbosity(&app, &config);
-    app.ui.verbosity = effective_verbosity;
+    if (snj_ui_set_verbosity(&app.ui, cli->verbosity) < 0)
+        goto out;
     if (!cli->execute && !cli->list &&
         (isatty(STDIN_FILENO) != 1 || isatty(STDERR_FILENO) != 1)) {
         (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,

@@ -8,7 +8,6 @@
 struct snj_ui {
     struct snj_ui_runtime *runtime;
     struct snj_history history;
-    unsigned int verbosity;
     enum snj_render_view view;
     bool opened;
     bool prompt_wanted;
@@ -21,12 +20,14 @@ struct snj_ui {
 
 enum snj_ui_operation {
     SNJ_UI_HOST, SNJ_UI_RUNTIME, SNJ_UI_ERROR, SNJ_UI_WARNING,
-    SNJ_UI_PUBLIC_END, SNJ_UI_PUBLIC_ABORT,
     SNJ_UI_ROLLOUT_END, SNJ_UI_ROLLOUT_ABORT,
     SNJ_UI_CLOSE
 };
 
 int snj_ui_init(struct snj_ui *ui);
+int snj_ui_set_verbosity(struct snj_ui *ui, unsigned int level);
+unsigned int snj_ui_verbosity(const struct snj_ui *ui);
+bool snj_ui_enabled(const struct snj_ui *ui, enum snj_presentation kind);
 void snj_ui_free(struct snj_ui *ui);
 int snj_ui_text(struct snj_ui *ui, enum snj_ui_operation op, const char *text);
 int snj_ui_color(struct snj_ui *ui, enum snj_color_mode mode);
@@ -59,17 +60,15 @@ int snj_ui_set_view(struct snj_ui *ui, enum snj_render_view view);
 int snj_ui_submitted(struct snj_ui *ui, const char *label, const char *text,
                        bool input);
 int snj_ui_public_begin(struct snj_ui *ui, int fd, const char *label,
-                          bool rollout);
+                        enum snj_presentation kind);
 int snj_ui_public(struct snj_ui *ui, const char *text, size_t len,
-                    struct snj_buf *delivered, bool rollout);
+                   struct snj_buf *delivered);
 int snj_ui_orientation(struct snj_ui *ui, const struct snj_session *session,
                          bool resumed);
 int snj_ui_history(struct snj_ui *ui, const struct snj_session *session);
 int snj_ui_irc_event(struct snj_ui *ui, const struct snj_irc_event *event);
-int snj_ui_tool_start(struct snj_ui *ui, const struct snj_response_item *call,
-                        const char *workdir, uint32_t timeout_ms);
-int snj_ui_tool_finish(struct snj_ui *ui, const char *name, const json_t *result,
-                         uint32_t max_output_bytes);
+int snj_ui_durable(struct snj_ui *ui, int fd, struct snj_render_source source,
+                    const char *type, uint32_t timeout_ms, uint32_t max_output_bytes);
 int snj_ui_event(struct snj_ui *ui, uint64_t seq, const char *type);
 int snj_ui_resume_hint(struct snj_ui *ui, const char *text, size_t len);
 int snj_ui_protocol(struct snj_ui *ui, const char *label,

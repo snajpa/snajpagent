@@ -141,7 +141,7 @@ render_request_headers(struct provider_ctx *ctx, const char *request_line,
     struct snj_buf accept_line;
     int rc = 0;
 
-    if (!ctx->render || ctx->render->verbosity < 6u)
+    if (!snj_ui_enabled(ctx->render, SNJ_PRESENT_WIRE))
         return 0;
     snj_buf_init(&redacted, SNJ_WIRE_HEADER_MAX);
     snj_buf_init(&host, SNJ_CONFIG_URL_MAX + 8u);
@@ -232,7 +232,7 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
             ctx->retry_after_ms = delay_ms;
         }
     }
-    if (ctx->render && ctx->render->verbosity >= 6u) {
+    if (snj_ui_enabled(ctx->render, SNJ_PRESENT_WIRE)) {
         if (status_line) {
             if (!ascii_printable(line, clean_len) ||
                 snj_ui_transport(ctx->render, '<', (const char *)line,
@@ -615,13 +615,13 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         ctx->retry_after_present, ctx->retry_after_ms);
     uint64_t deadline = snj_monotonic_ms() + delay_ms;
 
-    if (ctx->render && ctx->render->verbosity >= 3u) {
+    if (ctx->render) {
         char line[160];
         (void)snprintf(line, sizeof(line),
                        "provider retry %u/%u after %s in %llums",
                        retries_done + 1u, SNJ_PROVIDER_MAX_RETRIES,
                        reason, (unsigned long long)delay_ms);
-        if (snj_ui_text(ctx->render, SNJ_UI_RUNTIME, line) < 0) {
+        if (snj_ui_text(ctx->render, SNJ_UI_WARNING, line) < 0) {
             snj_errorf(error, error_size, "provider retry diagnostics could not be rendered");
             errno = EIO;
             return -1;
@@ -778,7 +778,7 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
     rc = snj_wire_json_redact(ctx->error_body.data, ctx->error_body.len,
                               &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));
-    if (rc == 0 && ctx->render && ctx->render->verbosity >= 5u)
+    if (rc == 0 && snj_ui_enabled(ctx->render, SNJ_PRESENT_PROTOCOL))
         (void)snj_ui_protocol(ctx->render, "response.error.body",
                                   (const char *)redacted.data, redacted.len);
     if (ctx->error_body.len) {

@@ -771,7 +771,7 @@ test_codex_model_list(void)
     config.providers[0].request_timeout_ms = 3000u;
     credential_set(&credential, "transport-secret");
     assert(snj_ui_init(&render) == 0);
-    render.verbosity = 6u;
+    assert(snj_ui_set_verbosity(&render, 6u) == 0);
     snj_ui_color(&render, SNJ_COLOR_NEVER);
     saved_stderr = capture_stderr_begin(pipefd);
     assert(snj_provider_models_list(&config, &config.providers[0],
@@ -1263,10 +1263,10 @@ test_ui_output_order_and_failure(void)
         struct snj_buf delivered;
         snj_buf_init(&delivered, 16u);
         snj_ui_signal(&ui);
-        assert(snj_ui_public_begin(&ui, STDOUT_FILENO, NULL, false) == 0);
-        assert(snj_ui_public(&ui, "stopped", 7u, &delivered, false) == 0);
+        assert(snj_ui_public_begin(&ui, STDOUT_FILENO, NULL, SNJ_PRESENT_CONVERSATION) == 0);
+        assert(snj_ui_public(&ui, "stopped", 7u, &delivered) == 0);
         assert(delivered.len == 0u);
-        assert(snj_ui_text(&ui, SNJ_UI_PUBLIC_END, NULL) == 0);
+        assert(snj_ui_text(&ui, SNJ_UI_ROLLOUT_END, NULL) == 0);
         assert(snj_ui_poll(&ui, 0, false, &action, &line) == 1);
         assert(action == SNJ_TERM_EXIT);
         snj_buf_free(&delivered);

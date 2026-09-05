@@ -313,8 +313,10 @@ and tail plus digest/provenance when the selected conservative
 one-token-per-UTF-8-byte bound permits; it does not call bytes an exact token
 count. The former `default_max_output_tokens` configuration key is removed.
 `[tool] max_output_bytes` is presentation-only: it limits the number of
-model-result UTF-8 bytes shown for each tool call, while `0` (the default)
-shows the complete result. It never truncates the durable result or changes
+model-result UTF-8 bytes shown for each tool call. At level 3 and above, `0`
+(the default) shows the complete retained result; level 2 also applies its
+512-character preview budget, and levels 0/1 show no output body.
+It never truncates the durable result or changes
 the independently bounded model-context projection.
 
 ## Rendering
@@ -322,12 +324,15 @@ the independently bounded model-context projection.
 Networked interactive output is a timestamped scrolling chat transcript. All
 verbosity levels show every actual room message, including the local model's
 own sends, and retained room history. Private model speech and tool internals
-stay in rollout. Verbosity 1 adds every tool call, its complete arguments,
-completion state, and configured amount of result text to rollout. Verbosity 2
-currently has the same detail,
-and higher levels progressively add runtime, durable, protocol, and transport
-detail. Ordinary mode uses the same single-`-v` tool visibility. Only terminal
-assistant speech remains local unless the model explicitly calls `irc_send`.
+stay in rollout. One process-local level is the exact `-v` count or `/verbose N`;
+configuration reloads never replace it. Level 1 adds compact generic tool start
+and outcome rows without output. Level 2 adds 1,024 argument / 512 output
+character previews and reasoning summaries; level 3 has full retained tools.
+Levels 4/5/6 add live runtime/durable, redacted protocol and transport diagnostics
+only in visible rollout. Unseen conversation, tool and IRC records use durable
+event references and current presentation policy; raising the level does not
+replay visited content. All modes share this ladder. Only explicit `irc_send`
+publishes model speech to the room.
 
 Committed compaction and goal set/clear milestones are terse bullet-prefixed
 semantic rollout records even at verbosity 0. Networked chat queues them for

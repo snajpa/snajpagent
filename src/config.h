@@ -98,7 +98,6 @@ struct snj_config {
     size_t provider_count;
     struct snj_model_limit_config model_limits[SNJ_CONFIG_MODEL_LIMIT_MAX];
     size_t model_limit_count;
-    unsigned int verbosity;
     enum snj_color_mode color;
     bool markdown;
     unsigned int resume_history_turns;

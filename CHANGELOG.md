@@ -17,6 +17,15 @@
   honor smaller bounds and use the ceiling for null. Replace the former
   `default_max_output_tokens` key; full capture and display limits are unchanged.
 
+- Replace additive/config verbosity with exact `-v` counts and UI-local
+  `/verbose 0..6`, preserved by reload and printed resume commands. Remove the
+  obsolete `[ui] verbosity` key. Level 1 has compact tool rows without output;
+  2 has 1,024/512-character argument/output previews and reasoning summaries;
+  3 has full retained tools. Debug/protocol/wire detail starts at 4/5/6 and is
+  live-only in visible rollout. Keep room history invariant and filter unseen
+  semantic work at presentation time. Continue keyboard/control processing
+  during output backpressure using privately owned nonblocking terminal output.
+
 - Exit promptly on empty Ctrl-D or interactive EOF, interrupting active model
   and command work through the existing cleanup path. Preserve the resumable
   session and nonempty-draft forward delete. Stop interrupted tool turns before

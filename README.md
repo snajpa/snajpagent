@@ -168,6 +168,33 @@ printf '%s\n' 'review the current diff' | snajpagent -e
 Final model text goes to stdout; diagnostics and the resume hint go to stderr.
 Redirected text has no terminal Markdown formatting or color.
 
+## Choose detail
+
+The number of `-v` flags is the level, starting at **0** without flags.
+`/verbose N` sets that same process-local level immediately, including during
+active work; `/verbose` queries it. Configuration reloads do not change it.
+More than six flags is a usage error. Remove any old `[ui] verbosity` config
+line: verbosity is no longer a configuration setting.
+
+| Level | Added local rollout detail |
+| ---: | --- |
+| 0 | Conversation, lifecycle notices, warnings and command replies |
+| 1 | Compact tool start/outcome rows; no output body |
+| 2 | 1,024-character argument and 512-character output previews; reasoning summaries |
+| 3 | Full retained tool arguments, execution context and results |
+| 4 | Runtime, accounting, durable-event and connection diagnostics |
+| 5 | Redacted protocol payloads |
+| 6 | Redacted transport diagnostics |
+
+Tool previews use terminal-safe Unicode code points and explicit omission
+markers. Full detail preserves existing capture/output limits. Chat always
+shows the complete shared room transcript; private detail stays in rollout.
+Unseen work is displayed at the current level; increasing the level does not
+replay already visited history. Lowering it stops ineligible remaining detail.
+Levels 4–6 are live diagnostics in visible rollout, not hidden chat history.
+Redaction does not guarantee that prompts, source or tool output contain no
+secrets. The printed resume command preserves your current level.
+
 ## Share a room
 
 Run these in separate terminals, each in its own working project:

@@ -57,6 +57,10 @@ struct snj_term_command {
 };
 
 struct snj_term {
+    int (*input_checkpoint)(void *);
+    void *input_opaque;
+    int output_fd[2];
+    bool input_only, cancel_pending;
     struct termios saved;
     struct sigaction saved_sigint;
     struct sigaction saved_sigwinch;
@@ -133,6 +137,7 @@ struct snj_term {
     bool search_failed;
     bool history_refresh_requested;
     bool input_backlog;
+    bool local_backlog;
 };
 
 void snj_term_init(struct snj_term *term);
@@ -175,6 +180,7 @@ size_t snj_term_text_width(const char *text, size_t len);
 bool snj_term_consume_echoed_submission(struct snj_term *term,
                                         const char *label);
 int snj_term_write_safe(int fd, const char *text, size_t len);
+int snj_term_append_safe(struct snj_buf *out, const char *text, size_t len);
 int snj_term_write(int fd, const void *text, size_t len);
 
 #endif

@@ -4,6 +4,7 @@
 #include "snajpagent.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,18 +41,22 @@ struct markdown_table_cell {
 enum snj_render_record_kind {
     SNJ_RENDER_RECORD_BLOCK,
     SNJ_RENDER_RECORD_IRC,
+    SNJ_RENDER_RECORD_TOOL,
     SNJ_RENDER_RECORD_PUBLIC
 };
 
 struct snj_render_record {
     struct snj_render_record *next;
     enum snj_render_record_kind kind;
+    enum snj_presentation presentation;
     struct snj_buf text;
     const char *color;
     char *label;
-    struct snj_irc_event irc;
+    struct snj_irc_event *irc;
+    enum snj_irc_event_kind irc_kind;
     size_t colored_len;
     size_t displayed;
+    size_t source_item;
     int fd;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
@@ -62,6 +67,10 @@ struct snj_render_record {
     bool physical_open;
     bool label_displayed;
     bool own_agent;
+    struct snj_render_source source, response;
+    uint32_t timeout_ms, max_output_bytes;
+    bool tool_start;
+    bool omitted;
 };
 
 static int render_irc_event_now(struct snj_render *render,
@@ -69,6 +78,49 @@ static int render_irc_event_now(struct snj_render *render,
                                 bool own_agent);
 static int flush_view(struct snj_render *render, enum snj_render_view view);
 static int close_public_output(struct snj_render *render);
+static int render_tool_record(struct snj_render *render, const struct snj_render_record *record);
+static json_t *source_event(struct snj_render *render, struct snj_render_source source);
+
+const char *
+snj_verbosity_name(unsigned int level)
+{
+    static const char *const names[] = {
+        "conversation", "tools", "previews", "full tools", "debug", "protocol", "wire"
+    };
+    return level <= SNJ_VERBOSITY_MAX ? names[level] : NULL;
+}
+
+bool
+snj_presentation_enabled(enum snj_presentation kind, unsigned int level,
+                          enum snj_render_view view)
+{
+    static const unsigned char minimum[] = {0, 1, 2, 2, 3, 2, 4, 5, 6, 0, 0};
+    if ((unsigned int)kind >= sizeof(minimum) || level < minimum[kind])
+        return false;
+    if (kind == SNJ_PRESENT_FEEDBACK)
+        return true;
+    return view == (kind == SNJ_PRESENT_CHAT ? SNJ_RENDER_CHAT : SNJ_RENDER_ROLLOUT);
+}
+
+size_t
+snj_presentation_limit(enum snj_presentation kind, unsigned int level)
+{
+    if (!snj_presentation_enabled(kind, level, SNJ_RENDER_ROLLOUT))
+        return 0u;
+    if (level == 2u && kind == SNJ_PRESENT_ARGUMENTS)
+        return 1024u;
+    if (level == 2u && kind == SNJ_PRESENT_OUTPUT)
+        return 512u;
+    return SIZE_MAX;
+}
+
+bool
+snj_render_enabled(const struct snj_render *render, enum snj_presentation kind)
+{
+    if (render->suppress_optional && kind >= SNJ_PRESENT_TOOL && kind <= SNJ_PRESENT_WIRE)
+        return false;
+    return snj_presentation_enabled(kind, render->verbosity, render->view);
+}
 
 static int
 render_checkpoint(struct snj_render *render)
@@ -206,8 +258,36 @@ free_record(struct snj_render_record *record)
     if (!record)
         return;
     snj_buf_free(&record->text);
+    free(record->irc);
     free(record->label);
     free(record);
+}
+
+static int
+write_optional_block(struct snj_render *render, enum snj_presentation kind,
+                     const char *color, const char *text, size_t len,
+                     size_t colored_len)
+{
+    bool ended_lf = true;
+    while (len) {
+        if (render_checkpoint(render) < 0)
+            return -1;
+        if (!snj_render_enabled(render, kind)) {
+            if (!ended_lf && write_literal(STDERR_FILENO, "\n") < 0)
+                return -1;
+            return snj_render_host(render, "… [display omitted]");
+        }
+        size_t amount = text_slice(text, len);
+        size_t colored = colored_len < amount ? colored_len : amount;
+        if (write_role_chunk(render, STDERR_FILENO, color, text, amount,
+                              colored, render->stderr_terminal, true) < 0)
+            return -1;
+        ended_lf = text[amount - 1u] == '\n';
+        text += amount;
+        len -= amount;
+        colored_len -= colored;
+    }
+    return 0;
 }
 
 static void
@@ -285,7 +365,8 @@ void
 snj_render_init(struct snj_render *render, unsigned int verbosity)
 {
     memset(render, 0, sizeof(*render));
-    render->verbosity = verbosity > 6u ? 6u : verbosity;
+    render->verbosity = verbosity;
+    render->history_fd = -1;
     render->markdown = true;
     render->markdown_prose_bullets = true;
     render->view = SNJ_RENDER_ROLLOUT;
@@ -305,6 +386,9 @@ snj_render_free(struct snj_render *render)
         while (render->view_head[view])
             pop_record(render, (enum snj_render_view)view);
     render->rollout_open = NULL;
+    if (render->history_fd >= 0)
+        (void)close(render->history_fd);
+    render->history_fd = -1;
 }
 
 void
@@ -652,8 +736,7 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
         goto fail;
     if (label_len) {
         bool colored = color_enabled(render, fd);
-        const char *color = strncmp(label, "reason", 6u) == 0 ?
-                            COLOR_ACTIVITY : COLOR_AGENT;
+        const char *color = COLOR_AGENT;
         if (colored) {
             if (output_begin(render, true) < 0)
                 goto fail;
@@ -2284,31 +2367,46 @@ rollout_physical_append(struct snj_render *render,
                         struct snj_render_record *record,
                         const char *text, size_t len)
 {
-    if (!len)
-        return 0;
-    if (rollout_physical_begin(render, record) < 0 ||
-        snj_render_public(render, text, len, NULL) < 0)
-        return -1;
-    record->displayed += len;
+    while (len) {
+        size_t amount = text_slice(text, len);
+        if (!snj_render_enabled(render, record->presentation)) {
+            record->omitted = true;
+            if (record->physical_open) {
+                if (snj_render_public_abort(render) < 0 ||
+                    snj_render_host(render, "… [display omitted]") < 0)
+                    return -1;
+                record->physical_open = false;
+            }
+        }
+        if (!record->omitted &&
+            (rollout_physical_begin(render, record) < 0 ||
+             snj_render_public(render, text, amount, NULL) < 0))
+            return -1;
+        record->displayed += amount;
+        text += amount;
+        len -= amount;
+        if (len && render_checkpoint(render) < 0)
+            return -1;
+    }
     return 0;
 }
 
 int
 snj_render_rollout_begin(struct snj_render *render, int fd,
-                         const char *label)
+                         const char *label, enum snj_presentation kind)
 {
     struct snj_render_record *record;
 
-    if (!render->networked)
-        return snj_render_public_begin(render, fd, label);
-    if (render->rollout_open || (fd != STDOUT_FILENO && fd != STDERR_FILENO)) {
-        errno = render->rollout_open ? EBUSY : EINVAL;
+    if (render->rollout_open || render->public_item_open ||
+        (fd != STDOUT_FILENO && fd != STDERR_FILENO)) {
+        errno = render->rollout_open || render->public_item_open ? EBUSY : EINVAL;
         return -1;
     }
     record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
     record->kind = SNJ_RENDER_RECORD_PUBLIC;
+    record->presentation = kind;
     record->fd = fd;
     snj_buf_init(&record->text, SNJ_MAX_PUBLIC_ITEM);
     if (label) {
@@ -2317,11 +2415,6 @@ snj_render_rollout_begin(struct snj_render *render, int fd,
             free_record(record);
             return -1;
         }
-    }
-    if (render->view == SNJ_RENDER_ROLLOUT &&
-        rollout_physical_begin(render, record) < 0) {
-        free_record(record);
-        return -1;
     }
     queue_record(render, SNJ_RENDER_ROLLOUT, record);
     render->rollout_open = record;
@@ -2338,8 +2431,6 @@ snj_render_rollout(struct snj_render *render, const char *text, size_t len,
     size_t complete_max;
     int rc = -1;
 
-    if (!render->networked)
-        return snj_render_public(render, text, len, delivered);
     if (!record || record->complete ||
         !snj_size_add(len, sizeof(record->utf8_pending), &complete_max)) {
         errno = record ? EOVERFLOW : EINVAL;
@@ -2394,9 +2485,6 @@ close_rollout_record(struct snj_render *render, bool abort)
     bool was_head;
     int rc = 0;
 
-    if (!render->networked)
-        return abort ? snj_render_public_abort(render) :
-                       snj_render_public_end(render);
     if (!record)
         return 0;
     if (record->utf8_pending_len) {
@@ -2493,7 +2581,7 @@ snj_render_runtime(struct snj_render *render, const char *text)
     struct snj_buf line;
     int rc;
 
-    if (render->verbosity < 3u)
+    if (!snj_render_enabled(render, SNJ_PRESENT_DEBUG))
         return 0;
     len = strlen(text);
     snj_buf_init(&line, 4u * 1024u * 1024u);
@@ -2501,10 +2589,9 @@ snj_render_runtime(struct snj_render *render, const char *text)
     if (rc == 0 && (!len || text[len - 1u] != '\n'))
         rc = snj_buf_putc(&line, '\n');
     if (rc == 0)
-        rc = view_block(render, SNJ_RENDER_ROLLOUT, STDERR_FILENO, COLOR_META,
+        rc = write_optional_block(render, SNJ_PRESENT_DEBUG, COLOR_META,
                         (char *)line.data, line.len,
-                        first_line_len((char *)line.data, line.len),
-                        render->stderr_terminal, true);
+                        first_line_len((char *)line.data, line.len));
     snj_buf_free(&line);
     return rc;
 }
@@ -2752,16 +2839,59 @@ snj_render_irc_event(struct snj_render *render,
     }
     own_agent = event->local && render->model_nick[0] &&
                 strcmp(event->nick, render->model_nick) == 0;
+    struct snj_render_source source = render->irc_source;
+    render->irc_source = (struct snj_render_source){0};
     if (!render->networked || render->view == SNJ_RENDER_CHAT)
         return render_irc_event_now(render, event, own_agent);
     record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
     record->kind = SNJ_RENDER_RECORD_IRC;
-    record->irc = *event;
+    record->source = source;
+    record->irc_kind = event->kind;
+    if (!source.len) {
+        record->irc = malloc(sizeof(*record->irc));
+        if (!record->irc) {
+            free_record(record);
+            return -1;
+        }
+        *record->irc = *event;
+    }
     record->own_agent = own_agent;
     queue_record(render, SNJ_RENDER_CHAT, record);
     return 0;
+}
+
+static int
+render_irc_record(struct snj_render *render, const struct snj_render_record *record)
+{
+    if (record->irc)
+        return render_irc_event_now(render, record->irc, record->own_agent);
+    json_t *event = source_event(render, record->source);
+    json_t *data = json_object_get(event, "data");
+    struct snj_irc_event irc = {.kind = record->irc_kind};
+    int rc = -1;
+    const char *value;
+    if (!event || snj_json_integer_u64(data, "timestamp_ms", &irc.timestamp_ms) < 0)
+        goto out;
+#define IRC_FIELD(member) do { \
+    value = snj_json_string(data, #member); \
+    if (!value || strlen(value) >= sizeof(irc.member)) goto out; \
+    memcpy(irc.member, value, strlen(value) + 1u); \
+} while (0)
+    IRC_FIELD(endpoint);
+    IRC_FIELD(room);
+    IRC_FIELD(nick);
+    IRC_FIELD(text);
+#undef IRC_FIELD
+    irc.historical = json_is_true(json_object_get(data, "historical"));
+    irc.local = json_is_true(json_object_get(data, "local"));
+    irc.op = json_is_true(json_object_get(data, "op"));
+    rc = render_irc_event_now(render, &irc, record->own_agent);
+out:
+    if (event)
+        json_decref(event);
+    return rc;
 }
 
 static int
@@ -2777,10 +2907,29 @@ flush_view(struct snj_render *render, enum snj_render_view view)
                                   record->text.len, record->colored_len,
                                   record->terminal_safe, record->persistent);
         } else if (record->kind == SNJ_RENDER_RECORD_IRC) {
-            rc = render_irc_event_now(render, &record->irc, record->own_agent);
+            rc = render_irc_record(render, record);
+        } else if (record->kind == SNJ_RENDER_RECORD_TOOL) {
+            rc = render_tool_record(render, record);
         } else {
             rc = 0;
-            if (record->displayed < record->text.len)
+            if (record->source.len && !record->text.data) {
+                json_t *event = source_event(render, record->source);
+                json_t *data = json_object_get(event, "data");
+                json_t *items = json_object_get(data, "items");
+                if (!items)
+                    items = json_object_get(data, "partial_public");
+                json_t *text = json_object_get(json_array_get(items, record->source_item), "text");
+                if (!json_is_string(text)) {
+                    if (event)
+                        json_decref(event);
+                    errno = EPROTO;
+                    return -1;
+                }
+                snj_buf_init(&record->text, SNJ_MAX_PUBLIC_ITEM);
+                rc = snj_buf_append(&record->text, json_string_value(text), json_string_length(text));
+                json_decref(event);
+            }
+            if (rc == 0 && record->displayed < record->text.len)
                 rc = rollout_physical_append(
                     render, record,
                     (const char *)record->text.data + record->displayed,
@@ -2842,20 +2991,224 @@ snj_render_set_view(struct snj_render *render, enum snj_render_view view)
     return 0;
 }
 
+static int
+tool_body(struct snj_render *render, const struct snj_render_block *block)
+{
+    const char *label = block->body_kind == SNJ_PRESENT_ARGUMENTS ? "arguments" : "output";
+    size_t offset = 0u, count = 0u;
+    bool truncated = block->truncated;
+
+    if (!block->body.len || !snj_render_enabled(render, block->body_kind))
+        return 0;
+    char header[32];
+    (void)snprintf(header, sizeof(header), "  %s:\n", label);
+    if (write_block(render, STDERR_FILENO, header, strlen(header), true, true) < 0)
+        return -1;
+    while (offset < block->body.len) {
+        size_t limit = snj_render_enabled(render, block->body_kind) ?
+                       snj_presentation_limit(block->body_kind, render->verbosity) : 0u;
+        size_t end = offset, characters = 0u;
+        while (end < block->body.len && end - offset < 1024u && count + characters < limit) {
+            size_t n = snj_utf8_size(block->body.data[end]);
+            if (!n || n > block->body.len - end) {
+                errno = EILSEQ;
+                return -1;
+            }
+            end += n;
+            ++characters;
+        }
+        if (end == offset) {
+            truncated = true;
+            break;
+        }
+        if (write_block(render, STDERR_FILENO, (const char *)block->body.data + offset,
+                         end - offset, true, true) < 0)
+            return -1;
+        offset = end;
+        count += characters;
+        if (render_checkpoint(render) < 0)
+            return -1;
+    }
+    if (offset && block->body.data[offset - 1u] != '\n' &&
+        write_literal(STDERR_FILENO, "\n") < 0)
+        return -1;
+    if (truncated) {
+        (void)snprintf(header, sizeof(header), "… [%s truncated]\n", label);
+        return write_block(render, STDERR_FILENO, header, strlen(header), true, true);
+    }
+    return 0;
+}
+
 int
-snj_render_tool_block(struct snj_render *render,
-                       const struct snj_render_block *block)
+snj_render_tool_block(struct snj_render *render, const struct snj_render_block *block)
 {
     static const char *const colors[] = {
         COLOR_ACTIVITY, COLOR_SUCCESS, COLOR_WARNING, COLOR_ERROR
     };
 
-    if (render->verbosity < 1u)
+    if (!snj_render_enabled(render, SNJ_PRESENT_TOOL))
         return 0;
-    return view_block(render, SNJ_RENDER_ROLLOUT, STDERR_FILENO,
+    if (write_role_block(render, STDERR_FILENO,
                       colors[block->role], (const char *)block->text.data,
                       block->text.len, block->colored_len,
-                      render->stderr_terminal, true);
+                      render->stderr_terminal, true) < 0 || render_checkpoint(render) < 0)
+        return -1;
+    if (block->context.len && snj_render_enabled(render, SNJ_PRESENT_CONTEXT) &&
+        write_optional_block(render, SNJ_PRESENT_CONTEXT, "",
+                              (const char *)block->context.data,
+                              block->context.len, 0u) < 0)
+        return -1;
+    return tool_body(render, block);
+}
+
+static json_t *
+source_event(struct snj_render *render, struct snj_render_source source)
+{
+    struct snj_buf text;
+    json_t *event = NULL;
+    char error[128];
+
+    if (source.offset < 0 || !source.len || source.len > SNJ_MAX_EVENT_LINE) {
+        errno = EINVAL;
+        return NULL;
+    }
+    snj_buf_init(&text, source.len);
+    if (snj_buf_reserve(&text, source.len) < 0)
+        goto out;
+    while (text.len < source.len) {
+        size_t want = source.len - text.len;
+        if (want > 8192u)
+            want = 8192u;
+        ssize_t n = pread(render->history_fd, text.data + text.len, want,
+                          source.offset + (off_t)text.len);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0 || render_checkpoint(render) < 0)
+            goto out;
+        text.len += (size_t)n;
+    }
+    event = snj_json_load_strict(text.data, text.len, text.max, error, sizeof(error));
+out:
+    snj_buf_free(&text);
+    return event;
+}
+
+static int
+render_tool_record(struct snj_render *render, const struct snj_render_record *record)
+{
+    json_t *event = NULL, *response = NULL, *data, *items;
+    struct snj_render_block block;
+    int rc = -1;
+
+    if (!snj_render_enabled(render, SNJ_PRESENT_TOOL))
+        return 0;
+    event = source_event(render, record->source);
+    response = source_event(render, record->response);
+    if (!event || !response)
+        goto out;
+    data = json_object_get(event, "data");
+    const char *status = snj_json_string(json_object_get(data, "result"), "status");
+    if (!record->tool_start && status && strcmp(status, "not_run") == 0) {
+        rc = 0;
+        goto out;
+    }
+    items = json_object_get(json_object_get(response, "data"), "items");
+    const char *id = snj_json_string(data, "call_id");
+    for (size_t i = 0u; id && i < json_array_size(items); ++i) {
+        json_t *item = json_array_get(items, i);
+        const char *call_id = snj_json_string(item, "call_id");
+        const char *name = snj_json_string(item, "name");
+        if (!call_id || !name || strcmp(call_id, id) != 0)
+            continue;
+        unsigned int columns = render->term ? render->term->columns : 0u;
+        if (record->tool_start) {
+            struct snj_response_item call = {
+                .name = (char *)name, .arguments = json_object_get(item, "arguments")
+            };
+            const char *workdir = snj_json_string(data, "resolved_workdir");
+            rc = snj_render_prepare_tool_start(&block, &call, workdir ? workdir : "?",
+                  record->timeout_ms, render->verbosity, columns);
+        } else {
+            rc = snj_render_prepare_tool_finish(&block, name, json_object_get(data, "result"),
+                  record->max_output_bytes, render->verbosity, columns);
+        }
+        if (rc == 0) {
+            rc = snj_render_tool_block(render, &block);
+            snj_render_block_free(&block);
+        }
+        goto out;
+    }
+    errno = EPROTO;
+out:
+    if (event)
+        json_decref(event);
+    if (response)
+        json_decref(response);
+    return rc;
+}
+
+int
+snj_render_durable(struct snj_render *render, int fd, struct snj_render_source source,
+                    const char *type, uint32_t timeout_ms, uint32_t max_output_bytes)
+{
+    if (render->history_fd < 0) {
+        render->history_fd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+        if (render->history_fd < 0)
+            return -1;
+    }
+    if (strcmp(type, "response_completed") == 0) {
+        render->response_source = source;
+    }
+    if (strcmp(type, "irc_event") == 0) {
+        render->irc_source = source;
+        return 0;
+    }
+    if (strcmp(type, "response_completed") == 0 ||
+        strcmp(type, "response_interrupted") == 0 || strcmp(type, "response_failed") == 0) {
+        json_t *event = NULL;
+        int rc = 0;
+        for (struct snj_render_record *record = render->view_head[SNJ_RENDER_ROLLOUT];
+             record; record = record->next) {
+            if (record->kind != SNJ_RENDER_RECORD_PUBLIC || record->source.len ||
+                !record->complete)
+                continue;
+            if (!event && !(event = source_event(render, source))) {
+                rc = -1;
+                break;
+            }
+            json_t *data = json_object_get(event, "data");
+            json_t *items = json_object_get(data, "items");
+            if (!items)
+                items = json_object_get(data, "partial_public");
+            for (size_t i = 0u; i < json_array_size(items); ++i) {
+                json_t *text = json_object_get(json_array_get(items, i), "text");
+                if (!json_is_string(text) || json_string_length(text) != record->text.len ||
+                    memcmp(json_string_value(text), record->text.data, record->text.len) != 0)
+                    continue;
+                record->source = source;
+                record->source_item = i;
+                snj_buf_free(&record->text);
+                break;
+            }
+        }
+        if (event)
+            json_decref(event);
+        return rc;
+    }
+    bool start = strcmp(type, "tool_started") == 0;
+    if ((!start && strcmp(type, "tool_finished") != 0) || !render->response_source.len)
+        return 0;
+    struct snj_render_record *record = calloc(1u, sizeof(*record));
+    if (!record)
+        return -1;
+    record->kind = SNJ_RENDER_RECORD_TOOL;
+    record->source = source;
+    record->response = render->response_source;
+    record->tool_start = start;
+    record->timeout_ms = timeout_ms;
+    record->max_output_bytes = max_output_bytes;
+    queue_record(render, SNJ_RENDER_ROLLOUT, record);
+    return render->view == SNJ_RENDER_ROLLOUT ? flush_view(render, render->view) : 0;
 }
 
 int
@@ -2873,25 +3226,27 @@ snj_render_event(struct snj_render *render, uint64_t seq, const char *type)
     else if (strcmp(type, "goal_completed") == 0 ||
              strcmp(type, "goal_cancelled") == 0)
         notice = "Goal cleared";
-    if (!notice && render->verbosity < 4u)
+    bool debug = snj_render_enabled(render, SNJ_PRESENT_DEBUG);
+    if (!notice && !debug)
         return 0;
     snj_buf_init(&line, 1024u);
-    if (notice && render->verbosity < 4u) {
+    if (notice) {
         if (snj_buf_printf(&line, "• %s\n", notice) < 0)
             rc = -1;
-    } else if (notice) {
-        if (snj_buf_printf(&line, "• %s · event › %llu %s synced\n",
-                           notice, (unsigned long long)seq, type) < 0)
-            rc = -1;
-    } else if (snj_buf_printf(&line, "event › %llu %s synced\n",
-                              (unsigned long long)seq, type) < 0) {
-        rc = -1;
     }
-    if (rc == 0)
+    if (rc == 0 && notice)
         rc = view_block(render, SNJ_RENDER_ROLLOUT, STDERR_FILENO,
-                        notice ? COLOR_LIFECYCLE : COLOR_DURABLE,
+                        COLOR_LIFECYCLE,
                         (char *)line.data, line.len, line.len,
                         render->stderr_terminal, true);
+    snj_buf_reset(&line);
+    if (rc == 0 && debug) {
+        rc = snj_buf_printf(&line, "event › %llu %s synced\n",
+                            (unsigned long long)seq, type);
+        if (rc == 0)
+            rc = write_optional_block(render, SNJ_PRESENT_DEBUG, COLOR_DURABLE,
+                                       (char *)line.data, line.len, line.len);
+    }
     snj_buf_free(&line);
     return rc;
 }
@@ -2984,7 +3339,7 @@ snj_render_protocol(struct snj_render *render, const char *label,
     struct snj_buf block;
     int rc = -1;
 
-    if (render->verbosity < 5u)
+    if (!snj_render_enabled(render, SNJ_PRESENT_PROTOCOL))
         return 0;
     if (!label || !diagnostic_text_valid(label, strlen(label), false) ||
         !diagnostic_text_valid(text, len, true) ||
@@ -2999,10 +3354,9 @@ snj_render_protocol(struct snj_render *render, const char *label,
         snj_buf_append(&block, text, len) < 0 ||
         (len && text[len - 1u] != '\n' && snj_buf_putc(&block, '\n') < 0))
         goto out;
-    rc = view_block(render, SNJ_RENDER_ROLLOUT, STDERR_FILENO, COLOR_PROTOCOL,
+    rc = write_optional_block(render, SNJ_PRESENT_PROTOCOL, COLOR_PROTOCOL,
                     (const char *)block.data, block.len,
-                    first_line_len((const char *)block.data, block.len),
-                    render->stderr_terminal, true);
+                    first_line_len((const char *)block.data, block.len));
 out:
     snj_buf_free(&block);
     return rc;
@@ -3015,7 +3369,7 @@ snj_render_transport(struct snj_render *render, char direction,
     struct snj_buf line;
     int rc = -1;
 
-    if (render->verbosity < 6u)
+    if (!snj_render_enabled(render, SNJ_PRESENT_WIRE))
         return 0;
     if ((direction != '>' && direction != '<') ||
         !diagnostic_text_valid(text, len, false) || len > 64u * 1024u) {
@@ -3029,10 +3383,9 @@ snj_render_transport(struct snj_render *render, char direction,
         snj_buf_putc(&line, ' ') < 0 ||
         snj_buf_append(&line, text, len) < 0 || snj_buf_putc(&line, '\n') < 0)
         goto out;
-    rc = view_block(render, SNJ_RENDER_ROLLOUT, STDERR_FILENO, COLOR_TRANSPORT,
+    rc = write_optional_block(render, SNJ_PRESENT_WIRE, COLOR_TRANSPORT,
                     (const char *)line.data, line.len,
-                    line.len > 2u ? 2u : line.len,
-                    render->stderr_terminal, true);
+                    line.len > 2u ? 2u : line.len);
 out:
     snj_buf_free(&line);
     return rc;

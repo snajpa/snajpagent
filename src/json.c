@@ -12,11 +12,26 @@ encode_string(struct snj_buf *out, const char *s, size_t len)
 {
     static const char hex[] = "0123456789abcdef";
 
-    if (!snj_utf8_valid((const unsigned char *)s, len, true) ||
-        snj_buf_putc(out, '"') < 0)
+    if (snj_buf_putc(out, '"') < 0)
         return -1;
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)s[i];
+        if (!c) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if (c >= 0x80u) {
+            size_t n = snj_utf8_size(c);
+            if (!n || n > len - i ||
+                !snj_utf8_valid((const unsigned char *)s + i, n, true)) {
+                errno = EILSEQ;
+                return -1;
+            }
+            if (snj_buf_append(out, s + i, n) < 0)
+                return -1;
+            i += n - 1u;
+            continue;
+        }
         if (c == '"' || c == '\\') {
             if (snj_buf_putc(out, '\\') < 0 || snj_buf_putc(out, c) < 0)
                 return -1;

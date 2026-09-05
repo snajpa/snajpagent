@@ -11,6 +11,13 @@
 #include <time.h>
 #include <unistd.h>
 
+bool
+snj_verbosity_command(const char *text, size_t len)
+{
+    return text && len >= 8u && memcmp(text, "/verbose", 8u) == 0 &&
+           (len == 8u || text[8] == ' ' || text[8] == '\t' || text[8] == '\n');
+}
+
 unsigned char
 snj_irc_fold(unsigned char c)
 {

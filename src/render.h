@@ -18,7 +18,24 @@ enum snj_render_view {
     SNJ_RENDER_VIEW_COUNT
 };
 
+enum snj_presentation {
+    SNJ_PRESENT_CONVERSATION, SNJ_PRESENT_TOOL, SNJ_PRESENT_ARGUMENTS,
+    SNJ_PRESENT_OUTPUT, SNJ_PRESENT_CONTEXT, SNJ_PRESENT_REASONING,
+    SNJ_PRESENT_DEBUG, SNJ_PRESENT_PROTOCOL, SNJ_PRESENT_WIRE,
+    SNJ_PRESENT_CHAT, SNJ_PRESENT_FEEDBACK
+};
+
+bool snj_presentation_enabled(enum snj_presentation kind, unsigned int level,
+                              enum snj_render_view view);
+size_t snj_presentation_limit(enum snj_presentation kind, unsigned int level);
+const char *snj_verbosity_name(unsigned int level);
+
 struct snj_render_record;
+
+struct snj_render_source {
+    off_t offset;
+    size_t len;
+};
 
 struct snj_markdown_state {
     char prefix[16];
@@ -66,6 +83,10 @@ struct snj_render {
     int (*checkpoint)(void *);
     void *checkpoint_opaque;
     unsigned int verbosity;
+    bool suppress_optional;
+    int history_fd;
+    struct snj_render_source response_source;
+    struct snj_render_source irc_source;
     bool stdout_terminal;
     bool stderr_terminal;
     int public_fd;
@@ -109,6 +130,8 @@ struct snj_render {
 };
 
 void snj_render_init(struct snj_render *render, unsigned int verbosity);
+bool snj_render_enabled(const struct snj_render *render,
+                         enum snj_presentation kind);
 void snj_render_free(struct snj_render *render);
 void snj_render_set_color(struct snj_render *render, enum snj_color_mode mode);
 void snj_render_set_markdown(struct snj_render *render, bool enabled);
@@ -135,7 +158,7 @@ int snj_render_public(struct snj_render *render, const char *text, size_t len,
 int snj_render_public_end(struct snj_render *render);
 int snj_render_public_abort(struct snj_render *render);
 int snj_render_rollout_begin(struct snj_render *render, int fd,
-                             const char *label);
+                             const char *label, enum snj_presentation kind);
 int snj_render_rollout(struct snj_render *render, const char *text, size_t len,
                        struct snj_buf *delivered);
 int snj_render_rollout_end(struct snj_render *render);
@@ -154,16 +177,26 @@ enum snj_render_role {
 
 struct snj_render_block {
     struct snj_buf text;
+    struct snj_buf context;
+    struct snj_buf body;
     size_t colored_len;
     enum snj_render_role role;
+    enum snj_presentation body_kind;
+    bool truncated;
 };
 
-/* Engine-side formatting; no terminal state or writes. */
+/* Pure formatting of UI-owned values; no terminal writes. */
 int snj_render_prepare_tool_start(struct snj_render_block *block,
                           const struct snj_response_item *call,
-                          const char *workdir, uint32_t default_timeout_ms);
+                          const char *workdir, uint32_t default_timeout_ms,
+                          unsigned int level, unsigned int columns);
 int snj_render_prepare_tool_finish(struct snj_render_block *block, const char *name,
-                           const json_t *result, uint32_t max_output_bytes);
+                           const json_t *result, uint32_t max_output_bytes,
+                           unsigned int level, unsigned int columns);
+void snj_render_block_free(struct snj_render_block *block);
+int snj_render_durable(struct snj_render *render, int fd,
+                        struct snj_render_source source, const char *type,
+                        uint32_t timeout_ms, uint32_t max_output_bytes);
 int snj_render_tool_block(struct snj_render *render,
                           const struct snj_render_block *block);
 int snj_render_event(struct snj_render *render, uint64_t seq,

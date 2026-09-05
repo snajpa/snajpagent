@@ -221,7 +221,7 @@ tool results, provider traffic, request bodies, and internal agent activity
 are never sent to the room implicitly.
 
 Rollout view shows the local model's streamed work using the ordinary
-non-networked visibility rules at the configured verbosity. At verbosity 0 it
+non-networked visibility rules at the process verbosity. At verbosity 0 it
 therefore shows local model text; increasing verbosity adds tools, reasoning
 summaries, runtime state, protocol, and transport detail through the existing
 single verbosity ladder. Actionable errors and direct local-command results
@@ -247,7 +247,7 @@ at verbosity 0. They use exact terse bullet lines: `• Compacted` after
 `compaction_completed`, `• Goal set` after `goal_started` or `goal_reworded`,
 and `• Goal cleared` after `goal_completed` or `goal_cancelled`. No IDs, actors,
 reasons, hashes, counts, or other detail appears at baseline verbosity. At
-durable-event verbosity the same line may append its sequence and event type.
+level 4, a separate live diagnostic may show its sequence and event type.
 In chat view these records wait in the existing rollout queue and appear once,
 in order, when rollout is entered; they never become IRC messages.
 
@@ -277,18 +277,23 @@ The boundary, catch-up, and destination prompt are one terminal-output
 transaction: no old or new prompt may be redrawn between catch-up records or
 appended to model text.
 
-Networked mode keeps IRC debugging behind the more useful agent/tool detail.
-Its additional local-only ladder is:
+All modes use the same process-local ladder (flag count or `/verbose N`):
 
-- verbosity 1: reasoning summaries and all tool calls, arguments, completion
-  state, and result text in rollout,
-  up to `[tool] max_output_bytes` (`0` means unlimited display);
-- verbosity 2: currently the same as verbosity 1;
-- verbosity 3: runtime and provider-cycle detail;
-- verbosity 4: durable app events and compact IRC connection/event state;
+- verbosity 1: compact tool start/outcome rows, no output body;
+- verbosity 2: 1,024 argument / 512 output character previews and reasoning summaries;
+- verbosity 3: full retained arguments, execution context and results, preserving
+  `[tool] max_output_bytes` and capture limits;
+- verbosity 4: runtime, accounting, durable app events and IRC connection state;
 - verbosity 5: sanitized prompt/protocol bodies and parsed IRC commands, with
   the existing sensitive-content warning; and
 - verbosity 6: bounded provider and IRC wire-transport diagnostics.
+
+Levels 4–6 are live-only in visible rollout, never accumulated behind chat.
+Completed tool details refer to durable events and are formatted at the current
+level when first visited. Raising the level does not replay visited records;
+lowering it stops now-ineligible remaining detail. `/verbose` is UI-local and
+remains usable during engine work; its reply never becomes a room message.
+There is no config verbosity setting or per-mode level resolver.
 
 Non-networked interactive and one-shot modes keep their current output model,
 with the same color roles applied to prompts, labels, status, tools, warnings,
@@ -338,7 +343,7 @@ yellow for warnings/activity, cyan/blue for agent and prompt identity,
 magenta for operator identity, and dim/default text for metadata. Attributes
 are always reset at field boundaries so user/model text cannot inherit them.
 Terse lifecycle milestone lines have their own bold-green role spanning the
-bullet and text, plus any high-verbosity durable suffix.
+bullet and text. Durable identities are separate live debug records at level 4.
 Chat timestamps and sender labels already frame messages, so Markdown rendering
 does not add a synthetic bullet to ordinary agent prose there. An actual
 Markdown list item still renders with its structural bullet.

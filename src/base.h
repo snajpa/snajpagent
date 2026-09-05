@@ -6,6 +6,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define SNJ_VERBOSITY_MAX 6u
+
+bool snj_verbosity_command(const char *text, size_t len);
+
 #define SNJ_ID_HEX_LEN 32u
 #define SNJ_SHA256_HEX_LEN 64u
 #define SNJ_PATH_MAX_BYTES (16u * 1024u)

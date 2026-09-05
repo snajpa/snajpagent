@@ -2,6 +2,7 @@
 #include "ui.h"
 
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -14,10 +15,10 @@
 #include <unistd.h>
 
 enum ui_kind {
-    UI_TEXT, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_COMMANDS, UI_PAUSE,
+    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_COMMANDS, UI_PAUSE,
     UI_OPEN, UI_EXTERNAL, UI_PROMPT, UI_SPINNERS, UI_DRAFT,
     UI_VIEW, UI_SUBMITTED, UI_PUBLIC_BEGIN, UI_PUBLIC, UI_VALIDATE,
-    UI_ORIENTATION, UI_HISTORY, UI_IRC, UI_TOOL, UI_EVENT,
+    UI_ORIENTATION, UI_HISTORY, UI_IRC, UI_DURABLE, UI_EVENT,
     UI_RESUME, UI_PROTOCOL, UI_TRANSPORT, UI_RAW, UI_HISTORY_SNAPSHOT, UI_STOP
 };
 
@@ -38,7 +39,6 @@ struct ui_prompt {
 
 struct ui_message {
     enum ui_kind kind;
-    unsigned int verbosity;
     char *text;
     char *label;
     size_t len;
@@ -52,10 +52,11 @@ struct ui_message {
         enum snj_ui_operation operation;
         unsigned int value;
         struct ui_prompt prompt;
-        struct { int fd; bool rollout; } public;
+        struct { int fd; enum snj_presentation kind; } public;
         struct { uint64_t turns; size_t queued; bool resumed; } orientation;
         struct snj_irc_event irc;
-        struct { enum snj_render_role role; size_t colored_len; } tool;
+        struct { int fd; struct snj_render_source source;
+                 uint32_t timeout_ms, max_output_bytes; } durable;
         uint64_t seq;
         struct { struct snj_term_command *items; size_t count; } commands;
         struct { struct snj_history_snapshot entries; bool refresh; } history;
@@ -74,7 +75,7 @@ struct ui_action {
     enum snj_term_action action;
     char *text;
     int error;
-    bool history_refresh, steering;
+    bool history_refresh, steering, local;
     struct ui_snapshot snapshot;
 };
 
@@ -85,6 +86,7 @@ struct snj_ui_runtime {
     atomic_int fatal;
     atomic_bool exit_requested, cancel;
     atomic_uint steering_pending;
+    atomic_uint level, view;
     _Atomic uint64_t interrupt;
     _Atomic uint64_t pause_until;
     uint64_t sequence;
@@ -100,7 +102,45 @@ struct snj_ui_display {
     uint64_t turn_generation;
     bool suspended;
     bool input_closed, backlog_warned;
+    char feedback[192];
+    struct ui_action *local;
+    bool local_acknowledged, painting_feedback;
 };
+
+static int
+set_level(struct snj_ui_display *display, unsigned int level)
+{
+    if (!snj_verbosity_name(level)) {
+        errno = EINVAL;
+        return -1;
+    }
+    display->render.verbosity = level;
+    atomic_store(&display->runtime->level, level);
+    return 0;
+}
+
+static void
+verbosity_command(struct snj_ui_display *display, const char *text)
+{
+    const char *value = text + 8u;
+    while (isspace((unsigned char)*value))
+        ++value;
+    if (*value) {
+        const char *end = value + 1u;
+        while (isspace((unsigned char)*end))
+            ++end;
+        if (*value < '0' || *value > '6' || *end) {
+            (void)snprintf(display->feedback, sizeof(display->feedback),
+                           "/verbose expects one integer from 0 through 6");
+            return;
+        }
+        (void)set_level(display, (unsigned int)(*value - '0'));
+    }
+    (void)snprintf(display->feedback, sizeof(display->feedback),
+        "verbosity: %u (%s)%s", display->render.verbosity,
+        snj_verbosity_name(display->render.verbosity),
+        display->render.view == SNJ_RENDER_CHAT ? " · work detail is in /rollout" : "");
+}
 
 static void
 wake_owner(struct ui_queue *queue)
@@ -260,8 +300,6 @@ apply_text(struct snj_ui_display *display, const struct ui_message *message)
     case SNJ_UI_RUNTIME: return snj_render_runtime(render, message->text);
     case SNJ_UI_ERROR: return snj_render_error_ctx(render, message->text);
     case SNJ_UI_WARNING: return snj_render_warning_ctx(render, message->text);
-    case SNJ_UI_PUBLIC_END: return snj_render_public_end(render);
-    case SNJ_UI_PUBLIC_ABORT: return snj_render_public_abort(render);
     case SNJ_UI_ROLLOUT_END: return snj_render_rollout_end(render);
     case SNJ_UI_ROLLOUT_ABORT: return snj_render_rollout_abort(render);
     case SNJ_UI_CLOSE:
@@ -280,8 +318,8 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
     struct snj_render *render = &display->render;
     struct snj_term *term = &display->term;
 
-    render->verbosity = message->verbosity;
     switch (message->kind) {
+    case UI_LEVEL: return set_level(display, message->data.value);
     case UI_TEXT: return apply_text(display, message);
     case UI_COLOR: {
         bool previous = render->color_stderr;
@@ -366,11 +404,8 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
             snj_render_input_submitted(render, message->label, message->text) :
             snj_render_submitted(render, message->label, message->text);
     case UI_PUBLIC_BEGIN:
-        return message->data.public.rollout ?
-            snj_render_rollout_begin(render, message->data.public.fd,
-                                    message->label) :
-            snj_render_public_begin(render, message->data.public.fd,
-                                   message->label);
+        return snj_render_rollout_begin(render, message->data.public.fd,
+                                        message->label, message->data.public.kind);
     case UI_ORIENTATION:
         return snj_render_orientation(render, message->text, message->label,
                     message->data.orientation.turns,
@@ -379,15 +414,10 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
     case UI_HISTORY:
         return snj_render_history(render, message->label, message->text);
     case UI_IRC: return snj_render_irc_event(render, &message->data.irc);
-    case UI_TOOL: {
-        struct snj_render_block block = {
-            .text = {.data = (unsigned char *)message->text,
-                     .len = message->len},
-            .colored_len = message->data.tool.colored_len,
-            .role = message->data.tool.role
-        };
-        return snj_render_tool_block(render, &block);
-    }
+    case UI_DURABLE:
+        return snj_render_durable(render, message->data.durable.fd,
+            message->data.durable.source, message->text,
+            message->data.durable.timeout_ms, message->data.durable.max_output_bytes);
     case UI_EVENT:
         return snj_render_event(render, message->data.seq, message->text);
     case UI_RESUME:
@@ -416,16 +446,17 @@ read_input(struct snj_ui_display *display, int timeout_ms)
     struct ui_action *item;
     int rc;
 
-    if (!term->opened || !term->label[0] || display->suspended ||
+    if (!term->opened || display->suspended ||
         display->input_closed) {
         struct pollfd pfd = {runtime->commands.wake[0], POLLIN, 0};
         rc = poll(&pfd, 1u, timeout_ms);
         return rc < 0 && errno != EINTR ? -1 : 0;
     }
     term->input_backlog = queue_full(&runtime->actions);
+    term->local_backlog = display->local != NULL;
     if (!term->input_backlog)
         display->backlog_warned = false;
-    else if (!display->backlog_warned) {
+    else if (!display->backlog_warned && !term->input_only) {
         display->backlog_warned = true;
         if (snj_render_warning_ctx(&display->render,
                 "input backlog is full; draft retained, retry Enter shortly") < 0)
@@ -442,7 +473,7 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         bool deferred = term->defer_redraw;
         term->defer_redraw = deferred || item->action == SNJ_TERM_SUBMIT ||
                              item->action == SNJ_TERM_QUEUE;
-        if (apply_prompt(display) < 0) {
+        if (!term->input_only && display->prompt_source && apply_prompt(display) < 0) {
             free(item->text);
             free(item);
             return -1;
@@ -457,6 +488,16 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         term->history_refresh_requested = false;
         item->history_refresh = true;
     }
+    if (item->action == SNJ_TERM_SUBMIT && item->text &&
+        snj_verbosity_command(item->text, strlen(item->text))) {
+        verbosity_command(display, item->text);
+        item->local = true;
+        item->action = SNJ_TERM_NONE;
+        term->prompt_wanted = true;
+        display->local = item;
+        display->local_acknowledged = false;
+        return 0;
+    }
     if (item->action == SNJ_TERM_INTERRUPT) {
         atomic_store(&runtime->interrupt, display->turn_generation);
     } else if (item->action == SNJ_TERM_EXIT) {
@@ -464,7 +505,7 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         display->input_closed = true;
     } else if (item->action == SNJ_TERM_CANCEL && term->input_backlog) {
         atomic_store(&runtime->cancel, true);
-    } else if (item->action != SNJ_TERM_NONE ||
+    } else if (item->action != SNJ_TERM_NONE || item->local ||
                item->history_refresh || item->error) {
         if (item->action == SNJ_TERM_SUBMIT || item->action == SNJ_TERM_QUEUE) {
             term->prompt_wanted = true;
@@ -490,9 +531,41 @@ read_input(struct snj_ui_display *display, int timeout_ms)
 }
 
 static int
-render_input_checkpoint(void *opaque)
+local_feedback(struct snj_ui_display *display)
+{
+    struct ui_action *item = display->local;
+    int rc = 0;
+
+    if (!item || display->painting_feedback)
+        return 0;
+    if (!display->local_acknowledged) {
+        display->painting_feedback = true;
+        rc = snj_render_submitted(&display->render, item->snapshot.label, item->text);
+        if (rc == 0)
+            rc = snj_render_host(&display->render, display->feedback);
+        display->painting_feedback = false;
+        display->local_acknowledged = true;
+    }
+    if (queue_push(&display->runtime->actions, item))
+        display->local = NULL;
+    return rc;
+}
+
+static int
+output_input_checkpoint(void *opaque)
 {
     return read_input(opaque, 0);
+}
+
+static int
+render_input_checkpoint(void *opaque)
+{
+    struct snj_ui_display *display = opaque;
+    int rc = read_input(display, 0);
+    display->render.suppress_optional = atomic_load(&display->runtime->exit_requested) ||
+        atomic_load(&display->runtime->interrupt) ||
+        atomic_load(&display->runtime->steering_pending);
+    return rc < 0 ? -1 : local_feedback(display);
 }
 
 static bool
@@ -510,6 +583,7 @@ apply_display(struct snj_ui_display *display, struct ui_message *message)
     size_t offset = 0u;
     bool raw = message->kind == UI_RAW;
 
+    display->render.suppress_optional = public_stopped(runtime);
     if (!raw && message->kind != UI_PUBLIC)
         return apply_message(display, message,
                              message->error, sizeof(message->error));
@@ -517,7 +591,7 @@ apply_display(struct snj_ui_display *display, struct ui_message *message)
         size_t amount = message->len - offset;
         if (amount > 1024u)
             amount = 1024u;
-        if (read_input(display, 0) < 0)
+        if (render_input_checkpoint(display) < 0)
             return -1;
         while (!raw && !public_stopped(runtime) &&
                snj_term_typing_pause_remaining(&display->term, snj_monotonic_ms()))
@@ -527,10 +601,7 @@ apply_display(struct snj_ui_display *display, struct ui_message *message)
             return 0;
         if (raw ? snj_term_write((int)message->data.value,
                                  message->text + offset, amount) < 0 :
-            message->data.public.rollout ?
             snj_render_rollout(&display->render, message->text + offset, amount,
-                                &message->delivered) < 0 :
-            snj_render_public(&display->render, message->text + offset, amount,
                                 &message->delivered) < 0)
             return -1;
         offset += amount;
@@ -547,6 +618,8 @@ presentation_main(void *opaque)
     uint64_t sequence = 0u;
 
     snj_term_init(&display.term);
+    display.term.input_checkpoint = output_input_checkpoint;
+    display.term.input_opaque = &display;
     snj_render_init(&display.render, 0u);
     display.render.checkpoint = render_input_checkpoint;
     display.render.checkpoint_opaque = &display;
@@ -563,6 +636,8 @@ presentation_main(void *opaque)
             display.input_closed = true;
             wake_owner(&runtime->actions);
         }
+        if (local_feedback(&display) < 0)
+            atomic_store(&runtime->fatal, errno ? errno : EIO);
         if (!message)
             continue;
         snj_buf_init(&message->delivered, message->len + 4u);
@@ -574,6 +649,7 @@ presentation_main(void *opaque)
             display.input_closed = true;
         }
         take_snapshot(&display, &message->snapshot);
+        atomic_store(&runtime->view, (unsigned int)display.render.view);
         {
             bool stop = message->kind == UI_STOP;
             atomic_store_explicit(&message->done, true, memory_order_release);
@@ -583,6 +659,10 @@ presentation_main(void *opaque)
         }
     }
     snj_render_free(&display.render);
+    if (display.local) {
+        free(display.local->text);
+        free(display.local);
+    }
     snj_term_close(&display.term);
     message_free(&display.commands);
     free(display.prompt_source);
@@ -600,7 +680,6 @@ request(struct snj_ui *ui, struct ui_message *message, const char *label,
     struct snj_ui_runtime *runtime = ui->runtime;
     struct pollfd pfd = {runtime->actions.wake[0], POLLIN, 0};
     assert(pthread_equal(pthread_self(), runtime->engine));
-    message->verbosity = ui->verbosity;
     message->len = len;
     atomic_init(&message->done, false);
     if (label && !(message->label = snj_strdup_checked(label, SIZE_MAX)))
@@ -664,6 +743,8 @@ snj_ui_init(struct snj_ui *ui)
     atomic_init(&runtime->cancel, false);
     atomic_init(&runtime->steering_pending, 0u);
     atomic_init(&runtime->pause_until, 0u);
+    atomic_init(&runtime->level, 0u);
+    atomic_init(&runtime->view, SNJ_RENDER_ROLLOUT);
     if (queue_open(&runtime->commands) < 0)
         goto fail;
     if (queue_open(&runtime->actions) < 0)
@@ -725,6 +806,30 @@ snj_ui_text(struct snj_ui *ui, enum snj_ui_operation op, const char *text)
 {
     struct ui_message message = {.kind = UI_TEXT, .data.operation = op};
     return send_message(ui, &message, text);
+}
+
+int
+snj_ui_set_verbosity(struct snj_ui *ui, unsigned int level)
+{
+    struct ui_message message = {.kind = UI_LEVEL, .data.value = level};
+    if (!snj_verbosity_name(level)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return send_message(ui, &message, NULL);
+}
+
+unsigned int
+snj_ui_verbosity(const struct snj_ui *ui)
+{
+    return ui && ui->runtime ? atomic_load(&ui->runtime->level) : 0u;
+}
+
+bool
+snj_ui_enabled(const struct snj_ui *ui, enum snj_presentation kind)
+{
+    return ui && ui->runtime && snj_presentation_enabled(kind,
+        snj_ui_verbosity(ui), (enum snj_render_view)atomic_load(&ui->runtime->view));
 }
 
 int
@@ -949,6 +1054,11 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
     ui->input_view = item->snapshot.view;
     memcpy(ui->submitted_label, item->snapshot.label,
            sizeof(ui->submitted_label));
+    if (item->local) {
+        (void)snj_ui_history_add(ui, item->text);
+        free(item->text);
+        item->text = NULL;
+    }
     *action = item->action;
     *text = item->text;
     if (item->steering)
@@ -1001,21 +1111,20 @@ snj_ui_submitted(struct snj_ui *ui, const char *label, const char *text, bool in
 }
 
 int
-snj_ui_public_begin(struct snj_ui *ui, int fd, const char *label, bool rollout)
+snj_ui_public_begin(struct snj_ui *ui, int fd, const char *label,
+                     enum snj_presentation kind)
 {
     struct ui_message message = {
-        .kind = UI_PUBLIC_BEGIN, .data.public = {.fd = fd, .rollout = rollout}
+        .kind = UI_PUBLIC_BEGIN, .data.public = {.fd = fd, .kind = kind}
     };
     return request(ui, &message, label, NULL, 0u, NULL, NULL, 0u);
 }
 
 int
 snj_ui_public(struct snj_ui *ui, const char *text, size_t len,
-              struct snj_buf *delivered, bool rollout)
+              struct snj_buf *delivered)
 {
-    struct ui_message message = {
-        .kind = UI_PUBLIC, .data.public.rollout = rollout
-    };
+    struct ui_message message = {.kind = UI_PUBLIC};
     return request(ui, &message, NULL, text, len, delivered, NULL, 0u);
 }
 
@@ -1048,41 +1157,13 @@ snj_ui_irc_event(struct snj_ui *ui, const struct snj_irc_event *event)
     return send_message(ui, &message, NULL);
 }
 
-static int
-tool_block(struct snj_ui *ui, struct snj_render_block *block)
-{
-    struct ui_message message = {
-        .kind = UI_TOOL, .data.tool = {
-            .role = block->role, .colored_len = block->colored_len}
-    };
-    int rc = request(ui, &message, NULL, (char *)block->text.data,
-                      block->text.len, NULL, NULL, 0u);
-    snj_buf_free(&block->text);
-    return rc;
-}
-
 int
-snj_ui_tool_start(struct snj_ui *ui, const struct snj_response_item *call,
-                  const char *workdir, uint32_t timeout_ms)
+snj_ui_durable(struct snj_ui *ui, int fd, struct snj_render_source source,
+                 const char *type, uint32_t timeout_ms, uint32_t max_output_bytes)
 {
-    struct snj_render_block block;
-    if (ui->verbosity < 1u)
-        return 0;
-    if (snj_render_prepare_tool_start(&block, call, workdir, timeout_ms) < 0)
-        return -1;
-    return tool_block(ui, &block);
-}
-
-int
-snj_ui_tool_finish(struct snj_ui *ui, const char *name, const json_t *result,
-                   uint32_t max_output_bytes)
-{
-    struct snj_render_block block;
-    if (ui->verbosity < 1u)
-        return 0;
-    if (snj_render_prepare_tool_finish(&block, name, result, max_output_bytes) < 0)
-        return -1;
-    return tool_block(ui, &block);
+    struct ui_message message = {.kind = UI_DURABLE,
+        .data.durable = {fd, source, timeout_ms, max_output_bytes}};
+    return send_message(ui, &message, type);
 }
 
 int

@@ -1761,6 +1761,19 @@ def test_preferences_and_verbosity():
     child = Child([])
     child.wait(PROMPT.rstrip())
 
+    for level in range(7):
+        start = len(child.buf)
+        child.send(f"/verbose {level}  \r".encode())
+        end = child.wait(f"verbosity: {level} (".encode(), start=start)
+        child.wait(PROMPT.rstrip(), start=end)
+    for value in ("7", "-1", "2x", "1 2", "99"):
+        child.send(f"/verbose {value}\r".encode())
+        end = child.wait(b"/verbose expects one integer from 0 through 6", start=end)
+        child.wait(PROMPT.rstrip(), start=end)
+    child.send(b"/verbose\r")
+    end = child.wait(b"verbosity: 6 (wire)", start=end)
+    child.wait(PROMPT.rstrip(), start=end)
+
     child.send(b"/effort quantum\r")
     end = child.wait(b"effort for next turn: quantum")
     child.wait(PROMPT.rstrip(), start=end)
@@ -1782,6 +1795,29 @@ def test_preferences_and_verbosity():
         "old_effort": "default", "new_effort": "quantum"
     }
     assert turn["data"]["config"]["effort"] == "quantum"
+
+
+def test_runtime_verbosity_resume():
+    for level in (0, 1, 6):
+        child = Child(["-vvv"])
+        try:
+            child.wait_idle_prompt()
+            child.send(f"/verbose {level}\r".encode())
+            end = child.wait(f"verbosity: {level} (".encode())
+            child.wait_idle_prompt(start=end)
+            command = child.exit_now()
+            assert shlex.split(command).count("-v") == level, command
+        finally:
+            child.kill()
+        resumed = Child.from_command(command)
+        try:
+            resumed.wait_idle_prompt()
+            resumed.send(b"/verbose\r")
+            end = resumed.wait(f"verbosity: {level} (".encode())
+            resumed.wait_idle_prompt(start=end)
+            resumed.exit_now()
+        finally:
+            resumed.kill()
 
 
 def test_command_name_completion():
@@ -2380,13 +2416,13 @@ def test_config_editor_reload():
     config.write_text(
         "[agent]\nmodel = editor-base\nreasoning_effort = medium\n"
         "[provider]\napi_key_env = OPENAI_API_KEY\n"
-        "[ui]\nverbosity = 0\n",
+        "[ui]\n",
         encoding="utf-8",
     )
     valid_two.write_text(
         "[agent]\nmodel = ignored-default\nreasoning_effort = high\n"
         "[provider]\napi_key_env = OPENAI_API_KEY\n"
-        "[ui]\nverbosity = 2\ntyping_pause_ms = 25\n"
+        "[ui]\ntyping_pause_ms = 25\n"
         "prompt = {chat:{hour:2}:{minute:02}:{second:02}:}"
         "{rollout-idle:W{context:4}{goal_spinner}{activity_spinner}›}"
         "{rollout-active:W{context:4}{activity_spinner}»}\n"
@@ -2398,15 +2434,15 @@ def test_config_editor_reload():
     valid_one.write_text(
         "[agent]\nmodel = another-default\nreasoning_effort = low\n"
         "[provider]\napi_key_env = OPENAI_API_KEY\n"
-        "[ui]\nverbosity = 1\n",
+        "[ui]\n",
         encoding="utf-8",
     )
     invalid.write_text(
-        "[ui]\nverbosity = 5\nprompt_spinner_tool = \"\\0\"\n"
+        "[ui]\nprompt_spinner_tool = \"\\0\"\n"
         "prompt = {chat:{hour:002}}{rollout-idle:x}{rollout-active:y}\n",
         encoding="utf-8")
     unrenderable.write_text(
-        "[ui]\nverbosity = 5\n"
+        "[ui]\n"
         "prompt = {chat:x}{rollout-idle:" + ("x" * 600) +
         "}{rollout-active:z}\n",
         encoding="utf-8",
@@ -2444,6 +2480,8 @@ def test_config_editor_reload():
         child = Child(["--config", str(config)])
         child.wait(PROMPT.rstrip())
         session_id = new_session(before)
+        child.send(b"/verbose 2\r")
+        child.wait(b"verbosity: 2")
 
         plan.write_text("unchanged", encoding="utf-8")
         child.send(b"/config\r")
@@ -2464,7 +2502,7 @@ def test_config_editor_reload():
 
         plan.write_text(str(invalid), encoding="utf-8")
         child.send(b"/config\r")
-        end = child.wait(b"invalid configuration at line 4", start=status_end)
+        end = child.wait(b"invalid configuration at line 3", start=status_end)
         child.wait("W  0%› ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
@@ -2495,7 +2533,7 @@ def test_config_editor_reload():
         )
         child.wait(PROMPT.rstrip(), start=end)
         child.send(b"/status\r")
-        status_end = child.wait(b"verbosity: 1", start=end)
+        status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
         child.wait(PROMPT.rstrip(), start=status_end)
 
@@ -3505,11 +3543,11 @@ def test_network_chat_and_managed_mention():
         human.wait(b"PRIVMSG #lab :network tool complete\r\n", start=wire_start)
         wait_turn_completed(child, session_id, "network_tool")
         child.send(b"/rollout\r")
-        child.wait(b"\xe2\x86\x92 exec  timeout=1000ms  'fixture ok'",
-                   start=tool_start)
-        child.wait(b"arguments: {\"command\":\"fixture ok\"", start=tool_start)
-        child.wait(b"fixture command succeeded", start=tool_start)
+        child.wait(b"\xe2\x86\x92 exec_command", start=tool_start)
         child.wait(PROMPT.rstrip(), start=tool_start)
+        child.drain()
+        assert b"  arguments:" not in child.buf[tool_start:]
+        assert b"fixture command succeeded" not in child.buf[tool_start:]
         child.send(b"/chat\r")
         child.wait("── chat ──".encode(), start=tool_start)
 
@@ -3926,6 +3964,9 @@ def test_editor_during_blocked_engine():
         child.drain(0.4)
         assert b"engine-block-start \n" in child.buf.replace(b"\r", b"")
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1
+        child.send(b"/verbose 2\r")
+        after = child.wait(b"verbosity: 2 (previews)", start=after, timeout=0.25)
+        assert b"engine-block-end" not in child.buf
         fcntl.ioctl(child.fd, termios.TIOCSWINSZ,
                     struct.pack("HHHH", 24, 48, 0, 0))
         child.send(b"responsive-draft")
@@ -3949,9 +3990,51 @@ def test_editor_during_blocked_engine():
             raise failure
 
 
+def test_stalled_output_consumes_input():
+    for level in range(7):
+        before = session_ids()
+        child = Child(["-v"] * level + ["--no-markdown"])
+        slave = None
+        try:
+            child.wait_idle_prompt()
+            inherited = [Path(f"/proc/{child.pid}/fdinfo/{fd}").read_text()
+                         for fd in (0, 1, 2)]
+            assert all(not (int(re.search(r"flags:\s+(\d+)", info)[1], 8) &
+                            os.O_NONBLOCK) for info in inherited)
+            slave = os.open(os.readlink(f"/proc/{child.pid}/fd/0"),
+                            os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+            child.send(b"render_flood\r")
+            after = child.wait(b"row-0000")
+            # Stop draining until the terminal fills. Input must still be consumed.
+            time.sleep(0.15)
+            child.send(b"/verbose 0\rpinx\x7fg")
+            deadline = time.monotonic() + 0.25
+            while True:
+                pending = struct.unpack("i", fcntl.ioctl(slave, termios.FIONREAD,
+                                                         struct.pack("i", 0)))[0]
+                if not pending:
+                    break
+                assert time.monotonic() < deadline, "stalled output stopped input consumption"
+                time.sleep(0.01)
+            child.wait(b"verbosity: 0 (conversation)", start=after)
+            end = child.wait(b"flood-end", start=after)
+            child.wait_idle_prompt(start=end)
+            child.send(b"\r")
+            end = child.wait(b"pong", start=end)
+            child.exit_cleanly(end)
+        finally:
+            if slave is not None:
+                os.close(slave)
+            child.kill()
+        log = events(new_session(before))
+        inputs = [event["data"]["text"] for event in log if event["type"] == "turn_started"]
+        assert inputs == ["render_flood", "ping"], inputs
+
+
 if __name__ == "__main__":
     test_compaction_statistical_source()
     test_ctrl_d_exit()
+    test_stalled_output_consumes_input()
     test_editor_during_render_flood()
     test_editor_during_blocked_engine()
     test_five_ctrl_c_exit()
@@ -3995,6 +4078,7 @@ if __name__ == "__main__":
     test_goal_refusal_failure_block_and_restart_pause()
     test_queue_mutation_commands()
     test_preferences_and_verbosity()
+    test_runtime_verbosity_resume()
     test_command_name_completion()
     test_uncached_typed_model_selection()
     test_provider_login_and_first_run()

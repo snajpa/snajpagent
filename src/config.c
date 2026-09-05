@@ -112,7 +112,6 @@ snj_config_init(struct snj_config *config)
     config->provider_count = 1u;
     config->max_goal_prompt_bytes = 256u * 1024u;
     config->read_agents_md = true;
-    config->verbosity = 0u;
     config->color = SNJ_COLOR_AUTO;
     config->markdown = true;
     config->resume_history_turns = 2u;
@@ -848,13 +847,6 @@ parse_ui(struct parse_state *state, const char *key, const char *value)
 {
     struct snj_config *config = state->config;
     uint32_t parsed;
-    if (strcmp(key, "verbosity") == 0) {
-        if (claim_key(state, 0u) < 0 ||
-            parse_u32(value, 0u, 6u, &parsed) < 0)
-            return -1;
-        config->verbosity = (unsigned int)parsed;
-        return 0;
-    }
     if (strcmp(key, "color") == 0) {
         if (claim_key(state, 1u) < 0)
             return -1;

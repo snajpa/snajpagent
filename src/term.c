@@ -19,6 +19,8 @@
 
 static atomic_uint sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
+/* Only the existing terminal owner uses these privately reopened descriptions. */
+static _Thread_local struct snj_term *output_owner;
 static int redraw(struct snj_term *term);
 static int move_prompt_cursor(struct snj_term *term);
 static int position_prompt_cursor(struct snj_term *term, size_t row, size_t col);
@@ -236,7 +238,14 @@ int
 snj_term_write(int fd, const void *text, size_t len)
 {
     const unsigned char *bytes = text;
-    struct pollfd output = {fd, POLLOUT, 0};
+    struct snj_term *term = output_owner;
+    int target = term && fd >= STDOUT_FILENO && fd <= STDERR_FILENO ?
+                 term->output_fd[fd - STDOUT_FILENO] : -1;
+    struct pollfd pfd[2] = {{target >= 0 ? target : fd, POLLOUT, 0}, {-1, POLLIN, 0}};
+
+    /* Input-only checkpoints capture intent, never recursively paint output. */
+    if (term && term->input_only)
+        return 0;
 
     if (fd < 0) {
         errno = EBADF;
@@ -244,20 +253,34 @@ snj_term_write(int fd, const void *text, size_t len)
     }
     while (len) {
         size_t amount = len < 1024u ? len : 1024u;
-        int rc;
-        do {
-            rc = poll(&output, 1u, -1);
-        } while (rc < 0 && errno == EINTR);
+        pfd[1].fd = term && term->raw ? STDIN_FILENO : -1;
+        int rc = poll(pfd, 2u, 0);
+        if (rc >= 0 && !(pfd[0].revents & POLLOUT) && term && term->input_checkpoint) {
+            term->input_only = true;
+            rc = term->input_checkpoint(term->input_opaque);
+            term->input_only = false;
+            if (rc < 0)
+                return -1;
+        }
+        if (rc >= 0 && !(pfd[0].revents & POLLOUT))
+            rc = poll(pfd, 2u, term ? 16 : -1);
+        if (rc < 0 && errno == EINTR)
+            continue;
         if (rc < 0)
             return -1;
-        if (output.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        if (pfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
             errno = EIO;
             return -1;
         }
-        if (snj_write_full(fd, bytes, amount) < 0)
+        if (!(pfd[0].revents & POLLOUT))
+            continue;
+        ssize_t written = write(pfd[0].fd, bytes, amount);
+        if (written < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
+            continue;
+        if (written <= 0)
             return -1;
-        bytes += amount;
-        len -= amount;
+        bytes += written;
+        len -= (size_t)written;
     }
     return 0;
 }
@@ -283,7 +306,7 @@ snj_term_write_safe(int fd, const char *text, size_t len)
     return rc;
 }
 
-static int
+int
 snj_term_append_safe(struct snj_buf *out, const char *text, size_t len)
 {
     return append_safe(out, (const unsigned char *)text, len, false, 0u, 0u,
@@ -294,6 +317,7 @@ void
 snj_term_init(struct snj_term *term)
 {
     memset(term, 0, sizeof(*term));
+    term->output_fd[0] = term->output_fd[1] = -1;
     snj_buf_init(&term->draft, SNJ_MAX_DIRECT_PROMPT + 1u);
     snj_buf_init(&term->search_label, SNJ_MAX_DIRECT_PROMPT + 64u);
     snj_buf_init(&term->search_query, SNJ_MAX_DIRECT_PROMPT + 1u);
@@ -435,7 +459,7 @@ update_size(struct snj_term *term)
             if (term->raw)
                 term->capable = true;
         } else {
-            term->columns = 80u;
+            term->columns = size.ws_col;
             term->capable = false;
         }
     } else {
@@ -509,6 +533,28 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
     sigint_pending = 0;
     sigwinch_pending = 0;
     term->opened = true;
+    for (int fd = STDOUT_FILENO; fd <= STDERR_FILENO; ++fd) {
+        char path[SNJ_PATH_MAX_BYTES];
+        struct stat original, owned;
+        if (!isatty(fd))
+            continue;
+        int name_error = ttyname_r(fd, path, sizeof(path));
+        int copy = name_error ? -1 : open(path, O_WRONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+        if (name_error)
+            errno = name_error;
+        if (copy < 0 || fstat(fd, &original) < 0 || fstat(copy, &owned) < 0 ||
+            original.st_rdev != owned.st_rdev || !S_ISCHR(owned.st_mode)) {
+            int saved_errno = copy < 0 ? errno : EIO;
+            if (copy >= 0)
+                close(copy);
+            snj_term_close(term);
+            errno = saved_errno;
+            snj_errorf(error, error_size, "cannot open private terminal output: %s", strerror(errno));
+            return -1;
+        }
+        term->output_fd[fd - STDOUT_FILENO] = copy;
+    }
+    output_owner = term;
     if (term->capable && snj_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
         int saved_errno = errno;
         (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
@@ -612,7 +658,7 @@ snj_term_hide(struct snj_term *term)
     size_t max;
     int rc = -1;
 
-    if (!term->opened || !term->prompt_visible)
+    if (term->input_only || !term->opened || !term->prompt_visible)
         return 0;
     snj_buf_reset(&term->painted_prompt);
     if (!term->capable) {
@@ -889,6 +935,8 @@ update_spinners(struct snj_term *term, uint64_t step)
     char label[SNJ_TERM_LABEL_BYTES];
     bool changed;
 
+    if (term->input_only)
+        return 0;
     if (compose_prompt(term->prompt_template, term->spinner,
                        term->spinner_states, step, label, next) < 0)
         return -1;
@@ -1335,7 +1383,7 @@ redraw(struct snj_term *term)
     const char *label;
     int rc = -1;
 
-    if (!term->opened || !term->prompt_wanted || term->output_depth)
+    if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth)
         return 0;
     if (term->prompt_template[0] &&
         compose_prompt(term->prompt_template, term->spinner,
@@ -1851,7 +1899,7 @@ move_prompt_cursor(struct snj_term *term)
     size_t label_len;
     int rc = -1;
 
-    if (!term->capable || !term->prompt_visible || term->output_depth)
+    if (term->input_only || !term->capable || !term->prompt_visible || term->output_depth)
         return redraw(term);
     if (compose_frame(term, &scratch, &label_len, &cursor_row, &cursor_col,
                        &end_row, &end_col) < 0)
@@ -2083,7 +2131,9 @@ complete_action(struct snj_term *term, enum snj_term_action action,
 {
     char *copy;
 
-    if (term->input_backlog)
+    bool local = action == SNJ_TERM_SUBMIT &&
+                 snj_verbosity_command((const char *)term->draft.data, term->draft.len);
+    if (local ? term->local_backlog : term->input_backlog)
         return snj_term_write(STDERR_FILENO, "\a", 1u);
     if (term->utf8_pending_len || !term->draft.len)
         return 0;
@@ -2285,14 +2335,14 @@ cancel_line(struct snj_term *term, enum snj_term_action *action)
 {
     bool interrupt = term->active && !term->searching && !term->draft.len;
 
-    if (!term->prompt_visible && redraw(term) < 0)
+    if (!term->input_only && !term->prompt_visible && redraw(term) < 0)
         return -1;
-    if (term->capable && term->prompt_visible) {
+    if (!term->input_only && term->capable && term->prompt_visible) {
         term->cursor = term->draft.len;
         if (move_prompt_cursor(term) < 0)
             return -1;
     }
-    if (snj_term_write(STDERR_FILENO, "^C\n", 3u) < 0)
+    if (!term->input_only && snj_term_write(STDERR_FILENO, "^C\n", 3u) < 0)
         return -1;
     free(term->search_original);
     term->search_original = NULL;
@@ -2308,6 +2358,10 @@ cancel_line(struct snj_term *term, enum snj_term_action *action)
     term->paste = false;
     term->paste_end_match = 0u;
     term->typing_active = false;
+    if (term->input_only) {
+        term->cancel_pending = true;
+        goto logical;
+    }
     term->prompt_visible = false;
     term->rendered_rows = 0u;
     term->rendered_cursor_row = 0u;
@@ -2319,6 +2373,7 @@ cancel_line(struct snj_term *term, enum snj_term_action *action)
     term->output_detour = false;
     term->output_columns = 0u;
     snj_buf_reset(&term->output_line);
+logical:
     history_reset_navigation(term);
     term->prompt_clock.captured = false;
     term->prompt_wanted = false;
@@ -2436,7 +2491,7 @@ consume_resize(struct snj_term *term)
     bool was_capable;
     bool now_capable;
 
-    if (!sigwinch_pending)
+    if (term->input_only || !sigwinch_pending)
         return 0;
     sigwinch_pending = 0;
     if (!term->opened)
@@ -2482,6 +2537,17 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
 
     *action = SNJ_TERM_NONE;
     *text = NULL;
+    if (!term->input_only && term->cancel_pending) {
+        term->cancel_pending = false;
+        if (snj_term_hide(term) < 0 ||
+            snj_term_write(STDERR_FILENO, "\n^C\n", 4u) < 0)
+            return -1;
+        term->output_seen = false;
+        term->output_ended_lf = true;
+        term->output_detour = false;
+        term->output_columns = 0u;
+        snj_buf_reset(&term->output_line);
+    }
     if (consume_resize(term) < 0)
         return -1;
     if (term->prompt_visible && term->capable && !term->searching &&
@@ -2593,5 +2659,11 @@ snj_term_close(struct snj_term *term)
     snj_buf_free(&term->output_cell);
     snj_buf_free(&term->output_line);
     snj_buf_free(&term->painted_prompt);
+    if (output_owner == term)
+        output_owner = NULL;
+    for (size_t i = 0u; i < 2u; ++i)
+        if (term->output_fd[i] >= 0)
+            close(term->output_fd[i]);
     memset(term, 0, sizeof(*term));
+    term->output_fd[0] = term->output_fd[1] = -1;
 }

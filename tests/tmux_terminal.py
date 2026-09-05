@@ -667,7 +667,7 @@ def write_config(path, read_agents, pause_ms=300, markdown=None):
     )
     path.write_text(
         f"[agent]\nread_agents_md = {'true' if read_agents else 'false'}\n"
-        f"[ui]\ntyping_pause_ms = {pause_ms}\nverbosity = 0\n"
+        f"[ui]\ntyping_pause_ms = {pause_ms}\n"
         'prompt_spinner_provider = " ◴"\n'
         'prompt_spinner_tool = " ⠋"\n'
         f"{markdown_line}",
@@ -1334,14 +1334,14 @@ def run_tool_case(binary, root):
     )
     try:
         terminal.wait(DEFAULT_IDLE_PROMPT)
-        terminal.submit("/verbose 1")
-        terminal.wait("verbosity: 1")
+        terminal.submit("/verbose 3")
+        terminal.wait("verbosity: 3")
         terminal.submit("text_tool")
         screen = terminal.wait("fixture command succeeded", join_wrapped=True)
         terminal.wait("done", join_wrapped=True)
         assert_order(screen, [
-            "→ exec  timeout=1000ms  'fixture ok'",
-            'arguments: {"command":"fixture ok"',
+            "→ exec_command",
+            'arguments:',
             "fixture command succeeded",
         ])
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
@@ -1556,7 +1556,7 @@ def write_irc_config(path, provider_port, model):
         "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
         "request_timeout_ms = 5000\nauto_compact_input_tokens = 0\n"
         "exact_token_count = false\nnative_compaction = false\n"
-        "[ui]\ntyping_pause_ms = 50\nverbosity = 0\ncolor = never\n",
+        "[ui]\ntyping_pause_ms = 50\ncolor = never\n",
         encoding="utf-8",
     )
 
@@ -1574,7 +1574,7 @@ def write_catalog_config(path, provider_port):
         "api_key_env = SNAJPAGENT_IRC_UI_KEY\n"
         "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
         "request_timeout_ms = 5000\n"
-        "[ui]\nverbosity = 0\ncolor = never\n",
+        "[ui]\ncolor = never\n",
         encoding="utf-8",
     )
 

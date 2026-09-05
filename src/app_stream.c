@@ -122,8 +122,7 @@ snj_app_finish_stream_item(struct app_state *app)
     if (!app->stream_item_active)
         return 0;
     app->stream_item_active = false;
-    if ((app->networked ? snj_ui_text(&app->ui, SNJ_UI_ROLLOUT_END, NULL) :
-                          snj_ui_text(&app->ui, SNJ_UI_PUBLIC_END, NULL)) < 0) {
+    if (snj_ui_text(&app->ui, SNJ_UI_ROLLOUT_END, NULL) < 0) {
         return stream_fail(app, errno,
                            "public output item could not be finished");
     }
@@ -136,8 +135,7 @@ snj_app_abort_stream_item(struct app_state *app)
     if (!app->stream_item_active)
         return 0;
     app->stream_item_active = false;
-    if ((app->networked ? snj_ui_text(&app->ui, SNJ_UI_ROLLOUT_ABORT, NULL) :
-                          snj_ui_text(&app->ui, SNJ_UI_PUBLIC_ABORT, NULL)) < 0) {
+    if (snj_ui_text(&app->ui, SNJ_UI_ROLLOUT_ABORT, NULL) < 0) {
         return stream_fail(app, errno,
                            "steered public output item could not be closed");
     }
@@ -190,12 +188,8 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
         app->stream_item_hidden = false;
 
         if (kind == SNJ_ITEM_REASONING_SUMMARY) {
-            if (app->ui.verbosity < 1u)
-                app->stream_item_hidden = true;
-            else {
-                fd = STDERR_FILENO;
-                label = "reason › ";
-            }
+            fd = STDERR_FILENO;
+            label = "reason › ";
         } else if (kind == SNJ_ITEM_ASSISTANT || kind == SNJ_ITEM_REFUSAL) {
             if (app->execute && phase == SNJ_PHASE_FINAL_ANSWER)
                 app->stream_item_hidden = true;
@@ -205,9 +199,9 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
             app->stream_item_hidden = true;
         }
         if (!app->stream_item_hidden) {
-            if ((app->networked ?
-                 snj_ui_public_begin(&app->ui, fd, label, true) :
-                 snj_ui_public_begin(&app->ui, fd, label, false)) < 0) {
+            if (snj_ui_public_begin(&app->ui, fd, label,
+                    kind == SNJ_ITEM_REASONING_SUMMARY ? SNJ_PRESENT_REASONING :
+                                                        SNJ_PRESENT_CONVERSATION) < 0) {
                 return stream_fail(app, errno,
                                    "public output item could not be started");
             }
@@ -240,9 +234,7 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     }
     if (partial->text.max > partial->text.len + remaining)
         partial->text.max = partial->text.len + remaining;
-    if ((app->networked ?
-         snj_ui_public(&app->ui, text, len, &partial->text, true) :
-         snj_ui_public(&app->ui, text, len, &partial->text, false)) < 0)
+    if (snj_ui_public(&app->ui, text, len, &partial->text) < 0)
         goto fail_partial;
     partial->text.max = partial_max;
     app->partial_bytes += partial->text.len - partial_before;

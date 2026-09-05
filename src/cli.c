@@ -170,8 +170,11 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
         const char *arg;
         switch (flag) {
         case 'v':
-            if (cli->verbosity < 6u)
-                ++cli->verbosity;
+            if (cli->verbosity == SNJ_VERBOSITY_MAX) {
+                snj_errorf(error, error_size, "at most six -v flags are allowed");
+                return -1;
+            }
+            ++cli->verbosity;
             break;
         case 'e':
             if (cli->execute) {
@@ -600,7 +603,9 @@ snj_cli_usage(int fd)
         "      --no-markdown            show model Markdown literally\n"
         "  -C DIR                       workspace (or resume relocation)\n"
         "  -m MODEL                     next-turn model override\n"
-        "  -v                           increase verbosity; repeatable to 6\n"
+        "  -v                           exact detail level: repeat 1 through 6 times\n"
+        "                               1 tools; 2 previews; 3 full tools;\n"
+        "                               4 debug; 5 protocol; 6 wire (default 0)\n"
         "      --resume [ID|--last]      resume a durable session\n"
         "      --all                    include sessions from all workspaces\n"
         "  -e                           one-shot execution (prompt or stdin)\n"

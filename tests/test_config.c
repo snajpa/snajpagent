@@ -102,7 +102,7 @@ test_auth_settings(const char *path)
     struct snj_config config;
     struct snj_provider_config provider;
     char error[256] = {0};
-    static const char initial[] = "# retain this\n[ui]\nverbosity=2\n";
+    static const char initial[] = "# retain this\n[ui]\ntyping_pause_ms=2\n";
     static const char invalid[] = "[provider]\nauth=chatgpt\nbase_url=https://other.test\n";
     static const char duplicate[] = "[provider]\nauth=env\nauth=api_key\n";
 
@@ -126,7 +126,7 @@ test_auth_settings(const char *path)
     assert(config.providers[0].auth == SNJ_AUTH_ENV);
     assert(config.providers[1].auth == SNJ_AUTH_API_KEY);
     assert(!config.providers[1].native_compaction);
-    assert(config.verbosity == 2u);
+    assert(config.typing_pause_ms == 2u);
     snj_config_free(&config);
     provider.auth = SNJ_AUTH_CHATGPT;
     assert(snj_config_validate_provider(&provider, error, sizeof(error)) < 0);
@@ -300,7 +300,6 @@ main(void)
         "\n[model-limit backup/org/model/with/slashes]\n"
         "max_input_tokens = 4000000000\n"
         "\n[ui]\n"
-        "verbosity = 4\n"
         "color = never\n"
         "markdown = false\n"
         "resume_history_turns = 0\n"
@@ -347,7 +346,6 @@ main(void)
     assert(strcmp(config.reasoning_effort, "default") == 0);
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
     assert(config.read_agents_md);
-    assert(config.verbosity == 0u);
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
@@ -461,7 +459,6 @@ main(void)
     assert(snj_config_provider(&config, NULL) == &config.providers[0]);
     assert(snj_config_provider(&config, "backup") == &config.providers[1]);
     assert(snj_config_provider(&config, "missing") == NULL);
-    assert(config.verbosity == 4u);
     assert(config.color == SNJ_COLOR_NEVER);
     assert(!config.markdown);
     assert(config.resume_history_turns == 0u);

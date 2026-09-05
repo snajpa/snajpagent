@@ -449,26 +449,24 @@ assert failed[0]["data"]["class"] == "protocol"
 PY
 done
 
-after=$($bin -e -v -- text_tool 2>"$root/text-tool.err")
+after=$($bin -e -vvv -- text_tool 2>"$root/text-tool.err")
 [ "$after" = done ]
 grep -q '^Checking first\.$' "$root/text-tool.err"
-grep -Fq "→ exec  timeout=1000ms  'fixture ok'" "$root/text-tool.err"
-grep -Fq 'arguments: {"command":"fixture ok"' "$root/text-tool.err"
+grep -Fq '→ exec_command  {"command":"fixture ok"' "$root/text-tool.err"
+grep -Fq '  arguments:' "$root/text-tool.err"
 grep -q '^fixture command succeeded$' "$root/text-tool.err"
 
 cat >"$root/tool-output-cap.ini" <<'EOF'
-[ui]
-verbosity = 1
 [tool]
 max_output_bytes = 8
 EOF
 cap_state="$root/tool-output-cap-state"
 after=$($bin --dotdir "$cap_state" --config "$root/tool-output-cap.ini" \
-    -e -- text_tool \
+    -e -vvv -- text_tool \
     2>"$root/tool-output-cap.err")
 [ "$after" = done ]
 grep -q '^fixture $' "$root/tool-output-cap.err"
-grep -q 'output bytes hidden by max_output_bytes' "$root/tool-output-cap.err"
+grep -Fq '[output truncated]' "$root/tool-output-cap.err"
 ! grep -q '^fixture command succeeded$' "$root/tool-output-cap.err"
 python3 - "$cap_state" <<'PY'
 import json
@@ -483,10 +481,33 @@ assert len(finished) == 1
 assert finished[0]["data"]["result"]["model_text"] == "fixture command succeeded"
 PY
 
-out=$($bin -e -v -- multi_item 2>"$root/multi.err")
+out=$($bin -e -vv -- multi_item 2>"$root/multi.err")
 [ "$out" = "Done." ]
 grep -q '^Working\.$' "$root/multi.err"
 grep -q '^reason › Checked the fixture\.$' "$root/multi.err"
+
+# Flags select exactly one shared ladder; low levels never leak tool output.
+flags=
+for level in 0 1 2 3 4 5 6; do
+    out=$($bin -e $flags -- text_tool 2>"$root/level-$level.err")
+    [ "$out" = done ]
+    if [ "$level" -eq 0 ]; then
+        ! grep -q '→ exec_command' "$root/level-$level.err"
+    else
+        grep -q '→ exec_command' "$root/level-$level.err"
+    fi
+    if [ "$level" -lt 2 ]; then
+        ! grep -q 'fixture command succeeded' "$root/level-$level.err"
+        ! grep -q '  arguments:' "$root/level-$level.err"
+    else
+        grep -q '^fixture command succeeded$' "$root/level-$level.err"
+    fi
+    flags="$flags -v"
+done
+if $bin -e -vvvvvvv -- ping >"$root/seven.out" 2>"$root/seven.err"; then
+    exit 1
+fi
+[ ! -s "$root/seven.out" ]
 
 set +e
 $bin -e -- final_plus_call >"$root/conflict.out" 2>"$root/conflict.err"
@@ -511,19 +532,18 @@ grep -q 'unfinished tool work' "$root/tool-recovery.err"
 grep -q '"status":"outcome_unknown"' "$dotdir/sessions/$tool_crash_id/events.jsonl"
 
 
-# Configuration is strict, additive, and applied before any state mutation.
+# Configuration is strict and applied before any state mutation.
 cat >"$root/config.ini" <<'EOF'
 [agent]
 model = default
 reasoning_effort = high
 [ui]
-verbosity = 3
 resume_history_turns = 0
 [tool]
 shell = /bin/sh
 secret_env = EXTRA_TOKEN
 EOF
-out=$($bin --config "$root/config.ini" -e -v -- ping 2>"$root/config.err")
+out=$($bin --config "$root/config.ini" -e -vvvv -- ping 2>"$root/config.err")
 [ "$out" = pong ]
 grep -q '^turn › .* effort=high ' "$root/config.err"
 grep -q '^event › .* turn_completed synced$' "$root/config.err"
@@ -555,7 +575,7 @@ status=$?
 set -e
 [ "$status" -eq 2 ]
 [ ! -s "$root/bad-config.out" ]
-grep -q 'invalid configuration at line 3' "$root/bad-config.err"
+grep -q 'invalid configuration at line 2' "$root/bad-config.err"
 [ "$(resume_count "$root/bad-config.err")" -eq 0 ]
 after=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
 [ "$before" -eq "$after" ]
