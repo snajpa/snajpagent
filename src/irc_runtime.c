@@ -18,6 +18,7 @@ enum irc_command { IRC_OPERATOR, IRC_AGENT, IRC_NOTICE,
 
 struct irc_request {
     enum irc_command command;
+    uint64_t revision;
     const char *text;
     const struct snag_irc_event *event;
     int result, saved_errno;
@@ -197,6 +198,11 @@ execute(struct irc_owner *owner, struct irc_request *request)
     char *error = request->error;
     size_t size = sizeof(request->error);
 
+    if (request->revision && request->revision != owner->sent.revision) {
+        snag_errorf(error, size, "destination room changed; not performed");
+        errno = ESTALE;
+        return -1;
+    }
     switch (request->command) {
     case IRC_OPERATOR:
         return snag_irc_core_send_operator(core, request->text, error, size);
@@ -347,11 +353,11 @@ drain(struct snag_irc *irc, int timeout_ms)
                 if (owner->routing_room[0] &&
                     strcmp(owner->routing_room, record->view.room) != 0) {
                     ++irc->routing_revision;
-                    ++owner->target.revision;
                 }
                 memcpy(owner->routing_room, record->view.room, sizeof(owner->routing_room));
             }
             owner->view = record->view;
+            owner->target.revision = record->view.revision;
         }
         pthread_mutex_unlock(&irc->mutex);
         if (record->kind == IRC_EVENT) {
@@ -475,6 +481,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
         snag_irc_core_view(owner->core, &owner->view) < 0)
         goto fail;
     owner->sent = owner->view;
+    owner->target.revision = owner->view.revision;
     memcpy(owner->routing_room, owner->view.room, sizeof(owner->routing_room));
     if (hosting) {
         memmove(irc->owners + 1u, irc->owners,
@@ -847,7 +854,9 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
               kind == SNAG_IRC_NOTICE ? IRC_NOTICE : model ? IRC_AGENT : IRC_OPERATOR;
     for (size_t i = 0u; i < route->count; ++i) {
         struct irc_owner *owner = NULL;
-        struct irc_request request = {.command = command, .text = text};
+        struct irc_request request = {
+            .command = command, .text = text, .revision = route->targets[i].revision
+        };
         int rc = 1;
         for (size_t j = 0u; irc && j < irc->owner_count; ++j)
             if (irc->owners[j]->target.id == route->targets[i].id &&

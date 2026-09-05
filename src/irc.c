@@ -63,6 +63,7 @@ struct irc_conn {
     char user[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char accepted_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    char previous_room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char topic[513u];
     struct irc_member members[IRC_MEMBERS_MAX];
     size_t member_count;
@@ -93,6 +94,7 @@ struct irc_message {
 };
 
 struct snag_irc_core {
+    uint64_t route_revision;
     int listener;
     bool hosting;
     char listen[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
@@ -1775,9 +1777,19 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
     if (strcmp(message.command, "005") == 0) {
         for (size_t i = 1u; i < message.param_count; ++i)
             if (strncmp(message.params[i], "SAJROOM=", 8u) == 0 &&
-                room_valid(message.params[i] + 8u))
+                room_valid(message.params[i] + 8u)) {
                 (void)normalize_room(link->room, sizeof(link->room),
                                      message.params[i] + 8u);
+                if (link->previous_room[0] && strcmp(link->previous_room, link->room)) {
+                    ++irc->route_revision;
+                    snag_buf_reset(&link->pending);
+                    link->pending_inflight = 0u;
+                    if (link_emit(irc, link, SNAG_IRC_NOTICE, link->room, SNAJPAGENT_NAME,
+                            "room changed; old queued messages discarded", false, 0u) < 0)
+                        return -1;
+                }
+                memcpy(link->previous_room, link->room, sizeof(link->previous_room));
+            }
         return 0;
     }
     if (strcmp(message.command, "376") == 0 ||
@@ -2709,6 +2721,7 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
     int rc = -1;
 
     memset(view, 0, sizeof(*view));
+    view->revision = irc->route_revision + 1u;
     (void)snag_strcpy(view->model, sizeof(view->model),
                       snag_irc_core_model_nick(irc));
     (void)snag_strcpy(view->operator, sizeof(view->operator),
@@ -2716,7 +2729,8 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
     view->joined = irc->hosting || (irc->link_count && irc->links[0].joined);
     if (irc->hosting || irc->link_count)
         (void)snag_strcpy(view->room, sizeof(view->room),
-                        irc->hosting ? irc->room : irc->links[0].room);
+                        irc->hosting ? irc->room : irc->links[0].room[0] ?
+                        irc->links[0].room : irc->links[0].previous_room);
     snag_buf_init(&text, sizeof(view->text) - 1u);
     snag_buf_init(&nicks, sizeof(view->nicks) - 1u);
     if (snapshot_network(irc, &text, &nicks) == 0) {

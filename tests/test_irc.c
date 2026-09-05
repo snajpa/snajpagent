@@ -304,6 +304,9 @@ test_runtime_roles(void)
     unsigned short host_port = free_port();
     unsigned short upstream_port = free_port();
     int human;
+    struct snag_irc_destinations destinations;
+    struct snag_irc_route route = {0}, frozen;
+    uint32_t removed_id;
 
     init_server_config(&upstream_config, upstream_port);
     upstream = open_server(&upstream_config, &upstream_capture);
@@ -352,7 +355,39 @@ test_runtime_roles(void)
     tick(runtime, 3u);
     (void)drain(human, wire, sizeof(wire));
     assert(strstr(wire, "shared-before-stop"));
-    assert(capture.events[SNAG_IRC_MESSAGE] == 1u);
+    assert(capture.events[SNAG_IRC_MESSAGE] == 2u);
+    snag_irc_destinations(runtime, &destinations);
+    assert(destinations.count == 2u);
+    assert(destinations.items[0].target.id < destinations.items[1].target.id);
+    assert(strcmp(destinations.items[0].endpoint, other) == 0);
+    assert(strcmp(destinations.items[1].endpoint, host) == 0);
+    assert(strcmp(destinations.items[0].model, "agent1") == 0);
+    route.count = 1u;
+    route.targets[0] = destinations.items[1].target;
+    removed_id = route.targets[0].id;
+    snag_buf_reset(&state);
+    assert(snag_irc_send_route(runtime, &route, false, SNAG_IRC_MESSAGE,
+        "host-only", &state, error, sizeof(error)) == 0);
+    tick(runtime, 3u);
+    tick(upstream, 3u);
+    (void)drain(human, wire, sizeof(wire));
+    assert(strstr(wire, "host-only"));
+    assert(!strstr(upstream_capture.message_text, "host-only"));
+    route.targets[0] = destinations.items[0].target;
+    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
+        "upstream-only", NULL, error, sizeof(error)) == 0);
+    tick(runtime, 3u);
+    tick(upstream, 3u);
+    (void)drain(human, wire, sizeof(wire));
+    assert(!strstr(wire, "upstream-only"));
+    assert(strstr(upstream_capture.message_text, "upstream-only"));
+    assert(strcmp(capture.last_message.endpoint, other) == 0);
+    assert(strcmp(capture.last_message.nick, "agent1") == 0);
+    ++route.targets[0].revision;
+    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
+        "wrong-revision", NULL, error, sizeof(error)) == 1);
+    snag_irc_capture_route(runtime, &frozen);
+    assert(frozen.count == 2u);
 
     /* The owner receives this before removal; admission happens during stop. */
     send_text(human, "PRIVMSG #lab :accepted-before-removal\r\nPING :barrier\r\n");
@@ -378,6 +413,10 @@ test_runtime_roles(void)
     assert(snag_irc_send_operator(runtime, "after-host-stop", error, sizeof(error)) == 0);
     tick(upstream, 3u);
     assert(strstr(upstream_capture.message_text, "after-host-stop"));
+    assert(snag_irc_send_route(runtime, &frozen, false, SNAG_IRC_MESSAGE,
+        "partial-to-survivor", NULL, error, sizeof(error)) == 2);
+    tick(upstream, 3u);
+    assert(strstr(upstream_capture.message_text, "partial-to-survivor"));
 
     config.irc.client_count = 0u;
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
@@ -387,12 +426,18 @@ test_runtime_roles(void)
     assert(snag_buf_terminate(&state) == 0);
     assert(strstr((char *)state.data, "no active endpoints"));
     assert(strstr((char *)state.data, "accepted-before-removal"));
+    assert(snag_irc_send_route(runtime, &frozen, true, SNAG_IRC_MESSAGE,
+        "no-targets", NULL, error, sizeof(error)) == 1);
 
     /* Re-add the host after freeing both primary owners. Public history only. */
     config.irc.listen_explicit = true;
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     human = connect_local(host_port, false);
     register_peer(runtime, human, "newhuman", false, wire, sizeof(wire));
+    snag_irc_destinations(runtime, &destinations);
+    assert(destinations.count == 1u && destinations.items[0].target.id > removed_id);
+    assert(snag_irc_send_route(runtime, &frozen, false, SNAG_IRC_MESSAGE,
+        "not-to-replacement", NULL, error, sizeof(error)) == 1);
     assert(strstr(wire, "accepted-before-removal"));
     assert(!strstr(wire, "after-host-stop"));
     assert(!strstr(wire, "not queued"));

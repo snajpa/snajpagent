@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 enum ui_kind {
-    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_DESTINATIONS, UI_SELECT, UI_COMMANDS, UI_PAUSE,
+    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_DESTINATIONS, UI_SELECT, UI_ROUTE, UI_COMMANDS, UI_PAUSE,
     UI_OPEN, UI_EXTERNAL, UI_PROMPT, UI_SPINNERS, UI_DRAFT,
     UI_VIEW, UI_SUBMITTED, UI_PUBLIC_BEGIN, UI_PUBLIC, UI_VALIDATE,
     UI_ORIENTATION, UI_HISTORY, UI_IRC, UI_DURABLE, UI_EVENT,
@@ -62,6 +62,7 @@ struct ui_message {
         struct { const struct snag_term_command *items; size_t count; } commands;
         struct { struct snag_history_snapshot entries; bool refresh; } history;
         const struct snag_irc_destinations *destinations;
+        struct snag_irc_route *route;
     } data;
 };
 
@@ -353,6 +354,9 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
         if (snag_term_select_destination(term, message->data.value) < 0)
             return -1;
         return display->prompt_source ? apply_prompt(display) : 0;
+    case UI_ROUTE:
+        snag_term_destination_route(term, message->text, message->data.route);
+        return 0;
     case UI_COMMANDS:
         snag_term_set_commands(term, message->data.commands.items,
                              message->data.commands.count);
@@ -917,6 +921,13 @@ snag_ui_select_destination(struct snag_ui *ui, uint32_t id)
 {
     struct ui_message message = {.kind = UI_SELECT, .data.value = id};
     return send_message(ui, &message, NULL);
+}
+
+int
+snag_ui_capture_route(struct snag_ui *ui, const char *text)
+{
+    struct ui_message message = {.kind = UI_ROUTE, .data.route = &ui->input_route};
+    return send_message(ui, &message, text);
 }
 
 int

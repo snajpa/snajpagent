@@ -2743,7 +2743,7 @@ render_irc_event_now(struct snag_render *render,
         const struct snag_irc_destination *origin = NULL;
         for (size_t i = 0u; i < destinations->count; ++i)
             if (strcmp(destinations->items[i].endpoint, event->endpoint) == 0 &&
-                strcmp(destinations->items[i].room, event->room) == 0)
+                (!event->room[0] || strcmp(destinations->items[i].room, event->room) == 0))
                 origin = &destinations->items[i];
         if (origin && event->local)
             own_agent = strcmp(origin->model, event->nick) == 0;

@@ -40,6 +40,9 @@ struct app_state {
     struct snag_irc *irc;
     struct snag_irc_destinations irc_destinations;
     struct snag_irc_route irc_request_route;
+    struct snag_irc_route irc_urgent_replies;
+    size_t irc_urgent_reply_offsets[SNAG_IRC_DESTINATIONS_MAX];
+    struct snag_irc_route irc_turn_replies;
     bool irc_destinations_ready;
     struct snag_buf irc_urgent;
     struct snag_buf irc_background;
@@ -82,9 +85,6 @@ struct app_state {
     bool request_networked; /* Capabilities frozen when constructing a request. */
     uint64_t request_routing_revision;
     bool tool_active;
-    bool irc_urgent_local_operator;
-    bool irc_turn_local_operator;
-    bool irc_turn_replied;
     int shutdown_signal;
     uint64_t irc_background_since_ms;
     char queue_edit_id[SNAG_ID_HEX_LEN + 1u];

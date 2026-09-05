@@ -9,6 +9,7 @@ struct snag_irc_view {
     char model[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char operator[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    uint64_t revision;
     char text[32768u];
     char nicks[4096u]; /* Newline-separated current members, without op prefixes. */
     bool joined;

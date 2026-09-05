@@ -180,6 +180,37 @@ out:
     return rc;
 }
 
+static void
+reply_target(struct snag_irc_route *route, struct snag_irc_target target, bool add)
+{
+    for (size_t i = 0u; i < route->count; ++i)
+        if (route->targets[i].id == target.id && route->targets[i].revision == target.revision) {
+            if (!add) {
+                memmove(route->targets + i, route->targets + i + 1u,
+                         (--route->count - i) * sizeof(route->targets[0]));
+            }
+            return;
+        }
+    if (add && route->count < SNAG_IRC_DESTINATIONS_MAX)
+        route->targets[route->count++] = target;
+}
+
+static void
+prune_replies(struct snag_irc_route *route, const struct snag_irc_destinations *destinations,
+                size_t *offsets)
+{
+    size_t kept = 0u;
+    for (size_t i = 0u; i < route->count; ++i)
+        for (size_t j = 0u; j < destinations->count; ++j)
+            if (route->targets[i].id == destinations->items[j].target.id &&
+                route->targets[i].revision == destinations->items[j].target.revision) {
+                if (offsets)
+                    offsets[kept] = offsets[i];
+                route->targets[kept++] = route->targets[i];
+            }
+    route->count = kept;
+}
+
 int
 snag_app_sync_destinations(struct app_state *app)
 {
@@ -191,6 +222,8 @@ snag_app_sync_destinations(struct app_state *app)
         return 0;
     if (snag_ui_destinations(&app->ui, &current) < 0)
         return -1;
+    prune_replies(&app->irc_urgent_replies, &current, app->irc_urgent_reply_offsets);
+    prune_replies(&app->irc_turn_replies, &current, NULL);
     app->irc_destinations = current;
     app->irc_destinations_ready = true;
     return 0;
@@ -249,6 +282,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     bool own_agent;
     bool local_operator;
     bool urgent;
+    struct snag_irc_target target;
+    size_t reply_offset;
 
     if (!app || !event)
         return -1;
@@ -270,8 +305,9 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     own_agent = snag_irc_local_identity(app->irc, event, true);
     local_operator = snag_irc_local_identity(app->irc, event, false);
     if (own_agent) {
-        if (app->session.active_turn && event->kind == SNAG_IRC_MESSAGE)
-            app->irc_turn_replied = true;
+        if (app->session.active_turn && event->kind == SNAG_IRC_MESSAGE &&
+            snag_irc_event_target(app->irc, event, &target))
+            reply_target(&app->irc_turn_replies, target, false);
         return 0;
     }
     if (event->kind == SNAG_IRC_HISTORY_READY) {
@@ -280,14 +316,18 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     }
     if (event->historical)
         return 0;
-    urgent = chat && snag_irc_mentions_agent(app->irc,
-        event->local ? "local" : event->endpoint, event->text);
+    urgent = chat && snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
+    reply_offset = app->irc_urgent.len;
     if (append_irc_projection(urgent ? &app->irc_urgent :
                                       &app->irc_background, event) < 0)
         return -1;
-    if (urgent)
-        app->irc_urgent_local_operator |= local_operator;
-    else if (!app->irc_background_since_ms)
+    if (urgent && local_operator && snag_irc_event_target(app->irc, event, &target)) {
+        size_t before = app->irc_urgent_replies.count;
+        reply_target(&app->irc_urgent_replies, target, true);
+        if (app->irc_urgent_replies.count > before)
+            app->irc_urgent_reply_offsets[before] = reply_offset;
+    }
+    if (!urgent && !app->irc_background_since_ms)
         app->irc_background_since_ms = snag_time_ms();
     return 0;
 }
@@ -346,12 +386,26 @@ out:
     return rc;
 }
 
+static void
+admit_replies(struct app_state *app, size_t used)
+{
+    size_t kept = 0u;
+    for (size_t i = 0u; i < app->irc_urgent_replies.count; ++i) {
+        if (app->irc_urgent_reply_offsets[i] < used) {
+            reply_target(&app->irc_turn_replies, app->irc_urgent_replies.targets[i], true);
+        } else {
+            app->irc_urgent_replies.targets[kept] = app->irc_urgent_replies.targets[i];
+            app->irc_urgent_reply_offsets[kept++] = app->irc_urgent_reply_offsets[i] - used;
+        }
+    }
+    app->irc_urgent_replies.count = kept;
+}
+
 int
 snag_app_irc_flush_urgent(struct app_state *app,
                          char *error, size_t error_size)
 {
     char steering_id[SNAG_ID_HEX_LEN + 1u];
-    bool local_operator;
     size_t used;
     char *text;
     int rc;
@@ -361,7 +415,6 @@ snag_app_irc_flush_urgent(struct app_state *app,
     if (snag_random_id(steering_id) < 0 ||
         !(text = pending_batch(&app->irc_urgent, &used)))
         return -1;
-    local_operator = app->irc_urgent_local_operator;
     rc = snag_app_commit_event(app, "steering_added",
             snag_app_steering_added_data(app->session.active_turn_id,
                 steering_id, text), error, error_size);
@@ -369,12 +422,7 @@ snag_app_irc_flush_urgent(struct app_state *app,
     if (rc < 0)
         return -1;
     consume_pending(&app->irc_urgent, used);
-    if (!app->irc_urgent.len)
-        app->irc_urgent_local_operator = false;
-    if (local_operator) {
-        app->irc_turn_local_operator = true;
-        app->irc_turn_replied = false;
-    }
+    admit_replies(app, used);
     return 0;
 }
 
@@ -393,7 +441,7 @@ snag_app_irc_take_pending(struct app_state *app,
     if (app->irc_urgent.len) {
         source = &app->irc_urgent;
         if (local_operator)
-            *local_operator = app->irc_urgent_local_operator;
+            *local_operator = app->irc_urgent_replies.count != 0u;
     } else if (app->irc_background.len &&
                (force_background ||
                 snag_time_ms() - app->irc_background_since_ms >= 100u)) {
@@ -405,10 +453,14 @@ snag_app_irc_take_pending(struct app_state *app,
     if (!copy)
         return NULL;
     consume_pending(source, used);
-    if (!source->len && source == &app->irc_urgent)
-        app->irc_urgent_local_operator = false;
-    else if (!source->len)
+    app->irc_turn_replies.count = 0u;
+    if (source == &app->irc_urgent) {
+        admit_replies(app, used);
+        if (local_operator)
+            *local_operator = app->irc_turn_replies.count != 0u;
+    } else if (!source->len) {
         app->irc_background_since_ms = 0u;
+    }
     return copy;
 }
 

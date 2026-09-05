@@ -292,6 +292,21 @@ class FakeResponses:
             )
             if latest.startswith("multi-tools"):
                 body = self.multi_tool_body(request, sequence, latest).encode()
+            elif latest.startswith("destination-model "):
+                _, destination, marker = latest.split()
+                call_id = f"call_destination_{marker}"
+                finished = any(item.get("type") == "function_call" and
+                               item.get("name") == "irc_send" and
+                               json.loads(item.get("arguments", "{}")).get("text") == marker and
+                               item.get("call_id") in completed_calls
+                               for item in request.get("input", []))
+                if finished:
+                    body = self.response_body(sequence, "destination model done").encode()
+                else:
+                    body = self.function_body(sequence, call_id, "irc_send", {
+                        "destination": None if destination == "null" else destination,
+                        "notice": False, "text": marker,
+                    }).encode()
             elif latest.startswith("tool-cap "):
                 body = self.output_cap_body(request, sequence, latest).encode()
             elif marker and not call_finished:
@@ -1914,6 +1929,105 @@ def validate_irc_styles(terminal, remote_agent, local_agent=None):
             raise AssertionError(f"network UI is missing {role} styling")
 
 
+def run_destination_case(binary, root, provider, environment):
+    endpoints = [f"127.0.0.1:{free_loopback_port()}" for _ in range(2)]
+    specs = [
+        ("a", "host-model", ["-s", endpoints[0], "-n", "servera", "-o", "opa", "-r", "alpha"]),
+        ("b", "one-model", ["-s", endpoints[1], "-n", "serverb", "-o", "opb", "-r", "beta"]),
+        ("c", "two-model", ["-c", endpoints[0], "-c", endpoints[1], "-n", "routerbot", "-o", "routerop"]),
+    ]
+    terminals = {}
+
+    def deliveries(marker, expected):
+        for name in expected:
+            terminals[name].wait(marker)
+        wait_irc_idle(list(terminals.values()))
+        for name, terminal in terminals.items():
+            _, events = read_events(terminal.dotdir)
+            matches = [event for event in event_list(events, "irc_event")
+                       if event["data"]["kind"] == "message" and
+                       event["data"]["text"] == marker]
+            assert len(matches) == expected.get(name, 0), (name, marker, matches)
+
+    try:
+        for name, model, args in specs:
+            case = root / ("dest-" + name)
+            workspace = case / "work"
+            workspace.mkdir(mode=0o700, parents=True)
+            config = case / "config.ini"
+            write_irc_config(config, provider.port, model)
+            terminal = TmuxTerminal(case / "terminal", binary, workspace,
+                case / "state", config, 120, 24, args=args, environment=environment)
+            terminals[name] = terminal
+            terminal.wait(f"{args[args.index('-o') + 1]}@{MACHINE_HOSTNAME} :")
+        client = terminals["c"]
+        terminals["a"].wait("routerop joined")
+        terminals["b"].wait("routerop joined")
+        wait_irc_idle(list(terminals.values()))
+        client.wait("[1 #alpha]")
+        client.submit("destination-plain-one")
+        deliveries("destination-plain-one", {"a": 1, "c": 1})
+        client.submit("/2 destination-once-two")
+        deliveries("destination-once-two", {"b": 1, "c": 1})
+        client.submit("destination-still-one")
+        deliveries("destination-still-one", {"a": 1, "c": 1})
+        client.submit("/2")
+        client.wait("destination: 2")
+        client.wait("[2 #beta]")
+        client.submit("destination-selected-two")
+        deliveries("destination-selected-two", {"b": 1, "c": 1})
+        client.submit("/all destination-broadcast")
+        deliveries("destination-broadcast", {"a": 1, "b": 1, "c": 2})
+        client.submit("/1 /all literal-command")
+        deliveries("/all literal-command", {"a": 1, "c": 1})
+        client.submit("/names")
+        client.wait("selected destination: 2")
+        client.wait(f"destination[1]: {endpoints[0]}")
+        client.wait(f"destination[2]: {endpoints[1]}")
+
+        client.submit("/rollout")
+        client.wait("fake/two-model/medium ›")
+        client.submit("destination-model 1 model-to-one")
+        deliveries("model-to-one", {"a": 1, "c": 1})
+        client.wait("destination model done")
+        client.submit("destination-model null ambiguous-model")
+        wait_irc_idle(list(terminals.values()))
+        requests = provider.matching_requests("destination-model null ambiguous-model")
+        deadline = time.monotonic() + 10.0
+        while len(requests) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+            requests = provider.matching_requests("destination-model null ambiguous-model")
+        outputs = [item["output"] for request in requests
+                   for item in request["body"]["input"]
+                   if item.get("type") == "function_call_output"]
+        assert any("Select a destination" in output for output in outputs), outputs
+        deliveries("ambiguous-model", {})
+
+        client.submit(f"/disconnect {endpoints[1]}")
+        client.wait("outgoing connection removed")
+        client.submit("/chat")
+        client.wait("[2 unavailable]")
+        client.submit("/1")
+        client.wait("destination: 1")
+        client.submit("/1 single-still-valid")
+        deliveries("single-still-valid", {"a": 1, "c": 1})
+        assert "[1 #alpha]" not in client.capture().rstrip().splitlines()[-1]
+        client.submit(f"/connect {endpoints[1]}")
+        client.wait("outgoing connection added")
+        client.submit("/names")
+        client.wait(f"destination[3]: {endpoints[1]}")
+        client.submit("/2 removed-target")
+        client.wait("unavailable")
+        deliveries("removed-target", {})
+        client.send_key("C-u")
+        for terminal in reversed(list(terminals.values())):
+            terminal.exit()
+        print("tmux_terminal destinations: ok", flush=True)
+    finally:
+        for terminal in reversed(list(terminals.values())):
+            terminal.close()
+
+
 def run_listener_collision_case(binary, root, provider, environment):
     endpoint = f"localhost:{free_loopback_port()}"
     terminals = []
@@ -2640,6 +2754,7 @@ def run_irc_case(binary, root):
         run_runtime_routing_cases(binary, root, provider, environment)
         run_runtime_boundary_cases(binary, root, provider, environment)
         run_runtime_history_case(binary, root, provider, environment)
+        run_destination_case(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
 
         run_multi_tool_cases(binary, root, provider, environment)

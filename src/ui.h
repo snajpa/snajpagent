@@ -39,6 +39,7 @@ int snag_ui_nicks(struct snag_ui *ui, const char *nicks);
 int snag_ui_destinations(struct snag_ui *ui,
                           const struct snag_irc_destinations *destinations);
 int snag_ui_select_destination(struct snag_ui *ui, uint32_t id);
+int snag_ui_capture_route(struct snag_ui *ui, const char *text);
 /* The immutable command catalog must outlive the UI (the app uses static data). */
 int snag_ui_commands(struct snag_ui *ui, const struct snag_term_command *commands,
                       size_t count);

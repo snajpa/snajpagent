@@ -617,8 +617,6 @@ tick_irc(struct app_state *app, char *error, size_t error_size)
         snag_app_sync_destinations(app) < 0)
         return -1;
     if (revision != snag_irc_routing_revision(app->irc)) {
-        app->irc_urgent_local_operator = false;
-        app->irc_turn_local_operator = false;
         if (snag_app_irc_snapshot(app, "topology", error, error_size) < 0)
             return -1;
     }
@@ -1689,7 +1687,6 @@ apply_network(struct app_state *app, struct snag_config *candidate,
                char *error, size_t error_size)
 {
     int rc = 0;
-    uint64_t revision = snag_irc_routing_revision(app->irc);
 
     if (snag_irc_normalize(candidate, error, error_size) < 0)
         return 1;
@@ -1713,10 +1710,6 @@ apply_network(struct app_state *app, struct snag_config *candidate,
     }
     snag_irc_roles(app->irc, app->config);
     candidate->irc = app->config->irc;
-    if (revision != snag_irc_routing_revision(app->irc)) {
-        app->irc_urgent_local_operator = false;
-        app->irc_turn_local_operator = false;
-    }
     app->networked = snag_irc_enabled(app->config);
     if (snag_ui_networked(&app->ui, app->networked,
                           snag_irc_model_nick(app->irc)) < 0 ||
@@ -2093,6 +2086,13 @@ handle_destination_command(struct app_state *app, const char *line, bool *handle
     if (command == SNAG_IRC_TARGET_SELECT)
         return snag_ui_select_destination(&app->ui, id) < 0 ?
             app_error(app, "destination unavailable; use /names") : 0;
+    if (command == SNAG_IRC_TARGET_SEND && !app->ui.input_route.count) {
+        char error[96u];
+        (void)snprintf(error, sizeof(error), "destination %u is unavailable; use /names", id);
+        if (app_error(app, error) < 0)
+            return -1;
+        return snag_ui_restore_draft(&app->ui, line);
+    }
     return send_operator_routed(app, line, line + body, SNAG_IRC_MESSAGE);
 }
 
@@ -2827,7 +2827,6 @@ run_turn(struct app_state *app, const char *prompt,
     int result = 4;
     snag_credential_clear(&credential);
     app->last_turn_refused = false;
-    app->irc_turn_replied = false;
     error[0] = '\0';
     if (!*prompt || strlen(prompt) > prompt_max ||
         !snag_utf8_valid((const unsigned char *)prompt, strlen(prompt), true)) {
@@ -3454,8 +3453,7 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (app->networked && !app->session.active_read_only &&
-            app->irc_turn_local_operator &&
-            !app->irc_turn_replied && !app->session.irc_reply_reminded &&
+            app->irc_turn_replies.count && !app->session.irc_reply_reminded &&
             (decision.outcome == SNAG_GRAPH_NONPRODUCTIVE ||
              decision.outcome == SNAG_GRAPH_FINAL ||
              decision.outcome == SNAG_GRAPH_REFUSAL)) {
@@ -3476,7 +3474,7 @@ run_turn(struct app_state *app, const char *prompt,
         if (app->request_networked && decision.outcome == SNAG_GRAPH_NONPRODUCTIVE) {
             if (commit_event(app, "turn_completed_silent",
                     silent_turn_data(turn_id, response_id,
-                        app->irc_turn_local_operator && !app->irc_turn_replied ?
+                        app->irc_turn_replies.count ?
                         "reply_reminder_exhausted" : "room_update_quiet"),
                     error, sizeof(error)) < 0) {
                 (void)app_error(app, error[0] ? error :
@@ -3592,6 +3590,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     const char *message = NULL;
     int rc = run_turn(app, prompt, queued, goal_turn, read_only);
 
+    app->irc_turn_replies.count = 0u;
     if (app->session.goal_status != SNAG_GOAL_ACTIVE)
         return rc;
     if (app->input_closed) {
@@ -3957,9 +3956,7 @@ run_ready_chains(struct app_state *app)
             char *prompt = snag_app_irc_take_pending(app, &local_operator,
                                                      true);
             if (prompt) {
-                app->irc_turn_local_operator = local_operator;
                 turn_rc = run_tracked_turn(app, prompt, NULL, false, false);
-                app->irc_turn_local_operator = false;
                 free(prompt);
                 if (turn_rc != 0)
                     return turn_rc;
@@ -3992,6 +3989,9 @@ interactive_loop(struct app_state *app, const char *initial)
     const char *prompt = initial;
     if (set_input_prompt(app, false) < 0)
         return 6;
+    if (initial && (snag_app_sync_destinations(app) < 0 ||
+                    snag_ui_capture_route(&app->ui, initial) < 0))
+        return 6;
     for (;;) {
         enum snag_term_action action = SNAG_TERM_NONE;
         bool prompt_ready = false;
@@ -4007,9 +4007,7 @@ interactive_loop(struct app_state *app, const char *initial)
             if (irc_prompt) {
                 int turn_rc;
                 app->queue_armed = false;
-                app->irc_turn_local_operator = local_operator;
                 turn_rc = run_tracked_turn(app, irc_prompt, NULL, false, false);
-                app->irc_turn_local_operator = false;
                 free(irc_prompt);
                 if (turn_rc == 3 || turn_rc == 6)
                     return turn_rc;

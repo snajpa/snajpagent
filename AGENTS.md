@@ -8,7 +8,8 @@ reason from the code in front of you, not a guess about future needs.
 
 Shipment policy: once relevant tests have passed at least once, rebase onto
 current master and compile the combined tree. A successful post-rebase build
-is sufficient to integrate and push authorized work to master; do not require
+is sufficient, including after conflict resolution, to integrate and push
+authorized work to master; do not require
 another full test run, fresh sanitizer run, or expanded validation campaign.
 Preserve the existing passing evidence and report its actual scope honestly.
 Fix known product failures and build failures; do not conceal them behind an
