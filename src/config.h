@@ -77,15 +77,13 @@ struct snag_provider_config {
     char openrouter_title[SNAG_CONFIG_MODEL_MAX];
 };
 
+/* Configured/advertised limits use zero for unknown; positive values are known. */
 struct snag_model_limit_config {
     char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char model[SNAG_CONFIG_MODEL_MAX];
     uint64_t context_window_tokens;
     uint64_t max_input_tokens;
     uint64_t max_output_tokens;
-    bool context_window_known;
-    bool max_input_known;
-    bool max_output_known;
 };
 
 struct snag_config {

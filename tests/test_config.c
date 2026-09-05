@@ -438,11 +438,8 @@ main(void)
         const struct snag_model_limit_config *limit =
             snag_config_model_limit(&config, "default", "gpt-5.5");
         assert(limit);
-        assert(limit->context_window_known);
         assert(limit->context_window_tokens == UINT64_C(1050000));
-        assert(limit->max_input_known);
         assert(limit->max_input_tokens == UINT64_C(922000));
-        assert(limit->max_output_known);
         assert(limit->max_output_tokens == UINT64_C(128000));
     }
     {
@@ -450,10 +447,9 @@ main(void)
             snag_config_model_limit(&config, "backup",
                                    "org/model/with/slashes");
         assert(limit);
-        assert(!limit->context_window_known);
-        assert(limit->max_input_known);
+        assert(!limit->context_window_tokens);
         assert(limit->max_input_tokens == SNAG_CONFIG_TOKEN_LIMIT_MAX);
-        assert(!limit->max_output_known);
+        assert(!limit->max_output_tokens);
     }
     assert(snag_config_model_limit(&config, "default", "missing") == NULL);
     assert(snag_config_provider(&config, NULL) == &config.providers[0]);

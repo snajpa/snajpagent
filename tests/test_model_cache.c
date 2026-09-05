@@ -97,6 +97,27 @@ main(void)
     assert(cache.providers == NULL);
 
     providers = load_json(providers_text);
+    {
+        json_t *limits = json_object_get(json_array_get(json_object_get(
+            json_array_get(providers, 0), "models"), 2), "limits");
+        static const char *const keys[] = {
+            "context_window_tokens", "max_context_window_tokens",
+            "input_context_window_tokens", "max_input_tokens",
+            "max_output_tokens", "auto_compact_input_tokens",
+            "effective_context_window_percent"
+        };
+
+        /* Zero is internal absence, not an accepted external limit. */
+        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+            assert(json_object_set_new(limits, keys[i], json_integer(0)) == 0);
+            assert(snag_model_cache_replace(&store, providers, 123456u, &cache,
+                                           error, sizeof(error)) < 0);
+            assert(json_object_del(limits, keys[i]) == 0);
+            assert(snag_model_cache_replace(&store, providers, 123456u, &cache,
+                                           error, sizeof(error)) < 0);
+            assert(json_object_set_new(limits, keys[i], json_null()) == 0);
+        }
+    }
     assert(snag_model_cache_replace(&store, providers, 123456u, &cache,
                                    error, sizeof(error)) == 0);
     assert(cache.updated_at_ms == 123456u);
@@ -133,14 +154,13 @@ main(void)
     assert(capacity.hard_input_tokens == 922000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            829800u);
-    assert(!capacity.effective_context_window_known);
+    assert(!capacity.effective_context_window_percent);
 
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "context-only", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.source == SNAG_CAPACITY_CATALOG);
-    assert(capacity.context_window_known);
-    assert(capacity.effective_context_window_known);
+    assert(capacity.context_window_tokens);
     assert(capacity.effective_context_window_derived);
     assert(capacity.effective_context_window_percent == 90u);
     assert(capacity.hard_input_tokens == 90000u);
@@ -167,7 +187,6 @@ main(void)
     assert(capacity.source == SNAG_CAPACITY_CATALOG);
     assert(capacity.context_window_tokens == 272000u);
     assert(capacity.max_context_window_tokens == 872000u);
-    assert(capacity.effective_context_window_known);
     assert(capacity.effective_context_window_derived);
     assert(capacity.effective_context_window_percent == 95u);
     assert(capacity.hard_input_tokens == 258400u);
@@ -181,7 +200,6 @@ main(void)
         config.model_limit_count = 1u;
         strcpy(limit->provider, "codex");
         strcpy(limit->model, "codex-context-only");
-        limit->context_window_known = true;
         limit->context_window_tokens = 872000u;
         assert(snag_model_capacity_resolve(&cache, &config, &config.providers[1],
                    "codex-context-only", "codex", &bigger,
@@ -210,15 +228,14 @@ main(void)
                     sizeof(config.model_limits[0].provider), "%s", "paid") > 0);
     assert(snprintf(config.model_limits[0].model,
                     sizeof(config.model_limits[0].model), "%s", "org/model") > 0);
-    config.model_limits[0].max_input_known = true;
     config.model_limits[0].max_input_tokens = 900000u;
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.source == SNAG_CAPACITY_CONFIG);
     assert(capacity.source_bound);
-    assert(!capacity.context_window_known);
-    assert(!capacity.max_output_known);
+    assert(!capacity.context_window_tokens);
+    assert(!capacity.max_output_tokens);
     assert(capacity.hard_input_tokens == 900000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            810000u);
@@ -228,11 +245,24 @@ main(void)
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.source == SNAG_CAPACITY_CONFIG);
-    assert(!capacity.context_window_known);
-    assert(!capacity.max_output_known);
+    assert(!capacity.context_window_tokens);
+    assert(!capacity.max_output_tokens);
     assert(capacity.hard_input_tokens == 1100000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            990000u);
+
+    config.model_limits[0].max_input_tokens = 0u;
+    config.model_limits[0].context_window_tokens = 100u;
+    config.model_limits[0].max_output_tokens = 100u;
+    assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.hard_input_known && capacity.hard_input_tokens == 0u);
+    assert(snag_model_compact_threshold(&config.providers[0], &capacity) == 1u);
+    config.model_limits[0].max_output_tokens = 101u;
+    assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) < 0);
 
     config.model_limit_count = 0u;
     assert(snag_model_cache_record(&store, &cache, &config.providers[0],

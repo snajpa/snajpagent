@@ -41,7 +41,7 @@ turn_config(const struct app_state *app)
         "provider", app->turn_provider->name, "profile_id", SNAJPAGENT_PROFILE_ID,
         "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1);
 
-    if (config && app->turn_capacity.max_output_known &&
+    if (config && app->turn_capacity.max_output_tokens &&
         snag_json_set_new(config, "max_output_tokens",
             json_integer((json_int_t)app->turn_capacity.max_output_tokens)) < 0) {
         json_decref(config);
@@ -441,7 +441,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
     uint64_t anchored_bound = 0u;
     int rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
         cycle, steering, app->turn_capacity.max_output_tokens,
-        app->turn_capacity.max_output_known, app->config,
+        app->turn_capacity.max_output_tokens, app->config,
         &app->turn_instructions, projection, error, error_size);
 
     if (rc < 0)
@@ -535,7 +535,7 @@ snag_app_response_started_data(const struct app_state *app,
         ((capacity->hard_input_known &&
           snag_json_set_new(data, "hard_input_tokens",
               json_integer((json_int_t)capacity->hard_input_tokens)) < 0) ||
-         (capacity->max_output_known &&
+         (capacity->max_output_tokens &&
           snag_json_set_new(data, "requested_output_tokens",
               json_integer((json_int_t)capacity->max_output_tokens)) < 0))) {
         json_decref(data);
@@ -559,7 +559,7 @@ snag_app_response_capacity_rejected_data(
 
     safety_ceiling_known = capacity &&
         snag_provider_failure_safety_ceiling(failure,
-            capacity->max_output_known, capacity->max_output_tokens,
+            capacity->max_output_tokens, capacity->max_output_tokens,
             &safety_ceiling);
 
     if (!data || !turn_id || !response_id || !request_hash || !failure ||

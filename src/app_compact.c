@@ -202,7 +202,7 @@ responses_compact_create_request(const json_t *compact_request,
         "input", copy, "model", model, "parallel_tool_calls", 0,
         "reasoning", "effort", effort, "store", 0, "stream", 1,
         "tool_choice", "none", "tools", "truncation", "disabled");
-    if (request && capacity->max_output_known &&
+    if (request && capacity->max_output_tokens &&
         snag_json_set_new(request, "max_output_tokens",
             json_integer((json_int_t)capacity->max_output_tokens)) < 0) {
         json_decref(request);

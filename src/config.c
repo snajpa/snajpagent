@@ -786,33 +786,20 @@ invalid:
 }
 
 static int
-parse_model_limit(struct parse_state *state, const char *key,
-                  const char *value)
+parse_model_limit(struct parse_state *state, const char *key, const char *value)
 {
     struct snag_model_limit_config *limit =
         &state->config->model_limits[state->model_limit_index];
 
-    if (strcmp(key, "context_window_tokens") == 0) {
-        if (parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                      &limit->context_window_tokens) < 0)
-            return -1;
-        limit->context_window_known = true;
-        return 0;
-    }
-    if (strcmp(key, "max_input_tokens") == 0) {
-        if (parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                      &limit->max_input_tokens) < 0)
-            return -1;
-        limit->max_input_known = true;
-        return 0;
-    }
-    if (strcmp(key, "max_output_tokens") == 0) {
-        if (parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                      &limit->max_output_tokens) < 0)
-            return -1;
-        limit->max_output_known = true;
-        return 0;
-    }
+    if (strcmp(key, "context_window_tokens") == 0)
+        return parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
+                         &limit->context_window_tokens);
+    if (strcmp(key, "max_input_tokens") == 0)
+        return parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
+                         &limit->max_input_tokens);
+    if (strcmp(key, "max_output_tokens") == 0)
+        return parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
+                         &limit->max_output_tokens);
     errno = EINVAL;
     return -1;
 }
@@ -1184,14 +1171,14 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
     for (size_t i = 0; i < config->model_limit_count; ++i) {
         const struct snag_model_limit_config *limit = &config->model_limits[i];
         if (!snag_config_provider(config, limit->provider) ||
-            (!limit->context_window_known && !limit->max_input_known &&
-             !limit->max_output_known) ||
-            (limit->context_window_known && limit->max_input_known &&
+            (!limit->context_window_tokens && !limit->max_input_tokens &&
+             !limit->max_output_tokens) ||
+            (limit->context_window_tokens && limit->max_input_tokens &&
              limit->max_input_tokens > limit->context_window_tokens) ||
-            (limit->context_window_known && limit->max_output_known &&
+            (limit->context_window_tokens && limit->max_output_tokens &&
              limit->max_output_tokens > limit->context_window_tokens) ||
-            (limit->context_window_known && limit->max_input_known &&
-             limit->max_output_known &&
+            (limit->context_window_tokens && limit->max_input_tokens &&
+             limit->max_output_tokens &&
              limit->max_input_tokens >
                  limit->context_window_tokens - limit->max_output_tokens)) {
             snag_errorf(error, error_size,

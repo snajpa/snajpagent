@@ -1004,11 +1004,11 @@ render_status(struct app_state *app)
                               capacity.hard_input_known,
                               capacity.hard_input_tokens) < 0 ||
         append_capacity_value(&text, "requested-output",
-                              capacity.max_output_known,
+                              capacity.max_output_tokens,
                               capacity.max_output_tokens) < 0 ||
         append_compact_threshold(&text, provider, &capacity) < 0)
         goto out;
-    if (capacity.effective_context_window_known &&
+    if (capacity.effective_context_window_percent &&
         snag_buf_printf(&text, " · effective=%u%%%s",
                        capacity.effective_context_window_percent,
                        capacity.effective_context_window_derived ?
@@ -1017,13 +1017,13 @@ render_status(struct app_state *app)
     if (configured) {
         if (snag_buf_append(&text, "\nconfigured", 11u) < 0 ||
             append_capacity_value(&text, "context",
-                configured->context_window_known,
+                configured->context_window_tokens,
                 configured->context_window_tokens) < 0 ||
             append_capacity_value(&text, "max-input",
-                configured->max_input_known,
+                configured->max_input_tokens,
                 configured->max_input_tokens) < 0 ||
             append_capacity_value(&text, "max-output",
-                configured->max_output_known,
+                configured->max_output_tokens,
                 configured->max_output_tokens) < 0)
             goto out;
     }

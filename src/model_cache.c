@@ -52,69 +52,71 @@ cache_string(const json_t *value, size_t max)
            snag_utf8_valid((const unsigned char *)text, len, true);
 }
 
+/* Advertised/configured limits are positive; zero is internal absence only. */
 static bool
 nullable_limit(const json_t *object, const char *key, uint64_t max,
-               uint64_t *value, bool *known)
+               uint64_t *value)
 {
     json_t *entry = json_object_get(object, key);
     json_int_t integer;
 
-    *known = false;
     *value = 0u;
     if (json_is_null(entry))
         return true;
     if (!json_is_integer(entry) || (integer = json_integer_value(entry)) <= 0 ||
         (uint64_t)integer > max)
         return false;
-    *known = true;
     *value = (uint64_t)integer;
     return true;
 }
 
 static bool
-limits_valid(const json_t *limits)
+capacity_limits_valid(const struct snag_model_capacity *c)
+{
+    return !c->context_window_tokens ||
+        ((!c->max_context_window_tokens ||
+          c->context_window_tokens <= c->max_context_window_tokens) &&
+         c->input_context_window_tokens <= c->context_window_tokens &&
+         c->max_input_tokens <= c->context_window_tokens &&
+         c->max_output_tokens <= c->context_window_tokens &&
+         c->max_input_tokens <= c->context_window_tokens - c->max_output_tokens &&
+         c->auto_compact_input_tokens <= c->context_window_tokens);
+}
+
+static bool
+read_limits(const json_t *limits, struct snag_model_capacity *c)
 {
     static const char *const keys[] = {
         "auto_compact_input_tokens", "context_window_tokens",
         "effective_context_window_percent", "input_context_window_tokens",
         "max_context_window_tokens", "max_input_tokens", "max_output_tokens"
     };
-    uint64_t context, max_context, input_context, max_input, max_output;
-    uint64_t auto_compact, effective;
-    bool context_known, max_context_known, input_context_known;
-    bool max_input_known, max_output_known, auto_compact_known, effective_known;
+    uint64_t percent = 0u;
 
-    if (!json_is_object(limits) ||
-        !snag_json_exact_keys((json_t *)limits, keys,
-                             sizeof(keys) / sizeof(keys[0])) ||
+    if (!snag_json_exact_keys(limits, keys, sizeof(keys) / sizeof(keys[0])) ||
         !nullable_limit(limits, "context_window_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &context,
-                        &context_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->context_window_tokens) ||
         !nullable_limit(limits, "max_context_window_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &max_context,
-                        &max_context_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_context_window_tokens) ||
         !nullable_limit(limits, "input_context_window_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &input_context,
-                        &input_context_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->input_context_window_tokens) ||
         !nullable_limit(limits, "max_input_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &max_input,
-                        &max_input_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_input_tokens) ||
         !nullable_limit(limits, "max_output_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &max_output,
-                        &max_output_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_output_tokens) ||
         !nullable_limit(limits, "auto_compact_input_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &auto_compact,
-                        &auto_compact_known) ||
-        !nullable_limit(limits, "effective_context_window_percent", 100u,
-                        &effective, &effective_known))
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->auto_compact_input_tokens) ||
+        !nullable_limit(limits, "effective_context_window_percent", 100u, &percent))
         return false;
-    return !(context_known && max_context_known && context > max_context) &&
-           !(context_known && input_context_known && input_context > context) &&
-           !(context_known && max_input_known && max_input > context) &&
-           !(context_known && max_output_known && max_output > context) &&
-           !(context_known && max_input_known && max_output_known &&
-             max_input > context - max_output) &&
-           !(context_known && auto_compact_known && auto_compact > context);
+    c->effective_context_window_percent = (unsigned int)percent;
+    return capacity_limits_valid(c);
+}
+
+static bool
+limits_valid(const json_t *limits)
+{
+    struct snag_model_capacity capacity = {0};
+    return read_limits(limits, &capacity);
 }
 
 static bool
@@ -778,16 +780,6 @@ snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
 }
 
 static void
-read_capacity_limit(const json_t *limits, const char *key, uint64_t max,
-                    uint64_t *value, bool *known)
-{
-    if (!nullable_limit(limits, key, max, value, known)) {
-        *value = 0u;
-        *known = false;
-    }
-}
-
-static void
 minimum_budget(uint64_t value, uint64_t *budget, bool *known)
 {
     if (!*known || value < *budget) {
@@ -866,68 +858,22 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
     override = snag_config_model_limit(config, provider->name, model);
     if (override) {
         capacity->context_window_tokens = override->context_window_tokens;
-        capacity->context_window_known = override->context_window_known;
         capacity->max_input_tokens = override->max_input_tokens;
-        capacity->max_input_known = override->max_input_known;
         capacity->max_output_tokens = override->max_output_tokens;
-        capacity->max_output_known = override->max_output_known;
         capacity->source = SNAG_CAPACITY_CONFIG;
     } else if (limits) {
-        read_capacity_limit(limits, "context_window_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->context_window_tokens,
-                            &capacity->context_window_known);
-        read_capacity_limit(limits, "max_context_window_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->max_context_window_tokens,
-                            &capacity->max_context_window_known);
-        read_capacity_limit(limits, "input_context_window_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->input_context_window_tokens,
-                            &capacity->input_context_window_known);
-        read_capacity_limit(limits, "max_input_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->max_input_tokens,
-                            &capacity->max_input_known);
-        read_capacity_limit(limits, "max_output_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->max_output_tokens,
-                            &capacity->max_output_known);
-        read_capacity_limit(limits, "auto_compact_input_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->auto_compact_input_tokens,
-                            &capacity->auto_compact_input_known);
-        {
-            uint64_t percent = 0u;
-
-            read_capacity_limit(limits, "effective_context_window_percent",
-                                100u, &percent,
-                                &capacity->effective_context_window_known);
-            capacity->effective_context_window_percent = (unsigned int)percent;
+        if (!read_limits(limits, capacity)) {
+            snag_errorf(error, error_size, "invalid cached capacity limits");
+            errno = EINVAL;
+            return -1;
         }
-        catalog_used = capacity->context_window_known ||
-            capacity->max_context_window_known ||
-            capacity->input_context_window_known ||
-            capacity->max_input_known || capacity->max_output_known ||
-            capacity->auto_compact_input_known ||
-            capacity->effective_context_window_known;
+        catalog_used = capacity->context_window_tokens ||
+            capacity->max_context_window_tokens ||
+            capacity->input_context_window_tokens || capacity->max_input_tokens ||
+            capacity->max_output_tokens || capacity->auto_compact_input_tokens ||
+            capacity->effective_context_window_percent;
     }
-    if ((capacity->context_window_known &&
-         capacity->max_context_window_known &&
-         capacity->context_window_tokens >
-             capacity->max_context_window_tokens) ||
-        (capacity->context_window_known &&
-         capacity->input_context_window_known &&
-         capacity->input_context_window_tokens >
-             capacity->context_window_tokens) ||
-        (capacity->context_window_known && capacity->max_input_known &&
-         capacity->max_input_tokens > capacity->context_window_tokens) ||
-        (capacity->context_window_known && capacity->max_output_known &&
-         capacity->max_output_tokens > capacity->context_window_tokens) ||
-        (capacity->context_window_known && capacity->max_input_known &&
-         capacity->max_output_known &&
-         capacity->max_input_tokens > capacity->context_window_tokens -
-                                      capacity->max_output_tokens)) {
+    if (!capacity_limits_valid(capacity)) {
         snag_errorf(error, error_size,
                   "contradictory capacity limits for %s/%s",
                   provider->name, model);
@@ -936,32 +882,30 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
     }
     if (!override && catalog_used)
         capacity->source = SNAG_CAPACITY_CATALOG;
-    if (capacity->max_input_known)
+    if (capacity->max_input_tokens)
         minimum_budget(capacity->max_input_tokens, &capacity->hard_input_tokens,
                        &capacity->hard_input_known);
-    if (capacity->input_context_window_known)
+    if (capacity->input_context_window_tokens)
         minimum_budget(capacity->input_context_window_tokens,
                        &capacity->hard_input_tokens,
                        &capacity->hard_input_known);
-    if (capacity->context_window_known) {
+    if (capacity->context_window_tokens) {
         uint64_t context_budget = capacity->context_window_tokens;
 
-        if (capacity->max_output_known)
+        if (capacity->max_output_tokens)
             context_budget -= capacity->max_output_tokens;
         minimum_budget(context_budget, &capacity->hard_input_tokens,
                        &capacity->hard_input_known);
-        if (!capacity->effective_context_window_known) {
+        if (!capacity->effective_context_window_percent) {
             if (capacity->codex_protocol) {
                 capacity->effective_context_window_percent = 95u;
-                capacity->effective_context_window_known = true;
                 capacity->effective_context_window_derived = true;
-            } else if (!capacity->max_output_known) {
+            } else if (!capacity->max_output_tokens) {
                 capacity->effective_context_window_percent = 90u;
-                capacity->effective_context_window_known = true;
                 capacity->effective_context_window_derived = true;
             }
         }
-        if (capacity->effective_context_window_known) {
+        if (capacity->effective_context_window_percent) {
             uint64_t effective_budget = capacity->context_window_tokens *
                 capacity->effective_context_window_percent / 100u;
 
