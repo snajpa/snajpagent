@@ -1196,37 +1196,19 @@ static int
 preview_printf(struct snag_buf *out, size_t *used, bool *truncated,
                const char *fmt, ...)
 {
+    struct snag_buf text;
     va_list ap;
-    va_list copy;
-    char *tmp;
-    int n;
     int rc;
 
     if (*truncated)
         return 0;
+    snag_buf_init(&text, SIZE_MAX);
     va_start(ap, fmt);
-    va_copy(copy, ap);
-    n = vsnprintf(NULL, 0, fmt, copy);
-    va_end(copy);
-    if (n < 0) {
-        va_end(ap);
-        errno = EINVAL;
-        return -1;
-    }
-    tmp = malloc((size_t)n + 1u);
-    if (!tmp) {
-        va_end(ap);
-        return -1;
-    }
-    if (vsnprintf(tmp, (size_t)n + 1u, fmt, ap) != n) {
-        va_end(ap);
-        free(tmp);
-        errno = EIO;
-        return -1;
-    }
+    rc = snag_buf_vprintf(&text, fmt, ap);
     va_end(ap);
-    rc = preview_appendn(out, used, truncated, tmp, (size_t)n);
-    free(tmp);
+    if (rc == 0)
+        rc = preview_appendn(out, used, truncated, (const char *)text.data, text.len);
+    snag_buf_free(&text);
     return rc;
 }
 

@@ -1342,9 +1342,9 @@ static json_t *
 model_input_object(struct context_builder *builder)
 {
     json_t *metadata = snag_instructions_metadata_json(builder->instructions);
-    json_t *input = json_pack("{s:s,s:i,s:s,s:O,s:O,s:s,s:s,s:i,s:O}",
+    json_t *input = json_pack("{s:s,s:I,s:s,s:O,s:O,s:s,s:s,s:i,s:O}",
         "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
-        "cycle", (int)builder->cycle, "effort", builder->effort,
+        "cycle", (json_int_t)builder->cycle, "effort", builder->effort,
         "instructions", metadata, "items", builder->request_input,
         "model", builder->model, "profile_id", SNAJPAGENT_PROFILE_ID,
         "tool_schema", 1, "tools", builder->tools);

@@ -134,26 +134,14 @@ app_hostf(struct app_state *app, const char *fmt, ...)
 {
     struct snag_buf text;
     va_list ap;
-    int needed;
     int rc;
+
     snag_buf_init(&text, 4u * 1024u * 1024u);
     va_start(ap, fmt);
-    needed = vsnprintf(NULL, 0, fmt, ap);
+    rc = snag_buf_vprintf(&text, fmt, ap);
     va_end(ap);
-    if (needed < 0 || (size_t)needed > text.max) {
-        snag_buf_free(&text);
-        errno = EOVERFLOW;
-        return -1;
-    }
-    if (snag_buf_reserve(&text, (size_t)needed + 1u) < 0) {
-        snag_buf_free(&text);
-        return -1;
-    }
-    va_start(ap, fmt);
-    (void)vsnprintf((char *)text.data, (size_t)needed + 1u, fmt, ap);
-    va_end(ap);
-    text.len = (size_t)needed;
-    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+    if (rc == 0)
+        rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
     snag_buf_free(&text);
     return rc;
 }
@@ -162,28 +150,16 @@ app_runtimef(struct app_state *app, const char *fmt, ...)
 {
     struct snag_buf text;
     va_list ap;
-    int needed;
     int rc;
+
     if (!snag_ui_enabled(&app->ui, SNAG_PRESENT_DEBUG))
         return 0;
     snag_buf_init(&text, 4u * 1024u * 1024u);
     va_start(ap, fmt);
-    needed = vsnprintf(NULL, 0, fmt, ap);
+    rc = snag_buf_vprintf(&text, fmt, ap);
     va_end(ap);
-    if (needed < 0 || (size_t)needed > text.max) {
-        snag_buf_free(&text);
-        errno = EOVERFLOW;
-        return -1;
-    }
-    if (snag_buf_reserve(&text, (size_t)needed + 1u) < 0) {
-        snag_buf_free(&text);
-        return -1;
-    }
-    va_start(ap, fmt);
-    (void)vsnprintf((char *)text.data, (size_t)needed + 1u, fmt, ap);
-    va_end(ap);
-    text.len = (size_t)needed;
-    rc = snag_ui_text(&app->ui, SNAG_UI_RUNTIME, (const char *)text.data);
+    if (rc == 0)
+        rc = snag_ui_text(&app->ui, SNAG_UI_RUNTIME, (const char *)text.data);
     snag_buf_free(&text);
     return rc;
 }

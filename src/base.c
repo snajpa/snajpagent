@@ -167,33 +167,38 @@ snag_buf_putc(struct snag_buf *buf, unsigned char c)
 }
 
 int
-snag_buf_printf(struct snag_buf *buf, const char *fmt, ...)
+snag_buf_vprintf(struct snag_buf *buf, const char *fmt, va_list ap)
 {
-    va_list ap;
     va_list copy;
     int n;
 
-    va_start(ap, fmt);
     va_copy(copy, ap);
     n = vsnprintf(NULL, 0, fmt, copy);
     va_end(copy);
     if (n < 0 || (size_t)n > buf->max - buf->len) {
-        va_end(ap);
         errno = EOVERFLOW;
         return -1;
     }
-    if (snag_buf_reserve(buf, (size_t)n + 1u) < 0) {
-        va_end(ap);
+    if (snag_buf_reserve(buf, (size_t)n + 1u) < 0)
         return -1;
-    }
     if (vsnprintf((char *)buf->data + buf->len, (size_t)n + 1u, fmt, ap) != n) {
-        va_end(ap);
         errno = EIO;
         return -1;
     }
-    va_end(ap);
     buf->len += (size_t)n;
     return 0;
+}
+
+int
+snag_buf_printf(struct snag_buf *buf, const char *fmt, ...)
+{
+    va_list ap;
+    int rc;
+
+    va_start(ap, fmt);
+    rc = snag_buf_vprintf(buf, fmt, ap);
+    va_end(ap);
+    return rc;
 }
 
 int
