@@ -283,9 +283,11 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
     render->verbosity = message->verbosity;
     switch (message->kind) {
     case UI_TEXT: return apply_text(display, message);
-    case UI_COLOR:
+    case UI_COLOR: {
+        bool previous = render->color_stderr;
         snj_render_set_color(render, (enum snj_color_mode)message->data.value);
-        return 0;
+        return previous != render->color_stderr ? snj_term_hide(term) : 0;
+    }
     case UI_MARKDOWN:
         snj_render_set_markdown(render, message->data.value != 0u);
         return 0;
@@ -424,9 +426,9 @@ read_input(struct snj_ui_display *display, int timeout_ms)
     item = calloc(1u, sizeof(*item));
     if (!item)
         return -1;
-    take_snapshot(display, &item->snapshot);
     rc = snj_term_poll(term, timeout_ms, runtime->commands.wake[0],
                        &item->action, &item->text);
+    take_snapshot(display, &item->snapshot);
     if (item->action == SNJ_TERM_CANCEL || item->action == SNJ_TERM_INTERRUPT ||
         item->action == SNJ_TERM_SUBMIT || item->action == SNJ_TERM_QUEUE) {
         bool deferred = term->defer_redraw;

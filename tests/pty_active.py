@@ -299,7 +299,7 @@ def wait_turn_completed(child, session_id, needle, timeout=8.0):
             needle in event["data"]["text"]
         ]
         if any(event["type"] == "turn_completed" and
-               event["data"]["turn_id"] in turn_ids for event in log):
+               event["data"]["turn_id"] in turn_ids[-1:] for event in log):
             return log
         if time.monotonic() >= deadline:
             lifecycle = [(event["type"], event["data"].get("turn_id"),
@@ -3131,6 +3131,8 @@ def test_network_chat_and_managed_mention():
         peer_agent = IRCClient(port, "peerbot", agent=True)
 
         stream_start = len(child.buf)
+        for nick in ("remoteop", "peerbot"):
+            wait_turn_completed(child, session_id, f"event=join sender={nick}")
         model_wire_start = len(human.buf)
         child.send(b"network_view_stream\r")
         deadline = time.monotonic() + 4.0
@@ -3190,6 +3192,7 @@ def test_network_chat_and_managed_mention():
         terminal_start = len(child.buf)
         wire_start = len(human.buf)
         child.send(b"network_zero\r")
+        wait_turn_completed(child, session_id, "network_zero")
         child.wait(network_idle, start=terminal_start)
         child.drain()
         assert b"network zero local only" not in child.buf[terminal_start:]
@@ -3202,6 +3205,7 @@ def test_network_chat_and_managed_mention():
         wire_start = len(human.buf)
         child.send(b"network_one\r")
         human.wait(b"PRIVMSG #lab :network one reply\r\n", start=wire_start)
+        wait_turn_completed(child, session_id, "network_one")
         verbose_end = child.wait(b"network one reply", start=verbose_end)
         child.wait(network_idle, start=verbose_end)
 
@@ -3209,6 +3213,7 @@ def test_network_chat_and_managed_mention():
         tool_start = len(child.buf)
         child.send(b"network_tool\r")
         human.wait(b"PRIVMSG #lab :network tool complete\r\n", start=wire_start)
+        wait_turn_completed(child, session_id, "network_tool")
         child.send(b"/rollout\r")
         child.wait(b"\xe2\x86\x92 exec  timeout=1000ms  'fixture ok'",
                    start=tool_start)
@@ -3222,12 +3227,14 @@ def test_network_chat_and_managed_mention():
         wire_start = len(human.buf)
         human.message("network_operator")
         human.wait(b"PRIVMSG #lab :network operator reply\r\n", start=wire_start)
+        wait_turn_completed(child, session_id, "network_operator")
         child.wait(network_idle, start=operator_start)
 
         mention_start = len(child.buf)
         wire_start = len(human.buf)
         peer_agent.message("agent: network_mention")
         human.wait(b"PRIVMSG #lab :network mention reply\r\n", start=wire_start)
+        wait_turn_completed(child, session_id, "network_mention")
         child.wait(network_idle, start=mention_start)
 
         count_start = len(child.buf)
@@ -3251,12 +3258,14 @@ def test_network_chat_and_managed_mention():
         peer_agent.message("agent: network count mention")
         human.wait(b"PRIVMSG #lab :network count mention reply\r\n",
                    start=wire_start)
+        wait_turn_completed(child, session_id, "network_count_wait")
         child.wait(network_idle, start=count_start)
 
         reminder_start = len(child.buf)
         wire_start = len(human.buf)
         child.send(b"network_reminder\r")
         human.wait(b"PRIVMSG #lab :network reminder reply\r\n", start=wire_start)
+        wait_turn_completed(child, session_id, "network_reminder")
         child.wait(network_idle, start=reminder_start)
 
         child.send(b"/verbose 2\r")
@@ -3267,6 +3276,7 @@ def test_network_chat_and_managed_mention():
         child.send(b"network_commentary\r")
         human.wait(b"PRIVMSG #lab :network commentary reply\r\n",
                    start=wire_start)
+        wait_turn_completed(child, session_id, "network_commentary")
         child.send(b"/rollout\r")
         child.wait(b"\xe2\x80\xa2 network local planning", start=verbose_end)
         child.send(b"/chat\r")
@@ -3290,6 +3300,7 @@ def test_network_chat_and_managed_mention():
             ) from exc
         managed_complete = child.wait(b"network managed local completion",
                                       start=verbose_end)
+        wait_turn_completed(child, session_id, "network_managed")
         child.wait(PROMPT, start=managed_complete)
         assert managed_end > wire_start
         assert (b"PRIVMSG #lab :network managed local completion\r\n" not in
@@ -3313,6 +3324,7 @@ def test_network_chat_and_managed_mention():
         child.send(b"network_one\r")
         human.wait(b"PRIVMSG #lab :network one reply\r\n", start=wire_start)
 
+        wait_turn_completed(child, session_id, "network_one")
         child.exit_now()
         exited = True
     finally:
