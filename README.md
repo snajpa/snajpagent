@@ -27,6 +27,34 @@ enables the terminal integration tests.
 
 ## Configure
 
+On a fresh interactive launch, `snajpagent` offers provider setup: ChatGPT/Codex
+device login, OpenRouter, OpenAI, or another Responses-compatible service.
+Choose the provider, authenticate, optionally fetch its model list, and select
+a model. Settings go into a minimal private `config.ini`; stored credentials
+go separately under the dotdir's private `auth/` directory.
+
+You can also configure a provider explicitly:
+
+```sh
+snajpagent login codex --device-auth
+snajpagent login openrouter
+snajpagent login status
+snajpagent logout openrouter
+```
+
+Put common options before the command. For noninteractive initial setup, choose
+a model and supply an API key through stdin, never through a command argument:
+
+```sh
+snajpagent -m vendor/model login openrouter --with-api-key < /private/key-file
+```
+
+Existing configuration and environment-key use still work. There is no setup
+wizard for piped input, `-e`, resume, listing, or an explicit missing/invalid
+configuration. Login for an existing provider leaves the default model alone;
+`/model PROVIDER/MODEL` selects it. Codex tokens refresh on use and coordinate
+across processes, while OpenRouter keeps its own credentials and capabilities.
+
 Choose a model your Responses-compatible provider supports. For example,
 create a private configuration directory:
 

@@ -19,6 +19,10 @@
   Preserve the conservative input bound when an exact-count probe is skipped.
   Accept OpenRouter's trailing SSE `[DONE]` only after a valid Responses
   terminal event.
+- Add provider-scoped login/status/logout and first-run setup for native Codex
+  device authentication, stored API keys, and existing environment credentials.
+  Keep OpenRouter and other Responses providers independent; coordinate OAuth
+  refresh across instances and adapt direct Codex requests without a proxy.
 
 - Automatically use OpenRouter's hosted web-search tool for its provider URL,
   in normal and `/ro` turns, without extra search configuration.

@@ -19,6 +19,22 @@ snajpagent \- fast, lightweight, networked coding agent
 .br
 .B snajpagent \-l
 .RI [ options ]
+.br
+.B snajpagent
+.RI [ options ]
+.B login
+.RI [ provider ]
+.RI [ --device-auth " | --with-api-key]"
+.br
+.B snajpagent
+.RI [ options ]
+.B login status
+.RI [ provider ]
+.br
+.B snajpagent
+.RI [ options ]
+.B logout
+.RI [ provider ]
 .SH DESCRIPTION
 .B snajpagent
 is a fast, lightweight, networked coding agent for power users.  It runs in
@@ -29,6 +45,16 @@ Networked mode adds a built-in single-room IRC server and up to 16 outgoing
 IRC connections.  Agents and channel operators share the room; the runtime
 owns joining, history, and reconnection.
 .SH GETTING STARTED
+On a fresh interactive launch without configuration or existing environment
+credentials, choose ChatGPT/Codex, OpenRouter, OpenAI, or a custom provider.
+Complete device login or enter a masked API key (blank selects an environment
+variable), optionally fetch that provider's catalog, and choose a model.
+Setup creates a minimal private configuration and separate credential store,
+then continues into the ordinary session.  Cancellation leaves prior settings
+and credentials intact.
+.PP
+For manual configuration:
+.PP
 Create a private state directory:
 .PP
 .nf
@@ -546,6 +572,49 @@ to summarize through ordinary Responses when a provider lacks that endpoint;
 there is no automatic compaction-protocol fallback.  Manual
 .B /compact
 is idle only.  Compaction changes model context, not the append-only local log.
+.SH LOGIN
+Common options such as
+.BR --dotdir ,
+.BR --config ,
+and
+.B -m
+must precede the login/logout command.
+.TP
+.BI "login " [provider]
+Authenticate a configured provider or choose one of the
+.BR codex ,
+.BR openrouter ,
+.BR openai ,
+and
+.B custom
+presets.  Existing environment authentication remains explicit; there is no
+fallback to another provider or authentication method.  Login does not change
+the default model in an existing configuration.
+.TP
+.B --device-auth
+Use the native Codex device flow.  Open the printed verification URL and enter
+the one-time code.  Device login must be enabled in the ChatGPT account or
+workspace.  Waiting is bounded to 15 minutes; Ctrl-C cancels.
+.TP
+.B --with-api-key
+Read one API key from stdin for explicit login.  No key argument is accepted.
+Noninteractive first setup also requires
+.B -m MODEL
+before
+.BR login .
+.TP
+.BI "login status " [provider]
+Report configured credential sources and local state without contacting a
+provider or refreshing tokens.  Stored status is not a remote entitlement check.
+.TP
+.BI "logout " [provider]
+Remove only the selected provider's stored login.  If omitted, select the
+configured default provider.  Environment variables and Codex's own credentials
+are not modified; other provider logins remain intact.
+.PP
+Automatic setup never consumes piped task input or runs for execution, resume,
+session listing, or a missing explicitly specified configuration.  Invalid
+existing configuration is an error, not an invitation to overwrite it.
 .SH CONFIGURATION
 The file is UTF-8 INI syntax.  Lines beginning with
 .B #
@@ -608,6 +677,21 @@ HTTP or HTTPS API base without query or fragment.  Default:
 .B api_key_env
 Credential environment-variable name.  Default:
 .BR OPENAI_API_KEY .
+.TP
+.B auth
+Credential source:
+.B env
+(default) reads
+.BR api_key_env ;
+.B api_key
+reads the provider's stored key; and
+.B chatgpt
+uses stored Codex OAuth credentials with automatic refresh.
+ChatGPT auth requires the exact base
+.BR https://chatgpt.com/backend-api/codex .
+These tokens are never sent to a custom endpoint.  Existing bearer-auth
+Codex-compatible proxies retain
+.BR auth=env .
 .TP
 .B connect_timeout_ms
 Connect timeout, 1000 through 120000.  Default: 30000.
@@ -858,6 +942,12 @@ Server and snapshot history, 1 through 1000.  Default: 200.
 .I $HOME/.snajpagent/config.ini
 Default configuration.
 .TP
+.I $HOME/.snajpagent/auth/PROVIDER.json
+Private credentials bound to provider, endpoint, and auth method.  Files must
+be user-owned regular files with no group/other permissions.  Per-provider
+locks coordinate refresh rotation and atomic replacement across processes.
+Do not share or commit these files.  An alternate dotdir has independent logins.
+.TP
 .I $HOME/.snajpagent/models.json
 Atomically replaced versioned provider/model registry containing advertised
 token capacities and source-bound learned accounting.  Refresh only with
@@ -931,7 +1021,7 @@ Used to resolve the executable path printed in a resume command.
 .TP
 .I api_key_env
 Each provider names its credential variable.  It must contain a nonempty value
-of 1 through 4096 ASCII bytes without whitespace or controls.
+of 1 through 16384 ASCII bytes without whitespace or controls.
 .TP
 .I secret_env
 Names additional variables hidden from tool children and redacted from output.
