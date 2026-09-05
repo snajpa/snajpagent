@@ -405,15 +405,23 @@ class FakeResponses:
                 status = 200
                 response = {
                     "models": [
-                        {"slug": "hidden", "visibility": "hide",
-                         "priority": 0},
+                        {"slug": "hidden", "visibility": "hide", "priority": 0},
+                        {"slug": "missing-visibility", "priority": 0},
+                        {"slug": "none", "visibility": "none", "priority": 0},
+                        {"slug": "future", "visibility": "future", "priority": 0},
                         {"slug": "codex-late", "visibility": "list",
-                         "priority": 20,
+                         "priority": 20, "context_window": 272000,
+                         "max_context_window": 872000,
+                         "auto_compact_token_limit": None,
                          "supported_reasoning_levels": [
-                             {"effort": "low"}, {"effort": "ultra"},
+                             {"effort": "low"}, {"effort": "ultra"}, {"effort": "low"},
                          ],
                          "default_reasoning_level": "low"},
                         {"slug": "codex-fast", "visibility": "list",
+                         "priority": 1,
+                         "supported_reasoning_levels": [{"effort": "medium"}],
+                         "default_reasoning_level": "medium"},
+                        {"slug": "codex-tied", "visibility": "list",
                          "priority": 1,
                          "supported_reasoning_levels": [{"effort": "high"}],
                          "default_reasoning_level": "high"},
@@ -1591,18 +1599,24 @@ def run_model_catalog_case(binary, root, provider, environment):
     )
     try:
         terminal.wait("    0% ordinary/uncached-start/low ›")
+        terminal.submit("/verbose 6")
+        terminal.wait("verbosity: 6")
         before = provider.catalog_paths()
         terminal.submit("/model cache")
-        screen = terminal.wait("4. codex / codex-late / ultra",
+        screen = terminal.wait("5. codex / codex-late / ultra",
                                join_wrapped=True)
         for expected in (
                 "1. ordinary / standard-model / medium",
-                "2. codex / codex-fast / high",
-                "3. codex / codex-late / low"):
+                "2. codex / codex-fast / medium",
+                "3. codex / codex-tied / high",
+                "4. codex / codex-late / low"):
             if expected not in screen:
                 raise AssertionError(
                     f"model catalog UI omitted {expected!r}:\n{screen}"
                 )
+        assert "> GET /backend-api/codex/models?client_version=0.146.0 HTTP/1.1" in screen
+        assert "> authorization:" in screen and "<redacted:bearer>" in screen
+        assert "irc-ui-secret" not in screen
         cache_path = terminal.dotdir / "models.json"
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
         if cache.get("schema_version") != 1:
@@ -1617,8 +1631,16 @@ def run_model_catalog_case(binary, root, provider, environment):
                 first_model.get("observed_hard_input_tokens") != 0):
             raise AssertionError("fresh model cache has invalid accounting state")
         if [model["id"] for model in cache["providers"][1]["models"]] != [
-                "codex-fast", "codex-late"]:
+                "codex-fast", "codex-tied", "codex-late"]:
             raise AssertionError("Codex cache retained hidden or unsorted models")
+        models = cache["providers"][1]["models"]
+        assert [m["default_effort"] for m in models] == ["medium", "high", "low"]
+        assert models[-1]["efforts"] == ["low", "ultra"]
+        limits = models[-1]["limits"]
+        assert limits["context_window_tokens"] == 272000
+        assert limits["max_context_window_tokens"] == 872000
+        assert limits["max_output_tokens"] is None
+        assert limits["effective_context_window_percent"] is None
         expected_paths = [
             "/v1/models",
             "/backend-api/codex/models?client_version=0.146.0",
@@ -1628,7 +1650,7 @@ def run_model_catalog_case(binary, root, provider, environment):
 
         paths_before_list = provider.catalog_paths()
         terminal.submit("/model list")
-        terminal.wait("4. codex / codex-late / ultra", join_wrapped=True)
+        terminal.wait("5. codex / codex-late / ultra", join_wrapped=True)
         wait_current_prompt(terminal, None, timeout=5.0)
         if provider.catalog_paths() != paths_before_list:
             raise AssertionError("offline model list contacted a provider")

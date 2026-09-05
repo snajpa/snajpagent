@@ -693,7 +693,8 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         const char *text = snag_json_string(data, "text");
         const char *kind = snag_json_string(data, "input_kind");
         bool goal_turn = kind && strcmp(kind, "goal") == 0;
-        if (!turn_id || !text || !kind || builder->active_turn) {
+        if (!turn_id || !snag_hex_is_lower(turn_id, SNAG_ID_HEX_LEN) ||
+            !text || !kind || builder->active_turn) {
             snag_errorf(error, error_size, "invalid turn context transition");
             errno = EINVAL;
             return -1;
@@ -1414,16 +1415,9 @@ count_request_object(const json_t *create)
 static json_t *
 compact_count_request_object(const json_t *input, const char *model)
 {
-    json_t *request = json_object();
-
-    if (!request || !json_is_array(input) || !model || !*model ||
-        snag_json_set_new(request, "input", json_deep_copy(input)) < 0 ||
-        snag_json_set_new(request, "model", json_string(model)) < 0) {
-        if (request)
-            json_decref(request);
+    if (!json_is_array(input) || !model || !*model)
         return NULL;
-    }
-    return request;
+    return json_pack("{s:O,s:s}", "input", input, "model", model);
 }
 
 static int
@@ -1433,6 +1427,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     struct context_builder *builder = opaque;
     size_t before = json_array_size(builder->request_input);
     bool was_active = builder->active_turn, group = false;
+    const char *turn_id = snag_json_string(data, "turn_id");
 
     if (builder->compact_stopped)
         return 0;
@@ -1441,7 +1436,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     builder->compact_source_seq = seq;
     if (builder->compact_stop_before_active &&
         strcmp(type, "turn_started") == 0 &&
-        strcmp(snag_json_string(data, "turn_id"), builder->target_turn_id) == 0) {
+        turn_id && strcmp(turn_id, builder->target_turn_id) == 0) {
         builder->compact_stopped = true;
         builder->compact_source_seq = seq - 1u;
         return 0;
@@ -1604,11 +1599,9 @@ compact_request_build(struct snag_session *session,
         rc = 1;
         goto out;
     }
-    req = json_object();
-    count = compact_count_request_object(builder.request_input, model);
-    if (!req || !count ||
-        snag_json_set_new(req, "input", json_deep_copy(builder.request_input)) < 0 ||
-        snag_json_set_new(req, "model", json_string(model)) < 0) {
+    req = compact_count_request_object(builder.request_input, model);
+    count = json_incref(req);
+    if (!req) {
         snag_errorf(error, error_size, "cannot build compact request");
         goto out;
     }

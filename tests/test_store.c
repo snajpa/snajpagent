@@ -245,9 +245,11 @@ main(void)
     memcpy(id, session.id, sizeof(id));
     memcpy(id_prefix, session.id, 8u);
     id_prefix[8] = '\0';
-    assert(snag_session_commit(&session, "model_changed",
-        change_data("old_model", "gpt-5.5-2026-04-23",
-                    "new_model", "gpt-5.5-2026-04-23-alt"),
+    assert(snag_session_commit(&session, "model_selection_changed",
+        json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+            "old_model", "gpt-5.5-2026-04-23", "new_model", "gpt-5.5-2026-04-23-alt",
+            "old_provider", "default", "new_provider", "default",
+            "old_effort", "default", "new_effort", "default"),
         NULL, error, sizeof(error)) == 0);
     assert(snag_session_commit(&session, "effort_changed",
         change_data("old_effort", "default", "new_effort", "high"),

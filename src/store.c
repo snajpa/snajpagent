@@ -695,10 +695,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     uint64_t n;
 
     if (strcmp(type, "session_created") == 0) {
-        static const char *const keys_v1[] = {
-            "default_effort", "default_model", "format", "protocol", "workspace"
-        };
-        static const char *const keys_v2[] = {
+        static const char *const keys[] = {
             "default_effort", "default_model", "default_provider", "format",
             "protocol", "workspace"
         };
@@ -710,15 +707,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
 
         if (seq != 1 ||
             snag_json_integer_u64(data, "format", &n) < 0 ||
-            (n == 1u ? !snag_json_exact_keys(data, keys_v1, 5u) :
-             n == 2u ? !snag_json_exact_keys(data, keys_v2, 6u) : true) ||
+            n != 2u || !snag_json_exact_keys(data, keys, 6u) ||
             !protocol || strcmp(protocol, "responses") != 0 ||
             !preference_text_valid(effort, sizeof(session->default_effort)) ||
             !preference_text_valid(model, sizeof(session->default_model)) ||
-            (n == 2u && (!provider || !*provider ||
-             strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
-             !snag_utf8_valid((const unsigned char *)provider,
-                             strlen(provider), true))) ||
+            !provider || !*provider ||
+            strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
+            !snag_utf8_valid((const unsigned char *)provider, strlen(provider), true) ||
             !workspace || workspace[0] != '/' ||
             strlen(workspace) > SNAG_PATH_MAX_BYTES ||
             !snag_utf8_valid((const unsigned char *)workspace,
@@ -731,9 +726,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                         sizeof(session->default_effort), effort) ||
             !snag_strcpy(session->default_model,
                         sizeof(session->default_model), model) ||
-            (n == 2u && !snag_strcpy(session->default_provider,
-                                    sizeof(session->default_provider),
-                                    provider)))
+            !snag_strcpy(session->default_provider,
+                         sizeof(session->default_provider), provider))
             goto invalid;
     } else if (session->delete_requested) {
         goto invalid;
@@ -1074,20 +1068,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->active_compact_id[0] = '\0';
         session->active_compact_source_sha256[0] = '\0';
         session->active_compact_source_seq = 0u;
-    } else if (strcmp(type, "model_changed") == 0) {
-        static const char *const keys[] = {"new_model", "old_model"};
-        const char *old_model = snag_json_string(data, "old_model");
-        const char *new_model = snag_json_string(data, "new_model");
-        if (session->active_turn || !snag_json_exact_keys(data, keys, 2u) ||
-            !old_model || !new_model || !*new_model ||
-            strcmp(old_model, session->default_model) != 0 ||
-            strcmp(old_model, new_model) == 0 ||
-            strlen(new_model) >= sizeof(session->default_model) ||
-            !snag_utf8_valid((const unsigned char *)new_model,
-                            strlen(new_model), true) ||
-            !snag_strcpy(session->default_model,
-                        sizeof(session->default_model), new_model))
-            goto invalid;
     } else if (strcmp(type, "model_selection_changed") == 0) {
         static const char *const keys[] = {
             "new_effort", "new_model", "new_provider",
@@ -2338,19 +2318,10 @@ session_created_data(const char *workspace, const char *provider,
                      const char *model,
                      const char *effort)
 {
-    json_t *data = json_object();
-    if (!data ||
-        snag_json_set_new(data, "default_effort", json_string(effort)) < 0 ||
-        snag_json_set_new(data, "default_model", json_string(model)) < 0 ||
-        snag_json_set_new(data, "default_provider", json_string(provider)) < 0 ||
-        snag_json_set_new(data, "format", json_integer(2)) < 0 ||
-        snag_json_set_new(data, "protocol", json_string("responses")) < 0 ||
-        snag_json_set_new(data, "workspace", json_string(workspace)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
+        "default_effort", effort, "default_model", model,
+        "default_provider", provider, "format", 2, "protocol", "responses",
+        "workspace", workspace);
 }
 
 int

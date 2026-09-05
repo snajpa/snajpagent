@@ -1071,6 +1071,42 @@ test_apply_patch_add_update_delete(void)
 }
 
 static void
+test_patch_line_endings(void)
+{
+    static const struct {
+        const char *before, *after;
+    } cases[] = {
+        {"a\n\nb\n", "a\n\nB\n"},
+        {"a\r\n\r\nb\r\n", "a\r\n\r\nB\r\n"},
+        {"a\n\nb", "a\n\nB"},
+        {"a\r\n\r\nb", "a\r\n\r\nB"},
+        {"a\nb\r\n", NULL},
+        {"a\rb\n", NULL},
+        {"a\r\nb\n", NULL}
+    };
+    char *dir = make_temp_workspace();
+    char path[4096];
+
+    join_path(path, sizeof(path), dir, "lines");
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        json_t *result;
+        char *text;
+        write_text_file(path, cases[i].before);
+        result = run_apply_patch(dir, "*** Begin Patch\r\n*** Update File: lines\r\n"
+                                     "@@\r\n-b\r\n+B\r\n*** End Patch\r\n");
+        assert(strcmp(snag_json_string(result, "status"),
+                      cases[i].after ? "succeeded" : "patch_rejected") == 0);
+        text = read_text_file(path);
+        assert(strcmp(text, cases[i].after ? cases[i].after : cases[i].before) == 0);
+        free(text);
+        json_decref(result);
+    }
+    remove_file_in_dir(dir, "lines");
+    assert(rmdir(dir) == 0);
+    free(dir);
+}
+
+static void
 test_apply_patch_rejects_ambiguous_match(void)
 {
     char *dir = make_temp_workspace();
@@ -1359,6 +1395,7 @@ main(void)
     test_all_provider_secrets_removed_and_redacted();
     test_apply_patch_rejects_null_result();
     test_apply_patch_add_update_delete();
+    test_patch_line_endings();
     test_apply_patch_rejects_ambiguous_match();
     test_apply_patch_rejects_path_escape();
     test_apply_patch_rejects_symlink_target();
