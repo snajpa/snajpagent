@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -1604,6 +1605,42 @@ snj_config_provider(const struct snj_config *config, const char *name)
         if (strcmp(config->providers[i].name, name) == 0)
             return &config->providers[i];
     return NULL;
+}
+
+const char *
+snj_config_web_search_type(const struct snj_provider_config *provider)
+{
+    static const char host[] = "openrouter.ai";
+    const char *url = provider ? provider->base_url : "";
+    const char *suffix;
+
+    if (strncmp(url, "https://", 8u) == 0)
+        url += 8u;
+    else if (strncmp(url, "http://", 7u) == 0)
+        url += 7u;
+    else
+        return "web_search";
+    if (strncasecmp(url, host, sizeof(host) - 1u) != 0)
+        return "web_search";
+    suffix = url + sizeof(host) - 1u;
+    if (*suffix == '.')
+        ++suffix;
+    if (*suffix == ':') {
+        unsigned int port = 0u;
+
+        ++suffix;
+        if (*suffix < '0' || *suffix > '9')
+            return "web_search";
+        while (*suffix >= '0' && *suffix <= '9') {
+            port = port * 10u + (unsigned int)(*suffix++ - '0');
+            if (port > 65535u)
+                return "web_search";
+        }
+        if (!port)
+            return "web_search";
+    }
+    return *suffix == '\0' || *suffix == '/' ?
+           "openrouter:web_search" : "web_search";
 }
 
 const struct snj_model_limit_config *

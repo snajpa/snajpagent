@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Automatically use OpenRouter's hosted web-search tool for its provider URL,
+  in normal and `/ro` turns, without extra search configuration.
+
 - Default `auto_compact_input_tokens` to `auto`, using 90% of each selected
   model's effective hard input budget after output/headroom and learned lower
   ceilings. Unknown capacity falls back to 120,000 tokens. Preserve fixed

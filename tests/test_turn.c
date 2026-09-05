@@ -36,6 +36,8 @@ main(void)
     snj_response_graph_init(&graph);
     assert(snj_response_graph_add_call(&graph, "item_web", "call_web",
                                        "web_search", json_object()) < 0);
+    assert(snj_response_graph_add_call(&graph, "item_web", "call_web",
+                                       "openrouter:web_search", json_object()) < 0);
     assert(graph.count == 0u);
     assert(snj_response_graph_set_provider_id(&graph, "bad\nresponse") < 0);
     assert(snj_response_graph_set_provider_id(&graph, "resp_final") == 0);

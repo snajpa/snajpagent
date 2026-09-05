@@ -137,6 +137,7 @@ int snj_config_prompt_expand(const char *text, unsigned int mode,
                              char *label, size_t label_size);
 const struct snj_provider_config *snj_config_provider(
     const struct snj_config *config, const char *name);
+const char *snj_config_web_search_type(const struct snj_provider_config *provider);
 const struct snj_model_limit_config *snj_config_model_limit(
     const struct snj_config *config, const char *provider, const char *model);
 

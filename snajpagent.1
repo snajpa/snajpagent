@@ -988,7 +988,24 @@ for
 The bound is persisted with the result and conservatively enforced as at most
 one token per retained UTF-8 byte.  Truncated context retains bounded
 provenance; the complete redacted output remains in the durable event.
-Hosted web search is a provider tool.  Networked mode adds
+Hosted web search is a provider tool.  When the active provider URL has the
+exact hostname
+.BR openrouter.ai ,
+snajpagent automatically uses
+.BR openrouter:web_search ;
+other providers retain
+.BR web_search .
+Hostname matching is case-insensitive and accepts an optional terminal DNS
+dot and port, but not userinfo, subdomains, or lookalike hosts.  The provider
+section name and model name do not control detection.  Use the usual
+.B https://openrouter.ai/api/v1
+base URL, model, and API credentials; no extra search setting, web plugin,
+.B :online
+suffix, or separate search credential is required.  This applies equally to
+normal and read-only turns.  OpenRouter chooses the search engine by default;
+search incurs provider charges in addition to model usage.
+.PP
+Networked mode adds
 .BR irc_send ,
 .BR irc_state ,
 and privilege-checked

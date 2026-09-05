@@ -84,6 +84,14 @@ to queue `/ro ...`, or enter `/queue /ro ...`; `/ro` cannot steer a running
 turn. The next ordinary prompt restores the normal toolset. This also works
 with `-e`. See the manual for filesystem and output bounds.
 
+For OpenRouter, use your normal provider configuration with
+`base_url = https://openrouter.ai/api/v1` and its API credential/model.
+snajpagent automatically declares OpenRouter's `openrouter:web_search` server
+tool in normal and `/ro` turns. No search setting, `:online` suffix, plugin,
+or separate search key is needed. OpenRouter selects the search engine and
+bills search usage in addition to model usage. Detection uses the URL hostname,
+not the provider section's name; other backends keep their existing search tool.
+
 For work that should continue across turns, enter a goal:
 
 ```text

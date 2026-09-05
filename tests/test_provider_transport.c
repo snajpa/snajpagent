@@ -53,6 +53,7 @@ enum model_fixture {
     MODEL_LIMIT_CONFLICT,
     MODEL_CREATE_HTTP_FAILURE,
     MODEL_CREATE_SSE_FAILURE,
+    MODEL_OPENROUTER_SEARCH,
     MODEL_COUNT_404,
     MODEL_COUNT_405,
     MODEL_COUNT_501
@@ -274,6 +275,25 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_transport\",\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
+    if (models == MODEL_OPENROUTER_SEARCH) {
+        serve_one(listen_fd, "POST", "/v1/responses", "openrouter:web_search",
+                  "text/event-stream",
+                  "event: response.created\n"
+                  "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_search\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+                  "event: response.output_item.added\n"
+                  "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"openrouter:web_search\",\"id\":\"ws_tmp_abc123\",\"status\":\"in_progress\"}}\n\n"
+                  "event: response.output_item.done\n"
+                  "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"openrouter:web_search\",\"id\":\"ws_tmp_abc123\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"example domains\",\"sources\":[{\"type\":\"url\",\"url\":\"https://example.com\"}]}}}\n\n"
+                  "event: response.output_item.done\n"
+                  "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"msg_search\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"Found https://example.com\",\"annotations\":[{\"type\":\"url_citation\",\"url\":\"https://example.com\",\"title\":\"Example\",\"start_index\":6,\"end_index\":25}]}]}}\n\n"
+                  "event: response.output_item.done\n"
+                  "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"id\":\"fc_after_search\",\"call_id\":\"call_after_search\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\",\\\"start_line\\\":1,\\\"end_line\\\":1}\",\"status\":\"completed\"}}\n\n"
+                  "event: response.completed\n"
+                  "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_search\",\"status\":\"completed\",\"output\":[]}}\n\n");
+        serve_one(listen_fd, "POST", "/v1/responses", "function_call_output",
+                  "text/event-stream", create_sse);
+        _exit(0);
+    }
     if (models >= MODEL_COUNT_404) {
         struct http_request request;
         unsigned int status = models == MODEL_COUNT_404 ? 404u :
@@ -980,11 +1000,96 @@ test_count_modes(void)
 }
 
 static void
+test_openrouter_search_transport(void)
+{
+    static const char search_tools[] =
+        "[{\"type\":\"openrouter:web_search\"},{\"type\":\"function\","
+        "\"name\":\"read_file\",\"parameters\":{\"type\":\"object\",\"properties\":{"
+        "\"path\":{\"type\":\"string\"},\"start_line\":{\"type\":\"integer\"},"
+        "\"end_line\":{\"type\":\"integer\"}}}}]";
+    static const char local_call[] =
+        "{\"type\":\"function_call\",\"call_id\":\"call_after_search\",\"name\":\"read_file\","
+        "\"arguments\":\"{\\\"path\\\":\\\"README.md\\\",\\\"start_line\\\":1,\\\"end_line\\\":1}\"}";
+    static const char local_output[] =
+        "{\"type\":\"function_call_output\",\"call_id\":\"call_after_search\",\"output\":\"snajpagent\"}";
+    struct local_server server;
+    struct snj_config config;
+    struct snj_credential credential;
+    struct snj_response_graph graph;
+    struct emitted_text emitted = {0};
+    json_t *request;
+    char endpoint[128], error[256] = {0};
+    int cancel = 0;
+    unsigned int retries = 0u;
+
+    start_server(&server, MODEL_OPENROUTER_SEARCH, false);
+    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
+                     (unsigned int)server.port) > 0);
+    assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+    snj_config_init(&config);
+    (void)snprintf(config.providers[0].base_url, sizeof(config.providers[0].base_url),
+                   "https://openrouter.ai/api/v1");
+    (void)snprintf(config.providers[0].openrouter_referer,
+                   sizeof(config.providers[0].openrouter_referer),
+                   "https://github.com/snajpa/snajpagent");
+    (void)snprintf(config.providers[0].openrouter_title,
+                   sizeof(config.providers[0].openrouter_title), "snajpagent");
+    config.providers[0].connect_timeout_ms = 1000u;
+    config.providers[0].idle_timeout_ms = 1000u;
+    config.providers[0].request_timeout_ms = 3000u;
+    credential_set(&credential, "transport-secret");
+    request = request_with_marker("search example domains");
+    assert(json_object_set_new(request, "tools", json_loadb(
+        search_tools, sizeof(search_tools) - 1u, 0, NULL)) == 0);
+    assert(strcmp(snj_json_string(json_array_get(json_object_get(request, "tools"), 0u),
+        "type"), snj_config_web_search_type(&config.providers[0])) == 0);
+    snj_buf_init(&emitted.text, 128u);
+    snj_response_graph_init(&graph);
+    assert(snj_provider_responses_create(request, &config, &config.providers[0],
+        &credential, NULL, emit_capture, &emitted, NULL, NULL, &graph, NULL,
+        error, sizeof(error), &cancel, &retries) == 0);
+    assert(!cancel && !retries);
+    assert(graph.count == 2u);
+    assert(graph.items[0].kind == SNJ_ITEM_ASSISTANT);
+    assert(strcmp(graph.items[0].text, "Found https://example.com") == 0);
+    assert(graph.items[1].kind == SNJ_ITEM_TOOL_CALL);
+    assert(strcmp(graph.items[1].name, "read_file") == 0);
+    assert(strcmp(graph.items[1].provider_call_id, "call_after_search") == 0);
+    assert(strcmp(snj_json_string(graph.items[1].arguments, "path"), "README.md") == 0);
+    assert(emitted.calls == 1u);
+    assert(emitted.text.len == strlen("Found https://example.com"));
+    assert(memcmp(emitted.text.data, "Found https://example.com", emitted.text.len) == 0);
+    /* A hosted item must not become a local call or contaminate the next
+     * stateless response. The existing context tests cover replay projection. */
+    assert(json_array_append_new(json_object_get(request, "input"), json_loadb(
+        local_call, sizeof(local_call) - 1u, 0, NULL)) == 0);
+    assert(json_array_append_new(json_object_get(request, "input"), json_loadb(
+        local_output, sizeof(local_output) - 1u, 0, NULL)) == 0);
+    snj_response_graph_free(&graph);
+    snj_response_graph_init(&graph);
+    snj_buf_reset(&emitted.text);
+    emitted.calls = 0u;
+    assert(snj_provider_responses_create(request, &config, &config.providers[0],
+        &credential, NULL, emit_capture, &emitted, NULL, NULL, &graph, NULL,
+        error, sizeof(error), &cancel, &retries) == 0);
+    assert(graph.count == 1u && graph.items[0].kind == SNJ_ITEM_ASSISTANT);
+    assert(strcmp(graph.items[0].text, "local transport") == 0);
+    assert(emitted.calls == 1u && !cancel && !retries);
+    snj_response_graph_free(&graph);
+    snj_buf_free(&emitted.text);
+    json_decref(request);
+    snj_credential_clear(&credential);
+    assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
+    stop_server(&server);
+}
+
+static void
 test_read_only_dispatch(void)
 {
     static const char *const denied[] = {
         "exec_command", "write_stdin", "apply_patch", "create_goal",
-        "update_goal", "irc_send", "irc_topic", "irc_state", "unknown"
+        "update_goal", "irc_send", "irc_topic", "irc_state", "unknown",
+        "web_search", "openrouter:web_search"
     };
     struct app_state app = {0};
     struct snj_response_item call = {0};
@@ -1071,6 +1176,7 @@ main(void)
     test_ui_output_order_and_failure();
     test_read_only_dispatch();
     test_local_provider_transport();
+    test_openrouter_search_transport();
     test_codex_model_list();
     test_codex_path_selection();
     test_structured_create_failures();

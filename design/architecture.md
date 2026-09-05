@@ -236,6 +236,13 @@ while typed model identifiers are not checked against the catalog.
 
 Hosted web search is exposed as a Responses request tool. There is no separate
 helper binary for web search.
+The active turn's provider URL selects `openrouter:web_search` for the exact
+`openrouter.ai` hostname (case-insensitive, optional DNS dot/port); other hosts
+use `web_search`. Arbitrary provider labels, model IDs, paths, userinfo, and
+lookalike/subdomain hosts do not select OpenRouter. The same selection applies
+to semantic, request, and count projections and to ordinary and `/ro` turns.
+No search configuration or new local function is introduced. Hosted output
+remains provider-owned; local function dispatch stays restricted as before.
 
 When a goal is active, context projection appends the current durable wording
 and controller rules after replay and compaction. It also exposes the strict
