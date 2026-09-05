@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Default `auto_compact_input_tokens` to `auto`, using 90% of each selected
+  model's effective hard input budget after output/headroom and learned lower
+  ceilings. Unknown capacity falls back to 120,000 tokens. Preserve fixed
+  numeric thresholds and explicit `0`; show the resolved policy in `/model`
+  and `/status` and share it across all proactive compaction checks.
+
 - Allow the existing provider-hosted web search in `/ro` queries alongside
   native file inspection, while keeping all other local tool dispatch blocked.
 - Isolate the editor and renderer on one presentation thread in every runtime

@@ -591,8 +591,8 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         request = NULL;
     }
     if (!active_prefix && strcmp(reason, "proactive") == 0 &&
-        app->turn_provider->auto_compact_input_tokens != 0u &&
-        input_tokens_bound < app->turn_provider->auto_compact_input_tokens) {
+        input_tokens_bound < snj_model_compact_threshold(
+            app->turn_provider, &app->turn_capacity)) {
         rc = 0;
         goto out;
     }
@@ -706,15 +706,17 @@ snj_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
                            const char *count_method,
                            char *error, size_t error_size)
 {
+    uint64_t threshold;
+
     if (!app || !app->config || !app->turn_provider ||
         !count_method_valid(count_method)) {
         snprintf(error, error_size, "invalid proactive compaction state");
         errno = EINVAL;
         return -1;
     }
-    if (app->turn_provider->auto_compact_input_tokens == 0u)
-        return 0;
-    if (input_tokens_bound < app->turn_provider->auto_compact_input_tokens)
+    threshold = snj_model_compact_threshold(app->turn_provider,
+                                           &app->turn_capacity);
+    if (!threshold || input_tokens_bound < threshold)
         return 0;
     return snj_app_compact_idle_command(app, "proactive", error, error_size);
 }
@@ -735,12 +737,11 @@ snj_app_compact_before_response(struct app_state *app,
         return -1;
     }
     {
+        uint64_t threshold = snj_model_compact_threshold(app->turn_provider,
+                                                        &app->turn_capacity);
         bool over_hard = app->turn_capacity.hard_input_known &&
             input_tokens_bound > app->turn_capacity.hard_input_tokens;
-        bool over_proactive =
-            app->turn_provider->auto_compact_input_tokens != 0u &&
-            input_tokens_bound >=
-                app->turn_provider->auto_compact_input_tokens;
+        bool over_proactive = threshold && input_tokens_bound >= threshold;
         int rc;
 
         if (!over_hard && !over_proactive)

@@ -85,7 +85,7 @@ provider_init(struct snj_provider_config *provider, const char *name)
     provider->connect_timeout_ms = 30000u;
     provider->idle_timeout_ms = 120000u;
     provider->request_timeout_ms = 1800000u;
-    provider->auto_compact_input_tokens = 120000u;
+    provider->auto_compact_input_tokens = SNJ_CONFIG_COMPACT_AUTO;
     provider->exact_token_count = SNJ_TOKEN_COUNT_AUTO;
     provider->native_compaction = true;
     memcpy(provider->base_url, "https://api.openai.com", 23u);
@@ -754,10 +754,16 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "request_timeout_ms") == 0)
         return claim_key(state, 2u) < 0 ? -1 :
                parse_u32(value, 1000u, 3600000u, &provider->request_timeout_ms);
-    if (strcmp(key, "auto_compact_input_tokens") == 0)
-        return claim_key(state, 3u) < 0 ? -1 :
-               parse_u32(value, 0u, 4000000u,
+    if (strcmp(key, "auto_compact_input_tokens") == 0) {
+        if (claim_key(state, 3u) < 0)
+            return -1;
+        if (strcmp(value, "auto") == 0) {
+            provider->auto_compact_input_tokens = SNJ_CONFIG_COMPACT_AUTO;
+            return 0;
+        }
+        return parse_u32(value, 0u, 4000000u,
                          &provider->auto_compact_input_tokens);
+    }
     if (strcmp(key, "base_url") == 0)
         return claim_key(state, 4u) < 0 ? -1 :
                copy_base_url(provider->base_url,

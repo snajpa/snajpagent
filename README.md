@@ -166,6 +166,12 @@ as `LINELEN=8192`. Peers must support that extension for long messages.
 
 ## Trust and reference
 
+Proactive compaction follows the selected model's usable context by default.
+Under `[provider NAME]`, `auto_compact_input_tokens = auto` uses 90% of the
+effective input budget, or a labelled 120,000-token fallback when unknown.
+Explicit numbers remain fixed; `0` disables proactive compaction but not
+hard-limit recovery. `/model` and `/status` show the effective threshold.
+
 Under `[ui]`, `prompt` supports mode cases and separate clock components:
 `{hour:02}:{minute:02}:{second:02}` gives the default chat clock. `{context:4}`
 space-pads the whole percentage to four columns; widths never truncate.

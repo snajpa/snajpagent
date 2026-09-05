@@ -233,6 +233,22 @@ derives 90-percent headroom. Derived policy is visible but is not cached or
 described as a provider promise. Unknown output capacity omits
 `max_output_tokens` from Responses requests.
 
+The provider setting `auto_compact_input_tokens` defaults to `auto`: proactive
+compaction uses 90% of the resolved hard input budget (rounded down, minimum
+one token). Resolution includes output reservation, effective client headroom,
+and cached/session lower ceilings before deriving this threshold. Unknown
+capacity uses a labelled 120,000-token fallback. Numeric values from 1 through
+4,000,000 remain fixed; `0` disables proactive compaction only. The hard guard
+and typed overflow recovery remain independent.
+
+Pre-response, post-turn, and post-turn recount checks share the same threshold
+calculation. It follows the selected model/provider and configuration without
+rewriting either configuration or advertised cache data. `/model` shows it on
+the selected-model line and `/status` reports it beside the effective hard
+budget, labelled `auto`, `auto fallback`, `fixed`, or `off`. Catalog-advertised
+automatic-compaction metadata remains a separate fact, not a fixed ceiling
+on this client policy.
+
 ## Token Accounting And Learned Facts
 
 `exact_token_count` has three modes. `auto`, the default, uses

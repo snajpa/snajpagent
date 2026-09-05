@@ -939,6 +939,21 @@ append_advertised_capacity(struct snj_buf *text, const json_t *model)
 }
 
 static int
+append_compact_threshold(struct snj_buf *text,
+                         const struct snj_provider_config *provider,
+                         const struct snj_model_capacity *capacity)
+{
+    const char *mode = provider->auto_compact_input_tokens ==
+        SNJ_CONFIG_COMPACT_AUTO ?
+            (capacity->hard_input_known ? "auto" : "auto fallback") :
+            (provider->auto_compact_input_tokens ? "fixed" : "off");
+
+    return snj_buf_printf(text, " · compact=%llu (%s)",
+        (unsigned long long)snj_model_compact_threshold(provider, capacity),
+        mode);
+}
+
+static int
 render_status(struct app_state *app)
 {
     const char *id = app->ui.verbosity >= 3u ? app->session.id : NULL;
@@ -1002,7 +1017,8 @@ render_status(struct app_state *app)
                               capacity.hard_input_tokens) < 0 ||
         append_capacity_value(&text, "requested-output",
                               capacity.max_output_known,
-                              capacity.max_output_tokens) < 0)
+                              capacity.max_output_tokens) < 0 ||
+        append_compact_threshold(&text, provider, &capacity) < 0)
         goto out;
     if (capacity.effective_context_window_known &&
         snj_buf_printf(&text, " · effective=%u%%%s",
@@ -1235,23 +1251,31 @@ static int
 render_model_catalog(struct app_state *app)
 {
     const struct snj_provider_config *selected = next_provider(app);
+    struct snj_model_capacity capacity;
     struct snj_buf text;
+    char error[256] = {0};
     char timestamp[64];
-    time_t seconds = (time_t)(app->model_cache.updated_at_ms / 1000u);
+    time_t seconds;
     struct tm broken;
-    size_t count = snj_model_cache_entry_count(&app->model_cache);
+    size_t count;
     int rc = -1;
 
     if (!selected)
         return app_error(app,
             "selected provider is not present in the current configuration");
+    if (snj_app_capacity_resolve(app, selected, next_model(app), &capacity,
+                                 error, sizeof(error)) < 0)
+        return app_error(app, error);
+    seconds = (time_t)(app->model_cache.updated_at_ms / 1000u);
+    count = snj_model_cache_entry_count(&app->model_cache);
     snj_buf_init(&text, 16u * 1024u * 1024u);
     if (snj_buf_printf(&text, "selected: %s / %s / %s%s",
                        selected->name, next_model(app),
                        resolve_effort(next_effort(app)) ?
                            resolve_effort(next_effort(app)) : next_effort(app),
                        app->staged_provider || app->staged_model ||
-                       app->staged_effort ? " (staged once)" : "") < 0)
+                       app->staged_effort ? " (staged once)" : "") < 0 ||
+        append_compact_threshold(&text, selected, &capacity) < 0)
         goto out;
     for (size_t index = 1u; index <= count; ++index) {
         const char *provider;

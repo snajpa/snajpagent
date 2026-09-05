@@ -92,5 +92,8 @@ int snj_model_capacity_resolve(
     const char *protocol, struct snj_model_capacity *capacity,
     char *error, size_t error_size);
 const char *snj_capacity_source_name(enum snj_capacity_source source);
+uint64_t snj_model_compact_threshold(
+    const struct snj_provider_config *provider,
+    const struct snj_model_capacity *capacity);
 
 #endif

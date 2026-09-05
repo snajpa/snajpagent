@@ -608,8 +608,21 @@ No-data timeout, 1000 through 600000.  Default: 120000.
 Whole-request timeout, 1000 through 3600000.  Default: 1800000.
 .TP
 .B auto_compact_input_tokens
-Proactive input threshold, 0 through 4000000.  Zero disables proactive policy,
-not the hard capacity guard.  Default: 120000.
+Proactive input threshold.  Default:
+.BR auto .
+Auto uses 90% of the selected model's effective hard input budget, rounded
+down with a minimum of one token, after output reservation and safety limits.
+It follows model/context changes and learned lower ceilings.  If capacity is
+unknown, it uses a labelled 120000-token fallback.
+An integer from 1 through 4000000 selects a fixed threshold; zero disables
+proactive policy, not the hard capacity guard.  Existing explicit numbers
+remain fixed: remove the setting or use
+.B auto
+to enable scaling.
+.B /model
+and
+.B /status
+show the effective threshold and its mode without changing configuration.
 .TP
 .B exact_token_count
 Input-token preflight policy.

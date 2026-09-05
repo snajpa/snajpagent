@@ -796,6 +796,22 @@ minimum_budget(uint64_t value, uint64_t *budget, bool *known)
     }
 }
 
+uint64_t
+snj_model_compact_threshold(const struct snj_provider_config *provider,
+                            const struct snj_model_capacity *capacity)
+{
+    uint64_t threshold;
+
+    if (provider->auto_compact_input_tokens != SNJ_CONFIG_COMPACT_AUTO)
+        return provider->auto_compact_input_tokens;
+    if (!capacity->hard_input_known)
+        return 120000u;
+    /* Floor 90% without overflowing; only explicit zero disables policy. */
+    threshold = capacity->hard_input_tokens / 10u * 9u +
+                capacity->hard_input_tokens % 10u * 9u / 10u;
+    return threshold ? threshold : 1u;
+}
+
 const char *
 snj_capacity_source_name(enum snj_capacity_source source)
 {

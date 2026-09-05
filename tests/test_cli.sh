@@ -689,6 +689,61 @@ assert responses2[0]["data"]["count_request_sha256"]
 assert started[1]["seq"] > responses2[0]["seq"]
 PY
 
+# Auto tracks the usable budget; explicit/off settings remain independent.
+for compact_case in default auto larger fixed below off fallback; do
+    budget_state="$root/compact-budget-$compact_case"
+    budget_config="$root/compact-budget-$compact_case.ini"
+    mkdir -m 700 "$budget_state"
+    $bin --dotdir "$budget_state" -e -- ping >"$root/budget-seed.out" \
+        2>"$root/budget-seed.err"
+    budget_id=$(find "$budget_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+    # The fixture counter reports 90,000 tokens, exactly 90% of the small
+    # budget. Exercise both pre-response and post-turn/recount boundaries.
+    {
+        printf '[provider]\nexact_token_count = true\n'
+        case "$compact_case" in
+            auto|larger) printf 'auto_compact_input_tokens = auto\n' ;;
+            fixed) printf 'auto_compact_input_tokens = 90000\n' ;;
+            below) printf 'auto_compact_input_tokens = 90001\n' ;;
+            off) printf 'auto_compact_input_tokens = 0\n' ;;
+        esac
+        case "$compact_case" in
+            fallback) ;;
+            *)
+                printf '[model-limit default/gpt-5.5-2026-04-23]\n'
+                if [ "$compact_case" = larger ]; then
+                    printf 'max_input_tokens = 1000000\n'
+                else
+                    printf 'max_input_tokens = 100000\n'
+                fi
+                ;;
+        esac
+    } >"$budget_config"
+    $bin --dotdir "$budget_state" --config "$budget_config" -e \
+        --resume "$budget_id" -- compact_budget >"$root/budget.out" \
+        2>"$root/budget.err"
+    python3 - "$budget_state/sessions/$budget_id/events.jsonl" "$compact_case" <<'PY'
+import json
+import sys
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+turn = [e for e in events if e["type"] == "turn_started"][-1]
+response = [e for e in events if e["type"] == "response_started"
+            and e["data"]["turn_id"] == turn["data"]["turn_id"]]
+assert len(response) == 1
+assert response[0]["data"]["input_tokens_bound"] == 90000
+compacts = [e for e in events if e["type"] == "compaction_started"]
+completed = [e for e in events if e["type"] == "compaction_completed"]
+expected = 2 if sys.argv[2] in ("default", "auto", "fixed") else 0
+assert len(compacts) == len(completed) == expected, (sys.argv[2], compacts)
+assert not any(e["type"] == "turn_failed" for e in events)
+if expected:
+    assert all(e["data"]["reason"] == "proactive" for e in compacts)
+    assert all(e["data"]["input_tokens_bound"] == 90000 for e in compacts)
+    assert turn["seq"] < compacts[0]["seq"] < completed[0]["seq"] < response[0]["seq"]
+    assert response[0]["seq"] < compacts[1]["seq"] < completed[1]["seq"]
+PY
+done
+
 # A source-bound statistical estimate can drive the meter and compaction, but
 # cannot terminalize a sendable first request when no older turn can compact.
 statistical_state="$root/statistical-budget-state"

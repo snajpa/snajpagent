@@ -1904,6 +1904,53 @@ def test_uncached_typed_model_selection():
             os.environ["CODEX_HOME"] = previous_codex_home
 
 
+def test_compaction_policy_selection():
+    cache_path = Path(DOTDIR) / "models.json"
+    old_cache = cache_path.read_bytes() if cache_path.exists() else None
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "compact-auto.ini"
+    config.write_text(
+        "[agent]\nmodel=gpt-5.6-luna\nreasoning_effort=high\n"
+        "[provider first]\nbase_url=https://example.test/backend-api/codex\n"
+        "[provider second]\nauto_compact_input_tokens=30000\n"
+        "[provider third]\nauto_compact_input_tokens=0\n"
+        "[model-limit first/gpt-5.6-luna]\ncontext_window_tokens=872000\n"
+        "[model-limit first/small]\ncontext_window_tokens=100000\n"
+        "max_output_tokens=20000\n", encoding="utf-8")
+    original_config = config.read_bytes()
+    child = Child(["--config", str(config), "--no-color"])
+    try:
+        child.wait(PROMPT)
+        child.send(b"/model cache\r")
+        end = child.wait(b"compact=745560 (auto)")
+        child.wait(PROMPT, start=end)
+        original_cache = cache_path.read_bytes()
+        for selector, expected in (
+            ("first / small / high", b"compact=72000 (auto)"),
+            ("first / unknown / high", b"compact=120000 (auto fallback)"),
+            ("second / gpt-5.6-luna / high", b"compact=30000 (fixed)"),
+            ("third / gpt-5.6-luna / high", b"compact=0 (off)"),
+            ("first / gpt-5.6-luna / high", b"compact=745560 (auto)"),
+        ):
+            start = len(child.buf)
+            child.send(f"/model {selector}\r".encode())
+            end = child.wait(b"model for next turn: " + selector.encode(), start=start)
+            child.wait(PROMPT, start=end)
+            for command in (b"/model\r", b"/status\r"):
+                start = len(child.buf)
+                child.send(command)
+                end = child.wait(expected, start=start)
+                child.wait(PROMPT, start=end)
+        assert config.read_bytes() == original_config
+        assert cache_path.read_bytes() == original_cache
+        child.exit_now()
+    finally:
+        child.kill()
+        if old_cache is None:
+            cache_path.unlink(missing_ok=True)
+        else:
+            cache_path.write_bytes(old_cache)
+
+
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
     initial_prompt = b"first/uncached-start/low   0%   \xe2\x80\xba "
@@ -3654,6 +3701,7 @@ if __name__ == "__main__":
     test_preferences_and_verbosity()
     test_command_name_completion()
     test_uncached_typed_model_selection()
+    test_compaction_policy_selection()
     test_model_cache_and_selection()
     test_model_configuration_save()
     test_config_editor_reload()

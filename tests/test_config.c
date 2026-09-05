@@ -52,6 +52,51 @@ expect_ui(const char *path, const char *key, const char *value, bool valid)
 }
 
 static void
+test_compact_setting(const char *path)
+{
+    static const struct {
+        const char *text;
+        uint32_t expected;
+        bool valid;
+    } cases[] = {
+        {"auto", SNJ_CONFIG_COMPACT_AUTO, true},
+        {"0", 0u, true},
+        {"1", 1u, true},
+        {"120000", 120000u, true},
+        {"4000000", 4000000u, true},
+        {"4000001", 0u, false},
+        {"4294967295", 0u, false},
+        {"-1", 0u, false},
+        {"90%", 0u, false},
+        {"automatic", 0u, false},
+        {"auto\nauto_compact_input_tokens=1", 0u, false}
+    };
+
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct snj_config config;
+        char data[256], error[256] = {0};
+        int n = snprintf(data, sizeof(data),
+                         "[provider first]\nauto_compact_input_tokens=%s\n"
+                         "[provider second]\n", cases[i].text);
+
+        assert(n > 0 && (size_t)n < sizeof(data));
+        write_bytes(path, data, (size_t)n);
+        snj_config_init(&config);
+        assert((snj_config_load(&config, path, NULL,
+                                error, sizeof(error)) == 0) == cases[i].valid);
+        if (cases[i].valid) {
+            assert(config.providers[0].auto_compact_input_tokens ==
+                   cases[i].expected);
+            assert(config.providers[1].auto_compact_input_tokens ==
+                   SNJ_CONFIG_COMPACT_AUTO);
+        } else {
+            assert(error[0]);
+        }
+        snj_config_free(&config);
+    }
+}
+
+static void
 test_prompt_numbers(const char *path)
 {
     const char *values[SNJ_PROMPT_FIELD_COUNT] = {
@@ -232,7 +277,8 @@ main(void)
     assert(config.max_output_bytes == 0u);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);
-    assert(config.providers[0].auto_compact_input_tokens == 120000u);
+    assert(config.providers[0].auto_compact_input_tokens ==
+           SNJ_CONFIG_COMPACT_AUTO);
     assert(config.providers[0].exact_token_count == SNJ_TOKEN_COUNT_AUTO);
     assert(config.providers[0].native_compaction);
     assert(strcmp(config.providers[0].base_url, "https://api.openai.com") == 0);
@@ -407,6 +453,7 @@ main(void)
             values, 0xfdu, expanded, sizeof(expanded)) < 0);
     }
 
+    test_compact_setting(path);
     test_prompt_numbers(path);
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
     assert(symlink(path, link_path) == 0);

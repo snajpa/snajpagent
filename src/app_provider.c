@@ -206,6 +206,11 @@ snj_app_provider_count(struct app_state *app, const json_t *count_request,
     (void)model_input_bytes;
     if (app->turn_provider->exact_token_count == SNJ_TOKEN_COUNT_STRICT)
         *count_method = "exact";
+    if (app->session.last_user &&
+        strcmp(app->session.last_user, "compact_budget") == 0) {
+        *input_tokens = 90000u;
+        *count_method = "exact";
+    }
     {
         struct snj_buf encoded;
         bool wait_for_mention;

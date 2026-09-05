@@ -131,6 +131,8 @@ main(void)
     assert(capacity.max_output_tokens == 128000u);
     assert(capacity.hard_input_known);
     assert(capacity.hard_input_tokens == 922000u);
+    assert(snj_model_compact_threshold(&config.providers[0], &capacity) ==
+           829800u);
     assert(!capacity.effective_context_window_known);
 
     assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
@@ -142,6 +144,8 @@ main(void)
     assert(capacity.effective_context_window_derived);
     assert(capacity.effective_context_window_percent == 90u);
     assert(capacity.hard_input_tokens == 90000u);
+    assert(snj_model_compact_threshold(&config.providers[0], &capacity) ==
+           81000u);
 
     assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
                "unknown", "openai", &capacity,
@@ -149,6 +153,8 @@ main(void)
     assert(capacity.source == SNJ_CAPACITY_UNKNOWN);
     assert(capacity.source_bound);
     assert(!capacity.hard_input_known);
+    assert(snj_model_compact_threshold(&config.providers[0], &capacity) ==
+           120000u);
 
     assert(snprintf(config.providers[1].name,
                     sizeof(config.providers[1].name), "%s", "codex") > 0);
@@ -165,6 +171,39 @@ main(void)
     assert(capacity.effective_context_window_derived);
     assert(capacity.effective_context_window_percent == 95u);
     assert(capacity.hard_input_tokens == 258400u);
+    config.providers[1].auto_compact_input_tokens = SNJ_CONFIG_COMPACT_AUTO;
+    assert(snj_model_compact_threshold(&config.providers[1], &capacity) ==
+           232560u);
+    {
+        struct snj_model_capacity bigger;
+        struct snj_model_limit_config *limit = &config.model_limits[0];
+
+        config.model_limit_count = 1u;
+        strcpy(limit->provider, "codex");
+        strcpy(limit->model, "codex-context-only");
+        limit->context_window_known = true;
+        limit->context_window_tokens = 872000u;
+        assert(snj_model_capacity_resolve(&cache, &config, &config.providers[1],
+                   "codex-context-only", "codex", &bigger,
+                   error, sizeof(error)) == 0);
+        assert(bigger.hard_input_tokens == 828400u);
+        assert(snj_model_compact_threshold(&config.providers[1], &bigger) ==
+               745560u);
+        config.providers[1].auto_compact_input_tokens = 120000u;
+        assert(snj_model_compact_threshold(&config.providers[1], &bigger) ==
+               120000u);
+        config.providers[1].auto_compact_input_tokens = 0u;
+        assert(snj_model_compact_threshold(&config.providers[1], &bigger) == 0u);
+        config.providers[1].auto_compact_input_tokens = SNJ_CONFIG_COMPACT_AUTO;
+        bigger.hard_input_tokens = 11u;
+        assert(snj_model_compact_threshold(&config.providers[1], &bigger) == 9u);
+        bigger.hard_input_tokens = 1u;
+        assert(snj_model_compact_threshold(&config.providers[1], &bigger) == 1u);
+        bigger.hard_input_tokens = UINT64_MAX;
+        assert(snj_model_compact_threshold(&config.providers[1], &bigger) ==
+               UINT64_C(16602069666338596453));
+        memset(limit, 0, sizeof(*limit));
+    }
 
     config.model_limit_count = 1u;
     assert(snprintf(config.model_limits[0].provider,
@@ -181,6 +220,8 @@ main(void)
     assert(!capacity.context_window_known);
     assert(!capacity.max_output_known);
     assert(capacity.hard_input_tokens == 900000u);
+    assert(snj_model_compact_threshold(&config.providers[0], &capacity) ==
+           810000u);
 
     config.model_limits[0].max_input_tokens = 1100000u;
     assert(snj_model_capacity_resolve(&cache, &config, &config.providers[0],
@@ -190,6 +231,8 @@ main(void)
     assert(!capacity.context_window_known);
     assert(!capacity.max_output_known);
     assert(capacity.hard_input_tokens == 1100000u);
+    assert(snj_model_compact_threshold(&config.providers[0], &capacity) ==
+           990000u);
 
     config.model_limit_count = 0u;
     assert(snj_model_cache_record(&store, &cache, &config.providers[0],
@@ -209,6 +252,8 @@ main(void)
     assert(capacity.count_capability == SNJ_COUNT_SUPPORTED);
     assert(capacity.observed_tokens_per_million_bytes == 250000u);
     assert(capacity.hard_input_tokens == 800000u);
+    assert(snj_model_compact_threshold(&config.providers[0], &capacity) ==
+           720000u);
     assert(capacity.source == SNJ_CAPACITY_OBSERVED);
     assert(snj_model_cache_record(&store, &cache, &config.providers[0],
                "openai", "org/model", SNJ_COUNT_UNKNOWN,
@@ -218,6 +263,8 @@ main(void)
                error, sizeof(error)) == 0);
     assert(capacity.observed_tokens_per_million_bytes == 300000u);
     assert(capacity.hard_input_tokens == 700000u);
+    assert(snj_model_compact_threshold(&config.providers[0], &capacity) ==
+           630000u);
     assert(snj_model_cache_record(&store, &cache, &config.providers[0],
                "openai", "org/model", SNJ_COUNT_UNKNOWN,
                2000u, 500u, 0u, error, sizeof(error)) == 0);
