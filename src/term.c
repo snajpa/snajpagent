@@ -708,6 +708,8 @@ mark_input_activity(struct snj_term *term)
     if (!term->active)
         return;
     term->typing_active = true;
+    if (term->output_detour)
+        term->output_seen = false;
     term->output_detour = false;
     term->last_input_ms = snj_monotonic_ms();
 }

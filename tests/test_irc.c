@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -29,6 +30,7 @@ struct capture {
     struct snj_irc_event last_nick;
     struct snj_irc_event last_connected;
     bool slow_quit;
+    bool fail_message;
 };
 
 static pthread_t engine_thread;
@@ -57,7 +59,7 @@ capture_event(void *opaque, const struct snj_irc_event *event)
         capture->last_connected = *event;
     if (event->kind == SNJ_IRC_QUIT && strcmp(event->nick, "slow") == 0)
         capture->slow_quit = true;
-    return 0;
+    return capture->fail_message && event->kind == SNJ_IRC_MESSAGE ? -1 : 0;
 }
 
 static int
@@ -996,9 +998,13 @@ test_client_events(void)
     tick(client, 5u);
     for (size_t i = 0u; i < 2u; ++i) {
         int flags;
+        int one = 1;
 
         peers[i] = accept(listener, NULL, NULL);
         assert(peers[i] >= 0);
+        /* Match the real server: fixture timing must not depend on delayed ACKs. */
+        assert(setsockopt(peers[i], IPPROTO_TCP, TCP_NODELAY,
+                          &one, sizeof(one)) == 0);
         flags = fcntl(peers[i], F_GETFL, 0);
         assert(flags >= 0 &&
                fcntl(peers[i], F_SETFL, flags | O_NONBLOCK) == 0);
@@ -1188,6 +1194,21 @@ test_independent_owners(void)
     snj_config_free(&config);
 }
 
+static void
+test_callback_failure(void)
+{
+    struct snj_config config;
+    struct capture capture = {.fail_message = true};
+    struct snj_irc *server;
+    char error[256u] = {0};
+
+    init_server_config(&config, free_port());
+    server = open_server(&config, &capture);
+    assert(snj_irc_send_agent(server, "failed admission", error, sizeof(error)) < 0);
+    snj_irc_close(server);
+    snj_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -1202,6 +1223,7 @@ main(void)
     test_client_nick_collision();
     test_client_events();
     test_independent_owners();
+    test_callback_failure();
     puts("test_irc: ok");
     return 0;
 }
