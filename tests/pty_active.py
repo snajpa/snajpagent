@@ -39,6 +39,10 @@ def chat_prompt(operator):
     return f"{operator}@{socket.gethostname()}   : ".encode()
 
 
+def chat_active_prompt(operator):
+    return f"{operator}@{socket.gethostname()} ◴ : ".encode()
+
+
 class Child:
     def __init__(self, args):
         self.pid, self.fd = pty.fork()
@@ -2317,12 +2321,12 @@ def test_network_collision_prompts():
         server = Child(["--no-color", "-s", address, "-r", "lab",
                         "-n", "agent", "-o", "operator"])
         children.append(server)
-        server.wait(PROMPT)
+        server.wait(chat_prompt("operator"))
         for suffix in (1, 2):
             client = Child(["--no-color", "-c", address,
                             "-n", "agent", "-o", "operator"])
             children.append(client)
-            client.wait(f"operator{suffix}@{socket.gethostname()}".encode())
+            client.wait(chat_prompt(f"operator{suffix}"))
             client.send(b"/names\r")
             client.wait(f"model agent{suffix} operator operator{suffix}".encode())
         peer = IRCClient(port, "visitor", agent=True)
@@ -2354,7 +2358,7 @@ def test_network_live_nick_prompt():
                    "-n", "agent", "-o", "operator"])
     links = []
     try:
-        child.wait(PROMPT)
+        child.wait(chat_prompt("operator"))
         session_id = new_session(before)
         links = accept_connections(upstream, 2)
         for link in links:
@@ -2388,7 +2392,7 @@ def test_network_live_nick_prompt():
         child.wait(b"/stats", start=start)
         child.send(b"u\r")
         status_end = child.wait(b"verbosity: 0", start=start)
-        child.wait(PROMPT, start=status_end)
+        child.wait(chat_prompt("operator8"), start=status_end)
         child.drain()
         assert child.buf[start:].count(b"operator7  is now known as") == 1
         assert child.buf[start:].count(b"agent7  is now known as") == 1
@@ -2397,13 +2401,13 @@ def test_network_live_nick_prompt():
         start = len(child.buf)
         child.send(b"network_view_stream\r")
         child.wait("@operator8 › network_view_stream".encode(), start=start)
-        child.wait(f"operator8@{socket.gethostname()} » ".encode(), start=start)
+        child.wait(chat_active_prompt("operator8"), start=start)
         child.send(b"/stats\x1b[D")
         child.drain(0.03)
         for link in links:
             link.sendall(b":operator8!u@fake NICK :operator9\r\n"
                          b":agent8!u@fake NICK :agent9\r\n")
-        renamed = child.wait(f"operator9@{socket.gethostname()} » ".encode(),
+        renamed = child.wait(f"operator9@{socket.gethostname()}".encode(),
                              start=start)
         child.wait(b"/stats", start=renamed)
         child.send(b"u\r")
