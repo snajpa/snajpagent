@@ -800,7 +800,7 @@ done
 statistical_state="$root/statistical-budget-state"
 mkdir -m 700 "$statistical_state"
 cat >"$statistical_state/models.json" <<'EOF'
-{"providers":[{"base_url":"https://api.openai.com","models":[{"count_capability":"unsupported","default_effort":"medium","efforts":["low","medium","high"],"id":"gpt-5.5-2026-04-23","limits":{"auto_compact_input_tokens":null,"context_window_tokens":null,"effective_context_window_percent":null,"input_context_window_tokens":null,"max_context_window_tokens":null,"max_input_tokens":null,"max_output_tokens":null},"observed_hard_input_tokens":1,"observed_input_tokens":100,"observed_model_input_bytes":100}],"name":"default","protocol":"openai"}],"schema_version":1,"updated_at_ms":1}
+{"providers":[{"base_url":"https://api.openai.com","models":[{"count_capability":"unsupported","default_effort":"medium","efforts":["low","medium","high"],"id":"gpt-5.5-2026-04-23","limits":{"auto_compact_input_tokens":null,"context_window_tokens":null,"effective_context_window_percent":null,"input_context_window_tokens":null,"max_context_window_tokens":null,"max_input_tokens":null,"max_output_tokens":null},"observed_hard_input_tokens":1,"observed_input_tokens":100,"observed_input_bytes":100}],"name":"default","protocol":"openai"}],"schema_version":1,"updated_at_ms":1}
 EOF
 chmod 600 "$statistical_state/models.json"
 cat >"$root/statistical-budget.ini" <<'EOF'

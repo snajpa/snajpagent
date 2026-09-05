@@ -97,7 +97,7 @@ absent learned facts remain zero:
   "effective_context_window_percent": null
 },
 "count_capability": "unknown",
-"observed_model_input_bytes": 0,
+"observed_input_bytes": 0,
 "observed_input_tokens": 0,
 "observed_hard_input_tokens": 0
 ```
@@ -276,3 +276,8 @@ facts are separate from advertised `limits`, never copied from configuration,
 never created for an uncached manually typed model, and never inferred from
 error prose. `/status` keeps configured, advertised, observed-ceiling, exact
 usage-anchor, statistical, and byte-bound meanings distinct.
+
+The current pre-1.0 `observed_input_bytes` sample measures the accounting
+envelope containing actual Responses input items. The former semantic-tree
+sample field is not accepted; regenerate that disposable cache rather than
+reuse an incomparable ratio. No old-format reader is provided.

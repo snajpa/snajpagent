@@ -20,6 +20,13 @@ request. Streaming events update the terminal as they arrive. A final answer,
 refusal, or completed tool cycle closes the turn; it does not close the
 session.
 
+Context has one immutable transcript: the actual Responses input items. The
+model-input accounting envelope adds instruction metadata, cycle and capability
+identity around those same items; it does not translate them into a second
+semantic transcript. Create and count requests share the input and tool
+declarations, differing only in their request envelopes. Normal replay and
+compaction use the same event interpreter; compaction selects complete prefixes.
+
 Before `response_started`, the runtime builds the exact outgoing model-input
 and request projections and accounts for them in token units. The default
 `exact_token_count = auto` prefers the provider's Responses count endpoint,
@@ -113,7 +120,7 @@ and queued origin from the durable turn-start event and clears both on closure.
 The application dispatcher rejects every non-read-only tool before lifecycle,
 IRC, fixture, and ordinary handlers. A forged local function named
 `web_search` is rejected by the response graph before dispatch.
-Request/count/semantic tool schemas expose the three native
+Request/count/accounting tool schemas expose the three native
 functions and the hosted search tool only. A fresh read-only controller
 survives compaction; no active
 goal or IRC-reply controller is projected in this mode. See the manual for

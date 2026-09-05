@@ -1259,7 +1259,7 @@ append_catalog_limits(struct snag_buf *text, const json_t *model)
         any = true;
     }
     if (count)
-        (void)snag_json_integer_u64(model, "observed_model_input_bytes",
+        (void)snag_json_integer_u64(model, "observed_input_bytes",
                                    &observed);
     if (count && snag_buf_printf(text, " · count=%s · estimate=%s", count,
                                 observed ? "learned" : "none") < 0)

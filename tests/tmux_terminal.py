@@ -1612,7 +1612,7 @@ def run_model_catalog_case(binary, root, provider, environment):
             raise AssertionError("mixed provider cache changed provider order")
         first_model = cache["providers"][0]["models"][0]
         if (first_model.get("count_capability") != "unknown" or
-                first_model.get("observed_model_input_bytes") != 0 or
+                first_model.get("observed_input_bytes") != 0 or
                 first_model.get("observed_input_tokens") != 0 or
                 first_model.get("observed_hard_input_tokens") != 0):
             raise AssertionError("fresh model cache has invalid accounting state")

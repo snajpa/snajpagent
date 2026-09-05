@@ -2159,7 +2159,7 @@ def test_model_cache_and_selection():
     ]
     first_model = cache["providers"][0]["models"][0]
     assert first_model["count_capability"] == "unknown"
-    assert first_model["observed_model_input_bytes"] == 0
+    assert first_model["observed_input_bytes"] == 0
     assert first_model["observed_input_tokens"] == 0
     assert first_model["observed_hard_input_tokens"] == 0
     child.wait(b"count=unknown", start=start)
