@@ -68,6 +68,19 @@ Ctrl-C clears the draft while leaving it in scrollback with `^C`. With an
 empty draft it also interrupts an active turn. It never exits. Use Ctrl-D on
 an empty draft to finish and leave, or `/exit` while idle.
 
+For one read-only query, use `/ro`:
+
+```text
+/ro find out how the request queue is implemented
+```
+
+That turn can only list directories/files, read whole files or line ranges,
+and search patterns using native snajpagent tools. It cannot run commands,
+edit files, send IRC messages, or change goals. During active work, press Tab
+to queue `/ro ...`, or enter `/queue /ro ...`; `/ro` cannot steer a running
+turn. The next ordinary prompt restores the normal toolset. This also works
+with `-e`. See the manual for filesystem and output bounds.
+
 For work that should continue across turns, enter a goal:
 
 ```text
@@ -75,6 +88,8 @@ For work that should continue across turns, enter a goal:
 ```
 
 The agent continues until the goal completes, pauses, or needs help.
+Queued prompts run in FIFO order without fresh goal reminders; goal reminders
+and automatic continuation resume only after the queue is empty.
 `/goal pause` stops automatic continuation after the current turn;
 `/goal resume` restarts it. `/status` shows the current state. `/help` lists
 all commands and keys.

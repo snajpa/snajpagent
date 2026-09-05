@@ -63,6 +63,7 @@ turn_started_data(const struct snj_session *session, const char *turn_id)
     assert(snj_json_set_new(config, "tool_schema", json_integer(1)) == 0);
     assert(snj_json_set_new(data, "config", config) == 0);
     assert(snj_json_set_new(data, "input_kind", json_string("direct")) == 0);
+    assert(snj_json_set_new(data, "read_only", json_false()) == 0);
     assert(snj_json_set_new(data, "instructions", metadata) == 0);
     assert(snj_json_set_new(data, "queue_id", json_null()) == 0);
     assert(snj_json_set_new(data, "queue_seq", json_null()) == 0);
@@ -81,6 +82,7 @@ queued_data(const char *turn_id, const char *queue_id, const char *text)
 
     assert(data);
     assert(snj_json_set_new(data, "queue_id", json_string(queue_id)) == 0);
+    assert(snj_json_set_new(data, "read_only", json_false()) == 0);
     assert(snj_json_set_new(data, "text", json_string(text)) == 0);
     assert(snj_json_set_new(data, "while_turn_id", json_string(turn_id)) == 0);
     return data;
@@ -93,6 +95,7 @@ edited_data(const char *queue_id, const char *text)
 
     assert(data);
     assert(snj_json_set_new(data, "queue_id", json_string(queue_id)) == 0);
+    assert(snj_json_set_new(data, "read_only", json_false()) == 0);
     assert(snj_json_set_new(data, "text", json_string(text)) == 0);
     return data;
 }

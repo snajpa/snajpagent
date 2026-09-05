@@ -132,7 +132,12 @@ When a model turn ends:
 2. A normal final answer while the goal is still active is a checkpoint, not a
    completion signal. snajpagent immediately starts another goal turn.
 3. User turns queued during the active turn run in FIFO order before that next
-   automatic continuation.
+   automatic continuation. No fresh goal-controller reminder is projected
+   throughout those turns, including the final dequeued item, or whenever
+   another item remains pending. A paused/unarmed queue also prevents goal
+   continuation until `/next` or queue removal; it is never bypassed. Historical
+   goal mentions remain conversation context, and already-frozen requests are
+   not retroactively changed. A `/ro` query exposes no goal lifecycle tools.
 4. A refusal pauses the goal instead of repeating the same refusal.
 5. A provider, protocol, context, resource, output, or tool failure that stops
    the current turn pauses the goal. An ordinary terminal tool result remains

@@ -210,6 +210,7 @@ static const struct snj_term_command commands[] = {
     {"/config", "edit and reload the active configuration"},
     {"/effort [LEVEL]", "show or set next-turn effort"},
     {"/goal [COMMAND|TEXT]", "show, start, or control a persistent goal"},
+    {"/ro QUERY", "one read-only query; during a turn use Tab or /queue /ro QUERY"},
     {"/verbose [0..6]", "show or set this process's verbosity"},
     {"/queue [TEXT|ACTION]", "list/add/edit/delete/clear/pop queued turns (/q alias)"},
     {"/next", "run the oldest paused turn"},
@@ -412,8 +413,9 @@ render_queue(struct app_state *app)
         return app_warning(app, "future-turn queue is empty");
     for (size_t i = 0; i < app->session.pending_queue_count; ++i) {
         char label[64];
-        (void)snprintf(label, sizeof(label), "%zu %.8s › ", i + 1u,
-                       app->session.pending_queue[i].queue_id);
+        (void)snprintf(label, sizeof(label), "%zu %.8s%s › ", i + 1u,
+                       app->session.pending_queue[i].queue_id,
+                       app->session.pending_queue[i].read_only ? " /ro" : "");
         if (snj_render_submitted(&app->render, label,
                                  app->session.pending_queue[i].text) < 0)
             return -1;
@@ -692,6 +694,8 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
                  char *error, size_t error_size)
 {
     struct snj_queued_turn *queued;
+    struct snj_buf draft;
+    int draft_rc;
 
     if (number == 0u || number > app->session.pending_queue_count) {
         snj_errorf(error, error_size, "queue item %zu does not exist", number);
@@ -702,8 +706,16 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
     app->queue_edit_number = number;
     app->queue_edit_was_armed = app->queue_armed;
     app->queue_armed = false;
-    if (set_input_prompt(app, active) < 0 ||
-        snj_term_restore_draft(&app->term, queued->text) < 0) {
+    snj_buf_init(&draft, SNJ_MAX_QUEUED_TEXT + 8u);
+    draft_rc = snj_buf_printf(&draft, "%s%s", queued->read_only ? "/ro " :
+                              queued->text[0] == '/' ? "/" : "", queued->text);
+    if (draft_rc == 0)
+        draft_rc = snj_buf_terminate(&draft);
+    if (draft_rc == 0 && set_input_prompt(app, active) == 0)
+        draft_rc = snj_term_restore_draft(&app->term, (char *)draft.data);
+    else draft_rc = -1;
+    snj_buf_free(&draft);
+    if (draft_rc < 0) {
         app->queue_armed = app->queue_edit_was_armed;
         app->queue_edit_id[0] = '\0';
         app->queue_edit_number = 0u;
@@ -719,9 +731,14 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
                   char *error, size_t error_size)
 {
     struct snj_queued_turn *queued;
-    size_t len = strlen(text);
+    const char *original = text;
+    bool read_only;
+    size_t len;
     bool restore_armed = app->queue_edit_was_armed;
     int rc = 0;
+
+    text = snj_prompt_parse(text, &read_only);
+    len = strlen(text);
 
     queued = queued_by_id(app, app->queue_edit_id, NULL);
     if (!queued) {
@@ -738,20 +755,20 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
         (void)snj_render_error_ctx(&app->render, error);
         error[0] = '\0';
         if (set_input_prompt(app, active) < 0 ||
-            snj_term_restore_draft(&app->term, text) < 0)
+            snj_term_restore_draft(&app->term, original) < 0)
             return -1;
         return 1;
     }
-    if (strcmp(queued->text, text) != 0 &&
+    if ((strcmp(queued->text, text) != 0 || queued->read_only != read_only) &&
         commit_event(app, "future_turn_edited",
-                     snj_app_future_turn_edited_data(queued->queue_id, text),
+                     snj_app_future_turn_edited_data(queued->queue_id, text, read_only),
                      error, error_size) < 0) {
         if (set_input_prompt(app, active) == 0)
-            (void)snj_term_restore_draft(&app->term, text);
+            (void)snj_term_restore_draft(&app->term, original);
         return -1;
     }
     if (snj_render_submitted(&app->render,
-            snj_term_prompt_label(&app->term), text) < 0) {
+            snj_term_prompt_label(&app->term), original) < 0) {
         snj_errorf(error, error_size, "edited turn acknowledgement could not be rendered");
         return -1;
     }
@@ -771,21 +788,21 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
                   char *error, size_t error_size)
 {
     char queue_id[SNJ_ID_HEX_LEN + 1u];
-    const char *queued_text = text;
+    bool read_only;
+    const char *queued_text = snj_prompt_parse(text, &read_only);
     size_t len;
     if (!app->session.active_turn) {
         snj_errorf(error, error_size, "/queue TEXT is valid only while a turn is active");
         errno = EINVAL;
         return 1;
     }
-    if (queued_text[0] == '/') {
-        if (queued_text[1] != '/') {
+    if (text[0] == '/' && !read_only) {
+        if (text[1] != '/') {
             snj_errorf(error, error_size,
                       "queued text starting with / must use // for a literal slash");
             errno = EINVAL;
             return 1;
         }
-        ++queued_text;
     }
     len = strlen(queued_text);
     if (!len || len > SNJ_MAX_QUEUED_TEXT ||
@@ -801,10 +818,10 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
     }
     if (commit_event(app, "future_turn_queued",
                      snj_app_future_turn_queued_data(app->session.active_turn_id,
-                                             queue_id, queued_text),
+                                             queue_id, queued_text, read_only),
                      error, error_size) < 0)
         return -1;
-    if (snj_render_submitted(&app->render, "next › ", queued_text) < 0) {
+    if (snj_render_submitted(&app->render, "next › ", text) < 0) {
         snj_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
         return -1;
     }
@@ -991,6 +1008,7 @@ render_status(struct app_state *app)
     if (snj_buf_printf(&text,
         "session: %s\n"
         "state: %s\n"
+        "tools: %s\n"
         "provider: %s%s\n"
         "model: %s%s\n"
         "effort: %s%s\n"
@@ -1004,6 +1022,7 @@ render_status(struct app_state *app)
                              app->session.id[4], app->session.id[5],
                              app->session.id[6], app->session.id[7], '\0'},
         app->session.active_turn ? "active" : "idle",
+        app->session.active_read_only ? "read-only query" : "normal",
         next_provider(app) ? next_provider(app)->name : "<missing>",
         app->staged_provider ? " (staged once)" : "",
         next_model(app), app->staged_model ? " (staged once)" : "",
@@ -2112,13 +2131,24 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         bool single_line = strchr(line, '\n') == NULL;
         bool handled = false;
         bool prompt_ready = false;
+        bool read_only;
+
+        (void)snj_prompt_parse(line, &read_only);
+        if (read_only) {
+            (void)snj_render_error_ctx(&app->render,
+                "/ro cannot steer an active turn; press Tab or use /queue /ro QUERY");
+            rc = set_input_prompt(app, true);
+            if (rc == 0)
+                rc = snj_term_restore_draft(&app->term, line);
+            goto active_done;
+        }
         if (single_line && line[0] == '/' && line[1] != '/') {
             rc = handle_common_command(app, line, true, &handled,
                                        &prompt_ready);
             if (rc < 0)
                 goto active_done;
         }
-        if (!handled && single_line) {
+        if (!handled) {
             rc = handle_queue_command(app, line, true, &handled,
                                       error, sizeof(error));
             if (rc != 0 && error[0])
@@ -2519,7 +2549,7 @@ silent_turn_data(const char *turn_id, const char *response_id,
 
 static int
 run_turn(struct app_state *app, const char *prompt,
-         const struct snj_queued_turn *queued, bool goal_turn)
+         const struct snj_queued_turn *queued, bool goal_turn, bool read_only)
 {
     char turn_id[SNJ_ID_HEX_LEN + 1u];
     char response_id[SNJ_ID_HEX_LEN + 1u];
@@ -2552,6 +2582,9 @@ run_turn(struct app_state *app, const char *prompt,
             "prompt must be nonempty valid UTF-8 within 1 MiB");
         return 2;
     }
+    if (read_only && app->networked && !app->execute &&
+        select_view(app, SNJ_RENDER_ROLLOUT, false) < 0)
+        return 6;
     if (prepare_turn_settings(app, error, sizeof(error)) < 0) {
         (void)app_error(app, error);
         return 2;
@@ -2588,7 +2621,7 @@ run_turn(struct app_state *app, const char *prompt,
     }
     if (commit_event(app, "turn_started",
                      snj_app_turn_started_data(app, turn_prompt, turn_id, queued,
-                                               goal_turn),
+                                               goal_turn, read_only),
                      error, sizeof(error)) < 0) {
         (void)app_error(app, error);
         result = 3;
@@ -2596,8 +2629,9 @@ run_turn(struct app_state *app, const char *prompt,
     }
     consume_staged_settings(app);
     if (app_runtimef(app,
-            "turn › %s started · model=%s · effort=%s · workspace=%s",
-            turn_id, app->turn_model, app->turn_effort, app->session.workspace) < 0) {
+            "turn › %s started%s · model=%s · effort=%s · workspace=%s",
+            turn_id, read_only ? " (read-only)" : "", app->turn_model,
+            app->turn_effort, app->session.workspace) < 0) {
         (void)app_error(app, "turn runtime facts could not be rendered");
         result = 6;
         goto out;
@@ -3282,7 +3316,8 @@ run_turn(struct app_state *app, const char *prompt,
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             continue;
         }
-        if (app->networked && app->irc_turn_local_operator &&
+        if (app->networked && !app->session.active_read_only &&
+            app->irc_turn_local_operator &&
             !app->irc_turn_replied && !app->session.irc_reply_reminded &&
             (decision.outcome == SNJ_GRAPH_NONPRODUCTIVE ||
              decision.outcome == SNJ_GRAPH_FINAL ||
@@ -3421,12 +3456,13 @@ out:
 
 static int
 run_tracked_turn(struct app_state *app, const char *prompt,
-                 const struct snj_queued_turn *queued, bool goal_turn)
+                 const struct snj_queued_turn *queued, bool goal_turn,
+                 bool read_only)
 {
     char error[256] = {0};
     const char *reason = NULL;
     const char *message = NULL;
-    int rc = run_turn(app, prompt, queued, goal_turn);
+    int rc = run_turn(app, prompt, queued, goal_turn, read_only);
 
     if (app->session.goal_status != SNJ_GOAL_ACTIVE)
         return rc;
@@ -3750,7 +3786,8 @@ run_queued_chain(struct app_state *app)
 {
     while (app->queue_armed && app->session.pending_queue_count != 0u) {
         const struct snj_queued_turn *queued = &app->session.pending_queue[0];
-        int turn_rc = run_tracked_turn(app, queued->text, queued, false);
+        int turn_rc = run_tracked_turn(app, queued->text, queued, false,
+                                       queued->read_only);
         if (turn_rc != 0) {
             app->queue_armed = false;
             return turn_rc;
@@ -3781,7 +3818,7 @@ run_ready_chains(struct app_state *app)
                                                      true);
             if (prompt) {
                 app->irc_turn_local_operator = local_operator;
-                turn_rc = run_tracked_turn(app, prompt, NULL, false);
+                turn_rc = run_tracked_turn(app, prompt, NULL, false, false);
                 app->irc_turn_local_operator = false;
                 free(prompt);
                 if (turn_rc != 0)
@@ -3789,16 +3826,17 @@ run_ready_chains(struct app_state *app)
                 continue;
             }
         }
-        if (app->queue_armed && app->session.pending_queue_count != 0u) {
+        if (app->queue_armed && !app->queue_edit_id[0] &&
+            app->session.pending_queue_count != 0u) {
             turn_rc = run_queued_chain(app);
             if (turn_rc != 0)
                 return turn_rc;
             continue;
         }
-        if (app->goal_armed &&
+        if (app->goal_armed && app->session.pending_queue_count == 0u &&
             app->session.goal_status == SNJ_GOAL_ACTIVE) {
             turn_rc = run_tracked_turn(app, SNJ_GOAL_CONTINUATION_TEXT,
-                                      NULL, true);
+                                      NULL, true, false);
             if (turn_rc != 0)
                 return turn_rc;
             continue;
@@ -3830,7 +3868,7 @@ interactive_loop(struct app_state *app, const char *initial)
                 int turn_rc;
                 app->queue_armed = false;
                 app->irc_turn_local_operator = local_operator;
-                turn_rc = run_tracked_turn(app, irc_prompt, NULL, false);
+                turn_rc = run_tracked_turn(app, irc_prompt, NULL, false, false);
                 app->irc_turn_local_operator = false;
                 free(irc_prompt);
                 if (turn_rc == 3 || turn_rc == 6)
@@ -3928,6 +3966,8 @@ interactive_loop(struct app_state *app, const char *initial)
         }
         {
             bool single_line = strchr(prompt, '\n') == NULL;
+            bool read_only;
+            const char *query = snj_prompt_parse(prompt, &read_only);
             bool handled = false;
             int local_rc = 0;
             if (single_line && prompt[0] == '/' && prompt[1] != '/')
@@ -3970,9 +4010,9 @@ interactive_loop(struct app_state *app, const char *initial)
                         return chain_rc;
                     }
                 }
-            } else if (single_line && prompt[0] == '/' && prompt[1] != '/') {
+            } else if (!read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
-            } else if (app->networked &&
+            } else if (!read_only && app->networked &&
                        snj_render_view(&app->render) == SNJ_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
@@ -3983,9 +4023,18 @@ interactive_loop(struct app_state *app, const char *initial)
                     (void)app_error(app, irc_error[0] ? irc_error :
                                     "IRC message could not be queued");
             } else {
-                const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
-                                     prompt + 1 : prompt;
+                const char *actual = query;
                 int turn_rc;
+
+                if (read_only && !*actual) {
+                    (void)app_error(app, "usage: /ro QUERY (query must not be empty)");
+                    free(owned);
+                    owned = NULL;
+                    prompt = NULL;
+                    if (set_input_prompt(app, false) < 0)
+                        return 6;
+                    continue;
+                }
 
                 if (app->networked &&
                     snj_render_input_submitted(&app->render,
@@ -3994,7 +4043,7 @@ interactive_loop(struct app_state *app, const char *initial)
                     return 6;
                 }
                 app->queue_armed = false;
-                turn_rc = run_tracked_turn(app, actual, NULL, false);
+                turn_rc = run_tracked_turn(app, actual, NULL, false, read_only);
                 if (turn_rc == 3 || turn_rc == 6) {
                     free(owned);
                     return turn_rc;
@@ -4268,7 +4317,9 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         }
     }
     if (cli->execute) {
-        rc = run_tracked_turn(&app, cli->prompt, NULL, false);
+        bool read_only;
+        const char *query = snj_prompt_parse(cli->prompt, &read_only);
+        rc = run_tracked_turn(&app, query, NULL, false, read_only);
         if (rc == 0 && (app.queue_armed || app.goal_armed))
             rc = run_ready_chains(&app);
         goto out;

@@ -412,6 +412,20 @@ cancelled, or blocked.  Queued operator turns run before the next automatic
 goal turn.  Failures, refusal, interruption, input closure, and session resume
 pause automatic continuation.
 .TP
+.BI /ro " query"
+Run one read-only local query, including multiline text.  The only available
+tools list files/directories, read whole files or inclusive 1-based line
+ranges, and search text patterns.  They are implemented in snajpagent without
+shells or external commands.  Normal capabilities return on the next ordinary
+turn.  In networked mode the query opens rollout view and sends no IRC reply.
+During active work, Enter rejects this mode switch and preserves the draft;
+press Tab or use
+.B /queue /ro query
+to run it after the current turn.  Ordinary steering inside a read-only turn
+cannot lift its restrictions.  Empty queries are rejected;
+.B //ro
+is literal text.  One-shot argument and stdin prompts also support this prefix.
+.TP
 .BR /goal , " /goal status"
 Show the durable goal.
 .TP
@@ -893,11 +907,37 @@ Standard output carries one-shot model text.  Diagnostics and the resume hint
 use standard error.  Redirected model text remains byte-exact and contains no
 terminal color or Markdown presentation.
 .PP
-The coding-tool surface is
+The normal coding-tool surface is
 .BR exec_command ,
 .BR write_stdin ,
 and
 .BR apply_patch .
+Read-only queries instead expose exactly
+.BR list_files ,
+.BR read_file ,
+and
+.BR grep .
+All other tool dispatch, including process control, patches, web search,
+goal lifecycle, and IRC, is unavailable for that turn.
+.PP
+Native inspection accepts literal workspace-relative or absolute paths and
+never follows symlinks, including parent components.  Listings include hidden
+entries; special files and symlinks are labeled but not opened.  Reads require
+regular UTF-8 files without NUL bytes.  Search uses POSIX extended regex or
+explicit literal matching, with optional case folding, and reports skipped
+non-text/special files.  It does not interpret ignore files or shell syntax.
+This is not a confidentiality sandbox: local readable files are accessible.
+Session/history persistence and filesystem access-time updates remain normal;
+independently running processes are not stopped or made read-only.
+.PP
+Results are bounded to 256 KiB, lines to less than 64 KiB, each scan to 128 MiB,
+directory entries to 100,000, and traversal depth to 32.  Listing/search use
+offset/limit pagination (default 200, maximum 1,000 results); output identifies
+incompleteness and the next offset.  Scan limits and I/O errors require a
+narrower path.  Oversized file output fails explicitly: use smaller line ranges.
+Directory order is sorted per directory; pagination observes the live tree,
+not a filesystem snapshot.
+.PP
 Commands that yield, reach a foreground handoff deadline, or receive urgent
 input continue under a process handle; the model can wait, interact, or
 explicitly terminate them with

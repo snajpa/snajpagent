@@ -81,7 +81,7 @@ turn_config(const struct app_state *app)
 json_t *
 snj_app_turn_started_data(const struct app_state *app, const char *prompt,
                   const char *turn_id, const struct snj_queued_turn *queued,
-                  bool goal_turn)
+                  bool goal_turn, bool read_only)
 {
     json_t *data = json_object();
     json_t *instructions = snj_instructions_metadata_json(&app->turn_instructions);
@@ -94,7 +94,8 @@ snj_app_turn_started_data(const struct app_state *app, const char *prompt,
         snj_json_set_new(data, "instructions", instructions) < 0)
         goto fail;
     instructions = NULL;
-    if (snj_json_set_new(data, "queue_id",
+    if (snj_json_set_new(data, "read_only", json_boolean(read_only)) < 0 ||
+        snj_json_set_new(data, "queue_id",
                          queued ? json_string(queued->queue_id) : json_null()) < 0 ||
         snj_json_set_new(data, "queue_seq",
                          queued ? json_integer((json_int_t)queued->seq) :
@@ -854,10 +855,11 @@ snj_app_steering_added_data(const char *turn_id, const char *steering_id,
 
 json_t *
 snj_app_future_turn_queued_data(const char *turn_id, const char *queue_id,
-                        const char *text)
+                        const char *text, bool read_only)
 {
     json_t *data = json_object();
-    if (!data || snj_json_set_new(data, "queue_id", json_string(queue_id)) < 0 ||
+    if (!data || snj_json_set_new(data, "read_only", json_boolean(read_only)) < 0 ||
+        snj_json_set_new(data, "queue_id", json_string(queue_id)) < 0 ||
         snj_json_set_new(data, "text", json_string(text)) < 0 ||
         snj_json_set_new(data, "while_turn_id", json_string(turn_id)) < 0) {
         if (data)
@@ -868,11 +870,13 @@ snj_app_future_turn_queued_data(const char *turn_id, const char *queue_id,
 }
 
 json_t *
-snj_app_future_turn_edited_data(const char *queue_id, const char *text)
+snj_app_future_turn_edited_data(const char *queue_id, const char *text,
+                               bool read_only)
 {
     json_t *data = json_object();
 
-    if (!data || snj_json_set_new(data, "queue_id", json_string(queue_id)) < 0 ||
+    if (!data || snj_json_set_new(data, "read_only", json_boolean(read_only)) < 0 ||
+        snj_json_set_new(data, "queue_id", json_string(queue_id)) < 0 ||
         snj_json_set_new(data, "text", json_string(text)) < 0) {
         if (data)
             json_decref(data);

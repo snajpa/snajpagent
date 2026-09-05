@@ -60,6 +60,7 @@ struct snj_queued_turn {
     char queue_id[SNJ_ID_HEX_LEN + 1u];
     uint64_t seq;
     char *text;
+    bool read_only;
 };
 
 struct snj_store {
@@ -148,6 +149,8 @@ struct snj_session {
     size_t pending_steering_count;
     size_t pending_queue_count;
     bool active_turn;
+    bool active_read_only;
+    bool active_queued;
     bool archived;
     bool delete_requested;
     bool response_open;

@@ -205,6 +205,21 @@ IRC message.
 
 ## Queue Commands
 
+`/ro QUERY` is a per-prompt read-only query, not a persistent setting. It works
+at idle and through `-e`; in chat view it explicitly opens local rollout view.
+Active Enter on `/ro` (including multiline input) preserves the draft and
+directs the user to Tab or `/queue /ro QUERY`. It never steers, interrupts, or
+changes the active tools. Ordinary steering inside an existing read-only turn
+keeps that turn read-only. `//ro ...` is literal ordinary input. Empty `/ro`
+queries are rejected before turn creation. Incoming IRC text is not parsed as
+a local slash command.
+
+Queue add/edit and turn-start events carry required `read_only` booleans.
+Queue listing identifies `/ro` entries; editing restores the command prefix
+(or the literal-slash escape) and saves both normalized text and mode. Edits
+retain FIFO identity, cancellation removes mode with the item, and replay
+restores the exact mode without interpreting prompt text again.
+
 `/queue` and `/q` are equivalent. With no argument, they print queued turns in
 FIFO order with one-based numbers and short durable IDs:
 

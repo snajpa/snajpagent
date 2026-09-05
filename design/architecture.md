@@ -79,6 +79,9 @@ unbounded retry.
 
 An active persistent goal schedules another ordinary turn after a normal final
 answer. Durable queued user turns take precedence over that continuation.
+Fresh goal-controller reminders are omitted throughout a queued turn (even
+after the last item is dequeued) and whenever pending queue entries exist.
+An unarmed queue blocks goal continuation until `/next` or queue removal.
 Goal turns carry a distinct `input_kind` and a developer continuation marker,
 so they do not appear as new user messages. Refusal, failure, input closure,
 and session reopening pause the goal; resumption is explicit.
@@ -86,6 +89,20 @@ and session reopening pause the goal; resumption is explicit.
 Tool calls are handled one at a time. Before a tool runs, snajpagent records a
 durable start event. After the tool finishes, snajpagent records the bounded
 result and sends that result into the next provider cycle.
+
+`/ro QUERY` selects a per-turn read-only toolset: `list_files`, `read_file`,
+and `grep`, implemented in `tools_read.c` using native file/directory APIs and
+POSIX regex, with no subprocesses. The existing `turn_started`,
+`future_turn_queued`, and `future_turn_edited` data each carry a required
+`read_only` boolean alongside normalized text. The session derives active mode
+and queued origin from the durable turn-start event and clears both on closure.
+The application dispatcher rejects every non-read-only tool before lifecycle,
+IRC, fixture, and ordinary handlers. Request/count/semantic tool schemas match
+that restriction. A fresh read-only controller survives compaction; no active
+goal or IRC-reply controller is projected in this mode. See the manual for
+literal path handling, no-follow semantics, regular-text requirements, and
+fixed pagination/scan/output bounds. This is a capability restriction, not a
+filesystem confidentiality sandbox or a freeze of independent processes.
 
 The active input pump services terminal input and IRC sockets during provider
 streams and tool execution. Local Enter submits immediate steering: it

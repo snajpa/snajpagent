@@ -976,9 +976,42 @@ test_count_modes(void)
     }
 }
 
+static void
+test_read_only_dispatch(void)
+{
+    static const char *const denied[] = {
+        "exec_command", "write_stdin", "apply_patch", "create_goal",
+        "update_goal", "irc_send", "irc_topic", "irc_state", "unknown"
+    };
+    struct app_state app = {0};
+    struct snj_response_item call = {0};
+    json_t *result = NULL;
+    char error[256] = {0};
+
+    app.session.active_read_only = true;
+    call.kind = SNJ_ITEM_TOOL_CALL;
+    call.arguments = json_object();
+    for (size_t i = 0; i < sizeof(denied) / sizeof(denied[0]); ++i) {
+        call.name = (char *)denied[i];
+        /* No config, IRC, credential or process: no handler may be reached. */
+        assert(snj_app_tool_run(&app, &call, NULL, &result,
+                                error, sizeof(error)) == 0);
+        assert(snj_tool_result_valid(result) == 0);
+        assert(strstr(snj_json_string(result, "model_text"), "read-only"));
+        json_decref(result);
+    }
+    app.session.active_read_only = false;
+    call.name = "read_file";
+    assert(snj_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snj_json_string(result, "model_text"), "only in /ro"));
+    json_decref(result);
+    json_decref(call.arguments);
+}
+
 int
 main(void)
 {
+    test_read_only_dispatch();
     test_local_provider_transport();
     test_codex_model_list();
     test_codex_path_selection();

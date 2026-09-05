@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define PATCH_MODEL_MAX_FOR_TEST (512u * 1024u)
@@ -1180,9 +1181,119 @@ test_apply_patch_preview_is_bounded(void)
     free(dir);
 }
 
+static int
+ro_cancel(void *opaque, unsigned int timeout_ms)
+{
+    (void)opaque;
+    (void)timeout_ms;
+    return 2;
+}
+
+static void
+check_read_tool(const char *workspace, const char *name, const char *arguments,
+                 bool success, const char *expected, snj_tool_pump_fn pump)
+{
+    struct snj_response_item call = {0};
+    json_t *result = NULL;
+    char error[256] = {0};
+
+    call.kind = SNJ_ITEM_TOOL_CALL;
+    call.name = (char *)name;
+    call.arguments = snj_json_load_strict((const unsigned char *)arguments,
+        strlen(arguments), 8192u, error, sizeof(error));
+    assert(call.arguments);
+    assert(snj_tools_read_only(&call, workspace, pump, NULL, &result) ==
+            (pump ? 2 : 0));
+    assert(snj_tool_result_valid(result) == 0);
+    assert(strcmp(snj_json_string(result, "status"), success ? "succeeded" : "failed") == 0);
+    assert(strstr(snj_json_string(result, "model_text"), expected));
+    json_decref(result);
+    json_decref(call.arguments);
+}
+
+static void
+test_native_read_tools(void)
+{
+    char temp[4096], path[4096];
+    const char *scratch = getenv("TMPDIR");
+    bool read_only;
+    FILE *file;
+
+    assert(strcmp(snj_prompt_parse("/ro\n inspect", &read_only), "inspect") == 0 && read_only);
+    assert(!*snj_prompt_parse("/ro  \t", &read_only) && read_only);
+    assert(strcmp(snj_prompt_parse("//ro inspect", &read_only), "/ro inspect") == 0 && !read_only);
+    assert(strcmp(snj_prompt_parse("/root", &read_only), "/root") == 0 && !read_only);
+    assert(snprintf(temp, sizeof(temp), "%s/ro-tools-XXXXXX", scratch ? scratch : ".") > 0);
+    assert(mkdtemp(temp));
+    join_path(path, sizeof(path), temp, "a ; echo nope");
+    write_text_file(path, "Alpha\nβeta\nlast");
+    join_path(path, sizeof(path), temp, "sub");
+    assert(mkdir(path, 0700) == 0);
+    join_path(path, sizeof(path), temp, "sub/.hidden");
+    write_text_file(path, "Alpha nested\n");
+    join_path(path, sizeof(path), temp, "link");
+    assert(symlink("sub", path) == 0);
+    join_path(path, sizeof(path), temp, "pipe");
+    assert(mkfifo(path, 0600) == 0);
+    join_path(path, sizeof(path), temp, "binary");
+    file = fopen(path, "wb");
+    assert(file && fwrite("\0bin\n", 1u, 5u, file) == 5u && fclose(file) == 0);
+
+    check_read_tool(temp, "read_file", "{\"path\":\"a ; echo nope\",\"start_line\":null,\"end_line\":null}",
+        true, "1:Alpha\n2:βeta\n3:last", NULL);
+    check_read_tool(temp, "read_file", "{\"path\":\"a ; echo nope\",\"start_line\":2,\"end_line\":2}",
+        true, "2:βeta\n", NULL);
+    check_read_tool(temp, "read_file", "{\"path\":\"a ; echo nope\",\"start_line\":4,\"end_line\":null}",
+        false, "beyond end", NULL);
+    check_read_tool(temp, "read_file", "{\"path\":\"a ; echo nope\",\"start_line\":3,\"end_line\":2}",
+        false, "Invalid", NULL);
+    check_read_tool(temp, "read_file", "{\"path\":\"binary\",\"start_line\":null,\"end_line\":null}",
+        false, "Non-text", NULL);
+    check_read_tool(temp, "read_file", "{\"path\":\"link/.hidden\",\"start_line\":null,\"end_line\":null}",
+        false, "Cannot open", NULL);
+    check_read_tool(temp, "read_file", "{\"path\":\"pipe\",\"start_line\":null,\"end_line\":null}",
+        false, "Cannot open", NULL);
+    check_read_tool(temp, "list_files", "{\"path\":\".\",\"recursive\":true,\"offset\":null,\"limit\":null}",
+        true, "./sub/.hidden\tfile", NULL);
+    check_read_tool(temp, "list_files", "{\"path\":\".\",\"recursive\":false,\"offset\":null,\"limit\":1}",
+        true, "More results (repeat with next_offset); returned=1; next_offset=1", NULL);
+    check_read_tool(temp, "list_files", "{\"path\":\".\",\"recursive\":false,\"offset\":1,\"limit\":1}",
+        true, "./binary\tfile", NULL);
+    check_read_tool(temp, "grep", "{\"path\":\".\",\"pattern\":\"^alpha\",\"recursive\":null,\"ignore_case\":true,\"literal\":null,\"offset\":null,\"limit\":null}",
+        true, "./sub/.hidden:1:Alpha nested", NULL);
+    check_read_tool(temp, "grep", "{\"path\":\".\",\"pattern\":\"missing\",\"recursive\":true,\"ignore_case\":null,\"literal\":true,\"offset\":null,\"limit\":null}",
+        true, "Complete; returned=0; next_offset=0; skipped_nontext_or_special=3", NULL);
+    check_read_tool(temp, "grep", "{\"path\":\".\",\"pattern\":\"[\",\"recursive\":true,\"ignore_case\":null,\"literal\":false,\"offset\":null,\"limit\":null}",
+        false, "", NULL);
+    check_read_tool(temp, "grep", "{\"path\":\".\",\"pattern\":\"Alpha\",\"recursive\":true,\"ignore_case\":null,\"literal\":true,\"offset\":1,\"limit\":1}",
+        true, "./sub/.hidden:1:Alpha nested", NULL);
+    check_read_tool(temp, "read_file", "{\"path\":\"a ; echo nope\",\"start_line\":null,\"end_line\":null}",
+        false, "interrupted", ro_cancel);
+    join_path(path, sizeof(path), temp, "large");
+    file = fopen(path, "wb");
+    assert(file);
+    for (size_t i = 0; i < 50000u; ++i)
+        assert(fputs("1234567890\n", file) >= 0);
+    assert(fclose(file) == 0);
+    check_read_tool(temp, "read_file", "{\"path\":\"large\",\"start_line\":null,\"end_line\":null}",
+        false, "narrower line range", NULL);
+    check_read_tool(temp, "read_file", "{\"path\":\"large\",\"start_line\":49999,\"end_line\":50000}",
+        true, "50000:1234567890", NULL);
+    remove_file_in_dir(temp, "large");
+    remove_file_in_dir(temp, "binary");
+    remove_file_in_dir(temp, "pipe");
+    remove_file_in_dir(temp, "link");
+    remove_file_in_dir(temp, "sub/.hidden");
+    join_path(path, sizeof(path), temp, "sub");
+    assert(rmdir(path) == 0);
+    remove_file_in_dir(temp, "a ; echo nope");
+    assert(rmdir(temp) == 0);
+}
+
 int
 main(void)
 {
+    test_native_read_tools();
     test_success_and_streams();
     test_command_output_limit_selection();
     test_command_output_limit_is_required_and_positive();

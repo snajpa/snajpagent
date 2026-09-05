@@ -7,6 +7,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+
+const char *
+snj_prompt_parse(const char *text, bool *read_only)
+{
+    *read_only = strncmp(text, "/ro", 3u) == 0 &&
+        (!text[3] || isspace((unsigned char)text[3]));
+    if (*read_only) {
+        text += 3u;
+        while (isspace((unsigned char)*text))
+            ++text;
+    } else if (text[0] == '/' && text[1] == '/') {
+        ++text;
+    }
+    return text;
+}
+
+bool
+snj_read_only_tool(const char *name)
+{
+    return name && (strcmp(name, "list_files") == 0 ||
+                    strcmp(name, "read_file") == 0 ||
+                    strcmp(name, "grep") == 0);
+}
 
 const char *
 snj_item_kind_name(enum snj_item_kind kind)
@@ -355,14 +379,14 @@ snj_response_graph_add_public(struct snj_response_graph *graph,
 static bool
 tool_name_valid(const char *name)
 {
-    return name && (strcmp(name, "exec_command") == 0 ||
+    return snj_read_only_tool(name) || (name && (strcmp(name, "exec_command") == 0 ||
                     strcmp(name, "write_stdin") == 0 ||
                     strcmp(name, "apply_patch") == 0 ||
                     strcmp(name, "create_goal") == 0 ||
                     strcmp(name, "update_goal") == 0 ||
                     strcmp(name, "irc_send") == 0 ||
                     strcmp(name, "irc_state") == 0 ||
-                    strcmp(name, "irc_topic") == 0);
+                    strcmp(name, "irc_topic") == 0));
 }
 
 static bool

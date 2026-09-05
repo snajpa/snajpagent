@@ -48,6 +48,7 @@ turn_started(const char *turn_id, unsigned int number, const char *text,
     assert(data);
     assert(snj_json_set_new(data, "config", turn_config()) == 0);
     assert(snj_json_set_new(data, "input_kind", json_string("direct")) == 0);
+    assert(snj_json_set_new(data, "read_only", json_false()) == 0);
     assert(snj_json_set_new(data, "instructions",
                             instructions ? instructions : json_array()) == 0);
     assert(snj_json_set_new(data, "queue_id", json_null()) == 0);
@@ -892,6 +893,86 @@ test_usage_anchor_before_controller_suffix(void)
     snj_context_projection_free(&projection);
 }
 
+static void
+test_read_only_and_queue_controllers(void)
+{
+    char temp[4096], state[4096], error[256];
+    const char *scratch = getenv("TMPDIR");
+    struct snj_store store;
+    struct snj_session session;
+    struct snj_context_projection projection;
+    struct snj_config config;
+    json_t *empty = json_array();
+    json_t *started;
+    const char *turn = "01010101010101010101010101010101";
+
+    assert(snprintf(temp, sizeof(temp), "%s/ro-context-XXXXXX",
+                     scratch ? scratch : ".") > 0);
+    assert(mkdtemp(temp));
+    assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
+    snj_store_init(&store);
+    snj_session_init(&session);
+    snj_context_projection_init(&projection);
+    snj_config_init(&config);
+    config.irc_listen_explicit = true;
+    assert(snj_store_open(&store, state, error, sizeof(error)) == 0);
+    assert(snj_session_create(&store, &session, temp, "default",
+                              SNAJPAGENT_MODEL, "default", error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "goal_started", goal_started_data(
+        "02020202020202020202020202020202", "distinct goal wording"),
+        NULL, error, sizeof(error)) == 0);
+    started = turn_started(turn, 1u, "inspect", temp, NULL);
+    assert(json_object_set_new(started, "read_only", json_true()) == 0);
+    assert(snj_session_commit(&session, "turn_started", started,
+                              NULL, error, sizeof(error)) == 0);
+    assert(session.active_read_only && !session.active_queued);
+    for (unsigned int pass = 0; pass < 5u; ++pass) {
+        json_t *requests[3];
+        struct snj_buf serialized;
+
+        session.active_read_only = pass == 0u;
+        session.active_queued = pass == 1u;
+        session.pending_queue_count = pass == 2u ? 1u : 0u;
+        assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u,
+            empty, 0u, false, &config, NULL, &projection, error, sizeof(error)) == 0);
+        requests[0] = projection.model_input;
+        requests[1] = projection.create_request;
+        requests[2] = projection.count_request;
+        for (size_t i = 0; i < 3u; ++i) {
+            json_t *ts = json_object_get(requests[i], "tools");
+            if (pass == 0u) {
+                assert(json_array_size(ts) == 3u);
+                assert(tool_by_name(ts, "list_files") && tool_by_name(ts, "read_file") &&
+                       tool_by_name(ts, "grep"));
+            } else {
+                assert(tool_by_name(ts, "exec_command"));
+                assert(tool_by_name(ts, "update_goal"));
+            }
+        }
+        snj_buf_init(&serialized, SNJ_CONTEXT_MAX_REQUEST);
+        assert(snj_json_canonical(projection.create_request, &serialized) == 0);
+        assert(snj_buf_terminate(&serialized) == 0);
+        assert((strstr((char *)serialized.data, "distinct goal wording") != NULL) == (pass >= 3u));
+        assert((strstr((char *)serialized.data, "This turn is a read-only query") != NULL) == (pass == 0u));
+        if (pass == 0u)
+            assert(!strstr((char *)serialized.data, "requires one successful irc_send"));
+        snj_buf_free(&serialized);
+    }
+    session.active_read_only = true;
+    started = json_object();
+    assert(snj_json_set_new(started, "turn_id", json_string(turn)) == 0);
+    assert(snj_json_set_new(started, "origin", json_string("user")) == 0);
+    assert(snj_json_set_new(started, "reason", json_string("cancelled")) == 0);
+    assert(snj_session_commit(&session, "turn_interrupted", started,
+                              NULL, error, sizeof(error)) == 0);
+    assert(!session.active_read_only && !session.active_queued);
+    snj_context_projection_free(&projection);
+    snj_session_close(&session);
+    snj_store_close(&store);
+    snj_config_free(&config);
+    json_decref(empty);
+}
+
 int
 main(void)
 {
@@ -920,6 +1001,7 @@ main(void)
     char large_tool_hash[SNJ_SHA256_HEX_LEN + 1u];
     char closure_output[4097];
 
+    test_read_only_and_queue_controllers();
     test_usage_anchor();
     test_usage_anchor_before_controller_suffix();
     assert(mkdtemp(temp));

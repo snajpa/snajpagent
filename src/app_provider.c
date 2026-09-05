@@ -340,7 +340,6 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
                      unsigned int *retry_count)
 {
 #ifdef SNAJPAGENT_TEST_FIXTURE
-    (void)create_request;
     (void)credential;
     if (failure)
         memset(failure, 0, sizeof(*failure));
@@ -364,6 +363,34 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
                            "fixture context rejected");
         errno = EOVERFLOW;
         return -1;
+    }
+    {
+        json_t *ts = json_object_get(create_request, "tools");
+        json_t *input = json_object_get(create_request, "input");
+        bool read_only = app->session.active_read_only;
+
+        if (read_only && json_array_size(ts) != 3u)
+            return -1;
+        for (size_t i = 0; read_only && i < json_array_size(ts); ++i)
+            if (!snj_read_only_tool(snj_json_string(json_array_get(ts, i), "name")))
+                return -1;
+        for (size_t i = 0; i < json_array_size(input); ++i) {
+            json_t *message = json_array_get(input, i);
+            const char *role = snj_json_string(message, "role");
+            json_t *content = json_object_get(message, "content");
+
+            if (!role || strcmp(role, "developer") != 0)
+                continue;
+            for (size_t j = 0; j < json_array_size(content); ++j) {
+                const char *text = snj_json_string(json_array_get(content, j), "text");
+                if ((read_only || app->session.active_queued ||
+                     app->session.pending_queue_count) && text &&
+                    strncmp(text, "Persistent goal ", 16u) == 0) {
+                    snj_errorf(error, error_size, "fixture: goal reminder bypassed queued work");
+                    return -1;
+                }
+            }
+        }
     }
     return snj_fixture_response(prompt, steering, app->session.workspace, cycle,
                                 app->session.goal_prompt,
@@ -410,6 +437,20 @@ snj_app_tool_run(struct app_state *app, const struct snj_response_item *call,
 {
     static const char *const send_keys[] = {"notice", "text"};
     static const char *const topic_keys[] = {"topic"};
+
+    if (app->session.active_read_only) {
+        if (call && snj_read_only_tool(call->name))
+            return snj_tools_read_only(call, app->session.workspace,
+                                       snj_app_active_input_pump, app, result);
+        *result = snj_tool_result_terminal(false,
+            "Tool unavailable: this turn is read-only; use list_files, read_file or grep.");
+        return *result ? 0 : -1;
+    }
+    if (call && snj_read_only_tool(call->name)) {
+        *result = snj_tool_result_terminal(false,
+            "Native inspection tools are available only in /ro queries.");
+        return *result ? 0 : -1;
+    }
 
     if (call && call->name &&
         (strcmp(call->name, "create_goal") == 0 ||

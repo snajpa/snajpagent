@@ -136,7 +136,7 @@ json_t *snj_app_turn_started_data(const struct app_state *app,
                                   const char *prompt,
                                   const char *turn_id,
                                   const struct snj_queued_turn *queued,
-                                  bool goal_turn);
+                                  bool goal_turn, bool read_only);
 json_t *snj_app_steering_snapshot(const struct snj_session *session);
 int snj_app_request_digests(struct app_state *app, const char *prompt,
                             const json_t *steering, unsigned int cycle,
@@ -202,9 +202,9 @@ json_t *snj_app_steering_added_data(const char *turn_id,
                                     const char *text);
 json_t *snj_app_future_turn_queued_data(const char *turn_id,
                                         const char *queue_id,
-                                        const char *text);
+                                        const char *text, bool read_only);
 json_t *snj_app_future_turn_edited_data(const char *queue_id,
-                                        const char *text);
+                                        const char *text, bool read_only);
 json_t *snj_app_future_turn_cancelled_data(const struct snj_session *session,
                                            const bool remove[SNJ_MAX_PENDING_TURNS]);
 json_t *snj_app_response_interrupted_data(const char *turn_id,

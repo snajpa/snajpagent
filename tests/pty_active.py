@@ -709,6 +709,191 @@ def test_armed_fifo():
     assert turns[1]["data"]["text"] == "ping"
 
 
+def test_read_only_queries():
+    Path(WORKSPACE, "ro-input.txt").write_text("native text\nsecond line\n", encoding="utf-8")
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"/ro\r")
+    end = child.wait(b"usage: /ro QUERY")
+    child.wait_idle_prompt(start=end)
+    child.send(b"/ro ro_native\r")
+    end = child.wait(b"native complete")
+    child.wait_idle_prompt(start=end)
+    child.send(b"/ro ro_denied\r")
+    end = child.wait(b"denied complete")
+    child.wait_idle_prompt(start=end)
+    child.send(b"ping\r")
+    end = child.wait(b"pong")
+    child.wait_idle_prompt(start=end)
+    child.send(b"//ro ping\r")
+    end = child.wait(b"fixture answer", start=end)
+    child.exit_cleanly(end)
+    log = events(new_session(before))
+    turns = [x["data"] for x in log if x["type"] == "turn_started"]
+    assert [x["read_only"] for x in turns] == [True, True, False, False]
+    assert turns[-1]["text"] == "/ro ping"
+    results = [x["data"]["result"] for x in log if x["type"] == "tool_finished"]
+    assert len(results) == 11
+    assert all(x["status"] == "succeeded" for x in results[:3])
+    assert "1:native text\n2:second line\n" in results[1]["model_text"]
+    assert "ro-input.txt:1:native text" in results[2]["model_text"]
+    assert all(x["status"] == "failed" and "read-only" in x["model_text"]
+               for x in results[3:])
+    assert not any(x["type"] == "goal_started" for x in log)
+
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"slow\r")
+    child.wait(b"working slowly")
+    child.send(b"/ro ping\r")
+    end = child.wait(b"/ro cannot steer an active turn")
+    child.wait(b"/ro ping", start=end)
+    child.send(b"\t")
+    child.wait(b"next " + PROMPT + b"/ro ping", start=end)
+    child.send(b"/queue /ro repeat\r")
+    child.wait(b"next " + PROMPT + b"/ro repeat", start=end)
+    child.send(b"//ro ping\t")
+    end = child.wait(b"slow complete")
+    end = child.wait(b"pong", start=end)
+    end = child.wait(b"haha", start=end)
+    end = child.wait(b"fixture answer", start=end)
+    child.exit_cleanly(end)
+    log = events(new_session(before))
+    turns = [x["data"] for x in log if x["type"] == "turn_started"]
+    assert [x["read_only"] for x in turns] == [False, True, True, False]
+    assert [x["text"] for x in turns] == ["slow", "ping", "repeat", "/ro ping"]
+    assert not any(x["type"] in ("steering_added", "response_interrupted") for x in log)
+
+    # Ordinary steers keep the existing read-only turn read-only.
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"/ro slow\r")
+    child.wait(b"working slowly")
+    child.send(b"replacement\r")
+    end = child.wait(b"steered: replacement")
+    child.exit_cleanly(end)
+    log = events(new_session(before))
+    assert one(log, "turn_started")["data"]["read_only"] is True
+    one(log, "steering_added")
+
+
+def test_read_only_multiline_compaction_and_chat():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    config = root / "config" / "ro-compaction.ini"
+    config.write_text("[provider]\nauto_compact_input_tokens = 1\n", encoding="utf-8")
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"ping\r")
+    end = child.wait(b"pong")
+    child.exit_cleanly(end)
+    sid = new_session(before)
+    child = Child(["--config", str(config), "--resume", sid])
+    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
+    child.send(b"/ro ro_native\r")
+    end = child.wait(b"native complete")
+    child.exit_cleanly(end)
+    log = events(sid)
+    assert any(x["type"] == "compaction_completed" for x in log)
+    assert [x for x in log if x["type"] == "turn_started"][-1]["data"]["read_only"] is True
+
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"slow\r")
+    child.wait(b"working slowly")
+    child.send(b"\x1b[200~/ro inspect\nmultiline\x1b[201~\r")
+    end = child.wait(b"/ro cannot steer an active turn")
+    child.wait(b"multiline", start=end)
+    child.send(b"\t")
+    end = child.wait(b"next " + PROMPT, start=end)
+    child.send(b"\x1b[200~/queue /ro another\nquery\x1b[201~\r")
+    child.wait(b"next " + PROMPT, start=end)
+    end = child.wait(b"slow complete")
+    end = child.wait(b"fixture answer", start=end)
+    end = child.wait(b"fixture answer", start=end)
+    child.exit_cleanly(end)
+    log = events(new_session(before))
+    turns = [x["data"] for x in log if x["type"] == "turn_started"]
+    assert [x["text"] for x in turns[1:]] == ["inspect\nmultiline", "another\nquery"]
+    assert all(x["read_only"] for x in turns[1:])
+    assert not any(x["type"] == "steering_added" for x in log)
+
+    before = session_ids()
+    child = Child(["--no-color", "-s", f"127.0.0.1:{free_port()}",
+                   "-n", "roagent", "-o", "rooperator", "-r", "lab"])
+    child.wait(chat_prompt("rooperator"))
+    child.send(b"/ro ro_native\r")
+    end = child.wait(b"native complete")
+    child.exit_cleanly(end)
+    log = events(new_session(before))
+    turn = one(log, "turn_started")["data"]
+    assert turn["read_only"] and turn["text"] == "ro_native"
+    assert not any(x["type"] in ("irc_reply_reminder", "turn_failed") for x in log)
+    assert all(x["data"]["result"]["status"] == "succeeded"
+               for x in log if x["type"] == "tool_finished")
+
+
+def test_read_only_queue_replay_and_edit():
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"queue_slow\r")
+    child.wait(b"working slowly")
+    child.send(b"/ro ping\t")
+    child.wait(b"next " + PROMPT + b"/ro ping")
+    end = len(child.buf)
+    child.send(b"/queue 1 edit\r")
+    end = child.wait(b"/ro ping", start=end)
+    child.send(b"\x15/ro repeat\r")
+    child.wait(b"/ro repeat", start=end)
+    child.send(b"\x03")
+    end = child.wait(b"turn interrupted")
+    child.exit_cleanly(end)
+    sid = new_session(before)
+    log = events(sid)
+    assert one(log, "future_turn_edited")["data"]["read_only"] is True
+    child = Child(["--resume", sid])
+    end = child.wait(b"queued future turns are paused")
+    child.wait_idle_prompt(start=end)
+    child.send(b"/goal slow goal\r")
+    end = child.wait(GOAL_SET)
+    # Existing explicit goal start arms retained FIFO work before the goal.
+    end = child.wait(b"haha", start=end)
+    end = child.wait(b"goal done", start=end, timeout=10.0)
+    child.exit_cleanly(end)
+    log = events(sid)
+    turns = [x["data"] for x in log if x["type"] == "turn_started"]
+    assert turns[1]["input_kind"] == "queued" and turns[1]["read_only"] is True
+    assert turns[1]["text"] == "repeat"
+
+    before = session_ids()
+    child = Child([])
+    child.wait(DEFAULT_IDLE_PROMPT)
+    child.send(b"/goal slow goal\r")
+    child.wait(b"working on goal")
+    child.send(b"/ro ping\t")
+    end = child.wait(b"next " + PROMPT + b"/ro ping")
+    child.send(b"/queue 1 edit\r")
+    child.wait(b"/ro ping", start=end)
+    end = child.wait(b"goal checkpoint")
+    child.drain(0.1)
+    assert b"goal done" not in child.buf[end:] and b"pong" not in child.buf[end:]
+    child.send(b"\x15/ro repeat\r")
+    end = child.wait(b"/ro repeat", start=end)
+    child.send(b"/next\r")
+    end = child.wait(b"haha", start=end)
+    end = child.wait(b"goal done", start=end)
+    child.exit_cleanly(end)
+    log = events(new_session(before))
+    assert [x["data"]["input_kind"] for x in log if x["type"] == "turn_started"] == [
+        "goal", "queued", "goal"
+    ]
+
+
 def test_managed_command_steering_and_tab_queue():
     before = session_ids()
     child = Child(["-v"])
@@ -1309,14 +1494,19 @@ def test_goal_pause_resume_and_queue_priority():
     child.wait(b"working on goal")
     child.send(b"ping\t")
     child.wait(b"next " + PROMPT + b"ping")
+    child.send(b"/ro repeat\t")
+    child.wait(b"next " + PROMPT + b"/ro repeat")
+    child.send(b"ping\t")
     checkpoint_end = child.wait(b"goal checkpoint")
     pong_end = child.wait(b"pong", start=checkpoint_end)
+    pong_end = child.wait(b"haha", start=pong_end)
+    pong_end = child.wait(b"pong", start=pong_end)
     answer_end = child.wait(b"goal done", start=pong_end)
     child.exit_cleanly(answer_end)
     log = events(new_session(before))
     turns = [item for item in log if item["type"] == "turn_started"]
     assert [item["data"]["input_kind"] for item in turns] == [
-        "goal", "queued", "goal"
+        "goal", "queued", "queued", "queued", "goal"
     ]
 
 
@@ -3250,6 +3440,9 @@ test_public_index_diagnostic()
 test_split_utf8_steering()
 test_typing_pause_and_stream_snapshots()
 test_armed_fifo()
+test_read_only_queries()
+test_read_only_multiline_compaction_and_chat()
+test_read_only_queue_replay_and_edit()
 test_managed_command_steering_and_tab_queue()
 test_steering_during_pre_response_compaction()
 test_steering_during_capacity_recovery_compaction()

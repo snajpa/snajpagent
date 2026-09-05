@@ -15,6 +15,10 @@
  * be constructed. */
 typedef int (*snj_tool_pump_fn)(void *opaque, unsigned int timeout_ms);
 
+int snj_tools_read_only(const struct snj_response_item *call,
+                        const char *workspace, snj_tool_pump_fn pump,
+                        void *opaque, json_t **result);
+
 int snj_tools_run(const struct snj_response_item *call,
                   const struct snj_config *config,
                   const struct snj_credential *credential,

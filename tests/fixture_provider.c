@@ -444,6 +444,34 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "msg_fixture_model_goal_checkpoint",
                            "model-created checkpoint", 0);
     }
+    if (strcmp(prompt, "ro_native") == 0) {
+        static const char *const names[] = {"list_files", "read_file", "grep"};
+        static const char *const arguments[] = {
+            "{\"path\":\".\",\"recursive\":false,\"offset\":null,\"limit\":null}",
+            "{\"path\":\"ro-input.txt\",\"start_line\":null,\"end_line\":null}",
+            "{\"path\":\"ro-input.txt\",\"pattern\":\"native\",\"recursive\":false,\"ignore_case\":false,\"literal\":true,\"offset\":null,\"limit\":null}"
+        };
+        if (cycle <= 3u) {
+            const char *text = arguments[cycle - 1u];
+            json_t *args = snj_json_load_strict((const unsigned char *)text,
+                strlen(text), 4096u, error, error_size);
+            if (!args)
+                return -1;
+            return snj_response_graph_add_call(graph, "item_native", "call_native",
+                                               names[cycle - 1u], args);
+        }
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER, "msg_native", "native complete", 0);
+    }
+    if (strcmp(prompt, "ro_denied") == 0) {
+        static const char *const names[] = {"exec_command", "apply_patch", "write_stdin",
+            "create_goal", "update_goal", "irc_send", "irc_topic", "irc_state"};
+        if (cycle <= sizeof(names) / sizeof(names[0]))
+            return snj_response_graph_add_call(graph, "item_denied", "call_denied",
+                                               names[cycle - 1u], json_object());
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER, "msg_denied", "denied complete", 0);
+    }
     if (strstr(prompt, "network_prompt_catchup")) {
         const char *kind = strstr(prompt, "slash") ? "slash" : "tab";
         const char *item = strstr(prompt, "_two") ? "two" : "one";

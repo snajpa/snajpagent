@@ -194,6 +194,26 @@ assert len(started) == 1
 assert started[0]["data"]["text"] == "ping"
 PY
 
+ro_dotdir="$root/ro-state"
+out=$(printf '/ro ping\n' | $bin --dotdir "$ro_dotdir" -e 2>"$root/ro.err")
+[ "$out" = pong ]
+out=$($bin --dotdir "$root/ro-argument" -e -- '/ro ping' 2>"$root/ro-argument.err")
+[ "$out" = pong ]
+ro_log=$(find "$ro_dotdir/sessions" -name events.jsonl -print)
+python3 - "$ro_log" <<'PY'
+import json
+import sys
+
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+turn = next(event["data"] for event in events if event["type"] == "turn_started")
+assert turn["text"] == "ping" and turn["read_only"] is True
+PY
+set +e
+$bin --dotdir "$root/ro-empty" -e -- '/ro   ' >"$root/ro-empty.out" 2>"$root/ro-empty.err"
+status=$?
+set -e
+[ "$status" -eq 2 ]
+
 goal_dotdir="$root/model-goal-state"
 out=$($bin --dotdir "$goal_dotdir" -e -- \
     'please create a persistent goal' 2>"$root/model-goal.err")

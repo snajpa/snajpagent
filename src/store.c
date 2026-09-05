@@ -1174,7 +1174,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         if (reminder)
             session->irc_reply_reminded = true;
     } else if (strcmp(type, "future_turn_queued") == 0) {
-        static const char *const keys[] = {"queue_id", "text", "while_turn_id"};
+        static const char *const keys[] = {"queue_id", "read_only", "text", "while_turn_id"};
         const char *queue_id = snj_json_string(data, "queue_id");
         const char *text = snj_json_string(data, "text");
         const char *turn_id = snj_json_string(data, "while_turn_id");
@@ -1182,7 +1182,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         char *copy;
         struct snj_queued_turn *queued;
 
-        if (!snj_json_exact_keys(data, keys, 3u) || !session->active_turn ||
+        if (!snj_json_exact_keys(data, keys, 4u) || !session->active_turn ||
+            !json_is_boolean(json_object_get(data, "read_only")) ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             !queue_id || !snj_hex_is_lower(queue_id, SNJ_ID_HEX_LEN) ||
             pending_user_id_exists(session, queue_id) || !text || !*text ||
@@ -1198,9 +1199,10 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
         queued->seq = seq;
         queued->text = copy;
+        queued->read_only = json_is_true(json_object_get(data, "read_only"));
         session->pending_queue_bytes += len;
     } else if (strcmp(type, "future_turn_edited") == 0) {
-        static const char *const keys[] = {"queue_id", "text"};
+        static const char *const keys[] = {"queue_id", "read_only", "text"};
         const char *queue_id = snj_json_string(data, "queue_id");
         const char *text = snj_json_string(data, "text");
         struct snj_queued_turn *queued = NULL;
@@ -1208,7 +1210,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         size_t len;
         char *copy;
 
-        if (!snj_json_exact_keys(data, keys, 2u) || !queue_id || !text || !*text ||
+        if (!snj_json_exact_keys(data, keys, 3u) || !queue_id || !text || !*text ||
+            !json_is_boolean(json_object_get(data, "read_only")) ||
             !snj_hex_is_lower(queue_id, SNJ_ID_HEX_LEN) ||
             (len = strlen(text)) > SNJ_MAX_QUEUED_TEXT)
             goto invalid;
@@ -1218,7 +1221,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                 break;
             }
         }
-        if (!queued || strcmp(queued->text, text) == 0)
+        if (!queued || (strcmp(queued->text, text) == 0 &&
+            queued->read_only == json_is_true(json_object_get(data, "read_only"))))
             goto invalid;
         old_len = strlen(queued->text);
         if (len > old_len &&
@@ -1230,6 +1234,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             return -1;
         free(queued->text);
         queued->text = copy;
+        queued->read_only = json_is_true(json_object_get(data, "read_only"));
         session->pending_queue_bytes =
             session->pending_queue_bytes - old_len + len;
     } else if (strcmp(type, "future_turn_cancelled") == 0) {
@@ -1284,7 +1289,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
     } else if (strcmp(type, "turn_started") == 0) {
         static const char *const keys[] = {
             "config", "input_kind", "instructions", "queue_id", "queue_seq",
-            "text", "turn_id", "turn_number", "workspace"
+            "read_only", "text", "turn_id", "turn_number", "workspace"
         };
         const char *turn_id;
         const char *text;
@@ -1300,7 +1305,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
 
         if (session->active_turn || session->active_process_handle[0] != '\0' ||
             session->pending_steering_count != 0u ||
-            !snj_json_exact_keys(data, keys, 9u) ||
+            !snj_json_exact_keys(data, keys, 10u) ||
+            !json_is_boolean(json_object_get(data, "read_only")) ||
             !(turn_id = snj_json_string(data, "turn_id")) ||
             !snj_hex_is_lower(turn_id, SNJ_ID_HEX_LEN) ||
             snj_json_integer_u64(data, "turn_number", &n) < 0 ||
@@ -1326,6 +1332,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             goto invalid;
         if (goal) {
             if (session->goal_status != SNJ_GOAL_ACTIVE ||
+                json_is_true(json_object_get(data, "read_only")) ||
                 !json_is_null(json_object_get(data, "queue_id")) ||
                 !json_is_null(json_object_get(data, "queue_seq")) ||
                 strcmp(text, SNJ_GOAL_CONTINUATION_TEXT) != 0)
@@ -1343,6 +1350,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                 strcmp(queue_id, session->pending_queue[0].queue_id) != 0 ||
                 queue_seq != session->pending_queue[0].seq ||
                 strcmp(text, session->pending_queue[0].text) != 0 ||
+                session->pending_queue[0].read_only !=
+                    json_is_true(json_object_get(data, "read_only")) ||
                 strlen(text) > SNJ_MAX_QUEUED_TEXT)
                 goto invalid;
         }
@@ -1355,6 +1364,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                         sizeof(session->active_turn_effort), effort))
             goto invalid;
         session->active_turn = true;
+        session->active_read_only = json_is_true(json_object_get(data, "read_only"));
+        session->active_queued = queued;
         session->turn_count = n;
         if (goal)
             ++session->goal_turn_count;
@@ -1971,6 +1982,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             session->pending_steering_count != 0u)
             goto invalid;
         session->active_turn = false;
+        session->active_read_only = false;
+        session->active_queued = false;
         session->active_turn_id[0] = '\0';
         session->active_turn_model[0] = '\0';
         clear_response_state(session);
@@ -1998,6 +2011,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             session->pending_steering_count != 0u)
             goto invalid;
         session->active_turn = false;
+        session->active_read_only = false;
+        session->active_queued = false;
         session->active_turn_id[0] = '\0';
         session->active_turn_model[0] = '\0';
         clear_response_state(session);
@@ -2019,6 +2034,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])))
             goto invalid;
         session->active_turn = false;
+        session->active_read_only = false;
+        session->active_queued = false;
         session->active_turn_id[0] = '\0';
         session->active_turn_model[0] = '\0';
         clear_response_state(session);
@@ -2041,6 +2058,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !message || strlen(message) > 8192u)
             goto invalid;
         session->active_turn = false;
+        session->active_read_only = false;
+        session->active_queued = false;
         session->active_turn_id[0] = '\0';
         session->active_turn_model[0] = '\0';
         clear_response_state(session);

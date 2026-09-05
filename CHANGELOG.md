@@ -19,6 +19,13 @@
   limit to 8,192 bytes including CRLF. Preserve full history and durable text,
   prefer word boundaries when splitting, and tidy actorless notifications.
 
+- Add per-prompt `/ro` queries with native directory listing, whole/ranged
+  file reading, and POSIX-regex/literal search. Enforce a read-only toolset
+  without subprocesses, preserve mode through queue editing/replay, and reject
+  active `/ro` steering while allowing Tab or `/queue` submission.
+- Suppress fresh goal reminders during queued turns and while any queue item
+  remains; never bypass a paused queue with automatic goal continuation.
+
 - Refresh the README, complete command/configuration manual, and minimal static
   website against the current UI and runtime. Replace the terminal screenshots
   with current real-provider sessions.

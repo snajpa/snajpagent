@@ -370,7 +370,7 @@ start_goal(struct app_state *app, const char *prompt,
                           error, error_size) < 0)
         return -1;
     app->goal_armed = true;
-    if (app->session.pending_queue_count != 0u)
+    if (app->session.pending_queue_count != 0u && !app->queue_edit_id[0])
         app->queue_armed = true;
     return 0;
 }
@@ -454,7 +454,7 @@ goal_simple_command(struct app_state *app, const char *command)
                               error, sizeof(error)) < 0)
             return goal_error(app, error);
         app->goal_armed = true;
-        if (app->session.pending_queue_count != 0u)
+        if (app->session.pending_queue_count != 0u && !app->queue_edit_id[0])
             app->queue_armed = true;
         return snj_render_host(&app->render, "goal resumed");
     }

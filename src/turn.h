@@ -9,6 +9,9 @@
 #include <stdint.h>
 
 #define SNJ_MAX_RESPONSE_ITEMS 96u
+/* Parse only local prompt syntax; never apply this to model or IRC messages. */
+const char *snj_prompt_parse(const char *text, bool *read_only);
+bool snj_read_only_tool(const char *name);
 #define SNJ_MAX_CALLS_PER_RESPONSE 32u
 #define SNJ_MAX_PUBLIC_ITEM (2u * 1024u * 1024u)
 #define SNJ_MAX_PROVIDER_ID 512u
