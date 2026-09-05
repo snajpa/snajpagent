@@ -128,7 +128,7 @@ irc_event_data(const struct snag_irc_event *event)
         "endpoint", event->endpoint, "historical", event->historical,
         "kind", irc_kind_name(event->kind), "local", event->local,
         "nick", event->nick, "op", event->op, "room", event->room,
-        "text", event->text, "timestamp_ms", (json_int_t)event->time_ms);
+        "text", event->text, "timestamp_ms", (json_int_t)event->timestamp_ms);
 }
 
 static int
