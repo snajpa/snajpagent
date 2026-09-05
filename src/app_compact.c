@@ -432,6 +432,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
     uint64_t output_tokens_bound = 0u;
     uint64_t source_seq;
     uint64_t source_budget;
+    uint64_t threshold;
     bool use_exact;
     bool started = false;
     int build_rc;
@@ -463,6 +464,12 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
                                  &app->turn_capacity,
                                  error, error_size) < 0)
         goto out;
+    threshold = snj_model_compact_threshold(app->turn_provider,
+                                           &app->turn_capacity);
+    if (strcmp(reason, "proactive") == 0 && !threshold) {
+        rc = 0;
+        goto out;
+    }
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (!credential) {
         if (snj_credential_read(&owned_credential,
@@ -533,7 +540,6 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             goto out;
         }
         input_tokens_bound = (uint64_t)count_request_bytes;
-#ifndef SNAJPAGENT_TEST_FIXTURE
         if (use_exact) {
             stage_rc = snj_app_provider_count(app, count_request, credential, 0u,
                 &input_tokens_bound, &count_method, error, error_size);
@@ -546,7 +552,6 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
                 input_tokens_bound = (uint64_t)count_request_bytes;
             }
         }
-#endif
         if (input_tokens_bound == 0u ||
             input_tokens_bound > (uint64_t)INT64_MAX) {
             snprintf(error, error_size,
@@ -591,8 +596,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         request = NULL;
     }
     if (!active_prefix && strcmp(reason, "proactive") == 0 &&
-        input_tokens_bound < snj_model_compact_threshold(
-            app->turn_provider, &app->turn_capacity)) {
+        input_tokens_bound < threshold) {
         rc = 0;
         goto out;
     }
@@ -636,7 +640,6 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             &output_count_request_bytes, error, error_size) < 0 ||
         output_count_request_bytes == 0u)
         goto out;
-#ifndef SNAJPAGENT_TEST_FIXTURE
     if (use_exact) {
         stage_rc = snj_app_provider_count(app, output_count_request, credential,
             0u, &output_tokens_bound, &output_count_method, error, error_size);
@@ -647,7 +650,6 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         if (stage_rc == SNJ_APP_COUNT_SKIPPED)
             output_tokens_bound = (uint64_t)output_bytes;
     }
-#endif
     if (output_tokens_bound > (uint64_t)INT64_MAX) {
         snprintf(error, error_size, "compact output bound is too large");
         errno = EOVERFLOW;
