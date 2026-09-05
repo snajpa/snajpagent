@@ -7,24 +7,24 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SNJ_TRASH_SUFFIX_HEX_LEN SNJ_ID_HEX_LEN
-#define SNJ_TRASH_NAME_LEN (SNJ_ID_HEX_LEN + 1u + SNJ_TRASH_SUFFIX_HEX_LEN)
+#define SNAG_TRASH_SUFFIX_HEX_LEN SNAG_ID_HEX_LEN
+#define SNAG_TRASH_NAME_LEN (SNAG_ID_HEX_LEN + 1u + SNAG_TRASH_SUFFIX_HEX_LEN)
 
-enum snj_tail_policy {
-    SNJ_TAIL_REJECT,
-    SNJ_TAIL_TRUNCATE,
-    SNJ_TAIL_IGNORE
+enum snag_tail_policy {
+    SNAG_TAIL_REJECT,
+    SNAG_TAIL_TRUNCATE,
+    SNAG_TAIL_IGNORE
 };
 
-char *snj_store_path_join(const char *left, const char *right);
-int snj_store_verify_private_fd(int fd, bool directory, const char *name,
+char *snag_store_path_join(const char *left, const char *right);
+int snag_store_verify_private_fd(int fd, bool directory, const char *name,
                                 char *error, size_t error_size);
-int snj_store_open_session_files(struct snj_session *session, bool create,
+int snag_store_open_session_files(struct snag_session *session, bool create,
                                  char *error, size_t error_size);
-int snj_store_scan_log(struct snj_session *session,
-                       enum snj_tail_policy tail_policy,
+int snag_store_scan_log(struct snag_session *session,
+                       enum snag_tail_policy tail_policy,
                        bool allow_active, char *error, size_t error_size);
-int snj_store_complete_trash_delete(struct snj_store *store,
+int snag_store_complete_trash_delete(struct snag_store *store,
                                     const char *trash_name,
                                     char *error, size_t error_size);
 

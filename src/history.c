@@ -14,10 +14,10 @@
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
 #endif
-#define HISTORY_FILE_BYTES (SNJ_HISTORY_BYTES * 4u + SNJ_HISTORY_COUNT)
+#define HISTORY_FILE_BYTES (SNAG_HISTORY_BYTES * 4u + SNAG_HISTORY_COUNT)
 
 void
-snj_history_snapshot_free(struct snj_history_snapshot *snapshot)
+snag_history_snapshot_free(struct snag_history_snapshot *snapshot)
 {
     for (size_t i = 0u; i < snapshot->count; ++i)
         free(snapshot->items[i]);
@@ -25,14 +25,14 @@ snj_history_snapshot_free(struct snj_history_snapshot *snapshot)
 }
 
 int
-snj_history_snapshot_copy(struct snj_history_snapshot *out,
-                          const struct snj_history_snapshot *source)
+snag_history_snapshot_copy(struct snag_history_snapshot *out,
+                          const struct snag_history_snapshot *source)
 {
     memset(out, 0, sizeof(*out));
     for (size_t i = 0u; i < source->count; ++i) {
-        out->items[i] = snj_strdup_checked(source->items[i], SNJ_HISTORY_BYTES);
+        out->items[i] = snag_strdup_checked(source->items[i], SNAG_HISTORY_BYTES);
         if (!out->items[i]) {
-            snj_history_snapshot_free(out);
+            snag_history_snapshot_free(out);
             return -1;
         }
         ++out->count;
@@ -42,15 +42,15 @@ snj_history_snapshot_copy(struct snj_history_snapshot *out,
 }
 
 void
-snj_history_free(struct snj_history *history)
+snag_history_free(struct snag_history *history)
 {
-    snj_history_snapshot_free(&history->snapshot);
+    snag_history_snapshot_free(&history->snapshot);
     free(history->path);
     memset(history, 0, sizeof(*history));
 }
 
 static void
-history_note_warning(struct snj_history *term)
+history_note_warning(struct snag_history *term)
 {
     if (!term->warned)
         term->warning = true;
@@ -58,7 +58,7 @@ history_note_warning(struct snj_history *term)
 }
 
 bool
-snj_history_take_warning(struct snj_history *term)
+snag_history_take_warning(struct snag_history *term)
 {
     bool pending = term && term->warning;
 
@@ -68,18 +68,18 @@ snj_history_take_warning(struct snj_history *term)
 }
 
 static int
-history_memory_add(struct snj_history *term, const char *text, bool *dropped)
+history_memory_add(struct snag_history *term, const char *text, bool *dropped)
 {
     size_t len = strlen(text);
     char *copy;
 
-    if (!len || len > SNJ_HISTORY_BYTES)
+    if (!len || len > SNAG_HISTORY_BYTES)
         return 0;
-    copy = snj_strdup_checked(text, SNJ_HISTORY_BYTES);
+    copy = snag_strdup_checked(text, SNAG_HISTORY_BYTES);
     if (!copy)
         return -1;
-    while (term->snapshot.count == SNJ_HISTORY_COUNT ||
-           term->snapshot.bytes > SNJ_HISTORY_BYTES - len) {
+    while (term->snapshot.count == SNAG_HISTORY_COUNT ||
+           term->snapshot.bytes > SNAG_HISTORY_BYTES - len) {
         size_t old = strlen(term->snapshot.items[0]);
         if (dropped)
             *dropped = true;
@@ -109,7 +109,7 @@ history_lock(int fd)
 }
 
 static int
-history_file_open(struct snj_history *term)
+history_file_open(struct snag_history *term)
 {
     struct stat st;
     int fd = open(term->path,
@@ -141,16 +141,16 @@ history_file_open(struct snj_history *term)
 }
 
 static int
-history_decode(const unsigned char *line, size_t len, struct snj_buf *out)
+history_decode(const unsigned char *line, size_t len, struct snag_buf *out)
 {
     static const char hex[] = "0123456789ABCDEF";
 
-    snj_buf_reset(out);
+    snag_buf_reset(out);
     for (size_t i = 0u; i < len; ++i) {
         unsigned char c = line[i];
 
         if (c != '\\') {
-            if (c < 0x20u || c == 0x7fu || snj_buf_putc(out, c) < 0)
+            if (c < 0x20u || c == 0x7fu || snag_buf_putc(out, c) < 0)
                 return -1;
             continue;
         }
@@ -170,34 +170,34 @@ history_decode(const unsigned char *line, size_t len, struct snj_buf *out)
         } else {
             return -1;
         }
-        if (!c || snj_buf_putc(out, c) < 0)
+        if (!c || snag_buf_putc(out, c) < 0)
             return -1;
     }
-    if (!out->len || !snj_utf8_valid(out->data, out->len, true) ||
-        snj_buf_terminate(out) < 0)
+    if (!out->len || !snag_utf8_valid(out->data, out->len, true) ||
+        snag_buf_terminate(out) < 0)
         return -1;
     return 0;
 }
 
 static int
-history_encode(struct snj_buf *out, const char *text)
+history_encode(struct snag_buf *out, const char *text)
 {
     static const char hex[] = "0123456789ABCDEF";
     const unsigned char *p = (const unsigned char *)text;
 
-    snj_buf_reset(out);
+    snag_buf_reset(out);
     for (; *p; ++p) {
         unsigned char c = *p;
         const char *escape = c == '\\' ? "\\\\" : c == '\n' ? "\\n" :
                              c == '\r' ? "\\r" : c == '\t' ? "\\t" : NULL;
         if (escape) {
-            if (snj_buf_append(out, escape, 2u) < 0)
+            if (snag_buf_append(out, escape, 2u) < 0)
                 return -1;
         } else if (c < 0x20u || c == 0x7fu) {
             unsigned char encoded[4] = {'\\', 'x', hex[c >> 4], hex[c & 15u]};
-            if (snj_buf_append(out, encoded, sizeof(encoded)) < 0)
+            if (snag_buf_append(out, encoded, sizeof(encoded)) < 0)
                 return -1;
-        } else if (snj_buf_putc(out, c) < 0) {
+        } else if (snag_buf_putc(out, c) < 0) {
             return -1;
         }
     }
@@ -205,30 +205,30 @@ history_encode(struct snj_buf *out, const char *text)
 }
 
 static int
-history_rewrite(struct snj_history *term, int fd)
+history_rewrite(struct snag_history *term, int fd)
 {
-    struct snj_buf encoded;
+    struct snag_buf encoded;
     int rc = -1;
 
-    snj_buf_init(&encoded, HISTORY_FILE_BYTES);
+    snag_buf_init(&encoded, HISTORY_FILE_BYTES);
     if (ftruncate(fd, 0) < 0 || lseek(fd, 0, SEEK_SET) < 0)
         goto out;
     for (size_t i = 0u; i < term->snapshot.count; ++i)
         if (history_encode(&encoded, term->snapshot.items[i]) < 0 ||
-            snj_write_full(fd, encoded.data, encoded.len) < 0 ||
-            snj_write_full(fd, "\n", 1u) < 0)
+            snag_write_full(fd, encoded.data, encoded.len) < 0 ||
+            snag_write_full(fd, "\n", 1u) < 0)
             goto out;
-    rc = snj_sync_file(fd);
+    rc = snag_sync_file(fd);
 out:
-    snj_buf_free(&encoded);
+    snag_buf_free(&encoded);
     return rc;
 }
 
 static int
-history_load_locked(struct snj_history *term, int fd, bool *damaged)
+history_load_locked(struct snag_history *term, int fd, bool *damaged)
 {
     struct stat st;
-    struct snj_buf file, decoded;
+    struct snag_buf file, decoded;
     size_t pos = 0u;
     bool dirty = false;
     int rc = -1;
@@ -236,8 +236,8 @@ history_load_locked(struct snj_history *term, int fd, bool *damaged)
     if (fstat(fd, &st) < 0 || st.st_size < 0 ||
         (uintmax_t)st.st_size > HISTORY_FILE_BYTES)
         return -1;
-    snj_buf_init(&file, HISTORY_FILE_BYTES + 1u);
-    snj_buf_init(&decoded, SNJ_HISTORY_BYTES + 1u);
+    snag_buf_init(&file, HISTORY_FILE_BYTES + 1u);
+    snag_buf_init(&decoded, SNAG_HISTORY_BYTES + 1u);
     if (lseek(fd, 0, SEEK_SET) < 0)
         goto out;
     while (file.len < (size_t)st.st_size) {
@@ -248,10 +248,10 @@ history_load_locked(struct snj_history *term, int fd, bool *damaged)
             goto out;
         }
         if (!got) break;
-        if (snj_buf_append(&file, chunk, (size_t)got) < 0)
+        if (snag_buf_append(&file, chunk, (size_t)got) < 0)
             goto out;
     }
-    snj_history_snapshot_free(&term->snapshot);
+    snag_history_snapshot_free(&term->snapshot);
     while (pos < file.len) {
         unsigned char *lf = memchr(file.data + pos, '\n', file.len - pos);
         bool dropped = false;
@@ -273,13 +273,13 @@ history_load_locked(struct snj_history *term, int fd, bool *damaged)
     }
     rc = dirty ? history_rewrite(term, fd) : 0;
 out:
-    snj_buf_free(&decoded);
-    snj_buf_free(&file);
+    snag_buf_free(&decoded);
+    snag_buf_free(&file);
     return rc;
 }
 
 int
-snj_history_refresh(struct snj_history *term)
+snag_history_refresh(struct snag_history *term)
 {
     bool damaged = false;
     int fd, rc, saved;
@@ -304,32 +304,32 @@ fail:
 }
 
 int
-snj_history_open(struct snj_history *term, const char *dotdir)
+snag_history_open(struct snag_history *term, const char *dotdir)
 {
-    struct snj_buf path;
+    struct snag_buf path;
 
     if (!term || !dotdir || dotdir[0] != '/') {
         errno = EINVAL;
         return -1;
     }
-    snj_buf_init(&path, SNJ_PATH_MAX_BYTES);
-    if (snj_buf_printf(&path, "%s/prompt_history", dotdir) < 0 ||
-        snj_buf_terminate(&path) < 0) {
-        snj_buf_free(&path);
+    snag_buf_init(&path, SNAG_PATH_MAX_BYTES);
+    if (snag_buf_printf(&path, "%s/prompt_history", dotdir) < 0 ||
+        snag_buf_terminate(&path) < 0) {
+        snag_buf_free(&path);
         history_note_warning(term);
         return -1;
     }
     free(term->path);
     term->path = (char *)path.data;
     path.data = NULL;
-    snj_buf_free(&path);
-    return snj_history_refresh(term);
+    snag_buf_free(&path);
+    return snag_history_refresh(term);
 }
 
 int
-snj_history_add(struct snj_history *term, const char *text)
+snag_history_add(struct snag_history *term, const char *text)
 {
-    struct snj_buf encoded;
+    struct snag_buf encoded;
     bool damaged = false, dropped = false, retained = false;
     int fd, rc = -1, saved;
 
@@ -342,16 +342,16 @@ snj_history_add(struct snj_history *term, const char *text)
         goto memory;
     if (history_load_locked(term, fd, &damaged) < 0)
         goto close_memory;
-    snj_buf_init(&encoded, HISTORY_FILE_BYTES);
+    snag_buf_init(&encoded, HISTORY_FILE_BYTES);
     if (history_encode(&encoded, text) < 0 ||
-        snj_write_full(fd, encoded.data, encoded.len) < 0 ||
-        snj_write_full(fd, "\n", 1u) < 0 ||
+        snag_write_full(fd, encoded.data, encoded.len) < 0 ||
+        snag_write_full(fd, "\n", 1u) < 0 ||
         history_memory_add(term, text, &dropped) < 0)
         goto encoded_out;
     retained = true;
-    rc = dropped ? history_rewrite(term, fd) : snj_sync_file(fd);
+    rc = dropped ? history_rewrite(term, fd) : snag_sync_file(fd);
 encoded_out:
-    snj_buf_free(&encoded);
+    snag_buf_free(&encoded);
     saved = errno;
     (void)close(fd);
     errno = saved;

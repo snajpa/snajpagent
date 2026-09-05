@@ -8,7 +8,7 @@
 #include <string.h>
 
 void
-snj_credential_clear(struct snj_credential *credential)
+snag_credential_clear(struct snag_credential *credential)
 {
     volatile unsigned char *p;
 
@@ -20,7 +20,7 @@ snj_credential_clear(struct snj_credential *credential)
 }
 
 int
-snj_credential_read(struct snj_credential *credential,
+snag_credential_read(struct snag_credential *credential,
                     const char *env_name,
                     char *error, size_t error_size)
 {
@@ -31,10 +31,10 @@ snj_credential_read(struct snj_credential *credential,
 
     if (!credential) {
         errno = EINVAL;
-        snj_errorf(error, error_size, "invalid credential destination");
+        snag_errorf(error, error_size, "invalid credential destination");
         return -1;
     }
-    snj_credential_clear(credential);
+    snag_credential_clear(credential);
     value = getenv(effective_env);
     if (!value) {
         errno = ENOENT;
@@ -42,8 +42,8 @@ snj_credential_read(struct snj_credential *credential,
                        "%s is required for provider work", effective_env);
         return -1;
     }
-    len = strnlen(value, SNJ_CREDENTIAL_MAX + 1u);
-    if (!len || len > SNJ_CREDENTIAL_MAX) {
+    len = strnlen(value, SNAG_CREDENTIAL_MAX + 1u);
+    if (!len || len > SNAG_CREDENTIAL_MAX) {
         errno = EINVAL;
         (void)snprintf(error, error_size,
                        "%s must contain 1..16384 printable ASCII bytes",

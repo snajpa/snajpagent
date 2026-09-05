@@ -5,44 +5,44 @@
 #include "irc.h"
 
 /* One server, or one endpoint's paired agent/operator connections. No history. */
-struct snj_irc_view {
-    char model[SNJ_CONFIG_IRC_NICK_MAX + 1u];
-    char operator[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+struct snag_irc_view {
+    char model[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char operator[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char text[32768u];
     char nicks[4096u]; /* Newline-separated current members, without op prefixes. */
     bool joined;
 };
 
-struct snj_irc_core;
-bool snj_irc_endpoint_equal(const char *a, const char *b);
-bool snj_irc_nick_mentioned(const char *text, const char *nick);
-int snj_irc_core_open(struct snj_irc_core **out, const struct snj_config *config,
+struct snag_irc_core;
+bool snag_irc_endpoint_equal(const char *a, const char *b);
+bool snag_irc_nick_mentioned(const char *text, const char *nick);
+int snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
                       const char *workspace, bool network,
-                      snj_irc_event_fn event_fn, snj_irc_trace_fn trace_fn,
+                      snag_irc_event_fn event_fn, snag_irc_trace_fn trace_fn,
                       void *opaque, char *error, size_t error_size);
-void snj_irc_core_close(struct snj_irc_core *irc);
-int snj_irc_core_tick(struct snj_irc_core *irc, int timeout_ms, int wake_fd,
+void snag_irc_core_close(struct snag_irc_core *irc);
+int snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, int wake_fd,
                       char *error, size_t error_size);
-int snj_irc_core_send_operator(struct snj_irc_core *irc, const char *text,
+int snag_irc_core_send_operator(struct snag_irc_core *irc, const char *text,
                                char *error, size_t error_size);
-int snj_irc_core_send_agent(struct snj_irc_core *irc, const char *text,
+int snag_irc_core_send_agent(struct snag_irc_core *irc, const char *text,
                             char *error, size_t error_size);
-int snj_irc_core_send_agent_notice(struct snj_irc_core *irc, const char *text,
+int snag_irc_core_send_agent_notice(struct snag_irc_core *irc, const char *text,
                                    char *error, size_t error_size);
-int snj_irc_core_set_operator_topic(struct snj_irc_core *irc, const char *text,
+int snag_irc_core_set_operator_topic(struct snag_irc_core *irc, const char *text,
                                     char *error, size_t error_size);
-int snj_irc_core_set_agent_topic(struct snj_irc_core *irc, const char *text,
+int snag_irc_core_set_agent_topic(struct snag_irc_core *irc, const char *text,
                                  char *error, size_t error_size);
-int snj_irc_core_view(const struct snj_irc_core *irc, struct snj_irc_view *view);
-int snj_irc_core_history(const struct snj_irc_core *irc, struct snj_buf *out);
-void snj_irc_core_remember(struct snj_irc_core *irc,
-                           const struct snj_irc_event *event);
-int snj_irc_core_restore_event(struct snj_irc_core *irc,
-                               const struct snj_irc_event *event);
-int snj_irc_core_replay_hosted_history(const struct snj_irc_core *irc,
-                                       snj_irc_event_fn render, void *opaque);
-const char *snj_irc_core_model_nick(const struct snj_irc_core *irc);
-const char *snj_irc_core_operator_nick(const struct snj_irc_core *irc);
-const char *snj_irc_core_room_name(const struct snj_irc_core *irc);
+int snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view);
+int snag_irc_core_history(const struct snag_irc_core *irc, struct snag_buf *out);
+void snag_irc_core_remember(struct snag_irc_core *irc,
+                           const struct snag_irc_event *event);
+int snag_irc_core_restore_event(struct snag_irc_core *irc,
+                               const struct snag_irc_event *event);
+int snag_irc_core_replay_hosted_history(const struct snag_irc_core *irc,
+                                       snag_irc_event_fn render, void *opaque);
+const char *snag_irc_core_model_nick(const struct snag_irc_core *irc);
+const char *snag_irc_core_operator_nick(const struct snag_irc_core *irc);
+const char *snag_irc_core_room_name(const struct snag_irc_core *irc);
 
 #endif

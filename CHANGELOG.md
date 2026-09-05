@@ -432,8 +432,8 @@
   and archived per-platform dependency-closure evidence explicit.
 
 - Repaired the dependency/vendoring state: the tarball now ships `DEPENDENCIES.md`,
-  `make depscheck`, a non-shadowing `src/snj_jansson.h` wrapper, and an
-  inventoried first-party `src/snj_jansson_abi.h` declaration shim, making clear
+  `make depscheck`, a non-shadowing `src/snag_jansson.h` wrapper, and an
+  inventoried first-party `src/snag_jansson_abi.h` declaration shim, making clear
   that no third-party implementation or upstream header source is vendored while
   system libcurl/Jansson remain the linked dependencies.
 

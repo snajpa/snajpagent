@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 #define IRC_MAILBOX 64u
-#define IRC_RECORDS (IRC_MAILBOX * (SNJ_CONFIG_IRC_CLIENT_MAX + 1u))
+#define IRC_RECORDS (IRC_MAILBOX * (SNAG_CONFIG_IRC_CLIENT_MAX + 1u))
 
 enum irc_record_kind { IRC_EVENT, IRC_TRACE, IRC_VIEW };
 enum irc_command { IRC_OPERATOR, IRC_AGENT, IRC_NOTICE,
@@ -19,7 +19,7 @@ enum irc_command { IRC_OPERATOR, IRC_AGENT, IRC_NOTICE,
 struct irc_request {
     enum irc_command command;
     const char *text;
-    const struct snj_irc_event *event;
+    const struct snag_irc_event *event;
     int result, saved_errno;
     char error[256u];
     bool done;
@@ -29,19 +29,19 @@ struct irc_request {
 struct irc_record {
     enum irc_record_kind kind;
     size_t source;
-    struct snj_irc_view view;
-    struct snj_irc_event event;
+    struct snag_irc_view view;
+    struct snag_irc_event event;
     unsigned int level;
     char direction;
-    char trace[SNJ_IRC_LINE_MAX];
+    char trace[SNAG_IRC_LINE_MAX];
 };
 
 struct irc_owner {
-    struct snj_irc *runtime;
-    struct snj_irc_core *core; /* Only this owner accesses it after startup. */
-    struct snj_irc_view sent;  /* Owner-private last published view. */
-    struct snj_irc_view view;  /* Engine-private admitted view. */
-    char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    struct snag_irc *runtime;
+    struct snag_irc_core *core; /* Only this owner accesses it after startup. */
+    struct snag_irc_view sent;  /* Owner-private last published view. */
+    struct snag_irc_view view;  /* Engine-private admitted view. */
+    char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     size_t index;
     pthread_t thread;
     int wake[2];
@@ -50,12 +50,12 @@ struct irc_owner {
     bool started;
 };
 
-struct snj_irc {
-    struct irc_owner owners[SNJ_CONFIG_IRC_CLIENT_MAX + 1u];
+struct snag_irc {
+    struct irc_owner owners[SNAG_CONFIG_IRC_CLIENT_MAX + 1u];
     size_t owner_count;
-    struct snj_irc_core *history; /* Engine-owned replay/admitted history. */
-    snj_irc_event_fn event_fn;
-    snj_irc_trace_fn trace_fn;
+    struct snag_irc_core *history; /* Engine-owned replay/admitted history. */
+    snag_irc_event_fn event_fn;
+    snag_irc_trace_fn trace_fn;
     void *opaque;
     pthread_mutex_t mutex;
     pthread_cond_t changed;
@@ -83,7 +83,7 @@ open_wake(int fds[2])
     if (pipe(fds) < 0)
         return -1;
     for (size_t i = 0u; i < 2u; ++i)
-        if (snj_fd_cloexec(fds[i]) < 0 ||
+        if (snag_fd_cloexec(fds[i]) < 0 ||
             fcntl(fds[i], F_SETFL, O_NONBLOCK) < 0)
             return -1;
     return 0;
@@ -92,7 +92,7 @@ open_wake(int fds[2])
 static int
 publish(struct irc_owner *owner, struct irc_record *record)
 {
-    struct snj_irc *irc = owner->runtime;
+    struct snag_irc *irc = owner->runtime;
     int rc = 0;
 
     record->source = owner->index;
@@ -115,21 +115,21 @@ publish(struct irc_owner *owner, struct irc_record *record)
 static int
 capture_view(struct irc_owner *owner, struct irc_record *record)
 {
-    if (snj_irc_core_view(owner->core, &record->view) < 0)
+    if (snag_irc_core_view(owner->core, &record->view) < 0)
         return -1;
     owner->sent = record->view;
     return 0;
 }
 
 static int
-receive_event(void *opaque, const struct snj_irc_event *event)
+receive_event(void *opaque, const struct snag_irc_event *event)
 {
     struct irc_owner *owner = opaque;
     struct irc_record *record;
 
     /* A broadcast local send has one application echo, from the primary owner. */
     if (owner->index && event->local &&
-        (event->kind == SNJ_IRC_MESSAGE || event->kind == SNJ_IRC_NOTICE))
+        (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE))
         return 0;
     record = calloc(1u, sizeof(*record));
     if (!record)
@@ -156,7 +156,7 @@ receive_trace(void *opaque, unsigned int level, char direction,
     record->level = level;
     record->direction = direction;
     if (len >= sizeof(record->trace) ||
-        !snj_strcpy(record->event.endpoint, sizeof(record->event.endpoint),
+        !snag_strcpy(record->event.endpoint, sizeof(record->event.endpoint),
                     endpoint)) {
         free(record);
         errno = EOVERFLOW;
@@ -173,7 +173,7 @@ refresh_view(struct irc_owner *owner)
 
     if (!record)
         return -1;
-    if (snj_irc_core_view(owner->core, &record->view) < 0) {
+    if (snag_irc_core_view(owner->core, &record->view) < 0) {
         free(record);
         return -1;
     }
@@ -189,23 +189,23 @@ refresh_view(struct irc_owner *owner)
 static int
 execute(struct irc_owner *owner, struct irc_request *request)
 {
-    struct snj_irc_core *core = owner->core;
+    struct snag_irc_core *core = owner->core;
     char *error = request->error;
     size_t size = sizeof(request->error);
 
     switch (request->command) {
     case IRC_OPERATOR:
-        return snj_irc_core_send_operator(core, request->text, error, size);
+        return snag_irc_core_send_operator(core, request->text, error, size);
     case IRC_AGENT:
-        return snj_irc_core_send_agent(core, request->text, error, size);
+        return snag_irc_core_send_agent(core, request->text, error, size);
     case IRC_NOTICE:
-        return snj_irc_core_send_agent_notice(core, request->text, error, size);
+        return snag_irc_core_send_agent_notice(core, request->text, error, size);
     case IRC_OPERATOR_TOPIC:
-        return snj_irc_core_set_operator_topic(core, request->text, error, size);
+        return snag_irc_core_set_operator_topic(core, request->text, error, size);
     case IRC_AGENT_TOPIC:
-        return snj_irc_core_set_agent_topic(core, request->text, error, size);
+        return snag_irc_core_set_agent_topic(core, request->text, error, size);
     case IRC_RESTORE:
-        return snj_irc_core_restore_event(core, request->event);
+        return snag_irc_core_restore_event(core, request->event);
     }
     errno = EINVAL;
     return -1;
@@ -215,7 +215,7 @@ static void *
 run_owner(void *opaque)
 {
     struct irc_owner *owner = opaque;
-    struct snj_irc *irc = owner->runtime;
+    struct snag_irc *irc = owner->runtime;
     char error[256u];
 
     for (;;) {
@@ -243,7 +243,7 @@ run_owner(void *opaque)
             wake_fd(irc->wake[1]);
             pthread_mutex_unlock(&irc->mutex);
         } else {
-            rc = snj_irc_core_tick(owner->core, -1, owner->wake[0],
+            rc = snag_irc_core_tick(owner->core, -1, owner->wake[0],
                                     error, sizeof(error));
             if (rc == 0)
                 rc = refresh_view(owner);
@@ -262,7 +262,7 @@ run_owner(void *opaque)
 }
 
 static int
-start_owners(struct snj_irc *irc)
+start_owners(struct snag_irc *irc)
 {
     pthread_mutex_lock(&irc->mutex);
     errno = irc->failure ? irc->failure : irc->stopping ? ECANCELED : 0;
@@ -286,7 +286,7 @@ start_owners(struct snj_irc *irc)
 }
 
 static void
-stop_owners(struct snj_irc *irc)
+stop_owners(struct snag_irc *irc)
 {
     pthread_mutex_lock(&irc->mutex);
     irc->stopping = true;
@@ -303,7 +303,7 @@ stop_owners(struct snj_irc *irc)
 }
 
 static int
-drain(struct snj_irc *irc, int timeout_ms)
+drain(struct snag_irc *irc, int timeout_ms)
 {
     struct pollfd fd = {irc->wake[0], POLLIN, 0};
     char bytes[64u];
@@ -338,7 +338,7 @@ drain(struct snj_irc *irc, int timeout_ms)
         }
         pthread_mutex_unlock(&irc->mutex);
         if (record->kind == IRC_EVENT) {
-            snj_irc_core_remember(irc->history, &record->event);
+            snag_irc_core_remember(irc->history, &record->event);
             if (irc->event_fn)
                 rc = irc->event_fn(irc->opaque, &record->event);
         } else if (record->kind == IRC_TRACE && irc->trace_fn) {
@@ -365,7 +365,7 @@ drain(struct snj_irc *irc, int timeout_ms)
 static int
 request_owner(struct irc_owner *owner, struct irc_request *request)
 {
-    struct snj_irc *irc = owner->runtime;
+    struct snag_irc *irc = owner->runtime;
     bool done;
 
     if (!owner->started)
@@ -394,7 +394,7 @@ request_owner(struct irc_owner *owner, struct irc_request *request)
 }
 
 static int
-add_owner(struct snj_irc *irc, const struct snj_config *config,
+add_owner(struct snag_irc *irc, const struct snag_config *config,
           const char *workspace, char *error, size_t error_size)
 {
     struct irc_owner *owner = &irc->owners[irc->owner_count];
@@ -402,31 +402,31 @@ add_owner(struct snj_irc *irc, const struct snj_config *config,
     owner->runtime = irc;
     owner->index = irc->owner_count++;
     owner->wake[0] = owner->wake[1] = -1;
-    (void)snj_strcpy(owner->endpoint, sizeof(owner->endpoint),
+    (void)snag_strcpy(owner->endpoint, sizeof(owner->endpoint),
                       config->irc_listen_explicit ? config->irc_listen :
                                                    config->irc_clients[0]);
     if (open_wake(owner->wake) < 0)
         return -1;
-    if (snj_irc_core_open(&owner->core, config, workspace, true, receive_event,
+    if (snag_irc_core_open(&owner->core, config, workspace, true, receive_event,
                            irc->trace_fn ? receive_trace : NULL, owner,
                            error, error_size) < 0 ||
-        snj_irc_core_view(owner->core, &owner->view) < 0)
+        snag_irc_core_view(owner->core, &owner->view) < 0)
         return -1;
     owner->sent = owner->view;
     return 0;
 }
 
 int
-snj_irc_open(struct snj_irc **out, const struct snj_config *config,
-             const char *workspace, snj_irc_event_fn event_fn,
-             snj_irc_trace_fn trace_fn, void *opaque,
+snag_irc_open(struct snag_irc **out, const struct snag_config *config,
+             const char *workspace, snag_irc_event_fn event_fn,
+             snag_irc_trace_fn trace_fn, void *opaque,
              char *error, size_t error_size)
 {
-    struct snj_irc *irc;
-    struct snj_config local;
+    struct snag_irc *irc;
+    struct snag_config local;
     int rc;
 
-    if (!out || !config || !workspace || !snj_irc_enabled(config)) {
+    if (!out || !config || !workspace || !snag_irc_enabled(config)) {
         errno = EINVAL;
         return -1;
     }
@@ -455,7 +455,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     irc->wake[0] = irc->wake[1] = -1;
     if (open_wake(irc->wake) < 0)
         goto fail;
-    if (snj_irc_core_open(&irc->history, config, workspace, false, NULL, NULL,
+    if (snag_irc_core_open(&irc->history, config, workspace, false, NULL, NULL,
                            NULL, error, error_size) < 0)
         goto fail;
     /* Config copies never leave startup; owners receive private protocol state. */
@@ -468,9 +468,9 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     local.irc_history_lines = 0u; /* Only the engine and hosted server retain it. */
     for (size_t i = 0u; i < config->irc_client_count; ++i) {
         if (irc->hosting &&
-            snj_irc_endpoint_equal(config->irc_clients[i], config->irc_listen))
+            snag_irc_endpoint_equal(config->irc_clients[i], config->irc_listen))
             continue;
-        (void)snj_strcpy(local.irc_clients[0], sizeof(local.irc_clients[0]),
+        (void)snag_strcpy(local.irc_clients[0], sizeof(local.irc_clients[0]),
                           config->irc_clients[i]);
         if (add_owner(irc, &local, workspace, error, error_size) < 0)
             goto fail;
@@ -478,12 +478,12 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     *out = irc;
     return 0;
 fail:
-    snj_irc_close(irc);
+    snag_irc_close(irc);
     return -1;
 }
 
 void
-snj_irc_close(struct snj_irc *irc)
+snag_irc_close(struct snag_irc *irc)
 {
     if (!irc)
         return;
@@ -491,7 +491,7 @@ snj_irc_close(struct snj_irc *irc)
     for (size_t i = 0u; i < irc->owner_count; ++i) {
         struct irc_owner *owner = &irc->owners[i];
 
-        snj_irc_core_close(owner->core);
+        snag_irc_core_close(owner->core);
         for (size_t j = 0u; j < 2u; ++j)
             if (owner->wake[j] >= 0)
                 close(owner->wake[j]);
@@ -501,7 +501,7 @@ snj_irc_close(struct snj_irc *irc)
         irc->head = (irc->head + 1u) % IRC_RECORDS;
         --irc->count;
     }
-    snj_irc_core_close(irc->history);
+    snag_irc_core_close(irc->history);
     for (size_t i = 0u; i < 2u; ++i)
         if (irc->wake[i] >= 0)
             close(irc->wake[i]);
@@ -511,17 +511,17 @@ snj_irc_close(struct snj_irc *irc)
 }
 
 int
-snj_irc_tick(struct snj_irc *irc, int timeout_ms,
+snag_irc_tick(struct snag_irc *irc, int timeout_ms,
              char *error, size_t error_size)
 {
     if (irc && start_owners(irc) == 0 && drain(irc, timeout_ms) == 0)
         return 0;
-    snj_errorf(error, error_size, "IRC event loop failed: %s", strerror(errno));
+    snag_errorf(error, error_size, "IRC event loop failed: %s", strerror(errno));
     return -1;
 }
 
 static int
-send_command(struct snj_irc *irc, enum irc_command command, const char *text,
+send_command(struct snag_irc *irc, enum irc_command command, const char *text,
              char *error, size_t error_size)
 {
     bool accepted = false;
@@ -536,7 +536,7 @@ send_command(struct snj_irc *irc, enum irc_command command, const char *text,
             accepted = true;
             continue;
         }
-        snj_errorf(error, error_size, "%s", request.error[0] ?
+        snag_errorf(error, error_size, "%s", request.error[0] ?
                    request.error : strerror(errno));
         if (errno != EACCES)
             return -1;
@@ -547,104 +547,104 @@ send_command(struct snj_irc *irc, enum irc_command command, const char *text,
 }
 
 int
-snj_irc_send_operator(struct snj_irc *irc, const char *text,
+snag_irc_send_operator(struct snag_irc *irc, const char *text,
                       char *error, size_t error_size)
 {
     return send_command(irc, IRC_OPERATOR, text, error, error_size);
 }
 
 int
-snj_irc_send_agent(struct snj_irc *irc, const char *text,
+snag_irc_send_agent(struct snag_irc *irc, const char *text,
                    char *error, size_t error_size)
 {
     return send_command(irc, IRC_AGENT, text, error, error_size);
 }
 
 int
-snj_irc_send_agent_notice(struct snj_irc *irc, const char *text,
+snag_irc_send_agent_notice(struct snag_irc *irc, const char *text,
                           char *error, size_t error_size)
 {
     return send_command(irc, IRC_NOTICE, text, error, error_size);
 }
 
 int
-snj_irc_set_operator_topic(struct snj_irc *irc, const char *text,
+snag_irc_set_operator_topic(struct snag_irc *irc, const char *text,
                            char *error, size_t error_size)
 {
     return send_command(irc, IRC_OPERATOR_TOPIC, text, error, error_size);
 }
 
 int
-snj_irc_set_agent_topic(struct snj_irc *irc, const char *text,
+snag_irc_set_agent_topic(struct snag_irc *irc, const char *text,
                         char *error, size_t error_size)
 {
     return send_command(irc, IRC_AGENT_TOPIC, text, error, error_size);
 }
 
 int
-snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
+snag_irc_snapshot(const struct snag_irc *irc, struct snag_buf *out,
                  char *error, size_t error_size)
 {
     if (!irc || !out) {
         errno = EINVAL;
         return -1;
     }
-    if (snj_buf_printf(out,
+    if (snag_buf_printf(out,
             "[IRC room snapshot; @ marks a channel operator]\n"
             "model nick: %s\noperator nick: %s\nhosted: %s\n",
-            snj_irc_model_nick(irc), snj_irc_operator_nick(irc),
+            snag_irc_model_nick(irc), snag_irc_operator_nick(irc),
             irc->hosting ? irc->owners[0].endpoint : "no") < 0)
         goto fail;
     for (size_t i = 0u; i < irc->owner_count; ++i)
-        if (snj_buf_append(out, irc->owners[i].view.text,
+        if (snag_buf_append(out, irc->owners[i].view.text,
                            strlen(irc->owners[i].view.text)) < 0)
             goto fail;
-    if (snj_irc_core_history(irc->history, out) < 0)
+    if (snag_irc_core_history(irc->history, out) < 0)
         goto fail;
     return 0;
 fail:
-    snj_errorf(error, error_size, "IRC snapshot exceeds its bound");
+    snag_errorf(error, error_size, "IRC snapshot exceeds its bound");
     return -1;
 }
 
 int
-snj_irc_restore_event(struct snj_irc *irc, const struct snj_irc_event *event)
+snag_irc_restore_event(struct snag_irc *irc, const struct snag_irc_event *event)
 {
     struct irc_request request = {.command = IRC_RESTORE, .event = event};
 
-    if (!irc || snj_irc_core_restore_event(irc->history, event) < 0)
+    if (!irc || snag_irc_core_restore_event(irc->history, event) < 0)
         return -1;
     return irc->hosting ? request_owner(&irc->owners[0], &request) : 0;
 }
 
 int
-snj_irc_replay_hosted_history(const struct snj_irc *irc,
-                              snj_irc_event_fn render, void *opaque)
+snag_irc_replay_hosted_history(const struct snag_irc *irc,
+                              snag_irc_event_fn render, void *opaque)
 {
-    return snj_irc_core_replay_hosted_history(irc ? irc->history : NULL,
+    return snag_irc_core_replay_hosted_history(irc ? irc->history : NULL,
                                               render, opaque);
 }
 
 const char *
-snj_irc_model_nick(const struct snj_irc *irc)
+snag_irc_model_nick(const struct snag_irc *irc)
 {
     return irc ? irc->owners[0].view.model : NULL;
 }
 
 const char *
-snj_irc_operator_nick(const struct snj_irc *irc)
+snag_irc_operator_nick(const struct snag_irc *irc)
 {
     return irc ? irc->owners[0].view.operator : NULL;
 }
 
 const char *
-snj_irc_room_name(const struct snj_irc *irc)
+snag_irc_room_name(const struct snag_irc *irc)
 {
-    return snj_irc_core_room_name(irc ? irc->history : NULL);
+    return snag_irc_core_room_name(irc ? irc->history : NULL);
 }
 
 bool
-snj_irc_identity_changed(struct snj_irc *irc)
+snag_irc_identity_changed(struct snag_irc *irc)
 {
     bool changed;
 
@@ -658,7 +658,7 @@ snj_irc_identity_changed(struct snj_irc *irc)
 }
 
 bool
-snj_irc_mentions_agent(const struct snj_irc *irc, const char *endpoint,
+snag_irc_mentions_agent(const struct snag_irc *irc, const char *endpoint,
                        const char *text)
 {
     if (!irc || !endpoint || !text)
@@ -667,23 +667,23 @@ snj_irc_mentions_agent(const struct snj_irc *irc, const char *endpoint,
         const struct irc_owner *owner = &irc->owners[i];
 
         if (owner->view.joined && (strcmp(endpoint, "local") == 0 ||
-            snj_irc_endpoint_equal(endpoint, owner->endpoint))
-            && snj_irc_nick_mentioned(text, owner->view.model))
+            snag_irc_endpoint_equal(endpoint, owner->endpoint))
+            && snag_irc_nick_mentioned(text, owner->view.model))
             return true;
     }
     return false;
 }
 
 int
-snj_irc_take_nicks(struct snj_irc *irc, struct snj_buf *out)
+snag_irc_take_nicks(struct snag_irc *irc, struct snag_buf *out)
 {
     if (!irc || !irc->nicks_changed)
         return 0;
     for (size_t i = 0u; i < irc->owner_count; ++i)
-        if (snj_buf_append(out, irc->owners[i].view.nicks,
+        if (snag_buf_append(out, irc->owners[i].view.nicks,
                           strlen(irc->owners[i].view.nicks)) < 0)
             return -1;
-    if (snj_buf_terminate(out) < 0)
+    if (snag_buf_terminate(out) < 0)
         return -1;
     irc->nicks_changed = false;
     return 1;

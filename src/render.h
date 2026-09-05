@@ -10,37 +10,37 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SNJ_RENDER_IRC_MARKDOWN_STATES (SNJ_CONFIG_IRC_CLIENT_MAX + 1u)
+#define SNAG_RENDER_IRC_MARKDOWN_STATES (SNAG_CONFIG_IRC_CLIENT_MAX + 1u)
 
-enum snj_render_view {
-    SNJ_RENDER_CHAT,
-    SNJ_RENDER_ROLLOUT,
-    SNJ_RENDER_VIEW_COUNT
+enum snag_render_view {
+    SNAG_RENDER_CHAT,
+    SNAG_RENDER_ROLLOUT,
+    SNAG_RENDER_VIEW_COUNT
 };
 
-enum snj_presentation {
-    SNJ_PRESENT_CONVERSATION, SNJ_PRESENT_TOOL, SNJ_PRESENT_ARGUMENTS,
-    SNJ_PRESENT_OUTPUT, SNJ_PRESENT_CONTEXT, SNJ_PRESENT_REASONING,
-    SNJ_PRESENT_DEBUG, SNJ_PRESENT_PROTOCOL, SNJ_PRESENT_WIRE,
-    SNJ_PRESENT_CHAT, SNJ_PRESENT_FEEDBACK
+enum snag_presentation {
+    SNAG_PRESENT_CONVERSATION, SNAG_PRESENT_TOOL, SNAG_PRESENT_ARGUMENTS,
+    SNAG_PRESENT_OUTPUT, SNAG_PRESENT_CONTEXT, SNAG_PRESENT_REASONING,
+    SNAG_PRESENT_DEBUG, SNAG_PRESENT_PROTOCOL, SNAG_PRESENT_WIRE,
+    SNAG_PRESENT_CHAT, SNAG_PRESENT_FEEDBACK
 };
 
-bool snj_presentation_enabled(enum snj_presentation kind, unsigned int level,
-                              enum snj_render_view view);
-size_t snj_presentation_limit(enum snj_presentation kind, unsigned int level);
-const char *snj_verbosity_name(unsigned int level);
+bool snag_presentation_enabled(enum snag_presentation kind, unsigned int level,
+                              enum snag_render_view view);
+size_t snag_presentation_limit(enum snag_presentation kind, unsigned int level);
+const char *snag_verbosity_name(unsigned int level);
 
-struct snj_render_record;
+struct snag_render_record;
 
-struct snj_render_source {
+struct snag_render_source {
     off_t offset;
     size_t len;
 };
 
-struct snj_markdown_state {
+struct snag_markdown_state {
     char prefix[16];
     char fence_info[64];
-    struct snj_buf table;
+    struct snag_buf table;
     size_t prefix_len;
     size_t fence_info_len;
     size_t delimiter_len;
@@ -72,21 +72,21 @@ struct snj_markdown_state {
     bool table_disabled;
 };
 
-struct snj_irc_markdown_state {
-    char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+struct snag_irc_markdown_state {
+    char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char fence;
     unsigned int fence_len;
 };
 
-struct snj_render {
+struct snag_render {
     int (*checkpoint)(void *);
     void *checkpoint_opaque;
     unsigned int verbosity;
     bool suppress_optional;
     int history_fd;
-    struct snj_render_source response_source;
-    struct snj_render_source irc_source;
+    struct snag_render_source response_source;
+    struct snag_render_source irc_source;
     bool stdout_terminal;
     bool stderr_terminal;
     int public_fd;
@@ -110,13 +110,13 @@ struct snj_render {
     bool markdown_preserve_fence;
     bool markdown_prose_bullets;
     bool networked;
-    enum snj_render_view view;
-    char model_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
-    struct snj_term *term;
-    struct snj_render_record *view_head[SNJ_RENDER_VIEW_COUNT];
-    struct snj_render_record *view_tail[SNJ_RENDER_VIEW_COUNT];
-    struct snj_render_record *rollout_open;
-    struct snj_buf wrap_pending;
+    enum snag_render_view view;
+    char model_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    struct snag_term *term;
+    struct snag_render_record *view_head[SNAG_RENDER_VIEW_COUNT];
+    struct snag_render_record *view_tail[SNAG_RENDER_VIEW_COUNT];
+    struct snag_render_record *rollout_open;
+    struct snag_buf wrap_pending;
     size_t public_column;
     char public_style[64u];
     bool wrap_has_word;
@@ -125,87 +125,87 @@ struct snj_render {
     bool wrap_break_open;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
-    struct snj_markdown_state markdown_state;
-    struct snj_irc_markdown_state irc_markdown[SNJ_RENDER_IRC_MARKDOWN_STATES];
+    struct snag_markdown_state markdown_state;
+    struct snag_irc_markdown_state irc_markdown[SNAG_RENDER_IRC_MARKDOWN_STATES];
 };
 
-void snj_render_init(struct snj_render *render, unsigned int verbosity);
-bool snj_render_enabled(const struct snj_render *render,
-                         enum snj_presentation kind);
-void snj_render_free(struct snj_render *render);
-void snj_render_set_color(struct snj_render *render, enum snj_color_mode mode);
-void snj_render_set_markdown(struct snj_render *render, bool enabled);
-void snj_render_set_networked(struct snj_render *render, bool networked,
+void snag_render_init(struct snag_render *render, unsigned int verbosity);
+bool snag_render_enabled(const struct snag_render *render,
+                         enum snag_presentation kind);
+void snag_render_free(struct snag_render *render);
+void snag_render_set_color(struct snag_render *render, enum snag_color_mode mode);
+void snag_render_set_markdown(struct snag_render *render, bool enabled);
+void snag_render_set_networked(struct snag_render *render, bool networked,
                               const char *model_nick);
-void snj_render_attach_term(struct snj_render *render, struct snj_term *term);
-enum snj_render_view snj_render_view(const struct snj_render *render);
-int snj_render_set_view(struct snj_render *render, enum snj_render_view view);
-int snj_render_orientation(struct snj_render *render,
+void snag_render_attach_term(struct snag_render *render, struct snag_term *term);
+enum snag_render_view snag_render_view(const struct snag_render *render);
+int snag_render_set_view(struct snag_render *render, enum snag_render_view view);
+int snag_render_orientation(struct snag_render *render,
                            const char *workspace, const char *id,
                            uint64_t turns, size_t queued, bool resumed);
-int snj_render_history(struct snj_render *render,
+int snag_render_history(struct snag_render *render,
                        const char *user, const char *assistant);
-int snj_render_prompt(struct snj_render *render, const char *label);
-int snj_render_submitted(struct snj_render *render, const char *label,
+int snag_render_prompt(struct snag_render *render, const char *label);
+int snag_render_submitted(struct snag_render *render, const char *label,
                          const char *text);
-int snj_render_input_submitted(struct snj_render *render, const char *label,
+int snag_render_input_submitted(struct snag_render *render, const char *label,
                                const char *text);
-int snj_render_before_prompt(struct snj_render *render);
-int snj_render_public_begin(struct snj_render *render, int fd,
+int snag_render_before_prompt(struct snag_render *render);
+int snag_render_public_begin(struct snag_render *render, int fd,
                             const char *label);
-int snj_render_public(struct snj_render *render, const char *text, size_t len,
-                      struct snj_buf *delivered);
-int snj_render_public_end(struct snj_render *render);
-int snj_render_public_abort(struct snj_render *render);
-int snj_render_rollout_begin(struct snj_render *render, int fd,
-                             const char *label, enum snj_presentation kind);
-int snj_render_rollout(struct snj_render *render, const char *text, size_t len,
-                       struct snj_buf *delivered);
-int snj_render_rollout_end(struct snj_render *render);
-int snj_render_rollout_abort(struct snj_render *render);
-int snj_render_error(const char *message);
-int snj_render_warning(const char *message);
-int snj_render_error_ctx(struct snj_render *render, const char *message);
-int snj_render_warning_ctx(struct snj_render *render, const char *message);
-int snj_render_host(struct snj_render *render, const char *text);
-int snj_render_runtime(struct snj_render *render, const char *text);
-int snj_render_irc_event(struct snj_render *render,
-                         const struct snj_irc_event *event);
-enum snj_render_role {
-    SNJ_ROLE_ACTIVITY, SNJ_ROLE_SUCCESS, SNJ_ROLE_WARNING, SNJ_ROLE_ERROR
+int snag_render_public(struct snag_render *render, const char *text, size_t len,
+                      struct snag_buf *delivered);
+int snag_render_public_end(struct snag_render *render);
+int snag_render_public_abort(struct snag_render *render);
+int snag_render_rollout_begin(struct snag_render *render, int fd,
+                             const char *label, enum snag_presentation kind);
+int snag_render_rollout(struct snag_render *render, const char *text, size_t len,
+                       struct snag_buf *delivered);
+int snag_render_rollout_end(struct snag_render *render);
+int snag_render_rollout_abort(struct snag_render *render);
+int snag_render_error(const char *message);
+int snag_render_warning(const char *message);
+int snag_render_error_ctx(struct snag_render *render, const char *message);
+int snag_render_warning_ctx(struct snag_render *render, const char *message);
+int snag_render_host(struct snag_render *render, const char *text);
+int snag_render_runtime(struct snag_render *render, const char *text);
+int snag_render_irc_event(struct snag_render *render,
+                         const struct snag_irc_event *event);
+enum snag_render_role {
+    SNAG_ROLE_ACTIVITY, SNAG_ROLE_SUCCESS, SNAG_ROLE_WARNING, SNAG_ROLE_ERROR
 };
 
-struct snj_render_block {
-    struct snj_buf text;
-    struct snj_buf context;
-    struct snj_buf body;
+struct snag_render_block {
+    struct snag_buf text;
+    struct snag_buf context;
+    struct snag_buf body;
     size_t colored_len;
-    enum snj_render_role role;
-    enum snj_presentation body_kind;
+    enum snag_render_role role;
+    enum snag_presentation body_kind;
     bool truncated;
 };
 
 /* Pure formatting of UI-owned values; no terminal writes. */
-int snj_render_prepare_tool_start(struct snj_render_block *block,
-                          const struct snj_response_item *call,
+int snag_render_prepare_tool_start(struct snag_render_block *block,
+                          const struct snag_response_item *call,
                           const char *workdir, uint32_t default_timeout_ms,
                           unsigned int level, unsigned int columns);
-int snj_render_prepare_tool_finish(struct snj_render_block *block, const char *name,
+int snag_render_prepare_tool_finish(struct snag_render_block *block, const char *name,
                            const json_t *result, uint32_t max_output_bytes,
                            unsigned int level, unsigned int columns);
-void snj_render_block_free(struct snj_render_block *block);
-int snj_render_durable(struct snj_render *render, int fd,
-                        struct snj_render_source source, const char *type,
+void snag_render_block_free(struct snag_render_block *block);
+int snag_render_durable(struct snag_render *render, int fd,
+                        struct snag_render_source source, const char *type,
                         uint32_t timeout_ms, uint32_t max_output_bytes);
-int snj_render_tool_block(struct snj_render *render,
-                          const struct snj_render_block *block);
-int snj_render_event(struct snj_render *render, uint64_t seq,
+int snag_render_tool_block(struct snag_render *render,
+                          const struct snag_render_block *block);
+int snag_render_event(struct snag_render *render, uint64_t seq,
                      const char *type);
-int snj_render_resume_hint(const struct snj_render *render,
+int snag_render_resume_hint(const struct snag_render *render,
                            const char *command, size_t command_len);
-int snj_render_protocol(struct snj_render *render, const char *label,
+int snag_render_protocol(struct snag_render *render, const char *label,
                         const char *text, size_t len);
-int snj_render_transport(struct snj_render *render, char direction,
+int snag_render_transport(struct snag_render *render, char direction,
                          const char *text, size_t len);
 
 #endif

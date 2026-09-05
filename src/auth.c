@@ -15,7 +15,7 @@
 #define AUTH_FILE_MAX (96u * 1024u)
 
 void
-snj_auth_clear(struct snj_auth_tokens *tokens)
+snag_auth_clear(struct snag_auth_tokens *tokens)
 {
     volatile unsigned char *p = (volatile unsigned char *)tokens;
     for (size_t i = 0; i < sizeof(*tokens); ++i)
@@ -23,7 +23,7 @@ snj_auth_clear(struct snj_auth_tokens *tokens)
 }
 
 void
-snj_auth_json_free(json_t *value)
+snag_auth_json_free(json_t *value)
 {
     if (json_is_object(value)) {
         for (void *iter = json_object_iter(value); iter;
@@ -40,12 +40,12 @@ snj_auth_json_free(json_t *value)
 }
 
 const char *
-snj_auth_kind_name(enum snj_auth_kind kind)
+snag_auth_kind_name(enum snag_auth_kind kind)
 {
     switch (kind) {
-    case SNJ_AUTH_ENV: return "env";
-    case SNJ_AUTH_API_KEY: return "api_key";
-    case SNJ_AUTH_CHATGPT: return "chatgpt";
+    case SNAG_AUTH_ENV: return "env";
+    case SNAG_AUTH_API_KEY: return "api_key";
+    case SNAG_AUTH_CHATGPT: return "chatgpt";
     }
     return "invalid";
 }
@@ -58,17 +58,17 @@ token_copy(char *out, size_t size, const char *value, bool empty)
     for (const unsigned char *p = (const unsigned char *)value; *p; ++p)
         if (*p < 0x21u || *p > 0x7eu)
             return false;
-    return snj_strcpy(out, size, value);
+    return snag_strcpy(out, size, value);
 }
 
 int
-snj_auth_key(struct snj_auth_tokens *tokens, const char *key,
+snag_auth_key(struct snag_auth_tokens *tokens, const char *key,
               char *error, size_t error_size)
 {
-    snj_auth_clear(tokens);
+    snag_auth_clear(tokens);
     if (!token_copy(tokens->credential.value,
                     sizeof(tokens->credential.value), key, false)) {
-        snj_errorf(error, error_size, "API key must contain 1..16384 non-whitespace ASCII bytes");
+        snag_errorf(error, error_size, "API key must contain 1..16384 non-whitespace ASCII bytes");
         errno = EINVAL;
         return -1;
     }
@@ -90,17 +90,17 @@ private_fd(int fd, bool directory)
 }
 
 static bool
-provider_valid(const struct snj_provider_config *provider)
+provider_valid(const struct snag_provider_config *provider)
 {
     if (!provider || !provider->name[0] ||
-        (provider->auth != SNJ_AUTH_API_KEY && provider->auth != SNJ_AUTH_CHATGPT))
+        (provider->auth != SNAG_AUTH_API_KEY && provider->auth != SNAG_AUTH_CHATGPT))
         return false;
     for (const unsigned char *p = (const unsigned char *)provider->name; *p; ++p)
         if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
               (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
             return false;
-    return provider->auth != SNJ_AUTH_CHATGPT ||
-           strcmp(provider->base_url, SNJ_CHATGPT_BASE) == 0;
+    return provider->auth != SNAG_AUTH_CHATGPT ||
+           strcmp(provider->base_url, SNAG_CHATGPT_BASE) == 0;
 }
 
 static int
@@ -111,7 +111,7 @@ auth_dir(int root_fd, bool create)
         return -1;
     if (create) {
         if (mkdirat(root_fd, "auth", 0700) == 0) {
-            if (snj_sync_dir(root_fd) < 0)
+            if (snag_sync_dir(root_fd) < 0)
                 return -1;
         } else if (errno != EEXIST) {
             return -1;
@@ -126,12 +126,12 @@ auth_dir(int root_fd, bool create)
 }
 
 static int
-lock_provider(int dir, const char *name, snj_auth_pump_fn pump, void *opaque)
+lock_provider(int dir, const char *name, snag_auth_pump_fn pump, void *opaque)
 {
-    char path[SNJ_CONFIG_PROVIDER_NAME_MAX + 8u];
+    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
     struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
     int fd;
-    uint64_t deadline = snj_monotonic_ms() + 30000u;
+    uint64_t deadline = snag_monotonic_ms() + 30000u;
 
     (void)snprintf(path, sizeof(path), "%s.lock", name);
     fd = openat(dir, path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
@@ -142,7 +142,7 @@ lock_provider(int dir, const char *name, snj_auth_pump_fn pump, void *opaque)
     while (fcntl(fd, F_SETLK, &lock) < 0) {
         if (errno != EACCES && errno != EAGAIN && errno != EINTR)
             goto fail;
-        if (snj_monotonic_ms() >= deadline) {
+        if (snag_monotonic_ms() >= deadline) {
             errno = ETIMEDOUT;
             goto fail;
         }
@@ -158,25 +158,25 @@ fail:
 }
 
 static int
-read_tokens(int dir, const struct snj_provider_config *provider,
-             struct snj_auth_tokens *tokens)
+read_tokens(int dir, const struct snag_provider_config *provider,
+             struct snag_auth_tokens *tokens)
 {
     static const char *const keys[] = {
         "kind", "base_url", "access_token", "refresh_token", "account_id", "expires_at_ms"
     };
-    char path[SNJ_CONFIG_PROVIDER_NAME_MAX + 8u], error[128];
-    struct snj_buf text;
+    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u], error[128];
+    struct snag_buf text;
     json_t *value = NULL;
     const char *kind, *base;
     struct stat st;
     int fd, rc = -1;
 
-    snj_auth_clear(tokens);
+    snag_auth_clear(tokens);
     (void)snprintf(path, sizeof(path), "%s.json", provider->name);
     fd = openat(dir, path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0)
         return errno == ENOENT ? 1 : -1;
-    snj_buf_init(&text, AUTH_FILE_MAX);
+    snag_buf_init(&text, AUTH_FILE_MAX);
     if (private_fd(fd, false) < 0 || fstat(fd, &st) < 0 ||
         st.st_size < 1 || (uint64_t)st.st_size > AUTH_FILE_MAX)
         goto out;
@@ -185,72 +185,72 @@ read_tokens(int dir, const struct snj_provider_config *provider,
         ssize_t n = read(fd, chunk, sizeof(chunk));
         if (n < 0 && errno == EINTR)
             continue;
-        if (n < 0 || (n > 0 && snj_buf_append(&text, chunk, (size_t)n) < 0))
+        if (n < 0 || (n > 0 && snag_buf_append(&text, chunk, (size_t)n) < 0))
             goto out;
         if (!n)
             break;
     }
-    value = snj_json_load_strict(text.data, text.len, AUTH_FILE_MAX,
+    value = snag_json_load_strict(text.data, text.len, AUTH_FILE_MAX,
                                 error, sizeof(error));
-    kind = snj_json_string(value, "kind");
-    base = snj_json_string(value, "base_url");
-    if (!snj_json_exact_keys(value, keys, sizeof(keys) / sizeof(keys[0])) ||
-        !kind || !base || strcmp(kind, snj_auth_kind_name(provider->auth)) ||
+    kind = snag_json_string(value, "kind");
+    base = snag_json_string(value, "base_url");
+    if (!snag_json_exact_keys(value, keys, sizeof(keys) / sizeof(keys[0])) ||
+        !kind || !base || strcmp(kind, snag_auth_kind_name(provider->auth)) ||
         strcmp(base, provider->base_url) ||
         !token_copy(tokens->credential.value, sizeof(tokens->credential.value),
-                     snj_json_string(value, "access_token"), false) ||
+                     snag_json_string(value, "access_token"), false) ||
         !token_copy(tokens->refresh_token, sizeof(tokens->refresh_token),
-                     snj_json_string(value, "refresh_token"),
-                     provider->auth != SNJ_AUTH_CHATGPT) ||
+                     snag_json_string(value, "refresh_token"),
+                     provider->auth != SNAG_AUTH_CHATGPT) ||
         !token_copy(tokens->credential.account_id,
                      sizeof(tokens->credential.account_id),
-                     snj_json_string(value, "account_id"),
-                     provider->auth != SNJ_AUTH_CHATGPT) ||
-        snj_json_integer_u64(value, "expires_at_ms", &tokens->expires_at_ms) < 0 ||
-        (provider->auth == SNJ_AUTH_CHATGPT && !tokens->expires_at_ms) ||
-        (provider->auth == SNJ_AUTH_API_KEY && (tokens->expires_at_ms ||
+                     snag_json_string(value, "account_id"),
+                     provider->auth != SNAG_AUTH_CHATGPT) ||
+        snag_json_integer_u64(value, "expires_at_ms", &tokens->expires_at_ms) < 0 ||
+        (provider->auth == SNAG_AUTH_CHATGPT && !tokens->expires_at_ms) ||
+        (provider->auth == SNAG_AUTH_API_KEY && (tokens->expires_at_ms ||
             tokens->refresh_token[0] || tokens->credential.account_id[0])))
         goto out;
     tokens->credential.len = strlen(tokens->credential.value);
     rc = 0;
 out:
-    snj_auth_json_free(value);
+    snag_auth_json_free(value);
     if (text.data)
         memset(text.data, 0, text.len);
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     (void)close(fd);
     if (rc < 0) {
-        snj_auth_clear(tokens);
+        snag_auth_clear(tokens);
         errno = EACCES;
     }
     return rc;
 }
 
 static int
-write_tokens(int dir, const struct snj_provider_config *provider,
-              const struct snj_auth_tokens *tokens)
+write_tokens(int dir, const struct snag_provider_config *provider,
+              const struct snag_auth_tokens *tokens)
 {
-    char path[SNJ_CONFIG_PROVIDER_NAME_MAX + 8u];
-    char temp[SNJ_ID_HEX_LEN + 8u], id[SNJ_ID_HEX_LEN + 1u];
+    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
+    char temp[SNAG_ID_HEX_LEN + 8u], id[SNAG_ID_HEX_LEN + 1u];
     json_t *value = json_object();
-    struct snj_buf text;
+    struct snag_buf text;
     int fd = -1, rc = -1;
 
     temp[0] = '\0';
-    snj_buf_init(&text, AUTH_FILE_MAX);
+    snag_buf_init(&text, AUTH_FILE_MAX);
     if (!value ||
-        snj_json_set_new(value, "kind", json_string(snj_auth_kind_name(provider->auth))) < 0 ||
-        snj_json_set_new(value, "base_url", json_string(provider->base_url)) < 0 ||
-        snj_json_set_new(value, "access_token", json_string(tokens->credential.value)) < 0 ||
-        snj_json_set_new(value, "refresh_token", json_string(tokens->refresh_token)) < 0 ||
-        snj_json_set_new(value, "account_id", json_string(tokens->credential.account_id)) < 0 ||
-        snj_json_set_new(value, "expires_at_ms", json_integer((json_int_t)tokens->expires_at_ms)) < 0 ||
-        snj_json_canonical(value, &text) < 0 || snj_random_id(id) < 0)
+        snag_json_set_new(value, "kind", json_string(snag_auth_kind_name(provider->auth))) < 0 ||
+        snag_json_set_new(value, "base_url", json_string(provider->base_url)) < 0 ||
+        snag_json_set_new(value, "access_token", json_string(tokens->credential.value)) < 0 ||
+        snag_json_set_new(value, "refresh_token", json_string(tokens->refresh_token)) < 0 ||
+        snag_json_set_new(value, "account_id", json_string(tokens->credential.account_id)) < 0 ||
+        snag_json_set_new(value, "expires_at_ms", json_integer((json_int_t)tokens->expires_at_ms)) < 0 ||
+        snag_json_canonical(value, &text) < 0 || snag_random_id(id) < 0)
         goto out;
     (void)snprintf(path, sizeof(path), "%s.json", provider->name);
     (void)snprintf(temp, sizeof(temp), "%s.tmp", id);
     fd = openat(dir, temp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (fd < 0 || snj_write_full(fd, text.data, text.len) < 0 || fsync(fd) < 0 ||
+    if (fd < 0 || snag_write_full(fd, text.data, text.len) < 0 || fsync(fd) < 0 ||
         renameat(dir, temp, dir, path) < 0)
         goto out;
     temp[0] = '\0';
@@ -262,21 +262,21 @@ out:
         (void)close(fd);
     if (temp[0])
         (void)unlinkat(dir, temp, 0);
-    snj_auth_json_free(value);
+    snag_auth_json_free(value);
     if (text.data)
         memset(text.data, 0, text.len);
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     return rc;
 }
 
 int
-snj_auth_load(int root_fd, const struct snj_provider_config *provider,
-              struct snj_auth_tokens *tokens, char *error, size_t error_size)
+snag_auth_load(int root_fd, const struct snag_provider_config *provider,
+              struct snag_auth_tokens *tokens, char *error, size_t error_size)
 {
     int dir, rc;
-    snj_auth_clear(tokens);
+    snag_auth_clear(tokens);
     if (!provider_valid(provider)) {
-        snj_errorf(error, error_size, "invalid stored credential provider");
+        snag_errorf(error, error_size, "invalid stored credential provider");
         return -1;
     }
     dir = auth_dir(root_fd, false);
@@ -287,7 +287,7 @@ snj_auth_load(int root_fd, const struct snj_provider_config *provider,
         (void)close(dir);
     }
     if (rc != 0)
-        snj_errorf(error, error_size, rc == 1 ?
+        snag_errorf(error, error_size, rc == 1 ?
             "provider %s is not logged in; use snajpagent login %s" :
             "provider %s credentials are unsafe, invalid, or bound to another endpoint; use snajpagent login %s",
             provider->name, provider->name);
@@ -297,12 +297,12 @@ snj_auth_load(int root_fd, const struct snj_provider_config *provider,
 }
 
 int
-snj_auth_save(int root_fd, const struct snj_provider_config *provider,
-              const struct snj_auth_tokens *tokens,
-              struct snj_auth_tokens *previous,
-              snj_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
+snag_auth_save(int root_fd, const struct snag_provider_config *provider,
+              const struct snag_auth_tokens *tokens,
+              struct snag_auth_tokens *previous,
+              snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
 {
-    struct snj_auth_tokens local_previous;
+    struct snag_auth_tokens local_previous;
     int dir = -1, lock = -1, rc = -1;
     if (!provider_valid(provider) || !tokens->credential.len)
         goto out;
@@ -313,24 +313,24 @@ snj_auth_save(int root_fd, const struct snj_provider_config *provider,
         goto out;
     rc = write_tokens(dir, provider, tokens);
 out:
-    snj_auth_clear(&local_previous);
+    snag_auth_clear(&local_previous);
     if (lock >= 0)
         (void)close(lock);
     if (dir >= 0)
         (void)close(dir);
     if (rc < 0)
-        snj_errorf(error, error_size, "cannot save provider credentials safely");
+        snag_errorf(error, error_size, "cannot save provider credentials safely");
     return rc;
 }
 
 int
-snj_auth_restore(int root_fd, const struct snj_provider_config *provider,
-                 const struct snj_auth_tokens *expected,
-                 const struct snj_auth_tokens *previous,
+snag_auth_restore(int root_fd, const struct snag_provider_config *provider,
+                 const struct snag_auth_tokens *expected,
+                 const struct snag_auth_tokens *previous,
                  char *error, size_t error_size)
 {
-    struct snj_auth_tokens current;
-    char path[SNJ_CONFIG_PROVIDER_NAME_MAX + 8u];
+    struct snag_auth_tokens current;
+    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
     int dir = auth_dir(root_fd, false), lock = -1, rc = -1;
     if (dir < 0 || (lock = lock_provider(dir, provider->name, NULL, NULL)) < 0 ||
         read_tokens(dir, provider, &current) != 0)
@@ -338,7 +338,7 @@ snj_auth_restore(int root_fd, const struct snj_provider_config *provider,
     if (strcmp(current.credential.value, expected->credential.value) ||
         strcmp(current.refresh_token, expected->refresh_token) ||
         current.expires_at_ms != expected->expires_at_ms) {
-        snj_errorf(error, error_size, "credentials changed concurrently; rollback left the newer login intact");
+        snag_errorf(error, error_size, "credentials changed concurrently; rollback left the newer login intact");
         goto out;
     }
     if (previous->credential.len) {
@@ -349,22 +349,22 @@ snj_auth_restore(int root_fd, const struct snj_provider_config *provider,
             rc = fsync(dir);
     }
 out:
-    snj_auth_clear(&current);
+    snag_auth_clear(&current);
     if (lock >= 0)
         (void)close(lock);
     if (dir >= 0)
         (void)close(dir);
     if (rc < 0 && !error[0])
-        snj_errorf(error, error_size, "credential rollback failed; login state is retained for recovery");
+        snag_errorf(error, error_size, "credential rollback failed; login state is retained for recovery");
     return rc;
 }
 
 int
-snj_auth_logout(int root_fd, const struct snj_provider_config *provider,
-                snj_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
+snag_auth_logout(int root_fd, const struct snag_provider_config *provider,
+                snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
 {
-    char path[SNJ_CONFIG_PROVIDER_NAME_MAX + 8u];
-    struct snj_auth_tokens tokens;
+    char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
+    struct snag_auth_tokens tokens;
     int dir = -1, lock = -1, rc = -1;
     if (!provider_valid(provider))
         goto out;
@@ -382,41 +382,41 @@ snj_auth_logout(int root_fd, const struct snj_provider_config *provider,
         goto out;
     rc = fsync(dir);
 out:
-    snj_auth_clear(&tokens);
+    snag_auth_clear(&tokens);
     if (lock >= 0)
         (void)close(lock);
     if (dir >= 0)
         (void)close(dir);
     if (rc < 0)
-        snj_errorf(error, error_size, "cannot remove provider credentials safely");
+        snag_errorf(error, error_size, "cannot remove provider credentials safely");
     return rc;
 }
 
 int
-snj_auth_read(int root_fd, const struct snj_provider_config *provider,
-              bool force, const char *stale, struct snj_credential *out,
-              snj_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
+snag_auth_read(int root_fd, const struct snag_provider_config *provider,
+              bool force, const char *stale, struct snag_credential *out,
+              snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
 {
-    struct snj_auth_tokens tokens;
+    struct snag_auth_tokens tokens;
     int dir = -1, lock = -1, rc;
-    snj_credential_clear(out);
-    if (provider->auth == SNJ_AUTH_ENV)
-        return snj_credential_read(out, provider->api_key_env, error, error_size);
-    rc = snj_auth_load(root_fd, provider, &tokens, error, error_size);
+    snag_credential_clear(out);
+    if (provider->auth == SNAG_AUTH_ENV)
+        return snag_credential_read(out, provider->api_key_env, error, error_size);
+    rc = snag_auth_load(root_fd, provider, &tokens, error, error_size);
     if (rc != 0) {
         rc = -1;
         goto done;
     }
-    if (provider->auth == SNJ_AUTH_CHATGPT &&
-        (force || tokens.expires_at_ms <= snj_time_ms() + 60000u)) {
+    if (provider->auth == SNAG_AUTH_CHATGPT &&
+        (force || tokens.expires_at_ms <= snag_time_ms() + 60000u)) {
         rc = -1;
         dir = auth_dir(root_fd, false);
         if (dir < 0 || (lock = lock_provider(dir, provider->name, pump, opaque)) < 0 ||
             read_tokens(dir, provider, &tokens) != 0)
             goto done;
         if ((force && stale && strcmp(stale, tokens.credential.value) == 0) ||
-            tokens.expires_at_ms <= snj_time_ms() + 60000u) {
-            if (snj_auth_refresh(&tokens, pump, opaque, error, error_size) < 0 ||
+            tokens.expires_at_ms <= snag_time_ms() + 60000u) {
+            if (snag_auth_refresh(&tokens, pump, opaque, error, error_size) < 0 ||
                 write_tokens(dir, provider, &tokens) < 0)
                 goto done;
         }
@@ -425,12 +425,12 @@ snj_auth_read(int root_fd, const struct snj_provider_config *provider,
     *out = tokens.credential;
     out->root_fd = root_fd;
 done:
-    snj_auth_clear(&tokens);
+    snag_auth_clear(&tokens);
     if (lock >= 0)
         (void)close(lock);
     if (dir >= 0)
         (void)close(dir);
     if (rc < 0 && !error[0])
-        snj_errorf(error, error_size, "cannot acquire or refresh provider credentials");
+        snag_errorf(error, error_size, "cannot acquire or refresh provider credentials");
     return rc;
 }

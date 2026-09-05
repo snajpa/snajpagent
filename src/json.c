@@ -8,11 +8,11 @@
 #include <string.h>
 
 static int
-encode_string(struct snj_buf *out, const char *s, size_t len)
+encode_string(struct snag_buf *out, const char *s, size_t len)
 {
     static const char hex[] = "0123456789abcdef";
 
-    if (snj_buf_putc(out, '"') < 0)
+    if (snag_buf_putc(out, '"') < 0)
         return -1;
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)s[i];
@@ -21,41 +21,41 @@ encode_string(struct snj_buf *out, const char *s, size_t len)
             return -1;
         }
         if (c >= 0x80u) {
-            size_t n = snj_utf8_size(c);
+            size_t n = snag_utf8_size(c);
             if (!n || n > len - i ||
-                !snj_utf8_valid((const unsigned char *)s + i, n, true)) {
+                !snag_utf8_valid((const unsigned char *)s + i, n, true)) {
                 errno = EILSEQ;
                 return -1;
             }
-            if (snj_buf_append(out, s + i, n) < 0)
+            if (snag_buf_append(out, s + i, n) < 0)
                 return -1;
             i += n - 1u;
             continue;
         }
         if (c == '"' || c == '\\') {
-            if (snj_buf_putc(out, '\\') < 0 || snj_buf_putc(out, c) < 0)
+            if (snag_buf_putc(out, '\\') < 0 || snag_buf_putc(out, c) < 0)
                 return -1;
         } else if (c <= 0x1fu) {
             unsigned char escaped[6] = {'\\', 'u', '0', '0',
                                         (unsigned char)hex[c >> 4],
                                         (unsigned char)hex[c & 15u]};
-            if (snj_buf_append(out, escaped, sizeof(escaped)) < 0)
+            if (snag_buf_append(out, escaped, sizeof(escaped)) < 0)
                 return -1;
-        } else if (snj_buf_putc(out, c) < 0) {
+        } else if (snag_buf_putc(out, c) < 0) {
             return -1;
         }
     }
-    return snj_buf_putc(out, '"');
+    return snag_buf_putc(out, '"');
 }
 
-static int encode_value(const json_t *value, struct snj_buf *out,
+static int encode_value(const json_t *value, struct snag_buf *out,
                         unsigned int depth);
 
 static int
-encode_object(const json_t *value, struct snj_buf *out, unsigned int depth)
+encode_object(const json_t *value, struct snag_buf *out, unsigned int depth)
 {
     size_t count = json_object_size(value);
-    struct snj_key_ref *keys = NULL;
+    struct snag_key_ref *keys = NULL;
     void *iter;
     size_t i = 0;
     int rc = -1;
@@ -76,7 +76,7 @@ encode_object(const json_t *value, struct snj_buf *out, unsigned int depth)
         keys[i].name = json_object_iter_key(iter);
         keys[i].len = json_object_iter_key_len(iter);
         if (!keys[i].name ||
-            !snj_utf8_valid((const unsigned char *)keys[i].name,
+            !snag_utf8_valid((const unsigned char *)keys[i].name,
                             keys[i].len, true))
             goto out;
         ++i;
@@ -85,18 +85,18 @@ encode_object(const json_t *value, struct snj_buf *out, unsigned int depth)
     if (i != count)
         goto out;
     if (count)
-        qsort(keys, count, sizeof(*keys), snj_key_ref_compare);
-    if (snj_buf_putc(out, '{') < 0)
+        qsort(keys, count, sizeof(*keys), snag_key_ref_compare);
+    if (snag_buf_putc(out, '{') < 0)
         goto out;
     for (i = 0; i < count; ++i) {
         json_t *member = json_object_getn(value, keys[i].name, keys[i].len);
-        if ((i && snj_buf_putc(out, ',') < 0) ||
+        if ((i && snag_buf_putc(out, ',') < 0) ||
             encode_string(out, keys[i].name, keys[i].len) < 0 ||
-            snj_buf_putc(out, ':') < 0 || !member ||
+            snag_buf_putc(out, ':') < 0 || !member ||
             encode_value(member, out, depth + 1u) < 0)
             goto out;
     }
-    if (snj_buf_putc(out, '}') < 0)
+    if (snag_buf_putc(out, '}') < 0)
         goto out;
     rc = 0;
 out:
@@ -105,23 +105,23 @@ out:
 }
 
 static int
-encode_array(const json_t *value, struct snj_buf *out, unsigned int depth)
+encode_array(const json_t *value, struct snag_buf *out, unsigned int depth)
 {
     size_t count = json_array_size(value);
 
-    if (snj_buf_putc(out, '[') < 0)
+    if (snag_buf_putc(out, '[') < 0)
         return -1;
     for (size_t i = 0; i < count; ++i) {
         json_t *member = json_array_get(value, i);
-        if ((i && snj_buf_putc(out, ',') < 0) || !member ||
+        if ((i && snag_buf_putc(out, ',') < 0) || !member ||
             encode_value(member, out, depth + 1u) < 0)
             return -1;
     }
-    return snj_buf_putc(out, ']');
+    return snag_buf_putc(out, ']');
 }
 
 static int
-encode_value(const json_t *value, struct snj_buf *out, unsigned int depth)
+encode_value(const json_t *value, struct snag_buf *out, unsigned int depth)
 {
     char number[64];
     int n;
@@ -145,13 +145,13 @@ encode_value(const json_t *value, struct snj_buf *out, unsigned int depth)
             errno = EOVERFLOW;
             return -1;
         }
-        return snj_buf_append(out, number, (size_t)n);
+        return snag_buf_append(out, number, (size_t)n);
     case JSON_TRUE:
-        return snj_buf_append(out, "true", 4u);
+        return snag_buf_append(out, "true", 4u);
     case JSON_FALSE:
-        return snj_buf_append(out, "false", 5u);
+        return snag_buf_append(out, "false", 5u);
     case JSON_NULL:
-        return snj_buf_append(out, "null", 4u);
+        return snag_buf_append(out, "null", 4u);
     case JSON_REAL:
     default:
         errno = EINVAL;
@@ -160,9 +160,9 @@ encode_value(const json_t *value, struct snj_buf *out, unsigned int depth)
 }
 
 int
-snj_json_canonical(const json_t *value, struct snj_buf *out)
+snag_json_canonical(const json_t *value, struct snag_buf *out)
 {
-    snj_buf_reset(out);
+    snag_buf_reset(out);
     return encode_value(value, out, 0u);
 }
 
@@ -185,7 +185,7 @@ validate_loaded(const json_t *value, unsigned int depth)
             size_t key_len = json_object_iter_key_len(iter);
             json_t *member;
 
-            if (!key || !snj_utf8_valid((const unsigned char *)key,
+            if (!key || !snag_utf8_valid((const unsigned char *)key,
                                          key_len, true)) {
                 errno = EINVAL;
                 return -1;
@@ -208,7 +208,7 @@ validate_loaded(const json_t *value, unsigned int depth)
                 return -1;
         return 0;
     case JSON_STRING:
-        if (!snj_utf8_valid((const unsigned char *)json_string_value(value),
+        if (!snag_utf8_valid((const unsigned char *)json_string_value(value),
                             json_string_length(value), true)) {
             errno = EINVAL;
             return -1;
@@ -227,13 +227,13 @@ validate_loaded(const json_t *value, unsigned int depth)
 }
 
 json_t *
-snj_json_load_strict(const unsigned char *data, size_t len, size_t max_len,
+snag_json_load_strict(const unsigned char *data, size_t len, size_t max_len,
                      char *error, size_t error_size)
 {
     json_error_t jerr;
     json_t *value;
 
-    if (!len || len > max_len || !snj_utf8_valid(data, len, true)) {
+    if (!len || len > max_len || !snag_utf8_valid(data, len, true)) {
         if (error_size)
             (void)snprintf(error, error_size,
                            "invalid UTF-8, NUL, or JSON input size");
@@ -261,58 +261,58 @@ snj_json_load_strict(const unsigned char *data, size_t len, size_t max_len,
 }
 
 json_t *
-snj_json_load_canonical(const unsigned char *data, size_t len,
+snag_json_load_canonical(const unsigned char *data, size_t len,
                         char *error, size_t error_size)
 {
     json_t *value;
-    struct snj_buf encoded;
+    struct snag_buf encoded;
 
-    value = snj_json_load_strict(data, len, SNJ_MAX_EVENT_LINE,
+    value = snag_json_load_strict(data, len, SNAG_MAX_EVENT_LINE,
                                  error, error_size);
     if (!value)
         return NULL;
-    snj_buf_init(&encoded, SNJ_MAX_EVENT_LINE);
-    if (snj_json_canonical(value, &encoded) < 0 || encoded.len != len ||
+    snag_buf_init(&encoded, SNAG_MAX_EVENT_LINE);
+    if (snag_json_canonical(value, &encoded) < 0 || encoded.len != len ||
         memcmp(encoded.data, data, len) != 0) {
         if (error_size)
             (void)snprintf(error, error_size,
                            "record is not canonical format-1 JSON");
-        snj_buf_free(&encoded);
+        snag_buf_free(&encoded);
         json_decref(value);
         errno = EINVAL;
         return NULL;
     }
-    snj_buf_free(&encoded);
+    snag_buf_free(&encoded);
     return value;
 }
 
 int
-snj_json_digest_bounded(const json_t *value, size_t max,
-                        char out[SNJ_SHA256_HEX_LEN + 1u], size_t *bytes)
+snag_json_digest_bounded(const json_t *value, size_t max,
+                        char out[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes)
 {
-    struct snj_buf encoded;
+    struct snag_buf encoded;
     int rc = -1;
 
-    snj_buf_init(&encoded, max);
-    if (snj_json_canonical(value, &encoded) == 0) {
+    snag_buf_init(&encoded, max);
+    if (snag_json_canonical(value, &encoded) == 0) {
         if (out)
-            snj_sha256_hex(encoded.data, encoded.len, out);
+            snag_sha256_hex(encoded.data, encoded.len, out);
         if (bytes)
             *bytes = encoded.len;
         rc = 0;
     }
-    snj_buf_free(&encoded);
+    snag_buf_free(&encoded);
     return rc;
 }
 
 int
-snj_json_digest(const json_t *value, char out[SNJ_SHA256_HEX_LEN + 1u])
+snag_json_digest(const json_t *value, char out[SNAG_SHA256_HEX_LEN + 1u])
 {
-    return snj_json_digest_bounded(value, SNJ_MAX_EVENT_LINE, out, NULL);
+    return snag_json_digest_bounded(value, SNAG_MAX_EVENT_LINE, out, NULL);
 }
 
 bool
-snj_json_exact_keys(const json_t *object, const char *const *keys, size_t count)
+snag_json_exact_keys(const json_t *object, const char *const *keys, size_t count)
 {
     if (!json_is_object(object) || json_object_size(object) != count)
         return false;
@@ -323,14 +323,14 @@ snj_json_exact_keys(const json_t *object, const char *const *keys, size_t count)
 }
 
 const char *
-snj_json_string(const json_t *object, const char *key)
+snag_json_string(const json_t *object, const char *key)
 {
     json_t *value = json_object_get(object, key);
     return json_is_string(value) ? json_string_value(value) : NULL;
 }
 
 int
-snj_json_integer_u64(const json_t *object, const char *key, uint64_t *out)
+snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out)
 {
     json_t *value = json_object_get(object, key);
     json_int_t n;
@@ -345,7 +345,7 @@ snj_json_integer_u64(const json_t *object, const char *key, uint64_t *out)
 }
 
 int
-snj_json_set_new(json_t *object, const char *key, json_t *value)
+snag_json_set_new(json_t *object, const char *key, json_t *value)
 {
     if (!value) {
         errno = ENOMEM;

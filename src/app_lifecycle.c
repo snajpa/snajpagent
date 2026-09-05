@@ -9,7 +9,7 @@
 static int
 render_event_seq(struct app_state *app, uint64_t seq, const char *type)
 {
-    return snj_ui_event(&app->ui, seq, type) < 0 ? -1 : 0;
+    return snag_ui_event(&app->ui, seq, type) < 0 ? -1 : 0;
 }
 
 static bool
@@ -19,7 +19,7 @@ span_equals(const char *text, size_t len, const char *word)
 }
 
 int
-snj_app_parse_queue_argument(const char *argument,
+snag_app_parse_queue_argument(const char *argument,
                              enum queue_command_kind *kind, size_t *number)
 {
     const char *start = argument;
@@ -86,34 +86,34 @@ static int
 confirm_delete(struct app_state *app, char prefix[9], char *error,
                size_t error_size)
 {
-    enum snj_term_action action = SNJ_TERM_NONE;
+    enum snag_term_action action = SNAG_TERM_NONE;
     char *line = NULL;
     int rc;
 
     memcpy(prefix, app->session.id, 8u);
     prefix[8] = '\0';
-    if (snj_ui_text(&app->ui, SNJ_UI_HOST,
+    if (snag_ui_text(&app->ui, SNAG_UI_HOST,
             "delete is irreversible; type the displayed 8-character id prefix to confirm") < 0 ||
-        snj_ui_simple_prompt(&app->ui, false) < 0) {
+        snag_ui_simple_prompt(&app->ui, false) < 0) {
         snprintf(error, error_size, "delete confirmation prompt could not be displayed");
         return -1;
     }
     do {
-        rc = snj_ui_poll(&app->ui, -1, false, &action, &line);
+        rc = snag_ui_poll(&app->ui, -1, false, &action, &line);
     } while (rc == 0);
     if (rc < 0) {
         free(line);
         snprintf(error, error_size, "delete confirmation input could not be read");
         return -1;
     }
-    if (action == SNJ_TERM_CANCEL || action == SNJ_TERM_INTERRUPT) {
+    if (action == SNAG_TERM_CANCEL || action == SNAG_TERM_INTERRUPT) {
         free(line);
         if (error_size)
             error[0] = '\0';
         return 1;
     }
-    if (action == SNJ_TERM_EXIT || !line) {
-        if (action == SNJ_TERM_EXIT)
+    if (action == SNAG_TERM_EXIT || !line) {
+        if (action == SNAG_TERM_EXIT)
             app->input_closed = true;
         free(line);
         snprintf(error, error_size, "delete cancelled");
@@ -131,7 +131,7 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
 }
 
 int
-snj_app_lifecycle_command(struct app_state *app, const char *line,
+snag_app_lifecycle_command(struct app_state *app, const char *line,
                           bool *handled, bool *exit_now)
 {
     char error[256];
@@ -141,20 +141,20 @@ snj_app_lifecycle_command(struct app_state *app, const char *line,
     *exit_now = false;
     if (strcmp(line, "/archive") == 0) {
         seq = app->session.next_seq;
-        if (snj_session_archive(&app->session, &seq, error, sizeof(error)) < 0) {
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
+        if (snag_session_archive(&app->session, &seq, error, sizeof(error)) < 0) {
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
             return -1;
         }
         if (render_event_seq(app, seq, "session_archived") < 0 ||
-            snj_ui_text(&app->ui, SNJ_UI_HOST, "session archived") < 0)
+            snag_ui_text(&app->ui, SNAG_UI_HOST, "session archived") < 0)
             return -1;
         *exit_now = true;
         return 0;
     }
     if (strcmp(line, "/compact") == 0) {
-        if (snj_app_compact_idle_command(app, "manual",
+        if (snag_app_compact_idle_command(app, "manual",
                                          error, sizeof(error)) < 0) {
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
             return -1;
         }
         return 0;
@@ -164,17 +164,17 @@ snj_app_lifecycle_command(struct app_state *app, const char *line,
         int confirm_rc = confirm_delete(app, prefix, error, sizeof(error));
         if (confirm_rc != 0) {
             if (error[0])
-                (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
+                (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
             return confirm_rc < 0 ? -1 : 0;
         }
         seq = app->session.next_seq;
-        if (snj_session_delete(&app->store, &app->session, prefix, &seq,
+        if (snag_session_delete(&app->store, &app->session, prefix, &seq,
                                error, sizeof(error)) < 0) {
-            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
+            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
             return -1;
         }
         if (render_event_seq(app, seq, "session_delete_requested") < 0 ||
-            snj_ui_text(&app->ui, SNJ_UI_HOST, "session deleted") < 0)
+            snag_ui_text(&app->ui, SNAG_UI_HOST, "session deleted") < 0)
             return -1;
         *exit_now = true;
         return 0;
@@ -197,15 +197,15 @@ static const char goal_help[] =
 static int
 goal_error(struct app_state *app, const char *message)
 {
-    return snj_ui_text(&app->ui, SNJ_UI_ERROR, message);
+    return snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
 }
 
 static json_t *
-goal_id_data(const struct snj_session *session)
+goal_id_data(const struct snag_session *session)
 {
     json_t *data = json_object();
     if (!data ||
-        snj_json_set_new(data, "goal_id", json_string(session->goal_id)) < 0) {
+        snag_json_set_new(data, "goal_id", json_string(session->goal_id)) < 0) {
         if (data)
             json_decref(data);
         return NULL;
@@ -214,10 +214,10 @@ goal_id_data(const struct snj_session *session)
 }
 
 static json_t *
-goal_actor_data(const struct snj_session *session, const char *actor)
+goal_actor_data(const struct snag_session *session, const char *actor)
 {
     json_t *data = goal_id_data(session);
-    if (!data || snj_json_set_new(data, "actor", json_string(actor)) < 0) {
+    if (!data || snag_json_set_new(data, "actor", json_string(actor)) < 0) {
         if (data)
             json_decref(data);
         return NULL;
@@ -226,11 +226,11 @@ goal_actor_data(const struct snj_session *session, const char *actor)
 }
 
 static json_t *
-goal_text_data(const struct snj_session *session, const char *actor,
+goal_text_data(const struct snag_session *session, const char *actor,
                const char *prompt)
 {
     json_t *data = goal_actor_data(session, actor);
-    if (!data || snj_json_set_new(data, "prompt", json_string(prompt)) < 0) {
+    if (!data || snag_json_set_new(data, "prompt", json_string(prompt)) < 0) {
         if (data)
             json_decref(data);
         return NULL;
@@ -242,8 +242,8 @@ static json_t *
 goal_started_data(const char *goal_id, const char *prompt)
 {
     json_t *data = json_object();
-    if (!data || snj_json_set_new(data, "goal_id", json_string(goal_id)) < 0 ||
-        snj_json_set_new(data, "prompt", json_string(prompt)) < 0) {
+    if (!data || snag_json_set_new(data, "goal_id", json_string(goal_id)) < 0 ||
+        snag_json_set_new(data, "prompt", json_string(prompt)) < 0) {
         if (data)
             json_decref(data);
         return NULL;
@@ -259,23 +259,23 @@ commit_goal_event(struct app_state *app, const char *type, json_t *data,
         (void)snprintf(error, error_size, "cannot allocate %s event", type);
         return -1;
     }
-    return snj_app_commit_event(app, type, data, error, error_size);
+    return snag_app_commit_event(app, type, data, error, error_size);
 }
 
 static int
 render_goal(struct app_state *app)
 {
-    struct snj_buf text;
+    struct snag_buf text;
     int rc;
 
-    if (app->session.goal_status == SNJ_GOAL_NONE)
-        return snj_ui_text(&app->ui, SNJ_UI_WARNING, "no goal has been set");
-    snj_buf_init(&text, SNJ_MAX_GOAL_PROMPT + SNJ_MAX_GOAL_BLOCKER + 512u);
-    rc = snj_buf_printf(&text,
+    if (app->session.goal_status == SNAG_GOAL_NONE)
+        return snag_ui_text(&app->ui, SNAG_UI_WARNING, "no goal has been set");
+    snag_buf_init(&text, SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 512u);
+    rc = snag_buf_printf(&text,
         "goal %.8s: %s%s\n"
         "turns: %llu · revision: %llu · prompt: %zu/%u bytes\n"
         "%s",
-        app->session.goal_id, snj_goal_status_name(app->session.goal_status),
+        app->session.goal_id, snag_goal_status_name(app->session.goal_status),
         app->session.goal_locked ? " · wording locked" : " · wording unlocked",
         (unsigned long long)app->session.goal_turn_count,
         (unsigned long long)app->session.goal_revision,
@@ -283,12 +283,12 @@ render_goal(struct app_state *app)
         app->config->max_goal_prompt_bytes,
         app->session.goal_prompt ? app->session.goal_prompt : "");
     if (rc == 0 && app->session.goal_blocker)
-        rc = snj_buf_printf(&text, "\nblocker: %s", app->session.goal_blocker);
-    if (rc == 0 && snj_buf_terminate(&text) < 0)
+        rc = snag_buf_printf(&text, "\nblocker: %s", app->session.goal_blocker);
+    if (rc == 0 && snag_buf_terminate(&text) < 0)
         rc = -1;
     if (rc == 0)
-        rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
-    snj_buf_free(&text);
+        rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+    snag_buf_free(&text);
     return rc;
 }
 
@@ -318,7 +318,7 @@ copy_goal_argument(const char *argument, uint32_t limit,
         --end;
     }
     len = (size_t)(end - start);
-    if (!len || len > limit || len > SNJ_MAX_GOAL_PROMPT) {
+    if (!len || len > limit || len > SNAG_MAX_GOAL_PROMPT) {
         (void)snprintf(error, error_size,
                        "goal wording must contain 1..%u UTF-8 bytes", limit);
         errno = EINVAL;
@@ -329,8 +329,8 @@ copy_goal_argument(const char *argument, uint32_t limit,
         return NULL;
     memcpy(copy, start, len);
     copy[len] = '\0';
-    if (snj_text_blank(copy) ||
-        !snj_utf8_valid((const unsigned char *)copy, len, true)) {
+    if (snag_text_blank(copy) ||
+        !snag_utf8_valid((const unsigned char *)copy, len, true)) {
         free(copy);
         (void)snprintf(error, error_size,
                        "goal wording must be nonblank valid UTF-8");
@@ -357,14 +357,14 @@ static int
 start_goal(struct app_state *app, const char *prompt,
            char *error, size_t error_size)
 {
-    char goal_id[SNJ_ID_HEX_LEN + 1u];
+    char goal_id[SNAG_ID_HEX_LEN + 1u];
 
-    if (snj_goal_unfinished(app->session.goal_status)) {
+    if (snag_goal_unfinished(app->session.goal_status)) {
         (void)snprintf(error, error_size, "an unfinished goal already exists");
         errno = EINVAL;
         return -1;
     }
-    if (snj_random_id(goal_id) < 0) {
+    if (snag_random_id(goal_id) < 0) {
         (void)snprintf(error, error_size,
                        "cryptographic goal id generation failed");
         return -1;
@@ -390,10 +390,10 @@ set_goal_prompt(struct app_state *app, const char *argument)
 
     if (!prompt)
         return goal_error(app, error[0] ? error : "goal wording is unavailable");
-    if (snj_goal_unfinished(app->session.goal_status)) {
+    if (snag_goal_unfinished(app->session.goal_status)) {
         if (strcmp(prompt, app->session.goal_prompt) == 0) {
             free(prompt);
-            return snj_ui_text(&app->ui, SNJ_UI_WARNING,
+            return snag_ui_text(&app->ui, SNAG_UI_WARNING,
                                            "goal wording is unchanged");
         }
         rc = commit_goal_event(app, "goal_reworded",
@@ -412,17 +412,17 @@ set_goal_prompt(struct app_state *app, const char *argument)
 }
 
 int
-snj_app_goal_pause(struct app_state *app, const char *reason,
+snag_app_goal_pause(struct app_state *app, const char *reason,
                    char *error, size_t error_size)
 {
     json_t *data;
 
-    if (app->session.goal_status != SNJ_GOAL_ACTIVE) {
+    if (app->session.goal_status != SNAG_GOAL_ACTIVE) {
         app->goal_armed = false;
         return 0;
     }
     data = goal_id_data(&app->session);
-    if (!data || snj_json_set_new(data, "reason", json_string(reason)) < 0) {
+    if (!data || snag_json_set_new(data, "reason", json_string(reason)) < 0) {
         if (data)
             json_decref(data);
         (void)snprintf(error, error_size, "cannot allocate goal pause event");
@@ -443,16 +443,16 @@ goal_simple_command(struct app_state *app, const char *command)
     const char *type;
 
     if (strcmp(command, "pause") == 0) {
-        if (app->session.goal_status != SNJ_GOAL_ACTIVE)
+        if (app->session.goal_status != SNAG_GOAL_ACTIVE)
             return goal_error(app, "only an active goal can be paused");
-        if (snj_app_goal_pause(app, "user", error, sizeof(error)) < 0)
+        if (snag_app_goal_pause(app, "user", error, sizeof(error)) < 0)
             return goal_error(app, error);
-        return snj_ui_text(&app->ui, SNJ_UI_HOST,
+        return snag_ui_text(&app->ui, SNAG_UI_HOST,
                                "goal paused at the current turn boundary");
     }
     if (strcmp(command, "resume") == 0) {
-        if (app->session.goal_status != SNJ_GOAL_PAUSED &&
-            app->session.goal_status != SNJ_GOAL_BLOCKED)
+        if (app->session.goal_status != SNAG_GOAL_PAUSED &&
+            app->session.goal_status != SNAG_GOAL_BLOCKED)
             return goal_error(app, "only a paused or blocked goal can be resumed");
         if (commit_goal_event(app, "goal_resumed", goal_id_data(&app->session),
                               error, sizeof(error)) < 0)
@@ -460,18 +460,18 @@ goal_simple_command(struct app_state *app, const char *command)
         app->goal_armed = true;
         if (app->session.pending_queue_count != 0u && !app->queue_edit_id[0])
             app->queue_armed = true;
-        return snj_ui_text(&app->ui, SNJ_UI_HOST, "goal resumed");
+        return snag_ui_text(&app->ui, SNAG_UI_HOST, "goal resumed");
     }
     if (strcmp(command, "lock") == 0 || strcmp(command, "unlock") == 0) {
         bool locked = strcmp(command, "lock") == 0;
-        if (!snj_goal_unfinished(app->session.goal_status))
+        if (!snag_goal_unfinished(app->session.goal_status))
             return goal_error(app, "no unfinished goal can be locked or unlocked");
         if (app->session.goal_locked == locked)
-            return snj_ui_text(&app->ui, SNJ_UI_WARNING,
+            return snag_ui_text(&app->ui, SNAG_UI_WARNING,
                 locked ? "goal wording is already locked" :
                          "goal wording is already unlocked");
         data = goal_id_data(&app->session);
-        if (!data || snj_json_set_new(data, "locked", json_boolean(locked)) < 0) {
+        if (!data || snag_json_set_new(data, "locked", json_boolean(locked)) < 0) {
             if (data)
                 json_decref(data);
             return goal_error(app, "cannot allocate goal lock event");
@@ -479,17 +479,17 @@ goal_simple_command(struct app_state *app, const char *command)
         if (commit_goal_event(app, "goal_lock_changed", data,
                               error, sizeof(error)) < 0)
             return goal_error(app, error);
-        return snj_ui_text(&app->ui, SNJ_UI_HOST,
+        return snag_ui_text(&app->ui, SNAG_UI_HOST,
             locked ? "goal wording locked against model changes" :
                      "goal wording unlocked for model changes");
     }
     if (strcmp(command, "complete") == 0) {
-        if (!snj_goal_unfinished(app->session.goal_status))
+        if (!snag_goal_unfinished(app->session.goal_status))
             return goal_error(app, "no unfinished goal can be completed");
         type = "goal_completed";
         data = goal_actor_data(&app->session, "user");
     } else {
-        if (!snj_goal_unfinished(app->session.goal_status))
+        if (!snag_goal_unfinished(app->session.goal_status))
             return goal_error(app, "no unfinished goal can be cancelled");
         type = "goal_cancelled";
         data = goal_id_data(&app->session);
@@ -501,7 +501,7 @@ goal_simple_command(struct app_state *app, const char *command)
 }
 
 int
-snj_app_goal_command(struct app_state *app, const char *line, bool active)
+snag_app_goal_command(struct app_state *app, const char *line, bool active)
 {
     const char *argument;
     const char *word_end;
@@ -511,7 +511,7 @@ snj_app_goal_command(struct app_state *app, const char *line, bool active)
     if (strcmp(line, "/goal") == 0 || strcmp(line, "/goal status") == 0)
         return render_goal(app);
     if (strcmp(line, "/goal help") == 0)
-        return snj_ui_text(&app->ui, SNJ_UI_HOST, goal_help);
+        return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_help);
     if (strncmp(line, "/goal ", 6u) != 0)
         return goal_error(app, "invalid /goal command; use /goal help");
     argument = line + 6u;
@@ -536,7 +536,7 @@ snj_app_goal_command(struct app_state *app, const char *line, bool active)
         if (word_len == 6u && memcmp(argument, "status", 6u) == 0)
             return render_goal(app);
         if (word_len == 4u && memcmp(argument, "help", 4u) == 0)
-            return snj_ui_text(&app->ui, SNJ_UI_HOST, goal_help);
+            return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_help);
         return goal_simple_command(app, argument);
     }
     return set_goal_prompt(app, argument);
@@ -545,13 +545,13 @@ snj_app_goal_command(struct app_state *app, const char *line, bool active)
 static int
 tool_result(bool succeeded, const char *message, json_t **result)
 {
-    *result = snj_tool_result_terminal(succeeded, message);
+    *result = snag_tool_result_terminal(succeeded, message);
     return *result ? 0 : -1;
 }
 
 int
-snj_app_goal_tool(struct app_state *app,
-                  const struct snj_response_item *call,
+snag_app_goal_tool(struct app_state *app,
+                  const struct snag_response_item *call,
                   json_t **result, char *error, size_t error_size)
 {
     static const char *const keys[] = {"action", "text"};
@@ -567,15 +567,15 @@ snj_app_goal_tool(struct app_state *app,
         size_t len;
         char message[128];
 
-        if (!snj_json_exact_keys(call->arguments, create_keys, 1u) ||
-            !(objective = snj_json_string(call->arguments, "objective")))
+        if (!snag_json_exact_keys(call->arguments, create_keys, 1u) ||
+            !(objective = snag_json_string(call->arguments, "objective")))
             return tool_result(false, "create_goal arguments are invalid", result);
-        if (snj_goal_unfinished(app->session.goal_status))
+        if (snag_goal_unfinished(app->session.goal_status))
             return tool_result(false, "an unfinished goal already exists", result);
-        if (!*objective || snj_text_blank(objective) ||
+        if (!*objective || snag_text_blank(objective) ||
             (len = strlen(objective)) > app->config->max_goal_prompt_bytes ||
-            len > SNJ_MAX_GOAL_PROMPT ||
-            !snj_utf8_valid((const unsigned char *)objective, len, true))
+            len > SNAG_MAX_GOAL_PROMPT ||
+            !snag_utf8_valid((const unsigned char *)objective, len, true))
             return tool_result(false,
                 "goal objective is blank, invalid, or exceeds the configured limit",
                 result);
@@ -587,19 +587,19 @@ snj_app_goal_tool(struct app_state *app,
         return tool_result(true, message, result);
     }
     if (!call || strcmp(call->name, "update_goal") != 0 ||
-        !snj_json_exact_keys(call->arguments, keys, 2u) ||
-        !(action = snj_json_string(call->arguments, "action")))
+        !snag_json_exact_keys(call->arguments, keys, 2u) ||
+        !(action = snag_json_string(call->arguments, "action")))
         return tool_result(false, "update_goal arguments are invalid", result);
     text_value = json_object_get(call->arguments, "text");
-    if (app->session.goal_status != SNJ_GOAL_ACTIVE)
+    if (app->session.goal_status != SNAG_GOAL_ACTIVE)
         return tool_result(false, "there is no active goal to update", result);
     if (strcmp(action, "rewrite") == 0) {
         size_t len;
-        text = snj_json_string(call->arguments, "text");
-        if (!text || !*text || snj_text_blank(text) ||
+        text = snag_json_string(call->arguments, "text");
+        if (!text || !*text || snag_text_blank(text) ||
             (len = strlen(text)) > app->config->max_goal_prompt_bytes ||
-            len > SNJ_MAX_GOAL_PROMPT ||
-            !snj_utf8_valid((const unsigned char *)text, len, true))
+            len > SNAG_MAX_GOAL_PROMPT ||
+            !snag_utf8_valid((const unsigned char *)text, len, true))
             return tool_result(false,
                 "new goal wording is blank, invalid, or exceeds the configured limit",
                 result);
@@ -629,14 +629,14 @@ snj_app_goal_tool(struct app_state *app,
     }
     if (strcmp(action, "block") == 0) {
         size_t len;
-        text = snj_json_string(call->arguments, "text");
-        if (!text || !*text || snj_text_blank(text) ||
-            (len = strlen(text)) > SNJ_MAX_GOAL_BLOCKER ||
-            !snj_utf8_valid((const unsigned char *)text, len, true))
+        text = snag_json_string(call->arguments, "text");
+        if (!text || !*text || snag_text_blank(text) ||
+            (len = strlen(text)) > SNAG_MAX_GOAL_BLOCKER ||
+            !snag_utf8_valid((const unsigned char *)text, len, true))
             return tool_result(false,
                                "block requires a bounded nonblank reason", result);
         data = goal_actor_data(&app->session, "model");
-        if (!data || snj_json_set_new(data, "reason", json_string(text)) < 0) {
+        if (!data || snag_json_set_new(data, "reason", json_string(text)) < 0) {
             if (data)
                 json_decref(data);
             (void)snprintf(error, error_size, "cannot allocate goal block event");
@@ -646,7 +646,7 @@ snj_app_goal_tool(struct app_state *app,
                               error, error_size) < 0)
             return -1;
         app->goal_armed = false;
-        if (snj_ui_text(&app->ui, SNJ_UI_HOST, "goal blocked by model") < 0)
+        if (snag_ui_text(&app->ui, SNAG_UI_HOST, "goal blocked by model") < 0)
             return -1;
         return tool_result(true, "goal marked blocked", result);
     }

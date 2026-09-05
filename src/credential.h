@@ -4,20 +4,20 @@
 
 #include <stddef.h>
 
-#define SNJ_CREDENTIAL_MAX 16384u
-#define SNJ_ACCOUNT_ID_MAX 128u
+#define SNAG_CREDENTIAL_MAX 16384u
+#define SNAG_ACCOUNT_ID_MAX 128u
 
-struct snj_credential {
-    char value[SNJ_CREDENTIAL_MAX + 1u];
+struct snag_credential {
+    char value[SNAG_CREDENTIAL_MAX + 1u];
     size_t len;
-    char account_id[SNJ_ACCOUNT_ID_MAX + 1u];
+    char account_id[SNAG_ACCOUNT_ID_MAX + 1u];
     /* Borrowed dotdir fd for provider-scoped reacquisition, never closed here. */
     int root_fd;
 };
 
-int snj_credential_read(struct snj_credential *credential,
+int snag_credential_read(struct snag_credential *credential,
                         const char *env_name,
                         char *error, size_t error_size);
-void snj_credential_clear(struct snj_credential *credential);
+void snag_credential_clear(struct snag_credential *credential);
 
 #endif

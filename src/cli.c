@@ -11,15 +11,15 @@
 #include <unistd.h>
 
 void
-snj_cli_init(struct snj_cli *cli)
+snag_cli_init(struct snag_cli *cli)
 {
     memset(cli, 0, sizeof(*cli));
-    cli->color = SNJ_CLI_COLOR_UNSET;
-    cli->markdown = SNJ_CLI_MARKDOWN_UNSET;
+    cli->color = SNAG_CLI_COLOR_UNSET;
+    cli->markdown = SNAG_CLI_MARKDOWN_UNSET;
 }
 
 void
-snj_cli_free(struct snj_cli *cli)
+snag_cli_free(struct snag_cli *cli)
 {
     free(cli->auth_provider);
     free(cli->workspace);
@@ -35,31 +35,31 @@ snj_cli_free(struct snj_cli *cli)
     free(cli->irc_room_name);
     free(cli->resume_id);
     free(cli->prompt);
-    snj_cli_init(cli);
+    snag_cli_init(cli);
 }
 
 static int
-add_client(struct snj_cli *cli, const char *value,
+add_client(struct snag_cli *cli, const char *value,
            char *error, size_t error_size)
 {
     char *copy;
 
-    if (cli->irc_client_count >= SNJ_CLI_IRC_CLIENT_MAX) {
-        snj_errorf(error, error_size, "at most %u -c options are supported",
-                  SNJ_CLI_IRC_CLIENT_MAX);
+    if (cli->irc_client_count >= SNAG_CLI_IRC_CLIENT_MAX) {
+        snag_errorf(error, error_size, "at most %u -c options are supported",
+                  SNAG_CLI_IRC_CLIENT_MAX);
         errno = E2BIG;
         return -1;
     }
-    copy = snj_strdup_checked(value, SNJ_CONFIG_URL_MAX);
+    copy = snag_strdup_checked(value, SNAG_CONFIG_URL_MAX);
     if (!copy) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "-c endpoint is too long or unavailable");
         return -1;
     }
     for (size_t i = 0; i < cli->irc_client_count; ++i)
         if (strcmp(cli->irc_clients[i], copy) == 0) {
             free(copy);
-            snj_errorf(error, error_size, "duplicate -c endpoint");
+            snag_errorf(error, error_size, "duplicate -c endpoint");
             errno = EINVAL;
             return -1;
         }
@@ -72,13 +72,13 @@ set_once(char **slot, const char *value, const char *name,
          char *error, size_t error_size)
 {
     if (*slot) {
-        snj_errorf(error, error_size, "duplicate %s option", name);
+        snag_errorf(error, error_size, "duplicate %s option", name);
         errno = EINVAL;
         return -1;
     }
-    *slot = snj_strdup_checked(value, SNJ_PATH_MAX_BYTES);
+    *slot = snag_strdup_checked(value, SNAG_PATH_MAX_BYTES);
     if (!*slot) {
-        snj_errorf(error, error_size, "%s argument is too long or unavailable", name);
+        snag_errorf(error, error_size, "%s argument is too long or unavailable", name);
         return -1;
     }
     return 0;
@@ -91,7 +91,7 @@ option_argument(int argc, char **argv, int *index, const char *attached,
     if (attached && *attached)
         return attached;
     if (*index + 1 >= argc) {
-        snj_errorf(error, error_size, "%s requires an argument", name);
+        snag_errorf(error, error_size, "%s requires an argument", name);
         errno = EINVAL;
         return NULL;
     }
@@ -113,11 +113,11 @@ optional_endpoint(int argc, char **argv, int *index, const char *attached)
 }
 
 static int
-set_color(struct snj_cli *cli, enum snj_cli_color_mode color,
+set_color(struct snag_cli *cli, enum snag_cli_color_mode color,
           const char *name, char *error, size_t error_size)
 {
-    if (cli->color != SNJ_CLI_COLOR_UNSET) {
-        snj_errorf(error, error_size, "duplicate %s option", name);
+    if (cli->color != SNAG_CLI_COLOR_UNSET) {
+        snag_errorf(error, error_size, "duplicate %s option", name);
         errno = EINVAL;
         return -1;
     }
@@ -126,11 +126,11 @@ set_color(struct snj_cli *cli, enum snj_cli_color_mode color,
 }
 
 static int
-set_markdown(struct snj_cli *cli, enum snj_cli_markdown_mode markdown,
+set_markdown(struct snag_cli *cli, enum snag_cli_markdown_mode markdown,
              const char *name, char *error, size_t error_size)
 {
-    if (cli->markdown != SNJ_CLI_MARKDOWN_UNSET) {
-        snj_errorf(error, error_size, "duplicate %s option", name);
+    if (cli->markdown != SNAG_CLI_MARKDOWN_UNSET) {
+        snag_errorf(error, error_size, "duplicate %s option", name);
         errno = EINVAL;
         return -1;
     }
@@ -139,19 +139,19 @@ set_markdown(struct snj_cli *cli, enum snj_cli_markdown_mode markdown,
 }
 
 static int
-parse_color_value(struct snj_cli *cli, const char *value,
+parse_color_value(struct snag_cli *cli, const char *value,
                   const char *name, char *error, size_t error_size)
 {
-    enum snj_cli_color_mode color;
+    enum snag_cli_color_mode color;
 
     if (strcmp(value, "auto") == 0)
-        color = SNJ_CLI_COLOR_AUTO;
+        color = SNAG_CLI_COLOR_AUTO;
     else if (strcmp(value, "always") == 0)
-        color = SNJ_CLI_COLOR_ALWAYS;
+        color = SNAG_CLI_COLOR_ALWAYS;
     else if (strcmp(value, "never") == 0)
-        color = SNJ_CLI_COLOR_NEVER;
+        color = SNAG_CLI_COLOR_NEVER;
     else {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "%s accepts auto, always, or never", name);
         errno = EINVAL;
         return -1;
@@ -160,7 +160,7 @@ parse_color_value(struct snj_cli *cli, const char *value,
 }
 
 static int
-parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
+parse_short(struct snag_cli *cli, int argc, char **argv, int *index,
             char *error, size_t error_size)
 {
     const char *p = argv[*index] + 1;
@@ -170,22 +170,22 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
         const char *arg;
         switch (flag) {
         case 'v':
-            if (cli->verbosity == SNJ_VERBOSITY_MAX) {
-                snj_errorf(error, error_size, "at most six -v flags are allowed");
+            if (cli->verbosity == SNAG_VERBOSITY_MAX) {
+                snag_errorf(error, error_size, "at most six -v flags are allowed");
                 return -1;
             }
             ++cli->verbosity;
             break;
         case 'e':
             if (cli->execute) {
-                snj_errorf(error, error_size, "duplicate -e option");
+                snag_errorf(error, error_size, "duplicate -e option");
                 return -1;
             }
             cli->execute = true;
             break;
         case 'l':
             if (cli->list) {
-                snj_errorf(error, error_size, "duplicate -l option");
+                snag_errorf(error, error_size, "duplicate -l option");
                 return -1;
             }
             cli->list = true;
@@ -229,7 +229,7 @@ parse_short(struct snj_cli *cli, int argc, char **argv, int *index,
                 return -1;
             break;
         default:
-            snj_errorf(error, error_size, "unknown option -%c", flag);
+            snag_errorf(error, error_size, "unknown option -%c", flag);
             errno = EINVAL;
             return -1;
         }
@@ -242,30 +242,30 @@ bounded_preference(const char *value, size_t max)
 {
     size_t len = strlen(value);
     return len != 0u && len < max &&
-           snj_utf8_valid((const unsigned char *)value, len, true);
+           snag_utf8_valid((const unsigned char *)value, len, true);
 }
 
 static int
-read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
+read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
 {
-    struct snj_buf prompt;
+    struct snag_buf prompt;
     unsigned char chunk[4096];
 
     if (isatty(STDIN_FILENO) == 1) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "-e requires a prompt after -- or non-terminal stdin");
         errno = EINVAL;
         return -1;
     }
-    snj_buf_init(&prompt, SNJ_MAX_DIRECT_PROMPT + 2u);
+    snag_buf_init(&prompt, SNAG_MAX_DIRECT_PROMPT + 2u);
     for (;;) {
         ssize_t got = read(STDIN_FILENO, chunk, sizeof(chunk));
 
         if (got > 0) {
-            if (snj_buf_append(&prompt, chunk, (size_t)got) < 0) {
-                snj_errorf(error, error_size,
+            if (snag_buf_append(&prompt, chunk, (size_t)got) < 0) {
+                snag_errorf(error, error_size,
                           "stdin prompt is invalid or exceeds 1 MiB");
-                snj_buf_free(&prompt);
+                snag_buf_free(&prompt);
                 return -1;
             }
             continue;
@@ -273,8 +273,8 @@ read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
         if (got < 0 && errno == EINTR)
             continue;
         if (got < 0) {
-            snj_errorf(error, error_size, "stdin prompt could not be read");
-            snj_buf_free(&prompt);
+            snag_errorf(error, error_size, "stdin prompt could not be read");
+            snag_buf_free(&prompt);
             return -1;
         }
         break;
@@ -284,12 +284,12 @@ read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
         if (prompt.len != 0u && prompt.data[prompt.len - 1u] == '\r')
             --prompt.len;
     }
-    if (prompt.len == 0u || prompt.len > SNJ_MAX_DIRECT_PROMPT ||
-        !snj_utf8_valid(prompt.data, prompt.len, true) ||
-        snj_buf_terminate(&prompt) < 0) {
-        snj_errorf(error, error_size,
+    if (prompt.len == 0u || prompt.len > SNAG_MAX_DIRECT_PROMPT ||
+        !snag_utf8_valid(prompt.data, prompt.len, true) ||
+        snag_buf_terminate(&prompt) < 0) {
+        snag_errorf(error, error_size,
                   "stdin prompt is empty, invalid, or exceeds 1 MiB");
-        snj_buf_free(&prompt);
+        snag_buf_free(&prompt);
         errno = EINVAL;
         return -1;
     }
@@ -298,13 +298,13 @@ read_execute_prompt(struct snj_cli *cli, char *error, size_t error_size)
 }
 
 static int
-parse_auth_command(struct snj_cli *cli, int argc, char **argv, int first,
+parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first,
                     char *error, size_t error_size)
 {
-    cli->auth_command = strcmp(argv[first], "logout") == 0 ? SNJ_CLI_LOGOUT : SNJ_CLI_LOGIN;
-    if (cli->auth_command == SNJ_CLI_LOGIN && first + 1 < argc &&
+    cli->auth_command = strcmp(argv[first], "logout") == 0 ? SNAG_CLI_LOGOUT : SNAG_CLI_LOGIN;
+    if (cli->auth_command == SNAG_CLI_LOGIN && first + 1 < argc &&
         strcmp(argv[first + 1], "status") == 0) {
-        cli->auth_command = SNJ_CLI_LOGIN_STATUS;
+        cli->auth_command = SNAG_CLI_LOGIN_STATUS;
         ++first;
     }
     for (int i = first + 1; i < argc; ++i) {
@@ -313,7 +313,7 @@ parse_auth_command(struct snj_cli *cli, int argc, char **argv, int first,
         else if (strcmp(argv[i], "--with-api-key") == 0 && !cli->with_api_key)
             cli->with_api_key = true;
         else if (argv[i][0] != '-' && !cli->auth_provider)
-            cli->auth_provider = snj_strdup_checked(argv[i], SNJ_CONFIG_PROVIDER_NAME_MAX);
+            cli->auth_provider = snag_strdup_checked(argv[i], SNAG_CONFIG_PROVIDER_NAME_MAX);
         else
             goto invalid;
         if (argv[i][0] != '-' && !cli->auth_provider)
@@ -322,16 +322,16 @@ parse_auth_command(struct snj_cli *cli, int argc, char **argv, int first,
     if (cli->list || cli->last || cli->all || cli->irc_listen || cli->irc_client_count ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
         (cli->device_auth && cli->with_api_key) ||
-        (cli->auth_command != SNJ_CLI_LOGIN && (cli->device_auth || cli->with_api_key || cli->model || cli->effort)))
+        (cli->auth_command != SNAG_CLI_LOGIN && (cli->device_auth || cli->with_api_key || cli->model || cli->effort)))
         goto invalid;
     return 0;
 invalid:
-    snj_errorf(error, error_size, "invalid login/logout arguments; put common options before the command");
+    snag_errorf(error, error_size, "invalid login/logout arguments; put common options before the command");
     return -1;
 }
 
 int
-snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
+snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
               char *error, size_t error_size)
 {
     int i;
@@ -350,24 +350,24 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
             break;
         }
         if (strcmp(arg, "--last") == 0) {
-            if (cli->last) { snj_errorf(error, error_size, "duplicate --last option"); return -1; }
+            if (cli->last) { snag_errorf(error, error_size, "duplicate --last option"); return -1; }
             cli->last = true;
         } else if (strcmp(arg, "--all") == 0) {
-            if (cli->all) { snj_errorf(error, error_size, "duplicate --all option"); return -1; }
+            if (cli->all) { snag_errorf(error, error_size, "duplicate --all option"); return -1; }
             cli->all = true;
         } else if (strcmp(arg, "--resume") == 0) {
-            if (cli->resume) { snj_errorf(error, error_size, "duplicate --resume option"); return -1; }
+            if (cli->resume) { snag_errorf(error, error_size, "duplicate --resume option"); return -1; }
             cli->resume = true;
         } else if (strcmp(arg, "--no-color") == 0) {
-            if (set_color(cli, SNJ_CLI_COLOR_NEVER, "--no-color",
+            if (set_color(cli, SNAG_CLI_COLOR_NEVER, "--no-color",
                           error, error_size) < 0)
                 return -1;
         } else if (strcmp(arg, "--markdown") == 0) {
-            if (set_markdown(cli, SNJ_CLI_MARKDOWN_ENABLED, "--markdown",
+            if (set_markdown(cli, SNAG_CLI_MARKDOWN_ENABLED, "--markdown",
                              error, error_size) < 0)
                 return -1;
         } else if (strcmp(arg, "--no-markdown") == 0) {
-            if (set_markdown(cli, SNJ_CLI_MARKDOWN_DISABLED, "--no-markdown",
+            if (set_markdown(cli, SNAG_CLI_MARKDOWN_DISABLED, "--no-markdown",
                              error, error_size) < 0)
                 return -1;
         } else if (strcmp(arg, "--color") == 0) {
@@ -378,7 +378,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                 if (parse_color_value(cli, argv[++i], "--color",
                                       error, error_size) < 0)
                     return -1;
-            } else if (set_color(cli, SNJ_CLI_COLOR_ALWAYS, "--color",
+            } else if (set_color(cli, SNAG_CLI_COLOR_ALWAYS, "--color",
                                  error, error_size) < 0) {
                 return -1;
             }
@@ -390,7 +390,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                    strncmp(arg, "--client=", 9u) == 0) {
             const char *attached = arg[8] == '=' ? arg + 9u : NULL;
             if (attached && !*attached) {
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "--client= requires a nonempty endpoint");
                 errno = EINVAL;
                 return -1;
@@ -402,7 +402,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                    strncmp(arg, "--listen=", 9u) == 0) {
             const char *attached = arg[8] == '=' ? arg + 9u : NULL;
             if (attached && !*attached) {
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "--listen= requires a nonempty endpoint");
                 errno = EINVAL;
                 return -1;
@@ -465,7 +465,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                                    error, error_size) < 0)
                 return -1;
         } else if (arg[1] == '-') {
-            snj_errorf(error, error_size, "unknown option %s", arg);
+            snag_errorf(error, error_size, "unknown option %s", arg);
             return -1;
         } else if (parse_short(cli, argc, argv, &i, error, error_size) < 0) {
             return -1;
@@ -474,7 +474,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
     if ((cli->help || cli->version) &&
         (argc != 2 ||
          (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "-V") != 0))) {
-        snj_errorf(error, error_size, "-h and -V must stand alone");
+        snag_errorf(error, error_size, "-h and -V must stand alone");
         return -1;
     }
     if (cli->help || cli->version)
@@ -487,54 +487,54 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
                       cli->irc_listen ||
                       cli->irc_client_count || cli->irc_model_nick ||
                       cli->irc_operator_nick || cli->irc_room_name)) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "-l accepts only --config, --dotdir, --all, and color options");
         return -1;
     }
     if (cli->execute && (cli->irc_listen ||
                          cli->irc_client_count || cli->irc_model_nick ||
                          cli->irc_operator_nick || cli->irc_room_name)) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "-e cannot be combined with network options");
         return -1;
     }
     if ((cli->irc_listen || cli->irc_client_count) &&
         positional >= 0 && !dashdash && !cli->resume) {
-        snj_errorf(error, error_size,
+        snag_errorf(error, error_size,
                   "networked initial chat text must follow --");
         return -1;
     }
     if (cli->last && !cli->resume) {
-        snj_errorf(error, error_size, "--last requires --resume");
+        snag_errorf(error, error_size, "--last requires --resume");
         return -1;
     }
     if (cli->all && !cli->resume && !cli->list) {
-        snj_errorf(error, error_size, "--all requires --resume or -l");
+        snag_errorf(error, error_size, "--all requires --resume or -l");
         return -1;
     }
     if (cli->model && !bounded_preference(cli->model,
-                                          SNJ_CONFIG_MODEL_MAX)) {
-        snj_errorf(error, error_size,
+                                          SNAG_CONFIG_MODEL_MAX)) {
+        snag_errorf(error, error_size,
                   "model exceeds the supported structural bounds");
         return -1;
     }
     if (cli->effort && !bounded_preference(cli->effort,
-                                           SNJ_CONFIG_EFFORT_MAX)) {
-        snj_errorf(error, error_size,
+                                           SNAG_CONFIG_EFFORT_MAX)) {
+        snag_errorf(error, error_size,
                   "reasoning effort exceeds the supported structural bounds");
         return -1;
     }
     if (cli->resume) {
         if (positional >= 0 && !dashdash && !cli->last) {
-            cli->resume_id = snj_strdup_checked(argv[positional], SNJ_ID_HEX_LEN);
+            cli->resume_id = snag_strdup_checked(argv[positional], SNAG_ID_HEX_LEN);
             if (!cli->resume_id) {
-                snj_errorf(error, error_size, "session id is too long or unavailable");
+                snag_errorf(error, error_size, "session id is too long or unavailable");
                 return -1;
             }
             ++positional;
             if (positional < argc) {
                 if (strcmp(argv[positional], "--") != 0) {
-                    snj_errorf(error, error_size, "resume follow-up must follow --");
+                    snag_errorf(error, error_size, "resume follow-up must follow --");
                     return -1;
                 }
                 dashdash = true;
@@ -542,28 +542,28 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
             }
         }
         if (cli->last && positional >= 0 && !dashdash) {
-            snj_errorf(error, error_size, "--last cannot be combined with a session id");
+            snag_errorf(error, error_size, "--last cannot be combined with a session id");
             return -1;
         }
         if (cli->all && cli->resume_id) {
-            snj_errorf(error, error_size, "--all is invalid with an exact session id");
+            snag_errorf(error, error_size, "--all is invalid with an exact session id");
             return -1;
         }
         if (positional >= 0 && positional < argc) {
-            cli->prompt = snj_join_words(argv + positional, (size_t)(argc - positional),
-                                         SNJ_MAX_DIRECT_PROMPT);
+            cli->prompt = snag_join_words(argv + positional, (size_t)(argc - positional),
+                                         SNAG_MAX_DIRECT_PROMPT);
             if (!cli->prompt) {
-                snj_errorf(error, error_size, "prompt is invalid or exceeds 1 MiB");
+                snag_errorf(error, error_size, "prompt is invalid or exceeds 1 MiB");
                 return -1;
             }
         }
     } else if (!cli->list && positional >= 0 && positional < argc) {
         if (cli->execute && !dashdash) {
-            snj_errorf(error, error_size, "-e requires -- before its prompt");
+            snag_errorf(error, error_size, "-e requires -- before its prompt");
             return -1;
         }
-        cli->prompt = snj_join_words(argv + positional, (size_t)(argc - positional),
-                                     SNJ_MAX_DIRECT_PROMPT);
+        cli->prompt = snag_join_words(argv + positional, (size_t)(argc - positional),
+                                     SNAG_MAX_DIRECT_PROMPT);
         if (!cli->prompt)
             return -1;
     }
@@ -571,7 +571,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
         read_execute_prompt(cli, error, error_size) < 0)
         return -1;
     if (cli->execute && !*cli->prompt) {
-        snj_errorf(error, error_size, "-e requires a nonempty prompt");
+        snag_errorf(error, error_size, "-e requires a nonempty prompt");
         return -1;
     }
     cli->prompt_after_dashdash = dashdash;
@@ -579,7 +579,7 @@ snj_cli_parse(struct snj_cli *cli, int argc, char **argv,
 }
 
 void
-snj_cli_usage(int fd)
+snag_cli_usage(int fd)
 {
     static const char text[] =
         "usage: " SNAJPAGENT_NAME " [OPTIONS] [--] [INITIAL PROMPT...]\n"
@@ -612,5 +612,5 @@ snj_cli_usage(int fd)
         "  -l                           list sessions\n"
         "  -h                           show this help\n"
         "  -V                           show version\n";
-    (void)snj_write_full(fd, text, sizeof(text) - 1u);
+    (void)snag_write_full(fd, text, sizeof(text) - 1u);
 }

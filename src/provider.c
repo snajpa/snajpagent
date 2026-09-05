@@ -15,7 +15,7 @@
 #include <curl/curl.h>
 #include <errno.h>
 #include <poll.h>
-#include "snj_jansson.h"
+#include "snag_jansson.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,18 +25,18 @@
 #include <unistd.h>
 
 struct provider_ctx {
-    struct snj_sse_parser sse;
-    struct snj_responses_stream stream;
-    struct snj_buf body;
-    struct snj_buf error_body;
-    struct snj_secret_set secrets;
-    struct snj_credential credential;
+    struct snag_sse_parser sse;
+    struct snag_responses_stream stream;
+    struct snag_buf body;
+    struct snag_buf error_body;
+    struct snag_secret_set secrets;
+    struct snag_credential credential;
     struct curl_slist *headers;
     CURL *curl;
-    const struct snj_config *config;
-    const struct snj_provider_config *provider;
-    struct snj_ui *render;
-    snj_provider_pump_fn pump;
+    const struct snag_config *config;
+    const struct snag_provider_config *provider;
+    struct snag_ui *render;
+    snag_provider_pump_fn pump;
     void *pump_opaque;
     const char *accept;
     bool has_body;
@@ -49,7 +49,7 @@ struct provider_ctx {
     bool semantic_body_seen;
     bool request_may_have_been_sent;
     char error[256];
-    struct snj_provider_failure provider_failure;
+    struct snag_provider_failure provider_failure;
 };
 
 static void
@@ -63,7 +63,7 @@ stream_or_sse_error(struct provider_ctx *ctx, const char *sse_error,
                     const char *fallback)
 {
     if (ctx->stream.failed)
-        return snj_responses_stream_error(&ctx->stream);
+        return snag_responses_stream_error(&ctx->stream);
     if (sse_error && sse_error[0])
         return sse_error;
     return fallback;
@@ -89,7 +89,7 @@ strip_crlf(const char *input, size_t len, const unsigned char **out,
 }
 
 static int
-append_host_header(struct snj_buf *out, const char *base_url)
+append_host_header(struct snag_buf *out, const char *base_url)
 {
     const char *host;
     const char *end;
@@ -107,28 +107,28 @@ append_host_header(struct snj_buf *out, const char *base_url)
         end = host + strlen(host);
     if (end == host)
         return -1;
-    return snj_buf_append(out, "host: ", 6u) == 0 &&
-           snj_buf_append(out, host, (size_t)(end - host)) == 0 &&
-           snj_buf_terminate(out) == 0 ? 0 : -1;
+    return snag_buf_append(out, "host: ", 6u) == 0 &&
+           snag_buf_append(out, host, (size_t)(end - host)) == 0 &&
+           snag_buf_terminate(out) == 0 ? 0 : -1;
 }
 
 static int
-render_config_header(struct provider_ctx *ctx, struct snj_buf *redacted,
+render_config_header(struct provider_ctx *ctx, struct snag_buf *redacted,
                      const char *name, const char *value)
 {
-    struct snj_buf line;
+    struct snag_buf line;
     int rc = 0;
 
     if (!value[0])
         return 0;
-    snj_buf_init(&line, SNJ_WIRE_HEADER_MAX);
-    if (snj_buf_printf(&line, "%s: %s", name, value) < 0 ||
-        snj_wire_header_redact(line.data, line.len, &ctx->secrets.wire,
+    snag_buf_init(&line, SNAG_WIRE_HEADER_MAX);
+    if (snag_buf_printf(&line, "%s: %s", name, value) < 0 ||
+        snag_wire_header_redact(line.data, line.len, &ctx->secrets.wire,
                                redacted) < 0 ||
-        snj_ui_transport(ctx->render, '>', (const char *)redacted->data,
+        snag_ui_transport(ctx->render, '>', (const char *)redacted->data,
                              redacted->len) < 0)
         rc = -1;
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
@@ -136,35 +136,35 @@ static int
 render_request_headers(struct provider_ctx *ctx, const char *request_line,
                        const char *accept, bool has_body)
 {
-    struct snj_buf redacted;
-    struct snj_buf host;
-    struct snj_buf accept_line;
+    struct snag_buf redacted;
+    struct snag_buf host;
+    struct snag_buf accept_line;
     int rc = 0;
 
-    if (!snj_ui_enabled(ctx->render, SNJ_PRESENT_WIRE))
+    if (!snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE))
         return 0;
-    snj_buf_init(&redacted, SNJ_WIRE_HEADER_MAX);
-    snj_buf_init(&host, SNJ_CONFIG_URL_MAX + 8u);
-    snj_buf_init(&accept_line, SNJ_WIRE_HEADER_MAX);
+    snag_buf_init(&redacted, SNAG_WIRE_HEADER_MAX);
+    snag_buf_init(&host, SNAG_CONFIG_URL_MAX + 8u);
+    snag_buf_init(&accept_line, SNAG_WIRE_HEADER_MAX);
     if (append_host_header(&host, ctx->provider->base_url) < 0 ||
-        snj_buf_printf(&accept_line, "accept: %s", accept) < 0)
+        snag_buf_printf(&accept_line, "accept: %s", accept) < 0)
         goto fail;
-    if (snj_ui_transport(ctx->render, '>',
+    if (snag_ui_transport(ctx->render, '>',
                              request_line, strlen(request_line)) < 0 ||
-        snj_ui_transport(ctx->render, '>',
+        snag_ui_transport(ctx->render, '>',
                              (const char *)host.data, host.len) < 0 ||
-        snj_ui_transport(ctx->render, '>',
+        snag_ui_transport(ctx->render, '>',
                              (const char *)accept_line.data,
                              accept_line.len) < 0 ||
-        (has_body && snj_ui_transport(ctx->render, '>',
+        (has_body && snag_ui_transport(ctx->render, '>',
              "content-type: application/json",
              strlen("content-type: application/json")) < 0) ||
-        snj_wire_header_redact((const unsigned char *)"authorization: Bearer x",
+        snag_wire_header_redact((const unsigned char *)"authorization: Bearer x",
                                23u, &ctx->secrets.wire, &redacted) < 0 ||
-        snj_ui_transport(ctx->render, '>', (const char *)redacted.data,
+        snag_ui_transport(ctx->render, '>', (const char *)redacted.data,
                              redacted.len) < 0)
         rc = -1;
-    snj_buf_reset(&redacted);
+    snag_buf_reset(&redacted);
     if (rc == 0 &&
         render_config_header(ctx, &redacted, "HTTP-Referer",
                              ctx->provider->openrouter_referer) < 0)
@@ -177,9 +177,9 @@ render_request_headers(struct provider_ctx *ctx, const char *request_line,
 fail:
     rc = -1;
 out:
-    snj_buf_free(&accept_line);
-    snj_buf_free(&redacted);
-    snj_buf_free(&host);
+    snag_buf_free(&accept_line);
+    snag_buf_free(&redacted);
+    snag_buf_free(&host);
     return rc;
 }
 
@@ -194,7 +194,7 @@ count_write_cb(char *ptr, size_t size, size_t nmemb, void *opaque)
     len = size * nmemb;
     if (len == 0u)
         return 0u;
-    if (snj_buf_append(&ctx->error_body, ptr, len) < 0) {
+    if (snag_buf_append(&ctx->error_body, ptr, len) < 0) {
         ctx->body_failed = true;
         ctx_error(ctx, ctx->http_status >= 200 && ctx->http_status < 300 ?
                   "provider JSON response body exceeds diagnostic bound" :
@@ -211,7 +211,7 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
     const unsigned char *line;
     size_t len = size * nmemb;
     size_t clean_len;
-    struct snj_buf redacted;
+    struct snag_buf redacted;
     bool status_line;
 
     if (size && nmemb > SIZE_MAX / size)
@@ -226,31 +226,31 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
     if (clean_len > 12u && strncasecmp((const char *)line,
                                        "retry-after:", 12u) == 0) {
         uint32_t delay_ms;
-        if (snj_provider_retry_after_parse(line + 12u, clean_len - 12u,
+        if (snag_provider_retry_after_parse(line + 12u, clean_len - 12u,
                                            &delay_ms) == 0) {
             ctx->retry_after_present = true;
             ctx->retry_after_ms = delay_ms;
         }
     }
-    if (snj_ui_enabled(ctx->render, SNJ_PRESENT_WIRE)) {
+    if (snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE)) {
         if (status_line) {
             if (!ascii_printable(line, clean_len) ||
-                snj_ui_transport(ctx->render, '<', (const char *)line,
+                snag_ui_transport(ctx->render, '<', (const char *)line,
                                      clean_len) < 0) {
                 ctx_error(ctx, "HTTP status diagnostics could not be rendered");
                 return 0;
             }
         } else {
-            snj_buf_init(&redacted, SNJ_WIRE_HEADER_MAX);
-            if (snj_wire_header_redact(line, clean_len, &ctx->secrets.wire,
+            snag_buf_init(&redacted, SNAG_WIRE_HEADER_MAX);
+            if (snag_wire_header_redact(line, clean_len, &ctx->secrets.wire,
                                        &redacted) < 0 ||
-                snj_ui_transport(ctx->render, '<', (const char *)redacted.data,
+                snag_ui_transport(ctx->render, '<', (const char *)redacted.data,
                                      redacted.len) < 0) {
-                snj_buf_free(&redacted);
+                snag_buf_free(&redacted);
                 ctx_error(ctx, "HTTP header diagnostics could not be rendered");
                 return 0;
             }
-            snj_buf_free(&redacted);
+            snag_buf_free(&redacted);
         }
     }
     return len;
@@ -270,14 +270,14 @@ write_cb(char *ptr, size_t size, size_t nmemb, void *opaque)
         return 0u;
     if (ctx->http_status >= 200 && ctx->http_status < 300) {
         ctx->semantic_body_seen = true;
-        if (snj_sse_feed(&ctx->sse, ptr, len, error, sizeof(error)) < 0) {
+        if (snag_sse_feed(&ctx->sse, ptr, len, error, sizeof(error)) < 0) {
             (void)snprintf(ctx->error, sizeof(ctx->error), "%s",
                            stream_or_sse_error(ctx, error,
                                                "invalid provider SSE stream"));
             return 0;
         }
     } else {
-        if (snj_buf_append(&ctx->error_body, ptr, len) < 0) {
+        if (snag_buf_append(&ctx->error_body, ptr, len) < 0) {
             ctx->body_failed = true;
             ctx_error(ctx, "provider error body exceeds diagnostic bound");
             return 0;
@@ -319,7 +319,7 @@ perform_request(CURL *curl, struct provider_ctx *ctx)
         goto out;
     for (;;) {
         struct curl_waitfd wake = {
-            .fd = snj_ui_wake_fd(ctx->render), .events = CURL_WAIT_POLLIN
+            .fd = snag_ui_wake_fd(ctx->render), .events = CURL_WAIT_POLLIN
         };
         CURLMsg *message;
         int remaining;
@@ -347,7 +347,7 @@ out:
 }
 
 static int
-provider_endpoint_url(const struct snj_provider_config *provider,
+provider_endpoint_url(const struct snag_provider_config *provider,
                       const char *path,
                       char *buffer, size_t buffer_size, const char **url,
                       char *error, size_t error_size)
@@ -357,12 +357,12 @@ provider_endpoint_url(const struct snj_provider_config *provider,
     int written;
 
     if (!provider || !path || !url || !buffer || !buffer_size) {
-        snj_errorf(error, error_size, "invalid provider endpoint");
+        snag_errorf(error, error_size, "invalid provider endpoint");
         errno = EINVAL;
         return -1;
     }
     append_path = path;
-    if (provider->auth == SNJ_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
+    if (provider->auth == SNAG_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
         append_path = path + 3u;
     base_len = strlen(provider->base_url);
     while (base_len && provider->base_url[base_len - 1u] == '/')
@@ -374,7 +374,7 @@ provider_endpoint_url(const struct snj_provider_config *provider,
     written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len,
                        provider->base_url, append_path);
     if (written <= 0 || (size_t)written >= buffer_size) {
-        snj_errorf(error, error_size, "provider endpoint is too long");
+        snag_errorf(error, error_size, "provider endpoint is too long");
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -385,7 +385,7 @@ provider_endpoint_url(const struct snj_provider_config *provider,
         if (!base || !*base)
             return 0;
         append_path = path;
-        if (provider->auth == SNJ_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
+        if (provider->auth == SNAG_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
             append_path = path + 3u;
         base_len = strlen(base);
         while (base_len && base[base_len - 1u] == '/')
@@ -396,7 +396,7 @@ provider_endpoint_url(const struct snj_provider_config *provider,
         written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len,
                            base, append_path);
         if (written <= 0 || (size_t)written >= buffer_size) {
-            snj_errorf(error, error_size, "test provider endpoint is too long");
+            snag_errorf(error, error_size, "test provider endpoint is too long");
             errno = ENAMETOOLONG;
             return -1;
         }
@@ -409,20 +409,20 @@ provider_endpoint_url(const struct snj_provider_config *provider,
 static size_t
 receive_body(char *data, size_t size, size_t count, void *opaque)
 {
-    struct snj_buf *buf = opaque;
+    struct snag_buf *buf = opaque;
     if (size && count > SIZE_MAX / size)
         return 0;
     size *= count;
-    return snj_buf_append(buf, data, size) == 0 ? size : 0;
+    return snag_buf_append(buf, data, size) == 0 ? size : 0;
 }
 
 int
-snj_provider_auth_post(const char *issuer, const char *path, const char *type, const void *body, size_t size,
-           json_t **response, long *status, snj_provider_pump_fn pump, void *opaque,
+snag_provider_auth_post(const char *issuer, const char *path, const char *type, const void *body, size_t size,
+           json_t **response, long *status, snag_provider_pump_fn pump, void *opaque,
            char *error, size_t error_size)
 {
     char url[4096], header[96], parse_error[128];
-    struct snj_buf output;
+    struct snag_buf output;
     struct curl_slist *headers = NULL;
     CURL *curl = NULL;
     CURLM *multi = NULL;
@@ -432,7 +432,7 @@ snj_provider_auth_post(const char *issuer, const char *path, const char *type, c
 
     *response = NULL;
     *status = 0;
-    snj_buf_init(&output, (96u * 1024u));
+    snag_buf_init(&output, (96u * 1024u));
     if (snprintf(url, sizeof(url), "%s%s", issuer, path) >= (int)sizeof(url) ||
         curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
         goto out;
@@ -460,7 +460,7 @@ snj_provider_auth_post(const char *issuer, const char *path, const char *type, c
     do {
         if (pump && pump(opaque, 0u) != 0) {
             errno = ECANCELED;
-            snj_errorf(error, error_size, "login or token refresh cancelled");
+            snag_errorf(error, error_size, "login or token refresh cancelled");
             goto out;
         }
         if (curl_multi_perform(multi, &running) != CURLM_OK)
@@ -473,10 +473,10 @@ snj_provider_auth_post(const char *issuer, const char *path, const char *type, c
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status) != CURLE_OK)
         goto out;
     if (*status >= 200 && *status < 300) {
-        *response = snj_json_load_strict(output.data, output.len, (96u * 1024u),
+        *response = snag_json_load_strict(output.data, output.len, (96u * 1024u),
                                         parse_error, sizeof(parse_error));
         if (!json_is_object(*response)) {
-            snj_errorf(error, error_size, "authentication server returned an invalid response");
+            snag_errorf(error, error_size, "authentication server returned an invalid response");
             goto out;
         }
     }
@@ -493,12 +493,12 @@ out:
         curl_global_cleanup();
     if (output.data)
         memset(output.data, 0, output.len);
-    snj_buf_free(&output);
+    snag_buf_free(&output);
     if (rc < 0) {
-        snj_auth_json_free(*response);
+        snag_auth_json_free(*response);
         *response = NULL;
         if (!error[0])
-            snj_errorf(error, error_size, "authentication request failed (response details withheld)");
+            snag_errorf(error, error_size, "authentication request failed (response details withheld)");
     }
     return rc;
 }
@@ -515,20 +515,20 @@ append_header(struct curl_slist **headers, const char *text)
 
 static int
 append_authorization(struct curl_slist **headers,
-                     const struct snj_credential *credential)
+                     const struct snag_credential *credential)
 {
-    struct snj_buf line;
+    struct snag_buf line;
     int rc;
 
-    snj_buf_init(&line, SNJ_CREDENTIAL_MAX + 32u);
-    rc = snj_buf_append(&line, "Authorization: Bearer ", 22u);
+    snag_buf_init(&line, SNAG_CREDENTIAL_MAX + 32u);
+    rc = snag_buf_append(&line, "Authorization: Bearer ", 22u);
     if (rc == 0)
-        rc = snj_buf_append(&line, credential->value, credential->len);
+        rc = snag_buf_append(&line, credential->value, credential->len);
     if (rc == 0)
-        rc = snj_buf_terminate(&line);
+        rc = snag_buf_terminate(&line);
     if (rc == 0)
         rc = append_header(headers, (const char *)line.data);
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
@@ -536,23 +536,23 @@ static int
 append_named_header(struct curl_slist **headers, const char *name,
                     const char *value)
 {
-    struct snj_buf line;
+    struct snag_buf line;
     int rc;
 
     if (!value[0])
         return 0;
-    snj_buf_init(&line, SNJ_WIRE_HEADER_MAX);
-    rc = snj_buf_printf(&line, "%s: %s", name, value);
+    snag_buf_init(&line, SNAG_WIRE_HEADER_MAX);
+    rc = snag_buf_printf(&line, "%s: %s", name, value);
     if (rc == 0)
         rc = append_header(headers, (const char *)line.data);
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 static int
 append_provider_headers(struct curl_slist **headers,
-                        const struct snj_provider_config *provider,
-                        const struct snj_credential *credential)
+                        const struct snag_provider_config *provider,
+                        const struct snag_credential *credential)
 {
     return append_authorization(headers, credential) == 0 &&
            append_named_header(headers, "ChatGPT-Account-Id",
@@ -583,7 +583,7 @@ begin_attempt(struct provider_ctx *ctx)
     ctx->body_failed = false;
     ctx->semantic_body_seen = false;
     ctx->error[0] = '\0';
-    snj_buf_reset(&ctx->error_body);
+    snag_buf_reset(&ctx->error_body);
 }
 
 static bool
@@ -611,33 +611,33 @@ static int
 retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
            const char *reason, char *error, size_t error_size)
 {
-    uint32_t delay_ms = snj_provider_retry_delay_ms(retries_done,
+    uint32_t delay_ms = snag_provider_retry_delay_ms(retries_done,
         ctx->retry_after_present, ctx->retry_after_ms);
-    uint64_t deadline = snj_monotonic_ms() + delay_ms;
+    uint64_t deadline = snag_monotonic_ms() + delay_ms;
 
     if (ctx->render) {
         char line[160];
         (void)snprintf(line, sizeof(line),
                        "provider retry %u/%u after %s in %llums",
-                       retries_done + 1u, SNJ_PROVIDER_MAX_RETRIES,
+                       retries_done + 1u, SNAG_PROVIDER_MAX_RETRIES,
                        reason, (unsigned long long)delay_ms);
-        if (snj_ui_text(ctx->render, SNJ_UI_WARNING, line) < 0) {
-            snj_errorf(error, error_size, "provider retry diagnostics could not be rendered");
+        if (snag_ui_text(ctx->render, SNAG_UI_WARNING, line) < 0) {
+            snag_errorf(error, error_size, "provider retry diagnostics could not be rendered");
             errno = EIO;
             return -1;
         }
     }
     for (;;) {
-        uint64_t now = snj_monotonic_ms();
+        uint64_t now = snag_monotonic_ms();
         uint64_t remaining = now < deadline ? deadline - now : 0u;
         uint32_t slice = remaining > 25u ? 25u : (uint32_t)remaining;
-        struct pollfd wake = {snj_ui_wake_fd(ctx->render), POLLIN, 0};
+        struct pollfd wake = {snag_ui_wake_fd(ctx->render), POLLIN, 0};
         if (!remaining)
             break;
         if (ctx->pump) {
             int rc = ctx->pump(ctx->pump_opaque, 0u);
             if (rc < 0) {
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "active input could not be processed during provider retry");
                 errno = EIO;
                 return -1;
@@ -648,7 +648,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
             }
         }
         if (poll(&wake, 1u, (int)slice) < 0 && errno != EINTR) {
-            snj_errorf(error, error_size, "provider retry wait failed");
+            snag_errorf(error, error_size, "provider retry wait failed");
             return -1;
         }
     }
@@ -661,7 +661,7 @@ retryable_attempt(struct provider_ctx *ctx, CURLcode code)
     if (ctx->body_failed)
         return false;
     if (code == CURLE_OK)
-        return snj_provider_http_status_retryable(ctx->http_status);
+        return snag_provider_http_status_retryable(ctx->http_status);
     if (code == CURLE_ABORTED_BY_CALLBACK)
         return false;
     return curl_code_retryable(code, ctx->semantic_body_seen);
@@ -701,7 +701,7 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx,
                 *cancel_code = ctx->cancel_code;
             break;
         }
-        if (retries >= SNJ_PROVIDER_MAX_RETRIES ||
+        if (retries >= SNAG_PROVIDER_MAX_RETRIES ||
             !retryable_attempt(ctx, code))
             break;
         {
@@ -749,25 +749,25 @@ append_retry_suffix(char *error, size_t error_size,
 static int
 classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
 {
-    struct snj_buf redacted;
+    struct snag_buf redacted;
     char json_error[128] = {0};
     int rc;
 
     if (ctx->body_failed) {
-        snj_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                   "provider error body could not be retained");
         errno = EOVERFLOW;
         return -1;
     }
-    snj_buf_init(&redacted, SNJ_WIRE_BODY_MAX);
+    snag_buf_init(&redacted, SNAG_WIRE_BODY_MAX);
     if (ctx->error_body.len) {
-        json_t *root = snj_json_load_strict(ctx->error_body.data,
+        json_t *root = snag_json_load_strict(ctx->error_body.data,
                                             ctx->error_body.len,
-                                            SNJ_WIRE_BODY_MAX,
+                                            SNAG_WIRE_BODY_MAX,
                                             json_error,
                                             sizeof(json_error));
         if (root) {
-            if (snj_provider_failure_from_json(root,
+            if (snag_provider_failure_from_json(root,
                                                &ctx->provider_failure) < 0)
                 memset(&ctx->provider_failure, 0,
                        sizeof(ctx->provider_failure));
@@ -775,11 +775,11 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
         }
         json_error[0] = '\0';
     }
-    rc = snj_wire_json_redact(ctx->error_body.data, ctx->error_body.len,
+    rc = snag_wire_json_redact(ctx->error_body.data, ctx->error_body.len,
                               &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));
-    if (rc == 0 && snj_ui_enabled(ctx->render, SNJ_PRESENT_PROTOCOL))
-        (void)snj_ui_protocol(ctx->render, "response.error.body",
+    if (rc == 0 && snag_ui_enabled(ctx->render, SNAG_PRESENT_PROTOCOL))
+        (void)snag_ui_protocol(ctx->render, "response.error.body",
                                   (const char *)redacted.data, redacted.len);
     if (ctx->error_body.len) {
         if (rc == 0)
@@ -794,7 +794,7 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
     } else {
         (void)snprintf(error, error_size, "provider HTTP %ld", ctx->http_status);
     }
-    snj_buf_free(&redacted);
+    snag_buf_free(&redacted);
     errno = EIO;
     return -1;
 }
@@ -810,13 +810,13 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
     int rc = -1;
 
     if (ctx->body_failed) {
-        snj_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                   "input-token count body could not be retained");
         errno = EOVERFLOW;
         return -1;
     }
-    root = snj_json_load_strict(ctx->error_body.data, ctx->error_body.len,
-                                SNJ_WIRE_BODY_MAX, json_error,
+    root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
+                                SNAG_WIRE_BODY_MAX, json_error,
                                 sizeof(json_error));
     if (!root) {
         (void)snprintf(error, error_size,
@@ -824,11 +824,11 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
         errno = EPROTO;
         return -1;
     }
-    object = snj_json_string(root, "object");
-    if (!snj_json_exact_keys(root, keys, sizeof(keys) / sizeof(keys[0])) ||
+    object = snag_json_string(root, "object");
+    if (!snag_json_exact_keys(root, keys, sizeof(keys) / sizeof(keys[0])) ||
         !object || strcmp(object, "response.input_tokens") != 0 ||
-        snj_json_integer_u64(root, "input_tokens", input_tokens) < 0) {
-        snj_errorf(error, error_size,
+        snag_json_integer_u64(root, "input_tokens", input_tokens) < 0) {
+        snag_errorf(error, error_size,
                   "input-token count response has an invalid shape");
         errno = EPROTO;
         goto out;
@@ -845,7 +845,7 @@ parse_compact_body(struct provider_ctx *ctx, json_t **output,
                    char *error, size_t error_size)
 {
     char json_error[128] = {0};
-    char output_hash[SNJ_SHA256_HEX_LEN + 1u];
+    char output_hash[SNAG_SHA256_HEX_LEN + 1u];
     size_t output_bytes = 0u;
     json_t *root;
     json_t *body_output;
@@ -857,13 +857,13 @@ parse_compact_body(struct provider_ctx *ctx, json_t **output,
     if (output_tokens_bound)
         *output_tokens_bound = 0u;
     if (ctx->body_failed) {
-        snj_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                   "compact response body could not be retained");
         errno = EOVERFLOW;
         return -1;
     }
-    root = snj_json_load_strict(ctx->error_body.data, ctx->error_body.len,
-                                SNJ_CONTEXT_MAX_COMPACT, json_error,
+    root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
+                                SNAG_CONTEXT_MAX_COMPACT, json_error,
                                 sizeof(json_error));
     if (!root) {
         (void)snprintf(error, error_size,
@@ -871,27 +871,27 @@ parse_compact_body(struct provider_ctx *ctx, json_t **output,
         errno = EPROTO;
         return -1;
     }
-    object = snj_json_string(root, "object");
+    object = snag_json_string(root, "object");
     body_output = json_object_get(root, "output");
     if (!object || strcmp(object, "response.compaction") != 0 ||
-        snj_context_compact_output_valid(body_output, output_hash,
+        snag_context_compact_output_valid(body_output, output_hash,
                                          &output_bytes,
                                          error, error_size) < 0) {
         if (error && !error[0])
-            snj_errorf(error, error_size,
+            snag_errorf(error, error_size,
                       "compact response has an invalid shape");
         errno = EPROTO;
         goto out;
     }
     if (!output || !output_tokens_bound ||
         output_bytes > (size_t)UINT64_MAX) {
-        snj_errorf(error, error_size, "invalid compact response destination");
+        snag_errorf(error, error_size, "invalid compact response destination");
         errno = EINVAL;
         goto out;
     }
     *output = json_deep_copy(body_output);
     if (!*output) {
-        snj_errorf(error, error_size, "compact output could not be retained");
+        snag_errorf(error, error_size, "compact output could not be retained");
         errno = ENOMEM;
         goto out;
     }
@@ -902,11 +902,11 @@ out:
     return rc;
 }
 
-#define SNJ_PROVIDER_MODELS_MAX 4096u
-#define SNJ_PROVIDER_EFFORTS_MAX 32u
-#define SNJ_CODEX_CATALOG_CLIENT_VERSION "0.146.0"
-#define SNJ_CODEX_CATALOG_PATH \
-    "/models?client_version=" SNJ_CODEX_CATALOG_CLIENT_VERSION
+#define SNAG_PROVIDER_MODELS_MAX 4096u
+#define SNAG_PROVIDER_EFFORTS_MAX 32u
+#define SNAG_CODEX_CATALOG_CLIENT_VERSION "0.146.0"
+#define SNAG_CODEX_CATALOG_PATH \
+    "/models?client_version=" SNAG_CODEX_CATALOG_CLIENT_VERSION
 
 struct codex_model_ref {
     const json_t *model;
@@ -957,7 +957,7 @@ collect_limits(const json_t *const *objects, size_t object_count,
         for (size_t j = 0; j < key_count; ++j)
             if (merge_limit(objects[i], keys[j].key,
                     keys[j].field == LIMIT_EFFECTIVE ? 100u :
-                    SNJ_CONFIG_TOKEN_LIMIT_MAX, &limits[keys[j].field]) < 0)
+                    SNAG_CONFIG_TOKEN_LIMIT_MAX, &limits[keys[j].field]) < 0)
                 return -1;
     return 0;
 }
@@ -966,7 +966,7 @@ static int
 set_optional_limit(json_t *limits, const char *key,
                    const struct optional_limit *value)
 {
-    return snj_json_set_new(limits, key,
+    return snag_json_set_new(limits, key,
         value->known ? json_integer((json_int_t)value->value) : json_null());
 }
 
@@ -1071,7 +1071,7 @@ bounded_utf8_string(const json_t *value, size_t max, const char **out)
     text = json_string_value(value);
     len = json_string_length(value);
     if (!text || !len || len > max || strlen(text) != len ||
-        !snj_utf8_valid((const unsigned char *)text, len, true))
+        !snag_utf8_valid((const unsigned char *)text, len, true))
         return false;
     *out = text;
     return true;
@@ -1083,7 +1083,7 @@ append_efforts(json_t *out, const json_t *source, bool codex)
     if (!source)
         return 0;
     if (!json_is_array(source) ||
-        json_array_size(source) > SNJ_PROVIDER_EFFORTS_MAX)
+        json_array_size(source) > SNAG_PROVIDER_EFFORTS_MAX)
         return -1;
     for (size_t i = 0; i < json_array_size(source); ++i) {
         json_t *value = json_array_get(source, i);
@@ -1094,7 +1094,7 @@ append_efforts(json_t *out, const json_t *source, bool codex)
             value = json_object_get(value, "effort");
         else if (codex)
             return -1;
-        if (!bounded_utf8_string(value, SNJ_CONFIG_EFFORT_MAX - 1u,
+        if (!bounded_utf8_string(value, SNAG_CONFIG_EFFORT_MAX - 1u,
                                  &effort))
             return -1;
         for (size_t j = 0; j < json_array_size(out); ++j)
@@ -1121,10 +1121,10 @@ append_model(json_t *out, const json_t *source, bool codex)
 
     if (!json_is_object(source) ||
         !bounded_utf8_string(json_object_get(source, codex ? "slug" : "id"),
-                             SNJ_CONFIG_MODEL_MAX - 1u, &id))
+                             SNAG_CONFIG_MODEL_MAX - 1u, &id))
         return -1;
     for (size_t i = 0; i < json_array_size(out); ++i) {
-        const char *existing = snj_json_string(json_array_get(out, i), "id");
+        const char *existing = snag_json_string(json_array_get(out, i), "id");
         if (existing && strcmp(existing, id) == 0)
             return 0;
     }
@@ -1141,7 +1141,7 @@ append_model(json_t *out, const json_t *source, bool codex)
         if (!value && metadata)
             value = json_object_get(metadata, "default_reasoning_level");
         if (value && !json_is_null(value) &&
-            !bounded_utf8_string(value, SNJ_CONFIG_EFFORT_MAX - 1u,
+            !bounded_utf8_string(value, SNAG_CONFIG_EFFORT_MAX - 1u,
                                  &default_effort))
             return -1;
     }
@@ -1165,18 +1165,18 @@ append_model(json_t *out, const json_t *source, bool codex)
         if (!supported)
             goto fail;
     }
-    if (snj_json_set_new(entry, "default_effort",
+    if (snag_json_set_new(entry, "default_effort",
                          default_effort ? json_string(default_effort) :
                                           json_null()) < 0)
         goto fail;
-    if (snj_json_set_new(entry, "efforts", efforts) < 0) {
+    if (snag_json_set_new(entry, "efforts", efforts) < 0) {
         efforts = NULL;
         goto fail;
     }
     efforts = NULL;
-    if (snj_json_set_new(entry, "id", json_string(id)) < 0)
+    if (snag_json_set_new(entry, "id", json_string(id)) < 0)
         goto fail;
-    if (snj_json_set_new(entry, "limits", limits) < 0) {
+    if (snag_json_set_new(entry, "limits", limits) < 0) {
         limits = NULL;
         goto fail;
     }
@@ -1226,12 +1226,12 @@ decode_models(const unsigned char *data, size_t len, bool codex,
     if (models)
         *models = NULL;
     if (!data || !len || !models) {
-        snj_errorf(error, error_size, "invalid model catalog source");
+        snag_errorf(error, error_size, "invalid model catalog source");
         errno = EINVAL;
         return -1;
     }
-    root = snj_json_load_strict(data, len,
-                                SNJ_WIRE_BODY_MAX, json_error,
+    root = snag_json_load_strict(data, len,
+                                SNAG_WIRE_BODY_MAX, json_error,
                                 sizeof(json_error));
     if (!root || !json_is_object(root)) {
         (void)snprintf(error, error_size, "invalid model-list response: %s",
@@ -1241,8 +1241,8 @@ decode_models(const unsigned char *data, size_t len, bool codex,
     }
     source = json_object_get(root, codex ? "models" : "data");
     if (!json_is_array(source) ||
-        json_array_size(source) > SNJ_PROVIDER_MODELS_MAX) {
-        snj_errorf(error, error_size,
+        json_array_size(source) > SNAG_PROVIDER_MODELS_MAX) {
+        snag_errorf(error, error_size,
                   "model-list response has no bounded models array");
         errno = EPROTO;
         goto out;
@@ -1264,17 +1264,17 @@ decode_models(const unsigned char *data, size_t len, bool codex,
             json_t *priority;
 
             if (!json_is_object(model)) {
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "model-list response contains an invalid model entry");
                 errno = EPROTO;
                 goto out;
             }
-            visibility = snj_json_string(model, "visibility");
+            visibility = snag_json_string(model, "visibility");
             if (!visibility || strcmp(visibility, "list") != 0)
                 continue;
             priority = json_object_get(model, "priority");
             if (!json_is_integer(priority)) {
-                snj_errorf(error, error_size,
+                snag_errorf(error, error_size,
                           "model-list response contains an invalid model entry");
                 errno = EPROTO;
                 goto out;
@@ -1289,7 +1289,7 @@ decode_models(const unsigned char *data, size_t len, bool codex,
     for (size_t i = 0; i < (codex ? ref_count : json_array_size(source)); ++i)
         if (append_model(out, codex ? refs[i].model : json_array_get(source, i),
                          codex) < 0) {
-            snj_errorf(error, error_size,
+            snag_errorf(error, error_size,
                       "model-list response contains an invalid model entry");
             errno = EPROTO;
             goto out;
@@ -1311,7 +1311,7 @@ parse_models_body(struct provider_ctx *ctx, bool codex, json_t **models,
                   char *error, size_t error_size)
 {
     if (ctx->body_failed) {
-        snj_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                   "model-list response body exceeds the supported limit");
         errno = EOVERFLOW;
         return -1;
@@ -1321,7 +1321,7 @@ parse_models_body(struct provider_ctx *ctx, bool codex, json_t **models,
 }
 
 static bool
-provider_uses_codex_catalog(const struct snj_provider_config *provider)
+provider_uses_codex_catalog(const struct snag_provider_config *provider)
 {
     static const char suffix[] = "/backend-api/codex";
     const char *authority = strstr(provider->base_url, "://");
@@ -1339,7 +1339,7 @@ provider_uses_codex_catalog(const struct snj_provider_config *provider)
 }
 
 const char *
-snj_provider_catalog_protocol(const struct snj_provider_config *provider)
+snag_provider_catalog_protocol(const struct snag_provider_config *provider)
 {
     if (!provider)
         return NULL;
@@ -1356,10 +1356,10 @@ url_request_target(const char *url)
 }
 
 static void
-provider_ctx_init(struct provider_ctx *ctx, const struct snj_config *config,
-                  const struct snj_provider_config *provider,
-                  const struct snj_credential *credential,
-                  struct snj_ui *render, snj_provider_pump_fn pump,
+provider_ctx_init(struct provider_ctx *ctx, const struct snag_config *config,
+                  const struct snag_provider_config *provider,
+                  const struct snag_credential *credential,
+                  struct snag_ui *render, snag_provider_pump_fn pump,
                   void *pump_opaque, size_t body_max, size_t response_max)
 {
     memset(ctx, 0, sizeof(*ctx));
@@ -1369,9 +1369,9 @@ provider_ctx_init(struct provider_ctx *ctx, const struct snj_config *config,
     ctx->pump = pump;
     ctx->pump_opaque = pump_opaque;
     ctx->credential = *credential;
-    snj_secret_set_build(&ctx->secrets, config, &ctx->credential);
-    snj_buf_init(&ctx->body, body_max);
-    snj_buf_init(&ctx->error_body, response_max);
+    snag_secret_set_build(&ctx->secrets, config, &ctx->credential);
+    snag_buf_init(&ctx->body, body_max);
+    snag_buf_init(&ctx->error_body, response_max);
 }
 
 static void
@@ -1382,11 +1382,11 @@ provider_ctx_free(struct provider_ctx *ctx)
     curl_slist_free_all(ctx->headers);
     if (ctx->curl_global)
         curl_global_cleanup();
-    snj_buf_free(&ctx->body);
-    snj_buf_free(&ctx->error_body);
-    snj_sse_free(&ctx->sse);
-    snj_responses_stream_free(&ctx->stream);
-    snj_credential_clear(&ctx->credential);
+    snag_buf_free(&ctx->body);
+    snag_buf_free(&ctx->error_body);
+    snag_sse_free(&ctx->sse);
+    snag_responses_stream_free(&ctx->stream);
+    snag_credential_clear(&ctx->credential);
 }
 
 static int
@@ -1417,28 +1417,28 @@ request_auth_headers(struct provider_ctx *ctx)
 
 static int
 provider_request_setup(struct provider_ctx *ctx,
-                       const struct snj_credential *credential,
+                       const struct snag_credential *credential,
                        const char *path, const char *accept,
                        const json_t *request, const char *body_error,
                        size_t (*write_fn)(char *, size_t, size_t, void *),
                        char *error, size_t error_size)
 {
-    char url[SNJ_CONFIG_URL_MAX + 64u];
-    char request_line[SNJ_CONFIG_URL_MAX + 96u];
+    char url[SNAG_CONFIG_URL_MAX + 64u];
+    char request_line[SNAG_CONFIG_URL_MAX + 96u];
     const char *endpoint;
     bool has_body = request != NULL;
     int written;
 
     ctx->accept = accept;
     ctx->has_body = has_body;
-    if (ctx->provider->auth != SNJ_AUTH_ENV && credential->root_fd >= 0 &&
-        snj_auth_read(credential->root_fd, ctx->provider, false, NULL,
+    if (ctx->provider->auth != SNAG_AUTH_ENV && credential->root_fd >= 0 &&
+        snag_auth_read(credential->root_fd, ctx->provider, false, NULL,
                       &ctx->credential, auth_pump, ctx,
                       error, error_size) < 0)
         return -1;
-    snj_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
-    if (has_body && snj_json_canonical(request, &ctx->body) < 0) {
-        snj_errorf(error, error_size, "%s", body_error);
+    snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
+    if (has_body && snag_json_canonical(request, &ctx->body) < 0) {
+        snag_errorf(error, error_size, "%s", body_error);
         return -1;
     }
     if (provider_endpoint_url(ctx->provider, path, url, sizeof(url), &endpoint,
@@ -1448,28 +1448,28 @@ provider_request_setup(struct provider_ctx *ctx,
                        has_body ? "POST" : "GET",
                        url_request_target(endpoint));
     if (written <= 0 || (size_t)written >= sizeof(request_line)) {
-        snj_errorf(error, error_size, "provider request line is too long");
+        snag_errorf(error, error_size, "provider request line is too long");
         errno = ENAMETOOLONG;
         return -1;
     }
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
-        snj_errorf(error, error_size, "libcurl could not initialize");
+        snag_errorf(error, error_size, "libcurl could not initialize");
         errno = EIO;
         return -1;
     }
     ctx->curl_global = true;
     ctx->curl = curl_easy_init();
     if (!ctx->curl) {
-        snj_errorf(error, error_size, "libcurl easy handle could not initialize");
+        snag_errorf(error, error_size, "libcurl easy handle could not initialize");
         errno = ENOMEM;
         return -1;
     }
     if (request_auth_headers(ctx) < 0) {
-        snj_errorf(error, error_size, "provider headers could not be allocated");
+        snag_errorf(error, error_size, "provider headers could not be allocated");
         return -1;
     }
     if (render_request_headers(ctx, request_line, accept, has_body) < 0) {
-        snj_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                    "provider request headers could not be rendered");
         return -1;
     }
@@ -1498,7 +1498,7 @@ provider_request_setup(struct provider_ctx *ctx,
         curl_easy_setopt(ctx->curl, CURLOPT_USERAGENT,
                          SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
-        snj_errorf(error, error_size, "libcurl option setup failed");
+        snag_errorf(error, error_size, "libcurl option setup failed");
         errno = EIO;
         return -1;
     }
@@ -1516,10 +1516,10 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
                                        cancel_code, retry_out);
 
     if (code == CURLE_OK && ctx->http_status == 401 &&
-        ctx->provider->auth == SNJ_AUTH_CHATGPT && ctx->credential.root_fd >= 0 &&
+        ctx->provider->auth == SNAG_AUTH_CHATGPT && ctx->credential.root_fd >= 0 &&
         !ctx->semantic_body_seen) {
-        struct snj_credential refreshed;
-        int rc = snj_auth_read(ctx->credential.root_fd, ctx->provider, true,
+        struct snag_credential refreshed;
+        int rc = snag_auth_read(ctx->credential.root_fd, ctx->provider, true,
                                ctx->credential.value, &refreshed, auth_pump,
                                ctx, error, error_size);
         if (rc < 0) {
@@ -1531,8 +1531,8 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
             return -1;
         }
         ctx->credential = refreshed;
-        snj_credential_clear(&refreshed);
-        snj_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
+        snag_credential_clear(&refreshed);
+        snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
         if (request_auth_headers(ctx) < 0 ||
             curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK)
             return -1;
@@ -1547,7 +1547,7 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
         return ctx->cancel_code;
     }
     if (code != CURLE_OK) {
-        snj_errorf(error, error_size, "%s%s%s",
+        snag_errorf(error, error_size, "%s%s%s",
                    ctx->error[0] ? ctx->error : failure,
                    ctx->error[0] ? "" : ": ",
                    ctx->error[0] ? "" : curl_easy_strerror(code));
@@ -1566,11 +1566,11 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
 }
 
 int
-snj_provider_models_list(const struct snj_config *config,
-                         const struct snj_provider_config *provider,
-                         const struct snj_credential *credential,
-                         struct snj_ui *render,
-                         snj_provider_pump_fn pump, void *pump_opaque,
+snag_provider_models_list(const struct snag_config *config,
+                         const struct snag_provider_config *provider,
+                         const struct snag_credential *credential,
+                         struct snag_ui *render,
+                         snag_provider_pump_fn pump, void *pump_opaque,
                          json_t **models,
                          char *error, size_t error_size)
 {
@@ -1583,14 +1583,14 @@ snj_provider_models_list(const struct snj_config *config,
     if (models)
         *models = NULL;
     if (!config || !provider || !credential || !credential->len || !models) {
-        snj_errorf(error, error_size, "invalid model-list request");
+        snag_errorf(error, error_size, "invalid model-list request");
         errno = EINVAL;
         return -1;
     }
     provider_ctx_init(&ctx, config, provider, credential, render, pump, pump_opaque,
-                      SNJ_WIRE_BODY_MAX, SNJ_WIRE_BODY_MAX);
+                      SNAG_WIRE_BODY_MAX, SNAG_WIRE_BODY_MAX);
     codex = provider_uses_codex_catalog(provider);
-    path = codex ? SNJ_CODEX_CATALOG_PATH : "/v1/models";
+    path = codex ? SNAG_CODEX_CATALOG_PATH : "/v1/models";
     if (provider_request_setup(&ctx, credential, path, "application/json",
                                NULL, NULL, count_write_cb,
                                error, error_size) == 0 &&
@@ -1602,12 +1602,12 @@ snj_provider_models_list(const struct snj_config *config,
 }
 
 int
-snj_provider_responses_count(const json_t *count_request,
-                             const struct snj_config *config,
-                             const struct snj_provider_config *provider,
-                             const struct snj_credential *credential,
-                             struct snj_ui *render,
-                             snj_provider_pump_fn pump,
+snag_provider_responses_count(const json_t *count_request,
+                             const struct snag_config *config,
+                             const struct snag_provider_config *provider,
+                             const struct snag_credential *credential,
+                             struct snag_ui *render,
+                             snag_provider_pump_fn pump,
                              void *pump_opaque,
                              uint64_t *input_tokens,
                              bool *endpoint_unsupported,
@@ -1626,20 +1626,20 @@ snj_provider_responses_count(const json_t *count_request,
         *endpoint_unsupported = false;
     if (!count_request || !config || !provider || !credential || !credential->len ||
         !input_tokens) {
-        snj_errorf(error, error_size, "invalid input-token count request");
+        snag_errorf(error, error_size, "invalid input-token count request");
         errno = EINVAL;
         return -1;
     }
     *input_tokens = 0u;
-    if (provider->auth == SNJ_AUTH_CHATGPT) {
+    if (provider->auth == SNAG_AUTH_CHATGPT) {
         if (endpoint_unsupported)
             *endpoint_unsupported = true;
-        snj_errorf(error, error_size, "direct Codex does not provide exact input-token preflight");
+        snag_errorf(error, error_size, "direct Codex does not provide exact input-token preflight");
         errno = ENOTSUP;
         return -1;
     }
     provider_ctx_init(&ctx, config, provider, credential, render, pump,
-                      pump_opaque, SNJ_CONTEXT_MAX_REQUEST, SNJ_WIRE_BODY_MAX);
+                      pump_opaque, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
     if (provider_request_setup(&ctx, credential,
             "/v1/responses/input_tokens", "application/json", count_request,
             "input-token count request exceeds the bounded body limit",
@@ -1649,7 +1649,7 @@ snj_provider_responses_count(const json_t *count_request,
                                       retry_count);
     if (rc != 0 && endpoint_unsupported &&
         (ctx.http_status == 405 || ctx.http_status == 501 ||
-         (ctx.http_status == 404 && snj_config_provider_is_openrouter(provider))))
+         (ctx.http_status == 404 && snag_config_provider_is_openrouter(provider))))
         *endpoint_unsupported = true;
     if (rc == 0)
         rc = parse_count_body(&ctx, input_tokens, error, error_size);
@@ -1663,12 +1663,12 @@ snj_provider_responses_count(const json_t *count_request,
 }
 
 int
-snj_provider_responses_compact(const json_t *compact_request,
-                               const struct snj_config *config,
-                               const struct snj_provider_config *provider,
-                               const struct snj_credential *credential,
-                               struct snj_ui *render,
-                               snj_provider_pump_fn pump,
+snag_provider_responses_compact(const json_t *compact_request,
+                               const struct snag_config *config,
+                               const struct snag_provider_config *provider,
+                               const struct snag_credential *credential,
+                               struct snag_ui *render,
+                               snag_provider_pump_fn pump,
                                void *pump_opaque,
                                json_t **output,
                                uint64_t *output_tokens_bound,
@@ -1690,13 +1690,13 @@ snj_provider_responses_compact(const json_t *compact_request,
     if (!compact_request || !config || !provider || !credential ||
         !credential->len ||
         !output || !output_tokens_bound) {
-        snj_errorf(error, error_size, "invalid compact request");
+        snag_errorf(error, error_size, "invalid compact request");
         errno = EINVAL;
         return -1;
     }
     provider_ctx_init(&ctx, config, provider, credential, render, pump,
-                      pump_opaque, SNJ_CONTEXT_MAX_COMPACT,
-                      SNJ_CONTEXT_MAX_COMPACT);
+                      pump_opaque, SNAG_CONTEXT_MAX_COMPACT,
+                      SNAG_CONTEXT_MAX_COMPACT);
     if (provider_request_setup(&ctx, credential, "/v1/responses/compact",
             "application/json", compact_request,
             "compact request exceeds the bounded body limit", count_write_cb,
@@ -1706,9 +1706,9 @@ snj_provider_responses_compact(const json_t *compact_request,
     if (rc == 0)
         rc = parse_compact_body(&ctx, output, output_tokens_bound,
                                 error, error_size);
-    if (rc < 0 && provider->auth == SNJ_AUTH_CHATGPT &&
+    if (rc < 0 && provider->auth == SNAG_AUTH_CHATGPT &&
         (ctx.http_status == 404 || ctx.http_status == 405 || ctx.http_status == 501))
-        rc = SNJ_PROVIDER_UNSUPPORTED;
+        rc = SNAG_PROVIDER_UNSUPPORTED;
     if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
         rc = ctx.cancel_code;
         if (cancel_code)
@@ -1719,17 +1719,17 @@ snj_provider_responses_compact(const json_t *compact_request,
 }
 
 int
-snj_provider_responses_create(const json_t *create_request,
-                              const struct snj_config *config,
-                              const struct snj_provider_config *provider,
-                              const struct snj_credential *credential,
-                              struct snj_ui *render,
-                              snj_responses_emit_fn emit,
+snag_provider_responses_create(const json_t *create_request,
+                              const struct snag_config *config,
+                              const struct snag_provider_config *provider,
+                              const struct snag_credential *credential,
+                              struct snag_ui *render,
+                              snag_responses_emit_fn emit,
                               void *emit_opaque,
-                              snj_provider_pump_fn pump,
+                              snag_provider_pump_fn pump,
                               void *pump_opaque,
-                              struct snj_response_graph *graph,
-                              struct snj_provider_failure *failure,
+                              struct snag_response_graph *graph,
+                              struct snag_provider_failure *failure,
                               char *error, size_t error_size,
                               int *cancel_code,
                               unsigned int *retry_count)
@@ -1745,14 +1745,14 @@ snj_provider_responses_create(const json_t *create_request,
         *retry_count = 0u;
     if (!create_request || !config || !provider || !credential ||
         !credential->len || !graph) {
-        snj_errorf(error, error_size, "invalid provider request");
+        snag_errorf(error, error_size, "invalid provider request");
         errno = EINVAL;
         return -1;
     }
     provider_ctx_init(&ctx, config, provider, credential, render, pump,
-                      pump_opaque, SNJ_CONTEXT_MAX_REQUEST, SNJ_WIRE_BODY_MAX);
-    snj_responses_stream_init(&ctx.stream, emit, emit_opaque);
-    snj_sse_init(&ctx.sse, snj_responses_sse_record, &ctx.stream);
+                      pump_opaque, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
+    snag_responses_stream_init(&ctx.stream, emit, emit_opaque);
+    snag_sse_init(&ctx.sse, snag_responses_sse_record, &ctx.stream);
     if (provider_request_setup(&ctx, credential, "/v1/responses",
             "text/event-stream", create_request,
             "provider request exceeds the bounded body limit", write_cb,
@@ -1761,13 +1761,13 @@ snj_provider_responses_create(const json_t *create_request,
                                       error_size, cancel_code, retry_count);
     if (rc != 0)
         goto out;
-    if (snj_sse_finish(&ctx.sse, error, error_size) < 0) {
-        snj_errorf(error, error_size,
+    if (snag_sse_finish(&ctx.sse, error, error_size) < 0) {
+        snag_errorf(error, error_size,
                   stream_or_sse_error(&ctx, error,
                                       "invalid provider SSE stream"));
         goto out;
     }
-    rc = snj_responses_stream_finish(&ctx.stream, graph, error, error_size);
+    rc = snag_responses_stream_finish(&ctx.stream, graph, error, error_size);
     if (rc != 0) {
         if (rc > 0)
             rc = 3;

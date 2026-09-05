@@ -12,14 +12,14 @@
 #include <unistd.h>
 
 bool
-snj_verbosity_command(const char *text, size_t len)
+snag_verbosity_command(const char *text, size_t len)
 {
     return text && len >= 8u && memcmp(text, "/verbose", 8u) == 0 &&
            (len == 8u || text[8] == ' ' || text[8] == '\t' || text[8] == '\n');
 }
 
 unsigned char
-snj_irc_fold(unsigned char c)
+snag_irc_fold(unsigned char c)
 {
     if (c >= 'A' && c <= 'Z')
         return (unsigned char)(c + ('a' - 'A'));
@@ -31,7 +31,7 @@ snj_irc_fold(unsigned char c)
 }
 
 bool
-snj_irc_nick_char(unsigned char c)
+snag_irc_nick_char(unsigned char c)
 {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
            (c >= '0' && c <= '9') || c == '[' || c == ']' || c == '\\' ||
@@ -40,7 +40,7 @@ snj_irc_nick_char(unsigned char c)
 }
 
 void
-snj_errorf(char *error, size_t size, const char *fmt, ...)
+snag_errorf(char *error, size_t size, const char *fmt, ...)
 {
     va_list ap;
 
@@ -52,7 +52,7 @@ snj_errorf(char *error, size_t size, const char *fmt, ...)
 }
 
 size_t
-snj_utf8_size(unsigned char first)
+snag_utf8_size(unsigned char first)
 {
     if (first < 0x80u)
         return 1u;
@@ -64,10 +64,10 @@ snj_utf8_size(unsigned char first)
 }
 
 int
-snj_key_ref_compare(const void *left, const void *right)
+snag_key_ref_compare(const void *left, const void *right)
 {
-    const struct snj_key_ref *a = left;
-    const struct snj_key_ref *b = right;
+    const struct snag_key_ref *a = left;
+    const struct snag_key_ref *b = right;
     size_t n = a->len < b->len ? a->len : b->len;
     int cmp = memcmp(a->name, b->name, n);
 
@@ -75,7 +75,7 @@ snj_key_ref_compare(const void *left, const void *right)
 }
 
 int
-snj_fd_cloexec(int fd)
+snag_fd_cloexec(int fd)
 {
     int flags = fcntl(fd, F_GETFD);
 
@@ -83,7 +83,7 @@ snj_fd_cloexec(int fd)
 }
 
 bool
-snj_size_add(size_t a, size_t b, size_t *out)
+snag_size_add(size_t a, size_t b, size_t *out)
 {
     if (b > SIZE_MAX - a)
         return false;
@@ -92,33 +92,33 @@ snj_size_add(size_t a, size_t b, size_t *out)
 }
 
 void
-snj_buf_init(struct snj_buf *buf, size_t max)
+snag_buf_init(struct snag_buf *buf, size_t max)
 {
     memset(buf, 0, sizeof(*buf));
     buf->max = max;
 }
 
 void
-snj_buf_reset(struct snj_buf *buf)
+snag_buf_reset(struct snag_buf *buf)
 {
     buf->len = 0;
 }
 
 void
-snj_buf_free(struct snj_buf *buf)
+snag_buf_free(struct snag_buf *buf)
 {
     free(buf->data);
     memset(buf, 0, sizeof(*buf));
 }
 
 int
-snj_buf_reserve(struct snj_buf *buf, size_t extra)
+snag_buf_reserve(struct snag_buf *buf, size_t extra)
 {
     size_t need;
     size_t cap;
     unsigned char *next;
 
-    if (!snj_size_add(buf->len, extra, &need) || need > buf->max) {
+    if (!snag_size_add(buf->len, extra, &need) || need > buf->max) {
         errno = EOVERFLOW;
         return -1;
     }
@@ -145,9 +145,9 @@ snj_buf_reserve(struct snj_buf *buf, size_t extra)
 }
 
 int
-snj_buf_append(struct snj_buf *buf, const void *data, size_t len)
+snag_buf_append(struct snag_buf *buf, const void *data, size_t len)
 {
-    if ((len && !data) || snj_buf_reserve(buf, len) < 0)
+    if ((len && !data) || snag_buf_reserve(buf, len) < 0)
         return -1;
     if (len) {
         if (!buf->data) {
@@ -161,13 +161,13 @@ snj_buf_append(struct snj_buf *buf, const void *data, size_t len)
 }
 
 int
-snj_buf_putc(struct snj_buf *buf, unsigned char c)
+snag_buf_putc(struct snag_buf *buf, unsigned char c)
 {
-    return snj_buf_append(buf, &c, 1u);
+    return snag_buf_append(buf, &c, 1u);
 }
 
 int
-snj_buf_printf(struct snj_buf *buf, const char *fmt, ...)
+snag_buf_printf(struct snag_buf *buf, const char *fmt, ...)
 {
     va_list ap;
     va_list copy;
@@ -182,7 +182,7 @@ snj_buf_printf(struct snj_buf *buf, const char *fmt, ...)
         errno = EOVERFLOW;
         return -1;
     }
-    if (snj_buf_reserve(buf, (size_t)n + 1u) < 0) {
+    if (snag_buf_reserve(buf, (size_t)n + 1u) < 0) {
         va_end(ap);
         return -1;
     }
@@ -197,16 +197,16 @@ snj_buf_printf(struct snj_buf *buf, const char *fmt, ...)
 }
 
 int
-snj_buf_terminate(struct snj_buf *buf)
+snag_buf_terminate(struct snag_buf *buf)
 {
-    if (snj_buf_reserve(buf, 1u) < 0)
+    if (snag_buf_reserve(buf, 1u) < 0)
         return -1;
     buf->data[buf->len] = '\0';
     return 0;
 }
 
 bool
-snj_text_blank(const char *text)
+snag_text_blank(const char *text)
 {
     for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
         if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
@@ -215,7 +215,7 @@ snj_text_blank(const char *text)
 }
 
 bool
-snj_utf8_valid(const unsigned char *s, size_t len, bool reject_nul)
+snag_utf8_valid(const unsigned char *s, size_t len, bool reject_nul)
 {
     size_t i = 0;
 
@@ -270,7 +270,7 @@ hex_encode(const unsigned char *in, size_t len, char *out)
 }
 
 int
-snj_random_id(char out[SNJ_ID_HEX_LEN + 1u])
+snag_random_id(char out[SNAG_ID_HEX_LEN + 1u])
 {
     unsigned char raw[16];
     size_t done = 0;
@@ -305,7 +305,7 @@ snj_random_id(char out[SNJ_ID_HEX_LEN + 1u])
 }
 
 uint64_t
-snj_time_ms(void)
+snag_time_ms(void)
 {
     struct timespec ts;
 
@@ -317,7 +317,7 @@ snj_time_ms(void)
 }
 
 uint64_t
-snj_monotonic_ms(void)
+snag_monotonic_ms(void)
 {
     struct timespec now;
 
@@ -327,7 +327,7 @@ snj_monotonic_ms(void)
 }
 
 int
-snj_write_full(int fd, const void *data, size_t len)
+snag_write_full(int fd, const void *data, size_t len)
 {
     const unsigned char *p = data;
     size_t done = 0;
@@ -348,7 +348,7 @@ snj_write_full(int fd, const void *data, size_t len)
 }
 
 int
-snj_sync_file(int fd)
+snag_sync_file(int fd)
 {
 #if defined(__APPLE__)
     return fsync(fd);
@@ -362,7 +362,7 @@ snj_sync_file(int fd)
 }
 
 int
-snj_sync_dir(int fd)
+snag_sync_dir(int fd)
 {
     if (fsync(fd) == 0)
         return 0;
@@ -372,7 +372,7 @@ snj_sync_dir(int fd)
 }
 
 bool
-snj_strcpy(char *dst, size_t size, const char *src)
+snag_strcpy(char *dst, size_t size, const char *src)
 {
     size_t len;
 
@@ -383,7 +383,7 @@ snj_strcpy(char *dst, size_t size, const char *src)
 }
 
 char *
-snj_strdup_checked(const char *s, size_t max)
+snag_strdup_checked(const char *s, size_t max)
 {
     size_t len = strlen(s);
     char *copy;
@@ -400,23 +400,23 @@ snj_strdup_checked(const char *s, size_t max)
 }
 
 char *
-snj_join_words(char *const *words, size_t count, size_t max)
+snag_join_words(char *const *words, size_t count, size_t max)
 {
-    struct snj_buf buf;
+    struct snag_buf buf;
 
-    snj_buf_init(&buf, max + 1u);
+    snag_buf_init(&buf, max + 1u);
     for (size_t i = 0; i < count; ++i) {
         size_t len = strlen(words[i]);
-        if (!snj_utf8_valid((const unsigned char *)words[i], len, true) ||
-            (i && snj_buf_putc(&buf, ' ') < 0) ||
-            snj_buf_append(&buf, words[i], len) < 0) {
-            snj_buf_free(&buf);
+        if (!snag_utf8_valid((const unsigned char *)words[i], len, true) ||
+            (i && snag_buf_putc(&buf, ' ') < 0) ||
+            snag_buf_append(&buf, words[i], len) < 0) {
+            snag_buf_free(&buf);
             errno = EINVAL;
             return NULL;
         }
     }
-    if (snj_buf_terminate(&buf) < 0) {
-        snj_buf_free(&buf);
+    if (snag_buf_terminate(&buf) < 0) {
+        snag_buf_free(&buf);
         return NULL;
     }
     return (char *)buf.data;
@@ -436,7 +436,7 @@ static const uint32_t sha256_k[64] = {
 };
 
 static void
-sha256_block(struct snj_sha256 *ctx, const unsigned char block[64])
+sha256_block(struct snag_sha256 *ctx, const unsigned char block[64])
 {
     uint32_t w[64];
     uint32_t a, b, c, d, e, f, g, h;
@@ -467,7 +467,7 @@ sha256_block(struct snj_sha256 *ctx, const unsigned char block[64])
 }
 
 void
-snj_sha256_init(struct snj_sha256 *ctx)
+snag_sha256_init(struct snag_sha256 *ctx)
 {
     static const uint32_t init[8] = {
         0x6a09e667u,0xbb67ae85u,0x3c6ef372u,0xa54ff53au,
@@ -479,7 +479,7 @@ snj_sha256_init(struct snj_sha256 *ctx)
 }
 
 void
-snj_sha256_update(struct snj_sha256 *ctx, const void *data, size_t len)
+snag_sha256_update(struct snag_sha256 *ctx, const void *data, size_t len)
 {
     const unsigned char *p = data;
 
@@ -500,7 +500,7 @@ snj_sha256_update(struct snj_sha256 *ctx, const void *data, size_t len)
 }
 
 void
-snj_sha256_final(struct snj_sha256 *ctx, unsigned char out[32])
+snag_sha256_final(struct snag_sha256 *ctx, unsigned char out[32])
 {
     uint64_t bits = ctx->bit_count;
     ctx->block[ctx->block_len++] = 0x80u;
@@ -523,19 +523,19 @@ snj_sha256_final(struct snj_sha256 *ctx, unsigned char out[32])
 }
 
 void
-snj_sha256_hex(const void *data, size_t len, char out[SNJ_SHA256_HEX_LEN + 1u])
+snag_sha256_hex(const void *data, size_t len, char out[SNAG_SHA256_HEX_LEN + 1u])
 {
-    struct snj_sha256 ctx;
+    struct snag_sha256 ctx;
     unsigned char digest[32];
 
-    snj_sha256_init(&ctx);
-    snj_sha256_update(&ctx, data, len);
-    snj_sha256_final(&ctx, digest);
+    snag_sha256_init(&ctx);
+    snag_sha256_update(&ctx, data, len);
+    snag_sha256_final(&ctx, digest);
     hex_encode(digest, sizeof(digest), out);
 }
 
 bool
-snj_hex_is_lower(const char *s, size_t len)
+snag_hex_is_lower(const char *s, size_t len)
 {
     for (size_t i = 0; i < len; ++i)
         if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
@@ -547,7 +547,7 @@ static const char b64[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 int
-snj_base64_append(struct snj_buf *out, const unsigned char *data, size_t len)
+snag_base64_append(struct snag_buf *out, const unsigned char *data, size_t len)
 {
     size_t i = 0;
     while (i + 3u <= len) {
@@ -560,7 +560,7 @@ snj_base64_append(struct snj_buf *out, const unsigned char *data, size_t len)
             (unsigned char)b64[(v >> 6) & 63u],
             (unsigned char)b64[v & 63u]
         };
-        if (snj_buf_append(out, enc, sizeof(enc)) < 0)
+        if (snag_buf_append(out, enc, sizeof(enc)) < 0)
             return -1;
         i += 3u;
     }
@@ -573,14 +573,14 @@ snj_base64_append(struct snj_buf *out, const unsigned char *data, size_t len)
         enc[1] = (unsigned char)b64[(v >> 12) & 63u];
         enc[2] = (i + 1u < len) ? (unsigned char)b64[(v >> 6) & 63u] : '=';
         enc[3] = '=';
-        if (snj_buf_append(out, enc, sizeof(enc)) < 0)
+        if (snag_buf_append(out, enc, sizeof(enc)) < 0)
             return -1;
     }
     return 0;
 }
 
 int
-snj_base64_decode(struct snj_buf *out, const char *text)
+snag_base64_decode(struct snag_buf *out, const char *text)
 {
     size_t len = strlen(text);
     if (len % 4u)
@@ -603,7 +603,7 @@ snj_base64_decode(struct snj_buf *out, const char *text)
         if ((pad == 1u && (v & 0xffu)) || (pad == 2u && (v & 0xffffu)))
             return -1;
         for (unsigned int j = 0u; j < 3u - pad; ++j)
-            if (snj_buf_putc(out, (unsigned char)(v >> (16u - 8u * j))) < 0)
+            if (snag_buf_putc(out, (unsigned char)(v >> (16u - 8u * j))) < 0)
                 return -1;
     }
     return 0;

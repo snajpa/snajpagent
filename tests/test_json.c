@@ -11,7 +11,7 @@ test_strict_accepts_wire_json(void)
 {
     static const unsigned char input[] = " \n {\"b\":1.5,\"a\":[true,null]} \t";
     char error[192] = {0};
-    json_t *value = snj_json_load_strict(input, sizeof(input) - 1u,
+    json_t *value = snag_json_load_strict(input, sizeof(input) - 1u,
                                          sizeof(input), error, sizeof(error));
 
     assert(value);
@@ -42,7 +42,7 @@ test_strict_rejects_ambiguous_or_invalid_input(void)
 
     for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
         char error[192] = {0};
-        json_t *value = snj_json_load_strict(inputs[i].data, inputs[i].len,
+        json_t *value = snag_json_load_strict(inputs[i].data, inputs[i].len,
                                              inputs[i].max,
                                              error, sizeof(error));
         assert(!value);
@@ -69,7 +69,7 @@ test_nesting_limit(void)
     char error[192] = {0};
     size_t len;
     unsigned char *text = nested_json(48u, &len);
-    json_t *value = snj_json_load_strict(text, len, len, error, sizeof(error));
+    json_t *value = snag_json_load_strict(text, len, len, error, sizeof(error));
 
     assert(value);
     json_decref(value);
@@ -77,7 +77,7 @@ test_nesting_limit(void)
 
     memset(error, 0, sizeof(error));
     text = nested_json(49u, &len);
-    value = snj_json_load_strict(text, len, len, error, sizeof(error));
+    value = snag_json_load_strict(text, len, len, error, sizeof(error));
     assert(!value);
     assert(strstr(error, "nesting"));
     free(text);
@@ -92,15 +92,15 @@ test_canonical_remains_durable_only(void)
     char error[192] = {0};
     json_t *value;
 
-    value = snj_json_load_canonical(canonical, sizeof(canonical) - 1u,
+    value = snag_json_load_canonical(canonical, sizeof(canonical) - 1u,
                                     error, sizeof(error));
     assert(value);
     json_decref(value);
 
-    value = snj_json_load_canonical(whitespace, sizeof(whitespace) - 1u,
+    value = snag_json_load_canonical(whitespace, sizeof(whitespace) - 1u,
                                     error, sizeof(error));
     assert(!value);
-    value = snj_json_load_canonical(real, sizeof(real) - 1u,
+    value = snag_json_load_canonical(real, sizeof(real) - 1u,
                                     error, sizeof(error));
     assert(!value);
 }

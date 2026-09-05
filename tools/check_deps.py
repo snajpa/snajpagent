@@ -18,9 +18,9 @@ FORBIDDEN_VENDOR_DIRS = {
     "external",
     "submodules",
 }
-ALLOWED_JANSSON_INCLUDE = '#include "snj_jansson.h"'
-WRAPPER = ROOT / "src" / "snj_jansson.h"
-ABI = ROOT / "src" / "snj_jansson_abi.h"
+ALLOWED_JANSSON_INCLUDE = '#include "snag_jansson.h"'
+WRAPPER = ROOT / "src" / "snag_jansson.h"
+ABI = ROOT / "src" / "snag_jansson_abi.h"
 DOC = ROOT / "DEPENDENCIES.md"
 
 
@@ -54,16 +54,16 @@ def check_no_vendor_dirs() -> None:
 
 def check_jansson_policy() -> None:
     if (ROOT / "src" / "jansson.h").exists():
-        fail("src/jansson.h would shadow a system <jansson.h>; use snj_jansson.h wrapper")
+        fail("src/jansson.h would shadow a system <jansson.h>; use snag_jansson.h wrapper")
     if not WRAPPER.is_file():
-        fail("missing src/snj_jansson.h wrapper")
+        fail("missing src/snag_jansson.h wrapper")
     if not ABI.is_file():
-        fail("missing src/snj_jansson_abi.h ABI declaration shim")
+        fail("missing src/snag_jansson_abi.h ABI declaration shim")
     abi_text = ABI.read_text(encoding="utf-8")
     if "First-party declaration shim" not in abi_text or "contains no implementation" not in abi_text:
         fail("Jansson ABI shim is not explicitly inventoried as declarations-only")
     wrapper_text = WRAPPER.read_text(encoding="utf-8")
-    if '#include "snj_jansson_abi.h"' not in wrapper_text:
+    if '#include "snag_jansson_abi.h"' not in wrapper_text:
         fail("Jansson wrapper does not contain the local ABI fallback")
     for path in source_files():
         text = path.read_text(encoding="utf-8", errors="surrogateescape")
@@ -71,7 +71,7 @@ def check_jansson_policy() -> None:
             continue
         if re.search(r"#\s*include\s*<jansson\.h>", text):
             fail(f"raw <jansson.h> include outside wrapper: {rel(path)}")
-        if "snj_jansson_abi.h" in text and path != ABI:
+        if "snag_jansson_abi.h" in text and path != ABI:
             fail(f"direct ABI shim include outside wrapper: {rel(path)}")
 
 
@@ -89,7 +89,7 @@ def check_doc() -> None:
     required = [
         "Vendored third-party implementation source: none",
         "Vendored third-party header source: none",
-        "src/snj_jansson_abi.h",
+        "src/snag_jansson_abi.h",
         "system libcurl",
         "system Jansson",
         "make depscheck",

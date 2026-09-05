@@ -6,62 +6,62 @@
 #include <string.h>
 
 void
-snj_sse_init(struct snj_sse_parser *parser, snj_sse_record_fn record,
+snag_sse_init(struct snag_sse_parser *parser, snag_sse_record_fn record,
              void *opaque)
 {
     memset(parser, 0, sizeof(*parser));
-    snj_buf_init(&parser->line, SNJ_MAX_SSE_EVENT);
-    snj_buf_init(&parser->event, SNJ_MAX_SSE_NAME);
-    snj_buf_init(&parser->id, SNJ_MAX_SSE_NAME);
-    snj_buf_init(&parser->data, SNJ_MAX_SSE_EVENT);
+    snag_buf_init(&parser->line, SNAG_MAX_SSE_EVENT);
+    snag_buf_init(&parser->event, SNAG_MAX_SSE_NAME);
+    snag_buf_init(&parser->id, SNAG_MAX_SSE_NAME);
+    snag_buf_init(&parser->data, SNAG_MAX_SSE_EVENT);
     parser->record = record;
     parser->opaque = opaque;
 }
 
 void
-snj_sse_free(struct snj_sse_parser *parser)
+snag_sse_free(struct snag_sse_parser *parser)
 {
-    snj_buf_free(&parser->line);
-    snj_buf_free(&parser->event);
-    snj_buf_free(&parser->id);
-    snj_buf_free(&parser->data);
+    snag_buf_free(&parser->line);
+    snag_buf_free(&parser->event);
+    snag_buf_free(&parser->id);
+    snag_buf_free(&parser->data);
     memset(parser, 0, sizeof(*parser));
 }
 
 static int
-fail(struct snj_sse_parser *parser, char *error, size_t error_size,
+fail(struct snag_sse_parser *parser, char *error, size_t error_size,
      const char *message)
 {
     parser->failed = true;
-    snj_errorf(error, error_size, "%s", message);
+    snag_errorf(error, error_size, "%s", message);
     errno = EPROTO;
     return -1;
 }
 
 static int
-assign(struct snj_buf *target, const unsigned char *value, size_t len)
+assign(struct snag_buf *target, const unsigned char *value, size_t len)
 {
-    snj_buf_reset(target);
-    return snj_buf_append(target, value, len);
+    snag_buf_reset(target);
+    return snag_buf_append(target, value, len);
 }
 
 static int
-dispatch(struct snj_sse_parser *parser, char *error, size_t error_size)
+dispatch(struct snag_sse_parser *parser, char *error, size_t error_size)
 {
-    struct snj_sse_record record;
+    struct snag_sse_record record;
     int rc;
 
     if (!parser->data_seen) {
-        snj_buf_reset(&parser->event);
+        snag_buf_reset(&parser->event);
         return 0;
     }
-    if (!snj_utf8_valid(parser->event.data, parser->event.len, true) ||
-        !snj_utf8_valid(parser->id.data, parser->id.len, true) ||
-        !snj_utf8_valid(parser->data.data, parser->data.len, true))
+    if (!snag_utf8_valid(parser->event.data, parser->event.len, true) ||
+        !snag_utf8_valid(parser->id.data, parser->id.len, true) ||
+        !snag_utf8_valid(parser->data.data, parser->data.len, true))
         return fail(parser, error, error_size,
                     "SSE event contains invalid UTF-8 or NUL");
     memset(&record, 0, sizeof(record));
-    record.kind = SNJ_SSE_EVENT;
+    record.kind = SNAG_SSE_EVENT;
     record.event = parser->event.data;
     record.event_len = parser->event.len;
     record.id = parser->id.data;
@@ -72,39 +72,39 @@ dispatch(struct snj_sse_parser *parser, char *error, size_t error_size)
     if (rc != 0) {
         parser->failed = true;
         if (error_size && !error[0])
-            snj_errorf(error, error_size, "SSE consumer rejected an event");
+            snag_errorf(error, error_size, "SSE consumer rejected an event");
         if (!errno)
             errno = EPROTO;
         return -1;
     }
-    snj_buf_reset(&parser->event);
-    snj_buf_reset(&parser->data);
+    snag_buf_reset(&parser->event);
+    snag_buf_reset(&parser->data);
     parser->data_seen = false;
     return 0;
 }
 
 static int
-dispatch_comment(struct snj_sse_parser *parser,
+dispatch_comment(struct snag_sse_parser *parser,
                  const unsigned char *value, size_t len,
                  char *error, size_t error_size)
 {
-    struct snj_sse_record record;
+    struct snag_sse_record record;
     int rc;
 
-    if (!snj_utf8_valid(value, len, true))
+    if (!snag_utf8_valid(value, len, true))
         return fail(parser, error, error_size,
                     "SSE comment contains invalid UTF-8 or NUL");
     if (!parser->record)
         return 0;
     memset(&record, 0, sizeof(record));
-    record.kind = SNJ_SSE_COMMENT;
+    record.kind = SNAG_SSE_COMMENT;
     record.data = value;
     record.data_len = len;
     rc = parser->record(parser->opaque, &record);
     if (rc != 0) {
         parser->failed = true;
         if (error_size && !error[0])
-            snj_errorf(error, error_size, "SSE consumer rejected a comment");
+            snag_errorf(error, error_size, "SSE consumer rejected a comment");
         if (!errno)
             errno = EPROTO;
         return -1;
@@ -113,7 +113,7 @@ dispatch_comment(struct snj_sse_parser *parser,
 }
 
 static int
-process_line(struct snj_sse_parser *parser, char *error, size_t error_size)
+process_line(struct snag_sse_parser *parser, char *error, size_t error_size)
 {
     const unsigned char *line = parser->line.data;
     size_t len = parser->line.len;
@@ -123,7 +123,7 @@ process_line(struct snj_sse_parser *parser, char *error, size_t error_size)
 
     if (len == 0u)
         return dispatch(parser, error, error_size);
-    if (!snj_utf8_valid(line, len, true))
+    if (!snag_utf8_valid(line, len, true))
         return fail(parser, error, error_size,
                     "SSE line contains invalid UTF-8 or NUL");
     if (line[0] == ':') {
@@ -145,10 +145,10 @@ process_line(struct snj_sse_parser *parser, char *error, size_t error_size)
     }
     if (colon == 4u && memcmp(line, "data", 4u) == 0) {
         size_t extra = value_len + (parser->data_seen ? 1u : 0u);
-        if (extra > SNJ_MAX_SSE_EVENT - parser->data.len)
+        if (extra > SNAG_MAX_SSE_EVENT - parser->data.len)
             return fail(parser, error, error_size, "SSE event exceeds 1 MiB");
-        if ((parser->data_seen && snj_buf_putc(&parser->data, '\n') < 0) ||
-            snj_buf_append(&parser->data, value, value_len) < 0)
+        if ((parser->data_seen && snag_buf_putc(&parser->data, '\n') < 0) ||
+            snag_buf_append(&parser->data, value, value_len) < 0)
             return fail(parser, error, error_size, "SSE event exceeds 1 MiB");
         parser->data_seen = true;
     } else if (colon == 5u && memcmp(line, "event", 5u) == 0) {
@@ -169,25 +169,25 @@ process_line(struct snj_sse_parser *parser, char *error, size_t error_size)
 }
 
 static int
-end_line(struct snj_sse_parser *parser, char *error, size_t error_size)
+end_line(struct snag_sse_parser *parser, char *error, size_t error_size)
 {
     int rc = process_line(parser, error, error_size);
-    snj_buf_reset(&parser->line);
+    snag_buf_reset(&parser->line);
     return rc;
 }
 
 int
-snj_sse_feed(struct snj_sse_parser *parser, const void *data, size_t len,
+snag_sse_feed(struct snag_sse_parser *parser, const void *data, size_t len,
              char *error, size_t error_size)
 {
     const unsigned char *input = data;
 
     if (parser->failed) {
         errno = EPROTO;
-        snj_errorf(error, error_size, "SSE parser is already failed");
+        snag_errorf(error, error_size, "SSE parser is already failed");
         return -1;
     }
-    if (len > SNJ_MAX_PROVIDER_WIRE - parser->wire_bytes)
+    if (len > SNAG_MAX_PROVIDER_WIRE - parser->wire_bytes)
         return fail(parser, error, error_size,
                     "provider wire aggregate exceeds 64 MiB");
     parser->wire_bytes += len;
@@ -210,7 +210,7 @@ snj_sse_feed(struct snj_sse_parser *parser, const void *data, size_t len,
         } else if (c == '\n') {
             if (end_line(parser, error, error_size) < 0)
                 return -1;
-        } else if (snj_buf_putc(&parser->line, c) < 0) {
+        } else if (snag_buf_putc(&parser->line, c) < 0) {
             return fail(parser, error, error_size, "SSE line exceeds 1 MiB");
         }
     }
@@ -218,11 +218,11 @@ snj_sse_feed(struct snj_sse_parser *parser, const void *data, size_t len,
 }
 
 int
-snj_sse_finish(struct snj_sse_parser *parser, char *error, size_t error_size)
+snag_sse_finish(struct snag_sse_parser *parser, char *error, size_t error_size)
 {
     if (parser->failed) {
         errno = EPROTO;
-        snj_errorf(error, error_size, "SSE parser is failed");
+        snag_errorf(error, error_size, "SSE parser is failed");
         return -1;
     }
     if (parser->pending_cr || parser->line.len || parser->data_seen ||

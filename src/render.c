@@ -38,22 +38,22 @@ struct markdown_table_cell {
     size_t len;
 };
 
-enum snj_render_record_kind {
-    SNJ_RENDER_RECORD_BLOCK,
-    SNJ_RENDER_RECORD_IRC,
-    SNJ_RENDER_RECORD_TOOL,
-    SNJ_RENDER_RECORD_PUBLIC
+enum snag_render_record_kind {
+    SNAG_RENDER_RECORD_BLOCK,
+    SNAG_RENDER_RECORD_IRC,
+    SNAG_RENDER_RECORD_TOOL,
+    SNAG_RENDER_RECORD_PUBLIC
 };
 
-struct snj_render_record {
-    struct snj_render_record *next;
-    enum snj_render_record_kind kind;
-    enum snj_presentation presentation;
-    struct snj_buf text;
+struct snag_render_record {
+    struct snag_render_record *next;
+    enum snag_render_record_kind kind;
+    enum snag_presentation presentation;
+    struct snag_buf text;
     const char *color;
     char *label;
-    struct snj_irc_event *irc;
-    enum snj_irc_event_kind irc_kind;
+    struct snag_irc_event *irc;
+    enum snag_irc_event_kind irc_kind;
     size_t colored_len;
     size_t displayed;
     size_t source_item;
@@ -67,63 +67,63 @@ struct snj_render_record {
     bool physical_open;
     bool label_displayed;
     bool own_agent;
-    struct snj_render_source source, response;
+    struct snag_render_source source, response;
     uint32_t timeout_ms, max_output_bytes;
     bool tool_start;
     bool omitted;
 };
 
-static int render_irc_event_now(struct snj_render *render,
-                                const struct snj_irc_event *event,
+static int render_irc_event_now(struct snag_render *render,
+                                const struct snag_irc_event *event,
                                 bool own_agent);
-static int flush_view(struct snj_render *render, enum snj_render_view view);
-static int close_public_output(struct snj_render *render);
-static int render_tool_record(struct snj_render *render, const struct snj_render_record *record);
-static json_t *source_event(struct snj_render *render, struct snj_render_source source);
+static int flush_view(struct snag_render *render, enum snag_render_view view);
+static int close_public_output(struct snag_render *render);
+static int render_tool_record(struct snag_render *render, const struct snag_render_record *record);
+static json_t *source_event(struct snag_render *render, struct snag_render_source source);
 
 const char *
-snj_verbosity_name(unsigned int level)
+snag_verbosity_name(unsigned int level)
 {
     static const char *const names[] = {
         "conversation", "tools", "previews", "full tools", "debug", "protocol", "wire"
     };
-    return level <= SNJ_VERBOSITY_MAX ? names[level] : NULL;
+    return level <= SNAG_VERBOSITY_MAX ? names[level] : NULL;
 }
 
 bool
-snj_presentation_enabled(enum snj_presentation kind, unsigned int level,
-                          enum snj_render_view view)
+snag_presentation_enabled(enum snag_presentation kind, unsigned int level,
+                          enum snag_render_view view)
 {
     static const unsigned char minimum[] = {0, 1, 2, 2, 3, 2, 4, 5, 6, 0, 0};
     if ((unsigned int)kind >= sizeof(minimum) || level < minimum[kind])
         return false;
-    if (kind == SNJ_PRESENT_FEEDBACK)
+    if (kind == SNAG_PRESENT_FEEDBACK)
         return true;
-    return view == (kind == SNJ_PRESENT_CHAT ? SNJ_RENDER_CHAT : SNJ_RENDER_ROLLOUT);
+    return view == (kind == SNAG_PRESENT_CHAT ? SNAG_RENDER_CHAT : SNAG_RENDER_ROLLOUT);
 }
 
 size_t
-snj_presentation_limit(enum snj_presentation kind, unsigned int level)
+snag_presentation_limit(enum snag_presentation kind, unsigned int level)
 {
-    if (!snj_presentation_enabled(kind, level, SNJ_RENDER_ROLLOUT))
+    if (!snag_presentation_enabled(kind, level, SNAG_RENDER_ROLLOUT))
         return 0u;
-    if (level == 2u && kind == SNJ_PRESENT_ARGUMENTS)
+    if (level == 2u && kind == SNAG_PRESENT_ARGUMENTS)
         return 1024u;
-    if (level == 2u && kind == SNJ_PRESENT_OUTPUT)
+    if (level == 2u && kind == SNAG_PRESENT_OUTPUT)
         return 512u;
     return SIZE_MAX;
 }
 
 bool
-snj_render_enabled(const struct snj_render *render, enum snj_presentation kind)
+snag_render_enabled(const struct snag_render *render, enum snag_presentation kind)
 {
-    if (render->suppress_optional && kind >= SNJ_PRESENT_TOOL && kind <= SNJ_PRESENT_WIRE)
+    if (render->suppress_optional && kind >= SNAG_PRESENT_TOOL && kind <= SNAG_PRESENT_WIRE)
         return false;
-    return snj_presentation_enabled(kind, render->verbosity, render->view);
+    return snag_presentation_enabled(kind, render->verbosity, render->view);
 }
 
 static int
-render_checkpoint(struct snj_render *render)
+render_checkpoint(struct snag_render *render)
 {
     if (!render->checkpoint)
         return 0;
@@ -145,29 +145,29 @@ text_slice(const char *text, size_t len)
 static int
 write_literal(int fd, const char *s)
 {
-    return snj_term_write(fd, s, strlen(s));
+    return snag_term_write(fd, s, strlen(s));
 }
 
 static int
-output_begin(struct snj_render *render, bool persistent)
+output_begin(struct snag_render *render, bool persistent)
 {
-    return render->term ? snj_term_output_begin(render->term, persistent) : 0;
+    return render->term ? snag_term_output_begin(render->term, persistent) : 0;
 }
 
 static int
-output_end(struct snj_render *render)
+output_end(struct snag_render *render)
 {
-    return render->term ? snj_term_output_end(render->term) : 0;
+    return render->term ? snag_term_output_end(render->term) : 0;
 }
 
 static bool
-color_enabled(const struct snj_render *render, int fd)
+color_enabled(const struct snag_render *render, int fd)
 {
     return fd == STDOUT_FILENO ? render->color_stdout : render->color_stderr;
 }
 
 static int
-write_role_chunk(struct snj_render *render, int fd, const char *color,
+write_role_chunk(struct snag_render *render, int fd, const char *color,
                  const char *text, size_t len, size_t colored_len,
                  bool terminal_safe, bool persistent)
 {
@@ -186,21 +186,21 @@ write_role_chunk(struct snj_render *render, int fd, const char *color,
     if (colored && write_literal(fd, color) < 0)
         goto out;
     if (colored_len &&
-        (terminal_safe ? snj_term_write_safe(fd, text, colored_len) :
-                         snj_term_write(fd, text, colored_len)) < 0)
+        (terminal_safe ? snag_term_write_safe(fd, text, colored_len) :
+                         snag_term_write(fd, text, colored_len)) < 0)
         goto out;
     if (colored && write_literal(fd, COLOR_RESET) < 0)
         goto out;
     if (len > colored_len &&
-        (terminal_safe ? snj_term_write_safe(fd, text + colored_len,
+        (terminal_safe ? snag_term_write_safe(fd, text + colored_len,
                                               len - colored_len) :
-                         snj_term_write(fd, text + colored_len,
+                         snag_term_write(fd, text + colored_len,
                                         len - colored_len)) < 0)
         goto out;
     if (render->term &&
         ((fd == STDOUT_FILENO && render->stdout_terminal) ||
          (fd == STDERR_FILENO && render->stderr_terminal)) &&
-        snj_term_note_output(render->term, text, len,
+        snag_term_note_output(render->term, text, len,
                              colored && colored_len == len ? color : "") < 0)
         goto out;
     rc = 0;
@@ -219,7 +219,7 @@ out:
 }
 
 static int
-write_role_block(struct snj_render *render, int fd, const char *color,
+write_role_block(struct snag_render *render, int fd, const char *color,
                  const char *text, size_t len, size_t colored_len,
                  bool terminal_safe, bool persistent)
 {
@@ -253,18 +253,18 @@ write_role_block(struct snj_render *render, int fd, const char *color,
 }
 
 static void
-free_record(struct snj_render_record *record)
+free_record(struct snag_render_record *record)
 {
     if (!record)
         return;
-    snj_buf_free(&record->text);
+    snag_buf_free(&record->text);
     free(record->irc);
     free(record->label);
     free(record);
 }
 
 static int
-write_optional_block(struct snj_render *render, enum snj_presentation kind,
+write_optional_block(struct snag_render *render, enum snag_presentation kind,
                      const char *color, const char *text, size_t len,
                      size_t colored_len)
 {
@@ -272,10 +272,10 @@ write_optional_block(struct snj_render *render, enum snj_presentation kind,
     while (len) {
         if (render_checkpoint(render) < 0)
             return -1;
-        if (!snj_render_enabled(render, kind)) {
+        if (!snag_render_enabled(render, kind)) {
             if (!ended_lf && write_literal(STDERR_FILENO, "\n") < 0)
                 return -1;
-            return snj_render_host(render, "… [display omitted]");
+            return snag_render_host(render, "… [display omitted]");
         }
         size_t amount = text_slice(text, len);
         size_t colored = colored_len < amount ? colored_len : amount;
@@ -291,8 +291,8 @@ write_optional_block(struct snj_render *render, enum snj_presentation kind,
 }
 
 static void
-queue_record(struct snj_render *render, enum snj_render_view view,
-             struct snj_render_record *record)
+queue_record(struct snag_render *render, enum snag_render_view view,
+             struct snag_render_record *record)
 {
     if (render->view_tail[view])
         render->view_tail[view]->next = record;
@@ -302,9 +302,9 @@ queue_record(struct snj_render *render, enum snj_render_view view,
 }
 
 static void
-pop_record(struct snj_render *render, enum snj_render_view view)
+pop_record(struct snag_render *render, enum snag_render_view view)
 {
-    struct snj_render_record *record = render->view_head[view];
+    struct snag_render_record *record = render->view_head[view];
 
     if (!record)
         return;
@@ -317,11 +317,11 @@ pop_record(struct snj_render *render, enum snj_render_view view)
 }
 
 static int
-view_block(struct snj_render *render, enum snj_render_view view, int fd,
+view_block(struct snag_render *render, enum snag_render_view view, int fd,
            const char *color, const char *text, size_t len,
            size_t colored_len, bool terminal_safe, bool persistent)
 {
-    struct snj_render_record *record;
+    struct snag_render_record *record;
 
     if (!render->networked ||
         (render->view == view && !render->view_head[view]))
@@ -330,14 +330,14 @@ view_block(struct snj_render *render, enum snj_render_view view, int fd,
     record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
-    record->kind = SNJ_RENDER_RECORD_BLOCK;
+    record->kind = SNAG_RENDER_RECORD_BLOCK;
     record->fd = fd;
     record->color = color;
     record->colored_len = colored_len;
     record->terminal_safe = terminal_safe;
     record->persistent = persistent;
-    snj_buf_init(&record->text, len);
-    if (snj_buf_append(&record->text, text, len) < 0) {
+    snag_buf_init(&record->text, len);
+    if (snag_buf_append(&record->text, text, len) < 0) {
         free_record(record);
         return -1;
     }
@@ -354,7 +354,7 @@ first_line_len(const char *text, size_t len)
 }
 
 static int
-write_block(struct snj_render *render, int fd, const char *text, size_t len,
+write_block(struct snag_render *render, int fd, const char *text, size_t len,
             bool terminal_safe, bool persistent)
 {
     return write_role_block(render, fd, "", text, len, 0u,
@@ -362,29 +362,29 @@ write_block(struct snj_render *render, int fd, const char *text, size_t len,
 }
 
 void
-snj_render_init(struct snj_render *render, unsigned int verbosity)
+snag_render_init(struct snag_render *render, unsigned int verbosity)
 {
     memset(render, 0, sizeof(*render));
     render->verbosity = verbosity;
     render->history_fd = -1;
     render->markdown = true;
     render->markdown_prose_bullets = true;
-    render->view = SNJ_RENDER_ROLLOUT;
+    render->view = SNAG_RENDER_ROLLOUT;
     render->public_fd = -1;
     render->stdout_terminal = isatty(STDOUT_FILENO) == 1;
     render->stderr_terminal = isatty(STDERR_FILENO) == 1;
 }
 
 void
-snj_render_free(struct snj_render *render)
+snag_render_free(struct snag_render *render)
 {
     if (!render)
         return;
     if (render->public_item_open)
-        (void)snj_render_public_abort(render);
-    for (unsigned int view = 0u; view < SNJ_RENDER_VIEW_COUNT; ++view)
+        (void)snag_render_public_abort(render);
+    for (unsigned int view = 0u; view < SNAG_RENDER_VIEW_COUNT; ++view)
         while (render->view_head[view])
-            pop_record(render, (enum snj_render_view)view);
+            pop_record(render, (enum snag_render_view)view);
     render->rollout_open = NULL;
     if (render->history_fd >= 0)
         (void)close(render->history_fd);
@@ -392,68 +392,68 @@ snj_render_free(struct snj_render *render)
 }
 
 void
-snj_render_set_markdown(struct snj_render *render, bool enabled)
+snag_render_set_markdown(struct snag_render *render, bool enabled)
 {
     render->markdown = enabled;
 }
 
 void
-snj_render_set_color(struct snj_render *render, enum snj_color_mode mode)
+snag_render_set_color(struct snag_render *render, enum snag_color_mode mode)
 {
     const char *term = getenv("TERM");
-    bool disabled = mode == SNJ_COLOR_NEVER ||
-                    (mode == SNJ_COLOR_AUTO &&
+    bool disabled = mode == SNAG_COLOR_NEVER ||
+                    (mode == SNAG_COLOR_AUTO &&
                      (getenv("NO_COLOR") != NULL || !term ||
                       strcmp(term, "dumb") == 0));
 
     render->color_stdout = !disabled &&
-        (mode == SNJ_COLOR_ALWAYS || render->stdout_terminal);
+        (mode == SNAG_COLOR_ALWAYS || render->stdout_terminal);
     render->color_stderr = !disabled &&
-        (mode == SNJ_COLOR_ALWAYS || render->stderr_terminal);
+        (mode == SNAG_COLOR_ALWAYS || render->stderr_terminal);
     if (render->term)
-        snj_term_set_color(render->term, render->color_stderr,
+        snag_term_set_color(render->term, render->color_stderr,
                            render->networked);
 }
 
 void
-snj_render_set_networked(struct snj_render *render, bool networked,
+snag_render_set_networked(struct snag_render *render, bool networked,
                          const char *model_nick)
 {
     if (render->networked != networked)
-        render->view = networked ? SNJ_RENDER_CHAT : SNJ_RENDER_ROLLOUT;
+        render->view = networked ? SNAG_RENDER_CHAT : SNAG_RENDER_ROLLOUT;
     render->networked = networked;
     render->model_nick[0] = '\0';
     if (model_nick)
         (void)snprintf(render->model_nick, sizeof(render->model_nick), "%s",
                        model_nick);
     if (render->term)
-        snj_term_set_color(render->term, render->color_stderr, networked);
+        snag_term_set_color(render->term, render->color_stderr, networked);
 }
 
 void
-snj_render_attach_term(struct snj_render *render, struct snj_term *term)
+snag_render_attach_term(struct snag_render *render, struct snag_term *term)
 {
     render->term = term;
-    snj_term_set_color(term, render->color_stderr, render->networked);
+    snag_term_set_color(term, render->color_stderr, render->networked);
 }
 
 int
-snj_render_orientation(struct snj_render *render,
+snag_render_orientation(struct snag_render *render,
                        const char *workspace, const char *id,
                        uint64_t turns, size_t queued, bool resumed)
 {
-    struct snj_buf line;
+    struct snag_buf line;
     int rc;
 
-    snj_buf_init(&line, 32768u);
+    snag_buf_init(&line, 32768u);
     if (resumed) {
-        rc = snj_buf_printf(&line,
+        rc = snag_buf_printf(&line,
             SNAJPAGENT_IDENTITY " · resumed · %s · session id %.8s "
             "· %llu turns · %zu queued%s\n",
             workspace, id, (unsigned long long)turns, queued,
             queued ? " paused" : "");
     } else {
-        rc = snj_buf_printf(&line, SNAJPAGENT_IDENTITY
+        rc = snag_buf_printf(&line, SNAJPAGENT_IDENTITY
                             " · %s · session id %.8s\n",
                             workspace, id);
     }
@@ -461,51 +461,51 @@ snj_render_orientation(struct snj_render *render,
         rc = write_role_block(render, STDERR_FILENO, COLOR_AGENT,
                               (char *)line.data, line.len, line.len,
                               render->stderr_terminal, true);
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 int
-snj_render_history(struct snj_render *render,
+snag_render_history(struct snag_render *render,
                     const char *user, const char *assistant)
 {
-    struct snj_buf line;
+    struct snag_buf line;
     int rc = 0;
 
     if (!user && !assistant)
         return 0;
-    snj_buf_init(&line, 4u * 1024u * 1024u);
-    if (snj_buf_append(&line, "--- recent history ---\n", 23u) < 0 ||
+    snag_buf_init(&line, 4u * 1024u * 1024u);
+    if (snag_buf_append(&line, "--- recent history ---\n", 23u) < 0 ||
         (user &&
-         (snj_buf_append(&line, "user: ", 6u) < 0 ||
-          snj_buf_append(&line, user, strlen(user)) < 0 ||
-          snj_buf_putc(&line, '\n') < 0)))
+         (snag_buf_append(&line, "user: ", 6u) < 0 ||
+          snag_buf_append(&line, user, strlen(user)) < 0 ||
+          snag_buf_putc(&line, '\n') < 0)))
         rc = -1;
     else if (line.len)
         rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
                          render->stderr_terminal, true);
     if (rc == 0 && assistant) {
-        if (snj_render_public_begin(render, STDERR_FILENO, "assistant: ") < 0) {
+        if (snag_render_public_begin(render, STDERR_FILENO, "assistant: ") < 0) {
             rc = -1;
-        } else if (snj_render_public(render, assistant,
+        } else if (snag_render_public(render, assistant,
                                      strlen(assistant), NULL) < 0) {
             int saved_errno = errno;
-            (void)snj_render_public_abort(render);
+            (void)snag_render_public_abort(render);
             errno = saved_errno;
             rc = -1;
         } else {
-            rc = snj_render_public_end(render);
+            rc = snag_render_public_end(render);
         }
     }
     if (rc == 0)
         rc = write_block(render, STDERR_FILENO, "--- end history ---\n", 20u,
                          false, true);
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 int
-snj_render_prompt(struct snj_render *render, const char *label)
+snag_render_prompt(struct snag_render *render, const char *label)
 {
     return write_role_block(render, STDERR_FILENO,
                             render->networked ? COLOR_OPERATOR : COLOR_AGENT,
@@ -513,14 +513,14 @@ snj_render_prompt(struct snj_render *render, const char *label)
 }
 
 static int
-render_submitted(struct snj_render *render, const char *label, const char *text,
+render_submitted(struct snag_render *render, const char *label, const char *text,
                  bool separate)
 {
-    struct snj_buf line;
+    struct snag_buf line;
     int rc;
 
     if (render->term &&
-        snj_term_consume_echoed_submission(render->term, label)) {
+        snag_term_consume_echoed_submission(render->term, label)) {
         rc = separate && render->stderr_terminal ?
              write_block(render, STDERR_FILENO, "\n", 1u, false, true) : 0;
         if (rc == 0 && render->stderr_terminal) {
@@ -532,17 +532,17 @@ render_submitted(struct snj_render *render, const char *label, const char *text,
         }
         return rc;
     }
-    snj_buf_init(&line, SNJ_MAX_DIRECT_PROMPT * 8u + 64u);
+    snag_buf_init(&line, SNAG_MAX_DIRECT_PROMPT * 8u + 64u);
     if (render->public_item_open && !render->public_item_ended_lf) {
-        if (snj_buf_putc(&line, '\n') < 0) {
-            snj_buf_free(&line);
+        if (snag_buf_putc(&line, '\n') < 0) {
+            snag_buf_free(&line);
             return -1;
         }
         render->public_item_ended_lf = true;
     }
-    rc = snj_buf_append(&line, label, strlen(label));
+    rc = snag_buf_append(&line, label, strlen(label));
     if (rc == 0)
-        rc = snj_buf_append(&line, text, strlen(text));
+        rc = snag_buf_append(&line, text, strlen(text));
     if (rc == 0 && separate && render->stderr_terminal) {
         size_t len = strlen(text);
         size_t trailing = 0u;
@@ -551,17 +551,17 @@ render_submitted(struct snj_render *render, const char *label, const char *text,
                text[len - trailing - 1u] == '\n')
             ++trailing;
         while (trailing++ < 2u)
-            if (snj_buf_putc(&line, '\n') < 0) {
+            if (snag_buf_putc(&line, '\n') < 0) {
                 rc = -1;
                 break;
             }
     } else if (rc == 0) {
-        rc = snj_buf_putc(&line, '\n');
+        rc = snag_buf_putc(&line, '\n');
     }
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO,
                               render->networked &&
-                              render->view == SNJ_RENDER_CHAT ?
+                              render->view == SNAG_RENDER_CHAT ?
                               COLOR_OPERATOR : COLOR_AGENT,
                               (char *)line.data, line.len, strlen(label),
                               render->stderr_terminal, true);
@@ -572,26 +572,26 @@ render_submitted(struct snj_render *render, const char *label, const char *text,
             render->public_trailing_newlines = separate ? 2u : 1u;
         }
     }
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 int
-snj_render_submitted(struct snj_render *render, const char *label,
+snag_render_submitted(struct snag_render *render, const char *label,
                      const char *text)
 {
     return render_submitted(render, label, text, false);
 }
 
 int
-snj_render_input_submitted(struct snj_render *render, const char *label,
+snag_render_input_submitted(struct snag_render *render, const char *label,
                            const char *text)
 {
     return render_submitted(render, label, text, true);
 }
 
 int
-snj_render_before_prompt(struct snj_render *render)
+snag_render_before_prompt(struct snag_render *render)
 {
     static const char newlines[] = "\n\n";
     size_t count;
@@ -625,19 +625,19 @@ utf8_sequence_size(unsigned char first)
     return 0u;
 }
 
-static int public_write(struct snj_render *render, const char *text, size_t len);
-static int close_public_output(struct snj_render *render);
-static int markdown_finish(struct snj_render *render);
-static int markdown_abort(struct snj_render *render);
-static int markdown_write(struct snj_render *render,
+static int public_write(struct snag_render *render, const char *text, size_t len);
+static int close_public_output(struct snag_render *render);
+static int markdown_finish(struct snag_render *render);
+static int markdown_abort(struct snag_render *render);
+static int markdown_write(struct snag_render *render,
                           const unsigned char *text, size_t len);
-static int markdown_table_finish(struct snj_render *render);
-static bool public_terminal(const struct snj_render *render);
+static int markdown_table_finish(struct snag_render *render);
+static bool public_terminal(const struct snag_render *render);
 
 static bool
-markdown_has_style(const struct snj_render *render)
+markdown_has_style(const struct snag_render *render)
 {
-    const struct snj_markdown_state *md = &render->markdown_state;
+    const struct snag_markdown_state *md = &render->markdown_state;
 
     return md->heading || md->quote || md->strong || md->emphasis ||
            md->strike || md->inline_code || md->table_header ||
@@ -645,9 +645,9 @@ markdown_has_style(const struct snj_render *render)
 }
 
 static int
-markdown_paint_style(struct snj_render *render)
+markdown_paint_style(struct snag_render *render)
 {
-    const struct snj_markdown_state *md = &render->markdown_state;
+    const struct snag_markdown_state *md = &render->markdown_state;
     char sequence[64];
     size_t len = 3u;
 
@@ -672,14 +672,14 @@ markdown_paint_style(struct snj_render *render)
     sequence[len++] = 'm';
     memcpy(render->public_style, sequence, len);
     render->public_style[len] = '\0';
-    if (snj_term_write(render->public_fd, sequence, len) < 0)
+    if (snag_term_write(render->public_fd, sequence, len) < 0)
         return -1;
     render->markdown_state.style_painted = true;
     return 0;
 }
 
 static int
-markdown_clear_style(struct snj_render *render)
+markdown_clear_style(struct snag_render *render)
 {
     if (!render->markdown_state.style_painted)
         return 0;
@@ -689,7 +689,7 @@ markdown_clear_style(struct snj_render *render)
 }
 
 int
-snj_render_public_begin(struct snj_render *render, int fd, const char *label)
+snag_render_public_begin(struct snag_render *render, int fd, const char *label)
 {
     size_t label_len = label ? strlen(label) : 0u;
     bool terminal;
@@ -719,19 +719,19 @@ snj_render_public_begin(struct snj_render *render, int fd, const char *label)
         !render->stdout_item_ended_lf && !render->stdout_terminal &&
         write_literal(STDOUT_FILENO, "\n") < 0)
         return -1;
-    snj_buf_init(&render->wrap_pending, SNJ_MAX_PUBLIC_ITEM);
+    snag_buf_init(&render->wrap_pending, SNAG_MAX_PUBLIC_ITEM);
     render->public_fd = fd;
     render->public_item_open = true;
     render->public_item_bytes = label_len != 0u;
     render->public_item_ended_lf = label_len && label[label_len - 1u] == '\n';
     render->public_trailing_newlines = 0u;
-    render->public_column = label_len ? snj_term_text_width(label, label_len) : 0u;
+    render->public_column = label_len ? snag_term_text_width(label, label_len) : 0u;
     render->wrap_has_word = false;
     render->wrap_continuation = false;
     render->wrap_word_open = false;
     render->wrap_break_open = false;
     memset(&render->markdown_state, 0, sizeof(render->markdown_state));
-    snj_buf_init(&render->markdown_state.table, SNJ_MAX_PUBLIC_ITEM);
+    snag_buf_init(&render->markdown_state.table, SNAG_MAX_PUBLIC_ITEM);
     if (render->public_column == SIZE_MAX)
         goto fail;
     if (label_len) {
@@ -768,22 +768,22 @@ fail:
         render->public_trailing_newlines = 0u;
         render->markdown_rendering = false;
         render->public_fd = -1;
-        snj_buf_free(&render->markdown_state.table);
-        snj_buf_free(&render->wrap_pending);
+        snag_buf_free(&render->markdown_state.table);
+        snag_buf_free(&render->wrap_pending);
         errno = saved_errno;
         return -1;
     }
 }
 
 static bool
-public_terminal(const struct snj_render *render)
+public_terminal(const struct snag_render *render)
 {
     return render->public_fd == STDOUT_FILENO ? render->stdout_terminal :
                                                 render->stderr_terminal;
 }
 
 static int
-public_write(struct snj_render *render, const char *text, size_t len)
+public_write(struct snag_render *render, const char *text, size_t len)
 {
     bool terminal = public_terminal(render);
     size_t trailing = 0u;
@@ -799,11 +799,11 @@ public_write(struct snj_render *render, const char *text, size_t len)
         if (markdown_paint_style(render) < 0)
             return -1;
     }
-    if ((terminal ? snj_term_write_safe(render->public_fd, text, len) :
-                    snj_term_write(render->public_fd, text, len)) < 0)
+    if ((terminal ? snag_term_write_safe(render->public_fd, text, len) :
+                    snag_term_write(render->public_fd, text, len)) < 0)
         return -1;
     if (terminal && render->term &&
-        snj_term_note_output(render->term, text, len, render->public_style) < 0)
+        snag_term_note_output(render->term, text, len, render->public_style) < 0)
         return -1;
     render->public_item_bytes = true;
     render->public_item_ended_lf = text[len - 1u] == '\n';
@@ -821,7 +821,7 @@ public_write(struct snj_render *render, const char *text, size_t len)
 }
 
 static int
-close_public_output(struct snj_render *render)
+close_public_output(struct snag_render *render)
 {
     int rc = 0;
     int saved_errno = 0;
@@ -841,7 +841,7 @@ close_public_output(struct snj_render *render)
 }
 
 static int
-flush_wrap_pending(struct snj_render *render)
+flush_wrap_pending(struct snag_render *render)
 {
     const char *text = (const char *)render->wrap_pending.data;
     size_t len = render->wrap_pending.len;
@@ -856,7 +856,7 @@ flush_wrap_pending(struct snj_render *render)
     while (leading < len && (text[leading] == ' ' || text[leading] == '\t'))
         ++leading;
     prompt_interposed = !render->public_output_open && render->term &&
-                        snj_term_typing_active(render->term);
+                        snag_term_typing_active(render->term);
     if (prompt_interposed) {
         continued_line = render->public_column != 0u;
         render->public_column = 0u;
@@ -865,19 +865,19 @@ flush_wrap_pending(struct snj_render *render)
             len -= leading;
         }
         if (!len) {
-            snj_buf_reset(&render->wrap_pending);
+            snag_buf_reset(&render->wrap_pending);
             render->wrap_has_word = false;
             render->wrap_continuation = false;
             return 0;
         }
     }
-    width = snj_term_text_width(text, len);
+    width = snag_term_text_width(text, len);
     columns = render->markdown_measuring ? UINT_MAX :
-                                           snj_term_columns(render->term);
+                                           snag_term_columns(render->term);
     if (width == SIZE_MAX)
         return -1;
     if (columns >= 20u && render->public_column == columns && leading == len) {
-        snj_buf_reset(&render->wrap_pending);
+        snag_buf_reset(&render->wrap_pending);
         render->wrap_has_word = false;
         render->wrap_continuation = false;
         return 0;
@@ -896,7 +896,7 @@ flush_wrap_pending(struct snj_render *render)
                 return -1;
             render->public_column = 2u;
         }
-        width = snj_term_text_width(text, len);
+        width = snag_term_text_width(text, len);
         if (width == SIZE_MAX)
             return -1;
     }
@@ -915,7 +915,7 @@ flush_wrap_pending(struct snj_render *render)
     } else {
         render->public_column += width;
     }
-    snj_buf_reset(&render->wrap_pending);
+    snag_buf_reset(&render->wrap_pending);
     render->wrap_has_word = false;
     render->wrap_continuation = false;
     return 0;
@@ -937,7 +937,7 @@ wrap_break_after(const unsigned char *text, size_t len)
 }
 
 static int
-write_wrapped(struct snj_render *render, const unsigned char *text, size_t len)
+write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
 {
     size_t i = 0u;
 
@@ -971,7 +971,7 @@ write_wrapped(struct snj_render *render, const unsigned char *text, size_t len)
                     render->wrap_pending.len == 0u;
                 render->wrap_has_word = true;
             }
-            if (snj_buf_append(&render->wrap_pending, text + i, n) < 0)
+            if (snag_buf_append(&render->wrap_pending, text + i, n) < 0)
                 return -1;
             if (break_after) {
                 if (flush_wrap_pending(render) < 0)
@@ -997,7 +997,7 @@ markdown_word(const unsigned char *text, size_t len)
 }
 
 static int
-markdown_text(struct snj_render *render, const void *text, size_t len)
+markdown_text(struct snag_render *render, const void *text, size_t len)
 {
     const unsigned char *bytes = text;
     size_t last;
@@ -1015,7 +1015,7 @@ markdown_text(struct snj_render *render, const void *text, size_t len)
 }
 
 static int
-markdown_repeat(struct snj_render *render, char value, size_t count)
+markdown_repeat(struct snag_render *render, char value, size_t count)
 {
     char text[16];
 
@@ -1030,7 +1030,7 @@ markdown_repeat(struct snj_render *render, char value, size_t count)
 }
 
 static int
-markdown_style_changed(struct snj_render *render)
+markdown_style_changed(struct snag_render *render)
 {
     if (flush_wrap_pending(render) < 0 || markdown_clear_style(render) < 0)
         return -1;
@@ -1038,10 +1038,10 @@ markdown_style_changed(struct snj_render *render)
 }
 
 static int
-markdown_flush_delimiter(struct snj_render *render, bool next_word,
+markdown_flush_delimiter(struct snag_render *render, bool next_word,
                          bool at_end)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     char delimiter = md->delimiter;
     size_t count = md->delimiter_len;
 
@@ -1095,9 +1095,9 @@ markdown_escapable(unsigned char value)
 }
 
 static int
-markdown_inline(struct snj_render *render, const unsigned char *text, size_t len)
+markdown_inline(struct snag_render *render, const unsigned char *text, size_t len)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     size_t i = 0u;
 
     size_t checkpoint_at = 0u;
@@ -1306,9 +1306,9 @@ markdown_table_delimiter(const struct markdown_table_cell *cells,
 }
 
 static int
-markdown_inline_finish(struct snj_render *render)
+markdown_inline_finish(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
 
     if (markdown_flush_delimiter(render, false, true) < 0)
         return -1;
@@ -1332,11 +1332,11 @@ markdown_inline_finish(struct snj_render *render)
 }
 
 static int
-markdown_table_cell_width(struct snj_render *render,
+markdown_table_cell_width(struct snag_render *render,
                           const struct markdown_table_cell *cell,
                           size_t *width)
 {
-    struct snj_render probe;
+    struct snag_render probe;
     int rc;
 
     if (render_checkpoint(render) < 0)
@@ -1347,7 +1347,7 @@ markdown_table_cell_width(struct snj_render *render,
     probe.markdown_measuring = true;
     probe.checkpoint = render->checkpoint;
     probe.checkpoint_opaque = render->checkpoint_opaque;
-    snj_buf_init(&probe.wrap_pending, SNJ_MAX_PUBLIC_ITEM);
+    snag_buf_init(&probe.wrap_pending, SNAG_MAX_PUBLIC_ITEM);
     rc = markdown_inline(&probe, cell->text, cell->len);
     if (rc == 0)
         rc = markdown_inline_finish(&probe);
@@ -1355,12 +1355,12 @@ markdown_table_cell_width(struct snj_render *render,
         rc = flush_wrap_pending(&probe);
     if (rc == 0)
         *width = probe.public_column;
-    snj_buf_free(&probe.wrap_pending);
+    snag_buf_free(&probe.wrap_pending);
     return rc;
 }
 
 static int
-markdown_table_spaces(struct snj_render *render, size_t count)
+markdown_table_spaces(struct snag_render *render, size_t count)
 {
     static const char spaces[] = "                ";
 
@@ -1375,7 +1375,7 @@ markdown_table_spaces(struct snj_render *render, size_t count)
 }
 
 static int
-markdown_table_rule(struct snj_render *render, const char *left,
+markdown_table_rule(struct snag_render *render, const char *left,
                     const char *middle, const char *right,
                     const size_t *widths, size_t count, bool newline)
 {
@@ -1396,7 +1396,7 @@ markdown_table_rule(struct snj_render *render, const char *left,
 }
 
 static int
-markdown_table_cell(struct snj_render *render,
+markdown_table_cell(struct snag_render *render,
                     const struct markdown_table_cell *cell, bool strong)
 {
     render->markdown_state.previous_word = false;
@@ -1412,7 +1412,7 @@ markdown_table_cell(struct snj_render *render,
 }
 
 static int
-markdown_table_grid_row(struct snj_render *render,
+markdown_table_grid_row(struct snag_render *render,
                         const struct markdown_table_cell *cells,
                         size_t cell_count, const size_t *widths,
                         const enum markdown_table_alignment *alignment,
@@ -1474,9 +1474,9 @@ markdown_table_next_line(const unsigned char *text, size_t len,
 }
 
 static int
-markdown_table_render(struct snj_render *render)
+markdown_table_render(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     const unsigned char *text = md->table.data;
     struct markdown_table_cell header[MARKDOWN_TABLE_COLUMNS];
     struct markdown_table_cell delimiter[MARKDOWN_TABLE_COLUMNS];
@@ -1489,7 +1489,7 @@ markdown_table_render(struct snj_render *render)
     size_t offset = 0u;
     size_t body_offset;
     size_t total;
-    unsigned int terminal_columns = snj_term_columns(render->term);
+    unsigned int terminal_columns = snag_term_columns(render->term);
     bool ended_lf = md->table.len && text[md->table.len - 1u] == '\n';
     bool grid;
 
@@ -1615,9 +1615,9 @@ markdown_table_render(struct snj_render *render)
 }
 
 static void
-markdown_table_reset(struct snj_markdown_state *md)
+markdown_table_reset(struct snag_markdown_state *md)
 {
-    snj_buf_reset(&md->table);
+    snag_buf_reset(&md->table);
     md->table_header_len = 0u;
     md->table_line_start = 0u;
     md->table_line = false;
@@ -1626,13 +1626,13 @@ markdown_table_reset(struct snj_markdown_state *md)
 }
 
 static int
-markdown_table_replay(struct snj_render *render)
+markdown_table_replay(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
-    struct snj_buf saved = md->table;
+    struct snag_markdown_state *md = &render->markdown_state;
+    struct snag_buf saved = md->table;
     int rc;
 
-    snj_buf_init(&md->table, SNJ_MAX_PUBLIC_ITEM);
+    snag_buf_init(&md->table, SNAG_MAX_PUBLIC_ITEM);
     md->table_header_len = 0u;
     md->table_line_start = 0u;
     md->table_line = false;
@@ -1642,14 +1642,14 @@ markdown_table_replay(struct snj_render *render)
     md->table_disabled = true;
     rc = markdown_write(render, saved.data, saved.len);
     md->table_disabled = false;
-    snj_buf_free(&saved);
+    snag_buf_free(&saved);
     return rc;
 }
 
 static int
-markdown_table_finish(struct snj_render *render)
+markdown_table_finish(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     int rc;
 
     if (md->table_line) {
@@ -1661,13 +1661,13 @@ markdown_table_finish(struct snj_render *render)
                                   md->table.len - md->table_line_start,
                                   cells, &count)) {
             if (md->table_active) {
-                struct snj_buf row;
+                struct snag_buf row;
 
-                snj_buf_init(&row, SNJ_MAX_PUBLIC_ITEM);
-                if (snj_buf_append(&row,
+                snag_buf_init(&row, SNAG_MAX_PUBLIC_ITEM);
+                if (snag_buf_append(&row,
                                    md->table.data + md->table_line_start,
                                    md->table.len - md->table_line_start) < 0) {
-                    snj_buf_free(&row);
+                    snag_buf_free(&row);
                     return -1;
                 }
                 md->table.len = md->table_line_start;
@@ -1678,7 +1678,7 @@ markdown_table_finish(struct snj_render *render)
                     rc = markdown_write(render, row.data, row.len);
                     md->table_disabled = false;
                 }
-                snj_buf_free(&row);
+                snag_buf_free(&row);
                 return rc;
             }
             return markdown_table_replay(render);
@@ -1714,9 +1714,9 @@ markdown_table_finish(struct snj_render *render)
 }
 
 static int
-markdown_table_line_end(struct snj_render *render)
+markdown_table_line_end(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
     size_t line_len = md->table.len - md->table_line_start;
     size_t count;
@@ -1755,12 +1755,12 @@ markdown_table_line_end(struct snj_render *render)
 }
 
 static int
-markdown_table_start_line(struct snj_render *render)
+markdown_table_start_line(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
 
     md->table_line_start = md->table.len;
-    if (snj_buf_append(&md->table, md->prefix, md->prefix_len) < 0)
+    if (snag_buf_append(&md->table, md->prefix, md->prefix_len) < 0)
         return -1;
     md->prefix_len = 0u;
     md->table_line = true;
@@ -1769,7 +1769,7 @@ markdown_table_start_line(struct snj_render *render)
 }
 
 static size_t
-markdown_prefix_spaces(const struct snj_markdown_state *md)
+markdown_prefix_spaces(const struct snag_markdown_state *md)
 {
     size_t spaces = 0u;
 
@@ -1780,9 +1780,9 @@ markdown_prefix_spaces(const struct snj_markdown_state *md)
 }
 
 static int
-markdown_prefix_literal(struct snj_render *render)
+markdown_prefix_literal(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     size_t len = md->prefix_len;
     size_t spaces = markdown_prefix_spaces(md);
     bool prose = len != 0u && spaces != len;
@@ -1799,9 +1799,9 @@ markdown_prefix_literal(struct snj_render *render)
 }
 
 static int
-markdown_code_prefix_literal(struct snj_render *render)
+markdown_code_prefix_literal(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     size_t len = md->prefix_len;
 
     md->prefix_len = 0u;
@@ -1813,7 +1813,7 @@ markdown_code_prefix_literal(struct snj_render *render)
 }
 
 static bool
-markdown_fence_close(const struct snj_markdown_state *md)
+markdown_fence_close(const struct snag_markdown_state *md)
 {
     size_t spaces = markdown_prefix_spaces(md);
     size_t count = 0u;
@@ -1829,9 +1829,9 @@ markdown_fence_close(const struct snj_markdown_state *md)
 }
 
 static int
-markdown_open_fence(struct snj_render *render, bool newline)
+markdown_open_fence(struct snag_render *render, bool newline)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     size_t begin = 0u;
     size_t end = md->fence_info_len;
 
@@ -1853,10 +1853,10 @@ markdown_open_fence(struct snj_render *render, bool newline)
 }
 
 static int
-markdown_line_prefix(struct snj_render *render,
+markdown_line_prefix(struct snag_render *render,
                      const unsigned char *text, size_t len)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     size_t spaces;
     const char *body;
     size_t body_len;
@@ -1978,9 +1978,9 @@ ordinary:
 }
 
 static int
-markdown_newline(struct snj_render *render)
+markdown_newline(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     bool blank = md->line_start && !md->fence &&
                  markdown_prefix_spaces(md) == md->prefix_len;
 
@@ -2031,9 +2031,9 @@ markdown_newline(struct snj_render *render)
 }
 
 static int
-markdown_write(struct snj_render *render, const unsigned char *text, size_t len)
+markdown_write(struct snag_render *render, const unsigned char *text, size_t len)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
     size_t i = 0u;
 
     size_t checkpoint_at = 0u;
@@ -2051,14 +2051,14 @@ markdown_write(struct snj_render *render, const unsigned char *text, size_t len)
         }
         if (text[i] == '\n') {
             if (md->table_line) {
-                if (snj_buf_putc(&md->table, '\n') < 0 ||
+                if (snag_buf_putc(&md->table, '\n') < 0 ||
                     markdown_table_line_end(render) < 0)
                     return -1;
             } else if (markdown_newline(render) < 0) {
                 return -1;
             }
         } else if (md->table_line) {
-            if (snj_buf_append(&md->table, text + i, n) < 0)
+            if (snag_buf_append(&md->table, text + i, n) < 0)
                 return -1;
         } else if (md->fence_header) {
             if (n == 1u && text[i] == (unsigned char)md->fence &&
@@ -2101,9 +2101,9 @@ markdown_write(struct snj_render *render, const unsigned char *text, size_t len)
 }
 
 static int
-markdown_finish(struct snj_render *render)
+markdown_finish(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
 
     if (!render->markdown_rendering)
         return 0;
@@ -2159,9 +2159,9 @@ markdown_finish(struct snj_render *render)
 }
 
 static int
-markdown_abort(struct snj_render *render)
+markdown_abort(struct snag_render *render)
 {
-    struct snj_markdown_state *md = &render->markdown_state;
+    struct snag_markdown_state *md = &render->markdown_state;
 
     if ((md->table_line || md->table_pending || md->table_active) &&
         markdown_table_finish(render) < 0)
@@ -2170,21 +2170,21 @@ markdown_abort(struct snj_render *render)
 }
 
 static int
-render_public_chunk(struct snj_render *render, const char *text, size_t len,
-                  struct snj_buf *delivered)
+render_public_chunk(struct snag_render *render, const char *text, size_t len,
+                  struct snag_buf *delivered)
 {
     const unsigned char *input = (const unsigned char *)text;
-    struct snj_buf complete;
+    struct snag_buf complete;
     size_t complete_max;
     int rc = -1;
     int saved_errno = 0;
 
     if (!render->public_item_open ||
-        !snj_size_add(len, sizeof(render->utf8_pending), &complete_max)) {
+        !snag_size_add(len, sizeof(render->utf8_pending), &complete_max)) {
         errno = EOVERFLOW;
         return -1;
     }
-    snj_buf_init(&complete, complete_max);
+    snag_buf_init(&complete, complete_max);
     for (size_t i = 0; i < len; ++i) {
         size_t expected;
 
@@ -2196,14 +2196,14 @@ render_public_chunk(struct snj_render *render, const char *text, size_t len,
             goto invalid;
         if (render->utf8_pending_len < expected)
             continue;
-        if (!snj_utf8_valid(render->utf8_pending, expected, true))
+        if (!snag_utf8_valid(render->utf8_pending, expected, true))
             goto invalid;
-        if (snj_buf_append(&complete, render->utf8_pending, expected) < 0)
+        if (snag_buf_append(&complete, render->utf8_pending, expected) < 0)
             goto out;
         render->utf8_pending_len = 0;
     }
     if (complete.len) {
-        if (delivered && snj_buf_reserve(delivered, complete.len) < 0)
+        if (delivered && snag_buf_reserve(delivered, complete.len) < 0)
             goto out;
         if (public_terminal(render) ?
             (render->markdown_rendering ?
@@ -2211,7 +2211,7 @@ render_public_chunk(struct snj_render *render, const char *text, size_t len,
              write_wrapped(render, complete.data, complete.len) < 0) :
             public_write(render, (const char *)complete.data, complete.len) < 0)
             goto out;
-        if (delivered && snj_buf_append(delivered, complete.data, complete.len) < 0)
+        if (delivered && snag_buf_append(delivered, complete.data, complete.len) < 0)
             goto out;
     }
     rc = 0;
@@ -2224,15 +2224,15 @@ out:
         saved_errno = errno;
     if (close_public_output(render) < 0 && rc == 0)
         rc = -1;
-    snj_buf_free(&complete);
+    snag_buf_free(&complete);
     if (saved_errno)
         errno = saved_errno;
     return rc;
 }
 
 int
-snj_render_public(struct snj_render *render, const char *text, size_t len,
-                   struct snj_buf *delivered)
+snag_render_public(struct snag_render *render, const char *text, size_t len,
+                   struct snag_buf *delivered)
 {
     if (!len)
         return render_public_chunk(render, text, len, delivered);
@@ -2249,7 +2249,7 @@ snj_render_public(struct snj_render *render, const char *text, size_t len,
 }
 
 static int
-close_public_item(struct snj_render *render, bool discard_incomplete)
+close_public_item(struct snag_render *render, bool discard_incomplete)
 {
     int fd;
     bool ended_lf;
@@ -2304,8 +2304,8 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
     render->wrap_continuation = false;
     render->wrap_word_open = false;
     render->wrap_break_open = false;
-    snj_buf_free(&render->markdown_state.table);
-    snj_buf_free(&render->wrap_pending);
+    snag_buf_free(&render->markdown_state.table);
+    snag_buf_free(&render->wrap_pending);
     if (fd == STDOUT_FILENO && had_bytes) {
         render->stdout_item_seen = true;
         render->stdout_item_ended_lf = ended_lf;
@@ -2335,27 +2335,27 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
 }
 
 int
-snj_render_public_end(struct snj_render *render)
+snag_render_public_end(struct snag_render *render)
 {
     return close_public_item(render, false);
 }
 
 int
-snj_render_public_abort(struct snj_render *render)
+snag_render_public_abort(struct snag_render *render)
 {
     return close_public_item(render, true);
 }
 
 static int
-rollout_physical_begin(struct snj_render *render,
-                       struct snj_render_record *record)
+rollout_physical_begin(struct snag_render *render,
+                       struct snag_render_record *record)
 {
     const char *label;
 
     if (record->physical_open)
         return 0;
     label = record->label_displayed ? NULL : record->label;
-    if (snj_render_public_begin(render, record->fd, label) < 0)
+    if (snag_render_public_begin(render, record->fd, label) < 0)
         return -1;
     record->physical_open = true;
     record->label_displayed = true;
@@ -2363,24 +2363,24 @@ rollout_physical_begin(struct snj_render *render,
 }
 
 static int
-rollout_physical_append(struct snj_render *render,
-                        struct snj_render_record *record,
+rollout_physical_append(struct snag_render *render,
+                        struct snag_render_record *record,
                         const char *text, size_t len)
 {
     while (len) {
         size_t amount = text_slice(text, len);
-        if (!snj_render_enabled(render, record->presentation)) {
+        if (!snag_render_enabled(render, record->presentation)) {
             record->omitted = true;
             if (record->physical_open) {
-                if (snj_render_public_abort(render) < 0 ||
-                    snj_render_host(render, "… [display omitted]") < 0)
+                if (snag_render_public_abort(render) < 0 ||
+                    snag_render_host(render, "… [display omitted]") < 0)
                     return -1;
                 record->physical_open = false;
             }
         }
         if (!record->omitted &&
             (rollout_physical_begin(render, record) < 0 ||
-             snj_render_public(render, text, amount, NULL) < 0))
+             snag_render_public(render, text, amount, NULL) < 0))
             return -1;
         record->displayed += amount;
         text += amount;
@@ -2392,10 +2392,10 @@ rollout_physical_append(struct snj_render *render,
 }
 
 int
-snj_render_rollout_begin(struct snj_render *render, int fd,
-                         const char *label, enum snj_presentation kind)
+snag_render_rollout_begin(struct snag_render *render, int fd,
+                         const char *label, enum snag_presentation kind)
 {
-    struct snj_render_record *record;
+    struct snag_render_record *record;
 
     if (render->rollout_open || render->public_item_open ||
         (fd != STDOUT_FILENO && fd != STDERR_FILENO)) {
@@ -2405,38 +2405,38 @@ snj_render_rollout_begin(struct snj_render *render, int fd,
     record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
-    record->kind = SNJ_RENDER_RECORD_PUBLIC;
+    record->kind = SNAG_RENDER_RECORD_PUBLIC;
     record->presentation = kind;
     record->fd = fd;
-    snj_buf_init(&record->text, SNJ_MAX_PUBLIC_ITEM);
+    snag_buf_init(&record->text, SNAG_MAX_PUBLIC_ITEM);
     if (label) {
-        record->label = snj_strdup_checked(label, 1024u);
+        record->label = snag_strdup_checked(label, 1024u);
         if (!record->label) {
             free_record(record);
             return -1;
         }
     }
-    queue_record(render, SNJ_RENDER_ROLLOUT, record);
+    queue_record(render, SNAG_RENDER_ROLLOUT, record);
     render->rollout_open = record;
     return 0;
 }
 
 int
-snj_render_rollout(struct snj_render *render, const char *text, size_t len,
-                   struct snj_buf *delivered)
+snag_render_rollout(struct snag_render *render, const char *text, size_t len,
+                   struct snag_buf *delivered)
 {
-    struct snj_render_record *record = render->rollout_open;
+    struct snag_render_record *record = render->rollout_open;
     const unsigned char *input = (const unsigned char *)text;
-    struct snj_buf complete;
+    struct snag_buf complete;
     size_t complete_max;
     int rc = -1;
 
     if (!record || record->complete ||
-        !snj_size_add(len, sizeof(record->utf8_pending), &complete_max)) {
+        !snag_size_add(len, sizeof(record->utf8_pending), &complete_max)) {
         errno = record ? EOVERFLOW : EINVAL;
         return -1;
     }
-    snj_buf_init(&complete, complete_max);
+    snag_buf_init(&complete, complete_max);
     for (size_t i = 0u; i < len; ++i) {
         size_t expected;
 
@@ -2448,24 +2448,24 @@ snj_render_rollout(struct snj_render *render, const char *text, size_t len,
             goto invalid;
         if (record->utf8_pending_len < expected)
             continue;
-        if (!snj_utf8_valid(record->utf8_pending, expected, true))
+        if (!snag_utf8_valid(record->utf8_pending, expected, true))
             goto invalid;
-        if (snj_buf_append(&complete, record->utf8_pending, expected) < 0)
+        if (snag_buf_append(&complete, record->utf8_pending, expected) < 0)
             goto out;
         record->utf8_pending_len = 0u;
     }
     if (complete.len) {
-        if (snj_buf_reserve(&record->text, complete.len) < 0 ||
-            (delivered && snj_buf_reserve(delivered, complete.len) < 0) ||
-            snj_buf_append(&record->text, complete.data, complete.len) < 0)
+        if (snag_buf_reserve(&record->text, complete.len) < 0 ||
+            (delivered && snag_buf_reserve(delivered, complete.len) < 0) ||
+            snag_buf_append(&record->text, complete.data, complete.len) < 0)
             goto out;
-        if (render->view == SNJ_RENDER_ROLLOUT &&
+        if (render->view == SNAG_RENDER_ROLLOUT &&
             rollout_physical_append(render, record,
                                     (const char *)complete.data,
                                     complete.len) < 0)
             goto out;
         if (delivered &&
-            snj_buf_append(delivered, complete.data, complete.len) < 0)
+            snag_buf_append(delivered, complete.data, complete.len) < 0)
             goto out;
     }
     rc = 0;
@@ -2474,14 +2474,14 @@ invalid:
     record->utf8_pending_len = 0u;
     errno = EILSEQ;
 out:
-    snj_buf_free(&complete);
+    snag_buf_free(&complete);
     return rc;
 }
 
 static int
-close_rollout_record(struct snj_render *render, bool abort)
+close_rollout_record(struct snag_render *render, bool abort)
 {
-    struct snj_render_record *record = render->rollout_open;
+    struct snag_render_record *record = render->rollout_open;
     bool was_head;
     int rc = 0;
 
@@ -2496,147 +2496,147 @@ close_rollout_record(struct snj_render *render, bool abort)
     }
     record->complete = true;
     record->aborted = abort;
-    was_head = record == render->view_head[SNJ_RENDER_ROLLOUT];
+    was_head = record == render->view_head[SNAG_RENDER_ROLLOUT];
     if (record->physical_open) {
-        if ((abort ? snj_render_public_abort(render) :
-                     snj_render_public_end(render)) < 0 && rc == 0)
+        if ((abort ? snag_render_public_abort(render) :
+                     snag_render_public_end(render)) < 0 && rc == 0)
             rc = -1;
         record->physical_open = false;
     }
     render->rollout_open = NULL;
     if (was_head && record->displayed == record->text.len) {
-        pop_record(render, SNJ_RENDER_ROLLOUT);
-        if (render->view == SNJ_RENDER_ROLLOUT &&
-            flush_view(render, SNJ_RENDER_ROLLOUT) < 0 && rc == 0)
+        pop_record(render, SNAG_RENDER_ROLLOUT);
+        if (render->view == SNAG_RENDER_ROLLOUT &&
+            flush_view(render, SNAG_RENDER_ROLLOUT) < 0 && rc == 0)
             rc = -1;
     }
     return rc;
 }
 
 int
-snj_render_rollout_end(struct snj_render *render)
+snag_render_rollout_end(struct snag_render *render)
 {
     return close_rollout_record(render, false);
 }
 
 int
-snj_render_rollout_abort(struct snj_render *render)
+snag_render_rollout_abort(struct snag_render *render)
 {
     return close_rollout_record(render, true);
 }
 
 static int
-render_message(struct snj_render *render, const char *message,
+render_message(struct snag_render *render, const char *message,
                const char *color)
 {
-    struct snj_buf line;
+    struct snag_buf line;
     int rc;
 
-    snj_buf_init(&line, 16384u);
-    rc = snj_buf_printf(&line, SNAJPAGENT_NAME ": %s\n", message);
+    snag_buf_init(&line, 16384u);
+    rc = snag_buf_printf(&line, SNAJPAGENT_NAME ": %s\n", message);
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO, color,
                               (char *)line.data, line.len, line.len,
                               render->stderr_terminal, true);
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 int
-snj_render_error_ctx(struct snj_render *render, const char *message)
+snag_render_error_ctx(struct snag_render *render, const char *message)
 {
     return render_message(render, message, COLOR_ERROR);
 }
 
 int
-snj_render_warning_ctx(struct snj_render *render, const char *message)
+snag_render_warning_ctx(struct snag_render *render, const char *message)
 {
     return render_message(render, message, COLOR_WARNING);
 }
 
 int
-snj_render_host(struct snj_render *render, const char *text)
+snag_render_host(struct snag_render *render, const char *text)
 {
     size_t len = strlen(text);
-    struct snj_buf line;
+    struct snag_buf line;
     int rc;
 
-    snj_buf_init(&line, 4u * 1024u * 1024u);
-    rc = snj_buf_append(&line, text, len);
+    snag_buf_init(&line, 4u * 1024u * 1024u);
+    rc = snag_buf_append(&line, text, len);
     if (rc == 0 && (len == 0u || text[len - 1u] != '\n'))
-        rc = snj_buf_putc(&line, '\n');
+        rc = snag_buf_putc(&line, '\n');
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO, COLOR_HOST,
                               (char *)line.data, line.len,
                               first_line_len((char *)line.data, line.len),
                               render->stderr_terminal, true);
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 int
-snj_render_runtime(struct snj_render *render, const char *text)
+snag_render_runtime(struct snag_render *render, const char *text)
 {
     size_t len;
-    struct snj_buf line;
+    struct snag_buf line;
     int rc;
 
-    if (!snj_render_enabled(render, SNJ_PRESENT_DEBUG))
+    if (!snag_render_enabled(render, SNAG_PRESENT_DEBUG))
         return 0;
     len = strlen(text);
-    snj_buf_init(&line, 4u * 1024u * 1024u);
-    rc = snj_buf_append(&line, text, len);
+    snag_buf_init(&line, 4u * 1024u * 1024u);
+    rc = snag_buf_append(&line, text, len);
     if (rc == 0 && (!len || text[len - 1u] != '\n'))
-        rc = snj_buf_putc(&line, '\n');
+        rc = snag_buf_putc(&line, '\n');
     if (rc == 0)
-        rc = write_optional_block(render, SNJ_PRESENT_DEBUG, COLOR_META,
+        rc = write_optional_block(render, SNAG_PRESENT_DEBUG, COLOR_META,
                         (char *)line.data, line.len,
                         first_line_len((char *)line.data, line.len));
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 static const char *
-irc_event_word(enum snj_irc_event_kind kind)
+irc_event_word(enum snag_irc_event_kind kind)
 {
     switch (kind) {
-    case SNJ_IRC_CONNECTED: return "connected";
-    case SNJ_IRC_DISCONNECTED: return "disconnected";
-    case SNJ_IRC_JOIN: return "joined";
-    case SNJ_IRC_PART: return "left";
-    case SNJ_IRC_QUIT: return "quit";
-    case SNJ_IRC_NICK: return "is now known as";
-    case SNJ_IRC_TOPIC: return "set topic";
-    case SNJ_IRC_MODE: return "set mode";
-    case SNJ_IRC_HISTORY_READY: return "history synchronized";
-    case SNJ_IRC_MESSAGE: case SNJ_IRC_NOTICE: break;
+    case SNAG_IRC_CONNECTED: return "connected";
+    case SNAG_IRC_DISCONNECTED: return "disconnected";
+    case SNAG_IRC_JOIN: return "joined";
+    case SNAG_IRC_PART: return "left";
+    case SNAG_IRC_QUIT: return "quit";
+    case SNAG_IRC_NICK: return "is now known as";
+    case SNAG_IRC_TOPIC: return "set topic";
+    case SNAG_IRC_MODE: return "set mode";
+    case SNAG_IRC_HISTORY_READY: return "history synchronized";
+    case SNAG_IRC_MESSAGE: case SNAG_IRC_NOTICE: break;
     }
     return "event";
 }
 
 static int
-irc_piece(struct snj_render *render, const char *text, bool safe)
+irc_piece(struct snag_render *render, const char *text, bool safe)
 {
     size_t len = strlen(text);
 
-    if ((safe ? snj_term_write_safe(STDERR_FILENO, text, len) :
-                snj_term_write(STDERR_FILENO, text, len)) < 0)
+    if ((safe ? snag_term_write_safe(STDERR_FILENO, text, len) :
+                snag_term_write(STDERR_FILENO, text, len)) < 0)
         return -1;
     if (len && text[0] == '\033')
-        (void)snj_strcpy(render->public_style, sizeof(render->public_style), text);
+        (void)snag_strcpy(render->public_style, sizeof(render->public_style), text);
     else if (render->term)
-        return snj_term_note_output(render->term, text, len, render->public_style);
+        return snag_term_note_output(render->term, text, len, render->public_style);
     return 0;
 }
 
-static struct snj_irc_markdown_state *
-irc_markdown_state(struct snj_render *render, const struct snj_irc_event *event,
+static struct snag_irc_markdown_state *
+irc_markdown_state(struct snag_render *render, const struct snag_irc_event *event,
                    bool allocate)
 {
-    struct snj_irc_markdown_state *empty = NULL;
+    struct snag_irc_markdown_state *empty = NULL;
 
-    for (size_t i = 0u; i < SNJ_RENDER_IRC_MARKDOWN_STATES; ++i) {
-        struct snj_irc_markdown_state *state = &render->irc_markdown[i];
+    for (size_t i = 0u; i < SNAG_RENDER_IRC_MARKDOWN_STATES; ++i) {
+        struct snag_irc_markdown_state *state = &render->irc_markdown[i];
         if (!state->fence) {
             if (!empty)
                 empty = state;
@@ -2650,19 +2650,19 @@ irc_markdown_state(struct snj_render *render, const struct snj_irc_event *event,
 }
 
 static void
-irc_markdown_lifecycle(struct snj_render *render,
-                       const struct snj_irc_event *event)
+irc_markdown_lifecycle(struct snag_render *render,
+                       const struct snag_irc_event *event)
 {
-    bool endpoint_reset = event->kind == SNJ_IRC_CONNECTED ||
-                          event->kind == SNJ_IRC_DISCONNECTED;
-    bool nick_reset = event->kind == SNJ_IRC_PART ||
-                      event->kind == SNJ_IRC_QUIT ||
-                      event->kind == SNJ_IRC_NICK;
+    bool endpoint_reset = event->kind == SNAG_IRC_CONNECTED ||
+                          event->kind == SNAG_IRC_DISCONNECTED;
+    bool nick_reset = event->kind == SNAG_IRC_PART ||
+                      event->kind == SNAG_IRC_QUIT ||
+                      event->kind == SNAG_IRC_NICK;
 
     if (!endpoint_reset && !nick_reset)
         return;
-    for (size_t i = 0u; i < SNJ_RENDER_IRC_MARKDOWN_STATES; ++i) {
-        struct snj_irc_markdown_state *state = &render->irc_markdown[i];
+    for (size_t i = 0u; i < SNAG_RENDER_IRC_MARKDOWN_STATES; ++i) {
+        struct snag_irc_markdown_state *state = &render->irc_markdown[i];
         if (state->fence && strcmp(state->endpoint, event->endpoint) == 0 &&
             (endpoint_reset || strcmp(state->nick, event->nick) == 0))
             memset(state, 0, sizeof(*state));
@@ -2670,15 +2670,15 @@ irc_markdown_lifecycle(struct snj_render *render,
 }
 
 static int
-render_irc_markdown(struct snj_render *render,
-                    const struct snj_irc_event *event, size_t column)
+render_irc_markdown(struct snag_render *render,
+                    const struct snag_irc_event *event, size_t column)
 {
-    struct snj_irc_markdown_state *saved =
+    struct snag_irc_markdown_state *saved =
         irc_markdown_state(render, event, false);
-    struct snj_render body;
+    struct snag_render body;
     int rc = -1;
 
-    snj_render_init(&body, render->verbosity);
+    snag_render_init(&body, render->verbosity);
     body.stderr_terminal = render->stderr_terminal;
     body.color_stderr = render->color_stderr;
     body.markdown = true;
@@ -2686,7 +2686,7 @@ render_irc_markdown(struct snj_render *render,
     body.term = render->term;
     body.checkpoint = render->checkpoint;
     body.checkpoint_opaque = render->checkpoint_opaque;
-    if (snj_render_public_begin(&body, STDERR_FILENO, NULL) < 0)
+    if (snag_render_public_begin(&body, STDERR_FILENO, NULL) < 0)
         return -1;
     body.public_column = column;
     body.markdown_preserve_fence = true;
@@ -2694,7 +2694,7 @@ render_irc_markdown(struct snj_render *render,
         body.markdown_state.fence = saved->fence;
         body.markdown_state.fence_len = saved->fence_len;
     }
-    if (snj_render_public(&body, event->text, strlen(event->text), NULL) < 0 ||
+    if (snag_render_public(&body, event->text, strlen(event->text), NULL) < 0 ||
         markdown_finish(&body) < 0)
         goto out;
     if (body.markdown_state.fence) {
@@ -2713,17 +2713,17 @@ render_irc_markdown(struct snj_render *render,
     body.markdown_rendering = false;
     if (!body.public_item_bytes && public_write(&body, "\n", 1u) < 0)
         goto out;
-    rc = snj_render_public_end(&body);
+    rc = snag_render_public_end(&body);
     return rc;
 out:
     body.markdown_rendering = false;
-    (void)snj_render_public_abort(&body);
+    (void)snag_render_public_abort(&body);
     return -1;
 }
 
 static int
-render_irc_event_now(struct snj_render *render,
-                     const struct snj_irc_event *event, bool own_agent)
+render_irc_event_now(struct snag_render *render,
+                     const struct snag_irc_event *event, bool own_agent)
 {
     char when[16u];
     char prefix[768u];
@@ -2760,9 +2760,9 @@ render_irc_event_now(struct snj_render *render,
     if (colored && (irc_piece(render, "\033[0m", false) < 0 ||
                     irc_piece(render, nick_color, false) < 0))
         goto out;
-    if (event->kind == SNJ_IRC_MESSAGE || event->kind == SNJ_IRC_NOTICE) {
+    if (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) {
         n = snprintf(prefix, sizeof(prefix), "%s%s%s ",
-                     event->kind == SNJ_IRC_NOTICE ? "-" : "",
+                     event->kind == SNAG_IRC_NOTICE ? "-" : "",
                      event->op ? "@" : "", event->nick);
         if (n < 0 || (size_t)n >= sizeof(prefix) ||
             irc_piece(render, prefix, true) < 0)
@@ -2770,9 +2770,9 @@ render_irc_event_now(struct snj_render *render,
         if (colored && irc_piece(render, "\033[0m", false) < 0)
             goto out;
         if (irc_piece(render,
-                event->kind == SNJ_IRC_NOTICE ? "- " : "› ", true) < 0)
+                event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0)
             goto out;
-        markdown_body = event->kind == SNJ_IRC_MESSAGE && render->markdown &&
+        markdown_body = event->kind == SNAG_IRC_MESSAGE && render->markdown &&
                         render->stderr_terminal && !event->op;
         if (markdown_body) {
             char visible[1024u];
@@ -2780,16 +2780,16 @@ render_irc_event_now(struct snj_render *render,
 
             n = snprintf(visible, sizeof(visible), "%s%s %s%s%s %s ",
                          when, event->historical ? " history" : "",
-                         event->kind == SNJ_IRC_NOTICE ? "-" : "",
+                         event->kind == SNAG_IRC_NOTICE ? "-" : "",
                          event->op ? "@" : "", event->nick,
-                         event->kind == SNJ_IRC_NOTICE ? "-" : "›");
+                         event->kind == SNAG_IRC_NOTICE ? "-" : "›");
             if (n < 0 || (size_t)n >= sizeof(visible))
                 goto out;
-            column = snj_term_text_width(visible, (size_t)n);
+            column = snag_term_text_width(visible, (size_t)n);
             if (column == SIZE_MAX)
                 goto out;
             if (render_irc_markdown(render, event,
-                    column % snj_term_columns(render->term)) < 0)
+                    column % snag_term_columns(render->term)) < 0)
                 goto out;
             rc = 0;
             goto out;
@@ -2797,7 +2797,7 @@ render_irc_event_now(struct snj_render *render,
         if (irc_piece(render, event->text, true) < 0)
             goto out;
     } else {
-        const char *word = event->kind == SNJ_IRC_TOPIC && !event->nick[0] ?
+        const char *word = event->kind == SNAG_IRC_TOPIC && !event->nick[0] ?
                            "topic" : irc_event_word(event->kind);
 
         n = snprintf(prefix, sizeof(prefix), "· %s%s%s%s",
@@ -2827,10 +2827,10 @@ out:
 }
 
 int
-snj_render_irc_event(struct snj_render *render,
-                     const struct snj_irc_event *event)
+snag_render_irc_event(struct snag_render *render,
+                     const struct snag_irc_event *event)
 {
-    struct snj_render_record *record;
+    struct snag_render_record *record;
     bool own_agent;
 
     if (!render || !event) {
@@ -2839,14 +2839,14 @@ snj_render_irc_event(struct snj_render *render,
     }
     own_agent = event->local && render->model_nick[0] &&
                 strcmp(event->nick, render->model_nick) == 0;
-    struct snj_render_source source = render->irc_source;
-    render->irc_source = (struct snj_render_source){0};
-    if (!render->networked || render->view == SNJ_RENDER_CHAT)
+    struct snag_render_source source = render->irc_source;
+    render->irc_source = (struct snag_render_source){0};
+    if (!render->networked || render->view == SNAG_RENDER_CHAT)
         return render_irc_event_now(render, event, own_agent);
     record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
-    record->kind = SNJ_RENDER_RECORD_IRC;
+    record->kind = SNAG_RENDER_RECORD_IRC;
     record->source = source;
     record->irc_kind = event->kind;
     if (!source.len) {
@@ -2858,24 +2858,24 @@ snj_render_irc_event(struct snj_render *render,
         *record->irc = *event;
     }
     record->own_agent = own_agent;
-    queue_record(render, SNJ_RENDER_CHAT, record);
+    queue_record(render, SNAG_RENDER_CHAT, record);
     return 0;
 }
 
 static int
-render_irc_record(struct snj_render *render, const struct snj_render_record *record)
+render_irc_record(struct snag_render *render, const struct snag_render_record *record)
 {
     if (record->irc)
         return render_irc_event_now(render, record->irc, record->own_agent);
     json_t *event = source_event(render, record->source);
     json_t *data = json_object_get(event, "data");
-    struct snj_irc_event irc = {.kind = record->irc_kind};
+    struct snag_irc_event irc = {.kind = record->irc_kind};
     int rc = -1;
     const char *value;
-    if (!event || snj_json_integer_u64(data, "timestamp_ms", &irc.timestamp_ms) < 0)
+    if (!event || snag_json_integer_u64(data, "timestamp_ms", &irc.timestamp_ms) < 0)
         goto out;
 #define IRC_FIELD(member) do { \
-    value = snj_json_string(data, #member); \
+    value = snag_json_string(data, #member); \
     if (!value || strlen(value) >= sizeof(irc.member)) goto out; \
     memcpy(irc.member, value, strlen(value) + 1u); \
 } while (0)
@@ -2895,20 +2895,20 @@ out:
 }
 
 static int
-flush_view(struct snj_render *render, enum snj_render_view view)
+flush_view(struct snag_render *render, enum snag_render_view view)
 {
     while (render->view_head[view]) {
-        struct snj_render_record *record = render->view_head[view];
+        struct snag_render_record *record = render->view_head[view];
         int rc;
 
-        if (record->kind == SNJ_RENDER_RECORD_BLOCK) {
+        if (record->kind == SNAG_RENDER_RECORD_BLOCK) {
             rc = write_role_block(render, record->fd, record->color,
                                   (const char *)record->text.data,
                                   record->text.len, record->colored_len,
                                   record->terminal_safe, record->persistent);
-        } else if (record->kind == SNJ_RENDER_RECORD_IRC) {
+        } else if (record->kind == SNAG_RENDER_RECORD_IRC) {
             rc = render_irc_record(render, record);
-        } else if (record->kind == SNJ_RENDER_RECORD_TOOL) {
+        } else if (record->kind == SNAG_RENDER_RECORD_TOOL) {
             rc = render_tool_record(render, record);
         } else {
             rc = 0;
@@ -2925,8 +2925,8 @@ flush_view(struct snj_render *render, enum snj_render_view view)
                     errno = EPROTO;
                     return -1;
                 }
-                snj_buf_init(&record->text, SNJ_MAX_PUBLIC_ITEM);
-                rc = snj_buf_append(&record->text, json_string_value(text), json_string_length(text));
+                snag_buf_init(&record->text, SNAG_MAX_PUBLIC_ITEM);
+                rc = snag_buf_append(&record->text, json_string_value(text), json_string_length(text));
                 json_decref(event);
             }
             if (rc == 0 && record->displayed < record->text.len)
@@ -2935,8 +2935,8 @@ flush_view(struct snj_render *render, enum snj_render_view view)
                     (const char *)record->text.data + record->displayed,
                     record->text.len - record->displayed);
             if (rc == 0 && record->complete && record->physical_open) {
-                rc = record->aborted ? snj_render_public_abort(render) :
-                                       snj_render_public_end(render);
+                rc = record->aborted ? snag_render_public_abort(render) :
+                                       snag_render_public_end(render);
                 record->physical_open = false;
             }
             if (rc < 0)
@@ -2953,22 +2953,22 @@ flush_view(struct snj_render *render, enum snj_render_view view)
     return 0;
 }
 
-enum snj_render_view
-snj_render_view(const struct snj_render *render)
+enum snag_render_view
+snag_render_view(const struct snag_render *render)
 {
-    return render ? render->view : SNJ_RENDER_ROLLOUT;
+    return render ? render->view : SNAG_RENDER_ROLLOUT;
 }
 
 int
-snj_render_set_view(struct snj_render *render, enum snj_render_view view)
+snag_render_set_view(struct snag_render *render, enum snag_render_view view)
 {
-    static const char *const boundaries[SNJ_RENDER_VIEW_COUNT] = {
+    static const char *const boundaries[SNAG_RENDER_VIEW_COUNT] = {
         "── chat ──\n", "── rollout ──\n"
     };
-    struct snj_render_record *open;
+    struct snag_render_record *open;
 
-    if (!render || (view != SNJ_RENDER_CHAT && view != SNJ_RENDER_ROLLOUT) ||
-        (!render->networked && view != SNJ_RENDER_ROLLOUT)) {
+    if (!render || (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT) ||
+        (!render->networked && view != SNAG_RENDER_ROLLOUT)) {
         errno = EINVAL;
         return -1;
     }
@@ -2978,7 +2978,7 @@ snj_render_set_view(struct snj_render *render, enum snj_render_view view)
     if (open && open->physical_open) {
         /* Finish the visible fragment so buffered Markdown/wrap text is not
          * lost when the logical stream resumes after visiting chat. */
-        if (snj_render_public_end(render) < 0)
+        if (snag_render_public_end(render) < 0)
             return -1;
         open->physical_open = false;
     }
@@ -2992,24 +2992,24 @@ snj_render_set_view(struct snj_render *render, enum snj_render_view view)
 }
 
 static int
-tool_body(struct snj_render *render, const struct snj_render_block *block)
+tool_body(struct snag_render *render, const struct snag_render_block *block)
 {
-    const char *label = block->body_kind == SNJ_PRESENT_ARGUMENTS ? "arguments" : "output";
+    const char *label = block->body_kind == SNAG_PRESENT_ARGUMENTS ? "arguments" : "output";
     size_t offset = 0u, count = 0u;
     bool truncated = block->truncated;
 
-    if (!block->body.len || !snj_render_enabled(render, block->body_kind))
+    if (!block->body.len || !snag_render_enabled(render, block->body_kind))
         return 0;
     char header[32];
     (void)snprintf(header, sizeof(header), "  %s:\n", label);
     if (write_block(render, STDERR_FILENO, header, strlen(header), true, true) < 0)
         return -1;
     while (offset < block->body.len) {
-        size_t limit = snj_render_enabled(render, block->body_kind) ?
-                       snj_presentation_limit(block->body_kind, render->verbosity) : 0u;
+        size_t limit = snag_render_enabled(render, block->body_kind) ?
+                       snag_presentation_limit(block->body_kind, render->verbosity) : 0u;
         size_t end = offset, characters = 0u;
         while (end < block->body.len && end - offset < 1024u && count + characters < limit) {
-            size_t n = snj_utf8_size(block->body.data[end]);
+            size_t n = snag_utf8_size(block->body.data[end]);
             if (!n || n > block->body.len - end) {
                 errno = EILSEQ;
                 return -1;
@@ -3040,21 +3040,21 @@ tool_body(struct snj_render *render, const struct snj_render_block *block)
 }
 
 int
-snj_render_tool_block(struct snj_render *render, const struct snj_render_block *block)
+snag_render_tool_block(struct snag_render *render, const struct snag_render_block *block)
 {
     static const char *const colors[] = {
         COLOR_ACTIVITY, COLOR_SUCCESS, COLOR_WARNING, COLOR_ERROR
     };
 
-    if (!snj_render_enabled(render, SNJ_PRESENT_TOOL))
+    if (!snag_render_enabled(render, SNAG_PRESENT_TOOL))
         return 0;
     if (write_role_block(render, STDERR_FILENO,
                       colors[block->role], (const char *)block->text.data,
                       block->text.len, block->colored_len,
                       render->stderr_terminal, true) < 0 || render_checkpoint(render) < 0)
         return -1;
-    if (block->context.len && snj_render_enabled(render, SNJ_PRESENT_CONTEXT) &&
-        write_optional_block(render, SNJ_PRESENT_CONTEXT, "",
+    if (block->context.len && snag_render_enabled(render, SNAG_PRESENT_CONTEXT) &&
+        write_optional_block(render, SNAG_PRESENT_CONTEXT, "",
                               (const char *)block->context.data,
                               block->context.len, 0u) < 0)
         return -1;
@@ -3062,18 +3062,18 @@ snj_render_tool_block(struct snj_render *render, const struct snj_render_block *
 }
 
 static json_t *
-source_event(struct snj_render *render, struct snj_render_source source)
+source_event(struct snag_render *render, struct snag_render_source source)
 {
-    struct snj_buf text;
+    struct snag_buf text;
     json_t *event = NULL;
     char error[128];
 
-    if (source.offset < 0 || !source.len || source.len > SNJ_MAX_EVENT_LINE) {
+    if (source.offset < 0 || !source.len || source.len > SNAG_MAX_EVENT_LINE) {
         errno = EINVAL;
         return NULL;
     }
-    snj_buf_init(&text, source.len);
-    if (snj_buf_reserve(&text, source.len) < 0)
+    snag_buf_init(&text, source.len);
+    if (snag_buf_reserve(&text, source.len) < 0)
         goto out;
     while (text.len < source.len) {
         size_t want = source.len - text.len;
@@ -3087,32 +3087,32 @@ source_event(struct snj_render *render, struct snj_render_source source)
             goto out;
         text.len += (size_t)n;
     }
-    event = snj_json_load_strict(text.data, text.len, text.max, error, sizeof(error));
+    event = snag_json_load_strict(text.data, text.len, text.max, error, sizeof(error));
 out:
-    snj_buf_free(&text);
+    snag_buf_free(&text);
     return event;
 }
 
 static int
-render_process_chunks(struct snj_render *render, const json_t *ref,
+render_process_chunks(struct snag_render *render, const json_t *ref,
                        uint32_t max_output_bytes, off_t result_offset)
 {
-    const char *handle = snj_json_string(ref, "handle");
+    const char *handle = snag_json_string(ref, "handle");
     uint64_t start, end, from[2], to[2];
     size_t displayed = 0u, characters = 0u;
-    struct snj_buf line;
+    struct snag_buf line;
     bool truncated = false;
     int rc = -1;
-    if (!handle || snj_json_integer_u64(ref, "log_start", &start) < 0 ||
-        snj_json_integer_u64(ref, "log_end", &end) < 0 || start > end ||
+    if (!handle || snag_json_integer_u64(ref, "log_start", &start) < 0 ||
+        snag_json_integer_u64(ref, "log_end", &end) < 0 || start > end ||
         end > (uint64_t)result_offset ||
-        snj_json_integer_u64(ref, "stdout_start", &from[0]) < 0 ||
-        snj_json_integer_u64(ref, "stdout_end", &to[0]) < 0 ||
-        snj_json_integer_u64(ref, "stderr_start", &from[1]) < 0 ||
-        snj_json_integer_u64(ref, "stderr_end", &to[1]) < 0)
+        snag_json_integer_u64(ref, "stdout_start", &from[0]) < 0 ||
+        snag_json_integer_u64(ref, "stdout_end", &to[0]) < 0 ||
+        snag_json_integer_u64(ref, "stderr_start", &from[1]) < 0 ||
+        snag_json_integer_u64(ref, "stderr_end", &to[1]) < 0)
         return -1;
-    snj_buf_init(&line, SNJ_MAX_EVENT_LINE);
-    while (start < end && snj_render_enabled(render, SNJ_PRESENT_OUTPUT)) {
+    snag_buf_init(&line, SNAG_MAX_EVENT_LINE);
+    while (start < end && snag_render_enabled(render, SNAG_PRESENT_OUTPUT)) {
         unsigned char input[8192];
         size_t want = end - start > sizeof(input) ? sizeof(input) : (size_t)(end - start);
         ssize_t n = pread(render->history_fd, input, want, (off_t)start);
@@ -3123,47 +3123,47 @@ render_process_chunks(struct snj_render *render, const json_t *ref,
         start += (uint64_t)n;
         for (ssize_t i = 0; i < n; ++i) {
             if (input[i] != '\n') {
-                if (snj_buf_putc(&line, input[i]) < 0)
+                if (snag_buf_putc(&line, input[i]) < 0)
                     goto out;
                 continue;
             }
             char error[128];
-            json_t *event = snj_json_load_strict(line.data, line.len, line.max, error, sizeof(error));
+            json_t *event = snag_json_load_strict(line.data, line.len, line.max, error, sizeof(error));
             if (!event)
                 goto out;
             const json_t *data = json_object_get(event, "data");
-            const char *type = snj_json_string(event, "type");
-            const char *id = snj_json_string(data, "handle");
+            const char *type = snag_json_string(event, "type");
+            const char *id = snag_json_string(data, "handle");
             if (type && !strcmp(type, "process_output") && id && !strcmp(id, handle)) {
                 uint64_t stream, offset;
-                const char *text = snj_json_string(data, "data");
-                const char *encoding = snj_json_string(data, "encoding");
-                if (!text || !encoding || snj_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
-                    snj_json_integer_u64(data, "offset", &offset) < 0) {
+                const char *text = snag_json_string(data, "data");
+                const char *encoding = snag_json_string(data, "encoding");
+                if (!text || !encoding || snag_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
+                    snag_json_integer_u64(data, "offset", &offset) < 0) {
                     json_decref(event);
                     goto out;
                 }
                 if (offset >= from[stream] && offset < to[stream]) {
                     size_t shown = 0u, len = strlen(text), count = 0u;
-                    size_t limit = snj_presentation_limit(SNJ_PRESENT_OUTPUT, render->verbosity);
+                    size_t limit = snag_presentation_limit(SNAG_PRESENT_OUTPUT, render->verbosity);
                     while (shown < len && characters + count < limit &&
                            (!max_output_bytes || displayed + shown < max_output_bytes)) {
-                        size_t width = snj_utf8_size((unsigned char)text[shown]);
+                        size_t width = snag_utf8_size((unsigned char)text[shown]);
                         if (!width || width > len - shown ||
                             (max_output_bytes && width > max_output_bytes - displayed - shown))
                             break;
                         shown += width;
                         ++count;
                     }
-                    struct snj_render_block block = {.body_kind = SNJ_PRESENT_OUTPUT};
-                    snj_buf_init(&block.body, shown + 128u);
-                    int pr = snj_buf_printf(&block.body, "[%.8s %s%s]\n", handle,
+                    struct snag_render_block block = {.body_kind = SNAG_PRESENT_OUTPUT};
+                    snag_buf_init(&block.body, shown + 128u);
+                    int pr = snag_buf_printf(&block.body, "[%.8s %s%s]\n", handle,
                         stream ? "stderr" : "stdout", !strcmp(encoding, "base64") ? " base64" : "");
                     if (pr == 0)
-                        pr = snj_buf_append(&block.body, text, shown);
+                        pr = snag_buf_append(&block.body, text, shown);
                     if (pr == 0 && shown)
                         pr = tool_body(render, &block);
-                    snj_buf_free(&block.body);
+                    snag_buf_free(&block.body);
                     displayed += shown;
                     characters += count;
                     truncated = shown < len;
@@ -3174,9 +3174,9 @@ render_process_chunks(struct snj_render *render, const json_t *ref,
                 }
             }
             json_decref(event);
-            snj_buf_reset(&line);
+            snag_buf_reset(&line);
             if (truncated) {
-                rc = write_optional_block(render, SNJ_PRESENT_OUTPUT, "",
+                rc = write_optional_block(render, SNAG_PRESENT_OUTPUT, "",
                     "… [output truncated; complete bytes retained in journal]\n",
                     strlen("… [output truncated; complete bytes retained in journal]\n"), 0u);
                 goto out;
@@ -3185,53 +3185,53 @@ render_process_chunks(struct snj_render *render, const json_t *ref,
     }
     rc = 0;
 out:
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 static int
-render_tool_record(struct snj_render *render, const struct snj_render_record *record)
+render_tool_record(struct snag_render *render, const struct snag_render_record *record)
 {
     json_t *event = NULL, *response = NULL, *data, *items;
-    struct snj_render_block block;
+    struct snag_render_block block;
     int rc = -1;
 
-    if (!snj_render_enabled(render, SNJ_PRESENT_TOOL))
+    if (!snag_render_enabled(render, SNAG_PRESENT_TOOL))
         return 0;
     event = source_event(render, record->source);
     response = source_event(render, record->response);
     if (!event || !response)
         goto out;
     data = json_object_get(event, "data");
-    const char *status = snj_json_string(json_object_get(data, "result"), "status");
+    const char *status = snag_json_string(json_object_get(data, "result"), "status");
     if (!record->tool_start && status && strcmp(status, "not_run") == 0) {
         rc = 0;
         goto out;
     }
     items = json_object_get(json_object_get(response, "data"), "items");
-    const char *id = snj_json_string(data, "call_id");
+    const char *id = snag_json_string(data, "call_id");
     for (size_t i = 0u; id && i < json_array_size(items); ++i) {
         json_t *item = json_array_get(items, i);
-        const char *call_id = snj_json_string(item, "call_id");
-        const char *name = snj_json_string(item, "name");
+        const char *call_id = snag_json_string(item, "call_id");
+        const char *name = snag_json_string(item, "name");
         if (!call_id || !name || strcmp(call_id, id) != 0)
             continue;
         unsigned int columns = render->term ? render->term->columns : 0u;
         if (record->tool_start) {
-            struct snj_response_item call = {
+            struct snag_response_item call = {
                 .name = (char *)name, .arguments = json_object_get(item, "arguments")
             };
-            (void)snj_strcpy(call.call_id, sizeof(call.call_id), call_id);
-            const char *workdir = snj_json_string(data, "resolved_workdir");
-            rc = snj_render_prepare_tool_start(&block, &call, workdir ? workdir : "?",
+            (void)snag_strcpy(call.call_id, sizeof(call.call_id), call_id);
+            const char *workdir = snag_json_string(data, "resolved_workdir");
+            rc = snag_render_prepare_tool_start(&block, &call, workdir ? workdir : "?",
                   record->timeout_ms, render->verbosity, columns);
         } else {
-            rc = snj_render_prepare_tool_finish(&block, name, json_object_get(data, "result"),
+            rc = snag_render_prepare_tool_finish(&block, name, json_object_get(data, "result"),
                   record->max_output_bytes, render->verbosity, columns);
         }
         if (rc == 0) {
-            rc = snj_render_tool_block(render, &block);
-            snj_render_block_free(&block);
+            rc = snag_render_tool_block(render, &block);
+            snag_render_block_free(&block);
             json_t *ref = json_object_get(json_object_get(data, "result"), "output_ref");
             if (rc == 0 && ref && !record->tool_start)
                 rc = render_process_chunks(render, ref, record->max_output_bytes, record->source.offset);
@@ -3248,7 +3248,7 @@ out:
 }
 
 int
-snj_render_durable(struct snj_render *render, int fd, struct snj_render_source source,
+snag_render_durable(struct snag_render *render, int fd, struct snag_render_source source,
                     const char *type, uint32_t timeout_ms, uint32_t max_output_bytes)
 {
     if (render->history_fd < 0) {
@@ -3267,9 +3267,9 @@ snj_render_durable(struct snj_render *render, int fd, struct snj_render_source s
         strcmp(type, "response_interrupted") == 0 || strcmp(type, "response_failed") == 0) {
         json_t *event = NULL;
         int rc = 0;
-        for (struct snj_render_record *record = render->view_head[SNJ_RENDER_ROLLOUT];
+        for (struct snag_render_record *record = render->view_head[SNAG_RENDER_ROLLOUT];
              record; record = record->next) {
-            if (record->kind != SNJ_RENDER_RECORD_PUBLIC || record->source.len ||
+            if (record->kind != SNAG_RENDER_RECORD_PUBLIC || record->source.len ||
                 !record->complete)
                 continue;
             if (!event && !(event = source_event(render, source))) {
@@ -3287,7 +3287,7 @@ snj_render_durable(struct snj_render *render, int fd, struct snj_render_source s
                     continue;
                 record->source = source;
                 record->source_item = i;
-                snj_buf_free(&record->text);
+                snag_buf_free(&record->text);
                 break;
             }
         }
@@ -3298,24 +3298,24 @@ snj_render_durable(struct snj_render *render, int fd, struct snj_render_source s
     bool start = strcmp(type, "tool_started") == 0;
     if ((!start && strcmp(type, "tool_finished") != 0) || !render->response_source.len)
         return 0;
-    struct snj_render_record *record = calloc(1u, sizeof(*record));
+    struct snag_render_record *record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
-    record->kind = SNJ_RENDER_RECORD_TOOL;
+    record->kind = SNAG_RENDER_RECORD_TOOL;
     record->source = source;
     record->response = render->response_source;
     record->tool_start = start;
     record->timeout_ms = timeout_ms;
     record->max_output_bytes = max_output_bytes;
-    queue_record(render, SNJ_RENDER_ROLLOUT, record);
-    return render->view == SNJ_RENDER_ROLLOUT ? flush_view(render, render->view) : 0;
+    queue_record(render, SNAG_RENDER_ROLLOUT, record);
+    return render->view == SNAG_RENDER_ROLLOUT ? flush_view(render, render->view) : 0;
 }
 
 int
-snj_render_event(struct snj_render *render, uint64_t seq, const char *type)
+snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
 {
     const char *notice = NULL;
-    struct snj_buf line;
+    struct snag_buf line;
     int rc = 0;
 
     if (strcmp(type, "compaction_completed") == 0)
@@ -3326,38 +3326,38 @@ snj_render_event(struct snj_render *render, uint64_t seq, const char *type)
     else if (strcmp(type, "goal_completed") == 0 ||
              strcmp(type, "goal_cancelled") == 0)
         notice = "Goal cleared";
-    bool debug = snj_render_enabled(render, SNJ_PRESENT_DEBUG);
+    bool debug = snag_render_enabled(render, SNAG_PRESENT_DEBUG);
     if (!notice && !debug)
         return 0;
-    snj_buf_init(&line, 1024u);
+    snag_buf_init(&line, 1024u);
     if (notice) {
-        if (snj_buf_printf(&line, "• %s\n", notice) < 0)
+        if (snag_buf_printf(&line, "• %s\n", notice) < 0)
             rc = -1;
     }
     if (rc == 0 && notice)
-        rc = view_block(render, SNJ_RENDER_ROLLOUT, STDERR_FILENO,
+        rc = view_block(render, SNAG_RENDER_ROLLOUT, STDERR_FILENO,
                         COLOR_LIFECYCLE,
                         (char *)line.data, line.len, line.len,
                         render->stderr_terminal, true);
-    snj_buf_reset(&line);
+    snag_buf_reset(&line);
     if (rc == 0 && debug) {
-        rc = snj_buf_printf(&line, "event › %llu %s synced\n",
+        rc = snag_buf_printf(&line, "event › %llu %s synced\n",
                             (unsigned long long)seq, type);
         if (rc == 0)
-            rc = write_optional_block(render, SNJ_PRESENT_DEBUG, COLOR_DURABLE,
+            rc = write_optional_block(render, SNAG_PRESENT_DEBUG, COLOR_DURABLE,
                                        (char *)line.data, line.len, line.len);
     }
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
 
 int
-snj_render_resume_hint(const struct snj_render *render, const char *command,
+snag_render_resume_hint(const struct snag_render *render, const char *command,
                        size_t command_len)
 {
     static const char header[] =
         "• You can resume this session with the following command:";
-    struct snj_buf block;
+    struct snag_buf block;
     size_t max = command_len;
     bool colored;
     int rc = -1;
@@ -3366,41 +3366,41 @@ snj_render_resume_hint(const struct snj_render *render, const char *command,
         errno = EINVAL;
         return -1;
     }
-    if (!snj_size_add(max, sizeof(header) + 1u, &max)) {
+    if (!snag_size_add(max, sizeof(header) + 1u, &max)) {
         errno = EOVERFLOW;
         return -1;
     }
     colored = render->color_stderr;
     if (colored &&
-        (!snj_size_add(max, sizeof(COLOR_LIFECYCLE) - 1u, &max) ||
-         !snj_size_add(max, sizeof(COLOR_RESET) - 1u, &max))) {
+        (!snag_size_add(max, sizeof(COLOR_LIFECYCLE) - 1u, &max) ||
+         !snag_size_add(max, sizeof(COLOR_RESET) - 1u, &max))) {
         errno = EOVERFLOW;
         return -1;
     }
-    snj_buf_init(&block, max);
+    snag_buf_init(&block, max);
     if (colored &&
-        snj_buf_append(&block, COLOR_LIFECYCLE,
+        snag_buf_append(&block, COLOR_LIFECYCLE,
                        sizeof(COLOR_LIFECYCLE) - 1u) < 0)
         goto out;
-    if (snj_buf_append(&block, header, sizeof(header) - 1u) < 0)
+    if (snag_buf_append(&block, header, sizeof(header) - 1u) < 0)
         goto out;
     if (colored &&
-        snj_buf_append(&block, COLOR_RESET, sizeof(COLOR_RESET) - 1u) < 0)
+        snag_buf_append(&block, COLOR_RESET, sizeof(COLOR_RESET) - 1u) < 0)
         goto out;
-    if (snj_buf_putc(&block, '\n') < 0 ||
-        snj_buf_append(&block, command, command_len) < 0 ||
-        snj_buf_putc(&block, '\n') < 0)
+    if (snag_buf_putc(&block, '\n') < 0 ||
+        snag_buf_append(&block, command, command_len) < 0 ||
+        snag_buf_putc(&block, '\n') < 0)
         goto out;
-    rc = snj_term_write(STDERR_FILENO, block.data, block.len);
+    rc = snag_term_write(STDERR_FILENO, block.data, block.len);
 out:
-    snj_buf_free(&block);
+    snag_buf_free(&block);
     return rc;
 }
 
 static bool
 diagnostic_text_valid(const char *text, size_t len, bool multiline)
 {
-    if (!text || !snj_utf8_valid((const unsigned char *)text, len, true))
+    if (!text || !snag_utf8_valid((const unsigned char *)text, len, true))
         return false;
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)text[i];
@@ -3415,7 +3415,7 @@ diagnostic_text_valid(const char *text, size_t len, bool multiline)
 }
 
 static int
-protocol_warning(struct snj_render *render)
+protocol_warning(struct snag_render *render)
 {
     static const char warning[] =
         SNAJPAGENT_NAME
@@ -3433,13 +3433,13 @@ protocol_warning(struct snj_render *render)
 }
 
 int
-snj_render_protocol(struct snj_render *render, const char *label,
+snag_render_protocol(struct snag_render *render, const char *label,
                     const char *text, size_t len)
 {
-    struct snj_buf block;
+    struct snag_buf block;
     int rc = -1;
 
-    if (!snj_render_enabled(render, SNJ_PRESENT_PROTOCOL))
+    if (!snag_render_enabled(render, SNAG_PRESENT_PROTOCOL))
         return 0;
     if (!label || !diagnostic_text_valid(label, strlen(label), false) ||
         !diagnostic_text_valid(text, len, true) ||
@@ -3449,27 +3449,27 @@ snj_render_protocol(struct snj_render *render, const char *label,
     }
     if (protocol_warning(render) < 0)
         return -1;
-    snj_buf_init(&block, 2u * 1024u * 1024u + 4096u);
-    if (snj_buf_printf(&block, "protocol › %s\n", label) < 0 ||
-        snj_buf_append(&block, text, len) < 0 ||
-        (len && text[len - 1u] != '\n' && snj_buf_putc(&block, '\n') < 0))
+    snag_buf_init(&block, 2u * 1024u * 1024u + 4096u);
+    if (snag_buf_printf(&block, "protocol › %s\n", label) < 0 ||
+        snag_buf_append(&block, text, len) < 0 ||
+        (len && text[len - 1u] != '\n' && snag_buf_putc(&block, '\n') < 0))
         goto out;
-    rc = write_optional_block(render, SNJ_PRESENT_PROTOCOL, COLOR_PROTOCOL,
+    rc = write_optional_block(render, SNAG_PRESENT_PROTOCOL, COLOR_PROTOCOL,
                     (const char *)block.data, block.len,
                     first_line_len((const char *)block.data, block.len));
 out:
-    snj_buf_free(&block);
+    snag_buf_free(&block);
     return rc;
 }
 
 int
-snj_render_transport(struct snj_render *render, char direction,
+snag_render_transport(struct snag_render *render, char direction,
                      const char *text, size_t len)
 {
-    struct snj_buf line;
+    struct snag_buf line;
     int rc = -1;
 
-    if (!snj_render_enabled(render, SNJ_PRESENT_WIRE))
+    if (!snag_render_enabled(render, SNAG_PRESENT_WIRE))
         return 0;
     if ((direction != '>' && direction != '<') ||
         !diagnostic_text_valid(text, len, false) || len > 64u * 1024u) {
@@ -3478,15 +3478,15 @@ snj_render_transport(struct snj_render *render, char direction,
     }
     if (protocol_warning(render) < 0)
         return -1;
-    snj_buf_init(&line, 64u * 1024u + 4u);
-    if (snj_buf_putc(&line, (unsigned char)direction) < 0 ||
-        snj_buf_putc(&line, ' ') < 0 ||
-        snj_buf_append(&line, text, len) < 0 || snj_buf_putc(&line, '\n') < 0)
+    snag_buf_init(&line, 64u * 1024u + 4u);
+    if (snag_buf_putc(&line, (unsigned char)direction) < 0 ||
+        snag_buf_putc(&line, ' ') < 0 ||
+        snag_buf_append(&line, text, len) < 0 || snag_buf_putc(&line, '\n') < 0)
         goto out;
-    rc = write_optional_block(render, SNJ_PRESENT_WIRE, COLOR_TRANSPORT,
+    rc = write_optional_block(render, SNAG_PRESENT_WIRE, COLOR_TRANSPORT,
                     (const char *)line.data, line.len,
                     line.len > 2u ? 2u : line.len);
 out:
-    snj_buf_free(&line);
+    snag_buf_free(&line);
     return rc;
 }
