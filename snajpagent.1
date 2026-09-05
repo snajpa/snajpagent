@@ -274,8 +274,9 @@ an unknown budget shows
 .BR ?% .
 .PP
 The default chat prompt is
-.IR "  HH:MM:SS " OPERATOR_NICK@MACHINE_HOSTNAME " : "
-when idle.  Its two leading spaces reserve the same indicator slots.
+.IR "   HH:MM:SS " OPERATOR_NICK@MACHINE_HOSTNAME " : "
+when idle.  Its first two spaces reserve the indicator slots; one literal
+space separates them from the clock in every activity state.
 The timestamp is local time captured once per composer.  Editing, view changes,
 and status redraws retain it; submission or Ctrl-C cancellation ends that capture.
 The goal flag is independent of the activity slot.  Tool calls take priority

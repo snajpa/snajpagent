@@ -1536,7 +1536,7 @@ def wait_current_prompt(terminal, operator, timeout=10.0):
     expected = (f"{operator}@{MACHINE_HOSTNAME} :" if operator else
                 "    0% ordinary/uncached-start/low ›")
     timestamped = re.compile(
-        rf"(?m)^  \d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
+        rf"(?m)^   \d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
     ) if operator else None
     screen = ""
     while time.monotonic() < deadline:

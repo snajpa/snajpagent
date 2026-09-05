@@ -2832,7 +2832,7 @@ def test_network_live_nick_prompt():
         spinner_end = child.wait(" ◴".encode(), start=start)
         end = child.wait(chat_prompt("operator8"), start=spinner_end)
         visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", child.buf[start:end])
-        assert re.search(" ◴[0-9]{2}:[0-9]{2}:[0-9]{2} operator8@".encode(),
+        assert re.search(" ◴ [0-9]{2}:[0-9]{2}:[0-9]{2} operator8@".encode(),
                          visible), visible
         child.send(b"/stats\x1b[D")
         child.drain(0.03)

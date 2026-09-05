@@ -97,7 +97,7 @@ void
 snj_config_init(struct snj_config *config)
 {
     static const char prompt[] =
-        "{chat:{goal_spinner}{activity_spinner}{hour:02}:{minute:02}:{second:02} "
+        "{chat:{goal_spinner}{activity_spinner} {hour:02}:{minute:02}:{second:02} "
         "{operator}@{host} :}"
         "{rollout-idle:{goal_spinner}{activity_spinner}{context:4} "
         "{provider}/{model}/{effort} ›}"

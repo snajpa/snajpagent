@@ -305,7 +305,7 @@ main(void)
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
-    assert(strstr(config.prompt, "{chat:{goal_spinner}{activity_spinner}"));
+    assert(strstr(config.prompt, "{chat:{goal_spinner}{activity_spinner} "));
     assert(strstr(config.prompt, "{context:4}"));
     assert(strstr(config.prompt, "{goal_spinner}") != NULL);
     assert(strcmp(config.prompt_spinner_goal, " ⚑") == 0);
@@ -320,7 +320,7 @@ main(void)
 
         assert(snj_config_prompt_expand(config.prompt, 0u, values, 0xfdu,
                                         expanded, sizeof(expanded)) == 0);
-        assert(strcmp(expanded, "\xfd\xfe" "03:07:09 op@host : ") == 0);
+        assert(strcmp(expanded, "\xfd\xfe 03:07:09 op@host : ") == 0);
         for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
             values[SNJ_PROMPT_CONTEXT] = contexts[i];
             for (unsigned int mode = 1u; mode <= 2u; ++mode) {

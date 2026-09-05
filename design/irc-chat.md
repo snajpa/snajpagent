@@ -90,7 +90,7 @@ history_lines = 200
 
 [ui]
 color = auto
-prompt = {chat:{goal_spinner}{activity_spinner}{hour:02}:{minute:02}:{second:02} {operator}@{host} :}{rollout-idle:{goal_spinner}{activity_spinner}{context:4} {provider}/{model}/{effort} ›}{rollout-active:{goal_spinner}{activity_spinner}{context:4} {provider}/{model}/{effort} »}
+prompt = {chat:{goal_spinner}{activity_spinner} {hour:02}:{minute:02}:{second:02} {operator}@{host} :}{rollout-idle:{goal_spinner}{activity_spinner}{context:4} {provider}/{model}/{effort} ›}{rollout-active:{goal_spinner}{activity_spinner}{context:4} {provider}/{model}/{effort} »}
 prompt_spinner_goal = " ⚑"
 prompt_spinner_provider = " ◴◷◶◵"
 prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -295,7 +295,8 @@ with the same color roles applied to prompts, labels, status, tools, warnings,
 errors, and high-verbosity diagnostics.
 
 The default chat-view composer is
-`  HH:MM:SS OPERATOR_NICK@MACHINE_HOSTNAME : `. The default rollout view uses
+`   HH:MM:SS OPERATOR_NICK@MACHINE_HOSTNAME : `, with one literal space
+between the indicator slots and clock. The default rollout view uses
 `    0% PROVIDER/MODEL/EFFORT › ` while idle and the double-angle `»` while
 active. Both start with a goal flag slot and one shared activity slot;
 tool work takes priority over model work in the same column. Reserved slots

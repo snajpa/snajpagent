@@ -161,7 +161,8 @@ braces/backslash; it performs no shell or environment expansion. The default
 rollout prompt is `    0% PROVIDER/MODEL/EFFORT › ` while idle and uses `»` while
 active. Two leading indicator slots precede the four-column percentage;
 inactive slots and unused percentage digits remain spaces. The
-default idle chat prompt is `  HH:MM:SS OPERATOR@HOST : `. Snajpagent appends one
+default idle chat prompt is `   HH:MM:SS OPERATOR@HOST : `: two indicator slots
+and one literal space before the clock. Snajpagent appends one
 space after the expanded template.
 
 Clock components are natural decimal local-time values from one capture per
