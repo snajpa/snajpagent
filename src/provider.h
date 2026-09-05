@@ -4,12 +4,13 @@
 
 #include "config.h"
 #include "credential.h"
-#include "ui.h"
 #include "responses.h"
 #include "turn.h"
 
 #include "snag_jansson.h"
 #include <stddef.h>
+
+struct snag_ui;
 
 typedef int (*snag_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 

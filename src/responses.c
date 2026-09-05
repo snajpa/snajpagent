@@ -1040,8 +1040,7 @@ build_call(struct snag_responses_stream *stream,
     json_t *arguments;
     char json_error[192] = {0};
 
-    if ((!item->complete && !item->arguments_complete) ||
-        !item->arguments_complete || !item->arguments_seen ||
+    if (!item->arguments_complete || !item->arguments_seen ||
         !item->name || !item->call_id)
         return stream_fail(stream, EPROTO,
                            "function call did not complete coherently");

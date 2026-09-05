@@ -148,7 +148,6 @@ int snag_term_external_begin(struct snag_term *term,
                             char *error, size_t error_size);
 int snag_term_external_end(struct snag_term *term,
                           char *error, size_t error_size);
-int snag_term_set_prompt(struct snag_term *term, bool active);
 int snag_term_set_prompt_label(struct snag_term *term, bool active,
                               const char *label);
 int snag_term_set_prompt_template(struct snag_term *term, bool active,
@@ -156,7 +155,6 @@ int snag_term_set_prompt_template(struct snag_term *term, bool active,
                                  const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                                  uint32_t per_second, unsigned int states);
 int snag_term_set_spinner_states(struct snag_term *term, unsigned int states);
-const char *snag_term_prompt_label(const struct snag_term *term);
 int snag_term_hide(struct snag_term *term);
 int snag_term_output_begin(struct snag_term *term, bool persistent);
 int snag_term_output_end(struct snag_term *term);

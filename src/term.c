@@ -1357,14 +1357,6 @@ out:
 }
 
 int
-snag_term_set_prompt(struct snag_term *term, bool active)
-{
-    const char *label = active ? "» " : "› ";
-
-    return snag_term_set_prompt_label(term, active, label);
-}
-
-int
 snag_term_set_prompt_label(struct snag_term *term, bool active,
                           const char *label)
 {
@@ -1459,12 +1451,6 @@ snag_term_set_spinner_states(struct snag_term *term, unsigned int states)
     term->spinner_states = states;
     term->spinner_epoch_ms = snag_monotonic_ms();
     return update_spinners(term, 0u);
-}
-
-const char *
-snag_term_prompt_label(const struct snag_term *term)
-{
-    return term ? term->label : NULL;
 }
 
 int

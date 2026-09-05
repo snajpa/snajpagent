@@ -1253,12 +1253,6 @@ tool_schemas(bool goal_active,
     return tools;
 }
 
-json_t *
-snag_context_reasoning_settings(const char *effort)
-{
-    return json_pack("{s:s}", "effort", effort);
-}
-
 static bool
 checked_add_u64(uint64_t *value, uint64_t addition)
 {

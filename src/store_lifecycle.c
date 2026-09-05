@@ -126,19 +126,6 @@ snag_session_complete_delete(struct snag_store *store, struct snag_session *sess
     return 0;
 }
 
-static bool
-trash_basename_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u])
-{
-    if (!name || strlen(name) != SNAG_TRASH_NAME_LEN ||
-        name[SNAG_ID_HEX_LEN] != '.' ||
-        !snag_hex_is_lower(name + SNAG_ID_HEX_LEN + 1u,
-                          SNAG_TRASH_SUFFIX_HEX_LEN))
-        return false;
-    memcpy(id, name, SNAG_ID_HEX_LEN);
-    id[SNAG_ID_HEX_LEN] = '\0';
-    return snag_hex_is_lower(id, SNAG_ID_HEX_LEN);
-}
-
 int
 snag_store_complete_trash_delete(struct snag_store *store, const char *trash_name,
                                 char *error, size_t error_size)
@@ -148,7 +135,7 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
     int dir_fd;
     int rc = -1;
 
-    if (!trash_basename_id(trash_name, id)) {
+    if (!snag_store_trash_id(trash_name, id)) {
         snag_errorf(error, error_size, "invalid deleted-session trash name");
         errno = EINVAL;
         return -1;

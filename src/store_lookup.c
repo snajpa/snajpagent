@@ -57,10 +57,10 @@ open_trash_dir(struct snag_store *store, char *error, size_t error_size)
     return open_store_dir(store, "trash", "trash directory", error, error_size);
 }
 
-static bool
-trash_name_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u])
+bool
+snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u])
 {
-    if (strlen(name) != SNAG_TRASH_NAME_LEN || name[SNAG_ID_HEX_LEN] != '.' ||
+    if (!name || strlen(name) != SNAG_TRASH_NAME_LEN || name[SNAG_ID_HEX_LEN] != '.' ||
         !snag_hex_is_lower(name + SNAG_ID_HEX_LEN + 1u,
                           SNAG_TRASH_SUFFIX_HEX_LEN))
         return false;
@@ -116,7 +116,7 @@ resolve_prefix(struct snag_store *store, const char *prefix,
         return -1;
     while ((entry = readdir(dir)) != NULL) {
         char id[SNAG_ID_HEX_LEN + 1u];
-        if (!trash_name_id(entry->d_name, id) ||
+        if (!snag_store_trash_id(entry->d_name, id) ||
             strncmp(id, prefix, len) != 0)
             continue;
         record_resolved(target, id, entry->d_name, &matches);

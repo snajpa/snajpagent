@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Remove unused render/terminal/context APIs and the provider header's terminal
+  dependency. Share prompt hostname preparation and validated trash-name parsing.
+
 - Recover oversized historical context by compacting complete response/tool
   groups within older turns. Preserve replay, steering and managed-process
   pairing across each cut, and share normal statistical token estimation with

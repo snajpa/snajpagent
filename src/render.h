@@ -163,8 +163,6 @@ int snag_render_rollout(struct snag_render *render, const char *text, size_t len
                        struct snag_buf *delivered);
 int snag_render_rollout_end(struct snag_render *render);
 int snag_render_rollout_abort(struct snag_render *render);
-int snag_render_error(const char *message);
-int snag_render_warning(const char *message);
 int snag_render_error_ctx(struct snag_render *render, const char *message);
 int snag_render_warning_ctx(struct snag_render *render, const char *message);
 int snag_render_host(struct snag_render *render, const char *text);

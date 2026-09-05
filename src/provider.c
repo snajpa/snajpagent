@@ -11,6 +11,7 @@
 #include "sse.h"
 #include "snajpagent.h"
 #include "wire.h"
+#include "ui.h"
 
 #include <curl/curl.h>
 #include <errno.h>

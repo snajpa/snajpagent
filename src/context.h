@@ -32,7 +32,6 @@ struct snag_context_projection {
     char count_request_sha256[SNAG_SHA256_HEX_LEN + 1u];
 };
 
-json_t *snag_context_reasoning_settings(const char *effort);
 void snag_context_projection_init(struct snag_context_projection *projection);
 void snag_context_projection_free(struct snag_context_projection *projection);
 int snag_context_usage_anchor_bound(
