@@ -11,6 +11,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <wchar.h>
@@ -1612,28 +1613,6 @@ save_config_settings(const char *path, bool allow_create,
         errno = EINVAL;
         goto out;
     }
-    read_rc = read_config(path, !allow_create, &input, &before,
-                          error, error_size);
-    if (read_rc < 0)
-        goto out;
-    if ((provider_config ?
-         replace_provider_settings(&input, &output, provider_config, read_rc == 0) :
-         replace_model_settings(&input, &output, provider, model, effort)) < 0) {
-        snj_errorf(error, error_size, "configuration update exceeds 64 KiB");
-        goto out;
-    }
-    if (provider_config && *model) {
-        struct snj_buf selected;
-        snj_buf_init(&selected, SNJ_CONFIG_FILE_MAX);
-        if (replace_model_settings(&output, &selected, provider, model, effort) < 0) {
-            snj_buf_free(&selected);
-            goto out;
-        }
-        snj_buf_free(&output);
-        output = selected;
-    }
-    if (validate_config_text(&output, error, error_size) < 0)
-        goto out;
     path_copy = snj_strdup_checked(path, SNJ_CONFIG_PATH_MAX);
     if (!path_copy)
         goto out;
@@ -1659,6 +1638,33 @@ save_config_settings(const char *path, bool allow_create,
                   strerror(errno));
         goto out;
     }
+    /* Serialize cooperating writers without a second persistent state file. */
+    if (flock(parent_fd, LOCK_EX | LOCK_NB) < 0) {
+        snj_errorf(error, error_size, "configuration directory is being updated; try again");
+        goto out;
+    }
+    read_rc = read_config(path, !allow_create, &input, &before,
+                          error, error_size);
+    if (read_rc < 0)
+        goto out;
+    if ((provider_config ?
+         replace_provider_settings(&input, &output, provider_config, read_rc == 0) :
+         replace_model_settings(&input, &output, provider, model, effort)) < 0) {
+        snj_errorf(error, error_size, "configuration update exceeds 64 KiB");
+        goto out;
+    }
+    if (provider_config && *model) {
+        struct snj_buf selected;
+        snj_buf_init(&selected, SNJ_CONFIG_FILE_MAX);
+        if (replace_model_settings(&output, &selected, provider, model, effort) < 0) {
+            snj_buf_free(&selected);
+            goto out;
+        }
+        snj_buf_free(&output);
+        output = selected;
+    }
+    if (validate_config_text(&output, error, error_size) < 0)
+        goto out;
     if (snj_random_id(id) < 0)
         goto out;
     (void)snprintf(temp, sizeof(temp), ".snajpagent-config-%s.tmp", id);

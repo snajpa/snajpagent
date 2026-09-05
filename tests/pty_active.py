@@ -1920,6 +1920,10 @@ def test_provider_login_and_first_run():
     assert config.stat().st_mode & 0o777 == 0o600
     assert auth.stat().st_mode & 0o777 == 0o600
     original = config.read_bytes()
+    config.unlink()
+    result = subprocess.run(command[:-1], capture_output=True, env=env, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert config.read_bytes() == original
     result = subprocess.run([BINARY, "--dotdir", str(api), "login", "status"],
                             capture_output=True, env=env, timeout=10)
     assert result.returncode == 0 and b"openrouter: api_key (stored)" in result.stdout
@@ -1935,6 +1939,19 @@ def test_provider_login_and_first_run():
                             capture_output=True, env=env, timeout=10)
     assert result.returncode == 0 and not auth.exists()
     assert (api / "auth" / "openai.json").exists()
+    # A failed config commit rolls back only this login's new credential.
+    lock = os.open(api, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        before_failure = config.read_bytes()
+        result = subprocess.run(command, input=b"rolled-back-key\n", capture_output=True,
+                                env=env, timeout=10)
+        assert result.returncode != 0
+        assert config.read_bytes() == before_failure
+        assert not auth.exists()
+        assert (api / "auth" / "openai.json").exists()
+    finally:
+        os.close(lock)
     missing = root / "missing"
     result = subprocess.run([BINARY, "--dotdir", str(missing), "--config",
                              str(root / "absent.ini"), "login", "openrouter",

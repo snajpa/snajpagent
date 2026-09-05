@@ -289,6 +289,9 @@ snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
         post_json("/api/accounts/deviceauth/usercode", request, &response,
                    &status, pump, opaque, error, error_size) < 0)
         goto out;
+    if (!json_object_get(response, "user_code") && json_is_string(json_object_get(response, "usercode")) &&
+        snj_json_set_new(response, "user_code", json_string(auth_string(response, "usercode"))) < 0)
+        goto out;
     if (status != 200 || !*auth_string(response, "device_auth_id") ||
         !*auth_string(response, "user_code")) {
         snj_errorf(error, error_size, "device login unavailable; enable device-code login in ChatGPT security/workspace settings (HTTP %ld)", status);
@@ -330,7 +333,9 @@ snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
         if (status == 200)
             break;
         if (status != 403 && status != 404) {
-            snj_errorf(error, error_size, "device login failed (HTTP %ld)", status);
+            snj_errorf(error, error_size, status == 410 ?
+                "device login expired; start login again (HTTP %ld)" :
+                "device login denied or failed (HTTP %ld)", status);
             goto out;
         }
         uint64_t next = snj_time_ms() + interval * 1000u;

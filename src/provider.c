@@ -1295,12 +1295,16 @@ provider_ctx_free(struct provider_ctx *ctx)
 static int
 request_auth_headers(struct provider_ctx *ctx)
 {
-    curl_slist_free_all(ctx->headers);
-    ctx->headers = NULL;
-    if (append_named_header(&ctx->headers, "Accept", ctx->accept) < 0 ||
-        (ctx->has_body && append_header(&ctx->headers, "Content-Type: application/json") < 0) ||
-        append_provider_headers(&ctx->headers, ctx->provider, &ctx->credential) < 0)
+    struct curl_slist *headers = NULL;
+    if (append_named_header(&headers, "Accept", ctx->accept) < 0 ||
+        (ctx->has_body && append_header(&headers, "Content-Type: application/json") < 0) ||
+        append_provider_headers(&headers, ctx->provider, &ctx->credential) < 0 ||
+        curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK) {
+        curl_slist_free_all(headers);
         return -1;
+    }
+    curl_slist_free_all(ctx->headers);
+    ctx->headers = headers;
     return 0;
 }
 

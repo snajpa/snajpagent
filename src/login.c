@@ -189,10 +189,29 @@ choose_provider(const struct snj_cli *cli, struct snj_config *config,
 
 static int
 acquire_login(const struct snj_cli *cli, struct snj_provider_config *provider,
-               struct snj_auth_tokens *tokens, char *error, size_t error_size)
+               int root_fd, struct snj_auth_tokens *tokens,
+               char *error, size_t error_size)
 {
     char key[SNJ_CREDENTIAL_MAX + 1u];
     int rc;
+    if (provider->auth != SNJ_AUTH_ENV && root_fd >= 0 &&
+        !cli->device_auth && !cli->with_api_key) {
+        rc = snj_auth_load(root_fd, provider, tokens, error, error_size);
+        if (rc < 0)
+            return -1;
+        if (rc == 0 && (provider->auth == SNJ_AUTH_API_KEY ||
+                       tokens->expires_at_ms > snj_time_ms() + 60000u)) {
+            if (!isatty(STDIN_FILENO))
+                return 0;
+            if (read_line("Use the existing stored login? [Y/n]: ", key, sizeof(key),
+                           false, false, error, error_size) < 0)
+                return -1;
+            if (!*key || strcmp(key, "Y") == 0 || strcmp(key, "y") == 0)
+                return 0;
+        }
+        snj_auth_clear(tokens);
+        error[0] = '\0';
+    }
     if (provider->auth == SNJ_AUTH_CHATGPT)
         return snj_auth_device(tokens, login_pump, NULL, error, error_size);
     if (provider->auth == SNJ_AUTH_ENV)
@@ -393,7 +412,10 @@ snj_login_dispatch(const struct snj_cli *cli, bool *handled)
         snj_errorf(error, sizeof(error), "first noninteractive login needs -m MODEL before login");
         goto out;
     }
-    if (acquire_login(cli, &provider, &tokens, error, sizeof(error)) < 0)
+    root_fd = open(dotdir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (root_fd < 0 && errno != ENOENT)
+        goto out;
+    if (acquire_login(cli, &provider, root_fd, &tokens, error, sizeof(error)) < 0)
         goto out;
     if (first && choose_model(cli, &config, &provider, &tokens, model, error, sizeof(error)) < 0)
         goto out;

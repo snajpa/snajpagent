@@ -1325,6 +1325,21 @@ test_provider_auth(void)
 
     config.providers[0].auth = SNJ_AUTH_CHATGPT;
     strcpy(config.providers[0].base_url, SNJ_CHATGPT_BASE);
+    {
+        json_t *response = json_object();
+        snj_auth_clear(&tokens);
+        assert(snj_auth_token_response(response, &tokens, error, sizeof(error)) < 0);
+        assert(tokens.credential.len == 0u);
+        assert(snj_auth_key(&tokens, "old-access", error, sizeof(error)) == 0);
+        strcpy(tokens.credential.account_id, "acct-test");
+        strcpy(tokens.refresh_token, "old-refresh");
+        assert(json_object_set_new(response, "access_token", json_string("rotated-access")) == 0);
+        assert(json_object_set_new(response, "expires_in", json_integer(3600)) == 0);
+        assert(snj_auth_token_response(response, &tokens, error, sizeof(error)) == 0);
+        assert(strcmp(tokens.refresh_token, "old-refresh") == 0);
+        assert(strcmp(tokens.credential.account_id, "acct-test") == 0);
+        snj_auth_json_free(response);
+    }
     for (int mode = MODEL_AUTH_DEVICE; mode <= MODEL_AUTH_EXPIRED; ++mode) {
         start_server(&server, (enum model_fixture)mode, false);
         snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
