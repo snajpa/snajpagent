@@ -9,6 +9,7 @@ struct snj_irc_view {
     char model[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char operator[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char text[32768u];
+    char nicks[4096u]; /* Newline-separated current members, without op prefixes. */
     bool joined;
 };
 

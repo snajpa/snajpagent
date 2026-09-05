@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 enum ui_kind {
-    UI_TEXT, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_COMMANDS, UI_PAUSE,
+    UI_TEXT, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_COMMANDS, UI_PAUSE,
     UI_OPEN, UI_EXTERNAL, UI_PROMPT, UI_SPINNERS, UI_DRAFT,
     UI_VIEW, UI_SUBMITTED, UI_PUBLIC_BEGIN, UI_PUBLIC, UI_VALIDATE,
     UI_ORIENTATION, UI_HISTORY, UI_IRC, UI_TOOL, UI_EVENT,
@@ -294,6 +294,12 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
     case UI_NETWORKED:
         snj_render_set_networked(render, message->data.value != 0u,
                                 message->text);
+        term->chat = render->view == SNJ_RENDER_CHAT;
+        return 0;
+    case UI_NICKS:
+        free(term->nicks);
+        term->nicks = message->text;
+        message->text = NULL;
         return 0;
     case UI_COMMANDS:
         message_free(&display->commands);
@@ -351,6 +357,7 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
     case UI_DRAFT: return snj_term_restore_draft(term, message->text);
     case UI_VIEW:
         term->defer_redraw = true;
+        term->chat = message->data.value == SNJ_RENDER_CHAT;
         return snj_render_set_view(render,
                                   (enum snj_render_view)message->data.value);
     case UI_SUBMITTED:
@@ -744,6 +751,13 @@ snj_ui_networked(struct snj_ui *ui, bool enabled, const char *nick)
         .kind = UI_NETWORKED, .data.value = enabled
     };
     return send_message(ui, &message, nick);
+}
+
+int
+snj_ui_nicks(struct snj_ui *ui, const char *nicks)
+{
+    struct ui_message message = {.kind = UI_NICKS};
+    return send_message(ui, &message, nicks);
 }
 
 int

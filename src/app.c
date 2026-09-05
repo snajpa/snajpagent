@@ -628,7 +628,17 @@ prompt_spinner_states(const struct app_state *app, bool active)
 static int
 tick_irc(struct app_state *app, char *error, size_t error_size)
 {
+    struct snj_buf nicks;
+    int rc;
+
     if (snj_irc_tick(app->irc, 0, error, error_size) < 0)
+        return -1;
+    snj_buf_init(&nicks, (SNJ_CONFIG_IRC_CLIENT_MAX + 1u) * 4096u);
+    rc = snj_irc_take_nicks(app->irc, &nicks);
+    if (rc > 0)
+        rc = snj_ui_nicks(&app->ui, (const char *)nicks.data);
+    snj_buf_free(&nicks);
+    if (rc < 0)
         return -1;
     if (!snj_irc_identity_changed(app->irc))
         return 0;
@@ -1100,8 +1110,9 @@ render_help(struct app_state *app)
         "Enter submit/add to active turn · Empty Tab no-op · "
         "Tab complete/indent/queue · Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
     static const char network_keys[] =
-        "Enter submit/add to active turn · Empty Tab switch view · "
-        "Tab complete/indent/queue · Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
+        "Chat Enter send (mention to steer) · Rollout Enter submit/add to active turn · "
+        "Empty Tab switch view · Tab complete/indent/queue (chat: @nick) · "
+        "Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
     const char *keys = app->networked ? network_keys : ordinary_keys;
     struct snj_buf text;
     int rc = -1;

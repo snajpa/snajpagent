@@ -80,6 +80,9 @@ const char *snj_irc_operator_nick(const struct snj_irc *irc);
 const char *snj_irc_room_name(const struct snj_irc *irc);
 /* Consumes an admitted primary-identity change, including during command waits. */
 bool snj_irc_identity_changed(struct snj_irc *irc);
+/* Returns 1 with changed newline-separated membership, 0 unchanged, -1 on error. */
+int snj_irc_take_nicks(struct snj_irc *irc, struct snj_buf *out);
+/* Endpoint "local" broadcasts, so any joined endpoint's model alias matches. */
 bool snj_irc_mentions_agent(const struct snj_irc *irc, const char *endpoint,
                             const char *text);
 

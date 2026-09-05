@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- In chat, steer active work only for model-nick mentions, not ordinary local
+  or channel-operator messages. Tab completes `@nick` at the cursor from live
+  room membership without submitting or queueing the draft.
+
 - Correct HTTP/2 response-status handling and automatically fall back when
   OpenRouter's optional token-count endpoint is absent, without weakening
   strict counting or treating authentication errors as unsupported endpoints.

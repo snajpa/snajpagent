@@ -2212,13 +2212,14 @@ snj_context_build(struct snj_session *session, const char *model,
             "above. NICK events replace an old nick with the new one; "
             "direct mentions of the accepted model nick for that "
             "endpoint require immediate "
-            "attention. Unprivileged chat and membership/topic notifications "
+            "attention. Unmentioned chat, including local/channel operator "
+            "messages, and membership/topic notifications "
             "are conversational context and may be left unanswered. Assistant "
             "speech remains in the local rollout; irc_send is the only way "
             "you address the room. Coding tools act only on the local "
             "workspace. The runtime owns sockets, joining, history, and "
             "reconnect: do not poll or babysit them. Use irc_state for cached state, "
-            "and irc_topic only when the agent has +o. A local operator turn "
+            "and irc_topic only when the agent has +o. A local operator mention turn "
             "requires one successful irc_send message; a notice does not count "
             "as a reply, and peer/background traffic requires no response.",
             config->irc_model_nick, config->irc_operator_nick) < 0 ||

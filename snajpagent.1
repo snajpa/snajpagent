@@ -192,11 +192,16 @@ The default port is 6667.  In networked mode initial chat text must follow
 .SH INTERACTIVE INPUT
 .TP
 .B Enter
-Submit while idle.  During model generation, submit immediate steering at the
+Submit while idle.  In rollout during model generation, submit immediate steering at the
 next safe boundary.  A running command is handed back alive; it is not killed.
+In chat, send to the room; only a model-nick mention steers active work.
 .TP
 .B Tab
-Complete a slash command when possible.  While idle, otherwise insert spaces.
+Complete a slash command when possible.  In chat, complete an
+.B @nick
+at the cursor from current room members.  Ambiguous matches expand their common
+prefix; no match leaves the draft unchanged.  Mention completion never queues
+or sends text.  While idle, otherwise insert spaces.
 During a turn, queue the draft for a later FIFO turn.  Empty Tab switches chat
 and rollout views in networked mode and does nothing otherwise.
 .TP
@@ -1037,9 +1042,10 @@ the advertised room automatically.
 .PP
 The local operator and ordinary IRC clients receive channel mode
 .BR +o ;
-the model nick does not.  Current channel operators may change the topic and
-their messages steer the model.  Direct mentions of the model nick are also
-urgent.  Urgent input is coalesced and admitted at the earliest safe boundary;
+the model nick does not.  Current channel operators may change the topic.
+Only direct mentions of the model nick are urgent; ordinary messages from
+local or channel operators remain background context.
+Urgent input is coalesced and admitted at the earliest safe boundary;
 generation reaches a safe stream boundary and commands are handed back alive.
 .PP
 Other messages, joins, leaves, mode changes, and topic changes enter model
@@ -1070,7 +1076,7 @@ the next safe boundary.  It never emits an IRC message.  Incoming room traffic
 is not automatically bridged between servers.  Model response text remains local;
 .B irc_send
 is the only model-authored path to a room message or notice.  If a
-local-operator turn reaches a terminal response without a successful
+local-operator mention turn reaches a terminal response without a successful
 .B irc_send
 message, the model receives one reminder.  Notices do not satisfy that reply
 requirement.  Other room traffic never forces a reply.

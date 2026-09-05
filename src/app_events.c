@@ -283,8 +283,7 @@ snj_app_irc_event(void *opaque, const struct snj_irc_event *event)
     }
     if (event->historical)
         return 0;
-    urgent = chat && (local_operator || event->op ||
-        snj_irc_mentions_agent(app->irc, event->endpoint, event->text));
+    urgent = chat && snj_irc_mentions_agent(app->irc, event->endpoint, event->text);
     if (append_irc_projection(urgent ? &app->irc_urgent :
                                       &app->irc_background, event) < 0)
         return -1;

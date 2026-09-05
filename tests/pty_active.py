@@ -2809,6 +2809,11 @@ def test_network_live_nick_prompt():
                           ":fake BATCH -h\r\n").encode())
         child.wait(f"operator7@{socket.gethostname()}".encode())
         child.drain()
+        start = len(child.buf)
+        child.send(b"@ag\t")
+        child.wait(chat_prompt("operator7") + b"@agent7 ", start=start)
+        child.send(b"\x03")
+        child.drain(0.03)
         # Preserve a draft and its cursor through a live rename.
         child.send(b"/stats\x1b[D")
         child.drain()
@@ -2824,6 +2829,11 @@ def test_network_live_nick_prompt():
         child.drain()
         assert child.buf[start:].count(b"operator7 is now known as") == 1
         assert child.buf[start:].count(b"agent7 is now known as") == 1
+        start = len(child.buf)
+        child.send(b"@ag\t")
+        child.wait(chat_prompt("operator8") + b"@agent8 ", start=start)
+        child.send(b"\x03")
+        child.drain(0.03)
         # Local input is attributed to the accepted operator and the model's
         # request context includes a fresh snapshot with both accepted nicks.
         start = len(child.buf)
@@ -3129,6 +3139,71 @@ def test_network_view_routing_and_atomic_catchup():
     assert chat_turns[0]["data"]["text"] != "network_one"
 
 
+def test_chat_mention_completion_and_steering():
+    before = session_ids()
+    port = free_port()
+    child = Child(["-s", f"127.0.0.1:{port}", "-n", "agent", "-o", "localop",
+                   "-r", "lab", "--no-color", "-v"])
+    human = None
+    try:
+        child.wait(chat_prompt("localop"))
+        session_id = new_session(before)
+        human = IRCClient(port, "remoteop")
+        wait_turn_completed(child, session_id, "event=join sender=remoteop")
+        for prompt, marker in (("slow", b"working slowly"),
+                               ("managed_command_steer", b"fixture managed steering wait")):
+            start = len(child.buf)
+            child.send(b"/rollout\r")
+            boundary = child.wait("── rollout ──".encode(), start=start)
+            child.wait_idle_prompt(start=boundary)
+            child.send(prompt.encode() + b"\r")
+            child.wait(marker, start=start)
+            turn = next(event for event in reversed(events(session_id))
+                        if event["type"] == "turn_started")
+            turn_id = turn["data"]["turn_id"]
+            child.send(b"/chat\r")
+            boundary = child.wait("── chat ──".encode(), start=start)
+            child.wait(chat_prompt("localop"), start=boundary)
+            # A unique completion in the middle preserves punctuation and tail.
+            wire_start = len(human.buf)
+            child.send(b"hello @rem, tail" + b"\x1b[D" * 6 + b"\t\x05\r")
+            human.wait(b"PRIVMSG #lab :hello @remoteop, tail\r\n", start=wire_start)
+            human.message("ordinary operator chatter")
+            human.message("@agent7 is someone else")
+            human.wait(b"PRIVMSG #lab :@agent7 is someone else\r\n", start=wire_start)
+            # Unmatched and ambiguous completion must not queue active drafts.
+            child.send(b"@absent\t\x03@\t\x03")
+            child.drain(0.08)
+            log = events(session_id)
+            assert not [event for event in log if event["type"] == "queue_added"]
+            assert not [event for event in log
+                        if event["data"].get("turn_id") == turn_id and
+                        event["type"] in ("steering_added", "response_interrupted",
+                                          "turn_completed", "turn_interrupted")]
+            # Completing and submitting the local agent does steer. The managed
+            # fixture requires this exact instruction before terminating its handle.
+            child.send(b"@ag\tterminate it\r")
+            human.wait(b"PRIVMSG #lab :@agent terminate it\r\n", start=wire_start)
+            wait_turn_completed(child, session_id, prompt)
+            wait_turn_completed(child, session_id, "hello @remoteop, tail")
+            log = events(session_id)
+            steering = [event for event in log if event["type"] == "steering_added"
+                        and event["data"]["turn_id"] == turn_id]
+            assert len(steering) == 1, steering
+            assert "@agent terminate it" in steering[0]["data"]["text"]
+            assert "ordinary operator chatter" not in steering[0]["data"]["text"]
+            assert "hello @remoteop" not in steering[0]["data"]["text"]
+            assert not [event for event in log if event["type"] == "queue_added"]
+        child.send(b"\x04")
+        child.finish()
+        child = None
+    finally:
+        if human:
+            human.close()
+        if child:
+            child.kill()
+
+
 def test_network_chat_and_managed_mention():
     before = session_ids()
     port = free_port()
@@ -3318,7 +3393,7 @@ def test_network_chat_and_managed_mention():
 
         reminder_start = len(child.buf)
         wire_start = len(human.buf)
-        child.send(b"network_reminder\r")
+        child.send(b"@agent network_reminder\r")
         human.wait(b"PRIVMSG #lab :network reminder reply\r\n", start=wire_start)
         wait_turn_completed(child, session_id, "network_reminder")
         child.wait(network_idle, start=reminder_start)
@@ -3714,5 +3789,6 @@ if __name__ == "__main__":
     test_prompt_identity_is_terminal_safe()
     test_model_message_corrections_are_private_and_specific()
     test_network_view_routing_and_atomic_catchup()
+    test_chat_mention_completion_and_steering()
     test_network_chat_and_managed_mention()
     print("pty_active: ok")

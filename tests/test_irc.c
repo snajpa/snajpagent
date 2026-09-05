@@ -1058,6 +1058,30 @@ test_client_events(void)
     tick(client, 20u);
     assert(operator_fd >= 0);
     {
+        struct snj_buf nicks;
+
+        snj_buf_init(&nicks, 65536u);
+        assert(snj_irc_take_nicks(client, &nicks) == 1);
+        assert(strstr((const char *)nicks.data, "remoteop\n"));
+        assert(strstr((const char *)nicks.data, "remoteagent\n"));
+        assert(strstr((const char *)nicks.data, "peer\n"));
+        snj_buf_reset(&nicks);
+        assert(snj_irc_take_nicks(client, &nicks) == 0);
+        send_text(operator_fd, ":peer!u@fake NICK :renamed\r\n");
+        tick(client, 10u);
+        assert(snj_irc_take_nicks(client, &nicks) == 1);
+        assert(!strstr((const char *)nicks.data, "peer\n"));
+        assert(strstr((const char *)nicks.data, "renamed\n"));
+        snj_buf_reset(&nicks);
+        send_text(operator_fd, ":renamed!u@fake PART #lab :bye\r\n");
+        tick(client, 10u);
+        assert(snj_irc_take_nicks(client, &nicks) == 1);
+        assert(!strstr((const char *)nicks.data, "renamed\n"));
+        snj_buf_free(&nicks);
+        send_text(operator_fd, ":peer!u@fake JOIN #lab\r\n");
+        tick(client, 10u);
+    }
+    {
         unsigned int before = capture.events[SNJ_IRC_MESSAGE];
 
         send_text(operator_fd,
@@ -1091,12 +1115,14 @@ test_client_events(void)
             ":operator7!u@fake NICK :Operator7\r\n"
             ":peer!u@fake NICK :friend\r\n");
         tick(client, 10u);
-        assert(capture.events[SNJ_IRC_NICK] == 4u);
+        assert(capture.events[SNJ_IRC_NICK] == 5u);
         assert(capture.events[SNJ_IRC_MESSAGE] == messages);
         assert(capture.events[SNJ_IRC_DISCONNECTED] == 0u);
         assert(strcmp(snj_irc_model_nick(client), "agent7") == 0);
         assert(strcmp(snj_irc_operator_nick(client), "Operator7") == 0);
         assert(snj_irc_mentions_agent(client, address, "AGENT7: hello"));
+        assert(snj_irc_mentions_agent(client, "local", "@agent7 hello"));
+        assert(!snj_irc_mentions_agent(client, "local", "@remoteagent old"));
         assert(!snj_irc_mentions_agent(client, address, "remoteagent: old"));
         snj_buf_init(&snapshot, SNJ_MAX_IRC_SNAPSHOT);
         assert(snj_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);

@@ -43,6 +43,8 @@ int snj_key_ref_compare(const void *left, const void *right);
 int snj_fd_cloexec(int fd);
 bool snj_utf8_valid(const unsigned char *s, size_t len, bool reject_nul);
 bool snj_text_blank(const char *text);
+unsigned char snj_irc_fold(unsigned char c);
+bool snj_irc_nick_char(unsigned char c);
 int snj_random_id(char out[SNJ_ID_HEX_LEN + 1u]);
 uint64_t snj_time_ms(void);
 uint64_t snj_monotonic_ms(void);

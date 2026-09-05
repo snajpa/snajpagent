@@ -190,37 +190,16 @@ sanitize_text(char *dst, size_t size, const char *src)
     return 0;
 }
 
-static unsigned char
-irc_fold(unsigned char c)
-{
-    if (c >= 'A' && c <= 'Z')
-        return (unsigned char)(c + ('a' - 'A'));
-    if (c == '[') return '{';
-    if (c == ']') return '}';
-    if (c == '\\') return '|';
-    if (c == '^') return '~';
-    return c;
-}
-
 static int
 irc_casecmp(const char *a, const char *b)
 {
     for (;; ++a, ++b) {
-        unsigned char ac = irc_fold((unsigned char)*a);
-        unsigned char bc = irc_fold((unsigned char)*b);
+        unsigned char ac = snj_irc_fold((unsigned char)*a);
+        unsigned char bc = snj_irc_fold((unsigned char)*b);
 
         if (ac != bc || !ac || !bc)
             return (ac > bc) - (ac < bc);
     }
-}
-
-static bool
-nick_char(unsigned char c)
-{
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-           (c >= '0' && c <= '9') || c == '[' || c == ']' || c == '\\' ||
-           c == '`' || c == '_' || c == '^' || c == '{' || c == '}' ||
-           c == '|' || c == '-';
 }
 
 static size_t
@@ -272,7 +251,7 @@ nick_valid(const char *nick)
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)nick[i];
 
-        if (c < 0x80u && !nick_char(c))
+        if (c < 0x80u && !snj_irc_nick_char(c))
             return false;
     }
     return true;
@@ -2143,7 +2122,7 @@ derive_server_name(char out[SNJ_CONFIG_IRC_NICK_MAX + 1u])
     host[sizeof(host) - 1u] = '\0';
     for (size_t i = 0; host[i] && used < SNJ_CONFIG_IRC_NICK_MAX; ++i) {
         unsigned char c = (unsigned char)host[i];
-        out[used++] = nick_char(c) ? (char)c : '_';
+        out[used++] = snj_irc_nick_char(c) ? (char)c : '_';
     }
     if (!used || (out[0] >= '0' && out[0] <= '9') || out[0] == '-') {
         memcpy(out, "localhost", 10u);
@@ -2619,22 +2598,28 @@ snj_irc_core_set_agent_topic(struct snj_irc_core *irc, const char *topic,
 }
 
 static int
-snapshot_network(const struct snj_irc_core *irc, struct snj_buf *out)
+snapshot_member(struct snj_buf *out, struct snj_buf *nicks, const char *nick, bool op)
+{
+    return snj_buf_printf(out, " %s%s", op ? "@" : "", nick) < 0 ||
+           snj_buf_printf(nicks, "%s\n", nick) < 0 ? -1 : 0;
+}
+
+static int
+snapshot_network(const struct snj_irc_core *irc, struct snj_buf *out,
+                 struct snj_buf *nicks)
 {
     if (irc->hosting) {
         if (snj_buf_printf(out, "room: %s\ntopic: %s\n",
                            irc->room, irc->topic) < 0)
             goto fail;
-        if (snj_buf_printf(out, "members[%s]: %s%s %s%s", irc->listen,
-                           irc->agent_op ? "@" : "", irc->model_nick,
-                           irc->operator_op ? "@" : "",
-                           irc->operator_nick) < 0)
+        if (snj_buf_printf(out, "members[%s]:", irc->listen) < 0 ||
+            snapshot_member(out, nicks, irc->model_nick, irc->agent_op) < 0 ||
+            snapshot_member(out, nicks, irc->operator_nick, irc->operator_op) < 0)
             goto fail;
         for (size_t i = 0; i < IRC_SERVER_PEERS; ++i) {
             const struct irc_conn *peer = &irc->peers[i];
             if (peer->used && peer->joined &&
-                snj_buf_printf(out, " %s%s", peer->op ? "@" : "",
-                               peer->nick) < 0)
+                snapshot_member(out, nicks, peer->nick, peer->op) < 0)
                 goto fail;
         }
         if (snj_buf_append(out, "\n", 1u) < 0)
@@ -2669,9 +2654,8 @@ snapshot_network(const struct snj_irc_core *irc, struct snj_buf *out)
                                link->endpoint) < 0)
                 goto fail;
             for (size_t j = 0; j < link->member_count; ++j)
-                if (snj_buf_printf(out, " %s%s",
-                                   link->members[j].op ? "@" : "",
-                                   link->members[j].nick) < 0)
+                if (snapshot_member(out, nicks, link->members[j].nick,
+                                    link->members[j].op) < 0)
                     goto fail;
             if (snj_buf_append(out, "\n", 1u) < 0)
                 goto fail;
@@ -2685,7 +2669,7 @@ fail:
 int
 snj_irc_core_view(const struct snj_irc_core *irc, struct snj_irc_view *view)
 {
-    struct snj_buf text;
+    struct snj_buf text, nicks;
     int rc = -1;
 
     memset(view, 0, sizeof(*view));
@@ -2695,11 +2679,15 @@ snj_irc_core_view(const struct snj_irc_core *irc, struct snj_irc_view *view)
                       snj_irc_core_operator_nick(irc));
     view->joined = irc->hosting || (irc->link_count && irc->links[0].joined);
     snj_buf_init(&text, sizeof(view->text) - 1u);
-    if (snapshot_network(irc, &text) == 0) {
+    snj_buf_init(&nicks, sizeof(view->nicks) - 1u);
+    if (snapshot_network(irc, &text, &nicks) == 0) {
         memcpy(view->text, text.data, text.len);
+        if (nicks.len)
+            memcpy(view->nicks, nicks.data, nicks.len);
         rc = 0;
     }
     snj_buf_free(&text);
+    snj_buf_free(&nicks);
     return rc;
 }
 
@@ -2955,14 +2943,14 @@ snj_irc_nick_mentioned(const char *text, const char *nick)
         size_t j;
 
         if (i != 0u && ((unsigned char)text[i - 1u] >= 0x80u ||
-                        nick_char((unsigned char)text[i - 1u])))
+                        snj_irc_nick_char((unsigned char)text[i - 1u])))
             continue;
         for (j = 0u; j < nick_len && text[i + j]; ++j)
-            if (irc_fold((unsigned char)text[i + j]) !=
-                irc_fold((unsigned char)nick[j]))
+            if (snj_irc_fold((unsigned char)text[i + j]) !=
+                snj_irc_fold((unsigned char)nick[j]))
                 break;
         if (j == nick_len && (unsigned char)text[i + nick_len] < 0x80u &&
-            !nick_char((unsigned char)text[i + nick_len]))
+            !snj_irc_nick_char((unsigned char)text[i + nick_len]))
             return true;
     }
     return false;

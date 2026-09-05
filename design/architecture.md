@@ -114,11 +114,11 @@ filesystem confidentiality sandbox or a freeze of independent processes.
 
 The active input pump admits queued UI and IRC events during provider streams
 and tool execution. Independent UI and IRC owners service the terminal and
-sockets even when the engine is busy. Local Enter submits immediate steering: it
+sockets even when the engine is busy. Rollout Enter submits immediate steering: it
 interrupts a provider response or returns a running command with a live handle,
-then re-arms the empty active composer before the next model cycle. Local Tab
-instead appends a future FIFO turn and changes neither the active response nor
-the managed command. Current channel-operator and direct-mention IRC messages
+then re-arms the empty active composer before the next model cycle. Outside
+command/mention completion, Tab appends a future FIFO turn and changes neither the active response nor
+the managed command. Only direct-mention IRC messages
 remain durably coalesced for their documented urgent boundary. Other room
 traffic is coalesced for a convenient boundary and does not compel a model
 reply.

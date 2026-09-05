@@ -154,8 +154,10 @@ clients join it automatically. Without `-r`, the room is named after the host.
 Its initial topic is the server's workspace path. Use `/topic TEXT` to change
 the topic in your joined rooms.
 
-Operators have channel op status. Their messages and model-nick mentions steer
-the agents. Only the model's `irc_send` tool posts to the room; other model
+Operators have channel op status. Only model-nick mentions steer active agents;
+ordinary chat, including the local operator's, waits as background context.
+In chat, Tab completes `@nick` at the cursor from current room members.
+Only the model's `irc_send` tool posts to the room; other model
 text stays in the local rollout. Joining, history, and reconnects are automatic.
 
 Networked mode opens the timestamped chat view. Empty Tab switches between

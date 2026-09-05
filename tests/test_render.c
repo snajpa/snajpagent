@@ -313,6 +313,53 @@ test_prompt_spinners(void)
     snj_term_close(&term);
 }
 
+static void
+test_mention_completion(void)
+{
+    static const struct {
+        const char *nicks, *draft, *expected;
+        size_t cursor, result_cursor;
+    } cases[] = {
+        {"agent\n", "@ag", "@agent ", 3u, 7u},
+        {"Agent\nagent\n", "hey @AG", "hey @Agent ", 7u, 11u},
+        {"agent1\nagent2\n", "@ag", "@agent", 3u, 6u},
+        {"agent1\nagent2\n", "@agent", "@agent", 6u, 6u},
+        {"agent\n", "@missing", "@missing", 8u, 8u},
+        {"", "@", "@", 1u, 1u},
+        {"agent\n", "hi @agxxx, bye", "hi @agent, bye", 6u, 9u},
+        {"agent\n", "hey\n@ag tail", "hey\n@agent tail", 7u, 10u},
+        {"[bot]\n", "@{bo", "@[bot] ", 4u, 7u},
+        {"čenda\n", "@če", "@čenda ", 4u, 8u},
+        {"čenda\nčerven\n", "@č", "@če", 3u, 4u},
+        {"ač\naď\n", "@a", "@a", 2u, 2u},
+    };
+
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        for (unsigned int active = 0u; active < 2u; ++active) {
+            struct snj_term term;
+            enum snj_term_action action;
+            char *text = NULL;
+
+            snj_term_init(&term);
+            term.chat = true;
+            term.active = active != 0u;
+            term.nicks = snj_strdup_checked(cases[i].nicks, 4096u);
+            assert(term.nicks);
+            assert(snj_buf_append(&term.draft, cases[i].draft,
+                                  strlen(cases[i].draft)) == 0);
+            term.cursor = cases[i].cursor;
+            term.input[0] = '\t';
+            term.input_len = 1u;
+            assert(snj_term_poll(&term, 0, -1, &action, &text) == 0);
+            assert(action == SNJ_TERM_NONE && !text);
+            assert(term.draft.len == strlen(cases[i].expected));
+            assert(memcmp(term.draft.data, cases[i].expected, term.draft.len) == 0);
+            assert(term.cursor == cases[i].result_cursor);
+            snj_term_close(&term);
+        }
+    }
+}
+
 static size_t
 capture(unsigned int verbosity, char *out, size_t out_size)
 {
@@ -1360,6 +1407,7 @@ main(void)
     test_prompt_history();
     test_prompt_clock();
     test_prompt_spinners();
+    test_mention_completion();
     test_markdown_streaming();
     test_markdown_tables();
     for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity)

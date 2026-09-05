@@ -32,6 +32,7 @@ int snj_ui_text(struct snj_ui *ui, enum snj_ui_operation op, const char *text);
 int snj_ui_color(struct snj_ui *ui, enum snj_color_mode mode);
 int snj_ui_markdown(struct snj_ui *ui, bool enabled);
 int snj_ui_networked(struct snj_ui *ui, bool enabled, const char *nick);
+int snj_ui_nicks(struct snj_ui *ui, const char *nicks);
 int snj_ui_commands(struct snj_ui *ui, const struct snj_term_command *commands,
                       size_t count);
 int snj_ui_typing_pause(struct snj_ui *ui, uint32_t ms);

@@ -72,6 +72,7 @@ struct snj_term {
     struct snj_history_snapshot history;
     char *history_draft;
     char *search_original;
+    char *nicks;
     const struct snj_term_command *commands;
     size_t cursor;
     size_t command_count;
@@ -120,6 +121,7 @@ struct snj_term {
     bool output_detour;
     bool color;
     bool networked;
+    bool chat;
     bool redraw_after_output;
     bool rendered_end_at_margin;
     bool rendered_cursor_pending_wrap;

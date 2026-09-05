@@ -1790,13 +1790,14 @@ command_name_length(const struct snj_term_command *command)
 }
 
 static int
-replace_command_name(struct snj_term *term, const char *name, size_t name_len,
-                     size_t token_end)
+replace_completion(struct snj_term *term, const char *name, size_t name_len,
+                   size_t token_start, size_t token_end, bool space)
 {
     size_t tail_len = term->draft.len - token_end;
     size_t next_len;
 
     if (!snj_size_add(name_len, tail_len, &next_len) ||
+        !snj_size_add(next_len, token_start + (size_t)space, &next_len) ||
         next_len > SNJ_MAX_DIRECT_PROMPT) {
         errno = EOVERFLOW;
         return -1;
@@ -1804,11 +1805,14 @@ replace_command_name(struct snj_term *term, const char *name, size_t name_len,
     if (next_len > term->draft.len &&
         snj_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
         return -1;
-    memmove(term->draft.data + name_len, term->draft.data + token_end,
+    memmove(term->draft.data + token_start + name_len + (size_t)space,
+            term->draft.data + token_end,
             tail_len);
-    memcpy(term->draft.data, name, name_len);
+    memcpy(term->draft.data + token_start, name, name_len);
+    if (space)
+        term->draft.data[token_start + name_len] = ' ';
     term->draft.len = next_len;
-    term->cursor = name_len;
+    term->cursor = token_start + name_len + (size_t)space;
     history_reset_navigation(term);
     mark_input_activity(term);
     return redraw(term);
@@ -1861,7 +1865,66 @@ complete_command_name(struct snj_term *term, bool *handled)
         (token_end == match_len &&
          memcmp(term->draft.data, match, match_len) == 0))
         return 0;
-    return replace_command_name(term, match, match_len, token_end);
+    return replace_completion(term, match, match_len, 0u, token_end, false);
+}
+
+static bool
+nick_byte(unsigned char c)
+{
+    return c >= 0x80u || snj_irc_nick_char(c);
+}
+
+static int
+complete_mention(struct snj_term *term, bool *handled)
+{
+    const char *match = NULL;
+    size_t start = term->cursor, end = term->cursor, common = 0u, first_len = 0u;
+    bool unique = true;
+
+    *handled = false;
+    if (!term->chat)
+        return 0;
+    while (start && nick_byte(term->draft.data[start - 1u]))
+        --start;
+    if (!start || term->draft.data[start - 1u] != '@' ||
+        (start > 1u && nick_byte(term->draft.data[start - 2u])))
+        return 0;
+    *handled = true;
+    while (end < term->draft.len && nick_byte(term->draft.data[end]))
+        ++end;
+    size_t prefix = term->cursor - start;
+    for (const char *nick = term->nicks; nick && *nick;) {
+        const char *line = strchr(nick, '\n');
+        size_t len = line ? (size_t)(line - nick) : strlen(nick), i = 0u;
+
+        while (i < prefix && i < len &&
+               snj_irc_fold((unsigned char)nick[i]) ==
+               snj_irc_fold(term->draft.data[start + i]))
+            ++i;
+        if (i == prefix) {
+            if (!match) {
+                match = nick;
+                common = first_len = len;
+            } else {
+                while (i < common && i < len &&
+                       snj_irc_fold((unsigned char)nick[i]) ==
+                       snj_irc_fold((unsigned char)match[i]))
+                    ++i;
+                if (i != first_len || i != len)
+                    unique = false;
+                common = i;
+            }
+        }
+        nick = line ? line + 1u : NULL;
+    }
+    if (!match)
+        return 0;
+    while (common && !snj_utf8_valid((const unsigned char *)match, common, true))
+        --common;
+    if (common < prefix || (!unique && common == prefix))
+        return 0;
+    return replace_completion(term, match, common, start, end,
+                              unique && end == term->draft.len);
 }
 
 static int
@@ -2191,6 +2254,9 @@ feed_byte(struct snj_term *term, unsigned char byte,
 
             if (rc < 0 || handled)
                 return rc;
+            rc = complete_mention(term, &handled);
+            if (rc < 0 || handled)
+                return rc;
         }
         if (term->active)
             return complete_action(term, SNJ_TERM_QUEUE, action, text);
@@ -2394,6 +2460,7 @@ snj_term_close(struct snj_term *term)
         (void)sigaction(SIGINT, &term->saved_sigint, NULL);
     history_clear(term);
     free(term->search_original);
+    free(term->nicks);
     snj_buf_free(&term->search_label);
     snj_buf_free(&term->search_query);
     snj_buf_free(&term->draft);

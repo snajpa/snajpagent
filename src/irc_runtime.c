@@ -65,6 +65,7 @@ struct snj_irc {
     int wake[2];
     bool stopping, hosting;
     bool identity_changed; /* Mailbox-locked; retained across command drains. */
+    bool nicks_changed; /* Engine-owned, retained across command drains. */
     int failure;
 };
 
@@ -327,6 +328,8 @@ drain(struct snj_irc *irc, int timeout_ms)
         --irc->owners[record->source].queued;
         pthread_cond_broadcast(&irc->changed);
         if (record->kind != IRC_TRACE) {
+            if (strcmp(irc->owners[record->source].view.nicks, record->view.nicks) != 0)
+                irc->nicks_changed = true;
             if (!record->source &&
                 (strcmp(irc->owners[0].view.model, record->view.model) != 0 ||
                  strcmp(irc->owners[0].view.operator, record->view.operator) != 0))
@@ -448,6 +451,7 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
     irc->trace_fn = trace_fn;
     irc->opaque = opaque;
     irc->hosting = config->irc_listen_explicit;
+    irc->nicks_changed = true;
     irc->wake[0] = irc->wake[1] = -1;
     if (open_wake(irc->wake) < 0)
         goto fail;
@@ -662,9 +666,25 @@ snj_irc_mentions_agent(const struct snj_irc *irc, const char *endpoint,
     for (size_t i = 0u; i < irc->owner_count; ++i) {
         const struct irc_owner *owner = &irc->owners[i];
 
-        if (owner->view.joined && snj_irc_endpoint_equal(endpoint, owner->endpoint)
+        if (owner->view.joined && (strcmp(endpoint, "local") == 0 ||
+            snj_irc_endpoint_equal(endpoint, owner->endpoint))
             && snj_irc_nick_mentioned(text, owner->view.model))
             return true;
     }
     return false;
+}
+
+int
+snj_irc_take_nicks(struct snj_irc *irc, struct snj_buf *out)
+{
+    if (!irc || !irc->nicks_changed)
+        return 0;
+    for (size_t i = 0u; i < irc->owner_count; ++i)
+        if (snj_buf_append(out, irc->owners[i].view.nicks,
+                          strlen(irc->owners[i].view.nicks)) < 0)
+            return -1;
+    if (snj_buf_terminate(out) < 0)
+        return -1;
+    irc->nicks_changed = false;
+    return 1;
 }

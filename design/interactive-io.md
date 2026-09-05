@@ -104,9 +104,11 @@ The pause provides display focus, not a provider-generation guarantee. Input,
 interrupts, and local active-turn commands remain responsive while output is
 paused.
 
-Enter, Tab, and Ctrl-C have distinct active-turn meanings. Enter durably
+Enter, Tab, and Ctrl-C have distinct active-turn meanings. In rollout, Enter durably
 submits the draft as immediate steering and interrupts the current provider
-response at the next input-pump boundary. Tab durably appends the draft to the
+response at the next input-pump boundary. In chat, Enter sends a room message;
+only a mention of the local agent steers, while ordinary operator messages
+remain background context. Outside completion, Tab durably appends the draft to the
 future-turn FIFO and does not interrupt the response, yield a managed command,
 or expose the text to the current model cycle. Ctrl-C is composer-first in
 both idle and active states: it leaves the displayed draft in scrollback,
@@ -254,8 +256,14 @@ Enter submits the displayed match. Search never wraps or animates its prompt.
 Tab uses the following order in every ordinary composer:
 
 1. an empty draft cycles the available presentation views;
-2. a nonempty slash-command prefix is completed when possible; and
-3. other nonempty text retains the existing contextual action: indentation
+2. a nonempty slash-command prefix is completed when possible;
+3. in chat, an `@nick` token at the cursor completes from current joined-room
+   members across endpoints, using IRC case folding. One match expands with a
+   trailing space at draft end; multiple matches expand their common prefix.
+   No match leaves the draft unchanged. Mention completion never queues or
+   sends text, preserves surrounding text and UTF-8 boundaries, and follows
+   joins, departures, reconnects and nick changes through existing owner queues;
+4. other nonempty text retains the existing contextual action: indentation
    while idle and future-turn queueing while active.
 
 Non-networked mode has only the rollout view, so empty Tab is a no-op. A

@@ -11,6 +11,27 @@
 #include <time.h>
 #include <unistd.h>
 
+unsigned char
+snj_irc_fold(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z')
+        return (unsigned char)(c + ('a' - 'A'));
+    if (c == '[') return '{';
+    if (c == ']') return '}';
+    if (c == '\\') return '|';
+    if (c == '^') return '~';
+    return c;
+}
+
+bool
+snj_irc_nick_char(unsigned char c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '[' || c == ']' || c == '\\' ||
+           c == '`' || c == '_' || c == '^' || c == '{' || c == '}' ||
+           c == '|' || c == '-';
+}
+
 void
 snj_errorf(char *error, size_t size, const char *fmt, ...)
 {

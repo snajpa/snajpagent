@@ -356,16 +356,16 @@ conversation explains:
   accepted per-server aliases after collisions;
 - that chat entries marked `+o` are operator instructions;
 - that a direct mention of the agent requires immediate attention;
-- that unprivileged agent/room traffic and membership notifications are
-  conversational context;
+- that unmentioned chat, including local/channel operator messages, and
+  membership notifications are conversational context;
 - that assistant speech remains in the local rollout and `irc_send` is the
   only way for the model to address the room; and
 - that the declared coding tools still operate on the local workspace, not on
   the IRC server or remote peers;
 - that IRC connection health, joining, history synchronization, and reconnect
   are owned by the runtime and must not be polled or babysat by the model; and
-- that a quiet response to peer chatter is valid, while a local operator turn
-  requires one room-facing reply.
+- that a quiet response to ordinary chatter is valid, while a local operator
+  mention turn requires one room-facing reply.
 
 IRC input is recorded as typed structured session events before it affects a
 provider request. Each projected user message renders source endpoint, room,
@@ -374,13 +374,11 @@ never upgrades authority.
 
 Admission priority is:
 
-1. local operator text is urgent and starts an immediate user turn while idle;
-2. a room message from a member currently carrying `+o` is urgent in the same
-   way;
-3. a room message that mentions the model nick, using IRC case folding and a
-   nick boundary, is urgent regardless of the sender; and
-4. other chat and room notifications are coalesced into a bounded user-role
-   room update at a convenient provider boundary.
+1. a room message that mentions the accepted endpoint-local model nick, using
+   IRC case folding and a nick boundary, is urgent regardless of the sender.
+   Local chat is broadcast, so any joined endpoint's model alias matches; and
+2. other chat (including local operator and `+o` messages) and room notifications
+   are coalesced into a bounded user-role room update when active work finishes.
 
 Background traffic is drained before an automatic goal continuation. While
 idle it is briefly coalesced so ordinary chat does not create one provider
@@ -415,7 +413,7 @@ process. The IRC runtime does not require the model to babysit the socket or
 process. Ordinary terminal interrupt remains an explicit cancellation and is
 not changed by this rule.
 
-For a turn started by the local operator, snajpagent tracks whether a
+For a turn requested by a local operator mention, snajpagent tracks whether a
 successful `irc_send` message was posted to the room. A notice does not count
 as a reply. If the model reaches an otherwise terminal boundary without such a
 reply, the same turn receives one concise developer reminder to use `irc_send`
@@ -551,13 +549,13 @@ pass and focused local smoke checks demonstrate all of the following:
    including a switch during streamed output; atomic catch-up without an
    interposed prompt; visible exact-once local rollout submissions; and absence
    of rollout input from IRC wire output;
-5. earliest-safe, coalesced urgent admission for local operator, current
-   channel operator, and model-nick mentions without truncating active
+5. earliest-safe, coalesced urgent admission for model-nick mentions;
+   ordinary local/channel-operator messages stay background without interrupting active
    generation or tools; asynchronous managed-command handoff; coalesced
    background events; socket servicing during provider and tool work;
    first-join history projection; and fresh post-compaction history projection;
    one non-looping `irc_send` reminder for otherwise-silent local operator
-   turns; and no forced response to other traffic;
+   mention turns; and no forced response to other traffic;
 6. `irc_send` as the only model-authored IRC transmission path, final assistant
    text remaining local, and `irc_state` plus privilege-correct `irc_topic`
    behavior without model-driven polling, joining, or reconnection; and
