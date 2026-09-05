@@ -17,7 +17,7 @@ hash_json_bounded(const json_t *value, size_t max,
                   char *error, size_t error_size)
 {
     if (hash)
-        hash[0] = '\\0';
+        hash[0] = '\0';
     if (bytes)
         *bytes = 0u;
     if (snag_json_digest_bounded(value, max, hash, bytes) == 0)
