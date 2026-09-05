@@ -309,7 +309,7 @@ snj_app_irc_trace(void *opaque, unsigned int level, char direction,
     }
     if (app->render.verbosity < level)
         return 0;
-    snj_buf_init(&safe, 8u * 1024u);
+    snj_buf_init(&safe, 4u * SNJ_IRC_LINE_MAX);
     for (size_t i = 0u; i < len; ++i) {
         unsigned char c = (unsigned char)text[i];
         if (c < 0x20u || c == 0x7fu) {
@@ -322,7 +322,8 @@ snj_app_irc_trace(void *opaque, unsigned int level, char direction,
     if (level == 6u) {
         struct snj_buf line;
 
-        snj_buf_init(&line, 16u * 1024u);
+        snj_buf_init(&line, 4u * SNJ_IRC_LINE_MAX +
+                            SNJ_CONFIG_IRC_ENDPOINT_MAX + 8u);
         if (snj_buf_printf(&line, "IRC [%s] ", endpoint) < 0 ||
             snj_buf_append(&line, safe.data, safe.len) < 0) {
             snj_buf_free(&line);

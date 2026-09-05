@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #define SNJ_IRC_TEXT_MAX 4096u
+#define SNJ_IRC_LINE_MAX 8192u /* Includes CRLF. */
 
 enum snj_irc_event_kind {
     SNJ_IRC_CONNECTED,

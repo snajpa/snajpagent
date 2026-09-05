@@ -2454,7 +2454,7 @@ def test_network_collision_prompts():
     old_user = os.environ.get("USER")
     os.environ["USER"] = "root"
     try:
-        server = Child(["--no-color", "-s", address, "-r", "lab"])
+        server = Child(["--no-color", "-vvvvvv", "-s", address, "-r", "lab"])
         children.append(server)
         server.wait(chat_prompt("root0"))
         server.send(b"/names\r")
@@ -2479,6 +2479,14 @@ def test_network_collision_prompts():
             child.wait("visitor is now known as · visitor2".encode(), start=start)
             child.drain()
             assert child.buf[start:].count(b"visitor is now known as") == 1
+        # Escaped wire diagnostics may be four times longer than the wire.
+        starts = [len(child.buf) for child in children]
+        peer.message("\x02" * 8100 + "long trace payload")
+        message = "visitor2 › long trace payload".encode()
+        for child, start in zip(children, starts):
+            child.wait(message, start=start)
+            child.drain()
+            assert child.buf[start:].count(message) == 1
     finally:
         try:
             if peer:

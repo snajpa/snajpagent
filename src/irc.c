@@ -24,10 +24,9 @@
 #define IRC_MEMBERS_MAX 128u
 #define IRC_REPLAY_MEMBERS_MAX \
     (IRC_MEMBERS_MAX * (SNJ_CONFIG_IRC_CLIENT_MAX + 1u))
-#define IRC_INPUT_MAX 8192u
 #define IRC_OUTPUT_MAX (6u * 1024u * 1024u)
 #define IRC_PENDING_MAX (2u * 1024u * 1024u + 64u * 1024u)
-#define IRC_LINE_MAX (IRC_INPUT_MAX - 2u)
+#define IRC_LINE_MAX (SNJ_IRC_LINE_MAX - 2u)
 #define IRC_TOPIC_MAX 280u
 #define IRC_RETRY_MS 1000u
 
@@ -57,7 +56,7 @@ struct irc_conn {
     struct snj_buf pending;
     size_t output_offset;
     size_t pending_inflight;
-    unsigned char input[IRC_INPUT_MAX];
+    unsigned char input[SNJ_IRC_LINE_MAX];
     size_t input_len;
     char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
@@ -1198,7 +1197,7 @@ server_welcome(struct snj_irc *irc, struct irc_conn *peer)
                    irc->server_name, peer->nick) < 0 ||
         queue_line(peer, ":%s 005 %s CHANTYPES=# PREFIX=(o)@ SAJROOM=%s "
                    "LINELEN=%u :are supported", irc->server_name, peer->nick,
-                   irc->room, IRC_INPUT_MAX) < 0 ||
+                   irc->room, SNJ_IRC_LINE_MAX) < 0 ||
         queue_line(peer, ":%s 376 %s :End of MOTD", irc->server_name,
                    peer->nick) < 0)
         return -1;
