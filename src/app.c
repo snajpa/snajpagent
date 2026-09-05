@@ -2495,7 +2495,7 @@ run_turn(struct app_state *app, const char *prompt,
     struct snag_response_graph graph;
     json_t *steering = NULL;
     struct snag_context_projection projection = {0};
-    struct snag_buf request_body;
+    struct snag_buf request_body = {0};
     size_t prompt_max = queued ? SNAG_MAX_QUEUED_TEXT : SNAG_MAX_DIRECT_PROMPT;
     int result = 4;
     snag_credential_clear(&credential);
@@ -2533,7 +2533,6 @@ run_turn(struct app_state *app, const char *prompt,
         return 3;
     }
     snag_response_graph_init(&graph);
-    snag_buf_init(&request_body, SNAG_WIRE_BODY_MAX);
     if (app->config->read_agents_md) {
         if (snag_instructions_discover(&app->turn_instructions,
                                       app->session.workspace,

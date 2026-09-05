@@ -468,6 +468,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
         struct snag_buf encoded;
         struct snag_secret_set secrets;
 
+        snag_buf_init(request_body, SNAG_WIRE_BODY_MAX);
         snag_buf_init(&encoded, SNAG_WIRE_BODY_MAX);
         snag_secret_set_build(&secrets, app->config, credential);
         if (projection->create_request_bytes > SNAG_WIRE_BODY_MAX ||
