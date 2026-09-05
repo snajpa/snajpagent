@@ -201,6 +201,9 @@ snj_auth_token_response(json_t *response, struct snj_auth_tokens *tokens,
         refresh = tokens->refresh_token;
     if (!*refresh || !snj_strcpy(next.refresh_token, sizeof(next.refresh_token), refresh))
         goto out;
+    for (const unsigned char *p = (const unsigned char *)refresh; *p; ++p)
+        if (*p < 0x21u || *p > 0x7eu)
+            goto out;
     access = token_claims(next.credential.value);
     identity = token_claims(snj_json_string(response, "id_token"));
     account = auth_string(json_object_get(identity, "https://api.openai.com/auth"),
@@ -325,7 +328,7 @@ snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
         goto out;
     snj_auth_json_free(response);
     response = NULL;
-    deadline = snj_time_ms() + 15u * 60u * 1000u;
+    deadline = snj_monotonic_ms() + 15u * 60u * 1000u;
     for (;;) {
         if (post_json("/api/accounts/deviceauth/token", request, &code,
                        &status, pump, opaque, error, error_size) < 0)
@@ -338,9 +341,9 @@ snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
                 "device login denied or failed (HTTP %ld)", status);
             goto out;
         }
-        uint64_t next = snj_time_ms() + interval * 1000u;
-        while (snj_time_ms() < next) {
-            if (snj_time_ms() >= deadline) {
+        uint64_t next = snj_monotonic_ms() + interval * 1000u;
+        while (snj_monotonic_ms() < next) {
+            if (snj_monotonic_ms() >= deadline) {
                 snj_errorf(error, error_size, "device login expired; start login again");
                 goto out;
             }

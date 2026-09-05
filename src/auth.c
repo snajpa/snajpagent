@@ -131,7 +131,7 @@ lock_provider(int dir, const char *name, snj_auth_pump_fn pump, void *opaque)
     char path[SNJ_CONFIG_PROVIDER_NAME_MAX + 8u];
     struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
     int fd;
-    uint64_t deadline = snj_time_ms() + 30000u;
+    uint64_t deadline = snj_monotonic_ms() + 30000u;
 
     (void)snprintf(path, sizeof(path), "%s.lock", name);
     fd = openat(dir, path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
@@ -142,7 +142,7 @@ lock_provider(int dir, const char *name, snj_auth_pump_fn pump, void *opaque)
     while (fcntl(fd, F_SETLK, &lock) < 0) {
         if (errno != EACCES && errno != EAGAIN && errno != EINTR)
             goto fail;
-        if (snj_time_ms() >= deadline) {
+        if (snj_monotonic_ms() >= deadline) {
             errno = ETIMEDOUT;
             goto fail;
         }

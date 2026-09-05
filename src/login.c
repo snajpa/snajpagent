@@ -201,7 +201,7 @@ acquire_login(const struct snj_cli *cli, struct snj_provider_config *provider,
             return -1;
         if (rc == 0 && (provider->auth == SNJ_AUTH_API_KEY ||
                        tokens->expires_at_ms > snj_time_ms() + 60000u)) {
-            if (!isatty(STDIN_FILENO))
+            if (!isatty(STDIN_FILENO) || !isatty(STDERR_FILENO))
                 return 0;
             if (read_line("Use the existing stored login? [Y/n]: ", key, sizeof(key),
                            false, false, error, error_size) < 0)

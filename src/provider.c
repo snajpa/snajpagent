@@ -1293,6 +1293,16 @@ provider_ctx_free(struct provider_ctx *ctx)
 }
 
 static int
+auth_pump(void *opaque, uint32_t wait_ms)
+{
+    struct provider_ctx *ctx = opaque;
+    int rc = ctx->pump ? ctx->pump(ctx->pump_opaque, wait_ms) : 0;
+    if (rc)
+        ctx->cancel_code = rc < 0 ? 3 : rc;
+    return rc;
+}
+
+static int
 request_auth_headers(struct provider_ctx *ctx)
 {
     struct curl_slist *headers = NULL;
@@ -1326,7 +1336,7 @@ provider_request_setup(struct provider_ctx *ctx,
     ctx->has_body = has_body;
     if (ctx->provider->auth != SNJ_AUTH_ENV && credential->root_fd >= 0 &&
         snj_auth_read(credential->root_fd, ctx->provider, false, NULL,
-                      &ctx->credential, ctx->pump, ctx->pump_opaque,
+                      &ctx->credential, auth_pump, ctx,
                       error, error_size) < 0)
         return -1;
     snj_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
@@ -1413,10 +1423,16 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
         !ctx->semantic_body_seen) {
         struct snj_credential refreshed;
         int rc = snj_auth_read(ctx->credential.root_fd, ctx->provider, true,
-                               ctx->credential.value, &refreshed, ctx->pump,
-                               ctx->pump_opaque, error, error_size);
-        if (rc < 0)
+                               ctx->credential.value, &refreshed, auth_pump,
+                               ctx, error, error_size);
+        if (rc < 0) {
+            if (ctx->cancel_code == 1 || ctx->cancel_code == 2) {
+                if (cancel_code)
+                    *cancel_code = ctx->cancel_code;
+                return ctx->cancel_code;
+            }
             return -1;
+        }
         ctx->credential = refreshed;
         snj_credential_clear(&refreshed);
         snj_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
@@ -1540,6 +1556,11 @@ snj_provider_responses_count(const json_t *count_request,
         *endpoint_unsupported = true;
     if (rc == 0)
         rc = parse_count_body(&ctx, input_tokens, error, error_size);
+    if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
+        rc = ctx.cancel_code;
+        if (cancel_code)
+            *cancel_code = rc;
+    }
     provider_ctx_free(&ctx);
     return rc;
 }
@@ -1588,6 +1609,11 @@ snj_provider_responses_compact(const json_t *compact_request,
     if (rc == 0)
         rc = parse_compact_body(&ctx, output, output_tokens_bound,
                                 error, error_size);
+    if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
+        rc = ctx.cancel_code;
+        if (cancel_code)
+            *cancel_code = rc;
+    }
     provider_ctx_free(&ctx);
     return rc;
 }
@@ -1655,6 +1681,11 @@ out:
         else
             *failure = ctx.provider_failure;
         failure->output_correction = ctx.stream.output_correction;
+    }
+    if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
+        rc = ctx.cancel_code;
+        if (cancel_code)
+            *cancel_code = rc;
     }
     provider_ctx_free(&ctx);
     return rc;
