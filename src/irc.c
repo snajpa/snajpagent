@@ -1727,9 +1727,9 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
         if (link->registered || !message.param_count ||
             !nick_valid(message.params[0]))
             return 0;
-        (void)copy_string(link->nick, sizeof(link->nick), message.params[0]);
-        (void)copy_string(link->accepted_nick, sizeof(link->accepted_nick),
-                          link->nick);
+        (void)snj_strcpy(link->nick, sizeof(link->nick), message.params[0]);
+        (void)snj_strcpy(link->accepted_nick, sizeof(link->accepted_nick),
+                         link->nick);
         link->registered = true;
         return link_emit(irc, link, SNJ_IRC_CONNECTED, "", link->nick,
                          "", false, timestamp_ms);
@@ -1858,10 +1858,10 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
                 if (own->registered &&
                     endpoint_equal(own->endpoint, link->endpoint) &&
                     irc_casecmp(own->nick, sender) == 0) {
-                    (void)copy_string(own->nick, sizeof(own->nick),
-                                      message.params[0]);
-                    (void)copy_string(own->accepted_nick,
-                                      sizeof(own->accepted_nick), own->nick);
+                    (void)snj_strcpy(own->nick, sizeof(own->nick),
+                                     message.params[0]);
+                    (void)snj_strcpy(own->accepted_nick,
+                                     sizeof(own->accepted_nick), own->nick);
                 }
             }
         if (!member)
@@ -2175,8 +2175,8 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
                               config->irc_clients[i]);
             (void)snj_strcpy(link->nick, sizeof(link->nick),
                               role == 0u ? irc->model_nick : irc->operator_nick);
-            (void)copy_string(link->accepted_nick, sizeof(link->accepted_nick),
-                              link->nick);
+            (void)snj_strcpy(link->accepted_nick,
+                             sizeof(link->accepted_nick), link->nick);
         }
     }
     if (config->irc_listen_explicit) {
@@ -2824,6 +2824,12 @@ snj_irc_operator_nick(const struct snj_irc *irc)
 {
     return !irc ? NULL : irc->listener < 0 && irc->link_count ?
         irc->links[1].accepted_nick : irc->operator_nick;
+}
+
+const char *
+snj_irc_room_name(const struct snj_irc *irc)
+{
+    return irc ? irc->room : NULL;
 }
 
 
