@@ -1034,8 +1034,18 @@ compose_frame(struct snj_term *term, struct snj_buf *out, size_t *label_bytes,
         return -1;
     }
     out->max = label_len * 4u + 32u;
-    if (indent == SIZE_MAX || snj_term_append_safe(out, label, label_len) < 0)
+    if (indent == SIZE_MAX)
         return -1;
+    /* Search labels can contain a multiline draft; keep labels on their
+     * logical line instead of letting a bare LF desynchronize row layout. */
+    for (size_t start = 0u, pos = 0u; pos <= label_len; ++pos) {
+        if (pos != label_len && label[pos] != '\n')
+            continue;
+        if (snj_term_append_safe(out, label + start, pos - start) < 0 ||
+            (pos < label_len && snj_buf_append(out, "\\n", 2u) < 0))
+            return -1;
+        start = pos + 1u;
+    }
     *label_bytes = out->len;
     frame_position(out, out->len, term->columns, end_row, end_col);
     indent = *end_row * term->columns + *end_col;
@@ -1166,13 +1176,15 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
     size_t col = term->prompt_visible ? term->rendered_cursor_col : 0u;
     size_t old_rows = term->prompt_visible ? term->rendered_rows : 0u;
     bool stable = same_prompt_layout(term, frame);
+    size_t max;
     int rc = -1;
 
-    if (frame->max > (SIZE_MAX - 256u) / 16u) {
+    if (frame->max > (SIZE_MAX - 256u) / 16u || old_rows > SIZE_MAX / 32u ||
+        !snj_size_add(frame->max * 16u + 256u, old_rows * 32u, &max)) {
         errno = EOVERFLOW;
         return -1;
     }
-    snj_buf_init(&out, frame->max * 16u + 256u);
+    snj_buf_init(&out, max);
     if (term->rendered_cursor_pending_wrap && snj_buf_append(&out, " \b", 2u) < 0)
         goto out;
     if (stable) {
@@ -1377,6 +1389,10 @@ snj_term_set_prompt_label(struct snj_term *term, bool active,
         errno = EINVAL;
         return -1;
     }
+    if (!term->capable &&
+        (term->active != active || strcmp(term->label, label) != 0) &&
+        snj_term_hide(term) < 0)
+        return -1;
     term->active = active;
     if (!active)
         term->typing_active = false;
@@ -1422,6 +1438,10 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     if (compose_prompt(label, configured, states,
                        unchanged ? spinner_step(term, snj_monotonic_ms()) : 0u,
                        expanded, cells) < 0)
+        return -1;
+    if (!term->capable &&
+        (term->active != active || strcmp(term->label, expanded) != 0) &&
+        snj_term_hide(term) < 0)
         return -1;
     memcpy(term->prompt_template, label, len + 1u);
     install_prompt(term, expanded, cells);
@@ -2445,6 +2465,8 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
 
     *action = SNJ_TERM_NONE;
     *text = NULL;
+    if (consume_resize(term) < 0)
+        return -1;
     if (term->prompt_visible && term->capable && !term->searching &&
         !term->output_depth && animated_spinners(term) &&
         update_spinners(term, spinner_step(term, snj_monotonic_ms())) < 0)
@@ -2453,8 +2475,6 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
         (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
         return feed_byte(term, 0x03u, action, text);
     }
-    if (consume_resize(term) < 0)
-        return -1;
     if (term->input_pos == term->input_len) {
         term->input_pos = 0u;
         term->input_len = 0u;

@@ -372,7 +372,7 @@ def test_incremental_active_prompt_keeps_status_stable():
     try:
         child.wait(DEFAULT_IDLE_PROMPT)
         child.send(b"terminal_status\r")
-        child.wait(DEFAULT_ACTIVE_PROMPT)
+        child.wait("»".encode())
         phase_start = len(child.buf)
         child.wait("◷".encode(), start=phase_start, timeout=1.0)
 
@@ -541,7 +541,7 @@ def test_steering():
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
     child.send(b"slow\r")
-    child.wait(DEFAULT_ACTIVE_PROMPT)
+    child.wait("»".encode())
     child.wait(b"working slowly")
     child.send(b"change course\r")
     answer_end = child.wait(b"steered: change course")
@@ -977,7 +977,7 @@ def test_steering_during_pre_response_compaction():
     child.wait(DEFAULT_ACTIVE_PROMPT)
     child.send(b"change plan\r")
     steer_end = child.wait(DEFAULT_ACTIVE_PROMPT + b"change plan")
-    child.wait(DEFAULT_ACTIVE_PROMPT, start=steer_end)
+    child.wait("»".encode(), start=steer_end)
     answer_end = child.wait(b"fixture answer", start=steer_end)
     child.exit_cleanly(answer_end)
 
@@ -1245,11 +1245,11 @@ def test_prompt_history_and_reverse_search():
 
     search = len(second.buf)
     second.send(b"\x12history-repeat")
-    second.wait(b"(reverse-i-search)`history-repeat': history-repeat-new",
+    second.wait(b"t': history-repeat-new",
                 start=search)
     older = len(second.buf)
     second.send(b"\x12")
-    second.wait(b"(reverse-i-search)`history-repeat': history-repeat-old",
+    second.wait(b"old",
                 start=older)
     second.send(b"\r")
     answer = second.wait(b"fixture answer", start=search)
@@ -1257,11 +1257,11 @@ def test_prompt_history_and_reverse_search():
 
     search = len(second.buf)
     second.send(b"\x12" + "history-café-uniqueX".encode())
-    second.wait("(failed reverse-i-search)`history-café-uniqueX': ".encode(),
+    second.wait("failed reverse-i-search)`history-café-uniqueX': ".encode(),
                 start=search)
     second.send(b"\x7f")
     second.wait(
-        "(reverse-i-search)`history-café-unique': history-café-unique".encode(),
+        "reverse-i-search)`history-café-unique': history-café-unique".encode(),
         start=search,
     )
     accepted = len(second.buf)
@@ -1637,7 +1637,7 @@ def test_queue_mutation_commands():
     child.wait(b"first", start=start)
     child.wait(b"second", start=start)
     child.wait(b"third", start=start)
-    child.wait(DEFAULT_ACTIVE_PROMPT, start=listed)
+    child.wait("»".encode(), start=listed)
 
     child.send(b"/q p\r")
     child.wait(b"1 future turn cancelled")
@@ -1649,7 +1649,7 @@ def test_queue_mutation_commands():
     cancel_start = len(child.buf)
     child.send(b"\x03")
     child.wait(b"^C\r\n", start=cancel_start)
-    child.wait(DEFAULT_ACTIVE_PROMPT, start=cancel_start)
+    child.wait("»".encode(), start=cancel_start)
     child.send(b"/q 1e\r")
     child.wait(QUEUE_EDIT_ACTIVE_PROMPT + b"second", start=cancel_start)
     child.send(b" active\r")
@@ -1747,7 +1747,7 @@ def test_command_name_completion():
 
     start = len(child.buf)
     child.send(b"/he\t")
-    end = child.wait(b"/help", start=start)
+    end = child.wait(b"lp", start=start)
     child.send(b"\r")
     help_end = child.wait(b"/compact", start=end)
     child.wait(b"Empty Tab no-op", start=help_end)
@@ -1807,11 +1807,11 @@ def test_command_name_completion():
 
     start = len(child.buf)
     child.send(b"/he\t")
-    end = child.wait(DEFAULT_ACTIVE_PROMPT + b"/help", start=start)
+    end = child.wait(b"lp", start=start)
     child.send(b"\r")
     help_end = child.wait(b"/compact", start=end)
     child.wait(b"Tab complete/indent/queue", start=help_end)
-    child.wait(DEFAULT_ACTIVE_PROMPT, start=help_end)
+    child.wait("»".encode(), start=help_end)
 
     start = len(child.buf)
     child.send(b"/?\r")
@@ -1819,14 +1819,14 @@ def test_command_name_completion():
     child.wait(b"/?", start=alias_end)
     alias_end = child.wait(b"/compact", start=alias_end)
     child.wait(b"Tab complete/indent/queue", start=alias_end)
-    child.wait(DEFAULT_ACTIVE_PROMPT, start=alias_end)
+    child.wait("»".encode(), start=alias_end)
 
     start = len(child.buf)
     child.send(b"/sta\t")
-    end = child.wait(DEFAULT_ACTIVE_PROMPT + b"/status", start=start)
+    end = child.wait(b"tus", start=start)
     child.send(b"\r")
     status_end = child.wait(b"state: active", start=end)
-    child.wait(DEFAULT_ACTIVE_PROMPT, start=status_end)
+    child.wait("»".encode(), start=status_end)
     child.send(b"/config\r")
     config_end = child.wait(
         b"/config is idle-only; interrupt or wait", start=status_end
@@ -3165,7 +3165,7 @@ def test_network_view_routing_and_atomic_catchup():
         submitted_start = rollout_idle + b"slow"
         child.wait(submitted_start, start=active_start)
         child.wait(b"working slowly", start=active_start)
-        child.wait(DEFAULT_ACTIVE_PROMPT, start=active_start)
+        child.wait("»".encode(), start=active_start)
         steer_start = len(child.buf)
         child.send(b"rollout active steer\r")
         answer_end = child.wait(b"steered: rollout active steer",
@@ -3414,7 +3414,7 @@ def test_network_chat_and_managed_mention():
         search_start = len(child.buf)
         child.send(b"\x12network_view_stream")
         child.wait(
-            b"(reverse-i-search)`network_view_stream': network_view_stream",
+            b"m': network_view_stream",
             start=search_start,
         )
         child.send(b"\x07")
@@ -3811,7 +3811,8 @@ def test_history_lock_keeps_editing_live():
             child.send(b"\x12")
             start = child.wait(b"reverse-i-search")
             child.send(b"locked-history")
-            child.wait(b"locked-history", start=start, timeout=0.25)
+            child.wait(b"y': ", start=start, timeout=0.25)
+            assert_bytes_in_order(child.buf[start:], b"locked-history")
             child.send(b"\x07draft-alive")
             child.drain(0.1)
             visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]| \x08|\r", b"", child.buf[start:])

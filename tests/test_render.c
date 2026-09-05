@@ -362,6 +362,19 @@ test_retained_prompt(void)
     assert(snj_term_restore_draft(&term, "invalid:\xff") == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(strstr(output, "invalid:\\xFF"));
+    assert(snj_term_set_prompt_label(&term, true, "two\nlines> ") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(strstr(output, "two\\nlines> "));
+    assert(snj_term_set_prompt_label(&term, true, " 10%> ") == 0);
+    (void)prompt_output(fds[0], output, sizeof(output));
+    char multiline[141];
+    memset(multiline, '\n', sizeof(multiline) - 1u);
+    multiline[sizeof(multiline) - 1u] = '\0';
+    assert(snj_term_restore_draft(&term, multiline) == 0);
+    (void)prompt_output(fds[0], output, sizeof(output));
+    assert(snj_term_restore_draft(&term, "") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(term.rendered_rows == 1u);
 
     assert(snj_term_restore_draft(&term, "café界 tail") == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
