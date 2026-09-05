@@ -603,6 +603,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         }
         if (source_budget >= (uint64_t)source_bytes)
             source_budget = (uint64_t)source_bytes - 1u;
+        if (!source_budget)
+            source_budget = 1u; /* Zero means unbounded to the source walker. */
         json_decref(provider_request);
         provider_request = NULL;
         json_decref(count_request);

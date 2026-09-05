@@ -675,7 +675,10 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
         return 0;
     snj_buf_init(&encoded, SNJ_CONTEXT_MAX_COMPACT);
     if (snj_json_canonical(builder->request_input, &encoded) < 0) {
+        int saved = errno;
         snj_buf_free(&encoded);
+        if (saved == EOVERFLOW && builder->compact_best_known)
+            goto trim;
         snj_errorf(error, error_size, "cannot encode complete compaction group within 12 MiB");
         return -1;
     }
@@ -702,6 +705,7 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
         errno = EOVERFLOW;
         return -1;
     }
+trim:
     count = json_array_size(builder->request_input);
     while (count > builder->compact_best_request_count) {
         if (json_array_remove(builder->request_input, count - 1u) < 0)
