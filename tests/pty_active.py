@@ -2070,15 +2070,15 @@ def test_network_collision_prompts():
             client.wait(f"model agent{suffix} operator operator{suffix}".encode())
         peer = IRCClient(port, "visitor", agent=True)
         for child in children:
-            child.wait(b"visitor joined")
+            child.wait(b"visitor  joined")
             child.drain()
         starts = [len(child.buf) for child in children]
         peer.sock.sendall(b"NICK visitor2\r\n")
         peer.wait(b" NICK :visitor2\r\n")
         for child, start in zip(children, starts):
-            child.wait("visitor is now known as · visitor2".encode(), start=start)
+            child.wait("visitor  is now known as · visitor2".encode(), start=start)
             child.drain()
-            assert child.buf[start:].count(b"visitor is now known as") == 1
+            assert child.buf[start:].count(b"visitor  is now known as") == 1
     finally:
         if peer:
             peer.close()
@@ -2132,23 +2132,44 @@ def test_network_live_nick_prompt():
         status_end = child.wait(b"verbosity: 0", start=start)
         child.wait(PROMPT, start=status_end)
         child.drain()
-        assert child.buf[start:].count(b"operator7 is now known as") == 1
-        assert child.buf[start:].count(b"agent7 is now known as") == 1
+        assert child.buf[start:].count(b"operator7  is now known as") == 1
+        assert child.buf[start:].count(b"agent7  is now known as") == 1
         # Local input is attributed to the accepted operator and the model's
         # request context includes a fresh snapshot with both accepted nicks.
-        child.send(b"network_one\r")
-        child.wait("@operator8 › network_one".encode(), start=start)
+        start = len(child.buf)
+        child.send(b"network_view_stream\r")
+        child.wait("@operator8 › network_view_stream".encode(), start=start)
+        child.wait(f"operator8@{socket.gethostname()} » ".encode(), start=start)
+        child.send(b"/stats\x1b[D")
+        child.drain(0.03)
+        for link in links:
+            link.sendall(b":operator8!u@fake NICK :operator9\r\n"
+                         b":agent8!u@fake NICK :agent9\r\n")
+        renamed = child.wait(f"operator9@{socket.gethostname()} » ".encode(),
+                             start=start)
+        child.wait(b"/stats", start=renamed)
+        child.send(b"u\r")
+        child.wait(b"verbosity: 0", start=renamed)
         deadline = time.monotonic() + 8.0
-        while not any(event["type"] == "turn_completed"
-                      for event in events(session_id)):
+        while True:
+            log = events(session_id)
+            turns = [event["data"]["turn_id"] for event in log
+                     if event["type"] == "turn_started" and
+                     "network_view_stream" in event["data"]["text"]]
+            if any(event["type"] == "turn_completed" and
+                   event["data"]["turn_id"] in turns for event in log):
+                break
             assert time.monotonic() < deadline, bytes(child.buf)
             child.drain(0.05)
-        log = events(session_id)
         snapshots = [event["data"]["text"] for event in log
                      if event["type"] == "irc_snapshot" and
                      event["data"]["reason"] == "nick"]
         assert any("model nick: agent8\noperator nick: operator8\n" in text
                    for text in snapshots)
+        assert any("model nick: agent9\noperator nick: operator9\n" in text
+                   for text in snapshots)
+        assert b"model-output-one" not in child.buf
+        assert b"network stream acknowledged" not in child.buf
         command = child.exit_now()
         child = None
         arguments = command_arguments(command)

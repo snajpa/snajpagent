@@ -265,8 +265,8 @@ is U+203A RIGHT-POINTING SINGLE ANGLE QUOTATION MARK and `»` is U+00BB
 RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK. The prompt and local chat use the
 accepted nick on the first configured server, or the hosted nick when serving
 a room. Nick changes refresh the prompt without losing the draft. Configured
-nicks remain registration preferences. The hostname comes from the local machine, not the IRC
-endpoint, room, or remote server.
+nicks remain registration preferences. The hostname comes from the local
+machine, not the IRC endpoint, room, or remote server.
 
 Text entered at the network composer is sent as a room message from the local
 operator identity and also admitted once as local operator input to the model;

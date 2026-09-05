@@ -532,9 +532,10 @@ tick_irc(struct app_state *app, char *error, size_t error_size)
                    snj_irc_operator_nick(app->irc));
     if (snj_irc_tick(app->irc, 0, error, error_size) < 0)
         return -1;
-    if ((strcmp(model, snj_irc_model_nick(app->irc)) != 0 ||
-         strcmp(operator, snj_irc_operator_nick(app->irc)) != 0) &&
-        snj_app_irc_snapshot(app, "nick", error, error_size) < 0)
+    if (strcmp(model, snj_irc_model_nick(app->irc)) == 0 &&
+        strcmp(operator, snj_irc_operator_nick(app->irc)) == 0)
+        return 0;
+    if (snj_app_irc_snapshot(app, "nick", error, error_size) < 0)
         return -1;
     if (!app->term.opened || !app->term.prompt_wanted)
         return 0;
