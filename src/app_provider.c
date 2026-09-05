@@ -56,7 +56,6 @@ int snj_fixture_tool(const struct snj_response_item *call,
                      json_t **result, char *error, size_t error_size);
 #endif
 
-
 int
 snj_app_provider_models(struct app_state *app,
                         const struct snj_provider_config *provider,
