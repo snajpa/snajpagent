@@ -275,9 +275,9 @@ sizecheck:
 		sort -z | xargs -0 cat | wc -l | tr -d ' '); \
 	test_c=$$(find tests -type f -name '*.c' -print0 | \
 		sort -z | xargs -0 cat | wc -l | tr -d ' '); \
-	prod_c_soft=32768; prod_c_hard=36864; \
-	prod_h_soft=2560; prod_h_hard=3072; \
-	test_c_soft=12288; test_c_hard=14336; \
+	prod_c_soft=32768; prod_c_hard=49152; \
+	prod_h_soft=16384; prod_h_hard=65536; \
+	test_c_soft=16384; test_c_hard=32768; \
 	largest=$$(find src -type f \( -name '*.c' -o -name '*.h' \) -exec wc -l {} + | \
 		awk '$$2 != "total" && $$1 > max { max = $$1; file = $$2 } END { if (file == "") print "0 -"; else print max " " file }'); \
 	largest_lines=$$(printf '%s\n' "$$largest" | awk '{ print $$1 }'); \

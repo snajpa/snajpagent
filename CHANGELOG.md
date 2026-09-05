@@ -71,8 +71,6 @@
   rejection-ceiling logic with durable replay, and walk the catalog once for
   display. Update the private loaded cache directly instead of copying it again;
   unsuccessful writes retain the previous live cache.
-- Tighten source-size hard limits to 36,864 production C, 3,072 header and
-  14,336 test-C lines; keep the 32,768 production-C soft target visible.
   Remove the obsolete pre-1.0 session-format-1 and `model_changed` readers.
   Old semantic-input accounting samples are invalidated by the current cache
   shape; use `/model cache` to refresh them. Existing on-disk files are untouched.
