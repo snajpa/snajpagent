@@ -90,7 +90,7 @@ try:
     os.write(fd, b"\r")
     answer_end = wait(b"fixture answer", start=typed_end)
     terminal_end = wait(b"turn_completed synced", start=answer_end)
-    wait(b"\r" + accounted_prompt, start=terminal_end)
+    wait(accounted_prompt, start=terminal_end)
     os.write(fd, b"/exit\r")
     _, status = os.waitpid(pid, 0)
     code = os.waitstatus_to_exitcode(status)

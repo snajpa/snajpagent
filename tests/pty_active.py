@@ -1330,7 +1330,7 @@ def test_multiline_and_paste():
     child.wait(PROMPT)
     child.send(b"line one\nline two\r")
     first_end = child.wait(b"fixture answer")
-    child.wait(b"\r" + DEFAULT_ACCOUNTED_IDLE_PROMPT, start=first_end)
+    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=first_end)
     child.send(b"\x1b[200~ping\x1b[201~\r")
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
@@ -1663,7 +1663,7 @@ def test_queue_mutation_commands():
     child.wait(b"next " + PROMPT + b"fourth")
     child.send(b"\x03")
     interrupted_end = child.wait(b"turn interrupted")
-    child.wait(b"\r" + DEFAULT_ACCOUNTED_IDLE_PROMPT, start=interrupted_end)
+    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=interrupted_end)
 
     child.send(b"/queue 1 edit\r")
     child.wait(QUEUE_EDIT_IDLE_PROMPT + b"second active")
