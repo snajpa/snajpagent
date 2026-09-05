@@ -133,6 +133,7 @@ main(void)
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
+    assert(strstr(config.prompt, "{chat:{time} ") != NULL);
     assert(strstr(config.prompt, "{goal_spinner}") != NULL);
     assert(strcmp(config.prompt_spinner_goal, " ◆") == 0);
     assert(strcmp(config.prompt_spinner_provider, " ◴◷◶◵") == 0);
@@ -295,10 +296,10 @@ main(void)
     expect_ui(path, "prompt", "{chat:}{rollout-idle:y}{rollout-active:z}",
               false);
     {
-        const char *values[7] = {"prov", "model", "high", "", "host",
-                                 "0%", "rollout-idle"};
+        const char *values[8] = {"prov", "model", "high", "", "host",
+                                 "0%", "rollout-idle", "12:34:56"};
         const char template[] =
-            "pre{chat:{operator}:}{rollout-idle:{provider}/{model}/{effort} "
+            "pre{chat:{time} {operator}:}{rollout-idle:{provider}/{model}/{effort} "
             "{context}{goal_spinner}›}{rollout-active:A}";
         const unsigned char expected[] = {
             'p','r','e','p','r','o','v','/','m','o','d','e','l','/','h','i','g','h',
@@ -309,6 +310,9 @@ main(void)
         assert(snj_config_prompt_expand(template, 1u, values, 0xfdu,
                                          expanded, sizeof(expanded)) == 0);
         assert(memcmp(expanded, expected, sizeof(expected)) == 0);
+        assert(snj_config_prompt_expand(template, 0u, values, 0xfdu,
+                                         expanded, sizeof(expanded)) == 0);
+        assert(strcmp(expanded, "pre12:34:56 : ") == 0);
         assert(snj_config_prompt_expand(
             "{chat:{operator}}{rollout-idle:x}{rollout-active:y}", 0u,
             values, 0xfdu, expanded, sizeof(expanded)) < 0);

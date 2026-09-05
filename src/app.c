@@ -490,8 +490,10 @@ format_input_label(struct app_state *app, bool active,
     const char *model = active ? app->turn_model : next_model(app);
     const char *effort = active ? app->turn_effort :
                                   resolve_effort(next_effort(app));
-    char hostname[256u], meter[32u];
-    const char *values[7];
+    char hostname[256u], meter[32u], when[16u];
+    const char *values[8];
+    time_t seconds = time(NULL);
+    struct tm tm;
     unsigned int selected = snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
                             0u : active ? 2u : 1u;
 
@@ -506,6 +508,9 @@ format_input_label(struct app_state *app, bool active,
     for (size_t i = 0u; hostname[i]; ++i)
         if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
             hostname[i] = '_';
+    if (seconds == (time_t)-1 || !localtime_r(&seconds, &tm) ||
+        strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
+        memcpy(when, "--:--:--", 9u);
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
@@ -514,6 +519,7 @@ format_input_label(struct app_state *app, bool active,
     values[5] = meter;
     values[6] = selected == 0u ? "chat" :
                 selected == 1u ? "rollout-idle" : "rollout-active";
+    values[7] = when;
     if (app->queue_edit_id[0]) {
         struct snj_buf out;
 
@@ -547,7 +553,7 @@ validate_prompt_values(const struct snj_config *config,
                        bool networked)
 {
     char hostname[256u];
-    const char *values[7];
+    const char *values[8];
     const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
         config->prompt_spinner_goal,
         config->prompt_spinner_provider,
@@ -573,6 +579,7 @@ validate_prompt_values(const struct snj_config *config,
     values[3] = networked ? config->irc_operator_nick : "";
     values[4] = hostname;
     values[5] = "100%";
+    values[7] = "23:59:59";
     snj_term_init(&probe);
     for (unsigned int mode = 0u; mode < 3u; ++mode) {
         values[6] = mode == 0u ? "chat" : mode == 1u ?

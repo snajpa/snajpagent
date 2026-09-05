@@ -244,7 +244,8 @@ an unknown budget shows
 .BR ?% .
 .PP
 The default chat prompt is
-.IR OPERATOR_NICK@MACHINE_HOSTNAME "   : " .
+.IR HH:MM:SS " " OPERATOR_NICK@MACHINE_HOSTNAME "   : " .
+The timestamp is local time captured when the prompt opens.
 The three status fields indicate an active goal, provider work, and a
 synchronous tool call.  There is no separate textual activity row.
 .PP
@@ -529,8 +530,9 @@ case.  Ordinary fields are
 .BR {operator} ,
 .BR {host} ,
 .BR {context} ,
+.BR {mode} ,
 and
-.BR {mode} ;
+.BR {time} ;
 optional status fields are
 .BR {goal_spinner} ,
 .BR {provider_spinner} ,
@@ -542,7 +544,7 @@ label.
 .PP
 The default is:
 .nf
-{chat:{operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
+{chat:{time} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
 .fi
 .TP
 .BR prompt_spinner_goal , " prompt_spinner_provider" , " prompt_spinner_tool"

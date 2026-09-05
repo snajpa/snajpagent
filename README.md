@@ -43,7 +43,7 @@ api_key_env = OPENAI_API_KEY
 exact_token_count = auto
 
 [ui]
-prompt = {chat:{operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
+prompt = {chat:{time} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
 prompt_spinner_goal = " ◆"
 prompt_spinner_provider = " ◴◷◶◵"
 prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -68,8 +68,9 @@ byte/token estimate without treating bytes or statistical values as exact token
 counts.
 
 `prompt` is a non-shell data template with one case for chat, rollout-idle,
-and rollout-active. Fields such as `{provider}`, `{model}`, and `{effort}`
-expand separately; snajpagent appends one space after the selected label.
+and rollout-active. Fields such as `{time}`, `{provider}`, `{model}`, and
+`{effort}` expand separately; `{time}` is the local `HH:MM:SS` when the prompt
+is opened. snajpagent appends one space after the selected label.
 Each case may omit or include each adjacent `{goal_spinner}`,
 `{provider_spinner}`, and `{tool_spinner}` field.
 
@@ -200,7 +201,8 @@ is retried without exposing that correction as room chat or operator output.
 `-c` is repeatable. `-s ENDPOINT` selects the listener and may be combined with
 outgoing `-c` connections. Networked mode starts in chat view; Tab on an empty
 draft switches between chat and local rollout. The default chat composer is
-`OPERATOR_NICK@MACHINE_HOSTNAME   : `; both views use the same prompt history.
+`HH:MM:SS OPERATOR_NICK@MACHINE_HOSTNAME   : `; both views use the same prompt
+history.
 
 ## Reference
 

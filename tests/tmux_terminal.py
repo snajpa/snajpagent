@@ -1526,10 +1526,15 @@ def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
     expected = (f"{operator}@{MACHINE_HOSTNAME}   :" if operator else
                 "ordinary/uncached-start/low 0%   ›")
+    timestamped = re.compile(
+        rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
+    ) if operator else None
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture()
-        if screen.rstrip().endswith(expected):
+        visible = screen.rstrip()
+        if ((timestamped.search(visible) is not None) if operator else
+                visible.endswith(expected)):
             return screen
         if terminal.dead():
             raise AssertionError(

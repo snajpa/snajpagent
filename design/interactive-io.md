@@ -97,11 +97,12 @@ does not alter submitted text, model text, events, or provider traffic.
 `[ui] prompt` is one data-only template with exactly one `{chat:TEXT}`, one
 `{rollout-idle:TEXT}`, and one `{rollout-active:TEXT}` case. It supports
 separate `{provider}`, `{model}`, `{effort}`, `{operator}`, `{host}`,
-`{context}`, and `{mode}` fields plus optional `{goal_spinner}`,
+`{context}`, `{mode}`, and `{time}` fields plus optional `{goal_spinner}`,
 `{provider_spinner}`, and `{tool_spinner}` fields and escaped literal
 braces/backslash; it performs no shell or environment expansion. The default
 rollout prompt is `PROVIDER/MODEL/EFFORT N%   › ` while idle and uses `»` while
-active. The default chat prompt is `OPERATOR@HOST   : `. Snajpagent appends one
+active. `{time}` is the local `HH:MM:SS` captured when a prompt is opened. The
+default chat prompt is `HH:MM:SS OPERATOR@HOST   : `. Snajpagent appends one
 space after the expanded template.
 
 The context meter is the final rollout data field before the adjacent optional

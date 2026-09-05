@@ -90,7 +90,7 @@ history_lines = 200
 
 [ui]
 color = auto
-prompt = {chat:{operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
+prompt = {chat:{time} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
 prompt_spinner_goal = " ◆"
 prompt_spinner_provider = " ◴◷◶◵"
 prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -220,8 +220,10 @@ latest comparable durable token bound and resolved hard input budget. A fresh
 session or accounting from a different provider source, selection, or
 compaction lineage renders `0%`; compatible accounting with an unknown hard
 budget renders `?%`.
-The default chat prompt uses `OPERATOR_NICK@MACHINE_HOSTNAME` without a meter,
-so switching presentation views does not imply a token fact there.
+The default chat prompt uses local `HH:MM:SS` followed by
+`OPERATOR_NICK@MACHINE_HOSTNAME` without a meter, so switching presentation
+views does not imply a token fact there. The timestamp is captured when the
+prompt opens and the visible label is retained when that line is submitted.
 
 Successful durable lifecycle milestones are also first-class rollout records
 at verbosity 0. They use exact terse bullet lines: `• Compacted` after
@@ -265,8 +267,9 @@ Non-networked interactive and one-shot modes keep their current output model,
 with the same color roles applied to prompts, labels, status, tools, warnings,
 errors, and high-verbosity diagnostics.
 
-The default chat-view composer is `OPERATOR_NICK@MACHINE_HOSTNAME   : `. The
-default rollout view uses `PROVIDER/MODEL/EFFORT N%   › ` while idle and the
+The default chat-view composer is
+`HH:MM:SS OPERATOR_NICK@MACHINE_HOSTNAME   : `. The default rollout view uses
+`PROVIDER/MODEL/EFFORT N%   › ` while idle and the
 double-angle `»` plus goal/provider/tool spinner fields while active. The
 prompt and local chat use the accepted operator nick on the first configured
 server, or the hosted nick when serving a room. Nick changes refresh the prompt

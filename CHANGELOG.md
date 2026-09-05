@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Prefix the default IRC chat composer with the local `HH:MM:SS` prompt-open
+  time and expose that value as the data-only prompt template field `{time}`.
+
 - Use accepted IRC nicks in the prompt and local chat. Track live nick changes,
   preserve op status, and keep mentions, echo suppression, and model context
   current. Notify channel renames once without losing the input draft.

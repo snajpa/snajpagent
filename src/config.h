@@ -114,7 +114,7 @@ int snj_config_save_model(const char *path, bool allow_create,
                           const char *effort,
                           char *error, size_t error_size);
 int snj_config_prompt_expand(const char *text, unsigned int mode,
-                             const char *const values[7], unsigned char marker,
+                             const char *const values[8], unsigned char marker,
                              char *label, size_t label_size);
 const struct snj_provider_config *snj_config_provider(
     const struct snj_config *config, const char *name);
