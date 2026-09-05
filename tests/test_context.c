@@ -37,6 +37,8 @@ turn_config(void)
     assert(snj_json_set_new(config, "prompt_schema", json_integer(1)) == 0);
     assert(snj_json_set_new(config, "replay_schema", json_integer(1)) == 0);
     assert(snj_json_set_new(config, "tool_schema", json_integer(1)) == 0);
+    assert(snj_json_set_new(config, "max_parallel_commands", json_integer(4)) == 0);
+    assert(snj_json_set_new(config, "parallel_tool_calls", json_true()) == 0);
     return config;
 }
 
@@ -1159,7 +1161,7 @@ main(void)
     const char *resp2 = "04040404040404040404040404040404";
     const char *compact1 = "07070707070707070707070707070707";
     const char *call2 = "05050505050505050505050505050505";
-    const char *handle = "06060606060606060606060606060606";
+    const char *handle = "05050505050505050505050505050505";
     const char *goal = "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c";
     const char *goal_turn = "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d";
     struct snj_store store;
@@ -1510,7 +1512,7 @@ main(void)
         const char *command_turn = "14141414141414141414141414141414";
         const char *command_response = "15151515151515151515151515151515";
         const char *command_call = "16161616161616161616161616161616";
-        const char *command_handle = "17171717171717171717171717171717";
+        const char *command_handle = "16161616161616161616161616161616";
         const char *command_steer = "18181818181818181818181818181818";
         struct snj_session steered;
         struct snj_context_projection steered_projection;
@@ -1581,7 +1583,7 @@ main(void)
                       "immediate steer") != NULL);
         assert(strcmp(snj_json_string(json_array_get(input, 5), "content"),
                       "stop or wait") == 0);
-        assert(strstr(snj_json_string(json_array_get(input, 6), "content"),
+        assert(strstr(snj_json_string(json_array_get(input, json_array_size(input) - 1u), "content"),
                       command_handle) != NULL);
         json_decref(snapshot);
         snj_context_projection_free(&steered_projection);
@@ -1870,7 +1872,7 @@ main(void)
         assert(strstr(durable_tail, "full-model-tail") != NULL);
     }
     free(large_tool_output);
-    assert(strcmp(session.active_process_handle, handle) == 0);
+    assert(snj_session_process(&session, handle));
     assert(snj_session_commit(&session, "goal_started",
                               goal_started_data(goal, "finish compacted work"),
                               NULL, error, sizeof(error)) == 0);
@@ -1885,12 +1887,11 @@ main(void)
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
-        assert(json_array_size(tools) == 1);
+        assert(json_array_size(tools) == 5);
         assert(tool_by_name(tools, "create_goal") == NULL);
-        assert(tool_by_name(tools, "update_goal") == NULL);
-        assert(strcmp(snj_json_string(json_array_get(tools, 0), "name"),
-                      "write_stdin") == 0);
-        assert_context_tool_schemas(tools, handle, UINT32_MAX, 6000u);
+        assert(tool_by_name(tools, "update_goal") != NULL);
+        assert(tool_by_name(tools, "exec_command") != NULL);
+        assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(json_is_array(input));
         assert(tool_output != NULL);
         assert(json_string_length(json_object_get(tool_output, "output")) <=
@@ -1908,7 +1909,7 @@ main(void)
         gate = json_array_get(input, json_array_size(input) - 1u);
         gate_text = snj_json_string(gate, "content");
         assert(gate_text != NULL);
-        assert(strstr(gate_text, "only permitted tool call is write_stdin") != NULL);
+        assert(strstr(gate_text, "independent work") != NULL);
         assert(strstr(gate_text, handle) != NULL);
     }
     {
@@ -1928,18 +1929,14 @@ main(void)
                                  error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request, "tools");
         input = json_object_get(projection.create_request, "input");
-        assert(json_array_size(tools) == 4u);
-        assert(strcmp(snj_json_string(json_array_get(tools, 0), "name"),
-                      "irc_send") == 0);
-        assert(strcmp(snj_json_string(json_array_get(tools, 1), "name"),
-                      "irc_state") == 0);
-        assert(strcmp(snj_json_string(json_array_get(tools, 2), "name"),
-                      "irc_topic") == 0);
-        assert(strcmp(snj_json_string(json_array_get(tools, 3), "name"),
-                      "write_stdin") == 0);
+        assert(json_array_size(tools) == 8u);
+        assert(tool_by_name(tools, "irc_send"));
+        assert(tool_by_name(tools, "irc_state"));
+        assert(tool_by_name(tools, "irc_topic"));
+        assert(tool_by_name(tools, "write_stdin"));
         assert(tool_by_name(tools, "create_goal") == NULL);
-        assert(tool_by_name(tools, "update_goal") == NULL);
-        assert_context_tool_schemas(tools, handle,
+        assert(tool_by_name(tools, "update_goal") != NULL);
+        assert_context_tool_schemas(tools, NULL,
                                     network_config.max_timeout_ms, 777u);
         assert(strstr(snj_json_string(tool_by_type(input,
                    "function_call_output"), "output"),
@@ -1947,8 +1944,7 @@ main(void)
         gate_text = snj_json_string(
             json_array_get(input, json_array_size(input) - 1u), "content");
         assert(gate_text != NULL);
-        assert(strstr(gate_text, "first use IRC tools") != NULL);
-        assert(strstr(gate_text, "final tool call") != NULL);
+        assert(strstr(gate_text, "independent work") != NULL);
         assert(strstr(gate_text, handle) != NULL);
         snj_config_free(&network_config);
     }
@@ -1968,7 +1964,7 @@ main(void)
                                                       closure_result),
                                   NULL, error, sizeof(error)) == 0);
     }
-    assert(session.active_process_handle[0] == '\0');
+    assert(session.process_count == 0u);
     assert(snj_session_commit(&session, "turn_interrupted",
                               turn_interrupted_data(turn2),
                               NULL, error, sizeof(error)) == 0);

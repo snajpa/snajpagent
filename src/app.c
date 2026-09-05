@@ -622,11 +622,12 @@ validate_prompt_candidate(struct app_state *app,
 static unsigned int
 prompt_spinner_states(const struct app_state *app, bool active)
 {
+    bool tool = app->tool_active || snj_tools_busy();
     return (app->session.goal_status == SNJ_GOAL_ACTIVE ?
             1u << SNJ_TERM_SPINNER_GOAL : 0u) |
-           (active && !app->tool_active ?
+           (active && !tool ?
             1u << SNJ_TERM_SPINNER_PROVIDER : 0u) |
-           (app->tool_active ? 1u << SNJ_TERM_SPINNER_TOOL : 0u);
+           (tool ? 1u << SNJ_TERM_SPINNER_TOOL : 0u);
 }
 
 static int
@@ -1031,6 +1032,11 @@ render_status(struct app_state *app)
                               capacity.max_output_known,
                               capacity.max_output_tokens) < 0 ||
         append_compact_threshold(&text, provider, &capacity) < 0)
+        goto out;
+    if (snj_buf_printf(&text, "\nmax_parallel_commands: %u\nparallel_tool_calls: %s",
+        app->session.active_turn ? app->session.max_parallel_commands : app->config->max_parallel_commands,
+        (app->session.active_turn ? app->session.parallel_tool_calls : provider->parallel_tool_calls) ?
+        "true" : "false") < 0)
         goto out;
     if (capacity.effective_context_window_known &&
         snj_buf_printf(&text, " · effective=%u%%%s",
@@ -2021,6 +2027,14 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (app->steering_requested)
         return 1;
+    bool busy = snj_tools_busy();
+    if (snj_tools_service(0, snj_ui_wake_fd(&app->ui), error, sizeof(error)) < 0)
+        return -1;
+    for (size_t i = 0u; i < app->session.process_count; ++i)
+        snj_tools_process_state(&app->session.processes[i]);
+    if (busy != snj_tools_busy() &&
+        snj_ui_spinner_states(&app->ui, prompt_spinner_states(app, app->ui.active)) < 0)
+        return -1;
     if (app->networked) {
         error[0] = '\0';
         if (tick_irc(app, error, sizeof(error)) < 0) {
@@ -2228,26 +2242,26 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
                               const char *cause, bool user_interrupt,
                               char *error, size_t error_size)
 {
-    char handle[SNJ_ID_HEX_LEN + 1u];
-    json_t *result = NULL;
-    json_t *data;
-    if (!app->session.active_process_handle[0])
-        return 0;
-    memcpy(handle, app->session.active_process_handle, sizeof(handle));
+    snj_tools_close_all(user_interrupt);
+    while (app->session.process_count) {
+        char handle[SNJ_ID_HEX_LEN + 1u];
+        json_t *result = NULL;
+        memcpy(handle, app->session.processes[0].handle, sizeof(handle));
 #ifdef SNAJPAGENT_TEST_FIXTURE
-    (void)user_interrupt;
-    result = snj_tool_result_outcome_unknown("owner_lost");
+        result = snj_tool_result_outcome_unknown("owner_lost");
 #else
-    if (snj_tools_close_managed(handle, user_interrupt, snj_app_active_input_pump, app, snj_ui_wake_fd(&app->ui),
-                                &result, error, error_size) < 0)
-        return -1;
+        if (snj_tools_close_managed(handle, user_interrupt, snj_app_active_input_pump,
+                                    app, snj_ui_wake_fd(&app->ui), &result,
+                                    error, error_size) < 0)
+            return -1;
 #endif
-    data = snj_app_process_closed_data(turn_id, handle, cause, result);
-    if (!data) {
-        snj_errorf(error, error_size, "cannot allocate process closure event");
-        return -1;
+        if (commit_event(app, "process_closed",
+                snj_app_process_closed_data(turn_id, handle, cause, result),
+                error, error_size) < 0)
+            return -1;
+        snj_tools_collected(handle);
     }
-    return commit_event(app, "process_closed", data, error, error_size);
+    return 0;
 }
 static int
 fail_turn(struct app_state *app, const char *turn_id, const char *cause,
@@ -2342,7 +2356,7 @@ recover_session(struct app_state *app, char *error, size_t error_size)
         switch (app->session.response_outcome) {
         case SNJ_GRAPH_FINAL:
         case SNJ_GRAPH_REFUSAL:
-            if (app->session.active_process_handle[0] != '\0') {
+            if (app->session.process_count) {
                 message = "recovered terminal response while a managed process was unresolved";
                 if (fail_turn(app, turn_id, "protocol_failure",
                               "protocol", message, error, error_size) < 0)
@@ -2388,100 +2402,242 @@ recover_session(struct app_state *app, char *error, size_t error_size)
     return app_warning(app, "recovered an interrupted turn");
 }
 static int
+finish_call(struct app_state *app, const char *turn_id,
+             const struct snj_response_item *call, const char *handle,
+             json_t *result, char *error, size_t error_size)
+{
+    if (!result || snj_tools_attach_output_limit(call, app->config, result) < 0) {
+        json_decref(result);
+        return -1;
+    }
+    json_t *render = app->ui.verbosity >= 1u ? json_incref(result) : NULL;
+    struct snj_process_state cursor = {0};
+    struct snj_process_state *process = snj_session_process(&app->session, handle);
+    if (process)
+        cursor = *process;
+    if (commit_pending_result(app, turn_id, call->call_id, result, error, error_size) < 0) {
+        json_decref(render);
+        return -1;
+    }
+    if (handle && *handle) {
+        snj_tools_collected(handle);
+        struct snj_process_state *p = snj_session_process(&app->session, handle);
+        if (p) {
+            p->log_offset = (uint64_t)app->session.log_end;
+            p->log_seq = app->session.next_seq;
+            memcpy(p->log_hash, app->session.prev_sha256, sizeof(p->log_hash));
+            snj_tools_process_state(p);
+        }
+    }
+    int rc = render ? snj_ui_tool_finish(&app->ui, call->name, render,
+                                          app->config->max_output_bytes) : 0;
+    if (rc == 0 && render)
+        rc = snj_app_tool_display(app, render, &cursor, app->config->max_output_bytes);
+    json_decref(render);
+    return rc;
+}
+
+static int
 execute_calls(struct app_state *app, const char *turn_id,
               const struct snj_response_graph *graph,
               const struct snj_credential *credential,
               char *error, size_t error_size)
 {
-    for (size_t i = 0; i < graph->count; ++i) {
+    struct {
+        const struct snj_response_item *call;
+        char handle[SNJ_ID_HEX_LEN + 1u];
+        bool started, finished, process;
+    } calls[SNJ_MAX_CALLS_PER_RESPONSE] = {0};
+    size_t count = 0u, finished = 0u;
+    uint64_t began = snj_monotonic_ms(), deadline = UINT64_MAX;
+    const char *handoff = NULL;
+    int control = 0;
+
+    for (size_t i = 0u; i < graph->count; ++i) {
         const struct snj_response_item *call = &graph->items[i];
-        char digest[SNJ_SHA256_HEX_LEN + 1u];
-        json_t *result = NULL;
-        char tool_error[256];
         if (call->kind != SNJ_ITEM_TOOL_CALL)
             continue;
-        if (snj_tool_action_digest(call, app->session.workspace, digest) < 0) {
-            snj_errorf(error, error_size, "cannot digest tool action");
-            return -1;
-        }
-        if (commit_event(app, "tool_started",
-                         snj_app_tool_started_data(turn_id, call->call_id, digest,
-                                           app->session.workspace),
-                         error, error_size) < 0)
-            return -1;
-        tool_error[0] = '\0';
-        {
-            int run_rc;
-
-            app->tool_active = true;
-            if (snj_ui_spinner_states(&app->ui,
-                    prompt_spinner_states(app, true)) < 0) {
-                app->tool_active = false;
-                snj_errorf(error, error_size,
-                          "tool status could not be displayed");
+        calls[count].call = call;
+#ifndef SNAJPAGENT_TEST_FIXTURE
+        calls[count].process = !app->session.active_read_only &&
+            (!strcmp(call->name, "exec_command") || !strcmp(call->name, "write_stdin"));
+#endif
+        ++count;
+    }
+    while (finished < count) {
+        size_t before = finished;
+        bool pending = false;
+        for (size_t i = 0u; i < count; ++i) {
+            const struct snj_response_item *call = calls[i].call;
+            json_t *result = NULL;
+            if (calls[i].finished)
+                continue;
+            control = snj_app_active_input_pump(app, 0u);
+            if (control < 0)
                 return -1;
+            if (control == 2 || app->interrupt_requested) {
+                handoff = "turn_cancelled";
+                goto handoff;
             }
-            run_rc = snj_app_tool_run(app, call, credential, &result, tool_error,
-                                      sizeof(tool_error));
-            app->tool_active = false;
-            if (snj_ui_spinner_states(&app->ui,
-                    prompt_spinner_states(app, true)) < 0) {
-                if (result)
-                    json_decref(result);
-                snj_errorf(error, error_size,
-                          "provider status could not be restored");
-                return -1;
-            }
-            if (run_rc == 2 || app->interrupt_requested) {
-                if (!result)
-                    result = snj_tool_result_not_run("turn_cancelled");
-                if (!result ||
-                    snj_tools_attach_output_limit(call, app->config,
-                                                  result) < 0 ||
-                    commit_pending_result(app, turn_id, call->call_id, result,
-                                          error, error_size) < 0 ||
-                    terminalize_pending(app, turn_id, "turn_cancelled",
-                                        error, error_size) < 0 ||
-                    interrupt_turn(app, turn_id, "user_interrupt", true,
-                                   "user", "cancelled",
-                                   error, error_size) < 0)
+            if (control == 1 || app->irc_urgent.len) {
+                if (snj_app_irc_flush_urgent(app, error, error_size) < 0)
                     return -1;
-                snj_errorf(error, error_size, "turn cancelled");
-                return 2;
+                handoff = "steering_handoff";
+                goto handoff;
             }
-            if (run_rc < 0) {
-                if (result) {
-                    json_decref(result);
-                    result = NULL;
+            if (calls[i].started) {
+                if (snj_tools_ready(calls[i].handle)) {
+                    if (snj_tools_collect(calls[i].handle, NULL, &result, error, error_size) < 0 ||
+                        finish_call(app, turn_id, call, calls[i].handle, result, error, error_size) < 0)
+                        return -1;
+                    calls[i].finished = true;
+                    ++finished;
+                } else if (snj_tools_handoff(calls[i].handle)) {
+                    handoff = "batch_yield";
+                    goto handoff;
+                } else {
+                    pending = true;
                 }
-                if (!tool_error[0])
-                    (void)snprintf(tool_error, sizeof(tool_error),
-                                   "tool adapter failed");
-                result = snj_tool_result_terminal(false, tool_error);
+                continue;
             }
-        }
-        if (!result)
-            return -1;
-        if (snj_tools_attach_output_limit(call, app->config, result) < 0) {
-            json_decref(result);
-            snj_errorf(error, error_size,
-                      "command output token limit could not be retained");
-            return -1;
-        }
-        {
-            const char *status = snj_json_string(result, "status");
-            bool yielded = status && strcmp(status, "running") == 0;
-            if (commit_pending_result(app, turn_id, call->call_id, result,
-                                      error, error_size) < 0)
+            if (snj_monotonic_ms() >= deadline) {
+                handoff = "batch_yield";
+                goto handoff;
+            }
+            if (calls[i].process) {
+                uint32_t yield_ms = 0u;
+                int rc = snj_tools_prepare(call, app->config, calls[i].handle, &yield_ms, &result);
+                if (rc < 0)
+                    return -1;
+                if (yield_ms && began + yield_ms < deadline)
+                    deadline = began + yield_ms;
+                if (rc > 0) {
+                    const char *reason = snj_json_string(result, "reason");
+                    if (reason && !strcmp(reason, "process_limit")) {
+                        json_decref(result);
+                        continue; /* A later poll may free a slot in this wave. */
+                    }
+                }
+            } else if (!strcmp(call->name, "write_stdin")) {
+                const char *handle = snj_json_string(call->arguments, "handle");
+                if (!snj_session_process(&app->session, handle))
+                    result = snj_tool_result_not_run("managed_process_handle_mismatch");
+                else
+                    memcpy(calls[i].handle, handle, sizeof(calls[i].handle));
+            }
+            if (!result && !strcmp(call->name, "write_stdin")) {
+                for (size_t j = 0u; j < i; ++j)
+                    if (calls[j].started && !strcmp(calls[j].handle, calls[i].handle)) {
+                        result = snj_tool_result_not_run("process_busy");
+                        break;
+                    }
+            }
+            if (result) {
+                if (finish_call(app, turn_id, call, NULL, result, error, error_size) < 0)
+                    return -1;
+                calls[i].finished = true;
+                ++finished;
+                continue;
+            }
+            char digest[SNJ_SHA256_HEX_LEN + 1u];
+            if (snj_tool_action_digest(call, app->session.workspace, digest) < 0 ||
+                commit_event(app, "tool_started",
+                    snj_app_tool_started_data(turn_id, call->call_id, digest, app->session.workspace),
+                    error, error_size) < 0 ||
+                snj_ui_tool_start(&app->ui, call, app->session.workspace,
+                                   app->config->default_timeout_ms) < 0)
                 return -1;
-            if (yielded &&
-                terminalize_pending(app, turn_id,
-                                    "process_interaction_required",
-                                    error, error_size) < 0)
+            calls[i].started = true;
+            if (!strcmp(call->name, "exec_command")) {
+                memcpy(calls[i].handle, call->call_id, sizeof(calls[i].handle));
+                struct snj_process_state *p = snj_session_process(&app->session, call->call_id);
+                if (p) {
+                    p->log_offset = (uint64_t)app->session.log_end;
+                    p->log_seq = app->session.next_seq;
+                    memcpy(p->log_hash, app->session.prev_sha256, sizeof(p->log_hash));
+                }
+            }
+            app->tool_active = true;
+            if (snj_ui_spinner_states(&app->ui, prompt_spinner_states(app, true)) < 0)
                 return -1;
-            if (yielded)
-                return 0;
+            int rc = calls[i].process ?
+                snj_tools_start(call, app->config, credential, &result, error, error_size) :
+                snj_app_tool_run(app, call, credential, &result, error, error_size);
+            app->tool_active = false;
+            if (rc < 0) {
+                json_decref(result);
+                result = snj_tool_result_terminal(false, error[0] ? error : "Tool adapter failed.");
+            }
+            if (rc == 2 || app->interrupt_requested) {
+                if (result && finish_call(app, turn_id, call, calls[i].handle, result,
+                                           error, error_size) < 0)
+                    return -1;
+                if (result) {
+                    calls[i].finished = true;
+                    ++finished;
+                }
+                handoff = "turn_cancelled";
+                goto handoff;
+            }
+            if (result) {
+                if (finish_call(app, turn_id, call, calls[i].handle, result, error, error_size) < 0)
+                    return -1;
+                calls[i].finished = true;
+                ++finished;
+            } else {
+                pending = true;
+            }
+            if (snj_ui_spinner_states(&app->ui, prompt_spinner_states(app, true)) < 0)
+                return -1;
         }
+        if (finished == count)
+            break;
+        if (!pending) {
+            if (finished != before)
+                continue;
+            /* Only capacity-blocked calls remain; no invocation here can free it. */
+            handoff = "process_limit";
+            goto handoff;
+        }
+        if (snj_monotonic_ms() >= deadline) {
+            handoff = "batch_yield";
+            goto handoff;
+        }
+        if (snj_tools_service(10, snj_ui_wake_fd(&app->ui), error, error_size) < 0)
+            return -1;
+    }
+    return 0;
+
+handoff:
+    if (!strcmp(handoff, "turn_cancelled"))
+        snj_tools_close_all(true);
+    for (size_t i = 0u; i < count; ++i) {
+        json_t *result = NULL;
+        if (calls[i].finished)
+            continue;
+        if (calls[i].started && calls[i].process) {
+            if (!strcmp(handoff, "turn_cancelled"))
+                while (!snj_tools_ready(calls[i].handle))
+                    if (snj_tools_service(10, snj_ui_wake_fd(&app->ui), error, error_size) < 0)
+                        return -1;
+            if (snj_tools_collect(calls[i].handle, handoff, &result, error, error_size) < 0)
+                return -1;
+        } else if (calls[i].started) {
+            result = snj_tool_result_outcome_unknown("owner_lost");
+        } else {
+            result = snj_tool_result_not_run(!strcmp(handoff, "steering_handoff") ?
+                                              "superseded_by_steering" : handoff);
+        }
+        if (finish_call(app, turn_id, calls[i].call, calls[i].started ? calls[i].handle : NULL,
+                         result, error, error_size) < 0)
+            return -1;
+    }
+    if (!strcmp(handoff, "turn_cancelled")) {
+        app->interrupt_requested = true;
+        if (interrupt_turn(app, turn_id, "user_interrupt", true, "user", "cancelled",
+                            error, error_size) < 0)
+            return -1;
+        return 2;
     }
     return 0;
 }
@@ -3209,46 +3365,6 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
         }
-        {
-            enum snj_managed_continuation managed =
-                snj_app_managed_continuation_classify(app, &graph, &decision);
-
-            if (managed == SNJ_MANAGED_CONTINUATION_HANDLE_MISMATCH) {
-                if (terminalize_pending(app, turn_id,
-                                        "managed_process_handle_mismatch",
-                                        error, sizeof(error)) < 0) {
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
-                                                   NULL, NULL);
-                    (void)app_error(app, error);
-                    result = 3;
-                    goto out;
-                }
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
-                                               NULL);
-                continue;
-            }
-            if (managed == SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION) {
-                static const char message[] =
-                    "provider response violated unresolved managed process ordering";
-                if ((app->session.pending_call_count != 0u &&
-                     terminalize_pending(app, turn_id,
-                                         "managed_process_conflict",
-                                         error, sizeof(error)) < 0) ||
-                    fail_turn(app, turn_id, "protocol_failure",
-                              "protocol", message, error, sizeof(error)) < 0) {
-                    snj_app_response_cycle_release(app, &graph, NULL, NULL,
-                                                   NULL, NULL);
-                    (void)app_error(app, error);
-                    result = 3;
-                    goto out;
-                }
-                snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
-                                               NULL);
-                (void)app_error(app, message);
-                result = 4;
-                goto out;
-            }
-        }
         if (decision.outcome == SNJ_GRAPH_CONFLICT) {
             const char *message = decision.message ? decision.message :
                 "provider response contained conflicting actions";
@@ -3277,6 +3393,17 @@ run_turn(struct app_state *app, const char *prompt,
             }
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             continue;
+        }
+        if (app->session.process_count && decision.outcome != SNJ_GRAPH_CALLS) {
+            const char *message = "Unsettled commands remain; collect their terminal results before a final answer.";
+            if (fail_turn(app, turn_id, "protocol_failure", "protocol", message,
+                           error, sizeof(error)) < 0)
+                (void)app_error(app, error);
+            else
+                (void)app_error(app, message);
+            snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
+            result = 4;
+            goto out;
         }
         if (app->networked && !app->session.active_read_only &&
             app->irc_turn_local_operator &&
@@ -4085,6 +4212,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
                                               SNJ_COLOR_AUTO);
     app.cli = cli;
     app.config = &config;
+    snj_tools_journal(snj_app_tool_output, snj_app_tool_read, &app);
     app.config_allow_create = cli->config_path == NULL;
     app.execute = cli->execute;
     if (install_shutdown_handlers(&signal_handlers) < 0) {
@@ -4331,6 +4459,8 @@ out:
     snj_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);
     atomic_store(&shutdown_ui, NULL);
+    snj_tools_shutdown();
+    snj_tools_journal(NULL, NULL, NULL);
     snj_ui_free(&app.ui);
     (void)capture_shutdown_signal(&app);
     if (signal_handlers_installed)

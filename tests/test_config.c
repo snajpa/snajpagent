@@ -383,6 +383,8 @@ main(void)
     assert(config.default_timeout_ms == 0u);
     assert(config.max_timeout_ms == 86400000u);
     assert(config.max_output_tokens == 6000u);
+    assert(config.max_parallel_commands == 4u);
+    assert(config.providers[0].parallel_tool_calls);
     assert(config.max_output_bytes == 0u);
     assert(config.provider_count == 1u);
     assert(strcmp(config.providers[0].name, "default") == 0);

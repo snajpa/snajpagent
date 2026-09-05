@@ -56,6 +56,10 @@ turn_config(const struct app_state *app)
 {
     json_t *config = json_object();
     if (!config ||
+        snj_json_set_new(config, "max_parallel_commands",
+                         json_integer(app->config->max_parallel_commands)) < 0 ||
+        snj_json_set_new(config, "parallel_tool_calls",
+                         json_boolean(app->turn_provider->parallel_tool_calls)) < 0 ||
         snj_json_set_new(config, "capability_version",
                          json_string(SNAJPAGENT_CAPABILITY_VERSION)) < 0 ||
         snj_json_set_new(config, "effort", json_string(app->turn_effort)) < 0 ||
@@ -1016,6 +1020,155 @@ snj_app_tool_started_data(const char *turn_id, const char *call_id,
         return NULL;
     }
     return data;
+}
+
+int
+snj_app_tool_output(void *opaque, const char *handle, unsigned int stream,
+                     uint64_t offset, const void *bytes, size_t len)
+{
+    struct app_state *app = opaque;
+    struct snj_buf encoded;
+    char error[256] = {0};
+    bool utf8 = snj_utf8_valid(bytes, len, true);
+    json_t *event = json_object();
+    int rc = -1;
+    snj_buf_init(&encoded, 32768u);
+    if (!event || (!utf8 && snj_base64_append(&encoded, bytes, len) < 0) ||
+        snj_json_set_new(event, "turn_id", json_string(app->session.active_turn_id)) < 0 ||
+        snj_json_set_new(event, "handle", json_string(handle)) < 0 ||
+        snj_json_set_new(event, "stream", json_integer(stream)) < 0 ||
+        snj_json_set_new(event, "offset", json_integer((json_int_t)offset)) < 0 ||
+        snj_json_set_new(event, "encoding", json_string(utf8 ? "utf8" : "base64")) < 0 ||
+        snj_json_set_new(event, "data", json_stringn(utf8 ? bytes : (const void *)encoded.data,
+                                                     utf8 ? len : encoded.len)) < 0)
+        goto out;
+    rc = snj_app_commit_event(app, "process_output", event, error, sizeof(error));
+    event = NULL;
+out:
+    json_decref(event);
+    snj_buf_free(&encoded);
+    return rc;
+}
+
+struct process_read_range {
+    const char *handle;
+    unsigned int stream;
+    uint64_t from, to, seen;
+    struct snj_buf *out;
+    struct snj_ui *ui;
+    uint64_t display_left;
+};
+
+static int
+read_process_chunk(void *opaque, uint64_t seq, const char *type,
+                    const json_t *data, char *error, size_t error_size)
+{
+    struct process_read_range *read = opaque;
+    struct snj_buf bytes;
+    uint64_t stream, offset;
+    int rc = -1;
+    (void)seq;
+    (void)error;
+    (void)error_size;
+    if (strcmp(type, "process_output") ||
+        !snj_json_string(data, "handle") ||
+        strcmp(snj_json_string(data, "handle"), read->handle))
+        return 0;
+    if (snj_json_integer_u64(data, "stream", &stream) < 0 ||
+        snj_json_integer_u64(data, "offset", &offset) < 0)
+        return -1;
+    if (stream != read->stream)
+        return 0;
+    snj_buf_init(&bytes, 16384u);
+    if (snj_process_output_decode(data, &bytes) < 0 || offset > UINT64_MAX - bytes.len)
+        goto out;
+    uint64_t end = offset + bytes.len;
+    uint64_t from = offset > read->from ? offset : read->from;
+    uint64_t to = end < read->to ? end : read->to;
+    if (from < to) {
+        if (from != read->from + read->seen)
+            goto out;
+        read->seen += to - from;
+        if (read->ui) {
+            struct snj_buf text;
+            char label[80];
+            const unsigned char *part = bytes.data + (size_t)(from - offset);
+            size_t len = (size_t)(to - from);
+            snj_buf_init(&text, 32768u);
+            bool utf8 = snj_utf8_valid(part, len, true);
+            if ((utf8 ? snj_buf_append(&text, part, len) : snj_base64_append(&text, part, len)) < 0) {
+                snj_buf_free(&text);
+                goto out;
+            }
+            size_t shown = text.len;
+            if (shown > read->display_left)
+                shown = (size_t)read->display_left;
+            while (shown && !snj_utf8_valid(text.data, shown, true))
+                --shown;
+            (void)snprintf(label, sizeof(label), "%.8s %s%s", read->handle,
+                           read->stream ? "stderr" : "stdout", utf8 ? "" : " base64");
+            rc = shown ? snj_ui_tool_output(read->ui, label, text.data, shown) : 0;
+            read->display_left -= shown;
+            snj_buf_free(&text);
+            goto out;
+        }
+        uint64_t ranges[4] = {read->from, read->to, read->to, read->to};
+        if (read->to - read->from > read->out->max) {
+            ranges[1] = read->from + read->out->max / 2u;
+            ranges[2] = read->to - (read->out->max - read->out->max / 2u);
+        }
+        for (unsigned int i = 0u; i < 4u; i += 2u) {
+            uint64_t a = from > ranges[i] ? from : ranges[i];
+            uint64_t b = to < ranges[i + 1u] ? to : ranges[i + 1u];
+            if (a < b && snj_buf_append(read->out, bytes.data + (size_t)(a - offset),
+                                        (size_t)(b - a)) < 0)
+                goto out;
+        }
+    }
+    rc = 0;
+out:
+    snj_buf_free(&bytes);
+    return rc;
+}
+
+int
+snj_app_tool_read(void *opaque, const char *handle, unsigned int stream,
+                   uint64_t from, uint64_t to, struct snj_buf *out)
+{
+    struct app_state *app = opaque;
+    struct snj_process_state *process = snj_session_process(&app->session, handle);
+    struct process_read_range read = {.handle = handle, .stream = stream,
+        .from = from, .to = to, .out = out};
+    char error[256] = {0};
+    if (!process || from > to ||
+        snj_session_each_event_since(&app->session, process, read_process_chunk,
+                                      &read, error, sizeof(error)) < 0)
+        return -1;
+    return read.seen == to - from ? 0 : -1;
+}
+
+int
+snj_app_tool_display(struct app_state *app, const json_t *result,
+                       const struct snj_process_state *cursor, uint32_t limit)
+{
+    json_t *ref = json_object_get(result, "output_ref");
+    if (!ref || app->ui.verbosity < 1u)
+        return 0;
+    struct process_read_range read = {.handle = snj_json_string(ref, "handle"),
+        .ui = &app->ui, .display_left = limit ? limit : UINT64_MAX};
+    const char *const from[] = {"stdout_start", "stderr_start"};
+    const char *const to[] = {"stdout_end", "stderr_end"};
+    char error[256] = {0};
+    for (unsigned int s = 0u; s < 2u; ++s) {
+        read.stream = s;
+        read.seen = 0u;
+        if (snj_json_integer_u64(ref, from[s], &read.from) < 0 ||
+            snj_json_integer_u64(ref, to[s], &read.to) < 0 ||
+            snj_session_each_event_since(&app->session, cursor, read_process_chunk,
+                                          &read, error, sizeof(error)) < 0)
+            return -1;
+    }
+    return 0;
 }
 
 /* Takes ownership of result, including on failure. */

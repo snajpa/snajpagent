@@ -517,6 +517,50 @@ all_pending_finished(const struct snj_session *session)
             return false;
     return true;
 }
+
+struct snj_process_state *
+snj_session_process(struct snj_session *session, const char *handle)
+{
+    for (size_t i = 0u; i < session->process_count; ++i)
+        if (handle && !strcmp(session->processes[i].handle, handle))
+            return &session->processes[i];
+    return NULL;
+}
+
+static void
+remove_process(struct snj_session *session, struct snj_process_state *process)
+{
+    size_t i = (size_t)(process - session->processes);
+    --session->process_count;
+    memmove(process, process + 1, (session->process_count - i) * sizeof(*process));
+    memset(&session->processes[session->process_count], 0, sizeof(*process));
+}
+
+static void
+process_label(char out[257], const char *text)
+{
+    size_t n = text ? strlen(text) : 0u;
+    if (n > 256u)
+        n = 256u;
+    while (n && !snj_utf8_valid((const unsigned char *)text, n, true))
+        --n;
+    if (n)
+        memcpy(out, text, n);
+    out[n] = '\0';
+}
+
+int
+snj_process_output_decode(const json_t *data, struct snj_buf *bytes)
+{
+    static const char *const keys[] = {"turn_id", "handle", "stream", "offset", "encoding", "data"};
+    const char *encoding = snj_json_string(data, "encoding");
+    const char *text = snj_json_string(data, "data");
+    if (!snj_json_exact_keys(data, keys, 6u) || !encoding || !text)
+        return -1;
+    if (!strcmp(encoding, "utf8"))
+        return snj_buf_append(bytes, text, strlen(text));
+    return !strcmp(encoding, "base64") ? snj_base64_decode(bytes, text) : -1;
+}
 static bool
 process_close_status(const char *status)
 {
@@ -795,7 +839,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         static const char *const keys[] = {"new_workspace", "old_workspace"};
         const char *old_workspace = snj_json_string(data, "old_workspace");
         const char *new_workspace = snj_json_string(data, "new_workspace");
-        if (session->active_turn || session->active_process_handle[0] != '\0' ||
+        if (session->active_turn || session->process_count != 0u ||
             !snj_json_exact_keys(data, keys, 2u) ||
             !old_workspace || !new_workspace ||
             strcmp(old_workspace, session->workspace) != 0 ||
@@ -810,7 +854,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         static const char *const keys[] = {"origin"};
         const char *origin = snj_json_string(data, "origin");
         if (!snj_json_exact_keys(data, keys, 1u) || session->active_turn ||
-            session->active_process_handle[0] != '\0' || session->archived ||
+            session->process_count != 0u || session->archived ||
             !origin || strcmp(origin, "user") != 0)
             goto invalid;
         session->archived = true;
@@ -818,7 +862,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         static const char *const keys[] = {"origin"};
         const char *origin = snj_json_string(data, "origin");
         if (!snj_json_exact_keys(data, keys, 1u) || session->active_turn ||
-            session->active_process_handle[0] != '\0' || !session->archived ||
+            session->process_count != 0u || !session->archived ||
             !origin || strcmp(origin, "user") != 0)
             goto invalid;
         session->archived = false;
@@ -827,7 +871,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         const char *prefix = snj_json_string(data, "confirmed_id_prefix");
         const char *trash = snj_json_string(data, "trash_name");
         if (!snj_json_exact_keys(data, keys, 2u) || session->active_turn ||
-            session->active_process_handle[0] != '\0' ||
+            session->process_count != 0u ||
             !prefix || strlen(prefix) != 8u ||
             !snj_hex_is_lower(prefix, 8u) ||
             memcmp(prefix, session->id, 8u) != 0 ||
@@ -996,7 +1040,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                                          session->default_model;
         if (!snj_json_exact_keys(data, keys, sizeof(keys) / sizeof(keys[0])) ||
             (session->active_turn && !active_prefix) || session->response_open ||
-            session->active_process_handle[0] != '\0' ||
+            session->pending_call_count || (!active_prefix && session->process_count) ||
             session->active_compact_id[0] != '\0' ||
             !compact_id || !snj_hex_is_lower(compact_id, SNJ_ID_HEX_LEN) ||
             strcmp(compact_id, session->id) == 0 ||
@@ -1304,8 +1348,9 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         bool queued;
         bool goal;
         uint64_t queue_seq = 0;
+        uint64_t max_parallel;
 
-        if (session->active_turn || session->active_process_handle[0] != '\0' ||
+        if (session->active_turn || session->process_count != 0u ||
             session->pending_steering_count != 0u ||
             !snj_json_exact_keys(data, keys, 10u) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
@@ -1315,6 +1360,9 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             n != session->turn_count + 1u ||
             !(kind = snj_json_string(data, "input_kind")) ||
             !json_is_object(config) ||
+            snj_json_integer_u64(config, "max_parallel_commands", &max_parallel) < 0 ||
+            max_parallel < 1u || max_parallel > SNJ_MAX_PROCESSES ||
+            !json_is_boolean(json_object_get(config, "parallel_tool_calls")) ||
             !(model = snj_json_string(config, "model")) || !*model ||
             !(provider = snj_json_string(config, "provider")) || !*provider ||
             strlen(provider) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
@@ -1366,6 +1414,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                         sizeof(session->active_turn_effort), effort))
             goto invalid;
         session->active_turn = true;
+        session->max_parallel_commands = (uint32_t)max_parallel;
+        session->parallel_tool_calls = json_is_true(json_object_get(config, "parallel_tool_calls"));
         session->active_read_only = json_is_true(json_object_get(data, "read_only"));
         session->active_queued = queued;
         session->turn_count = n;
@@ -1845,6 +1895,11 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                         memcpy(pending->process_handle, handle,
                                sizeof(pending->process_handle));
                 }
+                if (strcmp(item->name, "exec_command") == 0) {
+                    memcpy(pending->process_handle, item->call_id, sizeof(pending->process_handle));
+                    process_label(pending->command, snj_json_string(item->arguments, "command"));
+                    process_label(pending->workdir, snj_json_string(item->arguments, "workdir"));
+                }
                 if (snj_tool_action_digest(item, session->workspace,
                                            pending->action_sha256) < 0) {
                     snj_response_graph_free(&graph);
@@ -1880,9 +1935,25 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             strcmp(action, call->action_sha256) != 0 ||
             call->started || call->finished)
             goto invalid;
-        for (size_t i = 0; i < index; ++i)
-            if (!session->pending_calls[i].finished)
+        if (!strcmp(call->tool_name, "exec_command")) {
+            struct snj_process_state *process;
+            if (session->process_count >= SNJ_MAX_PROCESSES ||
+                session->process_count >= session->max_parallel_commands ||
+                snj_session_process(session, call->process_handle))
                 goto invalid;
+            process = &session->processes[session->process_count++];
+            memset(process, 0, sizeof(*process));
+            memcpy(process->handle, call->process_handle, sizeof(process->handle));
+            memcpy(process->command, call->command, sizeof(process->command));
+            memcpy(process->workdir, call->workdir, sizeof(process->workdir));
+        } else if (!strcmp(call->tool_name, "write_stdin")) {
+            if (!snj_session_process(session, call->process_handle))
+                goto invalid;
+            for (size_t i = 0u; i < session->pending_call_count; ++i)
+                if (session->pending_calls[i].started &&
+                    !strcmp(session->pending_calls[i].process_handle, call->process_handle))
+                    goto invalid;
+        }
         call->started = true;
     } else if (strcmp(type, "tool_finished") == 0) {
         static const char *const keys[] = {"call_id", "result", "turn_id"};
@@ -1899,9 +1970,6 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !(call = find_pending_call(session, call_id, &index)) || call->finished ||
             snj_tool_result_valid(result) < 0 || !status)
             goto invalid;
-        for (size_t i = 0; i < index; ++i)
-            if (!session->pending_calls[i].finished)
-                goto invalid;
         if (call->started) {
             if (strcmp(status, "not_run") == 0 || strcmp(status, "denied") == 0)
                 goto invalid;
@@ -1909,30 +1977,37 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                    strcmp(status, "denied") != 0) {
             goto invalid;
         }
-        if (strcmp(status, "running") == 0) {
-            if (!handle)
+        struct snj_process_state *process = snj_session_process(session, call->process_handle);
+        if (call->started && call->process_handle[0]) {
+            if (!process)
                 goto invalid;
-            if (strcmp(call->tool_name, "exec_command") == 0) {
-                if (session->active_process_handle[0] != '\0')
+            json_t *ref = json_object_get(result, "output_ref");
+            if (ref) {
+                const char *ref_handle = snj_json_string(ref, "handle");
+                const char *const begin[] = {"stdout_start", "stderr_start"};
+                const char *const end[] = {"stdout_end", "stderr_end"};
+                if (!ref_handle || strcmp(ref_handle, process->handle))
                     goto invalid;
-                memcpy(session->active_process_handle, handle,
-                       sizeof(session->active_process_handle));
-            } else if (strcmp(call->tool_name, "write_stdin") == 0) {
-                if (session->active_process_handle[0] == '\0' ||
-                    call->process_handle[0] == '\0' ||
-                    strcmp(call->process_handle,
-                           session->active_process_handle) != 0 ||
-                    strcmp(handle, session->active_process_handle) != 0)
-                    goto invalid;
-            } else {
+                for (unsigned int s = 0u; s < 2u; ++s) {
+                    uint64_t from, to;
+                    if (snj_json_integer_u64(ref, begin[s], &from) < 0 ||
+                        snj_json_integer_u64(ref, end[s], &to) < 0 ||
+                        from != process->collected_bytes[s] || to != process->output_bytes[s])
+                        goto invalid;
+                    process->collected_bytes[s] = to;
+                }
+            } else if ((process->output_bytes[0] || process->output_bytes[1]) &&
+                       strcmp(status, "outcome_unknown")) {
                 goto invalid;
             }
-        } else if (strcmp(call->tool_name, "write_stdin") == 0 &&
-                   call->started && call->process_handle[0] != '\0' &&
-                   session->active_process_handle[0] != '\0' &&
-                   strcmp(call->process_handle,
-                          session->active_process_handle) == 0) {
-            session->active_process_handle[0] = '\0';
+            if (!strcmp(status, "running")) {
+                if (!handle || strcmp(handle, process->handle))
+                    goto invalid;
+            } else if (strcmp(status, "outcome_unknown")) {
+                remove_process(session, process);
+            }
+        } else if (!strcmp(status, "running")) {
+            goto invalid;
         }
         call->finished = true;
         if (all_pending_finished(session) &&
@@ -1942,6 +2017,28 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             memset(session->pending_calls, 0, sizeof(session->pending_calls));
             session->active_response_id[0] = '\0';
         }
+    } else if (strcmp(type, "process_output") == 0) {
+        const char *handle = snj_json_string(data, "handle");
+        const char *turn_id = snj_json_string(data, "turn_id");
+        struct snj_process_state *process = snj_session_process(session, handle);
+        struct snj_buf bytes;
+        uint64_t stream, offset;
+        int rc;
+        if (!session->active_turn || !turn_id ||
+            strcmp(turn_id, session->active_turn_id) || !process ||
+            snj_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
+            snj_json_integer_u64(data, "offset", &offset) < 0 ||
+            offset != process->output_bytes[stream])
+            goto invalid;
+        snj_buf_init(&bytes, 16384u);
+        rc = snj_process_output_decode(data, &bytes);
+        if (rc == 0 && bytes.len && offset <= INT64_MAX - bytes.len)
+            process->output_bytes[stream] += bytes.len;
+        else
+            rc = -1;
+        snj_buf_free(&bytes);
+        if (rc < 0)
+            goto invalid;
     } else if (strcmp(type, "process_closed") == 0) {
         static const char *const keys[] = {"cause", "handle", "result", "turn_id"};
         static const char *const causes[] = {
@@ -1953,18 +2050,18 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         const char *turn_id = snj_json_string(data, "turn_id");
         json_t *result = json_object_get(data, "result");
         const char *status = snj_json_string(result, "status");
+        struct snj_process_state *process = snj_session_process(session, handle);
         if (!snj_json_exact_keys(data, keys, 4u) || !session->active_turn ||
             session->response_open ||
             (session->response_complete && !all_pending_finished(session)) ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             !handle || !snj_hex_is_lower(handle, SNJ_ID_HEX_LEN) ||
-            session->active_process_handle[0] == '\0' ||
-            strcmp(handle, session->active_process_handle) != 0 ||
+            !process ||
             !string_in(cause, causes, sizeof(causes) / sizeof(causes[0])) ||
             snj_tool_result_valid(result) < 0 ||
             !process_close_status(status))
             goto invalid;
-        session->active_process_handle[0] = '\0';
+        remove_process(session, process);
     } else if (strcmp(type, "turn_completed") == 0) {
         static const char *const keys[] = {
             "final_item_id", "final_response_id", "turn_id"
@@ -1979,7 +2076,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 || !item_id ||
             strcmp(item_id, session->final_item_id) != 0 || !response_id ||
             strcmp(response_id, session->final_response_id) != 0 ||
-            session->active_process_handle[0] != '\0' ||
+            session->process_count != 0u ||
             session->pending_call_count != 0u ||
             session->pending_steering_count != 0u)
             goto invalid;
@@ -2008,7 +2105,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
                        sizeof(reasons) / sizeof(reasons[0])) ||
             (strcmp(reason, "reply_reminder_exhausted") == 0 &&
              !session->irc_reply_reminded) ||
-            session->active_process_handle[0] != '\0' ||
+            session->process_count != 0u ||
             session->pending_call_count != 0u ||
             session->pending_steering_count != 0u)
             goto invalid;
@@ -2028,7 +2125,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         const char *origin = snj_json_string(data, "origin");
         const char *reason = snj_json_string(data, "reason");
         if (!snj_json_exact_keys(data, keys, 3u) || !session->active_turn ||
-            session->active_process_handle[0] != '\0' ||
+            session->process_count != 0u ||
             session->response_open ||
             (session->response_complete && !all_pending_finished(session)) ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
@@ -2052,7 +2149,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         const char *class_name = snj_json_string(data, "class");
         const char *message = snj_json_string(data, "message");
         if (!snj_json_exact_keys(data, keys, 3u) || !session->active_turn ||
-            session->active_process_handle[0] != '\0' ||
+            session->process_count != 0u ||
             session->response_open ||
             (session->response_complete && !all_pending_finished(session)) ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
@@ -2084,14 +2181,15 @@ static int
 read_event_log(struct snj_session *source, struct snj_session *verifier,
                off_t boundary, enum snj_tail_policy tail_policy,
                snj_session_event_fn fn, void *opaque,
+               const struct snj_process_state *cursor,
                off_t *complete_end_out, uint64_t *next_seq_out,
                char *error, size_t error_size)
 {
     struct snj_buf line;
     unsigned char chunk[8192];
-    off_t complete_end = 0;
-    off_t read_off = 0;
-    uint64_t seq = 1;
+    off_t complete_end = cursor ? (off_t)cursor->log_offset : 0;
+    off_t read_off = complete_end;
+    uint64_t seq = cursor ? cursor->log_seq : 1u;
     int rc = -1;
 
     snj_buf_init(&line, SNJ_MAX_EVENT_LINE);
@@ -2203,7 +2301,7 @@ snj_store_scan_log(struct snj_session *session,
     off_t complete_end;
     uint64_t next_seq;
 
-    if (read_event_log(session, session, -1, tail_policy, NULL, NULL,
+    if (read_event_log(session, session, -1, tail_policy, NULL, NULL, NULL,
                        &complete_end, &next_seq, error, error_size) < 0)
         return -1;
     session->log_end = complete_end;
@@ -2240,7 +2338,27 @@ snj_session_each_event(struct snj_session *session, snj_session_event_fn fn,
     snj_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     return read_event_log(session, &verifier, session->log_end,
-                          SNJ_TAIL_REJECT, fn, opaque, NULL, NULL,
+                          SNJ_TAIL_REJECT, fn, opaque, NULL, NULL, NULL,
+                          error, error_size);
+}
+
+int
+snj_session_each_event_since(struct snj_session *session,
+                              const struct snj_process_state *cursor,
+                              snj_session_event_fn fn, void *opaque,
+                              char *error, size_t error_size)
+{
+    struct snj_session verifier;
+    if (!cursor || !cursor->log_seq)
+        return snj_session_each_event(session, fn, opaque, error, error_size);
+    if (cursor->log_offset > (uint64_t)session->log_end ||
+        !snj_hex_is_lower(cursor->log_hash, SNJ_SHA256_HEX_LEN))
+        return -1;
+    snj_session_init(&verifier);
+    memcpy(verifier.id, session->id, sizeof(verifier.id));
+    memcpy(verifier.prev_sha256, cursor->log_hash, sizeof(verifier.prev_sha256));
+    return read_event_log(session, &verifier, session->log_end,
+                          SNJ_TAIL_REJECT, fn, opaque, cursor, NULL, NULL,
                           error, error_size);
 }
 

@@ -12,6 +12,12 @@
 - Fail visibly when an IRC listen address is already in use, even without
   `-v`. Do not silently host a separate room on another localhost address.
 
+- Support native independent call batches and multiple command handles using
+  one engine poller. Add local concurrency and per-provider batching settings;
+  preserve steering cutovers, cancellation, recovery and active compaction.
+  Retain complete redacted command output as bounded journal chunks and return
+  incremental result excerpts instead of repeating cumulative output.
+
 - Make `[tool] max_output_tokens` a hard command-result context ceiling,
   defaulting to 6000. Clamp larger `exec_command` and `write_stdin` requests;
   honor smaller bounds and use the ceiling for null. Replace the former

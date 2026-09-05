@@ -542,3 +542,69 @@ snj_hex_is_lower(const char *s, size_t len)
             return false;
     return s[len] == '\0';
 }
+
+static const char b64[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+int
+snj_base64_append(struct snj_buf *out, const unsigned char *data, size_t len)
+{
+    size_t i = 0;
+    while (i + 3u <= len) {
+        unsigned int v = ((unsigned int)data[i] << 16) |
+                         ((unsigned int)data[i + 1u] << 8) |
+                         (unsigned int)data[i + 2u];
+        unsigned char enc[4] = {
+            (unsigned char)b64[(v >> 18) & 63u],
+            (unsigned char)b64[(v >> 12) & 63u],
+            (unsigned char)b64[(v >> 6) & 63u],
+            (unsigned char)b64[v & 63u]
+        };
+        if (snj_buf_append(out, enc, sizeof(enc)) < 0)
+            return -1;
+        i += 3u;
+    }
+    if (i < len) {
+        unsigned int v = (unsigned int)data[i] << 16;
+        unsigned char enc[4];
+        if (i + 1u < len)
+            v |= (unsigned int)data[i + 1u] << 8;
+        enc[0] = (unsigned char)b64[(v >> 18) & 63u];
+        enc[1] = (unsigned char)b64[(v >> 12) & 63u];
+        enc[2] = (i + 1u < len) ? (unsigned char)b64[(v >> 6) & 63u] : '=';
+        enc[3] = '=';
+        if (snj_buf_append(out, enc, sizeof(enc)) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+int
+snj_base64_decode(struct snj_buf *out, const char *text)
+{
+    size_t len = strlen(text);
+    if (len % 4u)
+        return -1;
+    for (size_t i = 0u; i < len; i += 4u) {
+        unsigned int v = 0u, pad = 0u;
+        for (size_t j = 0u; j < 4u; ++j) {
+            const char *p = strchr(b64, text[i + j]);
+            if (text[i + j] == '=') {
+                if (j < 2u || i + 4u != len)
+                    return -1;
+                ++pad;
+                v <<= 6;
+            } else {
+                if (!p || pad)
+                    return -1;
+                v = (v << 6) | (unsigned int)(p - b64);
+            }
+        }
+        if ((pad == 1u && (v & 0xffu)) || (pad == 2u && (v & 0xffffu)))
+            return -1;
+        for (unsigned int j = 0u; j < 3u - pad; ++j)
+            if (snj_buf_putc(out, (unsigned char)(v >> (16u - 8u * j))) < 0)
+                return -1;
+    }
+    return 0;
+}

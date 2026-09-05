@@ -10,6 +10,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <signal.h>
 #include "snj_jansson.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,63 @@
 #include <unistd.h>
 
 #define PATCH_MODEL_MAX_FOR_TEST (512u * 1024u)
+
+static struct {
+    char handle[SNJ_ID_HEX_LEN + 1u];
+    struct snj_buf streams[2];
+} output_journal[128];
+static size_t output_count;
+
+static size_t
+output_index(const char *handle)
+{
+    size_t i;
+    for (i = 0u; i < output_count; ++i)
+        if (!strcmp(output_journal[i].handle, handle))
+            return i;
+    assert(i < 128u);
+    memcpy(output_journal[i].handle, handle, sizeof(output_journal[i].handle));
+    for (unsigned int s = 0u; s < 2u; ++s)
+        snj_buf_init(&output_journal[i].streams[s], 4u * 1024u * 1024u);
+    ++output_count;
+    return i;
+}
+
+static int
+retain_output(void *opaque, const char *handle, unsigned int stream,
+               uint64_t offset, const void *bytes, size_t len)
+{
+    (void)opaque;
+    struct snj_buf *out = &output_journal[output_index(handle)].streams[stream];
+    assert(offset == out->len);
+    return snj_buf_append(out, bytes, len);
+}
+
+static int
+read_output(void *opaque, const char *handle, unsigned int stream,
+             uint64_t from, uint64_t to, struct snj_buf *out)
+{
+    (void)opaque;
+    struct snj_buf *source = &output_journal[output_index(handle)].streams[stream];
+    assert(from <= to && to <= source->len);
+    size_t len = (size_t)(to - from);
+    if (len <= out->max)
+        return snj_buf_append(out, source->data + from, len);
+    size_t head = out->max / 2u, tail = out->max - head;
+    return snj_buf_append(out, source->data + from, head) < 0 ||
+           snj_buf_append(out, source->data + to - tail, tail) < 0 ? -1 : 0;
+}
+
+static int
+close_command(const char *handle, bool user_interrupt, snj_tool_pump_fn pump,
+                void *opaque, int wake_fd, json_t **result, char *error, size_t size)
+{
+    int rc = snj_tools_close_managed(handle, user_interrupt, pump, opaque, wake_fd,
+                                     result, error, size);
+    if (rc == 0)
+        snj_tools_collected(handle);
+    return rc;
+}
 
 static json_t *
 call_args_yield(const char *command, const char *workdir, int timeout_ms,
@@ -444,7 +502,7 @@ test_managed_process_hands_off_on_steering(void)
                   "steering arrived") != NULL);
     handle = snj_json_string(result, "handle");
     assert(handle != NULL);
-    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+    assert(close_command(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL && snj_tool_result_valid(closed) == 0);
     assert(json_integer_value(json_object_get(closed,
@@ -473,8 +531,10 @@ test_command_output_limit_selection(void)
         json_t *result = run_command_full("printf unchanged", 1000, NULL,
             NULL, NULL, NULL, requests[i], 6789u);
 
-        assert(strcmp(snj_json_string(json_object_get(result, "stdout"),
-                                     "retained"), "unchanged") == 0);
+        json_t *ref = json_object_get(result, "output_ref");
+        struct snj_buf *full = &output_journal[output_index(snj_json_string(ref, "handle"))].streams[0];
+        assert(full->len == 9u && !memcmp(full->data, "unchanged", 9u));
+        assert(json_int_member(json_object_get(result, "stdout"), "original_bytes") == 9);
         json_decref(result);
     }
 }
@@ -497,7 +557,7 @@ test_managed_output_ceiling(void)
                (requests[i] == 42 ? 42 : 6000));
         json_decref(result);
     }
-    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+    assert(close_command(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(json_integer_value(json_object_get(closed, "max_output_tokens")) == 6000);
     json_decref(closed);
@@ -521,8 +581,9 @@ test_command_output_limit_is_required_and_positive(void)
     assert(json_object_del(graph.items[0].arguments,
                            "max_output_tokens") == 0);
     assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                         NULL, NULL, -1, &result, error, sizeof(error)) < 0);
-    assert(result == NULL);
+                         NULL, NULL, -1, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snj_json_string(result, "status"), "not_run"));
+    json_decref(result);
     result = snj_tool_result_terminal(false, "invalid arguments");
     assert(result != NULL);
     config.max_output_tokens = 123u;
@@ -533,8 +594,9 @@ test_command_output_limit_is_required_and_positive(void)
     assert(json_object_set_new(graph.items[0].arguments,
                "max_output_tokens", json_integer(0)) == 0);
     assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                         NULL, NULL, -1, &result, error, sizeof(error)) < 0);
-    assert(result == NULL);
+                         NULL, NULL, -1, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snj_json_string(result, "status"), "not_run"));
+    json_decref(result);
     result = snj_tool_result_terminal(false, "invalid arguments");
     assert(result != NULL);
     assert(snj_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
@@ -600,10 +662,11 @@ test_large_stdout_is_complete_for_model(void)
 
     assert(strcmp(snj_json_string(result, "status"), "succeeded") == 0);
     assert(json_int_member(out, "original_bytes") == 1024 * 1024);
-    assert(json_int_member(out, "retained_bytes") == 1024 * 1024);
-    assert(json_int_member(out, "discarded_bytes") == 0);
-    assert(strlen(snj_json_string(out, "retained")) == 1024u * 1024u);
-    assert(strlen(snj_json_string(result, "model_text")) > 1024u * 1024u);
+    assert(json_int_member(out, "retained_bytes") == 6000);
+    assert(json_int_member(out, "discarded_bytes") == 1024 * 1024 - 6000);
+    const char *handle = snj_json_string(json_object_get(result, "output_ref"), "handle");
+    assert(output_journal[output_index(handle)].streams[0].len == 1024u * 1024u);
+    assert(strlen(snj_json_string(result, "model_text")) < 7000u);
     json_decref(result);
 }
 
@@ -714,8 +777,10 @@ test_managed_process_accepts_repeated_write_stdin(void)
     assert(strcmp(snj_json_string(next, "status"), "running") == 0);
     done = run_write_stdin_call(handle, "two\n", true, 5000);
     assert(strcmp(snj_json_string(done, "status"), "succeeded") == 0);
-    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+    assert(strstr(snj_json_string(json_object_get(next, "stdout"),
                                   "retained"), "first:one") != NULL);
+    assert(strstr(snj_json_string(json_object_get(done, "stdout"),
+                                  "retained"), "first:one") == NULL);
     assert(strstr(snj_json_string(json_object_get(done, "stdout"),
                                   "retained"), "second:two") != NULL);
     json_decref(done);
@@ -754,7 +819,7 @@ test_write_stdin_rejects_unknown_handle(void)
     json_t *result = run_write_stdin_call("00000000000000000000000000000000",
                                           "x", false, 0);
 
-    assert(strcmp(snj_json_string(result, "status"), "failed") == 0);
+    assert(strcmp(snj_json_string(result, "status"), "not_run") == 0);
     json_decref(result);
 }
 
@@ -772,7 +837,7 @@ test_wrong_handle_does_not_touch_active_process(void)
     assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
     wrong = run_write_stdin_call("00000000000000000000000000000000",
                                  "wrong\\n", true, 0);
-    assert(strcmp(snj_json_string(wrong, "status"), "failed") == 0);
+    assert(strcmp(snj_json_string(wrong, "status"), "not_run") == 0);
     done = run_write_stdin_call(handle, "right\\n", true, 5000);
     assert(strcmp(snj_json_string(done, "status"), "succeeded") == 0);
     assert(strstr(snj_json_string(json_object_get(done, "stdout"),
@@ -797,10 +862,8 @@ test_malformed_interaction_preserves_active_process(void)
     handle = snj_json_string(result, "handle");
     assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
     rejected = run_malformed_write_stdin_call(handle);
-    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
-    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
-    assert(strstr(snj_json_string(rejected, "model_text"),
-                  "interaction was rejected") != NULL);
+    assert(strcmp(snj_json_string(rejected, "status"), "not_run") == 0);
+    assert(json_is_null(json_object_get(rejected, "handle")));
     done = run_write_stdin_call(handle, "right\\n", true, 5000);
     assert(strcmp(snj_json_string(done, "status"), "succeeded") == 0);
     assert(strstr(snj_json_string(json_object_get(done, "stdout"),
@@ -841,14 +904,12 @@ test_invalid_termination_preserves_managed_process(void)
     handle = snj_json_string(result, "handle");
     assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
     rejected = run_terminate_call(handle, "must not be written", false);
-    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
-    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
-    assert(strstr(snj_json_string(rejected, "model_text"),
-                  "not modified") != NULL);
+    assert(strcmp(snj_json_string(rejected, "status"), "not_run") == 0);
+    assert(json_is_null(json_object_get(rejected, "handle")));
     json_decref(rejected);
     rejected = run_terminate_call(handle, "", true);
-    assert(strcmp(snj_json_string(rejected, "status"), "running") == 0);
-    assert(strcmp(snj_json_string(rejected, "handle"), handle) == 0);
+    assert(strcmp(snj_json_string(rejected, "status"), "not_run") == 0);
+    assert(json_is_null(json_object_get(rejected, "handle")));
     json_decref(rejected);
     terminated = run_terminate_call(handle, "", false);
     assert(strcmp(snj_json_string(terminated, "status"), "running") != 0);
@@ -871,7 +932,7 @@ test_managed_process_close_returns_terminal_result(void)
     handle = snj_json_string(result, "handle");
     assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
     error[0] = '\0';
-    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+    assert(close_command(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL);
     assert(snj_tool_result_valid(closed) == 0);
@@ -933,7 +994,7 @@ test_managed_close_kills_process_family(void)
     handle = snj_json_string(result, "handle");
     assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
     error[0] = '\0';
-    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+    assert(close_command(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL);
     assert(snj_tool_result_valid(closed) == 0);
@@ -1330,6 +1391,8 @@ test_native_read_tools(void)
 int
 main(void)
 {
+    (void)signal(SIGPIPE, SIG_IGN);
+    snj_tools_journal(retain_output, read_output, NULL);
     test_native_read_tools();
     test_success_and_streams();
     test_command_output_limit_selection();
@@ -1367,5 +1430,9 @@ main(void)
     test_provider_secret_redacted_from_output();
     test_provider_secret_redacted_across_read_boundary();
     puts("test_tools: ok");
+    snj_tools_shutdown();
+    for (size_t i = 0u; i < output_count; ++i)
+        for (unsigned int s = 0u; s < 2u; ++s)
+            snj_buf_free(&output_journal[i].streams[s]);
     return 0;
 }

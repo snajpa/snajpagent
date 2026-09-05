@@ -21,7 +21,7 @@ typedef int (*fixture_emit_fn)(void *opaque, size_t item_index,
                                const char *text, size_t len);
 typedef int (*fixture_pump_fn)(void *opaque, unsigned int timeout_ms);
 
-static const char managed_handle[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+static char managed_handle[SNJ_ID_HEX_LEN + 1u];
 static const char wrong_managed_handle[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 static json_t *
@@ -1188,6 +1188,7 @@ snj_fixture_tool(const struct snj_response_item *call,
         _exit(98);
     if (strstr(command, "managed steering wait") ||
         strstr(command, "managed queue wait")) {
+        memcpy(managed_handle, call->call_id, sizeof(managed_handle));
         for (unsigned int i = 0u; i < 100u; ++i) {
             int pump_rc = pump ? pump(pump_opaque, 20u) : 0;
 
@@ -1205,6 +1206,7 @@ snj_fixture_tool(const struct snj_response_item *call,
         return *result ? 0 : -1;
     }
     if (strstr(command, "managed start")) {
+        memcpy(managed_handle, call->call_id, sizeof(managed_handle));
         *result = running_result("fixture process is still running");
         if (!*result)
             goto allocation;

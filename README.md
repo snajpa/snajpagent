@@ -145,6 +145,19 @@ tool calls and results in the rollout. More `-v`s enable diagnostic detail.
 Rollout prose uses compact paragraph bullets; timestamped IRC chat messages do
 not gain a synthetic bullet, while genuine Markdown lists remain lists.
 
+### Independent tool calls
+
+The model can batch independent calls and keep several commands running while
+doing other work. Yielded commands retain individual handles for `write_stdin`;
+steering stops new launches without killing already-started work. All handles
+must be settled before the turn finishes. Dependent steps need a model decision
+between their results, not ordering within a batch.
+
+Optional controls: `[tool] max_parallel_commands = 4` (1–32), and
+`[provider NAME] parallel_tool_calls = true`. Existing yield/timeout/output
+settings remain independent. Full redacted output is retained in journal
+chunks; polls return incremental excerpts under the 6000-token default hard cap.
+
 ## Resume or script
 
 Normal exit prints a ready-to-run resume command. You can also select sessions:

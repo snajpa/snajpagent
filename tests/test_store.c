@@ -67,6 +67,8 @@ turn_started_data(const struct snj_session *session, const char *turn_id)
     assert(snj_json_set_new(config, "prompt_schema", json_integer(1)) == 0);
     assert(snj_json_set_new(config, "replay_schema", json_integer(1)) == 0);
     assert(snj_json_set_new(config, "tool_schema", json_integer(1)) == 0);
+    assert(snj_json_set_new(config, "max_parallel_commands", json_integer(4)) == 0);
+    assert(snj_json_set_new(config, "parallel_tool_calls", json_true()) == 0);
     assert(snj_json_set_new(data, "config", config) == 0);
     assert(snj_json_set_new(data, "input_kind", json_string("direct")) == 0);
     assert(snj_json_set_new(data, "read_only", json_false()) == 0);

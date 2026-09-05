@@ -205,50 +205,34 @@ class FakeResponses:
         return body + "".join(self.event(kind, data) for kind, data in events)
 
     def function_body(self, sequence, call_id, name, arguments):
+        return self.functions_body(sequence, [(call_id, name, arguments)])
+
+    def functions_body(self, sequence, calls):
         response_id = f"resp_irc_ui_{sequence}"
-        item_id = f"fc_irc_ui_{sequence}"
-        encoded = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
-        created = {
-            "type": "response.created",
-            "response": {"id": response_id, "status": "in_progress", "output": []},
-        }
-        added_item = {
-            "id": item_id, "type": "function_call", "status": "in_progress",
-            "call_id": call_id, "name": name, "arguments": "",
-        }
-        done_item = dict(added_item)
-        done_item["status"] = "completed"
-        done_item["arguments"] = encoded
-        completed = {
-            "type": "response.completed",
-            "response": {
-                "id": response_id, "status": "completed",
-                "usage": {"input_tokens": 1, "output_tokens": 1,
-                          "total_tokens": 2},
-                "output": [],
-            },
-        }
-        events = [
-            ("response.output_item.added", {
-                "type": "response.output_item.added", "output_index": 0,
-                "item": added_item,
-            }),
-            ("response.function_call_arguments.delta", {
+        created = {"type": "response.created", "response": {
+            "id": response_id, "status": "in_progress", "output": []}}
+        events = [self.event("response.created", created)]
+        for index, (call_id, name, arguments) in enumerate(calls):
+            item_id = f"fc_irc_ui_{sequence}_{index}"
+            encoded = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+            item = {"id": item_id, "type": "function_call", "status": "in_progress",
+                    "call_id": call_id, "name": name, "arguments": ""}
+            events.append(self.event("response.output_item.added", {
+                "type": "response.output_item.added", "output_index": index, "item": item}))
+            events.append(self.event("response.function_call_arguments.delta", {
                 "type": "response.function_call_arguments.delta",
-                "item_id": item_id, "output_index": 0, "delta": encoded,
-            }),
-            ("response.function_call_arguments.done", {
+                "item_id": item_id, "output_index": index, "delta": encoded}))
+            events.append(self.event("response.function_call_arguments.done", {
                 "type": "response.function_call_arguments.done",
-                "item_id": item_id, "output_index": 0, "arguments": encoded,
-            }),
-            ("response.output_item.done", {
-                "type": "response.output_item.done", "output_index": 0,
-                "item": done_item,
-            }),
-            ("response.completed", completed),
-        ]
-        return (self.event("response.created", created) +
-                "".join(self.event(kind, data) for kind, data in events))
+                "item_id": item_id, "output_index": index, "arguments": encoded}))
+            item = dict(item, status="completed", arguments=encoded)
+            events.append(self.event("response.output_item.done", {
+                "type": "response.output_item.done", "output_index": index, "item": item}))
+        events.append(self.event("response.completed", {
+            "type": "response.completed", "response": {
+                "id": response_id, "status": "completed", "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}}))
+        return "".join(events)
 
     def handle(self, handler):
         try:
@@ -295,7 +279,9 @@ class FakeResponses:
                 item.get("call_id") in completed_calls
                 for item in request.get("input", [])
             )
-            if latest.startswith("tool-cap "):
+            if latest.startswith("multi-tools"):
+                body = self.multi_tool_body(request, sequence, latest).encode()
+            elif latest.startswith("tool-cap "):
                 body = self.output_cap_body(request, sequence, latest).encode()
             elif marker and not call_finished:
                 body = self.function_body(
@@ -378,6 +364,44 @@ class FakeResponses:
             "stdin": None, "pty": False, "timeout_ms": None, "yield_ms": 0,
             "max_output_tokens": selected,
         })
+
+    def multi_tool_body(self, request, sequence, prompt):
+        mode = prompt.split()[-1]
+        assert request["parallel_tool_calls"] is (mode != "single-request")
+        calls = [item for item in request["input"] if item.get("type") == "function_call"]
+        outputs = {item["call_id"]: item["output"] for item in request["input"]
+                   if item.get("type") == "function_call_output"}
+        jobs = []
+        for item in request["input"]:
+            text = item.get("content", "")
+            if isinstance(text, str) and "The preceding JSON describes unsettled commands" in text:
+                jobs = json.loads(text.split("\n", 1)[0])
+        if not calls:
+            # A cannot finish until B launches: this detects actual overlap,
+            # not merely several call items or a fast serial timing result.
+            commands = (["sleep 0.1; printf first", "printf second"] if mode == "serial" else [
+                "while test ! -f peer-ready; do sleep 0.02; done; sleep 0.2; printf first",
+                "touch peer-ready; printf second"])
+            if mode == "failure":
+                commands[1] = "touch peer-ready; printf failed-peer; exit 7"
+            batch = [(f"call_multi_{i}", "exec_command", {
+                "command": command, "workdir": str(self.tool_workspace),
+                "stdin": None, "pty": False, "timeout_ms": 3000,
+                "yield_ms": 30 if mode in ("yield", "single-request") else 0,
+                "max_output_tokens": None,
+            }) for i, command in enumerate(commands)]
+            return self.functions_body(sequence, batch)
+        assert all(call["call_id"] in outputs for call in calls)
+        if jobs:
+            assert {"exec_command", "apply_patch", "write_stdin"}.issubset(
+                {tool.get("name") for tool in request["tools"]})
+            return self.functions_body(sequence, [(f"poll_{sequence}_{i}", "write_stdin", {
+                "handle": job["handle"], "data": "", "eof": False,
+                "terminate": False, "yield_ms": 1000, "max_output_tokens": None,
+            }) for i, job in enumerate(jobs)])
+        assert "first" in "".join(outputs.values())
+        assert ("failed-peer" if mode == "failure" else "second") in "".join(outputs.values())
+        return self.response_body(sequence, "multi tools confirmed")
 
     def handle_catalog(self, handler):
         try:
@@ -1877,6 +1901,50 @@ def run_listener_collision_case(binary, root, provider, environment):
         for terminal in reversed(terminals):
             terminal.close()
 
+def run_multi_tool_cases(binary, root, provider, environment):
+    for mode in ("parallel", "serial", "yield", "failure", "single-request"):
+        case = root / ("multi-" + mode)
+        workspace = case / "work"
+        workspace.mkdir(mode=0o700, parents=True)
+        provider.tool_workspace = workspace
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        text = config.read_text()
+        if mode == "single-request":
+            # The runtime must still handle a provider returning several calls.
+            text = text.replace("[provider fake]\n", "[provider fake]\nparallel_tool_calls = false\n")
+        config.write_text(text + "[tool]\nmax_parallel_commands = " +
+                          ("1" if mode == "serial" else "4") + "\n", encoding="utf-8")
+        terminal = TmuxTerminal(case / "terminal", binary, workspace,
+                                case / "state", config, 120, 24,
+                                args=("-v",), environment=environment)
+        try:
+            terminal.wait("host-model/medium ›")
+            terminal.submit("multi-tools " + mode)
+            terminal.wait("multi tools confirmed")
+            _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
+            starts = event_list(events, "tool_started")
+            finishes = event_list(events, "tool_finished")
+            assert len(starts) == len(finishes) >= 2
+            assert not event_list(events, "turn_failed")
+            if mode != "serial":
+                assert starts[1]["seq"] < finishes[0]["seq"]
+            else:
+                assert finishes[0]["seq"] < starts[1]["seq"]
+            if mode in ("parallel", "failure"):
+                assert finishes[0]["data"]["call_id"] == starts[1]["data"]["call_id"]
+            if mode in ("yield", "single-request"):
+                assert any(event["data"]["result"]["status"] == "running" for event in finishes)
+            chunks = event_list(events, "process_output")
+            assert chunks and all(event["data"]["offset"] == 0 for event in chunks)
+            assert len({event["data"]["handle"] for event in chunks}) == 2
+            terminal.exit()
+            print(f"tmux_terminal multi-tool {mode}: ok", flush=True)
+        finally:
+            terminal.close()
+        if provider.failure:
+            raise provider.failure
+
 
 def run_output_cap_cases(binary, root, provider, environment):
     for name, configured, selected in (("default", None, None),
@@ -1902,8 +1970,9 @@ def run_output_cap_cases(binary, root, provider, environment):
             _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
             result = event_list(events, "tool_finished")[0]["data"]["result"]
             assert result["max_output_tokens"] == min(ceiling, selected or ceiling)
-            assert result["stdout"]["retained"] == "0" * 8000
-            assert "0" * 8000 in result["model_text"]
+            chunks = event_list(events, "process_output")
+            assert "".join(event["data"]["data"] for event in chunks) == "0" * 8000
+            assert result["stdout"]["original_bytes"] == 8000
             terminal.exit()
             print(f"tmux_terminal output cap {name}: ok", flush=True)
         finally:
@@ -1980,6 +2049,8 @@ def run_irc_case(binary, root):
     terminals = {}
     try:
         run_listener_collision_case(binary, root, provider, environment)
+
+        run_multi_tool_cases(binary, root, provider, environment)
         run_output_cap_cases(binary, root, provider, environment)
         run_ctrl_d_cases(binary, root, provider, environment)
         run_model_catalog_case(binary, root, provider, environment)

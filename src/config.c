@@ -90,6 +90,7 @@ provider_init(struct snj_provider_config *provider, const char *name)
     provider->auto_compact_input_tokens = SNJ_CONFIG_COMPACT_AUTO;
     provider->exact_token_count = SNJ_TOKEN_COUNT_AUTO;
     provider->native_compaction = true;
+    provider->parallel_tool_calls = true;
     memcpy(provider->base_url, "https://api.openai.com", 23u);
     memcpy(provider->api_key_env, "OPENAI_API_KEY", 15u);
 }
@@ -126,6 +127,7 @@ snj_config_init(struct snj_config *config)
     config->irc_history_lines = 200u;
     config->shell = snj_strdup_checked("/bin/sh", SNJ_CONFIG_PATH_MAX);
     config->default_yield_ms = 10000u;
+    config->max_parallel_commands = 4u;
     config->default_timeout_ms = 0u;
     config->max_timeout_ms = 86400000u;
     config->max_output_tokens = SNJ_DEFAULT_TOOL_OUTPUT_TOKENS;
@@ -742,6 +744,9 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
 {
     struct snj_provider_config *provider =
         &state->config->providers[state->provider_index];
+    if (strcmp(key, "parallel_tool_calls") == 0)
+        return claim_key(state, 11u) < 0 ? -1 :
+               parse_bool(value, &provider->parallel_tool_calls);
     if (strcmp(key, "connect_timeout_ms") == 0)
         return claim_key(state, 0u) < 0 ? -1 :
                parse_u32(value, 1000u, 120000u, &provider->connect_timeout_ms);
@@ -967,6 +972,9 @@ parse_tool(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "default_yield_ms") == 0)
         return claim_key(state, 1u) < 0 ? -1 :
                parse_u32(value, 0u, 600000u, &config->default_yield_ms);
+    if (strcmp(key, "max_parallel_commands") == 0)
+        return claim_key(state, 7u) < 0 ? -1 :
+               parse_u32(value, 1u, 32u, &config->max_parallel_commands);
     if (strcmp(key, "default_timeout_ms") == 0)
         return claim_key(state, 2u) < 0 ? -1 :
                parse_u32(value, 0u, UINT32_MAX,
@@ -1479,8 +1487,9 @@ provider_settings(struct snj_buf *output, const struct snj_provider_config *p)
     const char *auth = p->auth == SNJ_AUTH_CHATGPT ? "chatgpt" :
                        p->auth == SNJ_AUTH_API_KEY ? "api_key" : "env";
     return snj_buf_printf(output,
-        "auth = %s\nbase_url = %s\napi_key_env = %s\nnative_compaction = %s\n",
-        auth, p->base_url, p->api_key_env, p->native_compaction ? "true" : "false");
+        "auth = %s\nbase_url = %s\napi_key_env = %s\nnative_compaction = %s\nparallel_tool_calls = %s\n",
+        auth, p->base_url, p->api_key_env, p->native_compaction ? "true" : "false",
+        p->parallel_tool_calls ? "true" : "false");
 }
 
 static int
@@ -1527,7 +1536,8 @@ replace_provider_settings(const struct snj_buf *input, struct snj_buf *output,
                 *equal = '\0';
                 s = trim(s);
                 replaced = strcmp(s, "auth") == 0 || strcmp(s, "base_url") == 0 ||
-                    strcmp(s, "api_key_env") == 0 || strcmp(s, "native_compaction") == 0;
+                    strcmp(s, "api_key_env") == 0 || strcmp(s, "native_compaction") == 0 ||
+                    strcmp(s, "parallel_tool_calls") == 0;
             }
             if (!replaced && snj_buf_append(output, input->data + at,
                     end - at + (end < input->len ? 1u : 0u)) < 0)

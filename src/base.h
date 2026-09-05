@@ -72,5 +72,7 @@ void snj_sha256_final(struct snj_sha256 *ctx, unsigned char out[32]);
 void snj_sha256_hex(const void *data, size_t len,
                     char out[SNJ_SHA256_HEX_LEN + 1u]);
 bool snj_hex_is_lower(const char *s, size_t len);
+int snj_base64_append(struct snj_buf *out, const unsigned char *data, size_t len);
+int snj_base64_decode(struct snj_buf *out, const char *text);
 
 #endif

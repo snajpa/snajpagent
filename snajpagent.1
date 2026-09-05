@@ -752,6 +752,11 @@ For direct ChatGPT/Codex, an unavailable native compaction endpoint falls back
 once to Responses summarization. Authentication failures do not trigger this
 fallback, and the configured provider/account and hard context guard stay intact.
 .TP
+.B parallel_tool_calls
+Request native multiple function calls from this provider.  Default: true.
+Set false for a provider/model that cannot batch calls.  This does not disable
+local yielded-command concurrency or change provider/account selection.
+.TP
 .B openrouter_referer
 Optional printable ASCII
 .B HTTP-Referer
@@ -890,6 +895,11 @@ Default:
 .TP
 .B default_yield_ms
 Default initial yield interval, 0 through 600000.  Default: 10000.
+.TP
+.B max_parallel_commands
+Maximum unsettled command handles, including yielded and ready-but-uncollected
+jobs.  Range: 1 through 32.  Default: 4.  One runs commands serially without
+restoring the former tool-catalog lock.  This is not a subprocess or CPU limit.
 .TP
 .B default_timeout_ms
 Foreground handoff deadline when the model supplies none, 0 through 4294967295.
@@ -1107,7 +1117,14 @@ for the configured
 Larger requested bounds are capped at that ceiling; smaller bounds are honored.
 The bound is persisted with the result and conservatively enforced as at most
 one token per retained UTF-8 byte.  Truncated context retains bounded
-provenance; the complete redacted output remains in the durable event.
+provenance; complete redacted output remains in journal chunks.  Polls return
+only newly collected output, with exact stream-range references.  Multiple
+independent command calls may overlap; emission order does not establish a
+dependency.  A batch shares the smallest positive yield interval.  Steering
+hands back started commands and skips unstarted calls; it does not kill them.
+Invalid or repeated same-handle interactions are not run.  All handles must
+be settled before a final answer or goal completion.  Existing commands keep
+their tool catalog; unrelated work does not require an immediate poll.
 Hosted web search is a provider tool.  When the active provider URL has the
 exact hostname
 .BR openrouter.ai ,

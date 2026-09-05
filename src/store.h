@@ -46,6 +46,7 @@ struct snj_pending_call {
     char action_sha256[SNJ_SHA256_HEX_LEN + 1u];
     char tool_name[16];
     char process_handle[SNJ_ID_HEX_LEN + 1u];
+    char command[257], workdir[257];
     bool started;
     bool finished;
 };
@@ -77,7 +78,10 @@ struct snj_session {
     char active_response_id[SNJ_ID_HEX_LEN + 1u];
     char final_item_id[SNJ_ID_HEX_LEN + 1u];
     char final_response_id[SNJ_ID_HEX_LEN + 1u];
-    char active_process_handle[SNJ_ID_HEX_LEN + 1u];
+    struct snj_process_state processes[SNJ_MAX_PROCESSES];
+    size_t process_count;
+    uint32_t max_parallel_commands;
+    bool parallel_tool_calls;
     char compact_id[SNJ_ID_HEX_LEN + 1u];
     char active_compact_id[SNJ_ID_HEX_LEN + 1u];
     char active_compact_source_sha256[SNJ_SHA256_HEX_LEN + 1u];
@@ -206,6 +210,10 @@ typedef int (*snj_session_event_fn)(void *opaque, uint64_t seq,
 int snj_session_each_event(struct snj_session *session,
                            snj_session_event_fn fn, void *opaque,
                            char *error, size_t error_size);
+struct snj_process_state *snj_session_process(struct snj_session *, const char *handle);
+int snj_process_output_decode(const json_t *data, struct snj_buf *bytes);
+int snj_session_each_event_since(struct snj_session *, const struct snj_process_state *,
+                                  snj_session_event_fn, void *, char *, size_t);
 
 int snj_session_commit(struct snj_session *session, const char *type,
                        json_t *data, uint64_t *written_seq,

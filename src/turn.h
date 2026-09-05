@@ -13,6 +13,21 @@
 const char *snj_prompt_parse(const char *text, bool *read_only);
 bool snj_read_only_tool(const char *name);
 #define SNJ_MAX_CALLS_PER_RESPONSE 32u
+#define SNJ_MAX_PROCESSES 32u
+
+/* Durable identity/output counters plus engine-owned observations, never PIDs. */
+struct snj_process_state {
+    char handle[SNJ_ID_HEX_LEN + 1u];
+    char command[257];
+    char workdir[257];
+    uint64_t output_bytes[2];
+    uint64_t collected_bytes[2];
+    uint64_t input_accepted, input_written, input_pending;
+    bool ready, draining;
+    /* Live journal scan anchor; not part of provider-visible process facts. */
+    uint64_t log_offset, log_seq;
+    char log_hash[SNJ_SHA256_HEX_LEN + 1u];
+};
 #define SNJ_MAX_PUBLIC_ITEM (2u * 1024u * 1024u)
 #define SNJ_MAX_PROVIDER_ID 512u
 #define SNJ_MAX_TOOL_ARGUMENTS (2u * 1024u * 1024u)

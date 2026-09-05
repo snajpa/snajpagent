@@ -56,44 +56,6 @@ int snj_fixture_tool(const struct snj_response_item *call,
                      json_t **result, char *error, size_t error_size);
 #endif
 
-enum snj_managed_continuation
-snj_app_managed_continuation_classify(const struct app_state *app,
-                                      const struct snj_response_graph *graph,
-                                      const struct snj_graph_decision *decision)
-{
-    const char *handle = app->session.active_process_handle;
-    bool continuation = false;
-    bool mismatch = false;
-
-    if (!handle[0])
-        return SNJ_MANAGED_CONTINUATION_NONE;
-    if (decision->outcome != SNJ_GRAPH_CALLS)
-        return SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION;
-    for (size_t i = 0; i < graph->count; ++i) {
-        const struct snj_response_item *call = &graph->items[i];
-        const char *arg_handle;
-
-        if (call->kind != SNJ_ITEM_TOOL_CALL)
-            continue;
-        if (call->name && strcmp(call->name, "write_stdin") == 0) {
-            if (continuation)
-                return SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION;
-            continuation = true;
-            arg_handle = snj_json_string(call->arguments, "handle");
-            mismatch = !arg_handle || strcmp(arg_handle, handle) != 0;
-            continue;
-        }
-        if (continuation || !app->networked || !call->name ||
-            (strcmp(call->name, "irc_send") != 0 &&
-             strcmp(call->name, "irc_state") != 0 &&
-             strcmp(call->name, "irc_topic") != 0))
-            return SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION;
-    }
-    if (!continuation)
-        return SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION;
-    return mismatch ? SNJ_MANAGED_CONTINUATION_HANDLE_MISMATCH :
-                      SNJ_MANAGED_CONTINUATION_MATCHED;
-}
 
 int
 snj_app_provider_models(struct app_state *app,

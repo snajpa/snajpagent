@@ -1174,6 +1174,23 @@ snj_ui_event(struct snj_ui *ui, uint64_t seq, const char *type)
 }
 
 int
+snj_ui_tool_output(struct snj_ui *ui, const char *label, const void *data, size_t len)
+{
+    struct snj_render_block block = {.role = SNJ_ROLE_ACTIVITY};
+    if (ui->verbosity < 1u)
+        return 0;
+    snj_buf_init(&block.text, len + 256u);
+    if (snj_buf_printf(&block.text, "  %s:\n", label) < 0 ||
+        snj_buf_append(&block.text, data, len) < 0 ||
+        (len && ((const unsigned char *)data)[len - 1u] != '\n' &&
+         snj_buf_putc(&block.text, '\n') < 0)) {
+        snj_buf_free(&block.text);
+        return -1;
+    }
+    return tool_block(ui, &block);
+}
+
+int
 snj_ui_resume_hint(struct snj_ui *ui, const char *text, size_t len)
 {
     struct ui_message message = {.kind = UI_RESUME};

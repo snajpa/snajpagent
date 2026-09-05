@@ -187,7 +187,7 @@ compaction_state_valid(const struct app_state *app, const char *reason,
     if (active_prefix) {
         if (!active_reason(reason) || !app->session.active_turn ||
             app->session.response_open ||
-            app->session.active_process_handle[0] != '\0' ||
+            app->session.pending_call_count ||
             app->session.active_compact_id[0] != '\0') {
             snprintf(error, error_size,
                      "pre-response compaction requires an active turn before response");
@@ -197,7 +197,7 @@ compaction_state_valid(const struct app_state *app, const char *reason,
         return 0;
     }
     if (app->session.active_turn || app->session.response_open ||
-        app->session.active_process_handle[0] != '\0' ||
+        app->session.process_count ||
         app->session.active_compact_id[0] != '\0') {
         snprintf(error, error_size, "compaction requires an idle session");
         errno = EINVAL;

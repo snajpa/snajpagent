@@ -85,6 +85,11 @@ struct app_state {
     char capacity_cache_error[256];
 };
 
+int snj_app_tool_output(void *, const char *, unsigned int, uint64_t, const void *, size_t);
+int snj_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, struct snj_buf *);
+int snj_app_tool_display(struct app_state *, const json_t *,
+                          const struct snj_process_state *, uint32_t);
+
 enum {
     /* Provider pump results already use 1 and 2. */
     SNJ_APP_COUNT_SKIPPED = 3
@@ -108,13 +113,6 @@ int snj_app_goal_tool(struct app_state *app,
                       json_t **result, char *error, size_t error_size);
 int snj_app_goal_pause(struct app_state *app, const char *reason,
                        char *error, size_t error_size);
-
-enum snj_managed_continuation {
-    SNJ_MANAGED_CONTINUATION_NONE,
-    SNJ_MANAGED_CONTINUATION_MATCHED,
-    SNJ_MANAGED_CONTINUATION_HANDLE_MISMATCH,
-    SNJ_MANAGED_CONTINUATION_ORDERING_VIOLATION
-};
 
 enum queue_command_kind {
     QUEUE_COMMAND_LIST,
@@ -258,9 +256,6 @@ void snj_app_response_cycle_release(struct app_state *app,
                                     json_t **steering, json_t **create_request,
                                     json_t **count_request,
                                     struct snj_buf *request_body);
-enum snj_managed_continuation snj_app_managed_continuation_classify(
-    const struct app_state *app, const struct snj_response_graph *graph,
-    const struct snj_graph_decision *decision);
 int snj_app_lifecycle_command(struct app_state *app, const char *line,
                               bool *handled, bool *exit_now);
 int snj_app_parse_queue_argument(const char *argument,

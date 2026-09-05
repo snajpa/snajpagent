@@ -973,6 +973,12 @@ static bool
 reason_is_not_run(const char *reason)
 {
     return reason && (strcmp(reason, "protocol_conflict") == 0 ||
+                      strcmp(reason, "process_limit") == 0 ||
+                      strcmp(reason, "batch_yield") == 0 ||
+                      strcmp(reason, "process_busy") == 0 ||
+                      strcmp(reason, "stdin_busy") == 0 ||
+                      strcmp(reason, "stdin_closed") == 0 ||
+                      strcmp(reason, "invalid_arguments") == 0 ||
                       strcmp(reason, "managed_process_conflict") == 0 ||
                       strcmp(reason, "managed_process_handle_mismatch") == 0 ||
                       strcmp(reason, "recovery_unstarted") == 0 ||
@@ -986,7 +992,7 @@ snj_tool_result_valid(const json_t *result)
 {
     static const char *const keys[] = {
         "duration_ms", "exit_code", "handle", "model_text", "reason",
-        "signal", "status", "stderr", "stdout", "max_output_tokens"
+        "signal", "status", "stderr", "stdout", "max_output_tokens", "output_ref"
     };
     static const char *const legacy_keys[] = {
         "duration_ms", "exit_code", "handle", "model_text", "reason",
@@ -1002,7 +1008,8 @@ snj_tool_result_valid(const json_t *result)
     json_t *signal_value;
     json_t *limit_value;
 
-    if ((!snj_json_exact_keys((json_t *)result, keys, 10u) &&
+    if ((!snj_json_exact_keys((json_t *)result, keys, 11u) &&
+         !snj_json_exact_keys((json_t *)result, keys, 10u) &&
          !snj_json_exact_keys((json_t *)result, legacy_keys, 9u)) ||
         snj_json_integer_u64(result, "duration_ms", &duration) < 0 ||
         !(status = snj_json_string(result, "status")) ||
@@ -1016,6 +1023,33 @@ snj_tool_result_valid(const json_t *result)
          (uint64_t)json_integer_value(limit_value) >
              SNJ_CONFIG_TOKEN_LIMIT_MAX))
         return -1;
+    json_t *ref = json_object_get(result, "output_ref");
+    if (ref) {
+        static const char *const ref_keys[] = {"handle", "stdout_start", "stdout_end",
+            "stderr_start", "stderr_end", "stdin_accepted", "stdin_written",
+            "stdin_pending", "stdin_open"};
+        const char *h = snj_json_string(ref, "handle");
+        const char *const begin[] = {"stdout_start", "stderr_start"};
+        const char *const end[] = {"stdout_end", "stderr_end"};
+        const char *const streams[] = {"stdout", "stderr"};
+        uint64_t accepted, written, pending;
+        if (!snj_json_exact_keys(ref, ref_keys, 9u) || !h ||
+            !snj_hex_is_lower(h, SNJ_ID_HEX_LEN) ||
+            !json_is_boolean(json_object_get(ref, "stdin_open")) ||
+            snj_json_integer_u64(ref, "stdin_accepted", &accepted) < 0 ||
+            snj_json_integer_u64(ref, "stdin_written", &written) < 0 ||
+            snj_json_integer_u64(ref, "stdin_pending", &pending) < 0 ||
+            written > accepted || pending > accepted - written)
+            return -1;
+        for (unsigned int s = 0u; s < 2u; ++s) {
+            uint64_t from, to, bytes;
+            if (snj_json_integer_u64(ref, begin[s], &from) < 0 ||
+                snj_json_integer_u64(ref, end[s], &to) < 0 || from > to ||
+                snj_json_integer_u64(json_object_get(result, streams[s]), "original_bytes", &bytes) < 0 ||
+                bytes != to - from)
+                return -1;
+        }
+    }
     (void)model_text;
     reason_value = json_object_get(result, "reason");
     handle = json_object_get(result, "handle");
@@ -1039,6 +1073,7 @@ snj_tool_result_valid(const json_t *result)
                snj_hex_is_lower(json_string_value(handle), SNJ_ID_HEX_LEN) &&
                (json_is_null(reason_value) ||
                 (reason && (strcmp(reason, "timeout_handoff") == 0 ||
+                            strcmp(reason, "batch_yield") == 0 ||
                             strcmp(reason, "steering_handoff") == 0))) ? 0 : -1;
     if (!json_is_null(reason_value) || !json_is_null(handle))
         return -1;

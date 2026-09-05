@@ -71,6 +71,7 @@ struct snj_provider_config {
     uint32_t auto_compact_input_tokens;
     enum snj_token_count_mode exact_token_count;
     bool native_compaction;
+    bool parallel_tool_calls;
     char base_url[SNJ_CONFIG_URL_MAX];
     char api_key_env[SNJ_CONFIG_ENV_NAME_MAX + 1u];
     char openrouter_referer[SNJ_CONFIG_URL_MAX];
@@ -120,6 +121,7 @@ struct snj_config {
     uint32_t irc_history_lines;
     char *shell;
     uint32_t default_yield_ms;
+    uint32_t max_parallel_commands;
     uint32_t default_timeout_ms;
     uint32_t max_timeout_ms;
     uint32_t max_output_tokens;

@@ -143,20 +143,28 @@ turn. A turn continues until it completes, is explicitly interrupted, or hits
 an actual provider, protocol, storage, or machine-representation failure.
 Per-response item, call, argument, output, and wire-size bounds remain in force.
 
-At most one yielded process can be unresolved. While it is active, the request
-always exposes `write_stdin` with a schema bound to the exact active handle. In
-networked mode the IRC send/state/topic tools may precede it so urgent chat can
-be handled, but the response must end with exactly one matching `write_stdin`;
-other coding tools remain unavailable. A provider-supplied nonmatching handle
-is durably rejected without touching the process, then returned to the next
-bounded provider cycle. Invalid interaction arguments likewise leave the
-matching process durably active. Terminal speech, refusal, an empty response,
-or invalid call ordering closes the process before the turn fails. The active
-handle is cleared only by a terminal result for that exact process or an
-explicit durable closure event. A local steer returns a running result with
-`reason=steering_handoff` and does not signal the process. The matching
-`write_stdin` can explicitly terminate it through the same bounded
-managed-process closure used by required turn/session cleanup.
+`[tool] max_parallel_commands` bounds unsettled commands (default 4, range
+1–32). The launching call's existing opaque local ID is also its process
+handle: no second ID allocator or lookup registry. Native batches contain
+independent calls, not a dependency graph. One engine poller starts a bounded
+wave and services all stdout/stderr/stdin while provider work continues.
+Short in-process adapters stay serial. Results commit in actual completion
+order, identified by call ID. One call uses this same path.
+
+Yielded jobs keep the normal tool catalog available; `write_stdin` can address
+any known handle once per response. Invalid/duplicate interactions are not run
+and never touch the job. A ready, uncollected result retains its slot. Final
+answers and goal completion require every handle settled. A steer stops new
+admissions, returns live handles without signaling them, and marks unstarted
+calls `superseded_by_steering`; no skipped call launches after handoff. A batch
+shares the smallest positive effective yield interval. Pending stdin is owned
+once per handle and need not finish writing before steering can yield.
+
+Native batching is requested by per-provider `parallel_tool_calls` (default
+true), independently of the local concurrency limit. Both settings are frozen
+with the turn. No JS runtime, worker pool, per-tool thread or detached service.
+Cleanup fans out to all owned groups under one grace window. Exited leaders
+remain unreaped until output collection so a reused PID cannot be signaled.
 
 ## Storage
 
@@ -264,10 +272,10 @@ other post-terminal events remain errors.
 
 When a goal is active, context projection appends the current durable wording
 and controller rules after replay and compaction. It also exposes the strict
-`update_goal` function for rewrite, completion, or blocking. An unresolved
-managed process narrows the coding-tool surface to its exact `write_stdin`
-continuation until that process reaches a terminal result; networked requests
-retain the IRC tools before that required continuation.
+`update_goal` function for rewrite, completion, or blocking. A bounded process
+summary follows the goal controller; live handles do not narrow the catalog.
+Active-prefix compaction retains that summary outside the summarized history
+and never splits an unresolved call/result group.
 
 ## Tools
 
@@ -301,8 +309,11 @@ the process. Timeout expiry and steering handoff never signal or kill the
 command. Explicit user interruption and required turn/session closure retain
 their existing cancellation behavior.
 
-Tool stdout and stderr are redacted before capture and retained without a
-tool-specific length cutoff. `exec_command` and `write_stdin` require the
+Tool stdout and stderr are redacted and retained as bounded `process_output`
+chunks in the existing session journal, without a capture cutoff. Results
+reference contiguous per-stream ranges; successive polls return only newly
+collected output. RAM staging is bounded and I/O service rotates among jobs.
+The app owns journal writes, and the UI owns all display. `exec_command` and `write_stdin` require the
 model to select a positive `max_output_tokens` or explicitly use `null` for
 the configured `[tool] max_output_tokens` ceiling (6000 by default). Larger
 requests are clamped to that ceiling; smaller requests are honored. Both tool
