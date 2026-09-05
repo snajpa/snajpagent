@@ -427,7 +427,11 @@ cannot lift its restrictions.  Empty queries are rejected;
 is literal text.  One-shot argument and stdin prompts also support this prefix.
 .TP
 .BR /goal , " /goal status"
-Show the durable goal.
+Show the durable goal.  Queued prompts run before automatic goal continuation,
+without fresh goal reminders throughout those turns.  A retained unarmed queue
+cannot be bypassed: use
+.B /next
+or explicit goal start/resume to arm it.  An open queue editor prevents draining.
 .TP
 .BI /goal " text"
 Start a goal, or reword the unfinished goal.  Quote the text or use

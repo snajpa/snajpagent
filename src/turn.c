@@ -2,12 +2,12 @@
 #include "turn.h"
 #include "config.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 const char *
 snj_prompt_parse(const char *text, bool *read_only)

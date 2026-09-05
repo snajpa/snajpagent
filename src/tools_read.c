@@ -190,13 +190,8 @@ scan_file(struct read_query *q, int fd, const char *path)
         if (ferror(file)) { rc = -1; break; }
         if (c == EOF && !len)
             break;
-        if (len == RO_LINE) {
-            q->problem = "Line exceeds 64 KiB; inspection is incomplete.";
-            rc = -1;
-            break;
-        }
-        if (!snj_utf8_valid((unsigned char *)line, len, true) ||
-            memchr(line, 0, len)) {
+        if (memchr(line, 0, len) || (len < RO_LINE &&
+            !snj_utf8_valid((unsigned char *)line, len, true))) {
             if (q->grep) {
                 q->output.len = saved_len;
                 q->seen = saved_seen;
@@ -205,6 +200,11 @@ scan_file(struct read_query *q, int fd, const char *path)
                 break;
             }
             q->problem = "Non-text file (NUL or invalid UTF-8); inspection is incomplete.";
+            rc = -1;
+            break;
+        }
+        if (len == RO_LINE) {
+            q->problem = "Line exceeds 64 KiB; inspection is incomplete.";
             rc = -1;
             break;
         }

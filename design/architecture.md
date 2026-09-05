@@ -81,7 +81,8 @@ An active persistent goal schedules another ordinary turn after a normal final
 answer. Durable queued user turns take precedence over that continuation.
 Fresh goal-controller reminders are omitted throughout a queued turn (even
 after the last item is dequeued) and whenever pending queue entries exist.
-An unarmed queue blocks goal continuation until `/next` or queue removal.
+An unarmed queue blocks goal continuation until `/next`, explicit goal
+start/resume, or queue removal. An open queue editor always prevents draining.
 Goal turns carry a distinct `input_kind` and a developer continuation marker,
 so they do not appear as new user messages. Refusal, failure, input closure,
 and session reopening pause the goal; resumption is explicit.

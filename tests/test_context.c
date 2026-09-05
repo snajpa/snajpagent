@@ -907,7 +907,7 @@ test_read_only_and_queue_controllers(void)
     const char *turn = "01010101010101010101010101010101";
 
     assert(snprintf(temp, sizeof(temp), "%s/ro-context-XXXXXX",
-                     scratch ? scratch : ".") > 0);
+                     scratch ? scratch : "/tmp") > 0);
     assert(mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
     snj_store_init(&store);

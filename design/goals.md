@@ -135,7 +135,8 @@ When a model turn ends:
    automatic continuation. No fresh goal-controller reminder is projected
    throughout those turns, including the final dequeued item, or whenever
    another item remains pending. A paused/unarmed queue also prevents goal
-   continuation until `/next` or queue removal; it is never bypassed. Historical
+   continuation until `/next`, explicit goal start/resume, or queue removal;
+   an open queue editor always prevents draining. It is never bypassed. Historical
    goal mentions remain conversation context, and already-frozen requests are
    not retroactively changed. A `/ro` query exposes no goal lifecycle tools.
 4. A refusal pauses the goal instead of repeating the same refusal.

@@ -1223,7 +1223,7 @@ test_native_read_tools(void)
     assert(!*snj_prompt_parse("/ro  \t", &read_only) && read_only);
     assert(strcmp(snj_prompt_parse("//ro inspect", &read_only), "/ro inspect") == 0 && !read_only);
     assert(strcmp(snj_prompt_parse("/root", &read_only), "/root") == 0 && !read_only);
-    assert(snprintf(temp, sizeof(temp), "%s/ro-tools-XXXXXX", scratch ? scratch : ".") > 0);
+    assert(snprintf(temp, sizeof(temp), "%s/ro-tools-XXXXXX", scratch ? scratch : "/tmp") > 0);
     assert(mkdtemp(temp));
     join_path(path, sizeof(path), temp, "a ; echo nope");
     write_text_file(path, "Alpha\nβeta\nlast");
@@ -1237,7 +1237,10 @@ test_native_read_tools(void)
     assert(mkfifo(path, 0600) == 0);
     join_path(path, sizeof(path), temp, "binary");
     file = fopen(path, "wb");
-    assert(file && fwrite("\0bin\n", 1u, 5u, file) == 5u && fclose(file) == 0);
+    assert(file);
+    for (size_t i = 0; i < 70000u; ++i)
+        assert(fputc(0, file) != EOF);
+    assert(fclose(file) == 0);
 
     check_read_tool(temp, "read_file", "{\"path\":\"a ; echo nope\",\"start_line\":null,\"end_line\":null}",
         true, "1:Alpha\n2:βeta\n3:last", NULL);
