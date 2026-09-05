@@ -499,23 +499,30 @@ public_stopped(struct snj_ui_runtime *runtime)
 }
 
 static int
-apply_public(struct snj_ui_display *display, struct ui_message *message)
+apply_display(struct snj_ui_display *display, struct ui_message *message)
 {
     struct snj_ui_runtime *runtime = display->runtime;
     size_t offset = 0u;
+    bool raw = message->kind == UI_RAW;
+
+    if (!raw && message->kind != UI_PUBLIC)
+        return apply_message(display, message,
+                             message->error, sizeof(message->error));
     while (offset < message->len) {
         size_t amount = message->len - offset;
         if (amount > 1024u)
             amount = 1024u;
         if (read_input(display, 0) < 0)
             return -1;
-        while (!public_stopped(runtime) &&
+        while (!raw && !public_stopped(runtime) &&
                snj_term_typing_pause_remaining(&display->term, snj_monotonic_ms()))
             if (read_input(display, 16) < 0)
                 return -1;
-        if (public_stopped(runtime))
+        if (!raw && public_stopped(runtime))
             return 0;
-        if (message->data.public.rollout ?
+        if (raw ? snj_term_write((int)message->data.value,
+                                 message->text + offset, amount) < 0 :
+            message->data.public.rollout ?
             snj_render_rollout(&display->render, message->text + offset, amount,
                                 &message->delivered) < 0 :
             snj_render_public(&display->render, message->text + offset, amount,
@@ -524,29 +531,6 @@ apply_public(struct snj_ui_display *display, struct ui_message *message)
         offset += amount;
     }
     return 0;
-}
-
-static int
-apply_display(struct snj_ui_display *display, struct ui_message *message)
-{
-    if (message->kind == UI_PUBLIC)
-        return apply_public(display, message);
-    if (message->kind == UI_RAW) {
-        size_t offset = 0u;
-        while (offset < message->len) {
-            size_t amount = message->len - offset;
-            if (amount > 1024u)
-                amount = 1024u;
-            if (read_input(display, 0) < 0 ||
-                snj_term_write((int)message->data.value,
-                               message->text + offset, amount) < 0)
-                return -1;
-            offset += amount;
-        }
-        return 0;
-    }
-    return apply_message(display, message,
-                         message->error, sizeof(message->error));
 }
 
 static void *
