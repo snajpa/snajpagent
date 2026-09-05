@@ -7,6 +7,7 @@
 #include "cli.h"
 #include "config.h"
 #include "credential.h"
+#include "auth.h"
 #include "instructions.h"
 #include "irc.h"
 #include "model_cache.h"

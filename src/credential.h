@@ -4,11 +4,15 @@
 
 #include <stddef.h>
 
-#define SNJ_CREDENTIAL_MAX 4096u
+#define SNJ_CREDENTIAL_MAX 16384u
+#define SNJ_ACCOUNT_ID_MAX 128u
 
 struct snj_credential {
     char value[SNJ_CREDENTIAL_MAX + 1u];
     size_t len;
+    char account_id[SNJ_ACCOUNT_ID_MAX + 1u];
+    /* Borrowed dotdir fd for provider-scoped reacquisition, never closed here. */
+    int root_fd;
 };
 
 int snj_credential_read(struct snj_credential *credential,

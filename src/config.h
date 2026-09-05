@@ -54,8 +54,17 @@ enum snj_token_count_mode {
     SNJ_TOKEN_COUNT_STRICT
 };
 
+enum snj_auth_kind {
+    SNJ_AUTH_ENV,
+    SNJ_AUTH_API_KEY,
+    SNJ_AUTH_CHATGPT
+};
+
+#define SNJ_CHATGPT_BASE "https://chatgpt.com/backend-api/codex"
+
 struct snj_provider_config {
     char name[SNJ_CONFIG_PROVIDER_NAME_MAX + 1u];
+    enum snj_auth_kind auth;
     uint32_t connect_timeout_ms;
     uint32_t idle_timeout_ms;
     uint32_t request_timeout_ms;
@@ -131,6 +140,12 @@ int snj_config_save_model(const char *path, bool allow_create,
                           const char *provider, const char *model,
                           const char *effort,
                           char *error, size_t error_size);
+int snj_config_save_provider(const char *path, bool allow_create,
+                             const struct snj_provider_config *provider,
+                             const char *initial_model, const char *effort,
+                             char *error, size_t error_size);
+int snj_config_validate_provider(const struct snj_provider_config *provider,
+                                 char *error, size_t error_size);
 int snj_config_prompt_expand(const char *text, unsigned int mode,
                              const char *const values[SNJ_PROMPT_FIELD_COUNT],
                              unsigned char marker,

@@ -11,6 +11,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -20,6 +21,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define REQUEST_MAX (64u * 1024u)
@@ -58,8 +60,17 @@ enum model_fixture {
     MODEL_COUNT_405,
     MODEL_COUNT_501,
     MODEL_COUNT_401,
-    MODEL_COUNT_403
+    MODEL_COUNT_403,
+    MODEL_AUTH_DEVICE,
+    MODEL_AUTH_CANCEL,
+    MODEL_AUTH_EXPIRED,
+    MODEL_AUTH_REFRESH,
+    MODEL_AUTH_REFRESH_FAILURE,
+    MODEL_AUTH_401,
+    MODEL_AUTH_401_TWICE
 };
+
+static bool authentication_fixture;
 
 static void
 write_all_or_die(int fd, const char *data, size_t len)
@@ -161,12 +172,13 @@ read_request(int fd, struct http_request *request)
                      request->method, request->path);
     if (matched != 2)
         server_fail("unexpected request line");
-    if (!header_contains(request->headers, "Authorization: Bearer transport-secret"))
+    if (!authentication_fixture &&
+        !header_contains(request->headers, "Authorization: Bearer transport-secret"))
         server_fail("authorization header missing or unredacted differently");
-    if (!header_contains(request->headers,
+    if (!authentication_fixture && !header_contains(request->headers,
                          "HTTP-Referer: https://github.com/snajpa/snajpagent"))
         server_fail("OpenRouter referer header missing");
-    if (!header_contains(request->headers,
+    if (!authentication_fixture && !header_contains(request->headers,
                          "X-OpenRouter-Title: snajpagent"))
         server_fail("OpenRouter title header missing");
     if (!header_contains(request->headers,
@@ -255,8 +267,75 @@ serve_one(int listen_fd, const char *method, const char *path,
 }
 
 static void
+auth_server_child(int listen_fd, enum model_fixture fixture)
+{
+    static const char tokens[] =
+        "{\"access_token\":\"new-access\",\"refresh_token\":\"new-refresh\",\"expires_in\":3600,"
+        "\"id_token\":\"e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC10ZXN0In19.sig\"}";
+    unsigned int count = fixture == MODEL_AUTH_DEVICE ? 4u :
+        fixture == MODEL_AUTH_CANCEL || fixture == MODEL_AUTH_EXPIRED ? 2u :
+        fixture >= MODEL_AUTH_401 ? 3u : 1u;
+
+    authentication_fixture = true;
+    (void)alarm(15u);
+    for (unsigned int i = 0; i < count; ++i) {
+        struct http_request request;
+        const char *body = tokens;
+        unsigned int status = 200u;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0)
+            server_fail("auth accept failed");
+        read_request(fd, &request);
+        if (fixture <= MODEL_AUTH_EXPIRED) {
+            const char *path = i == 0u ? "/api/accounts/deviceauth/usercode" :
+                i == 3u ? "/oauth/token" : "/api/accounts/deviceauth/token";
+            if (strcmp(request.path, path))
+                server_fail("incorrect device flow path");
+            if (i == 0u) {
+                if (!strstr(request.body, "app_EMoamEEZ73f0CkXaXp7hrann"))
+                    server_fail("missing device client identifier");
+                body = "{\"device_auth_id\":\"device-id\",\"user_code\":\"CODE-1234\",\"interval\":\"1\"}";
+            } else if (i == 1u) {
+                status = fixture == MODEL_AUTH_EXPIRED ? 410u : 403u;
+                body = "{}";
+            } else if (i == 2u) {
+                body = "{\"authorization_code\":\"auth-code\",\"code_verifier\":\"verifier\",\"code_challenge\":\"challenge\"}";
+            } else if (!strstr(request.body, "grant_type=authorization_code") ||
+                       !strstr(request.body, "code_verifier=verifier")) {
+                server_fail("missing PKCE code exchange");
+            }
+        } else if (fixture >= MODEL_AUTH_401 && i != 1u) {
+            if (strcmp(request.path, "/models?client_version=0.146.0") ||
+                !strstr(request.headers, "ChatGPT-Account-Id: acct-test") ||
+                !strstr(request.headers, i == 0u ? "Bearer old-access" : "Bearer new-access"))
+                server_fail("wrong Codex account or access header");
+            if (i == 0u || fixture == MODEL_AUTH_401_TWICE) {
+                status = 401u;
+                body = "{\"error\":{\"message\":\"not authorized\"}}";
+            } else {
+                body = "{\"models\":[{\"slug\":\"gpt-5.6-luna\",\"visibility\":\"list\",\"default_reasoning_level\":\"high\",\"supported_reasoning_levels\":[{\"effort\":\"high\"}]}]}";
+            }
+        } else {
+            if (strcmp(request.path, "/oauth/token") ||
+                !strstr(request.body, "\"grant_type\":\"refresh_token\"") ||
+                !strstr(request.body, "old-refresh"))
+                server_fail("wrong refresh request");
+            if (fixture == MODEL_AUTH_REFRESH_FAILURE) {
+                status = 401u;
+                body = "{\"error\":\"private-refresh-server-detail\"}";
+            }
+        }
+        send_status(fd, status, body);
+        (void)close(fd);
+    }
+    _exit(0);
+}
+
+static void
 server_child(int listen_fd, enum model_fixture models, bool transport)
 {
+    if (models >= MODEL_AUTH_DEVICE)
+        auth_server_child(listen_fd, models);
     static const char create_sse[] =
         "event: response.created\n"
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_transport\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
@@ -1184,9 +1263,155 @@ test_ui_output_order_and_failure(void)
     snj_ui_free(&ui);
 }
 
+static int
+cancel_device_poll(void *opaque, uint32_t wait_ms)
+{
+    (void)opaque;
+    return wait_ms ? 2 : 0;
+}
+
+static void
+test_provider_auth(void)
+{
+    struct snj_config config;
+    struct snj_store store;
+    struct snj_auth_tokens tokens, previous, loaded;
+    struct snj_credential credential;
+    struct local_server server;
+    char path[4096], endpoint[128], error[256] = {0};
+    const char *tmp = getenv("TMPDIR");
+    struct stat st;
+    int status;
+
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-auth-XXXXXX", tmp ? tmp : "/tmp") > 0);
+    assert(mkdtemp(path));
+    snj_config_init(&config);
+    snj_store_init(&store);
+    assert(snj_store_open(&store, path, error, sizeof(error)) == 0);
+    config.providers[0].auth = SNJ_AUTH_API_KEY;
+    assert(snj_auth_load(store.root_fd, &config.providers[0], &tokens, error, sizeof(error)) == 1);
+    assert(snj_auth_key(&tokens, "stored-key", error, sizeof(error)) == 0);
+    assert(snj_auth_save(store.root_fd, &config.providers[0], &tokens, &previous,
+                          NULL, NULL, error, sizeof(error)) == 0);
+    assert(!previous.credential.len);
+    assert(fstatat(store.root_fd, "auth/default.json", &st, AT_SYMLINK_NOFOLLOW) == 0);
+    assert((st.st_mode & 0777u) == 0600u);
+    assert(snj_auth_read(store.root_fd, &config.providers[0], false, NULL, &credential,
+                         NULL, NULL, error, sizeof(error)) == 0);
+    assert(strcmp(credential.value, "stored-key") == 0);
+    assert(credential.root_fd == store.root_fd);
+    config.providers[1] = config.providers[0];
+    strcpy(config.providers[1].name, "other");
+    assert(snj_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) == 1);
+    strcpy(config.providers[0].base_url, "https://different.test");
+    assert(snj_auth_load(store.root_fd, &config.providers[0], &loaded, error, sizeof(error)) < 0);
+    strcpy(config.providers[0].base_url, "https://api.openai.com");
+    assert(fchmodat(store.root_fd, "auth/default.json", 0644, 0) == 0);
+    assert(snj_auth_load(store.root_fd, &config.providers[0], &loaded, error, sizeof(error)) < 0);
+    assert(fchmodat(store.root_fd, "auth/default.json", 0600, 0) == 0);
+    assert(snj_auth_key(&tokens, "replacement", error, sizeof(error)) == 0);
+    assert(snj_auth_save(store.root_fd, &config.providers[0], &tokens, &previous,
+                          NULL, NULL, error, sizeof(error)) == 0);
+    assert(snj_auth_restore(store.root_fd, &config.providers[0], &tokens, &previous,
+                             error, sizeof(error)) == 0);
+    assert(snj_auth_load(store.root_fd, &config.providers[0], &loaded, error, sizeof(error)) == 0);
+    assert(strcmp(loaded.credential.value, "stored-key") == 0);
+    assert(snj_auth_logout(store.root_fd, &config.providers[0], NULL, NULL, error, sizeof(error)) == 0);
+    assert(symlinkat("outside", store.root_fd, "auth/default.json") == 0);
+    assert(snj_auth_load(store.root_fd, &config.providers[0], &loaded, error, sizeof(error)) < 0);
+    assert(snj_auth_save(store.root_fd, &config.providers[0], &tokens, &previous,
+                          NULL, NULL, error, sizeof(error)) < 0);
+    assert(unlinkat(store.root_fd, "auth/default.json", 0) == 0);
+
+    config.providers[0].auth = SNJ_AUTH_CHATGPT;
+    strcpy(config.providers[0].base_url, SNJ_CHATGPT_BASE);
+    for (int mode = MODEL_AUTH_DEVICE; mode <= MODEL_AUTH_EXPIRED; ++mode) {
+        start_server(&server, (enum model_fixture)mode, false);
+        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
+        assert(setenv("SNAJPAGENT_TEST_AUTH_BASE", endpoint, 1) == 0);
+        error[0] = '\0';
+        int rc = snj_auth_device(&tokens, mode == MODEL_AUTH_CANCEL ? cancel_device_poll : NULL,
+                                  NULL, error, sizeof(error));
+        if (mode == MODEL_AUTH_DEVICE) {
+            assert(rc == 0);
+            assert(strcmp(tokens.credential.value, "new-access") == 0);
+            assert(strcmp(tokens.credential.account_id, "acct-test") == 0);
+            assert(strcmp(tokens.refresh_token, "new-refresh") == 0);
+            assert(tokens.expires_at_ms > snj_time_ms());
+        } else {
+            assert(rc < 0);
+            assert(tokens.credential.len == 0u);
+        }
+        stop_server(&server);
+    }
+    for (int mode = MODEL_AUTH_REFRESH; mode <= MODEL_AUTH_401_TWICE; ++mode) {
+        assert(snj_auth_key(&tokens, "old-access", error, sizeof(error)) == 0);
+        strcpy(tokens.refresh_token, "old-refresh");
+        strcpy(tokens.credential.account_id, "acct-test");
+        tokens.expires_at_ms = mode >= MODEL_AUTH_401 ? snj_time_ms() + 3600000u : 1u;
+        assert(snj_auth_save(store.root_fd, &config.providers[0], &tokens, NULL,
+                              NULL, NULL, error, sizeof(error)) == 0);
+        start_server(&server, (enum model_fixture)mode, false);
+        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
+        assert(setenv("SNAJPAGENT_TEST_AUTH_BASE", endpoint, 1) == 0);
+        error[0] = '\0';
+        if (mode == MODEL_AUTH_REFRESH) {
+            pid_t children[2];
+            for (size_t i = 0; i < 2u; ++i) {
+                children[i] = fork();
+                assert(children[i] >= 0);
+                if (children[i] == 0) {
+                    int rc = snj_auth_read(store.root_fd, &config.providers[0], false,
+                        NULL, &credential, NULL, NULL, error, sizeof(error));
+                    _exit(rc == 0 && strcmp(credential.value, "new-access") == 0 ? 0 : 1);
+                }
+            }
+            for (size_t i = 0; i < 2u; ++i) {
+                assert(waitpid(children[i], &status, 0) == children[i]);
+                assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            }
+            assert(snj_auth_load(store.root_fd, &config.providers[0], &loaded, error, sizeof(error)) == 0);
+            assert(strcmp(loaded.refresh_token, "new-refresh") == 0);
+        } else if (mode == MODEL_AUTH_REFRESH_FAILURE) {
+            assert(snj_auth_read(store.root_fd, &config.providers[0], false, NULL,
+                &credential, NULL, NULL, error, sizeof(error)) < 0);
+            assert(!strstr(error, "private-refresh-server-detail"));
+            assert(snj_auth_load(store.root_fd, &config.providers[0], &loaded, error, sizeof(error)) == 0);
+            assert(strcmp(loaded.refresh_token, "old-refresh") == 0);
+        } else {
+            json_t *models = NULL;
+            assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+            assert(snj_auth_read(store.root_fd, &config.providers[0], false, NULL,
+                &credential, NULL, NULL, error, sizeof(error)) == 0);
+            int rc = snj_provider_models_list(&config, &config.providers[0], &credential,
+                NULL, NULL, NULL, &models, error, sizeof(error));
+            assert((rc == 0) == (mode == MODEL_AUTH_401));
+            if (rc == 0)
+                assert(json_array_size(models) == 1u);
+            json_decref(models);
+            assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
+        }
+        stop_server(&server);
+    }
+    assert(unsetenv("SNAJPAGENT_TEST_AUTH_BASE") == 0);
+    assert(snj_auth_logout(store.root_fd, &config.providers[0], NULL, NULL, error, sizeof(error)) == 0);
+    assert(unlinkat(store.root_fd, "auth/default.lock", 0) == 0);
+    assert(unlinkat(store.root_fd, "auth", AT_REMOVEDIR) == 0);
+    assert(unlinkat(store.root_fd, "sessions", AT_REMOVEDIR) == 0);
+    assert(unlinkat(store.root_fd, "trash", AT_REMOVEDIR) == 0);
+    snj_store_close(&store);
+    assert(rmdir(path) == 0);
+    snj_config_free(&config);
+    snj_auth_clear(&tokens);
+    snj_auth_clear(&previous);
+    snj_auth_clear(&loaded);
+    snj_credential_clear(&credential);
+}
+
 int
 main(void)
 {
+    test_provider_auth();
     test_ui_output_order_and_failure();
     test_read_only_dispatch();
     test_local_provider_transport();

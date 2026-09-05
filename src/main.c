@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app.h"
 #include "cli.h"
+#include "login.h"
 #include "render.h"
 #include "snajpagent.h"
 
@@ -43,7 +44,12 @@ main(int argc, char **argv)
         snj_cli_free(&cli);
         return 0;
     }
-    rc = snj_app_run(&cli, argv[0]);
+    {
+        bool handled = false;
+        rc = snj_login_dispatch(&cli, &handled);
+        if (!handled)
+            rc = snj_app_run(&cli, argv[0]);
+    }
     snj_cli_free(&cli);
     return rc;
 }

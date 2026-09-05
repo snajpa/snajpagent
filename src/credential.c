@@ -46,7 +46,7 @@ snj_credential_read(struct snj_credential *credential,
     if (!len || len > SNJ_CREDENTIAL_MAX) {
         errno = EINVAL;
         (void)snprintf(error, error_size,
-                       "%s must contain 1..4096 printable ASCII bytes",
+                       "%s must contain 1..16384 printable ASCII bytes",
                        effective_env);
         return -1;
     }

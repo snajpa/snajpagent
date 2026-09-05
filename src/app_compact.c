@@ -472,9 +472,9 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
     }
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (!credential) {
-        if (snj_credential_read(&owned_credential,
-                                app->turn_provider->api_key_env,
-                                error, error_size) < 0)
+        if (snj_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
+                          &owned_credential, snj_app_active_input_pump, app,
+                          error, error_size) < 0)
             goto out;
         credential = &owned_credential;
     }

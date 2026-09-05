@@ -2,6 +2,7 @@
 #include "provider.h"
 
 #include "base.h"
+#include "auth.h"
 #include "provider_retry.h"
 #include "context.h"
 #include "json.h"
@@ -29,6 +30,7 @@ struct provider_ctx {
     struct snj_buf body;
     struct snj_buf error_body;
     struct snj_secret_set secrets;
+    struct snj_credential credential;
     struct curl_slist *headers;
     CURL *curl;
     const struct snj_config *config;
@@ -36,6 +38,8 @@ struct provider_ctx {
     struct snj_ui *render;
     snj_provider_pump_fn pump;
     void *pump_opaque;
+    const char *accept;
+    bool has_body;
     long http_status;
     int cancel_code;
     uint32_t retry_after_ms;
@@ -358,6 +362,8 @@ provider_endpoint_url(const struct snj_provider_config *provider,
         return -1;
     }
     append_path = path;
+    if (provider->auth == SNJ_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
+        append_path = path + 3u;
     base_len = strlen(provider->base_url);
     while (base_len && provider->base_url[base_len - 1u] == '/')
         --base_len;
@@ -373,12 +379,14 @@ provider_endpoint_url(const struct snj_provider_config *provider,
         return -1;
     }
     *url = buffer;
-#ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+#if defined(SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS) || defined(SNAJPAGENT_TEST_FIXTURE)
     {
         const char *base = getenv("SNAJPAGENT_TEST_OPENAI_BASE");
         if (!base || !*base)
             return 0;
         append_path = path;
+        if (provider->auth == SNJ_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
+            append_path = path + 3u;
         base_len = strlen(base);
         while (base_len && base[base_len - 1u] == '/')
             --base_len;
@@ -450,6 +458,8 @@ append_provider_headers(struct curl_slist **headers,
                         const struct snj_credential *credential)
 {
     return append_authorization(headers, credential) == 0 &&
+           append_named_header(headers, "ChatGPT-Account-Id",
+                               credential->account_id) == 0 &&
            append_named_header(headers, "HTTP-Referer",
                                provider->openrouter_referer) == 0 &&
            append_named_header(headers, "X-OpenRouter-Title",
@@ -1261,7 +1271,8 @@ provider_ctx_init(struct provider_ctx *ctx, const struct snj_config *config,
     ctx->render = render;
     ctx->pump = pump;
     ctx->pump_opaque = pump_opaque;
-    snj_secret_set_build(&ctx->secrets, config, credential);
+    ctx->credential = *credential;
+    snj_secret_set_build(&ctx->secrets, config, &ctx->credential);
     snj_buf_init(&ctx->body, body_max);
     snj_buf_init(&ctx->error_body, response_max);
 }
@@ -1278,6 +1289,19 @@ provider_ctx_free(struct provider_ctx *ctx)
     snj_buf_free(&ctx->error_body);
     snj_sse_free(&ctx->sse);
     snj_responses_stream_free(&ctx->stream);
+    snj_credential_clear(&ctx->credential);
+}
+
+static int
+request_auth_headers(struct provider_ctx *ctx)
+{
+    curl_slist_free_all(ctx->headers);
+    ctx->headers = NULL;
+    if (append_named_header(&ctx->headers, "Accept", ctx->accept) < 0 ||
+        (ctx->has_body && append_header(&ctx->headers, "Content-Type: application/json") < 0) ||
+        append_provider_headers(&ctx->headers, ctx->provider, &ctx->credential) < 0)
+        return -1;
+    return 0;
 }
 
 static int
@@ -1294,6 +1318,14 @@ provider_request_setup(struct provider_ctx *ctx,
     bool has_body = request != NULL;
     int written;
 
+    ctx->accept = accept;
+    ctx->has_body = has_body;
+    if (ctx->provider->auth != SNJ_AUTH_ENV && credential->root_fd >= 0 &&
+        snj_auth_read(credential->root_fd, ctx->provider, false, NULL,
+                      &ctx->credential, ctx->pump, ctx->pump_opaque,
+                      error, error_size) < 0)
+        return -1;
+    snj_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
     if (has_body && snj_json_canonical(request, &ctx->body) < 0) {
         snj_errorf(error, error_size, "%s", body_error);
         return -1;
@@ -1321,10 +1353,7 @@ provider_request_setup(struct provider_ctx *ctx,
         errno = ENOMEM;
         return -1;
     }
-    if (append_named_header(&ctx->headers, "Accept", accept) < 0 ||
-        (has_body &&
-         append_header(&ctx->headers, "Content-Type: application/json") < 0) ||
-        append_provider_headers(&ctx->headers, ctx->provider, credential) < 0) {
+    if (request_auth_headers(ctx) < 0) {
         snj_errorf(error, error_size, "provider headers could not be allocated");
         return -1;
     }
@@ -1374,6 +1403,25 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
     unsigned int *retry_out = retry_count ? retry_count : &retries;
     CURLcode code = perform_with_retry(ctx->curl, ctx, error, error_size,
                                        cancel_code, retry_out);
+
+    if (code == CURLE_OK && ctx->http_status == 401 &&
+        ctx->provider->auth == SNJ_AUTH_CHATGPT && ctx->credential.root_fd >= 0 &&
+        !ctx->semantic_body_seen) {
+        struct snj_credential refreshed;
+        int rc = snj_auth_read(ctx->credential.root_fd, ctx->provider, true,
+                               ctx->credential.value, &refreshed, ctx->pump,
+                               ctx->pump_opaque, error, error_size);
+        if (rc < 0)
+            return -1;
+        ctx->credential = refreshed;
+        snj_credential_clear(&refreshed);
+        snj_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
+        if (request_auth_headers(ctx) < 0 ||
+            curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK)
+            return -1;
+        code = perform_with_retry(ctx->curl, ctx, error, error_size,
+                                   cancel_code, retry_out);
+    }
 
     if (code == CURLE_ABORTED_BY_CALLBACK &&
         (ctx->cancel_code == 1 || ctx->cancel_code == 2)) {
@@ -1466,6 +1514,13 @@ snj_provider_responses_count(const json_t *count_request,
         return -1;
     }
     *input_tokens = 0u;
+    if (provider->auth == SNJ_AUTH_CHATGPT) {
+        if (endpoint_unsupported)
+            *endpoint_unsupported = true;
+        snj_errorf(error, error_size, "direct Codex does not provide exact input-token preflight");
+        errno = ENOTSUP;
+        return -1;
+    }
     provider_ctx_init(&ctx, config, provider, credential, render, pump,
                       pump_opaque, SNJ_CONTEXT_MAX_REQUEST, SNJ_WIRE_BODY_MAX);
     if (provider_request_setup(&ctx, credential,

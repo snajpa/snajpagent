@@ -1900,6 +1900,89 @@ def test_uncached_typed_model_selection():
             os.environ["CODEX_HOME"] = previous_codex_home
 
 
+def test_provider_login_and_first_run():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "login-tests"
+    root.mkdir()
+    env = dict(os.environ)
+    env["SNAJPAGENT_TEST_LOGIN"] = "1"
+    env.pop("OPENAI_API_KEY", None)
+    api = root / "api"
+    command = [BINARY, "--dotdir", str(api), "-m", "vendor/model", "login",
+               "openrouter", "--with-api-key"]
+    result = subprocess.run(command, input=b"private-test-key\n", capture_output=True,
+                            env=env, timeout=10)
+    assert result.returncode == 0, result.stderr
+    config = api / "config.ini"
+    auth = api / "auth" / "openrouter.json"
+    assert "private-test-key" not in config.read_text()
+    assert "auth = api_key" in config.read_text()
+    assert "native_compaction = false" in config.read_text()
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert auth.stat().st_mode & 0o777 == 0o600
+    original = config.read_bytes()
+    result = subprocess.run([BINARY, "--dotdir", str(api), "login", "status"],
+                            capture_output=True, env=env, timeout=10)
+    assert result.returncode == 0 and b"openrouter: api_key (stored)" in result.stdout
+    assert b"private-test-key" not in result.stdout + result.stderr
+    result = subprocess.run([BINARY, "--dotdir", str(api), "login", "openai",
+                             "--with-api-key"], input=b"second-private-key\n",
+                            capture_output=True, env=env, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "provider = openrouter" in config.read_text()
+    assert "model = vendor/model" in config.read_text()
+    assert (api / "auth" / "openai.json").exists()
+    result = subprocess.run([BINARY, "--dotdir", str(api), "logout", "openrouter"],
+                            capture_output=True, env=env, timeout=10)
+    assert result.returncode == 0 and not auth.exists()
+    assert (api / "auth" / "openai.json").exists()
+    missing = root / "missing"
+    result = subprocess.run([BINARY, "--dotdir", str(missing), "--config",
+                             str(root / "absent.ini"), "login", "openrouter",
+                             "--with-api-key"], input=b"not-saved\n", capture_output=True,
+                            env=env, timeout=10)
+    assert result.returncode != 0 and not missing.exists()
+    config.write_text("[unknown]\nvalue=1\n")
+    result = subprocess.run(command, input=b"not-saved\n", capture_output=True,
+                            env=env, timeout=10)
+    assert result.returncode != 0 and not auth.exists()
+    config.write_bytes(original)
+
+    prior = os.environ.get("SNAJPAGENT_TEST_LOGIN")
+    os.environ["SNAJPAGENT_TEST_LOGIN"] = "1"
+    try:
+        for cancel in (True, False):
+            fresh = root / ("cancelled" if cancel else "first-run")
+            child = Child.from_command(shlex.join([BINARY, "--dotdir", str(fresh)]))
+            try:
+                child.wait(b"Provider: ")
+                child.send(b"openrouter\n")
+                child.wait(b"API key (hidden;")
+                child.send(b"hidden-first-run-key\n")
+                end = child.wait(b"Fetch this provider's model list now?")
+                assert b"hidden-first-run-key" not in child.buf
+                if cancel:
+                    child.send(b"\x03")
+                    child.finish(expected=2, expect_resume=False)
+                    assert not (fresh / "config.ini").exists()
+                    assert not (fresh / "auth").exists()
+                else:
+                    child.send(b"n\n")
+                    child.wait(b"Model number or exact model ID: ", start=end)
+                    child.send(b"vendor/model\n")
+                    end = child.wait(b"Default model: openrouter / vendor/model")
+                    child.wait(PROMPT, start=end)
+                    child.exit_now()
+                    assert (fresh / "auth" / "openrouter.json").exists()
+                    assert b"hidden-first-run-key" not in child.buf
+            finally:
+                child.kill()
+    finally:
+        if prior is None:
+            os.environ.pop("SNAJPAGENT_TEST_LOGIN", None)
+        else:
+            os.environ["SNAJPAGENT_TEST_LOGIN"] = prior
+
+
 def test_compaction_policy_selection():
     cache_path = Path(DOTDIR) / "models.json"
     old_cache = cache_path.read_bytes() if cache_path.exists() else None
@@ -3839,6 +3922,7 @@ if __name__ == "__main__":
     test_preferences_and_verbosity()
     test_command_name_completion()
     test_uncached_typed_model_selection()
+    test_provider_login_and_first_run()
     test_compaction_policy_selection()
     test_model_cache_and_selection()
     test_model_configuration_save()

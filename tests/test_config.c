@@ -97,6 +97,53 @@ test_compact_setting(const char *path)
 }
 
 static void
+test_auth_settings(const char *path)
+{
+    struct snj_config config;
+    struct snj_provider_config provider;
+    char error[256] = {0};
+    static const char initial[] = "# retain this\n[ui]\nverbosity=2\n";
+    static const char invalid[] = "[provider]\nauth=chatgpt\nbase_url=https://other.test\n";
+    static const char duplicate[] = "[provider]\nauth=env\nauth=api_key\n";
+
+    write_bytes(path, invalid, sizeof(invalid) - 1u);
+    expect_invalid(path);
+    write_bytes(path, duplicate, sizeof(duplicate) - 1u);
+    expect_invalid(path);
+    write_bytes(path, initial, sizeof(initial) - 1u);
+    snj_config_init(&config);
+    provider = config.providers[0];
+    strcpy(provider.name, "openrouter");
+    strcpy(provider.base_url, "https://openrouter.ai/api/v1");
+    strcpy(provider.api_key_env, "OPENROUTER_API_KEY");
+    provider.auth = SNJ_AUTH_API_KEY;
+    provider.native_compaction = false;
+    assert(snj_config_save_provider(path, false, &provider, NULL, NULL,
+                                     error, sizeof(error)) == 0);
+    assert(snj_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+    assert(config.provider_count == 2u);
+    assert(strcmp(config.providers[0].name, "default") == 0);
+    assert(config.providers[0].auth == SNJ_AUTH_ENV);
+    assert(config.providers[1].auth == SNJ_AUTH_API_KEY);
+    assert(!config.providers[1].native_compaction);
+    assert(config.verbosity == 2u);
+    snj_config_free(&config);
+    provider.auth = SNJ_AUTH_CHATGPT;
+    assert(snj_config_validate_provider(&provider, error, sizeof(error)) < 0);
+    strcpy(provider.base_url, SNJ_CHATGPT_BASE);
+    assert(snj_config_validate_provider(&provider, error, sizeof(error)) == 0);
+    assert(snj_config_save_provider(path, false, &provider, "chosen/model", "high",
+                                     error, sizeof(error)) == 0);
+    snj_config_init(&config);
+    assert(snj_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+    assert(config.provider_count == 2u);
+    assert(config.providers[1].auth == SNJ_AUTH_CHATGPT);
+    assert(strcmp(config.provider, "openrouter") == 0);
+    assert(strcmp(config.model, "chosen/model") == 0);
+    snj_config_free(&config);
+}
+
+static void
 test_prompt_numbers(const char *path)
 {
     const char *values[SNJ_PROMPT_FIELD_COUNT] = {
@@ -522,6 +569,7 @@ main(void)
     }
 
     test_compact_setting(path);
+    test_auth_settings(path);
     test_prompt_numbers(path);
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
     assert(symlink(path, link_path) == 0);

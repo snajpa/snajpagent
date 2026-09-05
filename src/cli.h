@@ -20,7 +20,18 @@ enum snj_cli_markdown_mode {
     SNJ_CLI_MARKDOWN_DISABLED
 };
 
+enum snj_cli_auth_command {
+    SNJ_CLI_AUTH_NONE,
+    SNJ_CLI_LOGIN,
+    SNJ_CLI_LOGIN_STATUS,
+    SNJ_CLI_LOGOUT
+};
+
 struct snj_cli {
+    enum snj_cli_auth_command auth_command;
+    bool device_auth;
+    bool with_api_key;
+    char *auth_provider;
     bool resume;
     bool execute;
     bool list;

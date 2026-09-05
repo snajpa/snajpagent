@@ -2585,8 +2585,9 @@ run_turn(struct app_state *app, const char *prompt,
     }
     provider_capacity_source_sha256(app->turn_provider, provider_source_hash);
 #ifndef SNAJPAGENT_TEST_FIXTURE
-    if (snj_credential_read(&credential, app->turn_provider->api_key_env,
-                            error, sizeof(error)) < 0) {
+    if (snj_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
+                      &credential, snj_app_active_input_pump, app,
+                      error, sizeof(error)) < 0) {
         (void)app_error(app, error);
         snj_credential_clear(&credential);
         return 2;
@@ -3512,8 +3513,8 @@ current_workspace(char *error, size_t error_size)
 {
     return resolve_workspace_path(".", "current", error, error_size);
 }
-static char *
-resolve_dotdir(const char *override, char *error, size_t error_size)
+char *
+snj_app_dotdir(const char *override, char *error, size_t error_size)
 {
     const char *home = getenv("HOME");
     char *path;
@@ -4145,7 +4146,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         }
     }
     error[0] = '\0';
-    dotdir = resolve_dotdir(cli->dotdir, error, sizeof(error));
+    dotdir = snj_app_dotdir(cli->dotdir, error, sizeof(error));
     if (!dotdir) {
         (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
                                    error[0] ? error : "dotdir is unavailable");

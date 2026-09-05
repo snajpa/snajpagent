@@ -173,8 +173,8 @@ fail:
     struct snj_credential credential;
     int rc;
     snj_credential_clear(&credential);
-    if (snj_credential_read(&credential, provider->api_key_env,
-                            error, error_size) < 0)
+    if (snj_auth_read(app->store.root_fd, provider, false, NULL, &credential,
+                      snj_app_active_input_pump, app, error, error_size) < 0)
         return -1;
     rc = snj_provider_models_list(app->config, provider, &credential,
                                   &app->ui, snj_app_active_input_pump, app,

@@ -1603,6 +1603,8 @@ static json_t *
 create_request_object(struct context_builder *builder)
 {
     json_t *request = json_object();
+    const struct snj_provider_config *provider = snj_config_provider(
+        builder->config, builder->session->active_turn_provider);
     bool goal_active = builder->session &&
                        builder->session->goal_status == SNJ_GOAL_ACTIVE;
     bool goal_create_allowed = builder->session &&
@@ -1633,6 +1635,21 @@ create_request_object(struct context_builder *builder)
                      json_integer((json_int_t)builder->max_output_tokens)) < 0) {
         json_decref(request);
         return NULL;
+    }
+    if (provider && provider->auth == SNJ_AUTH_CHATGPT) {
+        json_t *include = json_array();
+        (void)json_object_del(request, "truncation");
+        (void)json_object_del(request, "max_output_tokens");
+        if (!include || json_array_append_new(include, json_string("reasoning.encrypted_content")) < 0) {
+            json_decref(include);
+            json_decref(request);
+            return NULL;
+        }
+        if (snj_json_set_new(request, "include", include) < 0 ||
+            snj_json_set_new(request, "instructions", json_string("")) < 0) {
+            json_decref(request);
+            return NULL;
+        }
     }
     return request;
 }

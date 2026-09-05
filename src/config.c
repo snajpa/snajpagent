@@ -751,6 +751,19 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "request_timeout_ms") == 0)
         return claim_key(state, 2u) < 0 ? -1 :
                parse_u32(value, 1000u, 3600000u, &provider->request_timeout_ms);
+    if (strcmp(key, "auth") == 0) {
+        if (claim_key(state, 10u) < 0)
+            return -1;
+        if (strcmp(value, "env") == 0)
+            provider->auth = SNJ_AUTH_ENV;
+        else if (strcmp(value, "api_key") == 0)
+            provider->auth = SNJ_AUTH_API_KEY;
+        else if (strcmp(value, "chatgpt") == 0)
+            provider->auth = SNJ_AUTH_CHATGPT;
+        else
+            goto invalid;
+        return 0;
+    }
     if (strcmp(key, "auto_compact_input_tokens") == 0) {
         if (claim_key(state, 3u) < 0)
             return -1;
@@ -1212,6 +1225,15 @@ snj_config_load(struct snj_config *config, const char *explicit_path,
     if (read_rc == 0 && parse_file(config, (char *)text.data,
                                    error, error_size) < 0)
         goto out;
+    for (size_t i = 0; i < config->provider_count; ++i) {
+        if (config->providers[i].auth == SNJ_AUTH_CHATGPT &&
+            strcmp(config->providers[i].base_url, SNJ_CHATGPT_BASE) != 0) {
+            snj_errorf(error, error_size,
+                       "chatgpt authentication requires " SNJ_CHATGPT_BASE);
+            errno = EINVAL;
+            goto out;
+        }
+    }
     for (size_t i = 0; i < config->model_limit_count; ++i) {
         const struct snj_model_limit_config *limit = &config->model_limits[i];
         if (!snj_config_provider(config, limit->provider) ||
@@ -1458,10 +1480,107 @@ out:
     return rc;
 }
 
+static int
+provider_settings(struct snj_buf *output, const struct snj_provider_config *p)
+{
+    const char *auth = p->auth == SNJ_AUTH_CHATGPT ? "chatgpt" :
+                       p->auth == SNJ_AUTH_API_KEY ? "api_key" : "env";
+    return snj_buf_printf(output,
+        "auth = %s\nbase_url = %s\napi_key_env = %s\nnative_compaction = %s\n",
+        auth, p->base_url, p->api_key_env, p->native_compaction ? "true" : "false");
+}
+
+static int
+replace_provider_settings(const struct snj_buf *input, struct snj_buf *output,
+                           const struct snj_provider_config *provider,
+                           bool existing)
+{
+    size_t at = 0u;
+    bool selected = false, found = false, any = false;
+
+    while (at < input->len) {
+        size_t end = at;
+        char line[SNJ_CONFIG_FILE_MAX + 1u];
+        char *s, *equal;
+        while (end < input->len && input->data[end] != '\n')
+            ++end;
+        memcpy(line, input->data + at, end - at);
+        line[end - at] = '\0';
+        s = trim(line);
+        if (*s == '[') {
+            char *close = strchr(s, ']');
+            selected = false;
+            if (close) {
+                *close = '\0';
+                s = trim(s + 1);
+                if (strcmp(s, "provider") == 0 || strncmp(s, "provider ", 9u) == 0) {
+                    const char *name = s[8] ? trim(s + 9) : "default";
+                    any = true;
+                    selected = strcmp(name, provider->name) == 0;
+                }
+            }
+            if (snj_buf_append(output, input->data + at, end - at) < 0 ||
+                snj_buf_putc(output, '\n') < 0)
+                return -1;
+            if (selected) {
+                found = true;
+                if (provider_settings(output, provider) < 0)
+                    return -1;
+            }
+        } else {
+            bool replaced = false;
+            equal = strchr(s, '=');
+            if (selected && equal) {
+                *equal = '\0';
+                s = trim(s);
+                replaced = strcmp(s, "auth") == 0 || strcmp(s, "base_url") == 0 ||
+                    strcmp(s, "api_key_env") == 0 || strcmp(s, "native_compaction") == 0;
+            }
+            if (!replaced && snj_buf_append(output, input->data + at,
+                    end - at + (end < input->len ? 1u : 0u)) < 0)
+                return -1;
+        }
+        at = end + 1u;
+    }
+    if (!found) {
+        if (existing && !any && strcmp(provider->name, "default") != 0) {
+            struct snj_provider_config implicit;
+            provider_init(&implicit, "default");
+            if (snj_buf_printf(output, "\n[provider default]\n") < 0 ||
+                provider_settings(output, &implicit) < 0)
+                return -1;
+        }
+        if (snj_buf_printf(output, "\n[provider %s]\n", provider->name) < 0 ||
+            provider_settings(output, provider) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 int
-snj_config_save_model(const char *path, bool allow_create,
+snj_config_validate_provider(const struct snj_provider_config *provider,
+                             char *error, size_t error_size)
+{
+    struct snj_buf text;
+    int rc = -1;
+    if (!provider || !provider_name_valid(provider->name) ||
+        (provider->auth == SNJ_AUTH_CHATGPT && strcmp(provider->base_url, SNJ_CHATGPT_BASE))) {
+        snj_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
+        return -1;
+    }
+    snj_buf_init(&text, SNJ_CONFIG_FILE_MAX);
+    if (snj_buf_printf(&text, "[provider %s]\n", provider->name) == 0 &&
+        provider_settings(&text, provider) == 0)
+        rc = validate_config_text(&text, error, error_size);
+    snj_buf_free(&text);
+    return rc;
+}
+
+static int
+save_config_settings(const char *path, bool allow_create,
                       const char *provider, const char *model,
                       const char *effort,
+                      const struct snj_provider_config *provider_config,
                       char *error, size_t error_size)
 {
     struct snj_buf input;
@@ -1484,7 +1603,7 @@ snj_config_save_model(const char *path, bool allow_create,
     snj_buf_init(&output, SNJ_CONFIG_FILE_MAX);
     if (!path || path[0] != '/' || strlen(path) > SNJ_CONFIG_PATH_MAX ||
         !provider || !*provider || strlen(provider) > SNJ_CONFIG_PROVIDER_NAME_MAX ||
-        !model || !*model || strlen(model) >= SNJ_CONFIG_MODEL_MAX ||
+        !model || (!provider_config && !*model) || strlen(model) >= SNJ_CONFIG_MODEL_MAX ||
         !effort || !*effort || strlen(effort) >= SNJ_CONFIG_EFFORT_MAX ||
         strchr(provider, '\n') || strchr(provider, '\r') ||
         strchr(model, '\n') || strchr(model, '\r') ||
@@ -1497,9 +1616,21 @@ snj_config_save_model(const char *path, bool allow_create,
                           error, error_size);
     if (read_rc < 0)
         goto out;
-    if (replace_model_settings(&input, &output, provider, model, effort) < 0) {
+    if ((provider_config ?
+         replace_provider_settings(&input, &output, provider_config, read_rc == 0) :
+         replace_model_settings(&input, &output, provider, model, effort)) < 0) {
         snj_errorf(error, error_size, "configuration update exceeds 64 KiB");
         goto out;
+    }
+    if (provider_config && *model) {
+        struct snj_buf selected;
+        snj_buf_init(&selected, SNJ_CONFIG_FILE_MAX);
+        if (replace_model_settings(&output, &selected, provider, model, effort) < 0) {
+            snj_buf_free(&selected);
+            goto out;
+        }
+        snj_buf_free(&output);
+        output = selected;
     }
     if (validate_config_text(&output, error, error_size) < 0)
         goto out;
@@ -1588,6 +1719,33 @@ out:
     snj_buf_free(&input);
     errno = saved;
     return rc;
+}
+
+int
+snj_config_save_model(const char *path, bool allow_create,
+                      const char *provider, const char *model, const char *effort,
+                      char *error, size_t error_size)
+{
+    return save_config_settings(path, allow_create, provider, model, effort,
+                                 NULL, error, error_size);
+}
+
+int
+snj_config_save_provider(const char *path, bool allow_create,
+                         const struct snj_provider_config *provider,
+                         const char *initial_model, const char *effort,
+                         char *error, size_t error_size)
+{
+    if (!provider || !provider_name_valid(provider->name) ||
+        (provider->auth == SNJ_AUTH_CHATGPT && strcmp(provider->base_url, SNJ_CHATGPT_BASE)) ||
+        strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r') ||
+        strchr(provider->api_key_env, '\n') || strchr(provider->api_key_env, '\r')) {
+        snj_errorf(error, error_size, "invalid provider settings");
+        return -1;
+    }
+    return save_config_settings(path, allow_create, provider->name,
+        initial_model ? initial_model : "", effort ? effort : "default",
+        provider, error, error_size);
 }
 
 const struct snj_provider_config *
