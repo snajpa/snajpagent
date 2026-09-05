@@ -74,7 +74,6 @@ const json_t *snag_model_cache_find(const struct snag_model_cache *cache,
                                    const char *model);
 const char *snag_model_cache_best_effort(const json_t *model,
                                         const char *fallback);
-size_t snag_model_cache_entry_count(const struct snag_model_cache *cache);
 int snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
                           const char *fallback_effort,
                           const char **provider, const char **model,

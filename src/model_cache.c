@@ -493,6 +493,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
                         uint64_t updated_at_ms, struct snag_model_cache *cache,
                         char *error, size_t error_size)
 {
+    struct snag_model_cache previous = {0};
     json_t *prepared = NULL;
     int lock_fd;
     int rc = -1;
@@ -507,8 +508,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
     lock_fd = lock_cache(store, error, error_size);
     if (lock_fd < 0)
         return -1;
-    snag_model_cache_free(cache);
-    if (snag_model_cache_load(store, cache, error, error_size) < 0 &&
+    if (snag_model_cache_load(store, &previous, error, error_size) < 0 &&
         errno != EINVAL)
         goto out;
     prepared = json_deep_copy(providers);
@@ -520,7 +520,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
     for (size_t i = 0; i < json_array_size(prepared); ++i) {
         json_t *after = json_array_get(prepared, i);
         const char *name = snag_json_string(after, "name");
-        const json_t *before = provider_entry(cache->providers, name);
+        const json_t *before = provider_entry(previous.providers, name);
         bool bound = before &&
             strcmp(snag_json_string(before, "base_url"),
                    snag_json_string(after, "base_url")) == 0 &&
@@ -531,7 +531,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
         for (size_t j = 0; j < json_array_size(models); ++j) {
             json_t *model = json_array_get(models, j);
             const json_t *old_model = bound ?
-                snag_model_cache_find(cache, name,
+                snag_model_cache_find(&previous, name,
                                      snag_json_string(model, "id")) : NULL;
 
             if (prepare_accounting(model, old_model) < 0) {
@@ -548,6 +548,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
 out:
     if (prepared)
         json_decref(prepared);
+    snag_model_cache_free(&previous);
     (void)close(lock_fd);
     return rc;
 }
@@ -561,12 +562,11 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
                        uint64_t hard_input_tokens,
                        char *error, size_t error_size)
 {
-    struct snag_model_cache lookup = {0};
+    struct snag_model_cache staged = {0};
     const json_t *source;
     const json_t *item;
     const char *current_state;
     const char *next_state = NULL;
-    json_t *updated = NULL;
     uint64_t value = 0u;
     uint64_t largest_bytes = 0u;
     uint64_t largest_tokens = 0u;
@@ -589,16 +589,16 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
     lock_fd = lock_cache(store, error, error_size);
     if (lock_fd < 0)
         return -1;
-    rc = snag_model_cache_load(store, cache, error, error_size);
+    rc = snag_model_cache_load(store, &staged, error, error_size);
     if (rc != 0)
         goto out;
     rc = 1;
-    source = provider_entry(cache->providers, provider->name);
-    item = snag_model_cache_find(cache, provider->name, model);
+    source = provider_entry(staged.providers, provider->name);
+    item = snag_model_cache_find(&staged, provider->name, model);
     if (!source ||
         strcmp(snag_json_string(source, "base_url"), provider->base_url) ||
         strcmp(snag_json_string(source, "protocol"), protocol) || !item)
-        goto out;
+        goto adopt;
     current_state = snag_json_string(item, "count_capability");
     if (capability != SNAG_COUNT_UNKNOWN)
         next_state = capability == SNAG_COUNT_SUPPORTED ?
@@ -616,22 +616,7 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
         (!value || hard_input_tokens < value);
     if (!capability_changed && !sample_changed && !hard_limit_changed) {
         rc = 0;
-        goto out;
-    }
-    updated = json_deep_copy(cache->providers);
-    if (!updated) {
-        snag_errorf(error, error_size, "cannot copy model cache observation");
-        errno = ENOMEM;
-        rc = -1;
-        goto out;
-    }
-    lookup.providers = updated;
-    item = snag_model_cache_find(&lookup, provider->name, model);
-    if (!item) {
-        snag_errorf(error, error_size, "cannot find copied model cache entry");
-        errno = EINVAL;
-        rc = -1;
-        goto out;
+        goto adopt;
     }
     if (capability_changed &&
         json_object_set_new((json_t *)item, "count_capability",
@@ -647,16 +632,20 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
         json_object_set_new((json_t *)item, "observed_hard_input_tokens",
                             json_integer((json_int_t)hard_input_tokens)) < 0)
         goto write_error;
-    rc = write_cache(store, updated, cache->updated_at_ms, cache,
+    rc = write_cache(store, staged.providers, staged.updated_at_ms, cache,
                      error, error_size);
+    goto out;
+adopt:
+    snag_model_cache_free(cache);
+    *cache = staged;
+    snag_model_cache_init(&staged);
     goto out;
 write_error:
     snag_errorf(error, error_size, "cannot update model cache observation");
     errno = ENOMEM;
     rc = -1;
 out:
-    if (updated)
-        json_decref(updated);
+    snag_model_cache_free(&staged);
     (void)close(lock_fd);
     return rc;
 }
@@ -723,34 +712,12 @@ snag_model_cache_best_effort(const json_t *model, const char *fallback)
     return fallback;
 }
 
-size_t
-snag_model_cache_entry_count(const struct snag_model_cache *cache)
-{
-    size_t count = 0u;
-
-    if (!cache || !cache->providers)
-        return 0u;
-    for (size_t i = 0; i < json_array_size(cache->providers); ++i) {
-        json_t *models = json_object_get(json_array_get(cache->providers, i),
-                                         "models");
-        for (size_t j = 0; j < json_array_size(models); ++j) {
-            json_t *efforts = json_object_get(json_array_get(models, j),
-                                              "efforts");
-            size_t variants = json_array_size(efforts);
-            count += variants ? variants : 1u;
-        }
-    }
-    return count;
-}
-
 int
 snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
                       const char *fallback_effort,
                       const char **provider, const char **model,
                       const char **effort)
 {
-    size_t current = 1u;
-
     if (!cache || !cache->providers || !index || !provider || !model || !effort)
         return -1;
     for (size_t i = 0; i < json_array_size(cache->providers); ++i) {
@@ -762,18 +729,16 @@ snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
             size_t variants = json_array_size(efforts);
             if (!variants)
                 variants = 1u;
-            for (size_t k = 0; k < variants; ++k, ++current) {
-                if (current != index)
-                    continue;
-                *provider = snag_json_string(provider_entry, "name");
-                *model = snag_json_string(model_entry, "id");
-                if (json_array_size(efforts))
-                    *effort = json_string_value(json_array_get(efforts, k));
-                else
-                    *effort = snag_model_cache_best_effort(model_entry,
-                                                          fallback_effort);
-                return *provider && *model && *effort ? 0 : -1;
+            if (index > variants) {
+                index -= variants;
+                continue;
             }
+            *provider = snag_json_string(provider_entry, "name");
+            *model = snag_json_string(model_entry, "id");
+            *effort = json_array_size(efforts) ?
+                json_string_value(json_array_get(efforts, index - 1u)) :
+                snag_model_cache_best_effort(model_entry, fallback_effort);
+            return *provider && *model && *effort ? 0 : -1;
         }
     }
     return 1;

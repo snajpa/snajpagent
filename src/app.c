@@ -1253,7 +1253,7 @@ render_model_catalog(struct app_state *app)
     char timestamp[64];
     time_t seconds;
     struct tm broken;
-    size_t count;
+    size_t index = 0u;
     int rc = -1;
 
     if (!selected)
@@ -1263,7 +1263,6 @@ render_model_catalog(struct app_state *app)
                                  error, sizeof(error)) < 0)
         return app_error(app, error);
     seconds = (time_t)(app->model_cache.updated_at_ms / 1000u);
-    count = snag_model_cache_entry_count(&app->model_cache);
     snag_buf_init(&text, 16u * 1024u * 1024u);
     if (snag_buf_printf(&text, "selected: %s / %s / %s%s",
                        selected->name, next_model(app),
@@ -1273,19 +1272,28 @@ render_model_catalog(struct app_state *app)
                        app->staged_effort ? " (staged once)" : "") < 0 ||
         append_compact_threshold(&text, selected, &capacity) < 0)
         goto out;
-    for (size_t index = 1u; index <= count; ++index) {
-        const char *provider;
-        const char *model;
-        const char *effort;
-        if (snag_model_cache_entry(&app->model_cache, index,
-                                  resolve_effort(app->config->reasoning_effort),
-                                  &provider, &model, &effort) != 0 ||
-            snag_buf_printf(&text, "\n%zu. %s / %s / %s",
-                           index, provider, model, effort) < 0)
-            goto out;
-        if (append_catalog_limits(&text,
-                snag_model_cache_find(&app->model_cache, provider, model)) < 0)
-            goto out;
+    for (size_t i = 0; i < json_array_size(app->model_cache.providers); ++i) {
+        json_t *provider = json_array_get(app->model_cache.providers, i);
+        json_t *models = json_object_get(provider, "models");
+
+        for (size_t j = 0; j < json_array_size(models); ++j) {
+            json_t *model = json_array_get(models, j);
+            json_t *efforts = json_object_get(model, "efforts");
+            size_t variants = json_array_size(efforts);
+
+            for (size_t k = 0; k < (variants ? variants : 1u); ++k) {
+                const char *effort = variants ?
+                    json_string_value(json_array_get(efforts, k)) :
+                    snag_model_cache_best_effort(model,
+                        resolve_effort(app->config->reasoning_effort));
+
+                if (!effort || snag_buf_printf(&text, "\n%zu. %s / %s / %s",
+                        ++index, snag_json_string(provider, "name"),
+                        snag_json_string(model, "id"), effort) < 0 ||
+                    append_catalog_limits(&text, model) < 0)
+                    goto out;
+            }
+        }
     }
     if (gmtime_r(&seconds, &broken) &&
         strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ",

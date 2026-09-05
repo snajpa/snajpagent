@@ -6,10 +6,12 @@
 
 #include <assert.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 static json_t *
@@ -121,7 +123,28 @@ main(void)
     assert(snag_model_cache_replace(&store, providers, 123456u, &cache,
                                    error, sizeof(error)) == 0);
     assert(cache.updated_at_ms == 123456u);
-    assert(snag_model_cache_entry_count(&cache) == 5u);
+    {
+        const char *name, *model, *effort;
+        static const char *const expected[][3] = {
+            {"paid", "org/model", "low"},
+            {"paid", "org/model", "high"},
+            {"paid", "context-only", "fallback"},
+            {"paid", "unknown", "fallback"},
+            {"codex", "codex-context-only", "medium"}
+        };
+
+        for (size_t i = 0; i < 5u; ++i) {
+            assert(snag_model_cache_entry(&cache, i + 1u, "fallback",
+                                         &name, &model, &effort) == 0);
+            assert(strcmp(name, expected[i][0]) == 0);
+            assert(strcmp(model, expected[i][1]) == 0);
+            assert(strcmp(effort, expected[i][2]) == 0);
+        }
+        assert(snag_model_cache_entry(&cache, 0u, "fallback",
+                                     &name, &model, &effort) < 0);
+        assert(snag_model_cache_entry(&cache, 6u, "fallback",
+                                     &name, &model, &effort) == 1);
+    }
     fd = openat(store.root_fd, "models.json", O_RDONLY);
     assert(fd >= 0);
     got = read(fd, encoded, sizeof(encoded) - 1u);
@@ -265,9 +288,53 @@ main(void)
                error, sizeof(error)) < 0);
 
     config.model_limit_count = 0u;
-    assert(snag_model_cache_record(&store, &cache, &config.providers[0],
-               "openai", "org/model", SNAG_COUNT_SUPPORTED,
-               1000u, 250u, 800000u, error, sizeof(error)) == 0);
+    {
+        struct rlimit saved, limited;
+        struct snag_model_cache disk = {0};
+        json_t *original = cache.providers;
+        json_t *snapshot = json_deep_copy(original);
+        void (*previous_signal)(int) = signal(SIGXFSZ, SIG_IGN);
+
+        assert(snapshot && previous_signal != SIG_ERR);
+        assert(fstatat(store.root_fd, "models.json", &before, 0) == 0);
+        assert(getrlimit(RLIMIT_FSIZE, &saved) == 0);
+        limited = saved;
+        limited.rlim_cur = 1u;
+        assert(setrlimit(RLIMIT_FSIZE, &limited) == 0);
+        assert(snag_model_cache_record(&store, &cache, &config.providers[0],
+                   "openai", "org/model", SNAG_COUNT_SUPPORTED,
+                   1000u, 250u, 800000u, error, sizeof(error)) < 0);
+        assert(cache.providers == original && json_equal(original, snapshot));
+        assert(snag_model_cache_replace(&store, providers, 234567u, &cache,
+                                       error, sizeof(error)) < 0);
+        assert(cache.providers == original && json_equal(original, snapshot));
+        assert(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+        assert(signal(SIGXFSZ, previous_signal) != SIG_ERR);
+        assert(fstatat(store.root_fd, "models.json", &after, 0) == 0);
+        assert(before.st_ino == after.st_ino && before.st_size == after.st_size);
+        assert(snag_model_cache_load(&store, &disk, error, sizeof(error)) == 0);
+        assert(json_equal(disk.providers, snapshot));
+        snag_model_cache_free(&disk);
+        json_decref(snapshot);
+    }
+    {
+        struct snag_model_cache stale = {0};
+        json_t *retained = json_incref(cache.providers);
+
+        assert(snag_model_cache_load(&store, &stale, error, sizeof(error)) == 0);
+        assert(snag_model_cache_record(&store, &cache, &config.providers[0],
+                   "openai", "org/model", SNAG_COUNT_SUPPORTED,
+                   1000u, 250u, 800000u, error, sizeof(error)) == 0);
+        assert(json_equal(retained, stale.providers));
+        assert(!json_equal(retained, cache.providers));
+        /* A no-op still adopts changes made by another cache owner. */
+        assert(snag_model_cache_record(&store, &stale, &config.providers[0],
+                   "openai", "org/model", SNAG_COUNT_UNKNOWN,
+                   500u, 200u, 850000u, error, sizeof(error)) == 0);
+        assert(json_equal(stale.providers, cache.providers));
+        snag_model_cache_free(&stale);
+        json_decref(retained);
+    }
     assert(fstatat(store.root_fd, "models.json", &before,
                    AT_SYMLINK_NOFOLLOW) == 0);
     assert(snag_model_cache_record(&store, &cache, &config.providers[0],
