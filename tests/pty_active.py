@@ -3530,6 +3530,7 @@ def test_editor_during_blocked_engine():
         if tasks.exists():
             assert len(list(tasks.iterdir())) == 2
         child.drain(0.4)
+        assert b"engine-block-start \n" in child.buf.replace(b"\r", b"")
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1
         fcntl.ioctl(child.fd, termios.TIOCSWINSZ,
                     struct.pack("HHHH", 24, 48, 0, 0))
@@ -3549,6 +3550,7 @@ def test_editor_during_blocked_engine():
         end = child.wait(b"engine-block-end", start=after)
         child.exit_cleanly(end)
     finally:
+        child.kill()
         if failure:
             raise failure
 

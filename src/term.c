@@ -958,8 +958,7 @@ redraw(struct snj_term *term)
         install_prompt(term, current, cells);
     label = prompt_label(term, &label_len);
     label_cols = snj_term_text_width(label, label_len);
-    if (term->active && term->typing_active && !term->prompt_visible &&
-        term->output_seen) {
+    if (term->active && !term->prompt_visible && term->output_seen) {
         if (!term->output_ended_lf &&
             snj_term_write(STDERR_FILENO, term->capable ? "\r\n" : "\n",
                            term->capable ? 2u : 1u) < 0)
