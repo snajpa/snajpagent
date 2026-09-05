@@ -129,7 +129,7 @@ snj_config_init(struct snj_config *config)
     config->default_yield_ms = 10000u;
     config->default_timeout_ms = 0u;
     config->max_timeout_ms = 86400000u;
-    config->default_max_output_tokens = SNJ_DEFAULT_TOOL_OUTPUT_TOKENS;
+    config->max_output_tokens = SNJ_DEFAULT_TOOL_OUTPUT_TOKENS;
     config->max_output_bytes = 0u;
 }
 
@@ -988,10 +988,10 @@ parse_tool(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "max_output_bytes") == 0)
         return claim_key(state, 5u) < 0 ? -1 :
                parse_u32(value, 0u, UINT32_MAX, &config->max_output_bytes);
-    if (strcmp(key, "default_max_output_tokens") == 0)
+    if (strcmp(key, "max_output_tokens") == 0)
         return claim_key(state, 6u) < 0 ? -1 :
                parse_u32(value, 1u, (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
-                         &config->default_max_output_tokens);
+                         &config->max_output_tokens);
 invalid:
     errno = EINVAL;
     return -1;

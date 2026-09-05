@@ -142,6 +142,17 @@ json_nullable_string(const json_t *object, const char *key)
 }
 
 static bool
+command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out)
+{
+    if (!json_u32_member(arguments, "max_output_tokens", ceiling, 1u,
+                         (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX, out))
+        return false;
+    if (*out > ceiling)
+        *out = ceiling;
+    return true;
+}
+
+static bool
 text_arg_valid(const char *text, size_t max)
 {
     size_t len;
@@ -1460,10 +1471,8 @@ run_write_stdin(const struct snj_response_item *call,
         !json_bool_member(call->arguments, "terminate", false, &terminate) ||
         !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
                          0u, SNJ_TOOL_YIELD_MAX_MS, &yield_ms) ||
-        !json_u32_member(call->arguments, "max_output_tokens",
-                         config->default_max_output_tokens, 1u,
-                         (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
-                         &max_output_tokens)) {
+        !command_output_limit(call->arguments, config->max_output_tokens,
+                               &max_output_tokens)) {
         *result = simple_result(proc->active ? "running" : "failed", NULL,
             "The write_stdin interaction was rejected because its arguments "
             "were invalid; the managed process was not modified.",
@@ -1548,10 +1557,8 @@ run_exec_command(const struct snj_response_item *call,
         !json_u32_member(call->arguments, "yield_ms",
                          config->default_yield_ms, 0u,
                          SNJ_TOOL_YIELD_MAX_MS, &yield_ms) ||
-        !json_u32_member(call->arguments, "max_output_tokens",
-                         config->default_max_output_tokens, 1u,
-                         (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
-                         &max_output_tokens)) {
+        !command_output_limit(call->arguments, config->max_output_tokens,
+                               &max_output_tokens)) {
         snj_errorf(error, error_size, "invalid exec_command arguments");
         errno = EINVAL;
         return -1;
@@ -1573,14 +1580,11 @@ snj_tools_attach_output_limit(const struct snj_response_item *call,
     if (!call || !call->name || !config || !result ||
         json_object_get(result, "max_output_tokens") ||
         (strcmp(call->name, "exec_command") != 0 &&
-         strcmp(call->name, "write_stdin") != 0) ||
-        !json_object_get(call->arguments, "max_output_tokens"))
+         strcmp(call->name, "write_stdin") != 0))
         return 0;
-    if (!json_u32_member(call->arguments, "max_output_tokens",
-                         config->default_max_output_tokens, 1u,
-                         (uint32_t)SNJ_CONFIG_TOKEN_LIMIT_MAX,
-                         &max_output_tokens))
-        return 0;
+    if (!command_output_limit(call->arguments, config->max_output_tokens,
+                              &max_output_tokens))
+        max_output_tokens = config->max_output_tokens;
     if (result_set(result, "max_output_tokens",
                    json_integer((json_int_t)max_output_tokens)) < 0) {
         return -1;

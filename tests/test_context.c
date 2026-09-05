@@ -603,7 +603,7 @@ assert_strict_tool_contract(json_t *tool)
 static void
 assert_context_tool_schemas(json_t *tools, const char *active_handle,
                             uint32_t max_timeout_ms,
-                            uint32_t default_max_output_tokens)
+                            uint32_t max_output_tokens)
 {
     size_t index;
     json_t *tool;
@@ -629,8 +629,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
                       "null runs without a timeout") != NULL);
         {
             char fallback[32];
-            assert(snprintf(fallback, sizeof(fallback), "default (%u)",
-                            default_max_output_tokens) > 0);
+            assert(snprintf(fallback, sizeof(fallback), "ceiling (%u)",
+                            max_output_tokens) > 0);
             assert(strstr(snj_json_string(tool, "description"), fallback));
             assert(strstr(snj_json_string(tool, "description"),
                           "one-token-per-UTF-8-byte upper bound"));
@@ -648,7 +648,7 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
                    "max_output_tokens"), "minimum")) == 1);
         assert((uint64_t)json_integer_value(json_object_get(json_object_get(
                    properties, "max_output_tokens"), "maximum")) ==
-               SNJ_CONFIG_TOKEN_LIMIT_MAX);
+               max_output_tokens);
         assert(json_integer_value(json_object_get(
                    json_object_get(properties, "timeout_ms"), "minimum")) == 1);
         assert((uint64_t)json_integer_value(json_object_get(
@@ -661,8 +661,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
     properties = assert_strict_tool_contract(tool);
     {
         char fallback[32];
-        assert(snprintf(fallback, sizeof(fallback), "default (%u)",
-                        default_max_output_tokens) > 0);
+        assert(snprintf(fallback, sizeof(fallback), "ceiling (%u)",
+                        max_output_tokens) > 0);
         assert(strstr(snj_json_string(tool, "description"), fallback));
     }
     {
@@ -688,6 +688,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
                        "integer", 1);
     assert(json_integer_value(json_object_get(json_object_get(properties,
                "max_output_tokens"), "minimum")) == 1);
+    assert(json_integer_value(json_object_get(json_object_get(properties,
+               "max_output_tokens"), "maximum")) == max_output_tokens);
 
     tool = tool_by_name(tools, "apply_patch");
     if (tool) {
@@ -1648,7 +1650,7 @@ main(void)
     {
         json_t *tools = json_object_get(projection.create_request, "tools");
         assert(json_array_size(tools) == 5u);
-        assert_context_tool_schemas(tools, NULL, UINT32_MAX, 4000u);
+        assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(tool_by_name(tools, "create_goal") != NULL);
         assert(tool_by_name(tools, "update_goal") == NULL);
     }
@@ -1753,7 +1755,7 @@ main(void)
         assert(tool_by_name(tools, "update_goal") == NULL);
         assert(strcmp(snj_json_string(json_array_get(tools, 0), "name"),
                       "write_stdin") == 0);
-        assert_context_tool_schemas(tools, handle, UINT32_MAX, 4000u);
+        assert_context_tool_schemas(tools, handle, UINT32_MAX, 6000u);
         assert(json_is_array(input));
         assert(tool_output != NULL);
         assert(json_string_length(json_object_get(tool_output, "output")) <=
@@ -1781,7 +1783,7 @@ main(void)
         const char *gate_text;
 
         snj_config_init(&network_config);
-        network_config.default_max_output_tokens = 777u;
+        network_config.max_output_tokens = 777u;
         network_config.irc_listen_explicit = true;
         memcpy(network_config.irc_model_nick, "builder", 8u);
         memcpy(network_config.irc_operator_nick, "alice", 6u);
@@ -1859,7 +1861,7 @@ main(void)
         const char *historical_text;
 
         assert(json_array_size(tools) == 5u);
-        assert_context_tool_schemas(tools, NULL, UINT32_MAX, 4000u);
+        assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(tool_by_name(tools, "create_goal") == NULL);
         assert(tool_by_name(tools, "update_goal") != NULL);
         assert(continuation != NULL);
@@ -1910,7 +1912,7 @@ main(void)
         semantic = json_object_get(projection.model_input, "items");
         harness = item_by_kind(semantic, "irc_harness");
         assert(json_array_size(tools) == 8u);
-        assert_context_tool_schemas(tools, NULL, 7654321u, 4000u);
+        assert_context_tool_schemas(tools, NULL, 7654321u, 6000u);
         assert(tool_by_name(tools, "irc_send") != NULL);
         assert(tool_by_name(tools, "irc_state") != NULL);
         assert(tool_by_name(tools, "irc_topic") != NULL);
@@ -1943,7 +1945,7 @@ main(void)
         json_t *semantic = json_object_get(projection.model_input, "items");
 
         assert(json_array_size(tools) == 4u);
-        assert_context_tool_schemas(tools, NULL, UINT32_MAX, 4000u);
+        assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(tool_by_name(tools, "create_goal") == NULL);
         assert(tool_by_name(tools, "update_goal") == NULL);
         assert(item_by_kind(semantic, "goal_controller") == NULL);

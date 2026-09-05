@@ -71,7 +71,7 @@ static json_t *
 run_command_full(const char *command, int timeout_ms, const char *secret,
                  const char *stdin_text, snj_tool_pump_fn pump,
                  void *pump_opaque, int selected_limit,
-                 uint32_t default_limit)
+                 uint32_t ceiling)
 {
     char cwd[4096];
     struct snj_config config;
@@ -85,7 +85,7 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
     assert(config.shell != NULL);
     config.default_timeout_ms = 0;
     config.max_timeout_ms = 5000;
-    config.default_max_output_tokens = default_limit;
+    config.max_output_tokens = ceiling;
     snj_credential_clear(&credential);
     if (secret) {
         credential.len = strlen(secret);
@@ -108,7 +108,8 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
     assert(snj_tool_result_valid(result) == 0);
     assert(json_integer_value(json_object_get(result,
                "max_output_tokens")) ==
-           (selected_limit >= 0 ? selected_limit : (json_int_t)default_limit));
+           (selected_limit >= 0 && (uint32_t)selected_limit < ceiling ?
+            (uint32_t)selected_limit : ceiling));
     snj_response_graph_free(&graph);
     snj_config_free(&config);
     return result;
@@ -119,7 +120,7 @@ run_command_with_credential(const char *command, int timeout_ms,
                             const char *secret)
 {
     return run_command_full(command, timeout_ms, secret, NULL, NULL, NULL,
-                            -1, 4000u);
+                            -1, 6000u);
 }
 
 static json_t *
@@ -447,7 +448,7 @@ test_managed_process_hands_off_on_steering(void)
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL && snj_tool_result_valid(closed) == 0);
     assert(json_integer_value(json_object_get(closed,
-               "max_output_tokens")) == 4000);
+               "max_output_tokens")) == 6000);
     json_decref(closed);
     json_decref(result);
 }
@@ -467,19 +468,40 @@ test_success_and_streams(void)
 static void
 test_command_output_limit_selection(void)
 {
-    json_t *configured = run_command_full("printf configured", 1000, NULL,
-        NULL, NULL, NULL, -1, 6789u);
-    json_t *selected = run_command_full("printf selected", 1000, NULL,
-        NULL, NULL, NULL, 123u, 6789u);
+    static const int requests[] = {-1, 1, 123, 6789, 6790, INT32_MAX};
+    for (size_t i = 0u; i < sizeof(requests) / sizeof(requests[0]); ++i) {
+        json_t *result = run_command_full("printf unchanged", 1000, NULL,
+            NULL, NULL, NULL, requests[i], 6789u);
 
-    assert(json_integer_value(json_object_get(configured,
-               "max_output_tokens")) == 6789);
-    assert(json_integer_value(json_object_get(selected,
-               "max_output_tokens")) == 123);
-    assert(strcmp(snj_json_string(json_object_get(selected, "stdout"),
-                                 "retained"), "selected") == 0);
-    json_decref(selected);
-    json_decref(configured);
+        assert(strcmp(snj_json_string(json_object_get(result, "stdout"),
+                                     "retained"), "unchanged") == 0);
+        json_decref(result);
+    }
+}
+
+static void
+test_managed_output_ceiling(void)
+{
+    json_t *started = run_managed_exec("read line; printf '%s' \"$line\"", 5000, 1);
+    const char *handle = snj_json_string(started, "handle");
+    static const int requests[] = {-1, 42, 6000, 6001};
+    json_t *closed = NULL;
+    char error[256] = {0};
+
+    assert(handle != NULL);
+    for (size_t i = 0u; i < sizeof(requests) / sizeof(requests[0]); ++i) {
+        json_t *result = run_write_stdin_call_limit(handle, "", false, 1,
+                                                    requests[i]);
+        assert(strcmp(snj_json_string(result, "status"), "running") == 0);
+        assert(json_integer_value(json_object_get(result, "max_output_tokens")) ==
+               (requests[i] == 42 ? 42 : 6000));
+        json_decref(result);
+    }
+    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
+                                   &closed, error, sizeof(error)) == 0);
+    assert(json_integer_value(json_object_get(closed, "max_output_tokens")) == 6000);
+    json_decref(closed);
+    json_decref(started);
 }
 
 static void
@@ -501,11 +523,23 @@ test_command_output_limit_is_required_and_positive(void)
     assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
                          NULL, NULL, -1, &result, error, sizeof(error)) < 0);
     assert(result == NULL);
+    result = snj_tool_result_terminal(false, "invalid arguments");
+    assert(result != NULL);
+    config.max_output_tokens = 123u;
+    assert(snj_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
+    assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
+    json_decref(result);
+    result = NULL;
     assert(json_object_set_new(graph.items[0].arguments,
                "max_output_tokens", json_integer(0)) == 0);
     assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
                          NULL, NULL, -1, &result, error, sizeof(error)) < 0);
     assert(result == NULL);
+    result = snj_tool_result_terminal(false, "invalid arguments");
+    assert(result != NULL);
+    assert(snj_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
+    assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
+    json_decref(result);
     snj_response_graph_free(&graph);
     snj_config_free(&config);
 }
@@ -842,7 +876,7 @@ test_managed_process_close_returns_terminal_result(void)
     assert(closed != NULL);
     assert(snj_tool_result_valid(closed) == 0);
     assert(json_integer_value(json_object_get(closed,
-               "max_output_tokens")) == 4000);
+               "max_output_tokens")) == 6000);
     status = snj_json_string(closed, "status");
     assert(strcmp(status, "running") != 0);
     assert(json_is_null(json_object_get(closed, "handle")));
@@ -1299,6 +1333,7 @@ main(void)
     test_native_read_tools();
     test_success_and_streams();
     test_command_output_limit_selection();
+    test_managed_output_ceiling();
     test_command_output_limit_is_required_and_positive();
     test_failure_status();
     test_timeout_hands_off_without_killing();

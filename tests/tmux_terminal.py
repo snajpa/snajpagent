@@ -96,7 +96,7 @@ class FakeResponses:
         self.sequence = 0
         self.exit_started = threading.Event()
         self.exit_release = threading.Event()
-        self.exit_workspace = None
+        self.tool_workspace = None
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -295,7 +295,9 @@ class FakeResponses:
                 item.get("call_id") in completed_calls
                 for item in request.get("input", [])
             )
-            if marker and not call_finished:
+            if latest.startswith("tool-cap "):
+                body = self.output_cap_body(request, sequence, latest).encode()
+            elif marker and not call_finished:
                 body = self.function_body(
                     sequence, call_id, "irc_send", {
                         "notice": False,
@@ -332,7 +334,7 @@ class FakeResponses:
                 for item in request.get("input", [])):
             body = self.function_body(sequence, "call_exit", "exec_command", {
                 "command": 'printf "%s" "$$" > command.pid; exec sleep 30',
-                "workdir": str(self.exit_workspace), "stdin": None,
+                "workdir": str(self.tool_workspace), "stdin": None,
                 "pty": False, "timeout_ms": None, "max_output_tokens": None,
                 "yield_ms": 1 if mode == "exit-managed" else 0,
             }).encode()
@@ -356,6 +358,26 @@ class FakeResponses:
         handler.send_header("Content-Length", str(len(body)))
         handler.end_headers()
         handler.wfile.write(body)
+
+    def output_cap_body(self, request, sequence, prompt):
+        _, ceiling, selected = prompt.split()
+        ceiling, selected = int(ceiling), json.loads(selected)
+        effective = min(ceiling, selected if selected is not None else ceiling)
+        for tool in request["tools"]:
+            if tool.get("name") in ("exec_command", "write_stdin"):
+                assert tool["parameters"]["properties"]["max_output_tokens"][
+                    "maximum"] == ceiling
+        outputs = [item["output"] for item in request["input"]
+                   if item.get("type") == "function_call_output"]
+        if outputs:
+            assert len(outputs) == 1 and len(outputs[0].encode()) <= effective
+            assert f"max_output_tokens={effective}" in outputs[0]
+            return self.response_body(sequence, "tool cap confirmed")
+        return self.function_body(sequence, "call_cap", "exec_command", {
+            "command": "printf '%08000d' 0", "workdir": str(self.tool_workspace),
+            "stdin": None, "pty": False, "timeout_ms": None, "yield_ms": 0,
+            "max_output_tokens": selected,
+        })
 
     def handle_catalog(self, handler):
         try:
@@ -1753,12 +1775,44 @@ def validate_irc_styles(terminal, remote_agent, local_agent=None):
             raise AssertionError(f"network UI is missing {role} styling")
 
 
+def run_output_cap_cases(binary, root, provider, environment):
+    for name, configured, selected in (("default", None, None),
+                                       ("above", 1234, 9999),
+                                       ("below", 1234, 512)):
+        case = root / ("cap-" + name)
+        workspace = case / "work"
+        workspace.mkdir(mode=0o700, parents=True)
+        provider.tool_workspace = workspace
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        config.write_text(config.read_text() + "[tool]\nmax_output_bytes = 17\n" +
+                          (f"max_output_tokens = {configured}\n"
+                           if configured else ""), encoding="utf-8")
+        ceiling = configured or 6000
+        terminal = TmuxTerminal(case / "terminal", binary, workspace,
+                                case / "state", config, 120, 24,
+                                args=("-v",), environment=environment)
+        try:
+            terminal.wait("host-model/medium ›")
+            terminal.submit(f"tool-cap {ceiling} {json.dumps(selected)}")
+            terminal.wait("tool cap confirmed")
+            _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
+            result = event_list(events, "tool_finished")[0]["data"]["result"]
+            assert result["max_output_tokens"] == min(ceiling, selected or ceiling)
+            assert result["stdout"]["retained"] == "0" * 8000
+            assert "0" * 8000 in result["model_text"]
+            terminal.exit()
+            print(f"tmux_terminal output cap {name}: ok", flush=True)
+        finally:
+            terminal.close()
+
+
 def run_ctrl_d_cases(binary, root, provider, environment):
     for mode in ("silent", "stream", "tool", "managed"):
         case = root / ("exit-" + mode)
         workspace = case / "work"
         workspace.mkdir(mode=0o700, parents=True)
-        provider.exit_workspace = workspace
+        provider.tool_workspace = workspace
         provider.exit_started.clear()
         provider.exit_release.clear()
         config = case / "config.ini"
@@ -1822,6 +1876,7 @@ def run_irc_case(binary, root):
     ]
     terminals = {}
     try:
+        run_output_cap_cases(binary, root, provider, environment)
         run_ctrl_d_cases(binary, root, provider, environment)
         run_model_catalog_case(binary, root, provider, environment)
         for name, model, _agent, operator, args in specs:

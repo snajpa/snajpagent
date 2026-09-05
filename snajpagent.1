@@ -893,10 +893,11 @@ Default: 0.  Reaching the deadline does not kill the command.
 .B max_timeout_ms
 Maximum positive model deadline, 1 through 4294967295.  Default: 86400000.
 .TP
-.B default_max_output_tokens
-Default command-result context bound when a tool call selects
-.BR null ,
-1 through 4000000000.  Default: 4000.
+.B max_output_tokens
+Command-result context ceiling, 1 through 4000000000.  Default: 6000.
+A tool call selects a smaller positive bound or
+.B null
+for this ceiling.  Larger requests are capped at this value.
 .TP
 .B max_output_bytes
 Maximum result bytes displayed per tool call, 0 through 4294967295.  Zero
@@ -1094,8 +1095,9 @@ call selects a positive
 .B max_output_tokens
 context bound or
 .B null
-for
-.BR default_max_output_tokens .
+for the configured
+.BR "[tool] max_output_tokens" " ceiling (default: 6000)."
+Larger requested bounds are capped at that ceiling; smaller bounds are honored.
 The bound is persisted with the result and conservatively enforced as at most
 one token per retained UTF-8 byte.  Truncated context retains bounded
 provenance; the complete redacted output remains in the durable event.

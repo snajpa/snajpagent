@@ -295,12 +295,14 @@ their existing cancellation behavior.
 Tool stdout and stderr are redacted before capture and retained without a
 tool-specific length cutoff. `exec_command` and `write_stdin` require the
 model to select a positive `max_output_tokens` or explicitly use `null` for
-the configured `[tool] default_max_output_tokens` (4000 by default). The
+the configured `[tool] max_output_tokens` ceiling (6000 by default). Larger
+requests are clamped to that ceiling; smaller requests are honored. Both tool
+schemas advertise the ceiling, and one shared runtime selector enforces it. The
 resolved value is recorded in the durable result so replay is independent of
 later configuration. Model-context projection preserves a valid-UTF-8 head
 and tail plus digest/provenance when the selected conservative
 one-token-per-UTF-8-byte bound permits; it does not call bytes an exact token
-count.
+count. The former `default_max_output_tokens` configuration key is removed.
 `[tool] max_output_bytes` is presentation-only: it limits the number of
 model-result UTF-8 bytes shown for each tool call, while `0` (the default)
 shows the complete result. It never truncates the durable result or changes

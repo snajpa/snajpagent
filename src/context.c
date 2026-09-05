@@ -1158,7 +1158,7 @@ fail:
 }
 
 static json_t *
-exec_tool_schema(uint32_t max_timeout_ms, uint32_t default_max_output_tokens)
+exec_tool_schema(uint32_t max_timeout_ms, uint32_t max_output_tokens)
 {
     static const char *const required[] = {
         "command", "workdir", "stdin", "pty", "yield_ms", "timeout_ms",
@@ -1171,9 +1171,9 @@ exec_tool_schema(uint32_t max_timeout_ms, uint32_t default_max_output_tokens)
             "Set timeout_ms only when this command needs a deadline; null "
             "runs without a timeout. Pick a positive max_output_tokens limit "
             "for result text sent to model context, or null for the configured "
-            "default (%u); this is enforced as a conservative "
+            "ceiling (%u). Larger requests are capped; this is a conservative "
             "one-token-per-UTF-8-byte upper bound.",
-            default_max_output_tokens) < 0 || !properties ||
+            max_output_tokens) < 0 || !properties ||
         snj_json_set_new(properties, "command", string_schema()) < 0 ||
         snj_json_set_new(properties, "workdir", string_schema()) < 0 ||
         snj_json_set_new(properties, "stdin", nullable_string_schema()) < 0 ||
@@ -1182,7 +1182,7 @@ exec_tool_schema(uint32_t max_timeout_ms, uint32_t default_max_output_tokens)
         snj_json_set_new(properties, "timeout_ms",
                      integer_schema(1, max_timeout_ms, true)) < 0 ||
         snj_json_set_new(properties, "max_output_tokens",
-                     integer_schema(1, SNJ_CONFIG_TOKEN_LIMIT_MAX, true)) < 0) {
+                     integer_schema(1, max_output_tokens, true)) < 0) {
         if (properties)
             json_decref(properties);
         return NULL;
@@ -1193,7 +1193,7 @@ exec_tool_schema(uint32_t max_timeout_ms, uint32_t default_max_output_tokens)
 
 static json_t *
 stdin_tool_schema(const char *active_handle,
-                  uint32_t default_max_output_tokens)
+                  uint32_t max_output_tokens)
 {
     static const char *const required[] = {
         "handle", "data", "eof", "terminate", "yield_ms",
@@ -1206,9 +1206,9 @@ stdin_tool_schema(const char *active_handle,
             "process. Set terminate=true only with empty data and "
             "eof=false/null to terminate it and receive its terminal result. "
             "Pick a positive max_output_tokens limit for new result text sent "
-            "to model context, or null for the configured default (%u); this "
-            "is enforced as a conservative one-token-per-UTF-8-byte upper bound.",
-            default_max_output_tokens) < 0 || !properties ||
+            "to model context, or null for the configured ceiling (%u). Larger "
+            "requests are capped; this is a conservative one-token-per-UTF-8-byte upper bound.",
+            max_output_tokens) < 0 || !properties ||
         snj_json_set_new(properties, "data", string_schema()) < 0 ||
         snj_json_set_new(properties, "eof", nullable_bool_schema()) < 0 ||
         snj_json_set_new(properties, "handle",
@@ -1217,7 +1217,7 @@ stdin_tool_schema(const char *active_handle,
         snj_json_set_new(properties, "terminate", nullable_bool_schema()) < 0 ||
         snj_json_set_new(properties, "yield_ms", integer_schema(0, 600000, true)) < 0 ||
         snj_json_set_new(properties, "max_output_tokens",
-                     integer_schema(1, SNJ_CONFIG_TOKEN_LIMIT_MAX, true)) < 0) {
+                     integer_schema(1, max_output_tokens, true)) < 0) {
         if (properties)
             json_decref(properties);
         return NULL;
@@ -1409,7 +1409,7 @@ tool_schemas(const char *active_handle, bool goal_active,
               json_array_append_new(tools, irc_topic_tool_schema()) < 0)) ||
             json_array_append_new(tools,
                 stdin_tool_schema(active_handle,
-                    config ? config->default_max_output_tokens :
+                    config ? config->max_output_tokens :
                              SNJ_DEFAULT_TOOL_OUTPUT_TOKENS)) < 0) {
             json_decref(tools);
             return NULL;
@@ -1418,11 +1418,11 @@ tool_schemas(const char *active_handle, bool goal_active,
     }
     if (json_array_append_new(tools,
             exec_tool_schema(config ? config->max_timeout_ms : UINT32_MAX,
-                config ? config->default_max_output_tokens :
+                config ? config->max_output_tokens :
                          SNJ_DEFAULT_TOOL_OUTPUT_TOKENS)) < 0 ||
         json_array_append_new(tools,
             stdin_tool_schema(NULL,
-                config ? config->default_max_output_tokens :
+                config ? config->max_output_tokens :
                          SNJ_DEFAULT_TOOL_OUTPUT_TOKENS)) < 0 ||
         json_array_append_new(tools, patch_tool_schema()) < 0 ||
         json_array_append_new(tools, web_search_tool_schema(search_type)) < 0 ||

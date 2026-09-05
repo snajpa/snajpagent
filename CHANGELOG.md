@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Make `[tool] max_output_tokens` a hard command-result context ceiling,
+  defaulting to 6000. Clamp larger `exec_command` and `write_stdin` requests;
+  honor smaller bounds and use the ceiling for null. Replace the former
+  `default_max_output_tokens` key; full capture and display limits are unchanged.
+
 - Exit promptly on empty Ctrl-D or interactive EOF, interrupting active model
   and command work through the existing cleanup path. Preserve the resumable
   session and nonempty-draft forward delete. Stop interrupted tool turns before
