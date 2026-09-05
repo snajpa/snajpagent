@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "config.h"
+#include "base.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -48,6 +49,87 @@ expect_ui(const char *path, const char *key, const char *value, bool valid)
     if (!valid)
         assert(error[0]);
     snj_config_free(&config);
+}
+
+static void
+test_prompt_numbers(const char *path)
+{
+    const char *values[SNJ_PROMPT_FIELD_COUNT] = {
+        "p", "m", "e", "op", "host", "0%", "chat", "3", "7", "9"};
+    static const char *const contexts[] = {"0%", "9%", "10%", "99%",
+                                           "100%", "?%"};
+    static const char *const padded[] = {"  0% ", "  9% ", " 10% ", " 99% ",
+                                         "100% ", "  ?% "};
+    static const char *const invalid[] = {
+        "time", "context:", "context:0", "context:04", "hour:0", "hour:00",
+        "hour:002", "hour:-2", "hour:+2", "minute: 2", "second:2 ",
+        "hour:2:2", "context:511", "hour:0511", "context:99999999999999999999",
+        "model:2", "provider:2", "mode:2", "goal_spinner:1",
+        "provider_spinner:1", "tool_spinner:1", "host:2", "operator:2",
+        "effort:2"};
+    char label[SNJ_TERM_LABEL_BYTES], template[256];
+
+    for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
+        values[SNJ_PROMPT_CONTEXT] = contexts[i];
+        assert(snj_config_prompt_expand(
+            "{chat:{context:4}}{rollout-idle:x}{rollout-active:y}", 0u,
+            values, 0xfdu, label, sizeof(label)) == 0);
+        assert(strcmp(label, padded[i]) == 0);
+    }
+    assert(snj_config_prompt_expand(
+        "{chat:{hour}:{minute}:{second}/{hour:2}:{minute:02}:{second:02}}"
+        "{rollout-idle:x}{rollout-active:y}", 0u, values, 0xfdu,
+        label, sizeof(label)) == 0);
+    assert(strcmp(label, "3:7:9/ 3:07:09 ") == 0);
+    for (unsigned int i = 0u; i <= 60u; ++i) {
+        char number[4], expected[16];
+
+        assert(snprintf(number, sizeof(number), "%u", i) > 0);
+        values[SNJ_PROMPT_SECOND] = number;
+        assert(snprintf(expected, sizeof(expected), "%u/%2u/%02u ", i, i, i) > 0);
+        assert(snj_config_prompt_expand(
+            "{chat:{second}/{second:2}/{second:02}}{rollout-idle:x}"
+            "{rollout-active:y}", 0u, values, 0xfdu,
+            label, sizeof(label)) == 0);
+        assert(strcmp(label, expected) == 0);
+    }
+    values[SNJ_PROMPT_CONTEXT] = "100%";
+    values[SNJ_PROMPT_HOUR] = "23";
+    values[SNJ_PROMPT_MINUTE] = "59";
+    values[SNJ_PROMPT_SECOND] = "60";
+    assert(snj_config_prompt_expand(
+        "{chat:{context:2}/{hour:1}:{minute:1}:{second:01}}"
+        "{rollout-idle:x}{rollout-active:y}", 0u, values, 0xfdu,
+        label, sizeof(label)) == 0);
+    assert(strcmp(label, "100%/23:59:60 ") == 0);
+    values[SNJ_PROMPT_HOUR] = values[SNJ_PROMPT_MINUTE] =
+        values[SNJ_PROMPT_SECOND] = "--";
+    assert(snj_config_prompt_expand(
+        "{chat:{hour:02}:{minute:03}:{second:3}}{rollout-idle:x}"
+        "{rollout-active:y}", 0u, values, 0xfdu, label, sizeof(label)) == 0);
+    assert(strcmp(label, "--: --: -- ") == 0);
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        assert(snprintf(template, sizeof(template),
+            "{chat:x}{rollout-idle:y}{rollout-active:{%s}}", invalid[i]) > 0);
+        expect_ui(path, "prompt", template, false);
+        /* Even an inactive mode must reject malformed numeric formats. */
+        assert(snj_config_prompt_expand(template, 0u, values, 0xfdu,
+                                         label, sizeof(label)) < 0);
+    }
+    expect_ui(path, "prompt",
+        "{chat:{hour:0510}}{rollout-idle:{context:510}}{rollout-active:y}", true);
+    assert(snj_config_prompt_expand(
+        "{chat:{context:510}}{rollout-idle:x}{rollout-active:y}", 0u,
+        values, 0xfdu, label, sizeof(label)) == 0);
+    assert(strlen(label) == sizeof(label) - 1u);
+    assert(strcmp(label + 506u, "100% ") == 0);
+    assert(snj_config_prompt_expand(
+        "{chat:{context:510}x}{rollout-idle:x}{rollout-active:y}", 0u,
+        values, 0xfdu, label, sizeof(label)) < 0);
+    assert(snj_config_prompt_expand(
+        "{chat:\\{{hour:02}\\}\\\\}{rollout-idle:x}{rollout-active:y}", 0u,
+        values, 0xfdu, label, sizeof(label)) == 0);
+    assert(strcmp(label, "{--}\\ ") == 0);
 }
 
 int
@@ -133,7 +215,8 @@ main(void)
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
-    assert(strstr(config.prompt, "{chat:{time} ") != NULL);
+    assert(strstr(config.prompt, "{chat:{hour:02}:{minute:02}:{second:02} "));
+    assert(strstr(config.prompt, "{context:4}"));
     assert(strstr(config.prompt, "{goal_spinner}") != NULL);
     assert(strcmp(config.prompt_spinner_goal, " ◆") == 0);
     assert(strcmp(config.prompt_spinner_provider, " ◴◷◶◵") == 0);
@@ -296,10 +379,12 @@ main(void)
     expect_ui(path, "prompt", "{chat:}{rollout-idle:y}{rollout-active:z}",
               false);
     {
-        const char *values[8] = {"prov", "model", "high", "", "host",
-                                 "0%", "rollout-idle", "12:34:56"};
+        const char *values[SNJ_PROMPT_FIELD_COUNT] = {
+            "prov", "model", "high", "", "host", "0%", "rollout-idle",
+            "12", "34", "56"};
         const char template[] =
-            "pre{chat:{time} {operator}:}{rollout-idle:{provider}/{model}/{effort} "
+            "pre{chat:{hour:02}:{minute:02}:{second:02} {operator}:}"
+            "{rollout-idle:{provider}/{model}/{effort} "
             "{context}{goal_spinner}›}{rollout-active:A}";
         const unsigned char expected[] = {
             'p','r','e','p','r','o','v','/','m','o','d','e','l','/','h','i','g','h',
@@ -318,6 +403,7 @@ main(void)
             values, 0xfdu, expanded, sizeof(expanded)) < 0);
     }
 
+    test_prompt_numbers(path);
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
     assert(symlink(path, link_path) == 0);
     expect_invalid(link_path);

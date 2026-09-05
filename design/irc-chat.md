@@ -90,7 +90,7 @@ history_lines = 200
 
 [ui]
 color = auto
-prompt = {chat:{time} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
+prompt = {chat:{hour:02}:{minute:02}:{second:02} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context:4}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context:4}{goal_spinner}{provider_spinner}{tool_spinner}»}
 prompt_spinner_goal = " ◆"
 prompt_spinner_provider = " ◴◷◶◵"
 prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -214,7 +214,8 @@ summaries, runtime state, protocol, and transport detail through the existing
 single verbosity ladder. Actionable errors and direct local-command results
 remain immediately visible in either view.
 
-The rollout composer includes bare `N%` as its last data field immediately
+The rollout composer includes `N%`, space-padded to four columns by default,
+as its last data field immediately
 before the optional goal/provider/tool spinner fields and `›` or `»`, using the
 latest comparable durable token bound and resolved hard input budget. A fresh
 session or accounting from a different provider source, selection, or
@@ -223,7 +224,10 @@ budget renders `?%`.
 The default chat prompt uses local `HH:MM:SS` followed by
 `OPERATOR_NICK@MACHINE_HOSTNAME` without a meter, so switching presentation
 views does not imply a token fact there. The timestamp is captured when the
-prompt opens and the visible label is retained when that line is submitted.
+prompt opens and is preserved across view, nickname, status, and editor redraws.
+Submission or cancellation starts a new capture for the next prompt. Components
+are independently formatted by `{hour:02}:{minute:02}:{second:02}`; see
+`interactive-io.md` for numeric widths and explicit spinner optionality.
 
 Successful durable lifecycle milestones are also first-class rollout records
 at verbosity 0. They use exact terse bullet lines: `• Compacted` after

@@ -141,6 +141,15 @@ messages remain visible.
 
 ## Trust and reference
 
+Under `[ui]`, `prompt` supports mode cases and separate clock components:
+`{hour:02}:{minute:02}:{second:02}` gives the default chat clock. `{context:4}`
+space-pads the whole percentage to four columns; widths never truncate.
+Spinner settings starting with a space reserve a column; leading `\0` hides
+it while idle. No whitespace is removed implicitly. See the
+[prompt reference](design/interactive-io.md#prompt-identity-and-tab) for the
+full syntax. Explicit pre-1.0 templates using `{time}` must replace it with
+the clock components.
+
 Tools run with your local permissions. There is no command approval sandbox.
 IRC has no authentication or TLS: keep it on localhost or use a trusted,
 separately secured network. Ordinary IRC clients receive operator status.

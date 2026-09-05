@@ -32,6 +32,20 @@ enum snj_color_mode {
     SNJ_COLOR_NEVER
 };
 
+enum snj_prompt_field {
+    SNJ_PROMPT_PROVIDER,
+    SNJ_PROMPT_MODEL,
+    SNJ_PROMPT_EFFORT,
+    SNJ_PROMPT_OPERATOR,
+    SNJ_PROMPT_HOST,
+    SNJ_PROMPT_CONTEXT,
+    SNJ_PROMPT_MODE,
+    SNJ_PROMPT_HOUR,
+    SNJ_PROMPT_MINUTE,
+    SNJ_PROMPT_SECOND,
+    SNJ_PROMPT_FIELD_COUNT
+};
+
 enum snj_token_count_mode {
     SNJ_TOKEN_COUNT_AUTO,
     SNJ_TOKEN_COUNT_OFF,
@@ -114,7 +128,8 @@ int snj_config_save_model(const char *path, bool allow_create,
                           const char *effort,
                           char *error, size_t error_size);
 int snj_config_prompt_expand(const char *text, unsigned int mode,
-                             const char *const values[8], unsigned char marker,
+                             const char *const values[SNJ_PROMPT_FIELD_COUNT],
+                             unsigned char marker,
                              char *label, size_t label_size);
 const struct snj_provider_config *snj_config_provider(
     const struct snj_config *config, const char *name);

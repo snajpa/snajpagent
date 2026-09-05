@@ -258,7 +258,7 @@ Both views append to terminal scrollback;
 neither is a full-screen TUI.
 .PP
 The default rollout prompt shows provider, model, effort, a bare context
-percentage, three status fields, and an idle or active marker:
+percentage space-padded to four columns, three status fields, and an idle or active marker:
 .B ›
 while idle and
 .B »
@@ -270,10 +270,11 @@ an unknown budget shows
 .PP
 The default chat prompt is
 .IR HH:MM:SS " " OPERATOR_NICK@MACHINE_HOSTNAME "   : " .
-The timestamp is local time captured when the prompt opens.
+The timestamp is local time captured once per composer.  Editing, view changes,
+and status redraws retain it; submission or Ctrl-C cancellation ends that capture.
 The status fields indicate an active goal, provider work, and a synchronous
-tool call.  Accepted interruption blinks a skull in the foreground status
-field until the turn closes.  The template and spinners are configurable under
+tool call.  Interruption retains the current provider/tool indicator until the
+turn closes; there is no separate interruption glyph.  The template and spinners are configurable under
 .BR [ui] .
 .SS Verbosity
 Verbosity controls detail within a view, not which view is selected.
@@ -658,8 +659,10 @@ case.  Ordinary fields are
 .BR {host} ,
 .BR {context} ,
 .BR {mode} ,
+.BR {hour} ,
+.BR {minute} ,
 and
-.BR {time} ;
+.BR {second} ;
 optional status fields are
 .BR {goal_spinner} ,
 .BR {provider_spinner} ,
@@ -668,6 +671,22 @@ and
 Backslash escapes literal braces and backslash.  No shell, environment, or
 command expansion occurs.  snajpagent appends one space after the selected
 label.
+.PP
+Numeric fields accept a minimum space-padded width, for example
+.B {context:4}
+renders the complete percentage as "  0%", "  9%", " 10%", "100%", or "  ?%".
+Clock components are natural decimal digits and additionally accept zero-fill:
+.B {hour:02}:{minute:02}:{second:02}
+is the default local clock.  Bare fields are unpadded.  Failed time capture
+renders each component as "--", padded with spaces even for a zero-fill format.
+Widths never truncate, include the percent sign, and must be positive decimal
+integers at most 510.  The complete label, input space, and largest spinner
+frames must still fit 512 bytes including NUL.  Signs, whitespace, extra leading
+zeros, empty widths, and formats on text/spinner fields are rejected in every
+mode.  Context zero-fill is invalid.  Invalid reloads retain the previous config.
+The pre-1.0 combined
+.B {time}
+field is removed: manually replace it in explicit templates with clock components.
 .PP
 For a minimal prompt without spinners, use this single-line value:
 .nf
@@ -691,7 +710,10 @@ removes a present field and
 .B \(dq\e0◆\(dq
 appears only while active.  Zero through 16 remaining one-column items are
 active frames.  One active frame is static and schedules no periodic refresh;
-two or more animate.  Adjacent active frames must differ.  Defaults:
+two or more animate.  Adjacent active frames must differ.  A blank active
+frame still occupies one column.  Omit a placeholder to remove it in one mode.
+Literal spaces are never trimmed, and numeric padding never restores an absent
+spinner.  Defaults:
 .PP
 .nf
 prompt_spinner_goal = " ◆"

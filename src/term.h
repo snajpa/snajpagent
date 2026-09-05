@@ -9,10 +9,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <termios.h>
+#include <time.h>
 
 #define SNJ_TERM_HISTORY_COUNT 100u
 #define SNJ_TERM_HISTORY_BYTES (4u * 1024u * 1024u)
-#define SNJ_TERM_LABEL_BYTES 512u
 #define SNJ_TERM_SPINNER_COUNT 3u
 #define SNJ_TERM_SPINNER_MARKER_BASE 0xfdu
 
@@ -20,6 +20,14 @@ enum snj_term_spinner_id {
     SNJ_TERM_SPINNER_GOAL,
     SNJ_TERM_SPINNER_PROVIDER,
     SNJ_TERM_SPINNER_TOOL
+};
+
+struct snj_prompt_clock {
+    bool captured;
+    bool valid;
+    int hour;
+    int minute;
+    int second;
 };
 
 struct snj_term_spinner {
@@ -84,6 +92,7 @@ struct snj_term {
     size_t paste_end_match;
     char label[SNJ_TERM_LABEL_BYTES];
     char prompt_template[SNJ_TERM_LABEL_BYTES];
+    struct snj_prompt_clock prompt_clock;
     struct snj_term_spinner spinner[SNJ_TERM_SPINNER_COUNT];
     uint64_t spinner_epoch_ms;
     uint32_t spinner_per_second;
@@ -114,6 +123,7 @@ struct snj_term {
 };
 
 void snj_term_init(struct snj_term *term);
+void snj_term_capture_prompt_clock(struct snj_term *term, time_t seconds);
 void snj_term_set_commands(struct snj_term *term,
                            const struct snj_term_command *commands,
                            size_t count);

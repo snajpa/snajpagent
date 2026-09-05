@@ -661,6 +661,26 @@ monotonic_ms(void)
     return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
 }
 
+void
+snj_term_capture_prompt_clock(struct snj_term *term, time_t seconds)
+{
+    struct tm local;
+    struct snj_prompt_clock *clock = &term->prompt_clock;
+
+    if (clock->captured)
+        return;
+    clock->captured = true;
+    clock->valid = seconds != (time_t)-1 && localtime_r(&seconds, &local) &&
+                   local.tm_hour >= 0 && local.tm_hour <= 23 &&
+                   local.tm_min >= 0 && local.tm_min <= 59 &&
+                   local.tm_sec >= 0 && local.tm_sec <= 60;
+    if (clock->valid) {
+        clock->hour = local.tm_hour;
+        clock->minute = local.tm_min;
+        clock->second = local.tm_sec;
+    }
+}
+
 static int
 prepare_spinner(struct snj_term_spinner *spinner, const char *value)
 {
@@ -2073,6 +2093,7 @@ complete_action(struct snj_term *term, enum snj_term_action action,
     term->cursor = 0u;
     term->prompt_wanted = false;
     term->typing_active = false;
+    term->prompt_clock.captured = false;
     history_reset_navigation(term);
     *text = copy;
     *out = action;
@@ -2282,8 +2303,8 @@ cancel_line(struct snj_term *term, enum snj_term_action *action)
     term->output_seen = false;
     term->output_ended_lf = true;
     history_reset_navigation(term);
-    if (redraw(term) < 0)
-        return -1;
+    term->prompt_clock.captured = false;
+    term->prompt_wanted = false;
     *action = interrupt ? SNJ_TERM_INTERRUPT : SNJ_TERM_CANCEL;
     return 1;
 }

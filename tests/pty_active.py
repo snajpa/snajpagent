@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -10,8 +11,10 @@ import select
 import shlex
 import signal
 import socket
+import struct
 import subprocess
 import sys
+import termios
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,12 +25,12 @@ DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
-DEFAULT_IDLE_PROMPT = f"default/{DEFAULT_MODEL}/medium 0%   › ".encode()
-DEFAULT_ACCOUNTED_IDLE_PROMPT = f"default/{DEFAULT_MODEL}/medium ?%   › ".encode()
-DEFAULT_ACTIVE_PROMPT = f"default/{DEFAULT_MODEL}/medium ?% ◴ » ".encode()
-DEFAULT_TOOL_PROMPT = f"default/{DEFAULT_MODEL}/medium ?%  ⠋» ".encode()
-QUEUE_EDIT_ACTIVE_PROMPT = "edit 1 ?% ◴ › ".encode()
-QUEUE_EDIT_IDLE_PROMPT = "edit 1 ?%   › ".encode()
+DEFAULT_IDLE_PROMPT = f"default/{DEFAULT_MODEL}/medium   0%   › ".encode()
+DEFAULT_ACCOUNTED_IDLE_PROMPT = f"default/{DEFAULT_MODEL}/medium   ?%   › ".encode()
+DEFAULT_ACTIVE_PROMPT = f"default/{DEFAULT_MODEL}/medium   ?% ◴ » ".encode()
+DEFAULT_TOOL_PROMPT = f"default/{DEFAULT_MODEL}/medium   ?%  ⠋» ".encode()
+QUEUE_EDIT_ACTIVE_PROMPT = "edit 1   ?% ◴ › ".encode()
+QUEUE_EDIT_IDLE_PROMPT = "edit 1   ?%   › ".encode()
 GOAL_SET = "• Goal set".encode()
 GOAL_CLEARED = "• Goal cleared".encode()
 COMPACTED = "• Compacted".encode()
@@ -391,8 +394,8 @@ def test_static_zero_width_spinner_has_no_refresh():
         "prompt_spinner_per_second = 60\n",
         encoding="utf-8",
     )
-    idle = f"default/{DEFAULT_MODEL}/medium 0%› ".encode()
-    active = f"default/{DEFAULT_MODEL}/medium ?%◆» ".encode()
+    idle = f"default/{DEFAULT_MODEL}/medium   0%› ".encode()
+    active = f"default/{DEFAULT_MODEL}/medium   ?%◆» ".encode()
     child = Child(["--config", str(config)])
     try:
         child.wait(idle)
@@ -403,6 +406,72 @@ def test_static_zero_width_spinner_has_no_refresh():
         assert len(child.buf) == settled, bytes(child.buf[settled:])
     finally:
         child.kill()
+
+
+def test_prompt_clock_lifetime():
+    config = (Path(os.environ["SNAJPAGENT_TEST_ROOT"]) /
+              "config" / "prompt-clock.ini")
+    clock = "@{hour:02}:{minute:02}:{second:02}"
+    config.write_text(
+        "[ui]\nprompt = {chat:" + clock + ":}"
+        "{rollout-idle:" + clock + " {context:4}{provider_spinner}›}"
+        "{rollout-active:" + clock + " {context:4}{provider_spinner}»}\n"
+        'prompt_spinner_provider = " P"\n', encoding="utf-8")
+    child = Child(["--config", str(config), "-s", f"127.0.0.1:{free_port()}",
+                   "-n", "clockagent", "-o", "clockop", "-r", "lab"])
+    pattern = rb"@(\d{2}:\d{2}:\d{2})"
+
+    def latest_clock():
+        return re.findall(pattern, child.buf)[-1]
+
+    try:
+        child.wait(b": ")
+        original = latest_clock()
+        child.drain(1.1)
+        # Empty Tab changes views, not the underlying composer capture.
+        start = len(child.buf)
+        child.send(b"\t")
+        idle = b"@" + original + "   0% › ".encode()
+        child.wait(idle, start=start)
+        child.send(b"clock-draft")
+        child.drain()
+        start = len(child.buf)
+        fcntl.ioctl(child.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 48, 0, 0))
+        child.wait(idle + b"clock-draft", start=start)
+        start = len(child.buf)
+        child.send(b"\x12")
+        child.wait(b"reverse-i-search", start=start)
+        child.drain(1.1)
+        start = len(child.buf)
+        child.send(b"\x07")
+        child.wait(idle + b"clock-draft", start=start)
+        # Cancellation retains the old displayed line and captures a new one.
+        start = len(child.buf)
+        child.send(b"\x03")
+        cancelled = child.wait(b"^C\r\n", start=start)
+        child.wait("   0% › ".encode(), start=cancelled)
+        replacement = latest_clock()
+        assert replacement != original, bytes(child.buf[start:])
+        child.drain(1.1)
+        start = len(child.buf)
+        child.send(b"terminal_status\r")
+        active_end = child.wait("   ?%P» ".encode(), start=start)
+        active_clock = latest_clock()
+        assert active_clock != replacement, bytes(child.buf[start:])
+        child.send(b"preserved-draft")
+        child.wait(b"status-second-fragment", start=active_end)
+        settled = child.wait(b"@" + active_clock + "   ?% › ".encode(),
+                             start=active_end)
+        child.wait(b"preserved-draft", start=settled)
+        assert set(re.findall(pattern, child.buf[active_end:])) == {active_clock}
+        child.send(b"\x03")
+        child.wait(b"^C\r\n", start=settled)
+        child.drain()
+        child.exit_now()
+        child = None
+    finally:
+        if child:
+            child.kill()
 
 
 def test_initial_unrenderable_prompt_is_rejected_atomically():
@@ -448,7 +517,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
-    prompt = f"default/{model}/medium 0%   › ".encode()
+    prompt = f"default/{model}/medium   0%   › ".encode()
     child = Child(["-m", model])
     try:
         child.wait(prompt)
@@ -807,7 +876,7 @@ def test_steering_during_capacity_recovery_compaction():
     mismatched = Child([
         "--config", str(mismatch_config), "--resume", session_id
     ])
-    prompt_end = mismatched.wait(b" 0%   \xe2\x80\xba ")
+    prompt_end = mismatched.wait(b"   0%   \xe2\x80\xba ")
     mismatched.send(b"/status\r")
     status_end = mismatched.wait(b"context: source=unknown", start=prompt_end)
     status_end = mismatched.wait(
@@ -1622,7 +1691,7 @@ def test_uncached_typed_model_selection():
 
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
-    initial_prompt = b"first/uncached-start/low 0%   \xe2\x80\xba "
+    initial_prompt = b"first/uncached-start/low   0%   \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     config.write_text(
@@ -1916,7 +1985,13 @@ def test_config_editor_reload():
     valid_two.write_text(
         "[agent]\nmodel = ignored-default\nreasoning_effort = high\n"
         "[provider]\napi_key_env = OPENAI_API_KEY\n"
-        "[ui]\nverbosity = 2\ntyping_pause_ms = 25\n",
+        "[ui]\nverbosity = 2\ntyping_pause_ms = 25\n"
+        "prompt = {chat:{hour:2}:{minute:02}:{second:02}:}"
+        "{rollout-idle:W{context:4}{goal_spinner}{provider_spinner}{tool_spinner}›}"
+        "{rollout-active:W{context:4}{provider_spinner}»}\n"
+        'prompt_spinner_goal = "\\0"\n'
+        'prompt_spinner_provider = "\\0P"\n'
+        'prompt_spinner_tool = " "\n',
         encoding="utf-8",
     )
     valid_one.write_text(
@@ -1925,7 +2000,10 @@ def test_config_editor_reload():
         "[ui]\nverbosity = 1\n",
         encoding="utf-8",
     )
-    invalid.write_text("[ui]\nverbosity = 9\n", encoding="utf-8")
+    invalid.write_text(
+        "[ui]\nverbosity = 5\nprompt_spinner_tool = \"\\0\"\n"
+        "prompt = {chat:{hour:002}}{rollout-idle:x}{rollout-active:y}\n",
+        encoding="utf-8")
     unrenderable.write_text(
         "[ui]\nverbosity = 5\n"
         "prompt = {chat:x}{rollout-idle:" + ("x" * 600) +
@@ -1977,7 +2055,7 @@ def test_config_editor_reload():
         plan.write_text(str(valid_two), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
-        child.wait(PROMPT, start=end)
+        child.wait("W  0% › ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
@@ -1985,8 +2063,8 @@ def test_config_editor_reload():
 
         plan.write_text(str(invalid), encoding="utf-8")
         child.send(b"/config\r")
-        end = child.wait(b"invalid configuration at line 2", start=status_end)
-        child.wait(PROMPT, start=end)
+        end = child.wait(b"invalid configuration at line 4", start=status_end)
+        child.wait("W  0% › ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
@@ -2084,12 +2162,12 @@ def test_known_context_meter():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"first/uncached-start/low 0%   \xe2\x80\xba ")
+    child.wait(b"first/uncached-start/low   0%   \xe2\x80\xba ")
     child.send(b"/model gpt-5.6-luna / high\r")
     selected = child.wait(
         b"model for next turn: first / gpt-5.6-luna / high"
     )
-    child.wait(b"first/gpt-5.6-luna/high 0%   \xe2\x80\xba ", start=selected)
+    child.wait(b"first/gpt-5.6-luna/high   0%   \xe2\x80\xba ", start=selected)
     session_id = new_session(before)
     start = len(child.buf)
     child.send(b"slow\r")
@@ -2109,7 +2187,7 @@ def test_known_context_meter():
     assert isinstance(used, int) and used > 0
     percent = min(100, (used * 100 + hard - 1) // hard)
     assert percent > 0
-    expected = f"first/gpt-5.6-luna/high {percent}% ◴ » ".encode()
+    expected = f"first/gpt-5.6-luna/high {str(percent) + '%':>4} ◴ » ".encode()
     child.wait(expected, start=start)
     child.send(b"\x03")
     interrupted = child.wait(b"turn interrupted", start=start)
@@ -2124,7 +2202,7 @@ def test_config_and_cli_model_passthrough():
     )
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"default/openai/gpt-5.6/medium 0%   \xe2\x80\xba ")
+    child.wait(b"default/openai/gpt-5.6/medium   0%   \xe2\x80\xba ")
 
     child.send(b"/status\r")
     end = child.wait(b"model: openai/gpt-5.6")
@@ -2144,7 +2222,7 @@ def test_config_and_cli_model_passthrough():
         "--config", str(config), "-m", "vendor/future-model",
         "--effort", "custom-effort", "--resume", session_id
     ])
-    resumed.wait(b"default/vendor/future-model/custom-effort 0%   \xe2\x80\xba ")
+    resumed.wait(b"default/vendor/future-model/custom-effort   0%   \xe2\x80\xba ")
     start = len(resumed.buf)
     resumed.send(b"/status\r")
     end = resumed.wait(
@@ -2152,11 +2230,11 @@ def test_config_and_cli_model_passthrough():
     )
     resumed.wait(PROMPT, start=end)
     resumed.send(b"ping\r")
-    resumed.wait(b"default/vendor/future-model/custom-effort ?% \xe2\x97\xb4 \xc2\xbb ",
+    resumed.wait(b"default/vendor/future-model/custom-effort   ?% \xe2\x97\xb4 \xc2\xbb ",
                  start=end)
     answer_end = resumed.wait(b"pong", start=end)
     idle_end = resumed.wait(
-        b"default/openai/gpt-5.6/medium 0%   \xe2\x80\xba ", start=answer_end
+        b"default/openai/gpt-5.6/medium   0%   \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -2506,11 +2584,11 @@ def test_prompt_identity_is_terminal_safe():
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(b"default/" + visible + b" 0%   \xe2\x80\xba ")
+    child.wait(b"default/" + visible + b"   0%   \xe2\x80\xba ")
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send(b"ping\r")
-    child.wait(b"default/" + visible + b" ?% \xe2\x97\xb4 \xc2\xbb ")
+    child.wait(b"default/" + visible + b"   ?% \xe2\x97\xb4 \xc2\xbb ")
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
 
@@ -2576,7 +2654,7 @@ def test_network_view_routing_and_atomic_catchup():
     peer_agent = None
     exited = False
     network_idle = f"localop@{socket.gethostname()}   : ".encode()
-    rollout_idle = f"default/{DEFAULT_MODEL}/medium ?%   › ".encode()
+    rollout_idle = f"default/{DEFAULT_MODEL}/medium   ?%   › ".encode()
 
     def queue_rollout_and_enter(trigger, first, second, switch):
         chat_start = len(child.buf)
@@ -2674,7 +2752,7 @@ def test_network_view_routing_and_atomic_catchup():
         active_output = bytes(child.buf[active_start:])
         frames = ["◴", "◷", "◶", "◵"]
         active_labels = [
-            f"default/{DEFAULT_MODEL}/medium ?% {frame} » ".encode() +
+            f"default/{DEFAULT_MODEL}/medium   ?% {frame} » ".encode() +
             b"rollout active steer" for frame in frames
         ]
         assert active_output.count(submitted_start) == 1, active_output
@@ -2759,10 +2837,10 @@ def test_network_chat_and_managed_mention():
     network_idle = f"localop@{socket.gethostname()}   : ".encode()
     network_active = f"localop@{socket.gethostname()} ◴ : ".encode()
     network_rollout_idle = (
-        f"default/{DEFAULT_MODEL}/medium 0%   › ".encode()
+        f"default/{DEFAULT_MODEL}/medium   0%   › ".encode()
     )
     network_rollout_accounted_idle = (
-        f"default/{DEFAULT_MODEL}/medium ?%   › ".encode()
+        f"default/{DEFAULT_MODEL}/medium   ?%   › ".encode()
     )
     try:
         child.wait(network_idle)
@@ -3119,6 +3197,7 @@ def test_network_chat_and_managed_mention():
 test_incremental_prompt_edit_and_utf8_cursor_column()
 test_incremental_active_prompt_keeps_status_stable()
 test_static_zero_width_spinner_has_no_refresh()
+test_prompt_clock_lifetime()
 test_initial_unrenderable_prompt_is_rejected_atomically()
 test_incremental_multiline_delete_clears_old_tail()
 test_incremental_wrapped_long_prompt_multiline_indent()

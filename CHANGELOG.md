@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Add minimum numeric prompt widths (`{context:4}`, `{hour:2}`) and clock-only
+  zero padding (`{hour:02}:{minute:02}:{second:02}`). Default context uses four
+  columns, including queue editing. Keep one component-valued clock capture
+  per composer across redraws, with a new capture after submission or Ctrl-C.
+  Reserved spinner spaces and explicit `\0` absence remain independent of
+  numeric padding. The pre-1.0 `{time}` field is removed; update explicit
+  templates to the component fields (no compatibility alias).
+
 - Refresh the README, complete command/configuration manual, and minimal static
   website against the current UI and runtime. Replace the terminal screenshots
   with current real-provider sessions.
@@ -15,7 +23,7 @@
   for IRC agent messages without adding synthetic prose bullets.
 
 - Prefix the default IRC chat composer with the local `HH:MM:SS` prompt-open
-  time and expose that value as the data-only prompt template field `{time}`.
+  time, assembled from individually configurable clock components.
 
 - Use accepted IRC nicks in the prompt and local chat. Track live nick changes,
   preserve op status, and keep mentions, echo suppression, and model context

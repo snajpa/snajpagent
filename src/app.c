@@ -490,10 +490,9 @@ format_input_label(struct app_state *app, bool active,
     const char *model = active ? app->turn_model : next_model(app);
     const char *effort = active ? app->turn_effort :
                                   resolve_effort(next_effort(app));
-    char hostname[256u], meter[32u], when[16u];
-    const char *values[8];
-    time_t seconds = time(NULL);
-    struct tm tm;
+    char hostname[256u], meter[32u], hour[12u], minute[12u], second[12u];
+    const char *values[SNJ_PROMPT_FIELD_COUNT];
+    const struct snj_prompt_clock *clock = &app->term.prompt_clock;
     unsigned int selected = snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
                             0u : active ? 2u : 1u;
 
@@ -508,9 +507,17 @@ format_input_label(struct app_state *app, bool active,
     for (size_t i = 0u; hostname[i]; ++i)
         if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
             hostname[i] = '_';
-    if (seconds == (time_t)-1 || !localtime_r(&seconds, &tm) ||
-        strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
-        memcpy(when, "--:--:--", 9u);
+    if (!clock->captured)
+        snj_term_capture_prompt_clock(&app->term, time(NULL));
+    if (clock->valid) {
+        (void)snprintf(hour, sizeof(hour), "%u", (unsigned int)clock->hour);
+        (void)snprintf(minute, sizeof(minute), "%u", (unsigned int)clock->minute);
+        (void)snprintf(second, sizeof(second), "%u", (unsigned int)clock->second);
+    } else {
+        memcpy(hour, "--", sizeof("--"));
+        memcpy(minute, "--", sizeof("--"));
+        memcpy(second, "--", sizeof("--"));
+    }
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
@@ -519,12 +526,14 @@ format_input_label(struct app_state *app, bool active,
     values[5] = meter;
     values[6] = selected == 0u ? "chat" :
                 selected == 1u ? "rollout-idle" : "rollout-active";
-    values[7] = when;
+    values[SNJ_PROMPT_HOUR] = hour;
+    values[SNJ_PROMPT_MINUTE] = minute;
+    values[SNJ_PROMPT_SECOND] = second;
     if (app->queue_edit_id[0]) {
         struct snj_buf out;
 
-        snj_buf_init(&out, SNJ_TERM_LABEL_BYTES - 1u);
-        if (snj_buf_printf(&out, "edit %zu %s", app->queue_edit_number, meter) < 0)
+        snj_buf_init(&out, SNJ_TERM_LABEL_BYTES);
+        if (snj_buf_printf(&out, "edit %zu %4s", app->queue_edit_number, meter) < 0)
             goto fail;
         for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
             if (snj_buf_putc(&out, SNJ_TERM_SPINNER_MARKER_BASE + i) < 0)
@@ -553,7 +562,7 @@ validate_prompt_values(const struct snj_config *config,
                        bool networked)
 {
     char hostname[256u];
-    const char *values[8];
+    const char *values[SNJ_PROMPT_FIELD_COUNT];
     const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
         config->prompt_spinner_goal,
         config->prompt_spinner_provider,
@@ -579,7 +588,9 @@ validate_prompt_values(const struct snj_config *config,
     values[3] = networked ? config->irc_operator_nick : "";
     values[4] = hostname;
     values[5] = "100%";
-    values[7] = "23:59:59";
+    values[SNJ_PROMPT_HOUR] = "23";
+    values[SNJ_PROMPT_MINUTE] = "59";
+    values[SNJ_PROMPT_SECOND] = "60";
     snj_term_init(&probe);
     for (unsigned int mode = 0u; mode < 3u; ++mode) {
         values[6] = mode == 0u ? "chat" : mode == 1u ?
@@ -2063,12 +2074,12 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         return set_input_prompt(app, true);
     }
     if (action == SNJ_TERM_CANCEL) {
-        return 0;
+        return set_input_prompt(app, true);
     }
     if (action == SNJ_TERM_INTERRUPT) {
         app->interrupt_requested = true;
         free(line);
-        return 2;
+        return set_input_prompt(app, true) < 0 ? -1 : 2;
     }
     if (action == SNJ_TERM_VIEW) {
         if (app->queue_edit_id[0]) {
@@ -3865,9 +3876,9 @@ interactive_loop(struct app_state *app, const char *initial)
                     app->queue_edit_id[0] = '\0';
                     app->queue_edit_number = 0u;
                     app->queue_edit_was_armed = false;
-                    if (set_input_prompt(app, false) < 0)
-                        return 6;
                 }
+                if (set_input_prompt(app, false) < 0)
+                    return 6;
                 continue;
             }
             if (action == SNJ_TERM_VIEW) {

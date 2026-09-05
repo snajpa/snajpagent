@@ -108,15 +108,17 @@ snj_config_init(struct snj_config *config)
     config->resume_history_turns = 2u;
     config->typing_pause_ms = 500u;
     memcpy(config->prompt,
-        "{chat:{time} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}"
-        "{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}"
+        "{chat:{hour:02}:{minute:02}:{second:02} {operator}@{host}"
+        "{goal_spinner}{provider_spinner}{tool_spinner}:}"
+        "{rollout-idle:{provider}/{model}/{effort} {context:4}{goal_spinner}"
         "{provider_spinner}{tool_spinner}›}"
-        "{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}"
+        "{rollout-active:{provider}/{model}/{effort} {context:4}{goal_spinner}"
         "{provider_spinner}{tool_spinner}»}",
-        sizeof("{chat:{time} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}"
-        "{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}"
+        sizeof("{chat:{hour:02}:{minute:02}:{second:02} {operator}@{host}"
+        "{goal_spinner}{provider_spinner}{tool_spinner}:}"
+        "{rollout-idle:{provider}/{model}/{effort} {context:4}{goal_spinner}"
         "{provider_spinner}{tool_spinner}›}"
-        "{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}"
+        "{rollout-active:{provider}/{model}/{effort} {context:4}{goal_spinner}"
         "{provider_spinner}{tool_spinner}»}"));
     memcpy(config->prompt_spinner_goal, " ◆", sizeof(" ◆"));
     memcpy(config->prompt_spinner_provider, " ◴◷◶◵", sizeof(" ◴◷◶◵"));
@@ -295,12 +297,13 @@ invalid:
 }
 
 static int
-prompt_body(const char *text, size_t len, const char *const values[8],
+prompt_body(const char *text, size_t len,
+            const char *const values[SNJ_PROMPT_FIELD_COUNT],
             unsigned char marker, struct snj_buf *out)
 {
     static const char *const fields[] = {"provider", "model", "effort",
-        "operator", "host", "context", "mode", "time", "goal_spinner",
-        "provider_spinner", "tool_spinner"};
+        "operator", "host", "context", "mode", "hour", "minute", "second",
+        "goal_spinner", "provider_spinner", "tool_spinner"};
     unsigned int spinners = 0u;
 
     for (size_t i = 0u; i < len; ++i) {
@@ -318,21 +321,60 @@ prompt_body(const char *text, size_t len, const char *const values[8],
         } else if (c == '{') {
             const char *end = memchr(text + i + 1u, '}', len - i - 1u);
             size_t field_len = end ? (size_t)(end - text - i - 1u) : 0u;
+            const char *format = memchr(text + i + 1u, ':', field_len);
+            size_t width = 0u;
+            unsigned char fill = ' ';
+
+            if (format)
+                field_len = (size_t)(format - text - i - 1u);
 
             while (field < sizeof(fields) / sizeof(fields[0]) &&
                    (strlen(fields[field]) != field_len ||
                     memcmp(fields[field], text + i + 1u, field_len) != 0))
                 ++field;
             if (!end || field == sizeof(fields) / sizeof(fields[0]) ||
-                (field >= 8u && (spinners & (1u << (field - 8u)))))
+                (field >= SNJ_PROMPT_FIELD_COUNT &&
+                 (spinners & (1u << (field - SNJ_PROMPT_FIELD_COUNT)))))
                 goto invalid;
-            if (field >= 8u)
-                spinners |= 1u << (field - 8u);
-            if (out && ((field < 8u && snj_buf_append(out, values[field],
-                                                     strlen(values[field])) < 0) ||
-                        (field >= 8u &&
-                         snj_buf_putc(out, marker + field - 8u) < 0)))
-                return -1;
+            if (format) {
+                bool clock = field >= SNJ_PROMPT_HOUR &&
+                             field <= SNJ_PROMPT_SECOND;
+
+                if (field != SNJ_PROMPT_CONTEXT && !clock)
+                    goto invalid;
+                ++format;
+                if (format < end && *format == '0') {
+                    if (!clock)
+                        goto invalid;
+                    fill = '0';
+                    ++format;
+                }
+                if (format == end || *format < '1' || *format > '9')
+                    goto invalid;
+                for (; format < end; ++format) {
+                    if (*format < '0' || *format > '9' ||
+                        width > (SNJ_TERM_LABEL_BYTES - 2u -
+                                 (unsigned int)(*format - '0')) / 10u)
+                        goto invalid;
+                    width = width * 10u + (unsigned int)(*format - '0');
+                }
+            }
+            if (field >= SNJ_PROMPT_FIELD_COUNT) {
+                spinners |= 1u << (field - SNJ_PROMPT_FIELD_COUNT);
+                if (out && snj_buf_putc(out,
+                        marker + field - SNJ_PROMPT_FIELD_COUNT) < 0)
+                    return -1;
+            } else if (out) {
+                size_t value_len = strlen(values[field]);
+
+                if (values[field][0] == '-')
+                    fill = ' ';
+                for (size_t pad = value_len; pad < width; ++pad)
+                    if (snj_buf_putc(out, fill) < 0)
+                        return -1;
+                if (snj_buf_append(out, values[field], value_len) < 0)
+                    return -1;
+            }
             i = (size_t)(end - text);
         } else if (c == '}') {
             goto invalid;
@@ -348,7 +390,8 @@ invalid:
 
 static int
 parse_prompt(const char *text, unsigned int selected,
-             const char *const values[8], unsigned char marker,
+             const char *const values[SNJ_PROMPT_FIELD_COUNT],
+             unsigned char marker,
              struct snj_buf *out)
 {
     static const char *const names[] = {"chat:", "rollout-idle:",
@@ -412,7 +455,8 @@ validate_prompt(const char *text)
 
 int
 snj_config_prompt_expand(const char *text, unsigned int mode,
-                         const char *const values[8], unsigned char marker,
+                         const char *const values[SNJ_PROMPT_FIELD_COUNT],
+                         unsigned char marker,
                          char *label, size_t label_size)
 {
     struct snj_buf out;
@@ -423,7 +467,7 @@ snj_config_prompt_expand(const char *text, unsigned int mode,
         errno = EINVAL;
         return -1;
     }
-    snj_buf_init(&out, label_size - 1u);
+    snj_buf_init(&out, label_size);
     if (parse_prompt(text, mode, values, marker, &out) < 0 || !out.len ||
         snj_buf_putc(&out, ' ') < 0 || snj_buf_terminate(&out) < 0)
         goto out;

@@ -97,13 +97,32 @@ does not alter submitted text, model text, events, or provider traffic.
 `[ui] prompt` is one data-only template with exactly one `{chat:TEXT}`, one
 `{rollout-idle:TEXT}`, and one `{rollout-active:TEXT}` case. It supports
 separate `{provider}`, `{model}`, `{effort}`, `{operator}`, `{host}`,
-`{context}`, `{mode}`, and `{time}` fields plus optional `{goal_spinner}`,
+`{context}`, `{mode}`, `{hour}`, `{minute}`, and `{second}` fields plus optional `{goal_spinner}`,
 `{provider_spinner}`, and `{tool_spinner}` fields and escaped literal
 braces/backslash; it performs no shell or environment expansion. The default
 rollout prompt is `PROVIDER/MODEL/EFFORT N%   › ` while idle and uses `»` while
-active. `{time}` is the local `HH:MM:SS` captured when a prompt is opened. The
+active. The complete percentage occupies four columns by default. The
 default chat prompt is `HH:MM:SS OPERATOR@HOST   : `. Snajpagent appends one
 space after the expanded template.
+
+Clock components are natural decimal local-time values from one capture per
+composer, not fragments of a preformatted string. `{hour:02}:{minute:02}:{second:02}`
+produces the default clock. Submission or Ctrl-C cancellation ends the capture;
+editing, search, resize, view/nick changes, asynchronous output, and status
+transitions preserve it. The clock has no timer. Failed capture produces `--`
+for all three components. Submitted/cancelled labels keep their displayed time.
+
+`{context:4}` right-aligns the complete percentage including `%` with spaces:
+`  0%`, `  9%`, ` 10%`, `100%`, or `  ?%`. Clock components also support space
+widths (`{hour:2}`), and only clocks support zero-fill (`{hour:02}`). Bare fields
+remain unpadded; widths never truncate. Unknown clock components always use
+space padding. Widths are positive decimal integers up to 510; reject empty,
+signed, extra-leading-zero, whitespace, overflowing, or nonnumeric formats.
+The whole label, input-separator space, and largest active frames must fit the
+512-byte label buffer. Widths on other fields, including spinners, are invalid.
+All modes are validated, and a failed `/config` reload keeps the prior config.
+The pre-1.0 combined `{time}` field is removed; explicit templates must use the
+component fields instead. No compatibility alias or automatic rewrite exists.
 
 The context meter is the final rollout data field before the adjacent optional
 spinner fields and state glyph. `N` is the rounded-up percentage of the
@@ -136,6 +155,13 @@ non-addressable terminal does not animate. Tool status spans the synchronous
 adapter call and returns to provider after a managed `running` result.
 Interruption retains the provider or tool field until the turn closes; there
 is no fourth interruption glyph, spinner, timer, or configuration key.
+
+Literal spaces never disappear implicitly, and numeric padding never adds a
+column to an absent spinner. An active space frame still occupies one column.
+Omitting a spinner placeholder removes it for that mode. Compact provider/tool
+handoffs account for changed slot ownership even when total width is unchanged.
+Queue editing retains its special `edit NUMBER` label with the same four-column
+context value and reserved/absent spinner configuration.
 
 The networked prompt identity and its chat/rollout views are specified in
 `irc-chat.md`.

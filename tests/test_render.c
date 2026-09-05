@@ -167,6 +167,36 @@ test_prompt_history(void)
 }
 
 static void
+test_prompt_clock(void)
+{
+    struct snj_term term;
+    char *saved_tz = getenv("TZ") ? strdup(getenv("TZ")) : NULL;
+
+    assert(setenv("TZ", "UTC0", 1) == 0);
+    tzset();
+    snj_term_init(&term);
+    snj_term_capture_prompt_clock(&term, 86399);
+    assert(term.prompt_clock.captured && term.prompt_clock.valid);
+    assert(term.prompt_clock.hour == 23 && term.prompt_clock.minute == 59 &&
+           term.prompt_clock.second == 59);
+    snj_term_capture_prompt_clock(&term, 86400);
+    assert(term.prompt_clock.hour == 23 && term.prompt_clock.second == 59);
+    term.prompt_clock.captured = false;
+    snj_term_capture_prompt_clock(&term, 86400);
+    assert(term.prompt_clock.valid && term.prompt_clock.hour == 0 &&
+           term.prompt_clock.minute == 0 && term.prompt_clock.second == 0);
+    term.prompt_clock.captured = false;
+    snj_term_capture_prompt_clock(&term, (time_t)-1);
+    assert(term.prompt_clock.captured && !term.prompt_clock.valid);
+    snj_term_capture_prompt_clock(&term, 0);
+    assert(!term.prompt_clock.valid);
+    snj_term_close(&term);
+    assert((saved_tz ? setenv("TZ", saved_tz, 1) : unsetenv("TZ")) == 0);
+    free(saved_tz);
+    tzset();
+}
+
+static void
 test_prompt_spinners(void)
 {
     struct snj_term term;
@@ -202,6 +232,38 @@ test_prompt_spinners(void)
     assert(snj_term_set_prompt_template(&term, false, oversized, wide, 8u,
                                         0u) < 0);
     assert(memcmp(saved, term.label, sizeof(saved)) == 0);
+    {
+        const char padded[] = "  9%\xfd\xfe\xff> ";
+        const char *stable[] = {" ◆", " P", " T"};
+        const char *compact[] = {"\\0◆", "\\0P", "\\0T"};
+        const char *blank[] = {" ", "\\0 P", "\\0"};
+
+        for (unsigned int state = 0u; state < 8u; ++state) {
+            assert(snj_term_set_prompt_template(&term, true, padded, stable,
+                                                8u, state) == 0);
+            assert(strncmp(term.label, "  9%", 4u) == 0);
+            assert(strcmp(term.label + strlen(term.label) - 2u, "> ") == 0);
+            assert(snj_term_text_width(term.label, strlen(term.label)) == 9u);
+        }
+        assert(snj_term_set_prompt_template(&term, true, padded, compact,
+                                            8u, 0u) == 0);
+        assert(strcmp(term.label, "  9%> ") == 0);
+        assert(snj_term_set_spinner_states(&term, 2u) == 0);
+        assert(strcmp(term.label, "  9%P> ") == 0);
+        assert(snj_term_set_spinner_states(&term, 4u) == 0);
+        assert(strcmp(term.label, "  9%T> ") == 0);
+        assert(term.spinner[SNJ_TERM_SPINNER_PROVIDER].current_len == 0u);
+        assert(term.spinner[SNJ_TERM_SPINNER_TOOL].current_len == 1u);
+        assert(snj_term_set_prompt_template(&term, true, padded, blank,
+                                            8u, 2u) == 0);
+        assert(strcmp(term.label, "  9%  > ") == 0);
+        assert(term.spinner[SNJ_TERM_SPINNER_PROVIDER].current_len == 1u);
+        assert(snj_term_set_spinner_states(&term, 0u) == 0);
+        assert(strcmp(term.label, "  9% > ") == 0);
+        assert(snj_term_set_prompt_template(&term, true, "  9%> ", compact,
+                                            8u, 7u) == 0);
+        assert(strcmp(term.label, "  9%> ") == 0);
+    }
     snj_term_close(&term);
 }
 
@@ -1209,6 +1271,7 @@ main(void)
     assert(strstr(output, "assistant: ## Literal assistant\n") != NULL);
     test_history_failure();
     test_prompt_history();
+    test_prompt_clock();
     test_prompt_spinners();
     test_markdown_streaming();
     test_markdown_tables();
