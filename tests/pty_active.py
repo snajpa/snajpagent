@@ -83,7 +83,7 @@ class Child:
         return self.buf.find(needle, start) + len(needle)
 
     def wait_idle_prompt(self, start=0, timeout=8.0):
-        pattern = re.compile(rb"\r[^\r\n]*/[^\r\n]* \xe2\x80\xba ")
+        pattern = re.compile(rb"(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba ")
         end = time.monotonic() + timeout
         while True:
             match = pattern.search(self.buf, start)
