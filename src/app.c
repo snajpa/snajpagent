@@ -2006,10 +2006,12 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     char *line = NULL;
     char error[256];
     int rc;
-    if (capture_shutdown_signal(app)) {
+    if (capture_shutdown_signal(app) || app->interrupt_requested) {
         app->interrupt_requested = true;
         return 2;
     }
+    if (app->steering_requested)
+        return 1;
     if (app->networked) {
         error[0] = '\0';
         if (tick_irc(app, error, sizeof(error)) < 0) {

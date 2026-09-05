@@ -2191,6 +2191,11 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
             (timeout_ms < 0 || timeout_ms > 30))
             timeout_ms = 30;
         timeout_ms = spinner_timeout(term, timeout_ms);
+        bool reveal = timeout_ms != 0 && term->active && term->prompt_wanted &&
+                      !term->prompt_visible && !term->output_depth &&
+                      !term->defer_redraw;
+        if (reveal && (timeout_ms < 0 || timeout_ms > 16))
+            timeout_ms = 16;
         rc = poll(pfd, 2u, timeout_ms);
         if (sigint_pending) {
             --sigint_pending;
@@ -2206,6 +2211,8 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
             term->escape_len = 0u;
             return search_accept(term, false);
         }
+        if (rc == 0 && reveal && redraw(term) < 0)
+            return -1;
         if (rc == 0 && animated_spinners(term) &&
             update_spinners(term, spinner_step(term, snj_monotonic_ms())) < 0)
             return -1;
