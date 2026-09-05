@@ -3020,7 +3020,7 @@ def test_network_view_routing_and_atomic_catchup():
         human.wait(b"PRIVMSG #lab :chat-route-backlog\r\n",
                    start=backlog_wire_start)
         child.drain()
-        assert b"chat-route-backlog" not in child.buf[backlog_start:]
+        assert b"chat-route-backlog" not in child.buf[backlog_start:], bytes(child.buf[backlog_start:])
         child.send(b"/chat\r")
         chat_boundary = child.wait("── chat ──".encode(), start=backlog_start)
         backlog_end = child.wait(b"chat-route-backlog", start=chat_boundary)
@@ -3528,7 +3528,9 @@ def test_editor_during_blocked_engine():
         after = child.wait(b"engine-block-start")
         tasks = Path(f"/proc/{child.pid}/task")
         if tasks.exists():
-            assert len(list(tasks.iterdir())) == 2
+            # GCC TSan adds one instrumentation worker, not an application thread.
+            tsan = "libtsan" in Path(f"/proc/{child.pid}/maps").read_text()
+            assert len(list(tasks.iterdir())) == 2 + int(tsan)
         child.drain(0.4)
         assert b"engine-block-start \n" in child.buf.replace(b"\r", b"")
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1

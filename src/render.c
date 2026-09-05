@@ -320,8 +320,9 @@ void
 snj_render_set_networked(struct snj_render *render, bool networked,
                          const char *model_nick)
 {
+    if (render->networked != networked)
+        render->view = networked ? SNJ_RENDER_CHAT : SNJ_RENDER_ROLLOUT;
     render->networked = networked;
-    render->view = networked ? SNJ_RENDER_CHAT : SNJ_RENDER_ROLLOUT;
     render->model_nick[0] = '\0';
     if (model_nick)
         (void)snprintf(render->model_nick, sizeof(render->model_nick), "%s",
