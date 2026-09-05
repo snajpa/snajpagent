@@ -198,6 +198,10 @@ reopened and rolled back to the prior topology if replacement initialization
 fails. Durable session provider/model/effort preferences remain session state,
 so configuration defaults do not overwrite an existing session.
 
+Loading and model/provider saves use the same semantic configuration validator,
+including auth endpoints and cross-field model limits. Saves validate private
+parse copies before atomically replacing the file; invalid text is not replaced.
+
 IRC configuration is process-local, while admitted room state is durable
 session data. Typed events cover connection, membership, message, mode, topic,
 history, and model-input snapshot transitions. They are validated before
