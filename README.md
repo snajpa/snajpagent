@@ -74,9 +74,11 @@ For one read-only query, use `/ro`:
 /ro find out how the request queue is implemented
 ```
 
-That turn can only list directories/files, read whole files or line ranges,
-and search patterns using native snajpagent tools. It cannot run commands,
-edit files, send IRC messages, or change goals. During active work, press Tab
+That turn can list directories/files, read whole files or line ranges,
+and search patterns using native snajpagent tools, and use provider-hosted web
+search when supported by the selected provider/model. Search queries go to
+the provider; local inspection does not invoke external commands. It cannot
+run commands, edit files, send IRC messages, or change goals. During active work, press Tab
 to queue `/ro ...`, or enter `/queue /ro ...`; `/ro` cannot steer a running
 turn. The next ordinary prompt restores the normal toolset. This also works
 with `-e`. See the manual for filesystem and output bounds.

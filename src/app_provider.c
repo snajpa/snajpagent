@@ -369,11 +369,18 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
         json_t *input = json_object_get(create_request, "input");
         bool read_only = app->session.active_read_only;
 
-        if (read_only && json_array_size(ts) != 3u)
+        if (read_only && json_array_size(ts) != 4u)
             return -1;
-        for (size_t i = 0; read_only && i < json_array_size(ts); ++i)
-            if (!snj_read_only_tool(snj_json_string(json_array_get(ts, i), "name")))
+        for (size_t i = 0; read_only && i < json_array_size(ts); ++i) {
+            json_t *tool = json_array_get(ts, i);
+            const char *type = snj_json_string(tool, "type");
+
+            if (type && strcmp(type, "web_search") == 0 && json_object_size(tool) == 1u)
+                continue;
+            if (!type || strcmp(type, "function") != 0 ||
+                !snj_read_only_tool(snj_json_string(tool, "name")))
                 return -1;
+        }
         for (size_t i = 0; i < json_array_size(input); ++i) {
             json_t *message = json_array_get(input, i);
             const char *role = snj_json_string(message, "role");

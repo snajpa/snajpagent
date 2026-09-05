@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Allow the existing provider-hosted web search in `/ro` queries alongside
+  native file inspection, while keeping all other local tool dispatch blocked.
+
 - Add minimum numeric prompt widths (`{context:4}`, `{hour:2}`) and clock-only
   zero padding (`{hour:02}:{minute:02}:{second:02}`). Default context uses four
   columns, including queue editing. Keep one component-valued clock capture

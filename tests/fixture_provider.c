@@ -465,7 +465,8 @@ snj_fixture_response(const char *prompt, const json_t *steering,
     }
     if (strcmp(prompt, "ro_denied") == 0) {
         static const char *const names[] = {"exec_command", "apply_patch", "write_stdin",
-            "create_goal", "update_goal", "irc_send", "irc_topic", "irc_state"};
+            "create_goal", "update_goal", "irc_send", "irc_topic", "irc_state",
+            "web_search"};
         if (cycle <= sizeof(names) / sizeof(names[0]))
             return snj_response_graph_add_call(graph, "item_denied", "call_denied",
                                                names[cycle - 1u], json_object());

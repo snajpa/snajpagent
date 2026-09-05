@@ -93,13 +93,19 @@ result and sends that result into the next provider cycle.
 
 `/ro QUERY` selects a per-turn read-only toolset: `list_files`, `read_file`,
 and `grep`, implemented in `tools_read.c` using native file/directory APIs and
-POSIX regex, with no subprocesses. The existing `turn_started`,
+POSIX regex, with no subprocesses, plus the same provider-hosted `web_search`
+available in ordinary turns. Hosted search is executed by the provider, not
+the local dispatcher; it sends queries to the provider and depends on its
+model/tool support. Both file and web contents are untrusted data.
+The existing `turn_started`,
 `future_turn_queued`, and `future_turn_edited` data each carry a required
 `read_only` boolean alongside normalized text. The session derives active mode
 and queued origin from the durable turn-start event and clears both on closure.
 The application dispatcher rejects every non-read-only tool before lifecycle,
-IRC, fixture, and ordinary handlers. Request/count/semantic tool schemas match
-that restriction. A fresh read-only controller survives compaction; no active
+IRC, fixture, and ordinary handlers, including a forged local function named
+`web_search`. Request/count/semantic tool schemas expose the three native
+functions and the hosted search tool only. A fresh read-only controller
+survives compaction; no active
 goal or IRC-reply controller is projected in this mode. See the manual for
 literal path handling, no-follow semantics, regular-text requirements, and
 fixed pagination/scan/output bounds. This is a capability restriction, not a

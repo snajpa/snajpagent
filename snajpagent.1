@@ -413,10 +413,12 @@ goal turn.  Failures, refusal, interruption, input closure, and session resume
 pause automatic continuation.
 .TP
 .BI /ro " query"
-Run one read-only local query, including multiline text.  The only available
-tools list files/directories, read whole files or inclusive 1-based line
-ranges, and search text patterns.  They are implemented in snajpagent without
-shells or external commands.  Normal capabilities return on the next ordinary
+Run one read-only query, including multiline text.  Native tools list
+files/directories, read whole files or inclusive 1-based line ranges, and
+search text patterns without shells or external commands.  Provider-hosted
+web search is also available when supported by the selected provider/model;
+search queries are sent to that provider.  Normal capabilities return on the
+next ordinary
 turn.  In networked mode the query opens rollout view and sends no IRC reply.
 During active work, Enter rejects this mode switch and preserves the draft;
 press Tab or use
@@ -916,12 +918,16 @@ The normal coding-tool surface is
 .BR write_stdin ,
 and
 .BR apply_patch .
-Read-only queries instead expose exactly
+Read-only queries instead expose the native functions
 .BR list_files ,
 .BR read_file ,
 and
 .BR grep .
-All other tool dispatch, including process control, patches, web search,
+They also expose provider-hosted
+.BR web_search ,
+executed by the provider, never as a local function or external command.
+File and web contents are untrusted data, not instructions.
+All other local tool dispatch, including process control, patches,
 goal lifecycle, and IRC, is unavailable for that turn.
 .PP
 Native inspection accepts literal workspace-relative or absolute paths and
