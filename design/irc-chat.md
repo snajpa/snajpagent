@@ -186,7 +186,10 @@ client without batch support receives the same bounded history as server
 notices. The cache contains timestamped chat, joins, parts, quits, nick
 changes, topic changes, and operator-mode changes. It is memory-bounded and
 reconstructed from the resumed local session when that session contains
-retained IRC events.
+retained IRC events. On startup, a resumed server displays that same bounded
+hosted-room history in its own chat view, without re-sending it or appending
+duplicate durable events. Outgoing connections receive their server's history
+through the ordinary join path.
 
 Outgoing clients reconnect with bounded fixed backoff while the foreground
 process remains alive. Disconnection is a visible room notification and does

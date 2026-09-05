@@ -2398,8 +2398,11 @@ def test_network_resume_roles():
     server.wait(chat_prompt("serverop"))
     server_id = new_session(before)
     peer = IRCClient(server_port, "firstpeer")
+    peer.message("retained room message")
+    server.wait("firstpeer › retained room message".encode())
     peer.close()
-    server_command = server.exit_now()
+    server.send(b"\x04")
+    server_command = server.finish()
     server_arguments = command_arguments(server_command)
     assert server_arguments[server_arguments.index("--listen") + 1] == \
         server_endpoint
@@ -2408,10 +2411,18 @@ def test_network_resume_roles():
         "#lab"
     resumed_server = Child.from_command(server_command)
     resumed_server.wait(b"session id " + server_id[:8].encode())
+    resumed_server.wait("history @firstpeer › retained room message".encode())
+    assert resumed_server.buf.count(b"retained room message") == 1
     resumed_server.wait(chat_prompt("serverop"))
     peer = IRCClient(server_port, "secondpeer")
+    peer.wait(b" PRIVMSG #lab :retained room message\r\n")
+    assert peer.buf.count(b" PRIVMSG #lab :retained room message\r\n") == 1
     peer.close()
-    resumed_server.exit_now()
+    resumed_server.send(b"\x04")
+    resumed_server.finish()
+    assert len([event for event in events(server_id)
+                if event["type"] == "irc_event" and
+                event["data"]["text"] == "retained room message"]) == 1
 
     combined_port = free_port()
     combined_endpoint = f"127.0.0.1:{combined_port}"

@@ -1128,6 +1128,38 @@ event_kind_text(enum snj_irc_event_kind kind)
     return "event";
 }
 
+static bool
+hosted_history_event(const struct snj_irc *irc,
+                      const struct snj_irc_event *event)
+{
+    return strcmp(event->room, irc->room) == 0 &&
+        (strcmp(event->endpoint, irc->listen) == 0 ||
+         strcmp(event->endpoint, "local") == 0);
+}
+
+int
+snj_irc_replay_hosted_history(const struct snj_irc *irc,
+                              snj_irc_event_fn render, void *opaque)
+{
+    if (!irc || !render) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (irc->listener < 0)
+        return 0;
+    for (size_t i = 0u; i < irc->history_count; ++i) {
+        struct snj_irc_event event =
+            irc->history[(irc->history_start + i) % irc->history_limit];
+
+        if (!hosted_history_event(irc, &event))
+            continue;
+        event.historical = true;
+        if (render(opaque, &event) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int
 server_send_history(struct snj_irc *irc, struct irc_conn *peer)
 {
@@ -1146,9 +1178,7 @@ server_send_history(struct snj_irc *irc, struct irc_conn *peer)
         const char *tag = "";
         char tag_buf[96u];
 
-        if (strcmp(event->room, irc->room) != 0 ||
-            (strcmp(event->endpoint, irc->listen) != 0 &&
-             strcmp(event->endpoint, "local") != 0))
+        if (!hosted_history_event(irc, event))
             continue;
         format_time(event->timestamp_ms, when);
         if (peer->cap_batch) {
