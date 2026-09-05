@@ -1131,6 +1131,55 @@ invalid:
     return -1;
 }
 
+static int
+validate_config(struct snag_config *config, char *error, size_t error_size)
+{
+    for (size_t i = 0; i < config->provider_count; ++i) {
+        if (config->providers[i].auth == SNAG_AUTH_CHATGPT &&
+            strcmp(config->providers[i].base_url, SNAG_CHATGPT_BASE) != 0) {
+            snag_errorf(error, error_size,
+                       "chatgpt authentication requires " SNAG_CHATGPT_BASE);
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    for (size_t i = 0; i < config->model_limit_count; ++i) {
+        const struct snag_model_limit_config *limit = &config->model_limits[i];
+        if (!snag_config_provider(config, limit->provider) ||
+            (!limit->context_window_tokens && !limit->max_input_tokens &&
+             !limit->max_output_tokens) ||
+            (limit->context_window_tokens && limit->max_input_tokens &&
+             limit->max_input_tokens > limit->context_window_tokens) ||
+            (limit->context_window_tokens && limit->max_output_tokens &&
+             limit->max_output_tokens > limit->context_window_tokens) ||
+            (limit->context_window_tokens && limit->max_input_tokens &&
+             limit->max_output_tokens &&
+             limit->max_input_tokens >
+                 limit->context_window_tokens - limit->max_output_tokens)) {
+            snag_errorf(error, error_size,
+                      "invalid model-limit section for %s/%s",
+                      limit->provider, limit->model);
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    if (config->default_timeout_ms > config->max_timeout_ms) {
+        snag_errorf(error, error_size,
+                  "tool default_timeout_ms cannot exceed max_timeout_ms");
+        errno = EINVAL;
+        return -1;
+    }
+    if (validate_shell(config, error, error_size) < 0)
+        return -1;
+    if (config->provider[0] && !snag_config_provider(config, config->provider)) {
+        snag_errorf(error, error_size,
+                  "configured agent provider is not defined");
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
 int
 snag_config_load(struct snag_config *config, const char *explicit_path,
                 const char *dotdir,
@@ -1159,50 +1208,7 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
     if (read_rc == 0 && parse_file(config, (char *)text.data,
                                    error, error_size) < 0)
         goto out;
-    for (size_t i = 0; i < config->provider_count; ++i) {
-        if (config->providers[i].auth == SNAG_AUTH_CHATGPT &&
-            strcmp(config->providers[i].base_url, SNAG_CHATGPT_BASE) != 0) {
-            snag_errorf(error, error_size,
-                       "chatgpt authentication requires " SNAG_CHATGPT_BASE);
-            errno = EINVAL;
-            goto out;
-        }
-    }
-    for (size_t i = 0; i < config->model_limit_count; ++i) {
-        const struct snag_model_limit_config *limit = &config->model_limits[i];
-        if (!snag_config_provider(config, limit->provider) ||
-            (!limit->context_window_tokens && !limit->max_input_tokens &&
-             !limit->max_output_tokens) ||
-            (limit->context_window_tokens && limit->max_input_tokens &&
-             limit->max_input_tokens > limit->context_window_tokens) ||
-            (limit->context_window_tokens && limit->max_output_tokens &&
-             limit->max_output_tokens > limit->context_window_tokens) ||
-            (limit->context_window_tokens && limit->max_input_tokens &&
-             limit->max_output_tokens &&
-             limit->max_input_tokens >
-                 limit->context_window_tokens - limit->max_output_tokens)) {
-            snag_errorf(error, error_size,
-                      "invalid model-limit section for %s/%s",
-                      limit->provider, limit->model);
-            errno = EINVAL;
-            goto out;
-        }
-    }
-    if (config->default_timeout_ms > config->max_timeout_ms) {
-        snag_errorf(error, error_size,
-                  "tool default_timeout_ms cannot exceed max_timeout_ms");
-        errno = EINVAL;
-        goto out;
-    }
-    if (validate_shell(config, error, error_size) < 0)
-        goto out;
-    if (config->provider[0] && !snag_config_provider(config, config->provider)) {
-        snag_errorf(error, error_size,
-                  "configured agent provider is not defined");
-        errno = EINVAL;
-        goto out;
-    }
-    rc = 0;
+    rc = validate_config(config, error, error_size);
 out:
     free(owned_path);
     snag_buf_free(&text);
@@ -1393,21 +1399,7 @@ validate_config_text(const struct snag_buf *text,
     }
     if (parse_file(&candidate, copy, error, error_size) < 0)
         goto out;
-    if (candidate.default_timeout_ms > candidate.max_timeout_ms) {
-        snag_errorf(error, error_size,
-                  "tool default_timeout_ms cannot exceed max_timeout_ms");
-        errno = EINVAL;
-        goto out;
-    }
-    if (validate_shell(&candidate, error, error_size) < 0)
-        goto out;
-    if (candidate.provider[0] &&
-        !snag_config_provider(&candidate, candidate.provider)) {
-        snag_errorf(error, error_size, "configured agent provider is not defined");
-        errno = EINVAL;
-        goto out;
-    }
-    rc = 0;
+    rc = validate_config(&candidate, error, error_size);
 out:
     snag_config_free(&candidate);
     free(copy);

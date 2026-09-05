@@ -141,6 +141,28 @@ test_auth_settings(const char *path)
     assert(strcmp(config.provider, "openrouter") == 0);
     assert(strcmp(config.model, "chosen/model") == 0);
     snag_config_free(&config);
+
+    /* Both writers must reject the same cross-field errors as loading. */
+    const char *invalid_save[] = {
+        invalid,
+        "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=101\n",
+        "[model-limit missing/model]\nmax_input_tokens=1\n"
+    };
+    for (size_t i = 0u; i < sizeof(invalid_save) / sizeof(invalid_save[0]); ++i) {
+        struct stat before, after;
+        char bytes[256];
+        size_t len = strlen(invalid_save[i]);
+        write_bytes(path, invalid_save[i], len);
+        assert(stat(path, &before) == 0);
+        assert(snag_config_save_model(path, false, "default", "new", "high",
+                                      error, sizeof(error)) < 0);
+        assert(snag_config_save_provider(path, false, &provider, NULL, NULL,
+                                         error, sizeof(error)) < 0);
+        assert(stat(path, &after) == 0 && before.st_ino == after.st_ino);
+        int fd = open(path, O_RDONLY);
+        assert(fd >= 0 && read(fd, bytes, sizeof(bytes)) == (ssize_t)len);
+        assert(close(fd) == 0 && memcmp(bytes, invalid_save[i], len) == 0);
+    }
 }
 
 static void
