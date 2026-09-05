@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,8 +17,7 @@
 #include <unistd.h>
 #include <wchar.h>
 
-
-static volatile sig_atomic_t sigint_pending;
+static atomic_uint sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
 static int redraw(struct snj_term *term);
 static int move_prompt_cursor(struct snj_term *term);
@@ -27,8 +27,7 @@ static void
 mark_sigint(int signal_number)
 {
     (void)signal_number;
-    if (sigint_pending < INT_MAX)
-        ++sigint_pending;
+    (void)atomic_fetch_add_explicit(&sigint_pending, 1u, memory_order_relaxed);
 }
 
 static void
@@ -2179,7 +2178,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
         update_spinners(term, spinner_step(term, snj_monotonic_ms())) < 0)
         return -1;
     if (sigint_pending) {
-        --sigint_pending;
+        (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
         return feed_byte(term, 0x03u, action, text);
     }
     if (consume_resize(term) < 0)
@@ -2198,7 +2197,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
             timeout_ms = 16;
         rc = poll(pfd, 2u, timeout_ms);
         if (sigint_pending) {
-            --sigint_pending;
+            (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
             return feed_byte(term, 0x03u, action, text);
         }
         if (sigwinch_pending) {
@@ -2227,7 +2226,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
         }
         count = read(STDIN_FILENO, term->input, sizeof(term->input));
         if (sigint_pending) {
-            --sigint_pending;
+            (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
             return feed_byte(term, 0x03u, action, text);
         }
         if (sigwinch_pending) {

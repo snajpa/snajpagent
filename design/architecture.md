@@ -198,7 +198,9 @@ SIGHUP and SIGTERM set signal-safe shutdown state, as does SIGINT outside the
 interactive terminal handler. Idle and active provider/tool/network pumps
 observe that state and unwind through common cleanup. Interactive Ctrl-C
 preserves the visible composer line, appends `^C` and a newline, discards the
-draft, and opens a clean prompt without exiting. Only an already-empty active
+draft, and opens a clean prompt. Five consecutive presses within two seconds
+request exit through durable cleanup, even while the engine is busy; other
+input resets that sequence. Only an already-empty active
 composer additionally interrupts the current turn through the normal durable
 path. An empty Ctrl-D closes input. Uncatchable SIGKILL, power loss, and fatal
 corruption cannot execute this path.

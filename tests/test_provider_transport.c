@@ -1011,9 +1011,50 @@ test_read_only_dispatch(void)
     json_decref(call.arguments);
 }
 
+static void
+test_ui_output_order_and_failure(void)
+{
+    struct snj_ui ui;
+    unsigned char text[1024];
+    enum snj_term_action action;
+    char *line;
+    int pipefd[2], status;
+    pid_t reader;
+
+    assert(pipe(pipefd) == 0);
+    reader = fork();
+    assert(reader >= 0);
+    if (!reader) {
+        size_t received = 0u;
+        (void)close(pipefd[1]);
+        while (received < 128u * sizeof(text)) {
+            ssize_t got = read(pipefd[0], text, sizeof(text));
+            assert(got > 0);
+            for (ssize_t i = 0; i < got; ++i)
+                assert(text[i] == (received + (size_t)i) / sizeof(text));
+            received += (size_t)got;
+        }
+        (void)close(pipefd[0]);
+        _exit(0);
+    }
+    assert(close(pipefd[0]) == 0);
+    assert(snj_ui_init(&ui) == 0);
+    for (unsigned int i = 0u; i < 128u; ++i) {
+        memset(text, (int)i, sizeof(text));
+        assert(snj_ui_raw(&ui, pipefd[1], (char *)text, sizeof(text)) == 0);
+    }
+    assert(waitpid(reader, &status, 0) == reader);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    assert(close(pipefd[1]) == 0);
+    assert(snj_ui_raw(&ui, pipefd[1], "x", 1u) < 0);
+    assert(snj_ui_poll(&ui, 0, false, &action, &line) < 0);
+    snj_ui_free(&ui);
+}
+
 int
 main(void)
 {
+    test_ui_output_order_and_failure();
     test_read_only_dispatch();
     test_local_provider_transport();
     test_codex_model_list();
