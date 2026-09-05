@@ -734,7 +734,7 @@ def test_read_only_queries():
     assert [x["read_only"] for x in turns] == [True, True, False, False]
     assert turns[-1]["text"] == "/ro ping"
     results = [x["data"]["result"] for x in log if x["type"] == "tool_finished"]
-    assert len(results) == 12
+    assert len(results) == 11
     assert all(x["status"] == "succeeded" for x in results[:3])
     assert "1:native text\n2:second line\n" in results[1]["model_text"]
     assert "ro-input.txt:1:native text" in results[2]["model_text"]

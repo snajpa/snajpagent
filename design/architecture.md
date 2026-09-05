@@ -102,8 +102,9 @@ The existing `turn_started`,
 `read_only` boolean alongside normalized text. The session derives active mode
 and queued origin from the durable turn-start event and clears both on closure.
 The application dispatcher rejects every non-read-only tool before lifecycle,
-IRC, fixture, and ordinary handlers, including a forged local function named
-`web_search`. Request/count/semantic tool schemas expose the three native
+IRC, fixture, and ordinary handlers. A forged local function named
+`web_search` is rejected by the response graph before dispatch.
+Request/count/semantic tool schemas expose the three native
 functions and the hosted search tool only. A fresh read-only controller
 survives compaction; no active
 goal or IRC-reply controller is projected in this mode. See the manual for
