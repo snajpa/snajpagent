@@ -413,14 +413,9 @@ snag_instructions_metadata_json(const struct snag_instruction_set *set)
         return NULL;
     for (size_t i = 0; set && i < set->count; ++i) {
         const struct snag_instruction_source *src = &set->sources[i];
-        json_t *item = json_object();
-        if (!item ||
-            snag_json_set_new(item, "bytes", json_integer((json_int_t)src->bytes)) < 0 ||
-            snag_json_set_new(item, "path", json_string(src->path)) < 0 ||
-            snag_json_set_new(item, "sha256", json_string(src->sha256)) < 0 ||
-            json_array_append_new(array, item) < 0) {
-            if (item)
-                json_decref(item);
+        if (json_array_append_new(array,
+            json_pack("{s:I,s:s,s:s}", "bytes", (json_int_t)src->bytes,
+                      "path", src->path, "sha256", src->sha256)) < 0) {
             json_decref(array);
             return NULL;
         }

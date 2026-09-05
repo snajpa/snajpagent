@@ -2,6 +2,7 @@
 #ifndef SNAJPAGENT_BASE_H
 #define SNAJPAGENT_BASE_H
 
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -36,6 +37,7 @@ void snag_buf_free(struct snag_buf *buf);
 int snag_buf_reserve(struct snag_buf *buf, size_t extra);
 int snag_buf_append(struct snag_buf *buf, const void *data, size_t len);
 int snag_buf_putc(struct snag_buf *buf, unsigned char c);
+int snag_buf_vprintf(struct snag_buf *buf, const char *fmt, va_list ap);
 int snag_buf_printf(struct snag_buf *buf, const char *fmt, ...);
 int snag_buf_terminate(struct snag_buf *buf);
 
@@ -45,6 +47,7 @@ bool snag_size_add(size_t a, size_t b, size_t *out);
 size_t snag_utf8_size(unsigned char first);
 int snag_key_ref_compare(const void *left, const void *right);
 int snag_fd_cloexec(int fd);
+size_t snag_utf8_decode(const unsigned char *text, size_t len, uint32_t *out);
 bool snag_utf8_valid(const unsigned char *s, size_t len, bool reject_nul);
 bool snag_text_blank(const char *text);
 unsigned char snag_irc_fold(unsigned char c);

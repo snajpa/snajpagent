@@ -9,6 +9,11 @@
   pairing across each cut, and share normal statistical token estimation with
   compaction instead of treating its entire source as one token per byte.
 
+- Use one semantic configuration validator for loading and saving, rejecting
+  invalid auth/model-limit combinations before replacement. Route cursor-only
+  input through the retained prompt painter and remove obsolete spinner paint
+  metadata/copies while retaining owned settings and animation timing.
+
 - Fail visibly when an IRC listen address is already in use, even without
   `-v`. Do not silently host a separate room on another localhost address.
 
@@ -61,6 +66,20 @@
 
 - Automatically use OpenRouter's hosted web-search tool for its provider URL,
   in normal and `/ro` turns, without extra search configuration.
+
+- Rename internal `snj_`/`SNJ_` symbols to `snag_`/`SNAG_`. Share one context
+  transcript/replay, retain request projections through each response cycle,
+  adopt staged durable state after append, and remove redundant JSON/patch/UI
+  ownership. Keep the engine/UI and independent IRC owner boundaries intact.
+  Consolidate bounded formatting and UTF-8 decoding; move config/catalog
+  acceptance cases from C into the existing CLI and terminal tests.
+  Represent positive-only capacity facts without duplicate known flags, share
+  rejection-ceiling logic with durable replay, and walk the catalog once for
+  display. Update the private loaded cache directly instead of copying it again;
+  unsuccessful writes retain the previous live cache.
+  Remove the obsolete pre-1.0 session-format-1 and `model_changed` readers.
+  Old semantic-input accounting samples are invalidated by the current cache
+  shape; use `/model cache` to refresh them. Existing on-disk files are untouched.
 
 - Default `auto_compact_input_tokens` to `auto`, using 90% of each selected
   model's effective hard input budget after output/headroom and learned lower

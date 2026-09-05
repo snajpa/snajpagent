@@ -97,7 +97,7 @@ absent learned facts remain zero:
   "effective_context_window_percent": null
 },
 "count_capability": "unknown",
-"observed_model_input_bytes": 0,
+"observed_input_bytes": 0,
 "observed_input_tokens": 0,
 "observed_hard_input_tokens": 0
 ```
@@ -117,6 +117,12 @@ current endpoint. It preserves observations only when provider name, normalized
 base URL, protocol, and model ID all still match. Cache observation updates use
 the same private advisory lock and atomic replacement, with no provider I/O
 while locked; a failed observation write warns but does not fail the model turn.
+Reload into private transaction state, mutate it there, and adopt only after a
+successful write. A no-op observation still adopts the latest disk state without
+rewriting it. Failed writes leave the previous live tree intact, and retained
+references are never mutated. Positive-only capacity facts use zero for absence
+internally, while cache JSON still requires positive integers or explicit null.
+Hard input budgets retain separate validity because a known zero is exhausted.
 
 `/model` and its alias `/model list` read the persistent cache without
 contacting a provider and do not refresh it merely because it is old. If no
@@ -276,3 +282,8 @@ facts are separate from advertised `limits`, never copied from configuration,
 never created for an uncached manually typed model, and never inferred from
 error prose. `/status` keeps configured, advertised, observed-ceiling, exact
 usage-anchor, statistical, and byte-bound meanings distinct.
+
+The current pre-1.0 `observed_input_bytes` sample measures the accounting
+envelope containing actual Responses input items. The former semantic-tree
+sample field is not accepted; regenerate that disposable cache rather than
+reuse an incomparable ratio. No old-format reader is provided.

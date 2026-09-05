@@ -112,6 +112,13 @@ main(void)
         assert(snag_json_canonical(encoded, &a) == 0);
         assert(snag_json_canonical(roundtrip, &b) == 0);
         assert(a.len == b.len && memcmp(a.data, b.data, a.len) == 0);
+        assert(json_object_set_new(json_object_get(json_array_get(roundtrip, 1u),
+            "arguments"), "command", json_string("changed")) == 0);
+        assert(json_object_set_new(json_object_get(json_array_get(roundtrip, 2u),
+            "payload"), "encrypted_content", json_string("changed")) == 0);
+        assert(json_equal(copy.items[1].arguments, graph.items[1].arguments));
+        assert(json_equal(copy.items[2].payload, graph.items[2].payload));
+        assert(!json_equal(roundtrip, encoded));
         snag_buf_free(&a);
         snag_buf_free(&b);
         json_decref(roundtrip);

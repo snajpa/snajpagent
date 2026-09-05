@@ -52,69 +52,71 @@ cache_string(const json_t *value, size_t max)
            snag_utf8_valid((const unsigned char *)text, len, true);
 }
 
+/* Advertised/configured limits are positive; zero is internal absence only. */
 static bool
 nullable_limit(const json_t *object, const char *key, uint64_t max,
-               uint64_t *value, bool *known)
+               uint64_t *value)
 {
     json_t *entry = json_object_get(object, key);
     json_int_t integer;
 
-    *known = false;
     *value = 0u;
     if (json_is_null(entry))
         return true;
     if (!json_is_integer(entry) || (integer = json_integer_value(entry)) <= 0 ||
         (uint64_t)integer > max)
         return false;
-    *known = true;
     *value = (uint64_t)integer;
     return true;
 }
 
 static bool
-limits_valid(const json_t *limits)
+capacity_limits_valid(const struct snag_model_capacity *c)
+{
+    return !c->context_window_tokens ||
+        ((!c->max_context_window_tokens ||
+          c->context_window_tokens <= c->max_context_window_tokens) &&
+         c->input_context_window_tokens <= c->context_window_tokens &&
+         c->max_input_tokens <= c->context_window_tokens &&
+         c->max_output_tokens <= c->context_window_tokens &&
+         c->max_input_tokens <= c->context_window_tokens - c->max_output_tokens &&
+         c->auto_compact_input_tokens <= c->context_window_tokens);
+}
+
+static bool
+read_limits(const json_t *limits, struct snag_model_capacity *c)
 {
     static const char *const keys[] = {
         "auto_compact_input_tokens", "context_window_tokens",
         "effective_context_window_percent", "input_context_window_tokens",
         "max_context_window_tokens", "max_input_tokens", "max_output_tokens"
     };
-    uint64_t context, max_context, input_context, max_input, max_output;
-    uint64_t auto_compact, effective;
-    bool context_known, max_context_known, input_context_known;
-    bool max_input_known, max_output_known, auto_compact_known, effective_known;
+    uint64_t percent = 0u;
 
-    if (!json_is_object(limits) ||
-        !snag_json_exact_keys((json_t *)limits, keys,
-                             sizeof(keys) / sizeof(keys[0])) ||
+    if (!snag_json_exact_keys(limits, keys, sizeof(keys) / sizeof(keys[0])) ||
         !nullable_limit(limits, "context_window_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &context,
-                        &context_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->context_window_tokens) ||
         !nullable_limit(limits, "max_context_window_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &max_context,
-                        &max_context_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_context_window_tokens) ||
         !nullable_limit(limits, "input_context_window_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &input_context,
-                        &input_context_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->input_context_window_tokens) ||
         !nullable_limit(limits, "max_input_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &max_input,
-                        &max_input_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_input_tokens) ||
         !nullable_limit(limits, "max_output_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &max_output,
-                        &max_output_known) ||
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_output_tokens) ||
         !nullable_limit(limits, "auto_compact_input_tokens",
-                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &auto_compact,
-                        &auto_compact_known) ||
-        !nullable_limit(limits, "effective_context_window_percent", 100u,
-                        &effective, &effective_known))
+                        SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->auto_compact_input_tokens) ||
+        !nullable_limit(limits, "effective_context_window_percent", 100u, &percent))
         return false;
-    return !(context_known && max_context_known && context > max_context) &&
-           !(context_known && input_context_known && input_context > context) &&
-           !(context_known && max_input_known && max_input > context) &&
-           !(context_known && max_output_known && max_output > context) &&
-           !(context_known && max_input_known && max_output_known &&
-             max_input > context - max_output) &&
-           !(context_known && auto_compact_known && auto_compact > context);
+    c->effective_context_window_percent = (unsigned int)percent;
+    return capacity_limits_valid(c);
+}
+
+static bool
+limits_valid(const json_t *limits)
+{
+    struct snag_model_capacity capacity = {0};
+    return read_limits(limits, &capacity);
 }
 
 static bool
@@ -133,7 +135,7 @@ accounting_valid(const json_t *model)
                                 &hard) == 0 &&
            snag_json_integer_u64(model, "observed_input_tokens",
                                 &tokens) == 0 &&
-           snag_json_integer_u64(model, "observed_model_input_bytes",
+           snag_json_integer_u64(model, "observed_input_bytes",
                                 &bytes) == 0 &&
            hard <= SNAG_CONFIG_TOKEN_LIMIT_MAX &&
            tokens <= SNAG_CONFIG_TOKEN_LIMIT_MAX &&
@@ -148,7 +150,7 @@ model_valid(const json_t *model, bool cached)
     };
     static const char *const cache_keys[] = {"count_capability", "default_effort",
         "efforts", "id", "limits", "observed_hard_input_tokens",
-        "observed_input_tokens", "observed_model_input_bytes"};
+        "observed_input_tokens", "observed_input_bytes"};
     json_t *fallback;
     json_t *efforts;
 
@@ -393,15 +395,11 @@ write_cache(struct snag_store *store, const json_t *providers,
         errno = EINVAL;
         return -1;
     }
-    root = json_object();
+    root = json_pack("{s:O,s:i,s:I}", "providers", providers,
+                     "schema_version", SNAG_MODEL_CACHE_SCHEMA,
+                     "updated_at_ms", (json_int_t)updated_at_ms);
     snag_buf_init(&data, SNAG_MODEL_CACHE_FILE_MAX);
     if (!root ||
-        snag_json_set_new(root, "providers",
-                         json_incref((json_t *)providers)) < 0 ||
-        snag_json_set_new(root, "schema_version",
-                         json_integer(SNAG_MODEL_CACHE_SCHEMA)) < 0 ||
-        snag_json_set_new(root, "updated_at_ms",
-                         json_integer((json_int_t)updated_at_ms)) < 0 ||
         snag_json_canonical(root, &data) < 0 || snag_buf_putc(&data, '\n') < 0 ||
         snag_random_id(id) < 0) {
         snag_errorf(error, error_size, "cannot encode model cache");
@@ -463,7 +461,7 @@ prepare_accounting(json_t *model, const json_t *old)
 {
     static const char *const keys[] = {
         "observed_hard_input_tokens", "observed_input_tokens",
-        "observed_model_input_bytes"
+        "observed_input_bytes"
     };
 
     if (json_object_set_new(model, "count_capability",
@@ -480,7 +478,7 @@ prepare_accounting(json_t *model, const json_t *old)
                             json_integer(0)) < 0 ||
         json_object_set_new(model, "observed_input_tokens",
                             json_integer(0)) < 0 ||
-        json_object_set_new(model, "observed_model_input_bytes",
+        json_object_set_new(model, "observed_input_bytes",
                             json_integer(0)) < 0)
         return -1;
     return 0;
@@ -491,6 +489,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
                         uint64_t updated_at_ms, struct snag_model_cache *cache,
                         char *error, size_t error_size)
 {
+    struct snag_model_cache previous = {0};
     json_t *prepared = NULL;
     int lock_fd;
     int rc = -1;
@@ -505,8 +504,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
     lock_fd = lock_cache(store, error, error_size);
     if (lock_fd < 0)
         return -1;
-    snag_model_cache_free(cache);
-    if (snag_model_cache_load(store, cache, error, error_size) < 0 &&
+    if (snag_model_cache_load(store, &previous, error, error_size) < 0 &&
         errno != EINVAL)
         goto out;
     prepared = json_deep_copy(providers);
@@ -518,7 +516,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
     for (size_t i = 0; i < json_array_size(prepared); ++i) {
         json_t *after = json_array_get(prepared, i);
         const char *name = snag_json_string(after, "name");
-        const json_t *before = provider_entry(cache->providers, name);
+        const json_t *before = provider_entry(previous.providers, name);
         bool bound = before &&
             strcmp(snag_json_string(before, "base_url"),
                    snag_json_string(after, "base_url")) == 0 &&
@@ -529,7 +527,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
         for (size_t j = 0; j < json_array_size(models); ++j) {
             json_t *model = json_array_get(models, j);
             const json_t *old_model = bound ?
-                snag_model_cache_find(cache, name,
+                snag_model_cache_find(&previous, name,
                                      snag_json_string(model, "id")) : NULL;
 
             if (prepare_accounting(model, old_model) < 0) {
@@ -546,6 +544,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
 out:
     if (prepared)
         json_decref(prepared);
+    snag_model_cache_free(&previous);
     (void)close(lock_fd);
     return rc;
 }
@@ -559,12 +558,11 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
                        uint64_t hard_input_tokens,
                        char *error, size_t error_size)
 {
-    struct snag_model_cache lookup = {0};
+    struct snag_model_cache staged = {0};
     const json_t *source;
     const json_t *item;
     const char *current_state;
     const char *next_state = NULL;
-    json_t *updated = NULL;
     uint64_t value = 0u;
     uint64_t largest_bytes = 0u;
     uint64_t largest_tokens = 0u;
@@ -587,22 +585,22 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
     lock_fd = lock_cache(store, error, error_size);
     if (lock_fd < 0)
         return -1;
-    rc = snag_model_cache_load(store, cache, error, error_size);
+    rc = snag_model_cache_load(store, &staged, error, error_size);
     if (rc != 0)
         goto out;
     rc = 1;
-    source = provider_entry(cache->providers, provider->name);
-    item = snag_model_cache_find(cache, provider->name, model);
+    source = provider_entry(staged.providers, provider->name);
+    item = snag_model_cache_find(&staged, provider->name, model);
     if (!source ||
         strcmp(snag_json_string(source, "base_url"), provider->base_url) ||
         strcmp(snag_json_string(source, "protocol"), protocol) || !item)
-        goto out;
+        goto adopt;
     current_state = snag_json_string(item, "count_capability");
     if (capability != SNAG_COUNT_UNKNOWN)
         next_state = capability == SNAG_COUNT_SUPPORTED ?
             "supported" : "unsupported";
     capability_changed = next_state && strcmp(current_state, next_state) != 0;
-    (void)snag_json_integer_u64(item, "observed_model_input_bytes",
+    (void)snag_json_integer_u64(item, "observed_input_bytes",
                                &largest_bytes);
     (void)snag_json_integer_u64(item, "observed_input_tokens",
                                &largest_tokens);
@@ -614,29 +612,14 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
         (!value || hard_input_tokens < value);
     if (!capability_changed && !sample_changed && !hard_limit_changed) {
         rc = 0;
-        goto out;
-    }
-    updated = json_deep_copy(cache->providers);
-    if (!updated) {
-        snag_errorf(error, error_size, "cannot copy model cache observation");
-        errno = ENOMEM;
-        rc = -1;
-        goto out;
-    }
-    lookup.providers = updated;
-    item = snag_model_cache_find(&lookup, provider->name, model);
-    if (!item) {
-        snag_errorf(error, error_size, "cannot find copied model cache entry");
-        errno = EINVAL;
-        rc = -1;
-        goto out;
+        goto adopt;
     }
     if (capability_changed &&
         json_object_set_new((json_t *)item, "count_capability",
                             json_string(next_state)) < 0)
         goto write_error;
     if (sample_changed &&
-        (json_object_set_new((json_t *)item, "observed_model_input_bytes",
+        (json_object_set_new((json_t *)item, "observed_input_bytes",
                              json_integer((json_int_t)model_input_bytes)) < 0 ||
          json_object_set_new((json_t *)item, "observed_input_tokens",
                              json_integer((json_int_t)input_tokens)) < 0))
@@ -645,16 +628,20 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
         json_object_set_new((json_t *)item, "observed_hard_input_tokens",
                             json_integer((json_int_t)hard_input_tokens)) < 0)
         goto write_error;
-    rc = write_cache(store, updated, cache->updated_at_ms, cache,
+    rc = write_cache(store, staged.providers, staged.updated_at_ms, cache,
                      error, error_size);
+    goto out;
+adopt:
+    snag_model_cache_free(cache);
+    *cache = staged;
+    snag_model_cache_init(&staged);
     goto out;
 write_error:
     snag_errorf(error, error_size, "cannot update model cache observation");
     errno = ENOMEM;
     rc = -1;
 out:
-    if (updated)
-        json_decref(updated);
+    snag_model_cache_free(&staged);
     (void)close(lock_fd);
     return rc;
 }
@@ -721,34 +708,12 @@ snag_model_cache_best_effort(const json_t *model, const char *fallback)
     return fallback;
 }
 
-size_t
-snag_model_cache_entry_count(const struct snag_model_cache *cache)
-{
-    size_t count = 0u;
-
-    if (!cache || !cache->providers)
-        return 0u;
-    for (size_t i = 0; i < json_array_size(cache->providers); ++i) {
-        json_t *models = json_object_get(json_array_get(cache->providers, i),
-                                         "models");
-        for (size_t j = 0; j < json_array_size(models); ++j) {
-            json_t *efforts = json_object_get(json_array_get(models, j),
-                                              "efforts");
-            size_t variants = json_array_size(efforts);
-            count += variants ? variants : 1u;
-        }
-    }
-    return count;
-}
-
 int
 snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
                       const char *fallback_effort,
                       const char **provider, const char **model,
                       const char **effort)
 {
-    size_t current = 1u;
-
     if (!cache || !cache->providers || !index || !provider || !model || !effort)
         return -1;
     for (size_t i = 0; i < json_array_size(cache->providers); ++i) {
@@ -760,31 +725,19 @@ snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
             size_t variants = json_array_size(efforts);
             if (!variants)
                 variants = 1u;
-            for (size_t k = 0; k < variants; ++k, ++current) {
-                if (current != index)
-                    continue;
-                *provider = snag_json_string(provider_entry, "name");
-                *model = snag_json_string(model_entry, "id");
-                if (json_array_size(efforts))
-                    *effort = json_string_value(json_array_get(efforts, k));
-                else
-                    *effort = snag_model_cache_best_effort(model_entry,
-                                                          fallback_effort);
-                return *provider && *model && *effort ? 0 : -1;
+            if (index > variants) {
+                index -= variants;
+                continue;
             }
+            *provider = snag_json_string(provider_entry, "name");
+            *model = snag_json_string(model_entry, "id");
+            *effort = json_array_size(efforts) ?
+                json_string_value(json_array_get(efforts, index - 1u)) :
+                snag_model_cache_best_effort(model_entry, fallback_effort);
+            return *provider && *model && *effort ? 0 : -1;
         }
     }
     return 1;
-}
-
-static void
-read_capacity_limit(const json_t *limits, const char *key, uint64_t max,
-                    uint64_t *value, bool *known)
-{
-    if (!nullable_limit(limits, key, max, value, known)) {
-        *value = 0u;
-        *known = false;
-    }
 }
 
 static void
@@ -846,7 +799,6 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
         return -1;
     }
     memset(capacity, 0, sizeof(*capacity));
-    capacity->codex_protocol = strcmp(protocol, "codex") == 0;
     cached_provider = provider_entry(cache ? cache->providers : NULL,
                                      provider->name);
     if (cached_provider) {
@@ -866,68 +818,22 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
     override = snag_config_model_limit(config, provider->name, model);
     if (override) {
         capacity->context_window_tokens = override->context_window_tokens;
-        capacity->context_window_known = override->context_window_known;
         capacity->max_input_tokens = override->max_input_tokens;
-        capacity->max_input_known = override->max_input_known;
         capacity->max_output_tokens = override->max_output_tokens;
-        capacity->max_output_known = override->max_output_known;
         capacity->source = SNAG_CAPACITY_CONFIG;
     } else if (limits) {
-        read_capacity_limit(limits, "context_window_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->context_window_tokens,
-                            &capacity->context_window_known);
-        read_capacity_limit(limits, "max_context_window_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->max_context_window_tokens,
-                            &capacity->max_context_window_known);
-        read_capacity_limit(limits, "input_context_window_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->input_context_window_tokens,
-                            &capacity->input_context_window_known);
-        read_capacity_limit(limits, "max_input_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->max_input_tokens,
-                            &capacity->max_input_known);
-        read_capacity_limit(limits, "max_output_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->max_output_tokens,
-                            &capacity->max_output_known);
-        read_capacity_limit(limits, "auto_compact_input_tokens",
-                            SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                            &capacity->auto_compact_input_tokens,
-                            &capacity->auto_compact_input_known);
-        {
-            uint64_t percent = 0u;
-
-            read_capacity_limit(limits, "effective_context_window_percent",
-                                100u, &percent,
-                                &capacity->effective_context_window_known);
-            capacity->effective_context_window_percent = (unsigned int)percent;
+        if (!read_limits(limits, capacity)) {
+            snag_errorf(error, error_size, "invalid cached capacity limits");
+            errno = EINVAL;
+            return -1;
         }
-        catalog_used = capacity->context_window_known ||
-            capacity->max_context_window_known ||
-            capacity->input_context_window_known ||
-            capacity->max_input_known || capacity->max_output_known ||
-            capacity->auto_compact_input_known ||
-            capacity->effective_context_window_known;
+        catalog_used = capacity->context_window_tokens ||
+            capacity->max_context_window_tokens ||
+            capacity->input_context_window_tokens || capacity->max_input_tokens ||
+            capacity->max_output_tokens || capacity->auto_compact_input_tokens ||
+            capacity->effective_context_window_percent;
     }
-    if ((capacity->context_window_known &&
-         capacity->max_context_window_known &&
-         capacity->context_window_tokens >
-             capacity->max_context_window_tokens) ||
-        (capacity->context_window_known &&
-         capacity->input_context_window_known &&
-         capacity->input_context_window_tokens >
-             capacity->context_window_tokens) ||
-        (capacity->context_window_known && capacity->max_input_known &&
-         capacity->max_input_tokens > capacity->context_window_tokens) ||
-        (capacity->context_window_known && capacity->max_output_known &&
-         capacity->max_output_tokens > capacity->context_window_tokens) ||
-        (capacity->context_window_known && capacity->max_input_known &&
-         capacity->max_output_known &&
-         capacity->max_input_tokens > capacity->context_window_tokens -
-                                      capacity->max_output_tokens)) {
+    if (!capacity_limits_valid(capacity)) {
         snag_errorf(error, error_size,
                   "contradictory capacity limits for %s/%s",
                   provider->name, model);
@@ -936,32 +842,30 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
     }
     if (!override && catalog_used)
         capacity->source = SNAG_CAPACITY_CATALOG;
-    if (capacity->max_input_known)
+    if (capacity->max_input_tokens)
         minimum_budget(capacity->max_input_tokens, &capacity->hard_input_tokens,
                        &capacity->hard_input_known);
-    if (capacity->input_context_window_known)
+    if (capacity->input_context_window_tokens)
         minimum_budget(capacity->input_context_window_tokens,
                        &capacity->hard_input_tokens,
                        &capacity->hard_input_known);
-    if (capacity->context_window_known) {
+    if (capacity->context_window_tokens) {
         uint64_t context_budget = capacity->context_window_tokens;
 
-        if (capacity->max_output_known)
+        if (capacity->max_output_tokens)
             context_budget -= capacity->max_output_tokens;
         minimum_budget(context_budget, &capacity->hard_input_tokens,
                        &capacity->hard_input_known);
-        if (!capacity->effective_context_window_known) {
-            if (capacity->codex_protocol) {
+        if (!capacity->effective_context_window_percent) {
+            if (strcmp(protocol, "codex") == 0) {
                 capacity->effective_context_window_percent = 95u;
-                capacity->effective_context_window_known = true;
                 capacity->effective_context_window_derived = true;
-            } else if (!capacity->max_output_known) {
+            } else if (!capacity->max_output_tokens) {
                 capacity->effective_context_window_percent = 90u;
-                capacity->effective_context_window_known = true;
                 capacity->effective_context_window_derived = true;
             }
         }
-        if (capacity->effective_context_window_known) {
+        if (capacity->effective_context_window_percent) {
             uint64_t effective_budget = capacity->context_window_tokens *
                 capacity->effective_context_window_percent / 100u;
 
@@ -981,7 +885,7 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
         else
             capacity->count_capability = SNAG_COUNT_UNKNOWN;
         observed_bytes = (uint64_t)json_integer_value(
-            json_object_get(cached_model, "observed_model_input_bytes"));
+            json_object_get(cached_model, "observed_input_bytes"));
         observed_tokens = (uint64_t)json_integer_value(
             json_object_get(cached_model, "observed_input_tokens"));
         if (observed_bytes) {

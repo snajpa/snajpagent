@@ -97,6 +97,9 @@ and terminal state, and joins the presentation thread; no thread is detached.
   Changes to wrapping or row count overwrite in natural wrap order, clearing
   obsolete suffixes afterward. Interposed output and resize invalidate the
   retained frame; conversation scrollback is never part of the frame.
+  Configured spinner strings remain owned; their paint state comes from the
+  shared label and frame, without separate offsets or copied frame metadata.
+  Timer eligibility comes from the actual template and active slots.
 - Visible model output pauses while the user is editing. Each edit restarts the
   pause. After the pause expires, the current composer line remains as a
   readable snapshot and model output resumes on the following line.

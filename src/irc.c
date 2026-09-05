@@ -202,29 +202,19 @@ irc_casecmp(const char *a, const char *b)
     }
 }
 
-static size_t
-utf8_codepoint(const unsigned char *text, uint32_t *codepoint)
-{
-    size_t bytes = text[0] < 0x80u ? 1u : text[0] < 0xe0u ? 2u :
-                   text[0] < 0xf0u ? 3u : 4u;
-    uint32_t value = text[0] &
-        (bytes == 1u ? 0x7fu : bytes == 2u ? 0x1fu :
-         bytes == 3u ? 0x0fu : 0x07u);
-
-    for (size_t i = 1u; i < bytes; ++i)
-        value = (value << 6u) | (uint32_t)(text[i] & 0x3fu);
-    *codepoint = value;
-    return bytes;
-}
-
 static bool
 identifier_unicode_unsafe(const char *text)
 {
     const unsigned char *p = (const unsigned char *)text;
 
-    while (*p) {
+    size_t remaining = strlen(text);
+
+    while (remaining) {
         uint32_t cp;
-        size_t bytes = utf8_codepoint(p, &cp);
+        size_t bytes = snag_utf8_decode(p, remaining, &cp);
+
+        if (!bytes)
+            return true;
 
         if (cp == 0x0085u || cp == 0x00a0u || cp == 0x00adu ||
             cp == 0x061cu || cp == 0x1680u || cp == 0x180eu ||
@@ -234,6 +224,7 @@ identifier_unicode_unsafe(const char *text)
             cp == 0xfeffu || (cp >= 0xfff9u && cp <= 0xfffbu))
             return true;
         p += bytes;
+        remaining -= bytes;
     }
     return false;
 }

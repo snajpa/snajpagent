@@ -6,6 +6,8 @@
 #include "snag_jansson.h"
 
 int snag_json_canonical(const json_t *value, struct snag_buf *out);
+/* Diagnostic JSON accepts real numbers; durable canonical JSON does not. */
+int snag_json_diagnostic(const json_t *value, struct snag_buf *out);
 json_t *snag_json_load_strict(const unsigned char *data, size_t len,
                              size_t max_len, char *error, size_t error_size);
 json_t *snag_json_load_canonical(const unsigned char *data, size_t len,

@@ -12,10 +12,9 @@
 struct snag_provider_failure {
     char code[64];
     char message[256];
+    /* Positive provider facts; zero means absent, never a measured zero. */
     uint64_t context_limit_tokens;
     uint64_t requested_input_tokens;
-    bool context_limit_known;
-    bool requested_input_known;
     enum snag_output_correction output_correction;
 };
 
@@ -92,10 +91,6 @@ int snag_responses_stream_finish(struct snag_responses_stream *stream,
 const char *snag_responses_stream_error(const struct snag_responses_stream *stream);
 bool snag_provider_failure_is_capacity(
     const struct snag_provider_failure *failure);
-bool snag_provider_failure_safety_ceiling(
-    const struct snag_provider_failure *failure,
-    bool requested_output_known, uint64_t requested_output_tokens,
-    uint64_t *ceiling_tokens);
 int snag_provider_failure_from_json(const json_t *root,
                                    struct snag_provider_failure *failure);
 

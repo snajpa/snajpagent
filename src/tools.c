@@ -370,39 +370,23 @@ static json_t *
 excerpt_json(const struct capture_stream *stream)
 {
     struct snag_buf encoded;
-    json_t *out = json_object();
-    bool textual;
-    int rc = -1;
+    const struct snag_buf *data = &stream->data;
+    bool textual = snag_utf8_valid(data->data, data->len, true);
+    json_t *out = NULL;
 
-    if (!out)
-        return NULL;
     snag_buf_init(&encoded, SIZE_MAX);
-    textual = snag_utf8_valid(stream->data.data, stream->data.len, true);
-    if (textual) {
-        if (snag_buf_append(&encoded, stream->data.data, stream->data.len) < 0)
-            goto out;
-    } else if (snag_base64_append(&encoded, stream->data.data, stream->data.len) < 0) {
-        goto out;
+    if (!textual) {
+        if (snag_base64_append(&encoded, data->data, data->len) < 0)
+            goto done;
+        data = &encoded;
     }
-    if (snag_json_set_new(out, "discarded_bytes",
-                         json_integer((json_int_t)(stream->bytes - stream->data.len))) < 0 ||
-        snag_json_set_new(out, "encoding",
-                         json_string(textual ? "utf8" : "base64")) < 0 ||
-        snag_json_set_new(out, "original_bytes",
-                         json_integer((json_int_t)stream->bytes)) < 0 ||
-        snag_json_set_new(out, "retained",
-                         json_stringn(encoded.len ? (const char *)encoded.data : "",
-                                      encoded.len)) < 0 ||
-        snag_json_set_new(out, "retained_bytes",
-                         json_integer((json_int_t)stream->data.len)) < 0)
-        goto out;
-    rc = 0;
-out:
+    out = json_pack("{s:I,s:s,s:I,s:s%,s:I}",
+        "discarded_bytes", (json_int_t)(stream->bytes - stream->data.len), "encoding", textual ? "utf8" : "base64",
+        "original_bytes", (json_int_t)stream->bytes,
+        "retained", data->len ? (const char *)data->data : "", data->len,
+        "retained_bytes", (json_int_t)stream->data.len);
+done:
     snag_buf_free(&encoded);
-    if (rc < 0) {
-        json_decref(out);
-        return NULL;
-    }
     return out;
 }
 
@@ -484,68 +468,32 @@ done:
     return out;
 }
 
-static int
-result_set(json_t *object, const char *key, json_t *value)
-{
-    return snag_json_set_new(object, key, value);
-}
-
 static json_t *
 result_json(const char *status, const char *reason, int exit_code,
             int signal_number, uint64_t duration_ms, const char *handle,
             const struct capture_stream *stdout_stream,
             const struct capture_stream *stderr_stream)
 {
-    json_t *out = json_object();
-    json_t *stdout_json = NULL;
-    json_t *stderr_json = NULL;
-    char *model_text = NULL;
-    int rc = -1;
+    char *model_text = model_text_for(status, reason, exit_code, signal_number,
+                                     stdout_stream, stderr_stream);
+    json_t *stdout_json = excerpt_json(stdout_stream);
+    json_t *stderr_json = excerpt_json(stderr_stream);
+    json_t *out = json_pack("{s:I,s:n,s:s?,s:s,s:s?,s:n,s:s,s:O,s:O}",
+        "duration_ms", (json_int_t)duration_ms, "exit_code", "handle", handle,
+        "model_text", model_text, "reason", reason, "signal", "status", status,
+        "stderr", stderr_json, "stdout", stdout_json);
 
-    if (!out)
-        return NULL;
-    model_text = model_text_for(status, reason, exit_code, signal_number,
-                                stdout_stream, stderr_stream);
-    stdout_json = excerpt_json(stdout_stream);
-    stderr_json = excerpt_json(stderr_stream);
-    if (!model_text || !stdout_json || !stderr_json)
-        goto done;
-    if (result_set(out, "duration_ms",
-                   json_integer((json_int_t)duration_ms)) < 0)
-        goto done;
-    if (result_set(out, "exit_code",
-                   exit_code >= 0 ? json_integer(exit_code) : json_null()) < 0)
-        goto done;
-    if (result_set(out, "handle",
-                   handle ? json_string(handle) : json_null()) < 0)
-        goto done;
-    if (result_set(out, "model_text", json_string(model_text)) < 0)
-        goto done;
-    if (result_set(out, "reason",
-                   reason ? json_string(reason) : json_null()) < 0)
-        goto done;
-    if (result_set(out, "signal",
-                   signal_number > 0 ? json_integer(signal_number) : json_null()) < 0)
-        goto done;
-    if (result_set(out, "status", json_string(status)) < 0)
-        goto done;
-    if (result_set(out, "stderr", stderr_json) < 0)
-        goto done;
-    stderr_json = NULL;
-    if (result_set(out, "stdout", stdout_json) < 0)
-        goto done;
-    stdout_json = NULL;
-    rc = 0;
-done:
-    free(model_text);
-    if (stdout_json)
-        json_decref(stdout_json);
-    if (stderr_json)
-        json_decref(stderr_json);
-    if (rc < 0) {
+    if (out &&
+        ((exit_code >= 0 &&
+          snag_json_set_new(out, "exit_code", json_integer(exit_code)) < 0) ||
+         (signal_number > 0 &&
+          snag_json_set_new(out, "signal", json_integer(signal_number)) < 0))) {
         json_decref(out);
-        return NULL;
+        out = NULL;
     }
+    free(model_text);
+    json_decref(stdout_json);
+    json_decref(stderr_json);
     return out;
 }
 
@@ -1568,7 +1516,7 @@ snag_tools_attach_output_limit(const struct snag_response_item *call,
     if (!command_output_limit(call->arguments, config->max_output_tokens,
                               &max_output_tokens))
         max_output_tokens = config->max_output_tokens;
-    if (result_set(result, "max_output_tokens",
+    if (snag_json_set_new(result, "max_output_tokens",
                    json_integer((json_int_t)max_output_tokens)) < 0) {
         return -1;
     }

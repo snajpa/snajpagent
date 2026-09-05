@@ -12,13 +12,7 @@
 static json_t *
 origin_user_data(void)
 {
-    json_t *data = json_object();
-    if (!data || snag_json_set_new(data, "origin", json_string("user")) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s}", "origin", "user");
 }
 
 int
@@ -40,15 +34,8 @@ snag_session_unarchive(struct snag_session *session, uint64_t *written_seq,
 static json_t *
 delete_request_data(const char *prefix, const char *trash_name)
 {
-    json_t *data = json_object();
-    if (!data ||
-        snag_json_set_new(data, "confirmed_id_prefix", json_string(prefix)) < 0 ||
-        snag_json_set_new(data, "trash_name", json_string(trash_name)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s}", "confirmed_id_prefix", prefix,
+                     "trash_name", trash_name);
 }
 
 static int

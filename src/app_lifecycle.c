@@ -203,52 +203,27 @@ goal_error(struct app_state *app, const char *message)
 static json_t *
 goal_id_data(const struct snag_session *session)
 {
-    json_t *data = json_object();
-    if (!data ||
-        snag_json_set_new(data, "goal_id", json_string(session->goal_id)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s}", "goal_id", session->goal_id);
 }
 
 static json_t *
 goal_actor_data(const struct snag_session *session, const char *actor)
 {
-    json_t *data = goal_id_data(session);
-    if (!data || snag_json_set_new(data, "actor", json_string(actor)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s}", "goal_id", session->goal_id, "actor", actor);
 }
 
 static json_t *
 goal_text_data(const struct snag_session *session, const char *actor,
                const char *prompt)
 {
-    json_t *data = goal_actor_data(session, actor);
-    if (!data || snag_json_set_new(data, "prompt", json_string(prompt)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s}", "goal_id", session->goal_id,
+                     "actor", actor, "prompt", prompt);
 }
 
 static json_t *
 goal_started_data(const char *goal_id, const char *prompt)
 {
-    json_t *data = json_object();
-    if (!data || snag_json_set_new(data, "goal_id", json_string(goal_id)) < 0 ||
-        snag_json_set_new(data, "prompt", json_string(prompt)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s}", "goal_id", goal_id, "prompt", prompt);
 }
 
 static int

@@ -587,6 +587,72 @@ grep -q 'invalid configuration at line 2' "$root/bad-config.err"
 after=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
 [ "$before" -eq "$after" ]
 
+# Invalid-file acceptance uses the real CLI; C retains ownership and I/O failures.
+python3 - "$bin" "$root" "$dotdir" <<'PY'
+import pathlib
+import subprocess
+import sys
+
+binary, root, dotdir = sys.argv[1:]
+path = pathlib.Path(root) / "invalid-config.ini"
+cases = [
+    "[ui]\nverbosity=1\nverbosity=2\n",
+    "[unknown]\nvalue=1\n",
+    "[ui]\nverbosity=7\n",
+    "[ui]\ntyping_pause_ms=5001\n",
+    "[ui]\ncolor=sometimes\n",
+    "[ui]\nmarkdown=maybe\n",
+    "[irc]\nhistory_lines=0\n",
+    "[irc]\nname=legacy\n",
+    "[irc]\noperator_name=legacy\n",
+    "[irc]\nclient=localhost\nclient=localhost\n",
+    "[ui]\ntyping_pause_ms=1\ntyping_pause_ms=2\n",
+    "[ui]\nmarkdown=true\nmarkdown=false\n",
+    "[tool]\ndefault_timeout_ms=5000\nmax_timeout_ms=4000\n",
+    "[tool]\nmax_timeout_ms=4294967296\n",
+    "[tool]\nmax_output_bytes=4294967296\n",
+    "[tool]\ndefault_max_output_tokens=6000\n",
+    "[tool]\nmax_output_tokens=0\n",
+    "[tool]\nmax_output_tokens=4000000001\n",
+    "[tool]\nmax_output_tokens=1\nmax_output_tokens=2\n",
+    "[tool]\nsecret_env=A,A\n",
+    "[provider]\nbase_url=ftp://example.test\n",
+    "[provider]\nbase_url=https://example.test/a?b\n",
+    "[provider]\napi_key_env=BAD-NAME\n",
+    "[provider]\nexact_token_count=maybe\n",
+    "[provider]\nnative_compaction=yes\n",
+    "[agent]\nmax_goal_prompt_bytes=0\n",
+    "[agent]\nmax_goal_prompt_bytes=1048577\n",
+    "[agent]\nread_agents_md=maybe\n",
+    "[agent]\nread_agents_md=true\nread_agents_md=false\n",
+    "[agent]\nprovider=missing\n[provider present]\n",
+    "[provider]\nopenrouter_title=\n",
+    "[provider duplicate]\n[provider duplicate]\n",
+    "[provider paid]\n[model-limit paid/model]\n",
+    "[model-limit missing/model]\nmax_input_tokens=1\n",
+    "[model-limit /model]\nmax_input_tokens=1\n",
+    "[model-limit default/]\nmax_input_tokens=1\n",
+    "[model-limit default/model]\nmax_input_tokens=0\n",
+    "[model-limit default/model]\nmax_input_tokens=4000000001\n",
+    "[model-limit default/model]\nmax_output_tokens=18446744073709551616\n",
+    "[model-limit default/model]\nmax_input_tokens=1\nmax_input_tokens=2\n",
+    "[model-limit default/model]\nmax_input_tokens=1\n[model-limit default/model]\nmax_output_tokens=1\n",
+    "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=101\n",
+    "[model-limit default/model]\ncontext_window_tokens=100\nmax_output_tokens=101\n",
+    "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=70\nmax_output_tokens=31\n",
+]
+sessions = set((pathlib.Path(dotdir) / "sessions").iterdir())
+for config in cases:
+    path.write_text(config, encoding="utf-8")
+    result = subprocess.run([binary, "--config", str(path), "-e", "--", "ping"],
+                            capture_output=True, timeout=10)
+    assert result.returncode == 2, (config, result)
+    assert not result.stdout, (config, result.stdout)
+    assert result.stderr.startswith(b"snajpagent: "), (config, result.stderr)
+    assert b"--resume" not in result.stderr, (config, result.stderr)
+assert set((pathlib.Path(dotdir) / "sessions").iterdir()) == sessions
+PY
+
 # Catchable shutdown signals unwind one-shot work through normal cleanup and
 # preserve conventional 128+signal exit statuses.
 for signal_case in 'INT 130' 'HUP 129' 'TERM 143'; do
@@ -807,7 +873,7 @@ done
 statistical_state="$root/statistical-budget-state"
 mkdir -m 700 "$statistical_state"
 cat >"$statistical_state/models.json" <<'EOF'
-{"providers":[{"base_url":"https://api.openai.com","models":[{"count_capability":"unsupported","default_effort":"medium","efforts":["low","medium","high"],"id":"gpt-5.5-2026-04-23","limits":{"auto_compact_input_tokens":null,"context_window_tokens":null,"effective_context_window_percent":null,"input_context_window_tokens":null,"max_context_window_tokens":null,"max_input_tokens":null,"max_output_tokens":null},"observed_hard_input_tokens":1,"observed_input_tokens":100,"observed_model_input_bytes":100}],"name":"default","protocol":"openai"}],"schema_version":1,"updated_at_ms":1}
+{"providers":[{"base_url":"https://api.openai.com","models":[{"count_capability":"unsupported","default_effort":"medium","efforts":["low","medium","high"],"id":"gpt-5.5-2026-04-23","limits":{"auto_compact_input_tokens":null,"context_window_tokens":null,"effective_context_window_percent":null,"input_context_window_tokens":null,"max_context_window_tokens":null,"max_input_tokens":null,"max_output_tokens":null},"observed_hard_input_tokens":1,"observed_input_tokens":100,"observed_input_bytes":100}],"name":"default","protocol":"openai"}],"schema_version":1,"updated_at_ms":1}
 EOF
 chmod 600 "$statistical_state/models.json"
 cat >"$root/statistical-budget.ini" <<'EOF'

@@ -32,13 +32,10 @@ struct snag_prompt_clock {
 
 struct snag_term_spinner {
     char value[80];
-    size_t label_offset;
     size_t frame_offset[16];
     unsigned char frame_len[16];
     unsigned char inactive_len;
     unsigned char frame_count;
-    unsigned char current_len;
-    bool present;
 };
 
 enum snag_term_action {

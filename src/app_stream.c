@@ -287,30 +287,17 @@ snag_app_stream_public_response(void *opaque, size_t item_index, enum snag_item_
 void
 snag_app_response_cycle_release(struct app_state *app,
                                struct snag_response_graph *graph,
-                               json_t **steering, json_t **create_request,
-                               json_t **count_request,
+                               json_t **steering,
+                               struct snag_context_projection *projection,
                                struct snag_buf *request_body)
 {
-    if (steering && *steering) {
-        json_decref(*steering);
-        *steering = NULL;
-    }
-    if (create_request && *create_request) {
-        json_decref(*create_request);
-        *create_request = NULL;
-    }
-    if (count_request && *count_request) {
-        json_decref(*count_request);
-        *count_request = NULL;
-    }
-    if (request_body)
-        snag_buf_free(request_body);
-    if (graph)
-        snag_response_graph_free(graph);
-    if (app) {
-        app->stream_graph = NULL;
-        snag_app_clear_partial_public(app);
-    }
+    json_decref(*steering);
+    *steering = NULL;
+    snag_context_projection_free(projection);
+    snag_buf_free(request_body);
+    snag_response_graph_free(graph);
+    app->stream_graph = NULL;
+    snag_app_clear_partial_public(app);
 }
 
 void

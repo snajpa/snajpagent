@@ -792,15 +792,15 @@ tool_by_type(json_t *tools, const char *type)
 }
 
 static json_t *
-item_by_kind(json_t *items, const char *kind)
+message_matching(json_t *items, const char *needle)
 {
     size_t index;
 
     assert(json_is_array(items));
     for (index = 0u; index < json_array_size(items); ++index) {
         json_t *item = json_array_get(items, index);
-        const char *item_kind = snag_json_string(item, "kind");
-        if (item_kind && strcmp(item_kind, kind) == 0)
+        const char *content = snag_json_string(item, "content");
+        if (content && strstr(content, needle))
             return item;
     }
     return NULL;
@@ -1466,9 +1466,9 @@ main(void)
                                  active_steering, 0u, false, NULL,
                                  &no_instructions,
                                  &active_projection, error, sizeof(error)) == 0);
-        assert(item_by_kind(json_object_get(active_projection.model_input,
+        assert(message_matching(json_object_get(active_projection.model_input,
                                             "items"),
-                            "rollout_log_location") == NULL);
+                            "The complete rollout log") == NULL);
         snag_context_projection_free(&active_projection);
         assert(snag_context_compact_active_prefix_request_build(&active,
                    active_model, active.default_effort, 0u, false,
@@ -1917,26 +1917,26 @@ main(void)
     assert(json_array_size(request_input) == 6);
     assert(strcmp(snag_json_string(json_array_get(request_input, 2), "type"),
                   "compaction") == 0);
-    assert(strstr(snag_json_string(json_array_get(items, 1), "text"),
+    assert(strstr(snag_json_string(json_array_get(items, 1), "content"),
                   "context guidance") != NULL);
-    assert(strcmp(snag_json_string(json_array_get(items, 2), "kind"),
-                  "native_compact_output") == 0);
-    assert(strcmp(snag_json_string(json_array_get(items, 2), "compact_id"),
-                  compact1) == 0);
-    assert(strcmp(snag_json_string(json_array_get(items, 3), "kind"),
-                  "rollout_log_location") == 0);
+    assert(json_equal(json_array_get(items, 2),
+                      json_array_get(session.compact_output, 0)));
+    assert(items == json_object_get(projection.create_request, "input"));
+    assert(items == json_object_get(projection.count_request, "input"));
+    assert(json_object_get(projection.create_request, "tools") ==
+           json_object_get(projection.count_request, "tools"));
     assert(strcmp(snag_json_string(json_array_get(items, 3), "role"),
                   "developer") == 0);
-    assert(strstr(snag_json_string(json_array_get(items, 3), "text"),
+    assert(strstr(snag_json_string(json_array_get(items, 3), "content"),
                   session.dir_path) != NULL);
-    assert(strcmp(snag_json_string(json_array_get(items, 4), "text"), "again") == 0);
+    assert(strcmp(snag_json_string(json_array_get(items, 4), "content"), "again") == 0);
     {
-        json_t *controller = item_by_kind(items, "goal_controller");
+        json_t *controller = message_matching(items, "No persistent goal");
 
         assert(controller != NULL);
-        assert(strstr(snag_json_string(controller, "text"),
+        assert(strstr(snag_json_string(controller, "content"),
                       "explicitly request") != NULL);
-        assert(strstr(snag_json_string(controller, "text"),
+        assert(strstr(snag_json_string(controller, "content"),
                       "Markdown does not activate continuation") != NULL);
     }
     snag_context_projection_free(&projection);
@@ -2089,9 +2089,9 @@ main(void)
     {
         json_t *tools = json_object_get(projection.create_request, "tools");
         json_t *semantic = json_object_get(projection.model_input, "items");
-        json_t *continuation = item_by_kind(semantic, "goal_continuation");
-        json_t *controller = item_by_kind(semantic, "goal_controller");
-        json_t *closed = item_by_kind(semantic, "managed_process_closed");
+        json_t *continuation = message_matching(semantic, SNAG_GOAL_CONTINUATION_TEXT);
+        json_t *controller = message_matching(semantic, "Persistent goal ");
+        json_t *closed = message_matching(semantic, "managed process closed;");
         json_t *historical_output = tool_by_type(
             json_object_get(projection.create_request, "input"),
             "function_call_output");
@@ -2103,17 +2103,17 @@ main(void)
         assert(tool_by_name(tools, "update_goal") != NULL);
         assert(continuation != NULL);
         assert(strcmp(snag_json_string(continuation, "role"), "developer") == 0);
-        assert(strcmp(snag_json_string(continuation, "text"),
+        assert(strcmp(snag_json_string(continuation, "content"),
                       SNAG_GOAL_CONTINUATION_TEXT) == 0);
         assert(controller != NULL);
-        assert(strstr(snag_json_string(controller, "text"),
+        assert(strstr(snag_json_string(controller, "content"),
                       "finish compacted work") != NULL);
-        assert(strstr(snag_json_string(controller, "text"),
+        assert(strstr(snag_json_string(controller, "content"),
                       "wording locked") != NULL);
         assert(closed != NULL);
-        assert(strstr(snag_json_string(closed, "text"),
+        assert(strstr(snag_json_string(closed, "content"),
                       "model_text=\"\\u000a\"") != NULL);
-        assert(strstr(snag_json_string(closed, "text"),
+        assert(strstr(snag_json_string(closed, "content"),
                       "closure-model-tail") == NULL);
         assert(historical_output != NULL);
         historical_text = snag_json_string(historical_output, "output");
@@ -2127,7 +2127,7 @@ main(void)
         assert(strstr(historical_text, large_tool_hash) != NULL);
         assert(strstr(historical_text, "durable session journal") != NULL);
         assert(strstr(historical_text, "full-model-tail") != NULL);
-        assert(item_by_kind(semantic, "native_compact_output") != NULL);
+        assert(tool_by_type(semantic, "compaction") != NULL);
     }
 
     {
@@ -2147,22 +2147,22 @@ main(void)
                                  error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request, "tools");
         semantic = json_object_get(projection.model_input, "items");
-        harness = item_by_kind(semantic, "irc_harness");
+        harness = message_matching(semantic, "IRC chat mode is active.");
         assert(json_array_size(tools) == 8u);
         assert_context_tool_schemas(tools, NULL, 7654321u, 6000u);
         assert(tool_by_name(tools, "irc_send") != NULL);
         assert(tool_by_name(tools, "irc_state") != NULL);
         assert(tool_by_name(tools, "irc_topic") != NULL);
         assert(harness != NULL);
-        assert(strstr(snag_json_string(harness, "text"),
+        assert(strstr(snag_json_string(harness, "content"),
                       "model nick builder") != NULL);
-        assert(strstr(snag_json_string(harness, "text"),
+        assert(strstr(snag_json_string(harness, "content"),
                       "operator nick alice") != NULL);
-        assert(strstr(snag_json_string(harness, "text"),
+        assert(strstr(snag_json_string(harness, "content"),
                       "do not poll or babysit") != NULL);
-        assert(strstr(snag_json_string(harness, "text"),
+        assert(strstr(snag_json_string(harness, "content"),
                       "irc_send is the only way") != NULL);
-        assert(strstr(snag_json_string(harness, "text"),
+        assert(strstr(snag_json_string(harness, "content"),
                       "requires one successful irc_send message") != NULL);
         assert(strstr(snag_json_string(tool_by_name(tools, "irc_send"),
                                      "description"),
@@ -2185,7 +2185,7 @@ main(void)
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(tool_by_name(tools, "create_goal") == NULL);
         assert(tool_by_name(tools, "update_goal") == NULL);
-        assert(item_by_kind(semantic, "goal_controller") == NULL);
+        assert(message_matching(semantic, "goal_controller") == NULL);
     }
 
     json_decref(empty_steering);

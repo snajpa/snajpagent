@@ -1147,9 +1147,8 @@ append_model(json_t *out, const json_t *source, bool codex)
     }
     if (codex && default_effort && !effort_source)
         return -1;
-    entry = json_object();
     efforts = json_array();
-    if (!entry || !efforts ||
+    if (!efforts ||
         append_efforts(efforts, effort_source, codex) < 0 ||
         build_model_limits(source, codex, &limits) < 0)
         goto fail;
@@ -1165,35 +1164,14 @@ append_model(json_t *out, const json_t *source, bool codex)
         if (!supported)
             goto fail;
     }
-    if (snag_json_set_new(entry, "default_effort",
-                         default_effort ? json_string(default_effort) :
-                                          json_null()) < 0)
-        goto fail;
-    if (snag_json_set_new(entry, "efforts", efforts) < 0) {
-        efforts = NULL;
-        goto fail;
-    }
-    efforts = NULL;
-    if (snag_json_set_new(entry, "id", json_string(id)) < 0)
-        goto fail;
-    if (snag_json_set_new(entry, "limits", limits) < 0) {
-        limits = NULL;
-        goto fail;
-    }
-    limits = NULL;
-    if (json_array_append_new(out, entry) < 0) {
-        entry = NULL;
-        goto fail;
-    }
-    entry = NULL;
-    return 0;
+    entry = json_pack("{s:s?,s:O,s:s,s:O}", "default_effort", default_effort,
+                      "efforts", efforts, "id", id, "limits", limits);
+    json_decref(limits);
+    json_decref(efforts);
+    return json_array_append_new(out, entry);
 fail:
-    if (limits)
-        json_decref(limits);
-    if (efforts)
-        json_decref(efforts);
-    if (entry)
-        json_decref(entry);
+    json_decref(limits);
+    json_decref(efforts);
     errno = EPROTO;
     return -1;
 }

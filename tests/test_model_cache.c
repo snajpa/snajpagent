@@ -6,10 +6,12 @@
 
 #include <assert.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 static json_t *
@@ -97,10 +99,52 @@ main(void)
     assert(cache.providers == NULL);
 
     providers = load_json(providers_text);
+    {
+        json_t *limits = json_object_get(json_array_get(json_object_get(
+            json_array_get(providers, 0), "models"), 2), "limits");
+        static const char *const keys[] = {
+            "context_window_tokens", "max_context_window_tokens",
+            "input_context_window_tokens", "max_input_tokens",
+            "max_output_tokens", "auto_compact_input_tokens",
+            "effective_context_window_percent"
+        };
+
+        /* Zero is internal absence, not an accepted external limit. */
+        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+            assert(json_object_set_new(limits, keys[i], json_integer(0)) == 0);
+            assert(snag_model_cache_replace(&store, providers, 123456u, &cache,
+                                           error, sizeof(error)) < 0);
+            assert(json_object_del(limits, keys[i]) == 0);
+            assert(snag_model_cache_replace(&store, providers, 123456u, &cache,
+                                           error, sizeof(error)) < 0);
+            assert(json_object_set_new(limits, keys[i], json_null()) == 0);
+        }
+    }
     assert(snag_model_cache_replace(&store, providers, 123456u, &cache,
                                    error, sizeof(error)) == 0);
     assert(cache.updated_at_ms == 123456u);
-    assert(snag_model_cache_entry_count(&cache) == 5u);
+    {
+        const char *name, *model, *effort;
+        static const char *const expected[][3] = {
+            {"paid", "org/model", "low"},
+            {"paid", "org/model", "high"},
+            {"paid", "context-only", "fallback"},
+            {"paid", "unknown", "fallback"},
+            {"codex", "codex-context-only", "medium"}
+        };
+
+        for (size_t i = 0; i < 5u; ++i) {
+            assert(snag_model_cache_entry(&cache, i + 1u, "fallback",
+                                         &name, &model, &effort) == 0);
+            assert(strcmp(name, expected[i][0]) == 0);
+            assert(strcmp(model, expected[i][1]) == 0);
+            assert(strcmp(effort, expected[i][2]) == 0);
+        }
+        assert(snag_model_cache_entry(&cache, 0u, "fallback",
+                                     &name, &model, &effort) < 0);
+        assert(snag_model_cache_entry(&cache, 6u, "fallback",
+                                     &name, &model, &effort) == 1);
+    }
     fd = openat(store.root_fd, "models.json", O_RDONLY);
     assert(fd >= 0);
     got = read(fd, encoded, sizeof(encoded) - 1u);
@@ -133,14 +177,13 @@ main(void)
     assert(capacity.hard_input_tokens == 922000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            829800u);
-    assert(!capacity.effective_context_window_known);
+    assert(!capacity.effective_context_window_percent);
 
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "context-only", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.source == SNAG_CAPACITY_CATALOG);
-    assert(capacity.context_window_known);
-    assert(capacity.effective_context_window_known);
+    assert(capacity.context_window_tokens);
     assert(capacity.effective_context_window_derived);
     assert(capacity.effective_context_window_percent == 90u);
     assert(capacity.hard_input_tokens == 90000u);
@@ -167,7 +210,6 @@ main(void)
     assert(capacity.source == SNAG_CAPACITY_CATALOG);
     assert(capacity.context_window_tokens == 272000u);
     assert(capacity.max_context_window_tokens == 872000u);
-    assert(capacity.effective_context_window_known);
     assert(capacity.effective_context_window_derived);
     assert(capacity.effective_context_window_percent == 95u);
     assert(capacity.hard_input_tokens == 258400u);
@@ -181,7 +223,6 @@ main(void)
         config.model_limit_count = 1u;
         strcpy(limit->provider, "codex");
         strcpy(limit->model, "codex-context-only");
-        limit->context_window_known = true;
         limit->context_window_tokens = 872000u;
         assert(snag_model_capacity_resolve(&cache, &config, &config.providers[1],
                    "codex-context-only", "codex", &bigger,
@@ -210,15 +251,14 @@ main(void)
                     sizeof(config.model_limits[0].provider), "%s", "paid") > 0);
     assert(snprintf(config.model_limits[0].model,
                     sizeof(config.model_limits[0].model), "%s", "org/model") > 0);
-    config.model_limits[0].max_input_known = true;
     config.model_limits[0].max_input_tokens = 900000u;
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.source == SNAG_CAPACITY_CONFIG);
     assert(capacity.source_bound);
-    assert(!capacity.context_window_known);
-    assert(!capacity.max_output_known);
+    assert(!capacity.context_window_tokens);
+    assert(!capacity.max_output_tokens);
     assert(capacity.hard_input_tokens == 900000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            810000u);
@@ -228,16 +268,73 @@ main(void)
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.source == SNAG_CAPACITY_CONFIG);
-    assert(!capacity.context_window_known);
-    assert(!capacity.max_output_known);
+    assert(!capacity.context_window_tokens);
+    assert(!capacity.max_output_tokens);
     assert(capacity.hard_input_tokens == 1100000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            990000u);
 
+    config.model_limits[0].max_input_tokens = 0u;
+    config.model_limits[0].context_window_tokens = 100u;
+    config.model_limits[0].max_output_tokens = 100u;
+    assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) == 0);
+    assert(capacity.hard_input_known && capacity.hard_input_tokens == 0u);
+    assert(snag_model_compact_threshold(&config.providers[0], &capacity) == 1u);
+    config.model_limits[0].max_output_tokens = 101u;
+    assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
+               "org/model", "openai", &capacity,
+               error, sizeof(error)) < 0);
+
     config.model_limit_count = 0u;
-    assert(snag_model_cache_record(&store, &cache, &config.providers[0],
-               "openai", "org/model", SNAG_COUNT_SUPPORTED,
-               1000u, 250u, 800000u, error, sizeof(error)) == 0);
+    {
+        struct rlimit saved, limited;
+        struct snag_model_cache disk = {0};
+        json_t *original = cache.providers;
+        json_t *snapshot = json_deep_copy(original);
+        void (*previous_signal)(int) = signal(SIGXFSZ, SIG_IGN);
+
+        assert(snapshot && previous_signal != SIG_ERR);
+        assert(fstatat(store.root_fd, "models.json", &before, 0) == 0);
+        assert(getrlimit(RLIMIT_FSIZE, &saved) == 0);
+        limited = saved;
+        limited.rlim_cur = 1u;
+        assert(setrlimit(RLIMIT_FSIZE, &limited) == 0);
+        assert(snag_model_cache_record(&store, &cache, &config.providers[0],
+                   "openai", "org/model", SNAG_COUNT_SUPPORTED,
+                   1000u, 250u, 800000u, error, sizeof(error)) < 0);
+        assert(cache.providers == original && json_equal(original, snapshot));
+        assert(snag_model_cache_replace(&store, providers, 234567u, &cache,
+                                       error, sizeof(error)) < 0);
+        assert(cache.providers == original && json_equal(original, snapshot));
+        assert(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+        assert(signal(SIGXFSZ, previous_signal) != SIG_ERR);
+        assert(fstatat(store.root_fd, "models.json", &after, 0) == 0);
+        assert(before.st_ino == after.st_ino && before.st_size == after.st_size);
+        assert(snag_model_cache_load(&store, &disk, error, sizeof(error)) == 0);
+        assert(json_equal(disk.providers, snapshot));
+        snag_model_cache_free(&disk);
+        json_decref(snapshot);
+    }
+    {
+        struct snag_model_cache stale = {0};
+        json_t *retained = json_incref(cache.providers);
+
+        assert(snag_model_cache_load(&store, &stale, error, sizeof(error)) == 0);
+        assert(snag_model_cache_record(&store, &cache, &config.providers[0],
+                   "openai", "org/model", SNAG_COUNT_SUPPORTED,
+                   1000u, 250u, 800000u, error, sizeof(error)) == 0);
+        assert(json_equal(retained, stale.providers));
+        assert(!json_equal(retained, cache.providers));
+        /* A no-op still adopts changes made by another cache owner. */
+        assert(snag_model_cache_record(&store, &stale, &config.providers[0],
+                   "openai", "org/model", SNAG_COUNT_UNKNOWN,
+                   500u, 200u, 850000u, error, sizeof(error)) == 0);
+        assert(json_equal(stale.providers, cache.providers));
+        snag_model_cache_free(&stale);
+        json_decref(retained);
+    }
     assert(fstatat(store.root_fd, "models.json", &before,
                    AT_SYMLINK_NOFOLLOW) == 0);
     assert(snag_model_cache_record(&store, &cache, &config.providers[0],

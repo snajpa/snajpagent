@@ -16,26 +16,14 @@ hash_json_bounded(const json_t *value, size_t max,
                   char hash[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes,
                   char *error, size_t error_size)
 {
-    struct snag_buf encoded;
-    int rc = -1;
-
     if (hash)
         hash[0] = '\0';
     if (bytes)
         *bytes = 0u;
-    snag_buf_init(&encoded, max);
-    if (snag_json_canonical(value, &encoded) < 0) {
-        snprintf(error, error_size, "canonical compaction JSON exceeds bound");
-        goto out;
-    }
-    if (hash)
-        snag_sha256_hex(encoded.data, encoded.len, hash);
-    if (bytes)
-        *bytes = encoded.len;
-    rc = 0;
-out:
-    snag_buf_free(&encoded);
-    return rc;
+    if (snag_json_digest_bounded(value, max, hash, bytes) == 0)
+        return 0;
+    snprintf(error, error_size, "canonical compaction JSON exceeds bound");
+    return -1;
 }
 
 static bool
@@ -64,35 +52,15 @@ compaction_started_data(const struct snag_session *session,
                         const char *count_request_hash,
                         uint64_t input_tokens_bound)
 {
-    json_t *data = json_object();
-
-    if (!data ||
-        snag_json_set_new(data, "capability_version",
-                         json_string(SNAJPAGENT_CAPABILITY_VERSION)) < 0 ||
-        snag_json_set_new(data, "compact_id", json_string(compact_id)) < 0 ||
-        snag_json_set_new(data, "count_method", json_string(count_method)) < 0 ||
-        snag_json_set_new(data, "count_request_sha256",
-                         json_string(count_request_hash)) < 0 ||
-        snag_json_set_new(data, "input_tokens_bound",
-                         json_integer((json_int_t)input_tokens_bound)) < 0 ||
-        snag_json_set_new(data, "model", json_string(model)) < 0 ||
-        snag_json_set_new(data, "predecessor_compact_id",
-                         session->compact_id[0] ?
-                         json_string(session->compact_id) : json_null()) < 0 ||
-        snag_json_set_new(data, "profile_id",
-                         json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
-        snag_json_set_new(data, "reason", json_string(reason)) < 0 ||
-        snag_json_set_new(data, "request_sha256",
-                         json_string(request_hash)) < 0 ||
-        snag_json_set_new(data, "source_seq",
-                         json_integer((json_int_t)source_seq)) < 0 ||
-        snag_json_set_new(data, "source_sha256",
-                         json_string(source_hash)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s?,s:s,s:s,s:s,s:I,s:s}",
+        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "compact_id", compact_id, "count_method", count_method,
+        "count_request_sha256", count_request_hash,
+        "input_tokens_bound", (json_int_t)input_tokens_bound, "model", model,
+        "predecessor_compact_id", session->compact_id[0] ? session->compact_id : NULL,
+        "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
+        "request_sha256", request_hash, "source_seq", (json_int_t)source_seq,
+        "source_sha256", source_hash);
 }
 
 static json_t *
@@ -106,43 +74,20 @@ compaction_completed_data(const char *compact_id,
                           uint64_t output_tokens_bound,
                           const json_t *output)
 {
-    json_t *data = json_object();
-
-    if (!data ||
-        snag_json_set_new(data, "compact_id", json_string(compact_id)) < 0 ||
-        snag_json_set_new(data, "count_method", json_string(count_method)) < 0 ||
-        snag_json_set_new(data, "input_tokens_bound",
-                         json_integer((json_int_t)input_tokens_bound)) < 0 ||
-        snag_json_set_new(data, "output", json_deep_copy(output)) < 0 ||
-        snag_json_set_new(data, "output_count_method",
-                         json_string(output_count_method)) < 0 ||
-        snag_json_set_new(data, "output_count_request_sha256",
-                         json_string(output_count_request_hash)) < 0 ||
-        snag_json_set_new(data, "output_sha256", json_string(output_hash)) < 0 ||
-        snag_json_set_new(data, "output_tokens_bound",
-                         json_integer((json_int_t)output_tokens_bound)) < 0 ||
-        snag_json_set_new(data, "source_sha256",
-                         json_string(source_hash)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s}",
+        "compact_id", compact_id, "count_method", count_method,
+        "input_tokens_bound", (json_int_t)input_tokens_bound, "output", output,
+        "output_count_method", output_count_method,
+        "output_count_request_sha256", output_count_request_hash,
+        "output_sha256", output_hash,
+        "output_tokens_bound", (json_int_t)output_tokens_bound,
+        "source_sha256", source_hash);
 }
 
 static json_t *
 compaction_interrupted_data(const char *compact_id, const char *reason)
 {
-    json_t *data = json_object();
-
-    if (!data ||
-        snag_json_set_new(data, "compact_id", json_string(compact_id)) < 0 ||
-        snag_json_set_new(data, "reason", json_string(reason)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s}", "compact_id", compact_id, "reason", reason);
 }
 
 static int
@@ -242,59 +187,36 @@ responses_compact_create_request(const json_t *compact_request,
         "Write the compact summary so it preserves the user's goals, decisions, "
         "constraints, repository state, active blockers, and next steps. Do not "
         "use markdown fences, prose outside JSON, or tool calls.";
-    json_t *request = json_object();
-    json_t *input = compact_request ? json_object_get(compact_request, "input") : NULL;
-    json_t *input_copy = NULL;
-    json_t *compact_instruction = json_object();
+    json_t *input = json_object_get(compact_request, "input");
+    json_t *copy;
+    json_t *request = NULL;
 
-    if (!request || !json_is_array(input) || !compact_instruction ||
-        !model || !effort || !capacity)
-        goto fail;
-    input_copy = json_deep_copy(input);
-    if (!input_copy ||
-        snag_json_set_new(compact_instruction, "content",
-                         json_string(instruction)) < 0 ||
-        snag_json_set_new(compact_instruction, "role",
-                         json_string("developer")) < 0 ||
-        json_array_append_new(input_copy, compact_instruction) < 0)
-        goto fail;
-    compact_instruction = NULL;
-    if (snag_json_set_new(request, "input", input_copy) < 0)
-        goto fail;
-    input_copy = NULL;
-    if (snag_json_set_new(request, "model", json_string(model)) < 0 ||
-        snag_json_set_new(request, "parallel_tool_calls", json_false()) < 0 ||
-        snag_json_set_new(request, "reasoning", snag_context_reasoning_settings(effort)) < 0 ||
-        snag_json_set_new(request, "store", json_false()) < 0 ||
-        snag_json_set_new(request, "stream", json_true()) < 0 ||
-        snag_json_set_new(request, "tool_choice", json_string("none")) < 0 ||
-        snag_json_set_new(request, "tools", json_array()) < 0 ||
-        snag_json_set_new(request, "truncation", json_string("disabled")) < 0)
-        goto fail;
-    if (capacity->max_output_known &&
+    if (!json_is_array(input) || !model || !effort || !capacity)
+        return NULL;
+    copy = json_copy(input);
+    if (!copy || json_array_append_new(copy,
+            json_pack("{s:s,s:s}", "role", "developer",
+                      "content", instruction)) < 0)
+        goto out;
+    request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:[],s:s}",
+        "input", copy, "model", model, "parallel_tool_calls", 0,
+        "reasoning", "effort", effort, "store", 0, "stream", 1,
+        "tool_choice", "none", "tools", "truncation", "disabled");
+    if (request && capacity->max_output_tokens &&
         snag_json_set_new(request, "max_output_tokens",
-            json_integer((json_int_t)capacity->max_output_tokens)) < 0)
-        goto fail;
-    return request;
-
-fail:
-    if (compact_instruction)
-        json_decref(compact_instruction);
-    if (input_copy)
-        json_decref(input_copy);
-    if (request)
+            json_integer((json_int_t)capacity->max_output_tokens)) < 0) {
         json_decref(request);
-    return NULL;
+        request = NULL;
+    }
+out:
+    json_decref(copy);
+    return request;
 }
 
 static json_t *
-responses_compact_count_request(const json_t *compact_request,
-                                const char *model, const char *effort,
-                                const struct snag_model_capacity *capacity)
+responses_compact_count_request(const json_t *create_request)
 {
-    json_t *request = responses_compact_create_request(compact_request,
-                                                        model, effort,
-                                                        capacity);
+    json_t *request = json_copy(create_request);
 
     if (!request)
         return NULL;
@@ -327,25 +249,15 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
         return -1;
     }
 #ifdef SNAJPAGENT_TEST_FIXTURE
-    json_t *fixture_output = json_array();
-    json_t *item = json_object();
+    json_t *fixture_output = json_pack("[{s:s,s:s,s:s}]",
+        "content", "fixture responses compact summary",
+        "role", "developer", "type", "message");
 
     (void)app;
     (void)create_request;
     (void)credential;
-    if (!fixture_output || !item ||
-        snag_json_set_new(item, "content",
-                         json_string("fixture responses compact summary")) < 0 ||
-        snag_json_set_new(item, "role", json_string("developer")) < 0 ||
-        snag_json_set_new(item, "type", json_string("message")) < 0 ||
-        json_array_append_new(fixture_output, item) < 0) {
-        if (item)
-            json_decref(item);
-        if (fixture_output)
-            json_decref(fixture_output);
+    if (!fixture_output)
         return -1;
-    }
-    item = NULL;
     if (snag_context_compact_output_valid(fixture_output, output_hash,
                                          &output_bytes, error, error_size) < 0) {
         json_decref(fixture_output);
@@ -525,8 +437,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             provider_request = responses_compact_create_request(
                 request, model, effort, &app->turn_capacity);
             json_decref(count_request);
-            count_request = responses_compact_count_request(
-                request, model, effort, &app->turn_capacity);
+            count_request = responses_compact_count_request(provider_request);
         }
         if (provider_request && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
             native &&

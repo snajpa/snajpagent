@@ -330,8 +330,6 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
             memcpy(failure->message, "fixture context rejected", 25u);
             failure->context_limit_tokens = 100000u;
             failure->requested_input_tokens = 90000u;
-            failure->context_limit_known = true;
-            failure->requested_input_known = true;
         }
         if (error_size)
             (void)snprintf(error, error_size,

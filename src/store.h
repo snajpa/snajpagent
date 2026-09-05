@@ -95,7 +95,6 @@ struct snag_session {
     char active_response_request_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char active_response_request_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char active_response_provider_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char usage_anchor_turn_id[SNAG_ID_HEX_LEN + 1u];
     char usage_anchor_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char usage_anchor_model[SNAG_MODEL_MAX_BYTES];
     char usage_anchor_effort[SNAG_EFFORT_MAX_BYTES];

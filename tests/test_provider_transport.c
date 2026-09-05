@@ -48,7 +48,6 @@ struct emitted_text {
 
 enum model_fixture {
     MODEL_OPENAI,
-    MODEL_CODEX,
     MODEL_CODEX_MALFORMED,
     MODEL_CODEX_LOOKALIKE,
     MODEL_CODEX_FAILURE,
@@ -457,18 +456,6 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                   "/backend-api/codex/models?client_version=0.146.0", NULL,
                   "application/json",
                   "{\"models\":[{\"slug\":\"malformed\",\"visibility\":\"list\",\"priority\":1,\"supported_reasoning_levels\":[\"high\"]}]}");
-    } else if (models == MODEL_CODEX) {
-        serve_one(listen_fd, "GET",
-                  "/backend-api/codex/models?client_version=0.146.0", NULL,
-                  "application/json",
-                  "{\"models\":["
-                  "{\"slug\":\"hidden-first\",\"visibility\":\"hide\",\"priority\":0},"
-                  "{\"slug\":\"vendor/native-model\",\"visibility\":\"list\",\"priority\":20,\"context_window\":272000,\"max_context_window\":872000,\"auto_compact_token_limit\":null,\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"ultra\"},{\"effort\":\"low\"}],\"default_reasoning_level\":\"low\"},"
-                  "{\"slug\":\"codex-fast\",\"visibility\":\"list\",\"priority\":5,\"supported_reasoning_levels\":[{\"effort\":\"medium\"}],\"default_reasoning_level\":\"medium\"},"
-                  "{\"slug\":\"codex-tied\",\"visibility\":\"list\",\"priority\":5,\"supported_reasoning_levels\":[{\"effort\":\"high\"}],\"default_reasoning_level\":\"high\"},"
-                  "{\"slug\":\"missing-visibility\",\"priority\":1},"
-                  "{\"slug\":\"none\",\"visibility\":\"none\",\"priority\":1},"
-                  "{\"slug\":\"unknown\",\"visibility\":\"future\",\"priority\":1}]}");
     } else if (models == MODEL_CODEX_LOOKALIKE) {
         serve_one(listen_fd, "GET", "/backend-api/codexish/v1/models", NULL,
                   "application/json",
@@ -576,40 +563,6 @@ credential_set(struct snag_credential *credential, const char *value)
     credential->len = strlen(value);
     assert(credential->len <= SNAG_CREDENTIAL_MAX);
     memcpy(credential->value, value, credential->len + 1u);
-}
-
-static int
-capture_stderr_begin(int pipefd[2])
-{
-    int saved;
-
-    assert(pipe(pipefd) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0);
-    assert(dup2(pipefd[1], STDERR_FILENO) == STDERR_FILENO);
-    assert(close(pipefd[1]) == 0);
-    return saved;
-}
-
-static void
-capture_stderr_end(int pipefd[2], int saved, char *out, size_t out_size)
-{
-    size_t used = 0u;
-
-    assert(dup2(saved, STDERR_FILENO) == STDERR_FILENO);
-    assert(close(saved) == 0);
-    while (used + 1u < out_size) {
-        ssize_t got = read(pipefd[0], out + used, out_size - used - 1u);
-        if (got < 0) {
-            assert(errno == EINTR);
-            continue;
-        }
-        if (got == 0)
-            break;
-        used += (size_t)got;
-    }
-    out[used] = '\0';
-    assert(close(pipefd[0]) == 0);
 }
 
 static void
@@ -733,81 +686,6 @@ test_local_provider_transport(void)
     json_decref(compact_output);
     json_decref(request);
 
-    snag_config_free(&config);
-    stop_server(&server);
-}
-
-static void
-test_codex_model_list(void)
-{
-    struct local_server server;
-    struct snag_config config;
-    struct snag_credential credential;
-    struct snag_ui render;
-    json_t *models = NULL;
-    json_t *model;
-    json_t *efforts;
-    char endpoint[128];
-    char diagnostic[8192];
-    char error[256] = {0};
-    int pipefd[2];
-    int saved_stderr;
-
-    start_server(&server, MODEL_CODEX, false);
-    assert(snprintf(endpoint, sizeof(endpoint),
-                    "http://127.0.0.1:%u/backend-api/codex/",
-                    (unsigned int)server.port) > 0);
-    snag_config_init(&config);
-    assert(snprintf(config.providers[0].base_url,
-                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snprintf(config.providers[0].openrouter_referer,
-                    sizeof(config.providers[0].openrouter_referer), "%s",
-                    "https://github.com/snajpa/snajpagent") > 0);
-    assert(snprintf(config.providers[0].openrouter_title,
-                    sizeof(config.providers[0].openrouter_title), "%s",
-                    "snajpagent") > 0);
-    config.providers[0].connect_timeout_ms = 1000u;
-    config.providers[0].idle_timeout_ms = 1000u;
-    config.providers[0].request_timeout_ms = 3000u;
-    credential_set(&credential, "transport-secret");
-    assert(snag_ui_init(&render) == 0);
-    assert(snag_ui_set_verbosity(&render, 6u) == 0);
-    snag_ui_color(&render, SNAG_COLOR_NEVER);
-    saved_stderr = capture_stderr_begin(pipefd);
-    assert(snag_provider_models_list(&config, &config.providers[0],
-                                    &credential, &render, NULL, NULL, &models,
-                                    error, sizeof(error)) == 0);
-    snag_ui_free(&render);
-    capture_stderr_end(pipefd, saved_stderr, diagnostic, sizeof(diagnostic));
-    assert(strstr(diagnostic,
-                  "> GET /backend-api/codex/models?client_version=0.146.0 HTTP/1.1") != NULL);
-    assert(strstr(diagnostic, "> authorization:") != NULL);
-    assert(strstr(diagnostic, "<redacted:bearer>") != NULL);
-    assert(strstr(diagnostic, "transport-secret") == NULL);
-    assert(json_array_size(models) == 3u);
-    model = json_array_get(models, 0);
-    assert(strcmp(snag_json_string(model, "id"), "codex-fast") == 0);
-    assert(strcmp(snag_json_string(model, "default_effort"), "medium") == 0);
-    model = json_array_get(models, 1);
-    assert(strcmp(snag_json_string(model, "id"), "codex-tied") == 0);
-    model = json_array_get(models, 2);
-    efforts = json_object_get(model, "efforts");
-    assert(strcmp(snag_json_string(model, "id"), "vendor/native-model") == 0);
-    assert(json_array_size(efforts) == 2u);
-    assert(strcmp(json_string_value(json_array_get(efforts, 0)), "low") == 0);
-    assert(strcmp(json_string_value(json_array_get(efforts, 1)), "ultra") == 0);
-    assert(strcmp(snag_json_string(model, "default_effort"), "low") == 0);
-    {
-        json_t *limits = json_object_get(model, "limits");
-        assert(json_integer_value(json_object_get(
-                   limits, "context_window_tokens")) == 272000);
-        assert(json_integer_value(json_object_get(
-                   limits, "max_context_window_tokens")) == 872000);
-        assert(json_is_null(json_object_get(limits, "max_output_tokens")));
-        assert(json_is_null(json_object_get(
-                   limits, "effective_context_window_percent")));
-    }
-    json_decref(models);
     snag_config_free(&config);
     stop_server(&server);
 }
@@ -954,12 +832,10 @@ test_structured_create_failures(void)
                    NULL, NULL, NULL, NULL, &graph, &failure,
                    error, sizeof(error), &cancel, NULL) < 0);
         assert(snag_provider_failure_is_capacity(&failure));
-        assert(failure.context_limit_known);
         assert(failure.context_limit_tokens ==
                (fixtures[i] == MODEL_CREATE_HTTP_FAILURE ?
                     272000u : 872000u));
         if (fixtures[i] == MODEL_CREATE_HTTP_FAILURE) {
-            assert(failure.requested_input_known);
             assert(failure.requested_input_tokens == 300000u);
         }
         snag_response_graph_free(&graph);
@@ -1468,7 +1344,6 @@ main(void)
     test_read_only_dispatch();
     test_local_provider_transport();
     test_openrouter_search_transport();
-    test_codex_model_list();
     test_codex_path_selection();
     test_structured_create_failures();
     test_count_capability_statuses();

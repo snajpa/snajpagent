@@ -18,7 +18,7 @@ struct context_builder {
     const struct snag_config *config;
     unsigned int cycle;
     const json_t *steering;
-    json_t *semantic_items;
+    json_t *tools;
     json_t *request_input;
     json_t *deferred_steering;
     size_t steering_seen;
@@ -29,10 +29,7 @@ struct context_builder {
     bool compact_stop_before_active;
     bool compact_current;
     bool compact_stopped;
-    size_t base_semantic_count;
     size_t base_request_count;
-    size_t active_semantic_start;
-    size_t active_request_start;
     size_t compact_new_items;
     uint64_t compact_source_seq;
     uint64_t max_output_tokens;
@@ -91,44 +88,11 @@ json_array_append_string(json_t *array, const char *value)
     return json_array_append_new(array, json_string(value));
 }
 
-static json_t *
-message_item(const char *role, const char *text)
-{
-    json_t *item = json_object();
-
-    if (!item || snag_json_set_new(item, "content", json_string(text)) < 0 ||
-        snag_json_set_new(item, "role", json_string(role)) < 0) {
-        if (item)
-            json_decref(item);
-        return NULL;
-    }
-    return item;
-}
-
 static int
-append_message(struct context_builder *builder, const char *kind,
-               const char *role, const char *text)
+append_message(struct context_builder *builder, const char *role, const char *text)
 {
-    json_t *semantic = json_object();
-    json_t *request = message_item(role, text);
-
-    if (!semantic || !request ||
-        snag_json_set_new(semantic, "kind", json_string(kind)) < 0 ||
-        snag_json_set_new(semantic, "role", json_string(role)) < 0 ||
-        snag_json_set_new(semantic, "text", json_string(text)) < 0 ||
-        json_array_append_new(builder->semantic_items, semantic) < 0) {
-        if (semantic)
-            json_decref(semantic);
-        if (request)
-            json_decref(request);
-        return -1;
-    }
-    semantic = NULL;
-    if (json_array_append_new(builder->request_input, request) < 0) {
-        json_decref(request);
-        return -1;
-    }
-    return 0;
+    return json_array_append_new(builder->request_input,
+        json_pack("{s:s,s:s}", "role", role, "content", text));
 }
 
 static char *
@@ -153,35 +117,14 @@ static int
 append_tool_call(struct context_builder *builder,
                  const struct snag_response_item *call)
 {
-    json_t *semantic = json_object();
-    json_t *request = json_object();
     char *args = canonical_string(call->arguments, SNAG_MAX_TOOL_ARGUMENTS);
+    json_t *request = json_pack("{s:s,s:s,s:s,s:s}",
+        "type", "function_call", "call_id", call->call_id,
+        "name", call->name, "arguments", args);
+    int rc = json_array_append_new(builder->request_input, request);
 
-    if (!semantic || !request || !args ||
-        snag_json_set_new(semantic, "arguments", json_deep_copy(call->arguments)) < 0 ||
-        snag_json_set_new(semantic, "call_id", json_string(call->call_id)) < 0 ||
-        snag_json_set_new(semantic, "kind", json_string("tool_call")) < 0 ||
-        snag_json_set_new(semantic, "name", json_string(call->name)) < 0 ||
-        snag_json_set_new(request, "arguments", json_string(args)) < 0 ||
-        snag_json_set_new(request, "call_id", json_string(call->call_id)) < 0 ||
-        snag_json_set_new(request, "name", json_string(call->name)) < 0 ||
-        snag_json_set_new(request, "type", json_string("function_call")) < 0 ||
-        json_array_append_new(builder->semantic_items, semantic) < 0) {
-        if (semantic)
-            json_decref(semantic);
-        if (request)
-            json_decref(request);
-        free(args);
-        return -1;
-    }
-    semantic = NULL;
-    if (json_array_append_new(builder->request_input, request) < 0) {
-        json_decref(request);
-        free(args);
-        return -1;
-    }
     free(args);
-    return 0;
+    return rc;
 }
 
 static int
@@ -248,7 +191,6 @@ append_tool_result(struct context_builder *builder, const char *call_id,
     uint32_t limit = json_is_integer(limit_value) ? (uint32_t)json_integer_value(limit_value) : 0u;
     struct snag_buf bounded, notice, full;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
-    json_t *semantic = json_object(), *request = json_object();
     int rc = -1;
 
     if (limit > SNAG_CONTEXT_MAX_REQUEST / (16u * SNAG_MAX_CALLS_PER_RESPONSE))
@@ -256,7 +198,7 @@ append_tool_result(struct context_builder *builder, const char *call_id,
     snag_buf_init(&bounded, (size_t)limit + 1u);
     snag_buf_init(&notice, SNAG_PATH_MAX_BYTES + 4096u);
     snag_buf_init(&full, SNAG_MAX_EVENT_LINE);
-    if (!model_text || !semantic || !request)
+    if (!model_text)
         goto out;
     if (ref) {
         char *encoded = canonical_string(ref, 4096u);
@@ -285,20 +227,11 @@ append_tool_result(struct context_builder *builder, const char *call_id,
             goto out;
         output_text = (const char *)notice.data;
     }
-    if (snag_json_set_new(semantic, "call_id", json_string(call_id)) < 0 ||
-        snag_json_set_new(semantic, "kind", json_string("tool_result")) < 0 ||
-        snag_json_set_new(semantic, "model_text", json_string(output_text)) < 0 ||
-        snag_json_set_new(request, "call_id", json_string(call_id)) < 0 ||
-        snag_json_set_new(request, "output", json_string(output_text)) < 0 ||
-        snag_json_set_new(request, "type", json_string("function_call_output")) < 0)
-        goto out;
-    if (json_array_append(builder->semantic_items, semantic) < 0 ||
-        json_array_append(builder->request_input, request) < 0)
-        goto out;
-    rc = 0;
+
+    rc = json_array_append_new(builder->request_input,
+        json_pack("{s:s,s:s,s:s}", "type", "function_call_output",
+                  "call_id", call_id, "output", output_text));
 out:
-    json_decref(semantic);
-    json_decref(request);
     snag_buf_free(&bounded);
     snag_buf_free(&notice);
     snag_buf_free(&full);
@@ -313,7 +246,7 @@ append_host_failed(struct context_builder *builder, const char *class_name)
     (void)snprintf(text, sizeof(text),
         "Previous " SNAJPAGENT_NAME " turn: failed; class=%s. No final answer completed. Unfinished work did not continue. Do not assume the requested work completed.",
         class_name);
-    return append_message(builder, "host_outcome", "developer", text);
+    return append_message(builder, "developer", text);
 }
 
 static int
@@ -325,7 +258,7 @@ append_host_interrupted(struct context_builder *builder, const char *origin,
     (void)snprintf(text, sizeof(text),
         "Previous " SNAJPAGENT_NAME " turn: interrupted; origin=%s; reason=%s. No final answer completed. Unfinished work did not continue. Do not assume the requested work completed.",
         origin, reason);
-    return append_message(builder, "host_outcome", "developer", text);
+    return append_message(builder, "developer", text);
 }
 
 static int
@@ -343,20 +276,15 @@ append_process_state(struct context_builder *builder)
         goto out;
     for (size_t i = 0u; i < builder->session->process_count; ++i) {
         const struct snag_process_state *p = &builder->session->processes[i];
-        json_t *job = json_object();
-        if (!job || snag_json_set_new(job, "handle", json_string(p->handle)) < 0 ||
-            snag_json_set_new(job, "command", json_string(p->command)) < 0 ||
-            snag_json_set_new(job, "workdir", json_string(p->workdir)) < 0 ||
-            snag_json_set_new(job, "state", json_string(p->ready ? "ready" : p->draining ? "draining" : "running")) < 0 ||
-            snag_json_set_new(job, "unread_bytes", json_integer((json_int_t)(
+        json_t *job = json_pack("{s:s,s:s,s:s,s:s,s:I,s:I,s:I,s:I}",
+            "handle", p->handle, "command", p->command, "workdir", p->workdir,
+            "state", p->ready ? "ready" : p->draining ? "draining" : "running",
+            "unread_bytes", (json_int_t)(
                 p->output_bytes[0] - p->collected_bytes[0] +
-                p->output_bytes[1] - p->collected_bytes[1]))) < 0 ||
-            snag_json_set_new(job, "stdin_accepted", json_integer((json_int_t)p->input_accepted)) < 0 ||
-            snag_json_set_new(job, "stdin_written", json_integer((json_int_t)p->input_written)) < 0 ||
-            snag_json_set_new(job, "stdin_pending", json_integer((json_int_t)p->input_pending)) < 0) {
-            json_decref(job);
-            goto out;
-        }
+                p->output_bytes[1] - p->collected_bytes[1]),
+            "stdin_accepted", (json_int_t)p->input_accepted,
+            "stdin_written", (json_int_t)p->input_written,
+            "stdin_pending", (json_int_t)p->input_pending);
         if (json_array_append_new(jobs, job) < 0)
             goto out;
     }
@@ -365,7 +293,7 @@ append_process_state(struct context_builder *builder)
             "You may do independent work. Use write_stdin to collect ready results, wait, send input, or terminate. "
             "Do not restart a yielded command. No final answer or goal completion until every handle is settled.") == 0 &&
         snag_buf_terminate(&text) == 0)
-        rc = append_message(builder, "process_state", "developer", (const char *)text.data);
+        rc = append_message(builder, "developer", (const char *)text.data);
 out:
     json_decref(jobs);
     snag_buf_free(&text);
@@ -384,7 +312,7 @@ append_goal_controller(struct context_builder *builder)
     if (builder->session->goal_status != SNAG_GOAL_ACTIVE) {
         if (snag_goal_unfinished(builder->session->goal_status))
             return 0;
-        return append_message(builder, "goal_controller", "developer",
+        return append_message(builder, "developer",
             "No persistent goal is active. If and only if the user or "
             "system/developer instructions explicitly request starting or "
             "setting one, call create_goal before claiming it is active. "
@@ -405,7 +333,7 @@ append_goal_controller(struct context_builder *builder)
         builder->session->goal_locked ? "locked" : "unlocked",
         builder->session->goal_prompt);
     if (rc == 0)
-        rc = append_message(builder, "goal_controller", "developer",
+        rc = append_message(builder, "developer",
                             (const char *)text.data);
     snag_buf_free(&text);
     return rc;
@@ -417,24 +345,6 @@ truncate_array(json_t *array, size_t keep)
     while (json_array_size(array) > keep)
         if (json_array_remove(array, json_array_size(array) - 1u) < 0)
             return -1;
-    return 0;
-}
-
-static int
-append_compact_output_raw(json_t *array, const json_t *output)
-{
-    if (!json_is_array(output)) {
-        errno = EINVAL;
-        return -1;
-    }
-    for (size_t i = 0; i < json_array_size(output); ++i) {
-        json_t *copy = json_deep_copy(json_array_get(output, i));
-        if (!copy || json_array_append_new(array, copy) < 0) {
-            if (copy)
-                json_decref(copy);
-            return -1;
-        }
-    }
     return 0;
 }
 
@@ -470,7 +380,7 @@ append_rollout_log_location(struct context_builder *builder)
             "tools to inspect it when the compacted context lacks needed detail.",
             quoted_path) < 0)
         goto out;
-    rc = append_message(builder, "rollout_log_location", "developer",
+    rc = append_message(builder, "developer",
                         (const char *)text.data);
 out:
     free(quoted_path);
@@ -482,32 +392,15 @@ out:
 }
 
 static int
-install_compact_output(struct context_builder *builder, const char *compact_id,
-                       const json_t *output, char *error, size_t error_size)
+install_compact_output(struct context_builder *builder, const json_t *output,
+                       char *error, size_t error_size)
 {
-    json_t *semantic = json_object();
     char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-    size_t output_bytes = 0u;
 
-    if (!compact_id ||
-        snag_context_compact_output_valid(output, output_hash, &output_bytes,
-                                         error, error_size) < 0 ||
-        truncate_array(builder->semantic_items, builder->base_semantic_count) < 0 ||
+    if (snag_context_compact_output_valid(output, output_hash, NULL,
+                                          error, error_size) < 0 ||
         truncate_array(builder->request_input, builder->base_request_count) < 0 ||
-        !semantic ||
-        snag_json_set_new(semantic, "bytes", json_integer((json_int_t)output_bytes)) < 0 ||
-        snag_json_set_new(semantic, "compact_id", json_string(compact_id)) < 0 ||
-        snag_json_set_new(semantic, "items", json_deep_copy(output)) < 0 ||
-        snag_json_set_new(semantic, "kind", json_string("native_compact_output")) < 0 ||
-        snag_json_set_new(semantic, "sha256", json_string(output_hash)) < 0 ||
-        json_array_append_new(builder->semantic_items, semantic) < 0) {
-        if (semantic)
-            json_decref(semantic);
-        snag_errorf(error, error_size, "invalid compact output");
-        return -1;
-    }
-    semantic = NULL;
-    if (append_compact_output_raw(builder->request_input, output) < 0 ||
+        json_array_extend(builder->request_input, (json_t *)output) < 0 ||
         append_rollout_log_location(builder) < 0) {
         snag_errorf(error, error_size, "cannot install compact output");
         return -1;
@@ -530,19 +423,13 @@ append_instruction_messages(struct context_builder *builder)
             "Project instruction file: %s\nThe following text is trusted user/project guidance lower priority than the fixed harness and current user or steering input.\n\n%s",
             src->path, src->text);
         if (rc == 0)
-            rc = append_message(builder, "discovered_instruction",
+            rc = append_message(builder,
                                 "developer", (const char *)text.data);
         snag_buf_free(&text);
         if (rc < 0)
             return -1;
     }
     return 0;
-}
-
-static json_t *
-instructions_metadata_object(const struct context_builder *builder)
-{
-    return snag_instructions_metadata_json(builder->instructions);
 }
 
 static int
@@ -601,7 +488,7 @@ append_process_closed(struct context_builder *builder, const char *cause,
         cause, status, exit_code, signal_number, reason ? reason : "null", quoted);
     free(quoted);
     if (rc == 0)
-        rc = append_message(builder, "managed_process_closed", "developer",
+        rc = append_message(builder, "developer",
                             (const char *)text.data);
     snag_buf_free(&text);
     snag_buf_free(&bounded);
@@ -645,23 +532,10 @@ append_response_items(struct context_builder *builder, const json_t *items,
             }
             text = (const char *)notice.data;
         }
-        if (item->kind == SNAG_ITEM_ASSISTANT) {
-            if (append_message(builder,
-                    item->phase == SNAG_PHASE_COMMENTARY ?
-                    "assistant_commentary" : "assistant_final",
-                    "assistant", text) < 0) {
-                snag_buf_free(&notice);
-                goto out;
-            }
-        } else if (item->kind == SNAG_ITEM_REFUSAL) {
-            if (append_message(builder, "assistant_refusal", "assistant",
-                               text) < 0) {
-                snag_buf_free(&notice);
-                goto out;
-            }
-        } else if (item->kind == SNAG_ITEM_REASONING_SUMMARY) {
-            if (append_message(builder, "reasoning_summary", "assistant",
-                               text) < 0) {
+        if (item->kind == SNAG_ITEM_ASSISTANT ||
+            item->kind == SNAG_ITEM_REFUSAL ||
+            item->kind == SNAG_ITEM_REASONING_SUMMARY) {
+            if (append_message(builder, "assistant", text) < 0) {
                 snag_buf_free(&notice);
                 goto out;
             }
@@ -765,9 +639,9 @@ append_deferred_steering(struct context_builder *builder)
         const char *text = json_is_string(value) ? json_string_value(value) : NULL;
 
         if (!text ||
-            append_message(builder, "steering_boundary", "developer",
+            append_message(builder, "developer",
                            boundary) < 0 ||
-            append_message(builder, "user_steering", "user", text) < 0 ||
+            append_message(builder, "user", text) < 0 ||
             json_array_remove(builder->deferred_steering, 0u) < 0)
             return -1;
     }
@@ -834,7 +708,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                     snag_instructions_match_metadata(builder->instructions,
                         json_object_get(data, "instructions"), error, error_size) < 0)
                     return -1;
-                if (append_message(builder, !strcmp(kind, "goal") ? "goal_continuation" : "user_request",
+                if (append_message(builder,
                     !strcmp(kind, "goal") ? "developer" : "user", text) < 0)
                     return -1;
             }
@@ -863,28 +737,27 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
-        return append_message(builder, "irc_snapshot", "user", text);
+        return append_message(builder, "user", text);
     }
     if (strcmp(type, "turn_started") == 0) {
         const char *turn_id = snag_json_string(data, "turn_id");
         const char *text = snag_json_string(data, "text");
         const char *kind = snag_json_string(data, "input_kind");
         bool goal_turn = kind && strcmp(kind, "goal") == 0;
-        if (!turn_id || !text || !kind || builder->active_turn) {
+        if (!turn_id || !snag_hex_is_lower(turn_id, SNAG_ID_HEX_LEN) ||
+            !text || !kind || builder->active_turn) {
             snag_errorf(error, error_size, "invalid turn context transition");
             errno = EINVAL;
             return -1;
         }
-        if (strcmp(turn_id, builder->target_turn_id) == 0 &&
+        if (builder->steering &&
+            strcmp(turn_id, builder->target_turn_id) == 0 &&
             snag_instructions_match_metadata(builder->instructions,
                 json_object_get(data, "instructions"), error, error_size) < 0)
             return -1;
         memcpy(builder->active_turn_id, turn_id, sizeof(builder->active_turn_id));
         builder->active_turn = true;
-        builder->active_semantic_start = json_array_size(builder->semantic_items);
-        builder->active_request_start = json_array_size(builder->request_input);
         return append_message(builder,
-                              goal_turn ? "goal_continuation" : "user_request",
                               goal_turn ? "developer" : "user", text);
     }
     if (strcmp(type, "response_started") == 0) {
@@ -905,7 +778,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         const char *turn_id = snag_json_string(data, "turn_id");
         const char *text = snag_json_string(data, "text");
         const char *steering_id = snag_json_string(data, "steering_id");
-        bool pending = builder->steering_seen <
+        bool pending = builder->steering && builder->steering_seen <
                        builder->session->pending_steering_count &&
                        builder->session->pending_steering[
                            builder->steering_seen].seq == seq;
@@ -919,14 +792,14 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             return -1;
         }
         if (strcmp(type, "steering_added") != 0)
-            return append_message(builder, type, "developer", text);
+            return append_message(builder, "developer", text);
         return defer_steering(builder, text);
     }
     if (strcmp(type, "response_output_correction") == 0) {
         const char *correction_id = snag_json_string(data, "correction_id");
         const char *turn_id = snag_json_string(data, "turn_id");
         const char *text = snag_json_string(data, "text");
-        bool pending = builder->steering_seen <
+        bool pending = builder->steering && builder->steering_seen <
                        builder->session->pending_steering_count &&
                        builder->session->pending_steering[
                            builder->steering_seen].seq == seq;
@@ -942,7 +815,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
-        return append_message(builder, "response_output_correction",
+        return append_message(builder,
                               "developer", text);
     }
     if (strcmp(type, "response_interrupted") == 0) {
@@ -1065,35 +938,10 @@ string_array(const char *a, const char *b)
 }
 
 static json_t *
-schema_type_value(const char *type, bool nullable)
-{
-    json_t *types;
-
-    if (!nullable)
-        return json_string(type);
-    types = json_array();
-    if (!types ||
-        json_array_append_new(types, json_string(type)) < 0 ||
-        json_array_append_new(types, json_string("null")) < 0) {
-        if (types)
-            json_decref(types);
-        return NULL;
-    }
-    return types;
-}
-
-static json_t *
 primitive_schema(const char *type, bool nullable)
 {
-    json_t *schema = json_object();
-
-    if (!schema || snag_json_set_new(schema, "type",
-                                schema_type_value(type, nullable)) < 0) {
-        if (schema)
-            json_decref(schema);
-        return NULL;
-    }
-    return schema;
+    return nullable ? json_pack("{s:[s,s]}", "type", type, "null") :
+                      json_pack("{s:s}", "type", type);
 }
 
 static json_t *
@@ -1111,28 +959,8 @@ nullable_string_schema(void)
 static json_t *
 goal_action_schema(void)
 {
-    static const char *const actions[] = {"rewrite", "complete", "block"};
-    json_t *schema = string_schema();
-    json_t *allowed = required_array(actions,
-                                     sizeof(actions) / sizeof(actions[0]));
-
-    if (!schema || !allowed)
-        goto fail;
-    {
-        int rc = snag_json_set_new(schema, "enum", allowed);
-
-        allowed = NULL;
-        if (rc < 0)
-            goto fail;
-    }
-    return schema;
-
-fail:
-    if (schema)
-        json_decref(schema);
-    if (allowed)
-        json_decref(allowed);
-    return NULL;
+    return json_pack("{s:s,s:[s,s,s]}", "type", "string",
+                     "enum", "rewrite", "complete", "block");
 }
 
 static json_t *
@@ -1144,84 +972,26 @@ nullable_bool_schema(void)
 static json_t *
 integer_schema(json_int_t minimum, json_int_t maximum, bool nullable)
 {
-    json_t *schema = json_object();
-
-    if (!schema || snag_json_set_new(schema, "maximum", json_integer(maximum)) < 0 ||
-        snag_json_set_new(schema, "minimum", json_integer(minimum)) < 0 ||
-        snag_json_set_new(schema, "type", schema_type_value("integer", nullable)) < 0) {
-        if (schema)
-            json_decref(schema);
-        return NULL;
-    }
-    return schema;
-}
-
-static json_t *
-tool_parameters(json_t *properties, json_t *required)
-{
-    json_t *params = json_object();
-
-    if (!params || !properties || !required)
-        goto fail;
-    if (snag_json_set_new(params, "additionalProperties", json_false()) < 0)
-        goto fail;
-    if (snag_json_set_new(params, "properties", properties) < 0)
-        goto fail;
-    properties = NULL;
-    if (snag_json_set_new(params, "required", required) < 0)
-        goto fail;
-    required = NULL;
-    if (snag_json_set_new(params, "type", json_string("object")) < 0)
-        goto fail;
-    return params;
-
-fail:
-    if (params)
-        json_decref(params);
-    if (properties)
-        json_decref(properties);
-    if (required)
-        json_decref(required);
-    return NULL;
+    return nullable ?
+        json_pack("{s:I,s:I,s:[s,s]}", "minimum", minimum, "maximum", maximum,
+                  "type", "integer", "null") :
+        json_pack("{s:I,s:I,s:s}", "minimum", minimum, "maximum", maximum,
+                  "type", "integer");
 }
 
 static json_t *
 tool_schema(const char *name, const char *description,
             json_t *properties, json_t *required)
 {
-    json_t *tool = json_object();
-    json_t *params = NULL;
+    json_t *tool = json_pack(
+        "{s:s,s:s,s:{s:b,s:O,s:O,s:s},s:b,s:s}",
+        "description", description, "name", name,
+        "parameters", "additionalProperties", 0, "properties", properties,
+        "required", required, "type", "object", "strict", 1, "type", "function");
 
-    if (!tool)
-        goto fail;
-    params = tool_parameters(properties, required);
-    properties = NULL;
-    required = NULL;
-    if (!params)
-        goto fail;
-    if (snag_json_set_new(tool, "description", json_string(description)) < 0)
-        goto fail;
-    if (snag_json_set_new(tool, "name", json_string(name)) < 0)
-        goto fail;
-    if (snag_json_set_new(tool, "parameters", params) < 0)
-        goto fail;
-    params = NULL;
-    if (snag_json_set_new(tool, "strict", json_true()) < 0)
-        goto fail;
-    if (snag_json_set_new(tool, "type", json_string("function")) < 0)
-        goto fail;
+    json_decref(properties);
+    json_decref(required);
     return tool;
-
-fail:
-    if (tool)
-        json_decref(tool);
-    if (params)
-        json_decref(params);
-    if (properties)
-        json_decref(properties);
-    if (required)
-        json_decref(required);
-    return NULL;
 }
 
 static json_t *
@@ -1350,14 +1120,7 @@ update_goal_tool_schema(void)
 static json_t *
 web_search_tool_schema(const char *type)
 {
-    json_t *tool = json_object();
-
-    if (!tool || snag_json_set_new(tool, "type", json_string(type)) < 0) {
-        if (tool)
-            json_decref(tool);
-        return NULL;
-    }
-    return tool;
+    return json_pack("{s:s}", "type", type);
 }
 
 static json_t *
@@ -1493,14 +1256,7 @@ tool_schemas(bool goal_active,
 json_t *
 snag_context_reasoning_settings(const char *effort)
 {
-    json_t *settings = json_object();
-
-    if (!settings || snag_json_set_new(settings, "effort", json_string(effort)) < 0) {
-        if (settings)
-            json_decref(settings);
-        return NULL;
-    }
-    return settings;
+    return json_pack("{s:s}", "effort", effort);
 }
 
 static bool
@@ -1613,35 +1369,18 @@ out:
 static json_t *
 model_input_object(struct context_builder *builder)
 {
-    json_t *input = json_object();
-    bool goal_active = builder->session &&
-                       builder->session->goal_status == SNAG_GOAL_ACTIVE;
-    bool goal_create_allowed = builder->session &&
-        !snag_goal_unfinished(builder->session->goal_status);
+    json_t *metadata = snag_instructions_metadata_json(builder->instructions);
+    json_t *input = json_pack("{s:s,s:I,s:s,s:O,s:O,s:s,s:s,s:i,s:O}",
+        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "cycle", (json_int_t)builder->cycle, "effort", builder->effort,
+        "instructions", metadata, "items", builder->request_input,
+        "model", builder->model, "profile_id", SNAJPAGENT_PROFILE_ID,
+        "tool_schema", 1, "tools", builder->tools);
 
-    if (!input ||
-        snag_json_set_new(input, "capability_version",
-                     json_string(SNAJPAGENT_CAPABILITY_VERSION)) < 0 ||
-        snag_json_set_new(input, "cycle", json_integer((json_int_t)builder->cycle)) < 0 ||
-        snag_json_set_new(input, "effort", json_string(builder->effort)) < 0 ||
-        snag_json_set_new(input, "instructions", instructions_metadata_object(builder)) < 0 ||
-        snag_json_set_new(input, "items", json_deep_copy(builder->semantic_items)) < 0 ||
-        snag_json_set_new(input, "model", json_string(builder->model)) < 0 ||
-        snag_json_set_new(input, "profile_id", json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
-        snag_json_set_new(input, "tool_schema", json_integer(1)) < 0 ||
-        snag_json_set_new(input, "tools",
-                     tool_schemas(goal_active, goal_create_allowed,
-                                  builder->networked,
-                                  builder->config,
-                                  builder->session->active_turn_provider,
-                                  builder->session->active_read_only)) < 0) {
-        if (input)
-            json_decref(input);
-        return NULL;
-    }
+    json_decref(metadata);
     if (builder->max_output_known &&
         snag_json_set_new(input, "max_output_tokens",
-                     json_integer((json_int_t)builder->max_output_tokens)) < 0) {
+            json_integer((json_int_t)builder->max_output_tokens)) < 0) {
         json_decref(input);
         return NULL;
     }
@@ -1651,14 +1390,10 @@ model_input_object(struct context_builder *builder)
 int
 snag_context_codex_request(json_t *request)
 {
-    json_t *include = json_array();
     (void)json_object_del(request, "truncation");
     (void)json_object_del(request, "max_output_tokens");
-    if (!include || json_array_append_new(include, json_string("reasoning.encrypted_content")) < 0) {
-        json_decref(include);
-        return -1;
-    }
-    if (snag_json_set_new(request, "include", include) < 0 ||
+    if (snag_json_set_new(request, "include",
+                         json_pack("[s]", "reasoning.encrypted_content")) < 0 ||
         snag_json_set_new(request, "instructions", json_string("")) < 0)
         return -1;
     return 0;
@@ -1667,36 +1402,18 @@ snag_context_codex_request(json_t *request)
 static json_t *
 create_request_object(struct context_builder *builder)
 {
-    json_t *request = json_object();
+    json_t *request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:O,s:s}",
+        "input", builder->request_input, "model", builder->model,
+        "parallel_tool_calls", builder->session->parallel_tool_calls,
+        "reasoning", "effort", builder->effort,
+        "store", 0, "stream", 1, "tool_choice", "auto",
+        "tools", builder->tools, "truncation", "disabled");
     const struct snag_provider_config *provider = snag_config_provider(
         builder->config, builder->session->active_turn_provider);
-    bool goal_active = builder->session &&
-                       builder->session->goal_status == SNAG_GOAL_ACTIVE;
-    bool goal_create_allowed = builder->session &&
-        !snag_goal_unfinished(builder->session->goal_status);
 
-    if (!request ||
-        snag_json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
-        snag_json_set_new(request, "model", json_string(builder->model)) < 0 ||
-        snag_json_set_new(request, "parallel_tool_calls", json_boolean(builder->session->parallel_tool_calls)) < 0 ||
-        snag_json_set_new(request, "reasoning", snag_context_reasoning_settings(builder->effort)) < 0 ||
-        snag_json_set_new(request, "store", json_false()) < 0 ||
-        snag_json_set_new(request, "stream", json_true()) < 0 ||
-        snag_json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
-        snag_json_set_new(request, "tools",
-                     tool_schemas(goal_active, goal_create_allowed,
-                                  builder->networked,
-                                  builder->config,
-                                  builder->session->active_turn_provider,
-                                  builder->session->active_read_only)) < 0 ||
-        snag_json_set_new(request, "truncation", json_string("disabled")) < 0) {
-        if (request)
-            json_decref(request);
-        return NULL;
-    }
     if (builder->max_output_known &&
         snag_json_set_new(request, "max_output_tokens",
-                     json_integer((json_int_t)builder->max_output_tokens)) < 0) {
+            json_integer((json_int_t)builder->max_output_tokens)) < 0) {
         json_decref(request);
         return NULL;
     }
@@ -1709,47 +1426,23 @@ create_request_object(struct context_builder *builder)
 }
 
 static json_t *
-count_request_object(struct context_builder *builder)
+count_request_object(const json_t *create)
 {
-    json_t *request = json_object();
-    bool goal_active = builder->session &&
-                       builder->session->goal_status == SNAG_GOAL_ACTIVE;
-    bool goal_create_allowed = builder->session &&
-        !snag_goal_unfinished(builder->session->goal_status);
+    json_t *request = json_copy(create);
 
-    if (!request ||
-        snag_json_set_new(request, "input", json_deep_copy(builder->request_input)) < 0 ||
-        snag_json_set_new(request, "model", json_string(builder->model)) < 0 ||
-        snag_json_set_new(request, "parallel_tool_calls", json_boolean(builder->session->parallel_tool_calls)) < 0 ||
-        snag_json_set_new(request, "reasoning", snag_context_reasoning_settings(builder->effort)) < 0 ||
-        snag_json_set_new(request, "tool_choice", json_string("auto")) < 0 ||
-        snag_json_set_new(request, "tools",
-                     tool_schemas(goal_active, goal_create_allowed,
-                                  builder->networked,
-                                  builder->config,
-                                  builder->session->active_turn_provider,
-                                  builder->session->active_read_only)) < 0 ||
-        snag_json_set_new(request, "truncation", json_string("disabled")) < 0) {
-        if (request)
-            json_decref(request);
-        return NULL;
-    }
+    /* Only the envelope differs; input, reasoning and tools stay immutable. */
+    json_object_del(request, "stream");
+    json_object_del(request, "store");
+    json_object_del(request, "max_output_tokens");
     return request;
 }
 
 static json_t *
 compact_count_request_object(const json_t *input, const char *model)
 {
-    json_t *request = json_object();
-
-    if (!request || !json_is_array(input) || !model || !*model ||
-        snag_json_set_new(request, "input", json_deep_copy(input)) < 0 ||
-        snag_json_set_new(request, "model", json_string(model)) < 0) {
-        if (request)
-            json_decref(request);
+    if (!json_is_array(input) || !model || !*model)
         return NULL;
-    }
-    return request;
+    return json_pack("{s:O,s:s}", "input", input, "model", model);
 }
 
 static int
@@ -1779,163 +1472,37 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
               char *error, size_t error_size)
 {
     struct context_builder *builder = opaque;
-    size_t before;
+    size_t before = json_array_size(builder->request_input);
+    bool was_active = builder->active_turn, group = false;
+    const char *turn_id = snag_json_string(data, "turn_id");
 
     if (builder->compact_stopped)
         return 0;
-    if (builder->session && seq <= builder->session->compact_seq)
+    if (seq <= builder->session->compact_seq)
         return context_event(opaque, seq, type, data, error, error_size);
     builder->compact_source_seq = seq;
-
     if (builder->compact_stop_before_active &&
-        strcmp(type, "turn_started") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
-        if (!turn_id) {
-            snag_errorf(error, error_size, "invalid compact active-turn boundary");
-            errno = EINVAL;
-            return -1;
+        strcmp(type, "turn_started") == 0 &&
+        turn_id && strcmp(turn_id, builder->target_turn_id) == 0) {
+        if (builder->compact_new_items) {
+            builder->compact_stopped = true;
+            builder->compact_source_seq = seq - 1u;
+            return 0;
         }
-        if (strcmp(turn_id, builder->target_turn_id) == 0) {
-            if (builder->compact_new_items) {
-                builder->compact_stopped = true;
-                builder->compact_source_seq = seq > 0u ? seq - 1u : 0u;
-                return 0;
-            }
-            builder->compact_current = true;
-        }
+        builder->compact_current = true;
     }
-
+    if (builder->compact_current && strcmp(type, "steering_added") == 0) {
+        const char *id = snag_json_string(data, "steering_id");
+        for (size_t i = 0u; id && i < builder->session->pending_steering_count; ++i)
+            if (!strcmp(id, builder->session->pending_steering[i].steering_id))
+                return 0;
+    }
     if (strcmp(type, "compaction_completed") == 0)
         return 0;
-    if (strcmp(type, "irc_snapshot") == 0) {
-        const char *text = snag_json_string(data, "text");
-        if (!text) {
-            snag_errorf(error, error_size, "invalid compact IRC snapshot");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_message(builder, "irc_snapshot", "user", text) < 0)
-            return -1;
-        builder->compact_new_items +=
-            json_array_size(builder->request_input) - before;
-        return 0;
-    }
-    if (strcmp(type, "turn_started") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
-        const char *text = snag_json_string(data, "text");
-        const char *kind = snag_json_string(data, "input_kind");
-        bool goal_turn = kind && strcmp(kind, "goal") == 0;
-        if (!turn_id || !text || !kind || builder->active_turn) {
-            snag_errorf(error, error_size, "invalid compact turn transition");
-            errno = EINVAL;
-            return -1;
-        }
-        memcpy(builder->active_turn_id, turn_id, sizeof(builder->active_turn_id));
-        builder->active_turn = true;
-        builder->active_semantic_start = json_array_size(builder->semantic_items);
-        builder->active_request_start = json_array_size(builder->request_input);
-        before = json_array_size(builder->request_input);
-        if (append_message(builder,
-                           goal_turn ? "goal_continuation" : "user_request",
-                           goal_turn ? "developer" : "user", text) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
-        return 0;
-    }
-    if (strcmp(type, "response_output_correction") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
-        const char *text = snag_json_string(data, "text");
-
-        before = json_array_size(builder->request_input);
-        if (!builder->active_turn || !turn_id ||
-            strcmp(turn_id, builder->active_turn_id) != 0 || !text ||
-            append_interrupted_prefix(builder, data, error, error_size) < 0) {
-            snag_errorf(error, error_size,
-                       "invalid compact response-output correction");
-            errno = EINVAL;
-            return -1;
-        }
-        if (append_message(builder, "response_output_correction",
-                           "developer", text) < 0)
-            return -1;
-        builder->compact_new_items +=
-            json_array_size(builder->request_input) - before;
-        return 0;
-    }
-    if (strcmp(type, "response_started") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
-
-        if (!builder->active_turn || !turn_id ||
-            strcmp(turn_id, builder->active_turn_id) != 0) {
-            snag_errorf(error, error_size,
-                      "invalid compact response-start transition");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_deferred_steering(builder) < 0)
-            return -1;
-        builder->compact_new_items +=
-            json_array_size(builder->request_input) - before;
-        return 0;
-    }
-    if (strcmp(type, "steering_added") == 0 ||
-        strcmp(type, "irc_reply_reminder") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
-        const char *text = snag_json_string(data, "text");
-        if (!builder->active_turn || !turn_id ||
-            strcmp(turn_id, builder->active_turn_id) != 0 || !text) {
-            snag_errorf(error, error_size, "invalid compact steering transition");
-            errno = EINVAL;
-            return -1;
-        }
-        if (builder->compact_current && !strcmp(type, "steering_added")) {
-            const char *id = snag_json_string(data, "steering_id");
-            for (size_t i = 0u; id && i < builder->session->pending_steering_count; ++i)
-                if (!strcmp(id, builder->session->pending_steering[i].steering_id))
-                    return 0;
-        }
-        if (strcmp(type, "steering_added") == 0)
-            return defer_steering(builder, text);
-        before = json_array_size(builder->request_input);
-        if (append_message(builder, type, "developer", text) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
-        return 0;
-    }
-    if (strcmp(type, "response_interrupted") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
-
-        if (!builder->active_turn || !turn_id ||
-            strcmp(turn_id, builder->active_turn_id) != 0) {
-            snag_errorf(error, error_size,
-                      "invalid compact interrupted-response transition");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_interrupted_prefix(builder, data, error, error_size) < 0)
-            return -1;
-        builder->compact_new_items +=
-            json_array_size(builder->request_input) - before;
-        return 0;
-    }
+    if (context_event(builder, seq, type, data, error, error_size) < 0)
+        return -1;
     if (strcmp(type, "response_completed") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
-        const char *status = snag_json_string(data, "status");
         json_t *items = json_object_get(data, "items");
-        if (!builder->active_turn || !turn_id ||
-            strcmp(turn_id, builder->active_turn_id) != 0 ||
-            !status || strcmp(status, "completed") != 0) {
-            snag_errorf(error, error_size, "invalid compact response transition");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_response_items(builder, items, error, error_size) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
         builder->compact_call_count = 0u;
         for (size_t i = 0u; i < json_array_size(items); ++i) {
             json_t *item = json_array_get(items, i);
@@ -1954,36 +1521,17 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                     (void)snag_strcpy(builder->compact_calls[slot].handle, sizeof(builder->compact_calls[slot].handle), handle);
             }
         }
-        if (builder->compact_pending_calls || (builder->compact_live_count && !builder->compact_current))
-            return 0;
-        before = json_array_size(builder->request_input);
-        if (append_deferred_steering(builder) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
-        return compact_complete_boundary(builder, seq, error, error_size);
-    }
-    if (strcmp(type, "tool_finished") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
+        group = true;
+    } else if (strcmp(type, "tool_finished") == 0) {
         const char *call_id = snag_json_string(data, "call_id");
         json_t *result = json_object_get(data, "result");
-        if (!builder->active_turn || !turn_id ||
-            strcmp(turn_id, builder->active_turn_id) != 0 || !call_id ||
-            snag_tool_result_valid(result) < 0) {
-            snag_errorf(error, error_size, "invalid compact tool result transition");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_tool_result(builder, call_id, result) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
+        const char *status = snag_json_string(result, "status");
         if (!builder->compact_pending_calls) {
             snag_errorf(error, error_size, "compact tool result has no pending call");
             errno = EINVAL;
             return -1;
         }
         --builder->compact_pending_calls;
-        const char *status = snag_json_string(result, "status");
         for (size_t i = 0u; i < builder->compact_call_count; ++i)
             if (!strcmp(builder->compact_calls[i].call, call_id) &&
                 strcmp(status, "not_run") && strcmp(status, "denied")) {
@@ -1993,88 +1541,19 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                     return -1;
                 break;
             }
-        if (builder->compact_pending_calls || (builder->compact_live_count && !builder->compact_current))
-            return 0;
-        before = json_array_size(builder->request_input);
-        if (append_deferred_steering(builder) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
-        return compact_complete_boundary(builder, seq, error, error_size);
-    }
-    if (strcmp(type, "process_closed") == 0) {
-        const char *turn_id = snag_json_string(data, "turn_id");
-        const char *cause = snag_json_string(data, "cause");
-        json_t *result = json_object_get(data, "result");
-        if (!builder->active_turn || !turn_id ||
-            strcmp(turn_id, builder->active_turn_id) != 0 || !cause ||
-            snag_tool_result_valid(result) < 0) {
-            snag_errorf(error, error_size, "invalid compact process closure");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_process_closed(builder, cause, result) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
+        group = true;
+    } else if (strcmp(type, "process_closed") == 0) {
         if (compact_process(builder, snag_json_string(data, "handle"), false) < 0)
             return -1;
-        if (builder->compact_pending_calls || (builder->compact_live_count && !builder->compact_current))
-            return 0;
-        before = json_array_size(builder->request_input);
-        if (append_deferred_steering(builder) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
-        return compact_complete_boundary(builder, seq, error, error_size);
+        group = true;
     }
-    if (strcmp(type, "turn_completed") == 0 ||
-        strcmp(type, "turn_completed_silent") == 0) {
-        if (!builder->active_turn) {
-            snag_errorf(error, error_size, "invalid compact completed turn");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_deferred_steering(builder) < 0)
-            return -1;
-        builder->compact_new_items +=
-            json_array_size(builder->request_input) - before;
-        builder->active_turn = false;
-        builder->active_turn_id[0] = '\0';
+    group = group && !builder->compact_pending_calls &&
+        (!builder->compact_live_count || builder->compact_current);
+    if (group && append_deferred_steering(builder) < 0)
+        return -1;
+    builder->compact_new_items += json_array_size(builder->request_input) - before;
+    if (group || (was_active && !builder->active_turn))
         return compact_complete_boundary(builder, seq, error, error_size);
-    }
-    if (strcmp(type, "turn_failed") == 0) {
-        const char *class_name = snag_json_string(data, "class");
-        if (!builder->active_turn || !class_name) {
-            snag_errorf(error, error_size, "invalid compact failed turn");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_deferred_steering(builder) < 0 ||
-            append_host_failed(builder, class_name) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
-        builder->active_turn = false;
-        builder->active_turn_id[0] = '\0';
-        return compact_complete_boundary(builder, seq, error, error_size);
-    }
-    if (strcmp(type, "turn_interrupted") == 0) {
-        const char *origin = snag_json_string(data, "origin");
-        const char *reason = snag_json_string(data, "reason");
-        if (!builder->active_turn || !origin || !reason) {
-            snag_errorf(error, error_size, "invalid compact interrupted turn");
-            errno = EINVAL;
-            return -1;
-        }
-        before = json_array_size(builder->request_input);
-        if (append_deferred_steering(builder) < 0 ||
-            append_host_interrupted(builder, origin, reason) < 0)
-            return -1;
-        builder->compact_new_items += json_array_size(builder->request_input) - before;
-        builder->active_turn = false;
-        builder->active_turn_id[0] = '\0';
-        return compact_complete_boundary(builder, seq, error, error_size);
-    }
     return 0;
 }
 
@@ -2148,7 +1627,6 @@ compact_request_build(struct snag_session *session,
     builder.session = session;
     builder.model = model;
     builder.effort = effort;
-    builder.semantic_items = json_array();
     builder.request_input = json_array();
     builder.deferred_steering = json_array();
     builder.compact_stop_before_active = active_prefix;
@@ -2158,7 +1636,7 @@ compact_request_build(struct snag_session *session,
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
     if (!session || !model || !effort || !request || !count_request ||
-        !source_seq || !builder.semantic_items || !builder.request_input ||
+        !source_seq || !builder.request_input ||
         !builder.deferred_steering ||
         session->response_open || session->pending_call_count ||
         (!active_prefix && session->process_count) ||
@@ -2171,8 +1649,7 @@ compact_request_build(struct snag_session *session,
         goto out;
     }
     if (session->compact_id[0] &&
-        install_compact_output(&builder, session->compact_id,
-                               session->compact_output,
+        install_compact_output(&builder, session->compact_output,
                                error, error_size) < 0)
         goto out;
     if (snag_session_each_event(session, compact_event, &builder,
@@ -2206,11 +1683,9 @@ compact_request_build(struct snag_session *session,
         rc = 1;
         goto out;
     }
-    req = json_object();
-    count = compact_count_request_object(builder.request_input, model);
-    if (!req || !count ||
-        snag_json_set_new(req, "input", json_deep_copy(builder.request_input)) < 0 ||
-        snag_json_set_new(req, "model", json_string(model)) < 0) {
+    req = compact_count_request_object(builder.request_input, model);
+    count = json_incref(req);
+    if (!req) {
         snag_errorf(error, error_size, "cannot build compact request");
         goto out;
     }
@@ -2232,8 +1707,7 @@ out:
         json_decref(req);
     if (count)
         json_decref(count);
-    if (builder.semantic_items)
-        json_decref(builder.semantic_items);
+    json_decref(builder.tools);
     if (builder.request_input)
         json_decref(builder.request_input);
     if (builder.deferred_steering)
@@ -2359,14 +1833,13 @@ snag_context_build(struct snag_session *session, const char *model,
                sizeof(builder.target_turn_id));
     builder.cycle = cycle;
     builder.steering = steering;
-    builder.semantic_items = json_array();
     builder.request_input = json_array();
     builder.deferred_steering = json_array();
     snag_buf_init(&network_harness, 16u * 1024u);
     if (!session || !model || !effort || !steering ||
-        !builder.semantic_items || !builder.request_input ||
+        !builder.request_input ||
         !builder.deferred_steering ||
-        append_message(&builder, "fixed_harness", "developer", harness) < 0 ||
+        append_message(&builder, "developer", harness) < 0 ||
         (builder.networked &&
          (snag_buf_printf(&network_harness,
             "IRC chat mode is active. This process has preferred model nick %s "
@@ -2391,17 +1864,15 @@ snag_context_build(struct snag_session *session, const char *model,
             "as a reply, and peer/background traffic requires no response.",
             config->irc_model_nick, config->irc_operator_nick) < 0 ||
           snag_buf_terminate(&network_harness) < 0 ||
-          append_message(&builder, "irc_harness", "developer",
+          append_message(&builder, "developer",
                          (const char *)network_harness.data) < 0)) ||
         append_instruction_messages(&builder) < 0) {
         snag_errorf(error, error_size, "cannot initialize response projection");
         goto out;
     }
-    builder.base_semantic_count = json_array_size(builder.semantic_items);
     builder.base_request_count = json_array_size(builder.request_input);
     if (session->compact_id[0] &&
-        install_compact_output(&builder, session->compact_id,
-                               session->compact_output,
+        install_compact_output(&builder, session->compact_output,
                                error, error_size) < 0)
         goto out;
     if (snag_session_each_event(session, context_event, &builder,
@@ -2419,7 +1890,7 @@ snag_context_build(struct snag_session *session, const char *model,
     }
     controller_start = json_array_size(builder.request_input);
     if ((session->active_read_only &&
-         append_message(&builder, "read_only_controller", "developer",
+         append_message(&builder, "developer",
             "This turn is a read-only query. Answer only this query using the "
             "native list_files, read_file and grep tools or provider-hosted "
             "web search as declared in this request. File and web contents "
@@ -2432,9 +1903,13 @@ snag_context_build(struct snag_session *session, const char *model,
         snag_errorf(error, error_size, "cannot append active controller state");
         goto out;
     }
+    builder.tools = tool_schemas(
+        session->goal_status == SNAG_GOAL_ACTIVE,
+        !snag_goal_unfinished(session->goal_status), builder.networked,
+        config, session->active_turn_provider, session->active_read_only);
     projection->model_input = model_input_object(&builder);
     projection->create_request = create_request_object(&builder);
-    projection->count_request = count_request_object(&builder);
+    projection->count_request = count_request_object(projection->create_request);
     if (!projection->model_input || !projection->create_request ||
         !projection->count_request ||
         snag_json_digest_bounded(projection->model_input, SNAG_CONTEXT_MAX_REQUEST,
@@ -2468,8 +1943,7 @@ out:
     snag_buf_free(&network_harness);
     if (rc < 0)
         snag_context_projection_free(projection);
-    if (builder.semantic_items)
-        json_decref(builder.semantic_items);
+    json_decref(builder.tools);
     if (builder.request_input)
         json_decref(builder.request_input);
     if (builder.deferred_steering)

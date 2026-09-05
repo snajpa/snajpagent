@@ -20,6 +20,21 @@ request. Streaming events update the terminal as they arrive. A final answer,
 refusal, or completed tool cycle closes the turn; it does not close the
 session.
 
+Context has one immutable transcript: the actual Responses input items. The
+model-input accounting envelope adds instruction metadata, cycle and capability
+identity around those same items; it does not translate them into a second
+semantic transcript. Create and count requests share the input and tool
+declarations, differing only in their request envelopes. Normal replay and
+compaction use the same event interpreter; compaction selects complete prefixes.
+The engine retains that projection through its response cycle, including hashes,
+byte counts and request views, rather than copying it into unrelated locals.
+Mutable session state is staged once per event and adopted only after durable
+append; a failed append leaves the live session unchanged.
+
+Only current pre-1.0 session format 2 is accepted. Model selection changes use
+`model_selection_changed`; the obsolete single-model event reader is removed.
+No migration or destructive rewrite of existing logs is performed.
+
 Before `response_started`, the runtime builds the exact outgoing model-input
 and request projections and accounts for them in token units. The default
 `exact_token_count = auto` prefers the provider's Responses count endpoint,
@@ -116,7 +131,7 @@ and queued origin from the durable turn-start event and clears both on closure.
 The application dispatcher rejects every non-read-only tool before lifecycle,
 IRC, fixture, and ordinary handlers. A forged local function named
 `web_search` is rejected by the response graph before dispatch.
-Request/count/semantic tool schemas expose the three native
+Request/count/accounting tool schemas expose the three native
 functions and the hosted search tool only. A fresh read-only controller
 survives compaction; no active
 goal or IRC-reply controller is projected in this mode. See the manual for
@@ -193,6 +208,10 @@ the replacement without restarting the process; a changed IRC topology is
 reopened and rolled back to the prior topology if replacement initialization
 fails. Durable session provider/model/effort preferences remain session state,
 so configuration defaults do not overwrite an existing session.
+
+Loading and model/provider saves use the same semantic configuration validator,
+including auth endpoints and cross-field model limits. Saves validate private
+parse copies before atomically replacing the file; invalid text is not replaced.
 
 IRC configuration is process-local, while admitted room state is durable
 session data. Typed events cover connection, membership, message, mode, topic,

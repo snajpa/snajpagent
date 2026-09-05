@@ -28,6 +28,7 @@ enum snag_capacity_source {
     SNAG_CAPACITY_STALE_CATALOG
 };
 
+/* Configured/advertised limits use zero for unknown; positive values are known. */
 struct snag_model_capacity {
     uint64_t context_window_tokens;
     uint64_t max_context_window_tokens;
@@ -40,18 +41,10 @@ struct snag_model_capacity {
     unsigned int effective_context_window_percent;
     enum snag_capacity_source source;
     enum snag_count_capability count_capability;
-    bool context_window_known;
-    bool max_context_window_known;
-    bool input_context_window_known;
-    bool max_input_known;
-    bool max_output_known;
-    bool auto_compact_input_known;
-    bool effective_context_window_known;
     bool effective_context_window_derived;
-    bool hard_input_known;
+    bool hard_input_known; /* Zero is a known exhausted budget, not absence. */
     bool source_bound;
     bool cache_source_mismatch;
-    bool codex_protocol;
 };
 
 void snag_model_cache_init(struct snag_model_cache *cache);
@@ -80,7 +73,6 @@ const json_t *snag_model_cache_find(const struct snag_model_cache *cache,
                                    const char *model);
 const char *snag_model_cache_best_effort(const json_t *model,
                                         const char *fallback);
-size_t snag_model_cache_entry_count(const struct snag_model_cache *cache);
 int snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
                           const char *fallback_effort,
                           const char **provider, const char **model,
