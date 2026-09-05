@@ -268,6 +268,14 @@ def clear_draft_incrementally(child, prompt=DEFAULT_IDLE_PROMPT):
     assert prompt not in edit, edit
 
 
+def assert_bytes_in_order(output, expected):
+    offset = 0
+    for byte in expected:
+        offset = output.find(bytes((byte,)), offset)
+        assert offset >= 0, output
+        offset += 1
+
+
 def test_incremental_prompt_edit_and_utf8_cursor_column():
     child = Child([])
     try:
@@ -861,14 +869,16 @@ def test_ctrl_c_cancels_partial_editor_states():
         child.send(b"escape-draft\x1b")
         child.send(b"\x03")
         escape_end = child.wait(b"^C\r\n", start=escape_start)
-        assert b"escape-draft" in bytes(child.buf[escape_start:escape_end])
+        assert_bytes_in_order(bytes(child.buf[escape_start:escape_end]),
+                              b"escape-draft")
         child.wait(DEFAULT_IDLE_PROMPT, start=escape_end)
 
         paste_start = len(child.buf)
         child.send(b"\x1b[200~paste-draft")
         child.send(b"\x03")
         paste_end = child.wait(b"^C\r\n", start=paste_start)
-        assert b"paste-draft" in bytes(child.buf[paste_start:paste_end])
+        assert_bytes_in_order(bytes(child.buf[paste_start:paste_end]),
+                              b"paste-draft")
         child.wait(DEFAULT_IDLE_PROMPT, start=paste_end)
         child.send(b"clean-after-cancel\r")
         child.wait(b"fixture answer", start=paste_end)
