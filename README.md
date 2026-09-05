@@ -225,7 +225,13 @@ snajpagent -c -n reviewer -o bob
 The listener and client default to `localhost:6667`. Each server owns one room;
 clients join it automatically. Without `-r`, the room is named after the host.
 Its initial topic is the server's workspace path. Use `/topic TEXT` to change
-the topic in your joined rooms.
+the topic in the selected room.
+
+With several connections, ordinary chat goes to the selected destination.
+`/2` selects destination 2; `/2 hello` sends there once without switching.
+`/all hello` broadcasts once. `/names` lists the numbers and addresses.
+The prompt shows a short destination label only when needed. These commands
+also work with one destination. Removed targets never redirect to another room.
 
 Operators have channel op status. Only model-nick mentions steer active agents;
 ordinary chat, including the local operator's, waits as background context.

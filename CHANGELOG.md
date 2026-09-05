@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Select IRC destinations with `/N`, send once with `/N TEXT`, or explicitly
+  broadcast with `/all TEXT`. Scope ordinary chat, topic changes, completion
+  and model tools to their destinations; keep stable numbers and reject stale
+  targets after removal or room changes. Show extra labels only when needed.
+
 - Remove unused render/terminal/context APIs and the provider header's terminal
   dependency. Share prompt hostname preparation and validated trash-name parsing.
 

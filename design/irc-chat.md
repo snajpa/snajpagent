@@ -230,6 +230,19 @@ silently consume or invent operator input.
 
 ## Operator Chat And Rollout UI
 
+Ordinary chat targets one selected destination. `/N` selects a number and
+`/N TEXT` sends there once without changing selection. `/all TEXT` explicitly
+broadcasts to a frozen recipient set. `/names` shows numbers, addresses, current
+selection and membership. Numbers are process-local, stable across reconnects,
+and never reused for a removed endpoint. One hosted room or outgoing endpoint
+counts once, not once per participant or model/operator socket.
+
+Single-destination use hides the extra labels but accepts the same commands.
+Multiple destinations use a short prompt chip and source numbers in the one
+transcript. Missing selected targets remain visibly unavailable instead of
+redirecting drafts. Completion uses the selected/explicit destination's nicks.
+Explicit sends may be invoked from rollout; plain rollout input stays private.
+
 Every interactive session has append-only `chat` and `rollout` presentation
 views, not a windowed full-screen TUI. Startup roles select chat; no roles
 select rollout. Runtime role changes preserve view, draft, history and verbosity.
@@ -415,7 +428,7 @@ Admission priority is:
 
 1. a room message that mentions the accepted endpoint-local model nick, using
    IRC case folding and a nick boundary, is urgent regardless of the sender.
-   Local chat is broadcast, so any joined endpoint's model alias matches; and
+   Local chat carries its actual destination and uses that endpoint's alias; and
 2. other chat (including local operator and `+o` messages) and room notifications
    are coalesced into a bounded user-role room update when active work finishes.
 
@@ -495,6 +508,13 @@ coding tools:
 - `irc_topic` requests a topic change as the agent identity and succeeds only
   where that identity currently has the required channel mode.
 
+Sends and topic tools require nullable string `destination`: a numbered target
+from maintained state, `all` for an explicit broadcast, or null when the frozen
+request has exactly one destination. Operator UI selection never redirects a
+model reply. Each target produces its own attributed local echo and queue/failure
+result. Queue acceptance is not proof of remote delivery. Local-mention reply
+obligations belong to their originating targets, not an unrelated successful send.
+
 Tool calls are durable and use the same start/result ordering and secret-safe
 rendering as other tools. One `-v` shows compact calls without output; `-vv`
 previews 1,024 argument and 512 output characters, and `-vvv` shows full retained
@@ -507,7 +527,7 @@ The event loop owns those operations continuously. `irc_send` is the exclusive
 room-speech path and may be used any number of times during a turn. Assistant
 response text remains local even at a terminal response boundary.
 
-The request freezes its tool contract and routing revision when constructed,
+The request freezes its tool contract and per-destination identities/revisions when constructed,
 including before token counting. Later topology changes do not rewrite or
 cancel it. Stale `irc_send`/`irc_topic` actions return individual not-performed
 results instead of migrating to new rooms; read-only `irc_state` returns live or
@@ -515,6 +535,10 @@ offline state. Accompanying `write_stdin` calls retain their original valid
 classification and live handles. Real destination changes (also remove/re-add
 and a different advertised room) advance the revision; no-ops and same-room
 reconnects do not. A topology change alone does not force an extra model turn.
+Unrelated additions do not invalidate a send to an unchanged explicit target.
+The IRC owner also checks the room revision before execution, covering changes
+not yet admitted by the engine. Reconnect to a different advertised room discards
+the old queued messages rather than sending them to the replacement room.
 
 ## Durability, Bounds, And Failure Semantics
 

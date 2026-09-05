@@ -576,11 +576,21 @@ Select the public chat transcript, including when offline.
 Select local model activity.
 .TP
 .BR /topic " [" text "]"
-Show the IRC snapshot, or change the topic in each joined room where the local
+Show the IRC snapshot, or change the topic in the selected room where the local
 operator has op status.  Text is at most 280 bytes, without newlines.
 .TP
 .B /names
-Show endpoints, members, and channel-operator flags.
+Show numbered destinations, selection, endpoints, members, and channel-operator flags.
+.TP
+.BR /N " [" text "]"
+Select numbered destination N.  With text, send there once without changing
+selection.  Numbers remain stable for this process and are not reused after
+removal.  With a sole destination the same syntax remains valid.
+.TP
+.B /all text
+Broadcast once to the destinations present at submission.  This does not
+enable a persistent broadcast mode.  A later connection does not receive it.
+An unavailable destination is reported locally; messages are not redirected.
 .SH MODEL SELECTION AND CONTEXT
 The provider, model, and effort are session preferences.  A typed selector
 without a provider uses the first configured provider, not necessarily the
@@ -1182,6 +1192,15 @@ Networked mode adds
 .BR irc_state ,
 and privilege-checked
 .BR irc_topic .
+Sending and topic changes require a nullable string
+.B destination
+argument: a number from
+.BR irc_state ,
+.B all
+for explicit broadcast, or
+.B null
+only for a sole destination.  Model routing is independent of the operator's
+selection.  Results distinguish queue acceptance from failures, not remote receipt.
 .PP
 Explicit goal requests expose
 .B create_goal
@@ -1226,8 +1245,11 @@ The terminal starts in the timestamped
 .B chat
 view.  Model text and tools belong to the
 .B rollout
-view regardless of verbosity.  Chat input goes to all attached rooms as the
-local operator and enters local model context once.  Rollout input stays local:
+view regardless of verbosity.  Chat input goes to the selected room as the
+local operator.  Multiple destinations receive short source/prompt labels;
+a hosted room counts once regardless of how many clients joined it.
+Explicit numbered sends and broadcasts also work from rollout, but ordinary
+rollout input stays local:
 while idle it starts a model turn, and during active work it steers that turn at
 the next safe boundary.  It never emits an IRC message.  Incoming room traffic
 is not automatically bridged between servers.  Model response text remains local;
