@@ -944,6 +944,18 @@ def test_prompt_history_and_reverse_search():
     mismatch = second.wait(b"delete confirmation did not match", start=confirm)
     second.wait_idle_prompt(start=mismatch)
 
+    second.send(b"/delete\r")
+    confirm = second.wait(b"delete is irreversible", start=mismatch)
+    second.wait(PROMPT, start=confirm)
+    cancel = len(second.buf)
+    second.send(b"confirmation-cancelled-draft\x03")
+    cancel_end = second.wait(b"^C\r\n", start=cancel)
+    prompt_end = second.wait(DEFAULT_IDLE_PROMPT, start=cancel_end)
+    cancelled = bytes(second.buf[cancel:prompt_end])
+    assert b"confirmation-cancelled-draft" in cancelled
+    assert b"delete cancelled" not in cancelled
+    assert cancelled.count(DEFAULT_IDLE_PROMPT) == 1
+
     run = subprocess.run(
         [BINARY, "--dotdir", DOTDIR, "-e", "--",
          "history-noninteractive-excluded"],
@@ -964,6 +976,7 @@ def test_prompt_history_and_reverse_search():
     assert "draft-restore" not in records
     assert "history-cancelled-draft" not in records
     assert "history-confirmation-excluded" not in records
+    assert "confirmation-cancelled-draft" not in records
     assert "history-noninteractive-excluded" not in records
 
 

@@ -104,8 +104,13 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
         snprintf(error, error_size, "delete confirmation input could not be read");
         return -1;
     }
-    if (action == SNJ_TERM_CANCEL || action == SNJ_TERM_INTERRUPT ||
-        action == SNJ_TERM_EXIT || !line) {
+    if (action == SNJ_TERM_CANCEL || action == SNJ_TERM_INTERRUPT) {
+        free(line);
+        if (error_size)
+            error[0] = '\0';
+        return 1;
+    }
+    if (action == SNJ_TERM_EXIT || !line) {
         free(line);
         snprintf(error, error_size, "delete cancelled");
         return 1;
@@ -154,7 +159,8 @@ snj_app_lifecycle_command(struct app_state *app, const char *line,
         char prefix[9];
         int confirm_rc = confirm_delete(app, prefix, error, sizeof(error));
         if (confirm_rc != 0) {
-            (void)snj_render_error_ctx(&app->render, error);
+            if (error[0])
+                (void)snj_render_error_ctx(&app->render, error);
             return confirm_rc < 0 ? -1 : 0;
         }
         seq = app->session.next_seq;
