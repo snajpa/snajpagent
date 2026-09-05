@@ -6,11 +6,13 @@
 #include "turn.h"
 
 #include <stdbool.h>
+#include <errno.h>
 #include <stddef.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 typedef int (*fixture_emit_fn)(void *opaque, size_t item_index,
@@ -730,6 +732,24 @@ snj_fixture_response(const char *prompt, const json_t *steering,
             if (pump_rc != 0)
                 return pump_rc;
         }
+        return 0;
+    }
+    if (strcmp(prompt, "engine_blocked") == 0) {
+        static const char text[] = "engine-block-start engine-block-end";
+        size_t index = graph->count;
+        struct timespec delay = {2, 500000000};
+
+        if (snj_response_graph_add_public(graph, SNJ_ITEM_ASSISTANT,
+                SNJ_PHASE_FINAL_ANSWER, "msg_engine_blocked", text) < 0 ||
+            emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 text, 19u) < 0)
+            goto allocation;
+        /* Intentionally no pump: models a sync/lock/DNS/library stall. */
+        while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
+            ;
+        if (emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
+                 text + 19u, sizeof(text) - 1u - 19u) < 0)
+            goto allocation;
         return 0;
     }
     if (strcmp(prompt, "terminal_status") == 0) {

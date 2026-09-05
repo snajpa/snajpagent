@@ -3426,6 +3426,32 @@ def test_network_chat_and_managed_mention():
     assert all(event["data"]["result"]["status"] == "succeeded"
                for event in cycle3_finished)
 
+def test_editor_during_blocked_engine():
+    child = Child([])
+    failure = None
+    try:
+        child.wait_idle_prompt()
+        child.send(b"engine_blocked\r")
+        after = child.wait(b"engine-block-start")
+        child.send(b"responsive-draft")
+        try:
+            deadline = time.monotonic() + 0.25
+            while b"responsive-draft" not in re.sub(
+                    rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", child.buf[after:]):
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, "engine stall stopped local editing"
+                child.read_once(remaining)
+        except AssertionError as exc:
+            failure = exc
+        child.send(b"\x03")
+        end = child.wait(b"engine-block-end", start=after)
+        child.exit_cleanly(end)
+    finally:
+        if failure:
+            raise failure
+
+
+test_editor_during_blocked_engine()
 test_incremental_prompt_edit_and_utf8_cursor_column()
 test_incremental_active_prompt_keeps_status_stable()
 test_static_zero_width_spinner_has_no_refresh()

@@ -5,6 +5,43 @@
 This note defines how streamed model output and the active input composer share
 the terminal, and how users inspect and modify queued turns.
 
+## Runtime Ownership And Scheduling
+
+Every application mode uses two application threads: one presentation owner
+and one engine owner. The editor and renderer stay together on the presentation
+thread. Only actual input/output capabilities differ for interactive, execute,
+listing, and redirected output; there is no synchronous alternate runtime.
+CLI preflight, help/version, and initial piped execute input precede startup.
+
+The engine owns application state, Jansson graphs, providers, tools, IRC,
+configuration, context, session durability, and history/cache disk work. None
+of those operations runs on the presentation thread. Two bounded SPSC queues
+carry owned typed values, never pointers into the other owner's mutable state.
+Release/acquire publication orders queue items; nonblocking pipes wake owners.
+Output backpressures the engine. Full input admission retains the draft and
+reports the backlog without blocking editing; urgent interrupt/exit/failure
+flags bypass ordinary backlog. Actions retain their originating prompt state.
+
+Presentation checks input/resize and due spinners before bounded output work,
+at most every 16 ms while editing/animating and 25 ms during other activity.
+Long text and view catch-up are sliced; Markdown and literal output share the
+same renderer. Inactive operation waits for real input, wakeups, or deadlines.
+Inherited terminal descriptors are never made nonblocking. A stalled terminal,
+kernel, or unscheduled process is outside this userspace guarantee.
+
+Provider and managed-process waits include the action wake descriptor. A single
+libcurl-multi driver serves create/count/compact/catalog requests. Indivisible
+engine syscalls may delay semantic acknowledgement, but cannot stop editing or
+spinners. Controls run first when such calls return. History search/navigation
+uses owned memory snapshots while engine refresh/persistence is pending.
+
+Durable append-and-sync-before-adopt/ack remains unchanged. Display messages
+retain engine order; public deltas acknowledge their exact delivered prefix
+before the callback returns, including cancellation and failure paths. Editor
+handoff restores cooked mode before the engine starts the editor and reclaims
+the terminal only after it exits. Shutdown closes admission, restores output
+and terminal state, and joins the presentation thread; no thread is detached.
+
 ## Streamed Output And Typing
 
 - Public model text is soft-wrapped at word boundaries to the current terminal
