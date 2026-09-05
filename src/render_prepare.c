@@ -143,6 +143,8 @@ snj_render_prepare_tool_start(struct snj_render_block *block,
     if (snj_buf_printf(&row, "→ %s", call->name) < 0)
         goto out;
     size_t colored_len = row.len;
+    if (call->call_id[0] && snj_buf_printf(&row, " [%.8s]", call->call_id) < 0)
+        goto out;
     if (snj_buf_append(&row, "  ", 2u) < 0 ||
         preview(&row, (const char *)args.data, args.len, 95u, 95u, true, &truncated) < 0 ||
         (truncated && snj_buf_append(&row, "…", 3u) < 0) ||
@@ -183,6 +185,9 @@ snj_render_prepare_tool_finish(struct snj_render_block *block, const char *name,
     const char *status = snj_json_string(result, "status");
     const char *output = snj_json_string(result, "model_text");
     const char *handle = snj_json_string(result, "handle");
+    json_t *ref = json_object_get(result, "output_ref");
+    if (ref)
+        handle = snj_json_string(ref, "handle");
     json_t *exit_value = json_object_get(result, "exit_code");
     uint64_t duration;
     size_t limit = snj_presentation_limit(SNJ_PRESENT_OUTPUT, level);
@@ -211,7 +216,7 @@ snj_render_prepare_tool_finish(struct snj_render_block *block, const char *name,
         goto out;
     if (summary(block, &row, columns, row.len) < 0)
         goto out;
-    if (output && limit) {
+    if (output && limit && !ref) {
         size_t len = json_string_length(json_object_get(result, "model_text"));
         size_t shown = max_output_bytes && len > max_output_bytes ? max_output_bytes : len;
         while (shown < len && shown && ((unsigned char)output[shown] & 0xc0u) == 0x80u)

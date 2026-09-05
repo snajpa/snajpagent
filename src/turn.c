@@ -1027,14 +1027,16 @@ snj_tool_result_valid(const json_t *result)
     if (ref) {
         static const char *const ref_keys[] = {"handle", "stdout_start", "stdout_end",
             "stderr_start", "stderr_end", "stdin_accepted", "stdin_written",
-            "stdin_pending", "stdin_open"};
+            "stdin_pending", "stdin_open", "log_start", "log_end"};
         const char *h = snj_json_string(ref, "handle");
         const char *const begin[] = {"stdout_start", "stderr_start"};
         const char *const end[] = {"stdout_end", "stderr_end"};
         const char *const streams[] = {"stdout", "stderr"};
-        uint64_t accepted, written, pending;
-        if (!snj_json_exact_keys(ref, ref_keys, 9u) || !h ||
+        uint64_t accepted, written, pending, log_start, log_end;
+        if (!snj_json_exact_keys(ref, ref_keys, 11u) || !h ||
             !snj_hex_is_lower(h, SNJ_ID_HEX_LEN) ||
+            snj_json_integer_u64(ref, "log_start", &log_start) < 0 ||
+            snj_json_integer_u64(ref, "log_end", &log_end) < 0 || log_start > log_end ||
             !json_is_boolean(json_object_get(ref, "stdin_open")) ||
             snj_json_integer_u64(ref, "stdin_accepted", &accepted) < 0 ||
             snj_json_integer_u64(ref, "stdin_written", &written) < 0 ||

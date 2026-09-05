@@ -2410,15 +2410,16 @@ finish_call(struct app_state *app, const char *turn_id,
         json_decref(result);
         return -1;
     }
-    json_t *render = app->ui.verbosity >= 1u ? json_incref(result) : NULL;
-    struct snj_process_state cursor = {0};
     struct snj_process_state *process = snj_session_process(&app->session, handle);
-    if (process)
-        cursor = *process;
-    if (commit_pending_result(app, turn_id, call->call_id, result, error, error_size) < 0) {
-        json_decref(render);
+    json_t *ref = json_object_get(result, "output_ref");
+    if (ref && process &&
+        (snj_json_set_new(ref, "log_start", json_integer((json_int_t)process->log_offset)) < 0 ||
+         snj_json_set_new(ref, "log_end", json_integer((json_int_t)app->session.log_end)) < 0)) {
+        json_decref(result);
         return -1;
     }
+    if (commit_pending_result(app, turn_id, call->call_id, result, error, error_size) < 0)
+        return -1;
     if (handle && *handle) {
         snj_tools_collected(handle);
         struct snj_process_state *p = snj_session_process(&app->session, handle);
@@ -2429,12 +2430,7 @@ finish_call(struct app_state *app, const char *turn_id,
             snj_tools_process_state(p);
         }
     }
-    int rc = render ? snj_ui_tool_finish(&app->ui, call->name, render,
-                                          app->config->max_output_bytes) : 0;
-    if (rc == 0 && render)
-        rc = snj_app_tool_display(app, render, &cursor, app->config->max_output_bytes);
-    json_decref(render);
-    return rc;
+    return 0;
 }
 
 static int
@@ -2543,9 +2539,7 @@ execute_calls(struct app_state *app, const char *turn_id,
             if (snj_tool_action_digest(call, app->session.workspace, digest) < 0 ||
                 commit_event(app, "tool_started",
                     snj_app_tool_started_data(turn_id, call->call_id, digest, app->session.workspace),
-                    error, error_size) < 0 ||
-                snj_ui_tool_start(&app->ui, call, app->session.workspace,
-                                   app->config->default_timeout_ms) < 0)
+                    error, error_size) < 0)
                 return -1;
             calls[i].started = true;
             if (!strcmp(call->name, "exec_command")) {

@@ -3094,6 +3094,102 @@ out:
 }
 
 static int
+render_process_chunks(struct snj_render *render, const json_t *ref,
+                       uint32_t max_output_bytes, off_t result_offset)
+{
+    const char *handle = snj_json_string(ref, "handle");
+    uint64_t start, end, from[2], to[2];
+    size_t displayed = 0u, characters = 0u;
+    struct snj_buf line;
+    bool truncated = false;
+    int rc = -1;
+    if (!handle || snj_json_integer_u64(ref, "log_start", &start) < 0 ||
+        snj_json_integer_u64(ref, "log_end", &end) < 0 || start > end ||
+        end > (uint64_t)result_offset ||
+        snj_json_integer_u64(ref, "stdout_start", &from[0]) < 0 ||
+        snj_json_integer_u64(ref, "stdout_end", &to[0]) < 0 ||
+        snj_json_integer_u64(ref, "stderr_start", &from[1]) < 0 ||
+        snj_json_integer_u64(ref, "stderr_end", &to[1]) < 0)
+        return -1;
+    snj_buf_init(&line, SNJ_MAX_EVENT_LINE);
+    while (start < end && snj_render_enabled(render, SNJ_PRESENT_OUTPUT)) {
+        unsigned char input[8192];
+        size_t want = end - start > sizeof(input) ? sizeof(input) : (size_t)(end - start);
+        ssize_t n = pread(render->history_fd, input, want, (off_t)start);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0 || render_checkpoint(render) < 0)
+            goto out;
+        start += (uint64_t)n;
+        for (ssize_t i = 0; i < n; ++i) {
+            if (input[i] != '\n') {
+                if (snj_buf_putc(&line, input[i]) < 0)
+                    goto out;
+                continue;
+            }
+            char error[128];
+            json_t *event = snj_json_load_strict(line.data, line.len, line.max, error, sizeof(error));
+            if (!event)
+                goto out;
+            const json_t *data = json_object_get(event, "data");
+            const char *type = snj_json_string(event, "type");
+            const char *id = snj_json_string(data, "handle");
+            if (type && !strcmp(type, "process_output") && id && !strcmp(id, handle)) {
+                uint64_t stream, offset;
+                const char *text = snj_json_string(data, "data");
+                const char *encoding = snj_json_string(data, "encoding");
+                if (!text || !encoding || snj_json_integer_u64(data, "stream", &stream) < 0 || stream > 1u ||
+                    snj_json_integer_u64(data, "offset", &offset) < 0) {
+                    json_decref(event);
+                    goto out;
+                }
+                if (offset >= from[stream] && offset < to[stream]) {
+                    size_t shown = 0u, len = strlen(text), count = 0u;
+                    size_t limit = snj_presentation_limit(SNJ_PRESENT_OUTPUT, render->verbosity);
+                    while (shown < len && characters + count < limit &&
+                           (!max_output_bytes || displayed + shown < max_output_bytes)) {
+                        size_t width = snj_utf8_size((unsigned char)text[shown]);
+                        if (!width || width > len - shown ||
+                            (max_output_bytes && width > max_output_bytes - displayed - shown))
+                            break;
+                        shown += width;
+                        ++count;
+                    }
+                    struct snj_render_block block = {.body_kind = SNJ_PRESENT_OUTPUT};
+                    snj_buf_init(&block.body, shown + 128u);
+                    int pr = snj_buf_printf(&block.body, "[%.8s %s%s]\n", handle,
+                        stream ? "stderr" : "stdout", !strcmp(encoding, "base64") ? " base64" : "");
+                    if (pr == 0)
+                        pr = snj_buf_append(&block.body, text, shown);
+                    if (pr == 0 && shown)
+                        pr = tool_body(render, &block);
+                    snj_buf_free(&block.body);
+                    displayed += shown;
+                    characters += count;
+                    truncated = shown < len;
+                    if (pr < 0) {
+                        json_decref(event);
+                        goto out;
+                    }
+                }
+            }
+            json_decref(event);
+            snj_buf_reset(&line);
+            if (truncated) {
+                rc = write_optional_block(render, SNJ_PRESENT_OUTPUT, "",
+                    "… [output truncated; complete bytes retained in journal]\n",
+                    strlen("… [output truncated; complete bytes retained in journal]\n"), 0u);
+                goto out;
+            }
+        }
+    }
+    rc = 0;
+out:
+    snj_buf_free(&line);
+    return rc;
+}
+
+static int
 render_tool_record(struct snj_render *render, const struct snj_render_record *record)
 {
     json_t *event = NULL, *response = NULL, *data, *items;
@@ -3125,6 +3221,7 @@ render_tool_record(struct snj_render *render, const struct snj_render_record *re
             struct snj_response_item call = {
                 .name = (char *)name, .arguments = json_object_get(item, "arguments")
             };
+            (void)snj_strcpy(call.call_id, sizeof(call.call_id), call_id);
             const char *workdir = snj_json_string(data, "resolved_workdir");
             rc = snj_render_prepare_tool_start(&block, &call, workdir ? workdir : "?",
                   record->timeout_ms, render->verbosity, columns);
@@ -3135,6 +3232,9 @@ render_tool_record(struct snj_render *render, const struct snj_render_record *re
         if (rc == 0) {
             rc = snj_render_tool_block(render, &block);
             snj_render_block_free(&block);
+            json_t *ref = json_object_get(json_object_get(data, "result"), "output_ref");
+            if (rc == 0 && ref && !record->tool_start)
+                rc = render_process_chunks(render, ref, record->max_output_bytes, record->source.offset);
         }
         goto out;
     }

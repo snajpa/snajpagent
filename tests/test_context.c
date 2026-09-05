@@ -465,7 +465,7 @@ test_compact_groups(struct snj_store *store, const char *workspace)
 {
     const char *turn = "a1000000000000000000000000000000";
     const char *next_turn = "a2000000000000000000000000000000";
-    const char *handle = "a3000000000000000000000000000000";
+    const char *handle = "0000000000000000000000000000c002";
     struct snj_session session;
     struct snj_instruction_set instructions;
     struct snj_context_projection projection;

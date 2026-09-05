@@ -1055,8 +1055,6 @@ struct process_read_range {
     unsigned int stream;
     uint64_t from, to, seen;
     struct snj_buf *out;
-    struct snj_ui *ui;
-    uint64_t display_left;
 };
 
 static int
@@ -1089,29 +1087,6 @@ read_process_chunk(void *opaque, uint64_t seq, const char *type,
         if (from != read->from + read->seen)
             goto out;
         read->seen += to - from;
-        if (read->ui) {
-            struct snj_buf text;
-            char label[80];
-            const unsigned char *part = bytes.data + (size_t)(from - offset);
-            size_t len = (size_t)(to - from);
-            snj_buf_init(&text, 32768u);
-            bool utf8 = snj_utf8_valid(part, len, true);
-            if ((utf8 ? snj_buf_append(&text, part, len) : snj_base64_append(&text, part, len)) < 0) {
-                snj_buf_free(&text);
-                goto out;
-            }
-            size_t shown = text.len;
-            if (shown > read->display_left)
-                shown = (size_t)read->display_left;
-            while (shown && !snj_utf8_valid(text.data, shown, true))
-                --shown;
-            (void)snprintf(label, sizeof(label), "%.8s %s%s", read->handle,
-                           read->stream ? "stderr" : "stdout", utf8 ? "" : " base64");
-            rc = shown ? snj_ui_tool_output(read->ui, label, text.data, shown) : 0;
-            read->display_left -= shown;
-            snj_buf_free(&text);
-            goto out;
-        }
         uint64_t ranges[4] = {read->from, read->to, read->to, read->to};
         if (read->to - read->from > read->out->max) {
             ranges[1] = read->from + read->out->max / 2u;
@@ -1147,29 +1122,6 @@ snj_app_tool_read(void *opaque, const char *handle, unsigned int stream,
     return read.seen == to - from ? 0 : -1;
 }
 
-int
-snj_app_tool_display(struct app_state *app, const json_t *result,
-                       const struct snj_process_state *cursor, uint32_t limit)
-{
-    json_t *ref = json_object_get(result, "output_ref");
-    if (!ref || app->ui.verbosity < 1u)
-        return 0;
-    struct process_read_range read = {.handle = snj_json_string(ref, "handle"),
-        .ui = &app->ui, .display_left = limit ? limit : UINT64_MAX};
-    const char *const from[] = {"stdout_start", "stderr_start"};
-    const char *const to[] = {"stdout_end", "stderr_end"};
-    char error[256] = {0};
-    for (unsigned int s = 0u; s < 2u; ++s) {
-        read.stream = s;
-        read.seen = 0u;
-        if (snj_json_integer_u64(ref, from[s], &read.from) < 0 ||
-            snj_json_integer_u64(ref, to[s], &read.to) < 0 ||
-            snj_session_each_event_since(&app->session, cursor, read_process_chunk,
-                                          &read, error, sizeof(error)) < 0)
-            return -1;
-    }
-    return 0;
-}
 
 /* Takes ownership of result, including on failure. */
 json_t *

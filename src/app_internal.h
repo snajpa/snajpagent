@@ -87,8 +87,6 @@ struct app_state {
 
 int snj_app_tool_output(void *, const char *, unsigned int, uint64_t, const void *, size_t);
 int snj_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, struct snj_buf *);
-int snj_app_tool_display(struct app_state *, const json_t *,
-                          const struct snj_process_state *, uint32_t);
 
 enum {
     /* Provider pump results already use 1 and 2. */

@@ -47,6 +47,8 @@ extern char **environ;
 struct capture_stream {
     struct snj_buf data;
     uint64_t bytes;
+    struct managed_process *owner;
+    unsigned int stream;
 };
 
 struct capture_redactor {
@@ -103,6 +105,7 @@ static snj_tool_read_fn journal_read;
 static void *journal_opaque;
 static size_t next_fd;
 static bool managed_cleanup_registered;
+static int flush_capture(struct managed_process *, unsigned int);
 
 static bool
 json_bool_member(const json_t *object, const char *key, bool default_value,
@@ -234,6 +237,9 @@ capture_append(struct capture_stream *stream, const unsigned char *data,
         errno = EINVAL;
         return -1;
     }
+    if (len > stream->data.max - stream->data.len && stream->owner &&
+        flush_capture(stream->owner, stream->stream) < 0)
+        return -1;
     if (snj_buf_append(&stream->data, data, len) < 0)
         return -1;
     stream->bytes += len;
@@ -1222,10 +1228,10 @@ snj_tools_collect(const char *handle, const char *reason, json_t **result,
         goto out;
     json_t *ref = json_object();
     static const char *const keys[] = {"stdout_start", "stdout_end", "stderr_start",
-        "stderr_end", "stdin_accepted", "stdin_written", "stdin_pending"};
+        "stderr_end", "stdin_accepted", "stdin_written", "stdin_pending", "log_start", "log_end"};
     uint64_t values[] = {proc->collected_offset[0], proc->result_offset[0],
         proc->collected_offset[1], proc->result_offset[1], proc->input_accepted_total,
-        proc->input_written_total, proc->input.len - proc->input_written};
+        proc->input_written_total, proc->input.len - proc->input_written, 0u, 0u};
     if (!ref)
         goto out;
     for (size_t i = 0u; i < sizeof(values) / sizeof(values[0]); ++i)
@@ -1391,6 +1397,8 @@ start_command(const char *handle, const char *command, const char *workdir,
     managed_secret_set_build(&proc->secrets, config, credential);
     capture_init(&proc->stdout_stream);
     capture_init(&proc->stderr_stream);
+    proc->stdout_stream.owner = proc->stderr_stream.owner = proc;
+    proc->stderr_stream.stream = 1u;
     redactor_init(&proc->stdout_redactor, &proc->stdout_stream,
                   &proc->secrets.wire);
     redactor_init(&proc->stderr_redactor, &proc->stderr_stream,

@@ -41,8 +41,10 @@ struct context_builder {
     bool compact_best_known;
     bool compact_allow_oversized_first;
     size_t compact_pending_calls;
-    bool compact_process_open;
-    char compact_process_call[SNJ_ID_HEX_LEN + 1u];
+    size_t compact_live_count, compact_call_count;
+    char compact_live[SNJ_MAX_PROCESSES][SNJ_ID_HEX_LEN + 1u];
+    struct { char call[SNJ_ID_HEX_LEN + 1u], handle[SNJ_ID_HEX_LEN + 1u]; }
+        compact_calls[SNJ_MAX_CALLS_PER_RESPONSE];
     bool max_output_known;
 };
 
@@ -1750,6 +1752,28 @@ compact_count_request_object(const json_t *input, const char *model)
 }
 
 static int
+compact_process(struct context_builder *builder, const char *handle, bool running)
+{
+    if (!handle || !*handle)
+        return 0;
+    size_t i;
+    for (i = 0u; i < builder->compact_live_count; ++i)
+        if (!strcmp(builder->compact_live[i], handle))
+            break;
+    if (running && i == builder->compact_live_count) {
+        if (i == SNJ_MAX_PROCESSES ||
+            !snj_strcpy(builder->compact_live[i], sizeof(builder->compact_live[i]), handle))
+            return -1;
+        ++builder->compact_live_count;
+    } else if (!running && i < builder->compact_live_count) {
+        --builder->compact_live_count;
+        memmove(builder->compact_live[i], builder->compact_live[i + 1u],
+            (builder->compact_live_count - i) * sizeof(builder->compact_live[0]));
+    }
+    return 0;
+}
+
+static int
 compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
               char *error, size_t error_size)
 {
@@ -1902,17 +1926,25 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (append_response_items(builder, items, error, error_size) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
-        builder->compact_process_call[0] = '\0';
+        builder->compact_call_count = 0u;
         for (size_t i = 0u; i < json_array_size(items); ++i) {
             json_t *item = json_array_get(items, i);
             if (strcmp(snj_json_string(item, "kind"), "tool_call") == 0) {
                 ++builder->compact_pending_calls;
-                if (strcmp(snj_json_string(item, "name"), "write_stdin") == 0)
-                    (void)snj_strcpy(builder->compact_process_call,
-                        sizeof(builder->compact_process_call), snj_json_string(item, "call_id"));
+                size_t slot = builder->compact_call_count++;
+                if (slot >= SNJ_MAX_CALLS_PER_RESPONSE)
+                    return -1;
+                const char *name = snj_json_string(item, "name");
+                const char *id = snj_json_string(item, "call_id");
+                const char *handle = !strcmp(name, "exec_command") ? id :
+                    !strcmp(name, "write_stdin") ? snj_json_string(json_object_get(item, "arguments"), "handle") : NULL;
+                (void)snj_strcpy(builder->compact_calls[slot].call, sizeof(builder->compact_calls[slot].call), id);
+                builder->compact_calls[slot].handle[0] = '\0';
+                if (handle)
+                    (void)snj_strcpy(builder->compact_calls[slot].handle, sizeof(builder->compact_calls[slot].handle), handle);
             }
         }
-        if (builder->compact_pending_calls || builder->compact_process_open)
+        if (builder->compact_pending_calls || builder->compact_live_count)
             return 0;
         before = json_array_size(builder->request_input);
         if (append_deferred_steering(builder) < 0)
@@ -1942,12 +1974,16 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         }
         --builder->compact_pending_calls;
         const char *status = snj_json_string(result, "status");
-        if (strcmp(status, "running") == 0)
-            builder->compact_process_open = true;
-        else if (strcmp(call_id, builder->compact_process_call) == 0 &&
-                 strcmp(status, "not_run") != 0 && strcmp(status, "denied") != 0)
-            builder->compact_process_open = false;
-        if (builder->compact_pending_calls || builder->compact_process_open)
+        for (size_t i = 0u; i < builder->compact_call_count; ++i)
+            if (!strcmp(builder->compact_calls[i].call, call_id) &&
+                strcmp(status, "not_run") && strcmp(status, "denied")) {
+                const char *handle = !strcmp(status, "running") ? snj_json_string(result, "handle") :
+                    builder->compact_calls[i].handle;
+                if (compact_process(builder, handle, !strcmp(status, "running")) < 0)
+                    return -1;
+                break;
+            }
+        if (builder->compact_pending_calls || builder->compact_live_count)
             return 0;
         before = json_array_size(builder->request_input);
         if (append_deferred_steering(builder) < 0)
@@ -1970,8 +2006,9 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (append_process_closed(builder, cause, result) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
-        builder->compact_process_open = false;
-        if (builder->compact_pending_calls)
+        if (compact_process(builder, snj_json_string(data, "handle"), false) < 0)
+            return -1;
+        if (builder->compact_pending_calls || builder->compact_live_count)
             return 0;
         before = json_array_size(builder->request_input);
         if (append_deferred_steering(builder) < 0)
