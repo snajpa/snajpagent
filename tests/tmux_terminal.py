@@ -94,6 +94,9 @@ class FakeResponses:
         self.catalog_failure = None
         self.failure = None
         self.sequence = 0
+        self.exit_started = threading.Event()
+        self.exit_release = threading.Event()
+        self.exit_workspace = None
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -270,6 +273,9 @@ class FakeResponses:
                     "model": model,
                     "latest": latest,
                 })
+            if latest.startswith("exit-"):
+                self.handle_exit(handler, request, sequence, latest)
+                return
             marker = None
             if "integration one from oneop" in latest:
                 marker = "one"
@@ -318,6 +324,38 @@ class FakeResponses:
                 handler.send_error(500)
             except OSError:
                 pass
+
+    def handle_exit(self, handler, request, sequence, mode):
+        handler.close_connection = True
+        if mode in ("exit-tool", "exit-managed") and not any(
+                item.get("type") == "function_call_output"
+                for item in request.get("input", [])):
+            body = self.function_body(sequence, "call_exit", "exec_command", {
+                "command": 'printf "%s" "$$" > command.pid; exec sleep 30',
+                "workdir": str(self.exit_workspace), "stdin": None,
+                "pty": False, "timeout_ms": None, "max_output_tokens": None,
+                "yield_ms": 1 if mode == "exit-managed" else 0,
+            }).encode()
+        else:
+            if mode == "exit-stream":
+                body = self.response_body(sequence, "exit stream prefix\n")
+                prefix = body.split("event: response.output_text.done", 1)[0]
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(prefix.encode())
+                handler.wfile.flush()
+            # Hold before headers or mid-stream until the application exits.
+            self.exit_started.set()
+            if not self.exit_release.wait(10.0):
+                raise AssertionError("Ctrl-D did not release the held request")
+            return
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
 
     def handle_catalog(self, handler):
         try:
@@ -1715,6 +1753,56 @@ def validate_irc_styles(terminal, remote_agent, local_agent=None):
             raise AssertionError(f"network UI is missing {role} styling")
 
 
+def run_ctrl_d_cases(binary, root, provider, environment):
+    for mode in ("silent", "stream", "tool", "managed"):
+        case = root / ("exit-" + mode)
+        workspace = case / "work"
+        workspace.mkdir(mode=0o700, parents=True)
+        provider.exit_workspace = workspace
+        provider.exit_started.clear()
+        provider.exit_release.clear()
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        terminal = TmuxTerminal(case / "terminal", binary, workspace,
+                                case / "state", config, 120, 24,
+                                environment=environment)
+        try:
+            terminal.wait("host-model/medium ›")
+            terminal.submit("exit-" + mode)
+            if mode in ("tool", "managed"):
+                deadline = time.monotonic() + 5.0
+                while not (workspace / "command.pid").exists():
+                    assert time.monotonic() < deadline, "command did not start"
+                    time.sleep(0.02)
+            if mode != "tool":
+                assert provider.exit_started.wait(5.0), "request did not start"
+            if mode == "stream":
+                terminal.wait("exit stream prefix")
+            terminal.send_key("C-d")
+            terminal.wait_dead(timeout=1.5)
+            assert terminal.run("display-message", "-p", "-t", terminal.target,
+                                "#{pane_dead_status}").strip() == "0"
+            screen = terminal.capture(join_wrapped=True)
+            assert "You can resume this session" in screen, screen
+            _, events = read_events(terminal.dotdir)
+            assert len(event_list(events, "turn_interrupted")) == 1
+            assert not event_list(events, "turn_completed")
+            assert len(event_list(events, "response_started")) == (
+                2 if mode == "managed" else 1)
+            if mode in ("tool", "managed"):
+                pid = int((workspace / "command.pid").read_text())
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    raise AssertionError(f"command {pid} survived Ctrl-D")
+            print(f"tmux_terminal ctrl-d {mode}: ok", flush=True)
+        finally:
+            provider.exit_release.set()
+            terminal.close()
+
+
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
@@ -1734,6 +1822,7 @@ def run_irc_case(binary, root):
     ]
     terminals = {}
     try:
+        run_ctrl_d_cases(binary, root, provider, environment)
         run_model_catalog_case(binary, root, provider, environment)
         for name, model, _agent, operator, args in specs:
             case = root / name

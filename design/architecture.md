@@ -203,7 +203,9 @@ draft, and opens a clean prompt. Five consecutive presses within two seconds
 request exit through durable cleanup, even while the engine is busy; other
 input resets that sequence. Only an already-empty active
 composer additionally interrupts the current turn through the normal durable
-path. An empty Ctrl-D closes input. Uncatchable SIGKILL, power loss, and fatal
+path. Empty Ctrl-D and terminal EOF request the same priority exit and interrupt
+active work before cleanup; they do not wait for turn completion. One-shot
+piped input still runs to completion. Uncatchable SIGKILL, power loss, and fatal
 corruption cannot execute this path.
 
 ## IRC Runtime

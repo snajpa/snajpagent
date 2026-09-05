@@ -83,7 +83,7 @@ struct snj_ui_runtime {
     pthread_t thread, engine;
     sigset_t saved_mask;
     atomic_int fatal;
-    atomic_bool force_exit, cancel, eof;
+    atomic_bool exit_requested, cancel;
     atomic_uint steering_pending;
     _Atomic uint64_t interrupt;
     _Atomic uint64_t pause_until;
@@ -458,11 +458,8 @@ read_input(struct snj_ui_display *display, int timeout_ms)
     }
     if (item->action == SNJ_TERM_INTERRUPT) {
         atomic_store(&runtime->interrupt, display->turn_generation);
-    } else if (item->action == SNJ_TERM_FORCE_EXIT) {
-        atomic_store(&runtime->force_exit, true);
-        display->input_closed = true;
     } else if (item->action == SNJ_TERM_EXIT) {
-        atomic_store(&runtime->eof, true);
+        atomic_store(&runtime->exit_requested, true);
         display->input_closed = true;
     } else if (item->action == SNJ_TERM_CANCEL && term->input_backlog) {
         atomic_store(&runtime->cancel, true);
@@ -500,7 +497,7 @@ render_input_checkpoint(void *opaque)
 static bool
 public_stopped(struct snj_ui_runtime *runtime)
 {
-    return atomic_load(&runtime->force_exit) ||
+    return atomic_load(&runtime->exit_requested) ||
            atomic_load(&runtime->interrupt) ||
            atomic_load(&runtime->steering_pending);
 }
@@ -662,9 +659,8 @@ snj_ui_init(struct snj_ui *ui)
     atomic_init(&runtime->fatal, 0);
     runtime->engine = pthread_self();
     atomic_init(&runtime->interrupt, 0u);
-    atomic_init(&runtime->force_exit, false);
+    atomic_init(&runtime->exit_requested, false);
     atomic_init(&runtime->cancel, false);
-    atomic_init(&runtime->eof, false);
     atomic_init(&runtime->steering_pending, 0u);
     atomic_init(&runtime->pause_until, 0u);
     if (queue_open(&runtime->commands) < 0)
@@ -913,8 +909,8 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             errno = fatal;
             return -1;
         }
-        if (atomic_exchange(&runtime->force_exit, false)) {
-            *action = SNJ_TERM_FORCE_EXIT;
+        if (atomic_exchange(&runtime->exit_requested, false)) {
+            *action = SNJ_TERM_EXIT;
             return 1;
         }
         uint64_t interrupted = atomic_exchange(&runtime->interrupt, 0u);
@@ -924,10 +920,6 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
         }
         if (atomic_exchange(&runtime->cancel, false)) {
             *action = SNJ_TERM_CANCEL;
-            return 1;
-        }
-        if (atomic_exchange(&runtime->eof, false)) {
-            *action = SNJ_TERM_EXIT;
             return 1;
         }
         size_t tail = atomic_load_explicit(&runtime->actions.tail, memory_order_relaxed);
@@ -986,7 +978,7 @@ void
 snj_ui_signal(struct snj_ui *ui)
 {
     if (ui) {
-        atomic_store(&ui->runtime->force_exit, true);
+        atomic_store(&ui->runtime->exit_requested, true);
         wake_owner(&ui->runtime->actions);
     }
 }

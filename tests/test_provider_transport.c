@@ -1174,7 +1174,7 @@ test_ui_output_order_and_failure(void)
         assert(delivered.len == 0u);
         assert(snj_ui_text(&ui, SNJ_UI_PUBLIC_END, NULL) == 0);
         assert(snj_ui_poll(&ui, 0, false, &action, &line) == 1);
-        assert(action == SNJ_TERM_FORCE_EXIT);
+        assert(action == SNJ_TERM_EXIT);
         snj_buf_free(&delivered);
     }
     assert(close(pipefd[1]) == 0);

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Exit promptly on empty Ctrl-D or interactive EOF, interrupting active model
+  and command work through the existing cleanup path. Preserve the resumable
+  session and nonempty-draft forward delete. Stop interrupted tool turns before
+  starting another model request.
+
 - In chat, steer active work only for model-nick mentions, not ordinary local
   or channel-operator messages. Tab completes `@nick` at the cursor from live
   room membership without submitting or queueing the draft.

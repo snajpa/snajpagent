@@ -116,10 +116,11 @@ appends literal `^C` and a newline, discards the draft/search state, and opens a
 clean prompt. A nonempty active draft does not interrupt the turn; an empty
 active composer requests safe turn interruption. Five consecutive Ctrl-C
 presses within two seconds request exit through normal durable cleanup. Other
-input or expiry resets the sequence. Ctrl-D, terminal EOF, and `/exit` remain
-explicit exits. After every accepted Enter steer, an empty active composer is
-armed immediately, before provider cancellation or the next response cycle
-completes, so another steer can be entered at once.
+input or expiry resets the sequence. Empty Ctrl-D and terminal EOF use the same
+priority exit control, interrupting active work and preserving the session;
+`/exit` is available while idle. After every accepted Enter steer, an empty
+active composer is armed immediately, before provider cancellation or the next
+response cycle completes, so another steer can be entered at once.
 
 When Enter interrupts visible model output, `response_interrupted` retains its
 byte-exact public prefix. The next request places that prefix in assistant role,

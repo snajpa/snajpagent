@@ -2210,12 +2210,8 @@ feed_byte(struct snj_term *term, unsigned char byte,
             term->ctrl_c_since_ms = now;
             term->ctrl_c_count = 0u;
         }
-        if (++term->ctrl_c_count == 5u) {
-            int rc = complete_exit(term, action);
-            if (rc > 0)
-                *action = SNJ_TERM_FORCE_EXIT;
-            return rc;
-        }
+        if (++term->ctrl_c_count == 5u)
+            return complete_exit(term, action);
         return cancel_line(term, action);
     }
     term->ctrl_c_count = 0u;

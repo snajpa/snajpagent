@@ -48,8 +48,7 @@ enum snj_term_action {
     SNJ_TERM_VIEW,
     SNJ_TERM_CANCEL,
     SNJ_TERM_INTERRUPT,
-    SNJ_TERM_EXIT,
-    SNJ_TERM_FORCE_EXIT
+    SNJ_TERM_EXIT
 };
 
 struct snj_term_command {

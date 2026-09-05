@@ -2075,14 +2075,11 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         }
         return 0;
     }
-    if (action == SNJ_TERM_EXIT || action == SNJ_TERM_FORCE_EXIT) {
+    if (action == SNJ_TERM_EXIT) {
         app->input_closed = true;
+        app->interrupt_requested = true;
         free(line);
-        if (action == SNJ_TERM_FORCE_EXIT) {
-            app->interrupt_requested = true;
-            return 2;
-        }
-        return 0;
+        return 2;
     }
     if ((action == SNJ_TERM_CANCEL || action == SNJ_TERM_INTERRUPT) &&
         app->queue_edit_id[0]) {
@@ -2457,7 +2454,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                           "provider status could not be restored");
                 return -1;
             }
-            if (run_rc == 2) {
+            if (run_rc == 2 || app->interrupt_requested) {
                 if (!result)
                     result = snj_tool_result_not_run("turn_cancelled");
                 if (!result ||
@@ -3929,7 +3926,7 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             if (poll_rc == 0)
                 continue;
-            if (action == SNJ_TERM_EXIT || action == SNJ_TERM_FORCE_EXIT) {
+            if (action == SNJ_TERM_EXIT) {
                 free(owned);
                 return 0;
             }

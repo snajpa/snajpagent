@@ -112,8 +112,8 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
             error[0] = '\0';
         return 1;
     }
-    if (action == SNJ_TERM_EXIT || action == SNJ_TERM_FORCE_EXIT || !line) {
-        if (action == SNJ_TERM_EXIT || action == SNJ_TERM_FORCE_EXIT)
+    if (action == SNJ_TERM_EXIT || !line) {
+        if (action == SNJ_TERM_EXIT)
             app->input_closed = true;
         free(line);
         snprintf(error, error_size, "delete cancelled");

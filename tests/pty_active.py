@@ -2548,12 +2548,16 @@ def test_exit_resume_matrix():
     active_eof.send(b"slow\r")
     active_eof.wait(b"working slowly")
     active_eof.send(b"\x04")
+    active_eof.wait(RESUME_HEADER, timeout=1.0)
     active_eof_command = active_eof.finish()
     active_eof_id = new_session(before)
     assert command_arguments(active_eof_command)[-2:] == [
         "--resume", active_eof_id
     ]
-    assert one(events(active_eof_id), "turn_completed")
+    log = events(active_eof_id)
+    assert one(log, "turn_interrupted")["data"]["origin"] == "user"
+    assert not [event for event in log if event["type"] == "turn_completed"]
+    assert b"slow complete" not in active_eof.buf
 
     before = session_ids()
     archived = Child(["--no-color"])
@@ -2875,7 +2879,7 @@ def test_network_live_nick_prompt():
         assert b"model-output-one" not in child.buf
         assert child.buf.count(b"network stream acknowledged") == 1
         # Nick notifications may start a background turn after this one.
-        # EOF gracefully finishes it; /exit is an idle-only command.
+        # EOF interrupts it and exits; /exit is an idle-only command.
         child.send(b"\x04")
         command = child.finish()
         child = None
@@ -3589,6 +3593,63 @@ def test_network_chat_and_managed_mention():
     assert all(event["data"]["result"]["status"] == "succeeded"
                for event in cycle3_finished)
 
+def test_ctrl_d_exit():
+    for prompt in (None, b"queue_slow", b"engine_blocked", b"/goal slow goal",
+                   b"slow"):
+        before = session_ids()
+        child = Child([])
+        try:
+            child.wait_idle_prompt()
+            if prompt:
+                child.send(prompt + b"\r")
+                child.wait(b"engine-block-start" if prompt == b"engine_blocked"
+                           else b"working on goal" if prompt.startswith(b"/goal")
+                           else b"working slowly")
+            # Nonempty Ctrl-D deletes at the cursor, but does not exit at EOL.
+            start = len(child.buf)
+            child.send(b"pxing\x1b[H\x1b[C\x04\x1b[F\x04")
+            child.drain(0.1)
+            assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
+            if prompt == b"queue_slow":
+                child.send(b"\t")
+                child.wait(b"next " + PROMPT + b"ping", start=start)
+            else:
+                child.send(b"\x7f" * 4)
+            if prompt == b"slow":
+                # Canonical Ctrl-D is read(0), as in the cooked fallback.
+                attrs = termios.tcgetattr(child.fd)
+                attrs[3] |= termios.ICANON
+                termios.tcsetattr(child.fd, termios.TCSANOW, attrs)
+            child.send(b"\x04")
+            child.wait(RESUME_HEADER, timeout=4.0 if prompt == b"engine_blocked"
+                       else 1.0)
+            flags = termios.tcgetattr(child.fd)[3]
+            assert flags & termios.ICANON and flags & termios.ECHO
+            command = child.finish()
+            log = events(new_session(before))
+            if prompt:
+                assert one(log, "turn_interrupted")
+                assert len([e for e in log if e["type"] == "turn_started"]) == 1
+                assert not [e for e in log if e["type"] == "turn_completed"]
+            if prompt == b"queue_slow":
+                assert one(log, "future_turn_queued")["data"]["text"] == "ping"
+            if prompt == b"/goal slow goal":
+                assert one(log, "goal_paused")["data"]["reason"] == "input_closed"
+            if prompt in (b"queue_slow", b"/goal slow goal"):
+                resumed = Child.from_command(command)
+                try:
+                    resumed.wait_idle_prompt()
+                    resumed.drain(0.1)
+                    resumed.exit_now()
+                    log = events(command_arguments(command)[-1])
+                    assert len([e for e in log if e["type"] == "turn_started"]) == 1
+                finally:
+                    resumed.kill()
+            assert b"engine-block-end" not in child.buf
+        finally:
+            child.kill()
+
+
 def test_five_ctrl_c_exit():
     for prompt in (None, b"slow", b"engine_blocked"):
         child = Child([])
@@ -3625,19 +3686,20 @@ def test_ctrl_c_sequence_reset():
 
 
 def test_full_input_queue_keeps_exit_live():
-    child = Child([])
-    try:
-        child.wait_idle_prompt()
-        child.send(b"engine_blocked\r")
-        child.wait(b"engine-block-start")
-        child.send(b"/verbose 1\r" * 32 + b"retained-draft\r")
-        child.wait(b"input backlog is full", timeout=1.0)
-        child.wait(b"\a", timeout=1.0)
-        child.send(b"\x03" * 5)
-        child.wait(RESUME_HEADER, timeout=4.0)
-        child.finish()
-    finally:
-        child.kill()
+    for gesture in (b"\x03" * 5, b"\x15\x04"):
+        child = Child([])
+        try:
+            child.wait_idle_prompt()
+            child.send(b"engine_blocked\r")
+            child.wait(b"engine-block-start")
+            child.send(b"/verbose 1\r" * 32 + b"retained-draft\r")
+            child.wait(b"input backlog is full", timeout=1.0)
+            child.wait(b"\a", timeout=1.0)
+            child.send(gesture)
+            child.wait(RESUME_HEADER, timeout=4.0)
+            child.finish()
+        finally:
+            child.kill()
 
 
 def test_history_lock_keeps_editing_live():
@@ -3731,6 +3793,7 @@ def test_editor_during_blocked_engine():
 
 
 if __name__ == "__main__":
+    test_ctrl_d_exit()
     test_editor_during_render_flood()
     test_editor_during_blocked_engine()
     test_five_ctrl_c_exit()

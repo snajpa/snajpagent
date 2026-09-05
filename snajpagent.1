@@ -218,7 +218,8 @@ other input resets the sequence.  Ctrl-D on an empty draft or
 while idle also exits.
 .TP
 .B Ctrl-D
-Delete at the cursor when text remains; close input and exit on an empty draft.
+Delete at the cursor when text remains.  On an empty draft, interrupt active
+work and exit without waiting for the model or command to finish.
 .TP
 .BR Up , " Down"
 Move through the shared persistent prompt history while preserving the current
@@ -255,8 +256,9 @@ of inactivity.  Bracketed paste inserts pasted newlines without submitting.
 .PP
 Direct prompts accept up to 1 MiB of valid UTF-8; steering and queued turns
 accept up to 256 KiB.  The queue holds up to 128 pending turns within 16 MiB;
-up to 32 steering items may be pending in a turn.  EOF lets active work finish,
-pauses further queued or goal work, and exits.
+up to 32 steering items may be pending in a turn.  Interactive EOF interrupts
+active work, pauses further queued or goal work, and exits.  The session remains
+resumable.
 .SH DISPLAY
 Ordinary mode shows the local rollout.  Networked mode opens chat; empty Tab,
 .BR /chat ,

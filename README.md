@@ -66,8 +66,8 @@ inserts a newline, Up/Down recall prompts, and Ctrl-R searches history.
 
 Ctrl-C clears the draft while leaving it in scrollback with `^C`. With an
 empty draft it also interrupts an active turn. Five consecutive presses within
-two seconds exit. Use Ctrl-D on an empty draft to finish and leave, or `/exit`
-while idle.
+two seconds exit. Ctrl-D on an empty draft interrupts active work and exits.
+Use `/exit` while idle.
 
 For one read-only query, use `/ro`:
 
