@@ -540,6 +540,59 @@ fail:
                                     SNJ_TERM_LABEL_BYTES);
 }
 
+static int
+validate_prompt_candidate(struct app_state *app,
+                          const struct snj_config *config)
+{
+    const struct snj_provider_config *provider = snj_config_provider(
+        config, app->session.default_provider[0] ?
+        app->session.default_provider : NULL);
+    const char *model = next_model(app);
+    const char *effort = resolve_effort(next_effort(app));
+    char hostname[256u];
+    const char *values[7];
+    const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
+        config->prompt_spinner_goal,
+        config->prompt_spinner_provider,
+        config->prompt_spinner_tool
+    };
+    struct snj_term probe;
+    char label[SNJ_TERM_LABEL_BYTES];
+    int rc = -1;
+
+    if (!provider || !model || !effort)
+        return -1;
+    if (gethostname(hostname, sizeof(hostname)) < 0)
+        memcpy(hostname, "localhost", sizeof("localhost"));
+    hostname[sizeof(hostname) - 1u] = '\0';
+    if (!snj_utf8_valid((const unsigned char *)hostname, strlen(hostname), true))
+        memcpy(hostname, "localhost", sizeof("localhost"));
+    for (size_t i = 0u; hostname[i]; ++i)
+        if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
+            hostname[i] = '_';
+    values[0] = provider->name;
+    values[1] = model;
+    values[2] = effort;
+    values[3] = snj_irc_enabled(config) ? config->irc_operator_nick : "";
+    values[4] = hostname;
+    values[5] = "100%";
+    snj_term_init(&probe);
+    for (unsigned int mode = 0u; mode < 3u; ++mode) {
+        values[6] = mode == 0u ? "chat" : mode == 1u ?
+                    "rollout-idle" : "rollout-active";
+        if (snj_config_prompt_expand(config->prompt, mode, values,
+                SNJ_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0 ||
+            snj_term_set_prompt_template(&probe, mode == 2u, label, spinners,
+                config->prompt_spinner_per_second,
+                (1u << SNJ_TERM_SPINNER_COUNT) - 1u) < 0)
+            goto out;
+    }
+    rc = 0;
+out:
+    snj_term_close(&probe);
+    return rc;
+}
+
 static unsigned int
 prompt_spinner_states(const struct app_state *app, bool active)
 {
@@ -1641,6 +1694,12 @@ reload_config(struct app_state *app, char *error, size_t error_size)
         errno = EINVAL;
         goto out;
     }
+    if (validate_prompt_candidate(app, &candidate) < 0) {
+        snj_errorf(error, error_size,
+                  "reloaded prompt cannot be rendered with the current selection");
+        errno = EINVAL;
+        goto out;
+    }
     old_networked = snj_irc_enabled(app->config);
     new_networked = snj_irc_enabled(&candidate);
     replace_irc = old_networked != new_networked ||
@@ -1953,15 +2012,15 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         free(line);
         return 0;
     }
+    if ((action == SNJ_TERM_CANCEL || action == SNJ_TERM_INTERRUPT) &&
+        app->queue_edit_id[0]) {
+        app->queue_armed = app->queue_edit_was_armed;
+        app->queue_edit_id[0] = '\0';
+        app->queue_edit_number = 0u;
+        app->queue_edit_was_armed = false;
+        return set_input_prompt(app, true);
+    }
     if (action == SNJ_TERM_CANCEL) {
-        if (app->queue_edit_id[0]) {
-            app->queue_armed = app->queue_edit_was_armed;
-            app->queue_edit_id[0] = '\0';
-            app->queue_edit_number = 0u;
-            app->queue_edit_was_armed = false;
-            if (set_input_prompt(app, true) < 0)
-                return -1;
-        }
         return 0;
     }
     if (action == SNJ_TERM_INTERRUPT) {

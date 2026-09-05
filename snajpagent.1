@@ -192,16 +192,27 @@ and rollout views in networked mode and does nothing otherwise.
 Insert a newline without submitting.
 .TP
 .B Ctrl-C
-Clear a nonempty draft.  With an empty active composer, interrupt the turn.
-With an empty idle composer, exit.  Five consecutive presses completed within
-two seconds exit from any composer state; during an active turn, the fifth also
-interrupts the turn for normal durable cleanup.
+Leave the visible draft in scrollback, append literal
+.BR ^C ,
+start a new line, and open a clean prompt.  With an empty active composer, also
+interrupt the turn.  Ctrl-C never exits; use Ctrl-D or
+.BR /exit .
 .TP
 .B Ctrl-D
 Delete at the cursor when text remains; close input and exit on an empty draft.
 .TP
 .BR Up , " Down"
-Move through local input history.
+Move through the shared persistent prompt history while preserving the current
+draft at the newest boundary.
+.TP
+.B Ctrl-R
+Start case-sensitive incremental reverse search over prompt history.  Press it
+again for the next older match; search does not wrap.
+.TP
+.B Ctrl-G
+Abort reverse search and restore the exact original draft and cursor.  Escape
+accepts the current match without submitting it; editing and movement keys
+accept it before applying their normal action.
 .TP
 .BR Left , " Right" , " Home" , " End" , " Delete" , " Backspace"
 Edit the UTF-8 draft.
@@ -223,13 +234,19 @@ Visible output resumes after
 .B typing_pause_ms
 of inactivity.  Bracketed paste inserts pasted newlines without submitting.
 .PP
-The ordinary prompt shows model, effort, context percentage, and an idle or
-active chevron.  The percentage is the latest comparable durable token bound
-divided by the resolved hard input budget, rounded up.  A fresh or incomparable
-state shows
+The default rollout prompt shows provider, model, effort, a bare context
+percentage, three adjacent status fields, and an idle or active chevron.  The
+percentage is the latest comparable durable token bound divided by the resolved
+hard input budget, rounded up.  It is the last data field before the status
+fields and marker.  A fresh or incomparable state shows
 .BR 0% ;
 an unknown budget shows
 .BR ?% .
+.PP
+The default chat prompt is
+.IR OPERATOR_NICK@MACHINE_HOSTNAME "   : " .
+The three status fields indicate an active goal, provider work, and a
+synchronous tool call.  There is no separate textual activity row.
 .PP
 Terminal model text uses color and compact Markdown presentation when enabled.
 Headings, lists, quotes, fenced code, pipe tables, inline code, emphasis,
@@ -498,6 +515,57 @@ exchange.  Default: 2.  Network chat shows it only from verbosity 1.
 .TP
 .B typing_pause_ms
 Output pause after an input edit, 0 through 5000.  Default: 500.
+.TP
+.B prompt
+Data-only prompt template containing exactly one
+.BR {chat:TEXT} ,
+.BR {rollout-idle:TEXT} ,
+and
+.BR {rollout-active:TEXT}
+case.  Ordinary fields are
+.BR {provider} ,
+.BR {model} ,
+.BR {effort} ,
+.BR {operator} ,
+.BR {host} ,
+.BR {context} ,
+and
+.BR {mode} ;
+optional status fields are
+.BR {goal_spinner} ,
+.BR {provider_spinner} ,
+and
+.BR {tool_spinner} .
+Backslash escapes literal braces and backslash.  No shell, environment, or
+command expansion occurs.  snajpagent appends one space after the selected
+label.
+.PP
+The default is:
+.nf
+{chat:{operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
+.fi
+.TP
+.BR prompt_spinner_goal , " prompt_spinner_provider" , " prompt_spinner_tool"
+Quoted inactive-item plus active-frame strings.  The first safe one-column
+Unicode item is the inactive rendering.  Exact leading file characters
+.B \e0
+instead select zero-width inactive rendering; no NUL byte is stored.  A space
+therefore reserves a stable column, while
+.B "\e0"
+removes a present field and
+.B "\e0◆"
+appears only while active.  Zero through 16 remaining one-column items are
+active frames.  One active frame is static and schedules no periodic refresh;
+two or more animate.  Defaults are
+.BR " ◆" ,
+.BR " ◴◷◶◵" ,
+and
+.BR " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" .
+.TP
+.B prompt_spinner_per_second
+One shared animation rate from 1 through 60.  Default: 8.  Hidden, suspended,
+search, non-addressable, disabled, and static states schedule no spinner
+refresh.
 .SS tool
 .TP
 .B shell
@@ -564,6 +632,13 @@ Default configuration.
 Atomically replaced versioned provider/model registry containing advertised
 token capacities and source-bound learned accounting.  Refresh only with
 .BR /model\ cache .
+.TP
+.I $HOME/.snajpagent/prompt_history
+Shared plaintext interactive prompt history.  It stores the newest 100 decoded
+entries within 4 MiB as private mode 0600, one escaped physical line per
+submission.  Another
+.B --dotdir
+selects another history file.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/events.jsonl
 Append-only durable session log.
@@ -788,6 +863,11 @@ snajpagent -c localhost:6667 -n reviewer -o bob
 The model and its tools act with the user's local authority.  Run in a suitable
 workspace, inspect configuration, and protect the dotdir.  snajpagent requires
 its state directories to be mode 0700 and creates state files mode 0600.
+.PP
+Prompt history intentionally retains submitted operator text across sessions,
+workspaces, and chat/rollout modes.  It cannot identify a secret deliberately
+typed by the operator; remove or protect the history file with the same care as
+shell history.  Session archive and deletion do not erase it.
 .PP
 Provider credential variables and configured
 .B secret_env

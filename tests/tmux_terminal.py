@@ -42,6 +42,7 @@ MARKDOWN_TEXT = (
 DEFAULT_IDLE_PROMPT = "default/gpt-5.5-2026-04-23/medium 0%   ›"
 DEFAULT_ACCOUNTED_IDLE_PROMPT = "default/gpt-5.5-2026-04-23/medium ?%   ›"
 DEFAULT_ACTIVE_PROMPT = "default/gpt-5.5-2026-04-23/medium ?% ◴ »"
+DEFAULT_GOAL_ACTIVE_PROMPT = "default/gpt-5.5-2026-04-23/medium ?%◆◴ »"
 MACHINE_HOSTNAME = socket.gethostname()
 EMPTY_OUTPUT_CORRECTION = (
     "You tried to send an empty assistant message. "
@@ -1319,6 +1320,7 @@ def run_lifecycle_case(binary, root):
     try:
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("/goal slow goal")
+        terminal.wait(DEFAULT_GOAL_ACTIVE_PROMPT)
         terminal.wait("• Goal set")
         terminal.wait("working on goal")
         terminal.submit("/goal cancel")

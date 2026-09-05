@@ -10,6 +10,7 @@ import select
 import shlex
 import signal
 import socket
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -302,7 +303,8 @@ def test_incremental_active_prompt_keeps_status_stable():
         child.wait(DEFAULT_IDLE_PROMPT)
         child.send(b"terminal_status\r")
         child.wait(DEFAULT_ACTIVE_PROMPT)
-        child.drain(0.05)
+        phase_start = len(child.buf)
+        child.wait("◷".encode(), start=phase_start, timeout=1.0)
 
         start = len(child.buf)
         child.send(b"a")
@@ -311,6 +313,31 @@ def test_incremental_active_prompt_keeps_status_stable():
         assert b"\x1b[2K" not in edit, edit
         assert b"working\xe2\x80\xa6" not in edit, edit
         assert DEFAULT_ACTIVE_PROMPT not in edit, edit
+    finally:
+        child.kill()
+
+
+def test_static_zero_width_spinner_has_no_refresh():
+    config = (Path(os.environ["SNAJPAGENT_TEST_ROOT"]) /
+              "config" / "static-spinner.ini")
+    config.write_text(
+        "[ui]\n"
+        'prompt_spinner_goal = "\\0"\n'
+        'prompt_spinner_provider = "\\0◆"\n'
+        'prompt_spinner_tool = "\\0"\n'
+        "prompt_spinner_per_second = 60\n",
+        encoding="utf-8",
+    )
+    idle = f"default/{DEFAULT_MODEL}/medium 0%› ".encode()
+    active = f"default/{DEFAULT_MODEL}/medium ?%◆» ".encode()
+    child = Child(["--config", str(config)])
+    try:
+        child.wait(idle)
+        child.send(b"terminal_status\r")
+        child.wait(active)
+        settled = len(child.buf)
+        child.drain(0.35)
+        assert len(child.buf) == settled, bytes(child.buf[settled:])
     finally:
         child.kill()
 
@@ -809,14 +836,21 @@ def test_active_ctrl_c_clears_draft():
 
 def test_prompt_history_and_reverse_search():
     history = Path(DOTDIR) / "prompt_history"
-    first = Child([])
-    first.wait(DEFAULT_IDLE_PROMPT)
-    first.send(b"history-alpha-unique\r")
-    answer = first.wait(b"fixture answer")
-    first.exit_cleanly(answer)
-
     second = Child([])
     second.wait(DEFAULT_IDLE_PROMPT)
+    first = Child([])
+    first.wait(DEFAULT_IDLE_PROMPT)
+    for entry in (
+        b"history-repeat-old",
+        b"history-repeat-new",
+        "history-café-unique".encode(),
+    ):
+        start = len(first.buf)
+        first.send(entry + b"\r")
+        answer = first.wait(b"fixture answer", start=start)
+        first.wait_idle_prompt(start=answer)
+    first.exit_cleanly(answer)
+
     second.send(b"draft-restore")
     second.send(b"\x12")
     second.wait(b"(failed reverse-i-search)`draft-restore': ")
@@ -826,18 +860,69 @@ def test_prompt_history_and_reverse_search():
     cancel_end = second.wait(b"^C\r\n", start=cancel)
     cancelled = bytes(second.buf[cancel:cancel_end])
     assert b"draft-restore" in cancelled
+
     search = len(second.buf)
-    second.send(b"\x12history-alpha")
-    second.wait(b"(reverse-i-search)`history-alpha': history-alpha-unique",
+    second.send(b"\x12history-repeat")
+    second.wait(b"(reverse-i-search)`history-repeat': history-repeat-new",
                 start=search)
+    older = len(second.buf)
+    second.send(b"\x12")
+    second.wait(b"(reverse-i-search)`history-repeat': history-repeat-old",
+                start=older)
     second.send(b"\r")
     answer = second.wait(b"fixture answer", start=search)
-    second.exit_cleanly(answer)
+    second.wait_idle_prompt(start=answer)
+
+    search = len(second.buf)
+    second.send(b"\x12" + "history-café-uniqueX".encode())
+    second.wait("(failed reverse-i-search)`history-café-uniqueX': ".encode(),
+                start=search)
+    second.send(b"\x7f")
+    second.wait(
+        "(reverse-i-search)`history-café-unique': history-café-unique".encode(),
+        start=search,
+    )
+    accepted = len(second.buf)
+    second.send(b"\x1b")
+    second.wait(DEFAULT_IDLE_PROMPT + "history-café-unique".encode(),
+                start=accepted)
+    second.send(b"\x03")
+    second.wait(b"^C\r\n", start=accepted)
+
+    second.send(b"/history-invalid-command\r")
+    invalid_end = second.wait(b"unknown slash command")
+    second.wait_idle_prompt(start=invalid_end)
+    second.send(b"\r")
+    second.send(b"history-cancelled-draft\x03")
+    second.wait(b"^C\r\n", start=invalid_end)
+    second.send(b"/delete\r")
+    confirm = second.wait(b"delete is irreversible")
+    second.wait(PROMPT, start=confirm)
+    second.send(b"history-confirmation-excluded\r")
+    mismatch = second.wait(b"delete confirmation did not match", start=confirm)
+    second.wait_idle_prompt(start=mismatch)
+
+    run = subprocess.run(
+        [BINARY, "--dotdir", DOTDIR, "-e", "--",
+         "history-noninteractive-excluded"],
+        cwd=WORKSPACE,
+        capture_output=True,
+        timeout=8,
+        check=False,
+    )
+    assert run.returncode == 0, (run.stdout, run.stderr)
+    second.exit_now()
 
     assert history.stat().st_mode & 0o777 == 0o600
     records = history.read_text(encoding="utf-8").splitlines()
-    assert records.count("history-alpha-unique") == 2
+    assert records.count("history-repeat-old") == 2
+    assert records.count("history-repeat-new") == 1
+    assert records.count("history-café-unique") == 1
+    assert records.count("/history-invalid-command") == 1
     assert "draft-restore" not in records
+    assert "history-cancelled-draft" not in records
+    assert "history-confirmation-excluded" not in records
+    assert "history-noninteractive-excluded" not in records
 
 
 def test_multiline_and_paste():
@@ -1161,6 +1246,12 @@ def test_queue_mutation_commands():
 
     child.send(b"/q 1e\r")
     child.wait(QUEUE_EDIT_ACTIVE_PROMPT + b"second")
+    cancel_start = len(child.buf)
+    child.send(b"\x03")
+    child.wait(b"^C\r\n", start=cancel_start)
+    child.wait(DEFAULT_ACTIVE_PROMPT, start=cancel_start)
+    child.send(b"/q 1e\r")
+    child.wait(QUEUE_EDIT_ACTIVE_PROMPT + b"second", start=cancel_start)
     child.send(b" active\r")
     child.wait(QUEUE_EDIT_ACTIVE_PROMPT + b"second active")
 
@@ -1691,6 +1782,7 @@ def test_config_editor_reload():
     valid_two = root / "config" / "editor-valid-two.ini"
     valid_one = root / "config" / "editor-valid-one.ini"
     invalid = root / "config" / "editor-invalid.ini"
+    unrenderable = root / "config" / "editor-unrenderable.ini"
     network = root / "config" / "editor-network.ini"
     plan = root / "config" / "editor-plan"
     seen = root / "config" / "editor-seen"
@@ -1714,6 +1806,12 @@ def test_config_editor_reload():
         encoding="utf-8",
     )
     invalid.write_text("[ui]\nverbosity = 9\n", encoding="utf-8")
+    unrenderable.write_text(
+        "[ui]\nverbosity = 5\n"
+        "prompt = {chat:x}{rollout-idle:" + ("x" * 600) +
+        "}{rollout-active:z}\n",
+        encoding="utf-8",
+    )
     network_port = free_port()
     network.write_text(
         "[agent]\nmodel = network-default\nreasoning_effort = medium\n"
@@ -1768,6 +1866,18 @@ def test_config_editor_reload():
         plan.write_text(str(invalid), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(b"invalid configuration at line 2", start=status_end)
+        child.wait(PROMPT, start=end)
+        child.send(b"/status\r")
+        status_end = child.wait(b"verbosity: 2", start=end)
+        child.wait(b"model: editor-base", start=end)
+        child.wait(PROMPT, start=status_end)
+
+        plan.write_text(str(unrenderable), encoding="utf-8")
+        child.send(b"/config\r")
+        end = child.wait(
+            b"reloaded prompt cannot be rendered with the current selection",
+            start=status_end,
+        )
         child.wait(PROMPT, start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
@@ -2425,6 +2535,21 @@ def test_network_chat_and_managed_mention():
         assert (b"PRIVMSG #lab :model-output-one model-output-two "
                 b"model-output-three\r\n" not in human.buf[model_wire_start:])
 
+        child.send(b"/rollout\r")
+        rollout_end = child.wait("── rollout ──".encode(), start=chat_end)
+        child.wait(network_rollout_idle, start=rollout_end)
+        search_start = len(child.buf)
+        child.send(b"\x12network_view_stream")
+        child.wait(
+            b"(reverse-i-search)`network_view_stream': network_view_stream",
+            start=search_start,
+        )
+        child.send(b"\x07")
+        child.wait(network_rollout_idle, start=search_start)
+        child.send(b"/chat\r")
+        chat_end = child.wait("── chat ──".encode(), start=search_start)
+        child.wait(network_idle, start=chat_end)
+
         terminal_start = len(child.buf)
         wire_start = len(human.buf)
         child.send(b"network_zero\r")
@@ -2687,6 +2812,7 @@ def test_network_chat_and_managed_mention():
 
 test_incremental_prompt_edit_and_utf8_cursor_column()
 test_incremental_active_prompt_keeps_status_stable()
+test_static_zero_width_spinner_has_no_refresh()
 test_incremental_multiline_delete_clears_old_tail()
 test_incremental_wrapped_long_prompt_multiline_indent()
 test_steering()

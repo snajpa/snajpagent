@@ -132,9 +132,9 @@ Multiple active frames use the one shared `prompt_spinner_per_second` rate
 only changed spinner cells; a width-changing `\0` transition performs one
 structural redraw. A search prompt, hidden prompt, suspended process, or
 non-addressable terminal does not animate. Tool status spans the synchronous
-adapter call and returns to provider after a managed `running` result. A fixed
-interruption skull blink is included only if its documented implementation
-preflight records `GO`.
+adapter call and returns to provider after a managed `running` result.
+Interruption retains the provider or tool field until the turn closes; there
+is no fourth interruption glyph, spinner, timer, or configuration key.
 
 The networked prompt identity and its chat/rollout views are specified in
 `irc-chat.md`.

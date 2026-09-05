@@ -729,6 +729,35 @@ compose_prompt(const char *prompt, const struct snj_term_spinner *spinners,
     return used ? 0 : -1;
 }
 
+static int
+prompt_fits(const char *prompt,
+            const struct snj_term_spinner spinners[SNJ_TERM_SPINNER_COUNT])
+{
+    size_t used = 0u;
+    unsigned int seen = 0u;
+
+    for (const unsigned char *p = (const unsigned char *)prompt; *p; ++p) {
+        size_t len = 1u;
+
+        if (*p >= SNJ_TERM_SPINNER_MARKER_BASE) {
+            unsigned int id = *p - SNJ_TERM_SPINNER_MARKER_BASE;
+            const struct snj_term_spinner *cell = &spinners[id];
+
+            if (seen & (1u << id))
+                return -1;
+            seen |= 1u << id;
+            len = cell->inactive_len;
+            for (size_t i = 0u; i < cell->frame_count; ++i)
+                if (cell->frame_len[i] > len)
+                    len = cell->frame_len[i];
+        }
+        if (used > SNJ_TERM_LABEL_BYTES - 1u - len)
+            return -1;
+        used += len;
+    }
+    return used ? 0 : -1;
+}
+
 static void
 install_prompt(struct snj_term *term, const char *label,
                const struct snj_term_spinner cells[SNJ_TERM_SPINNER_COUNT])
@@ -1028,14 +1057,16 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
 
     if (!term || !label || !(len = strlen(label)) ||
         len >= sizeof(term->prompt_template) || !spinners ||
-        per_second < 1u || per_second > 60u) {
+        per_second < 1u || per_second > 60u ||
+        states >= (1u << SNJ_TERM_SPINNER_COUNT)) {
         errno = EINVAL;
         return -1;
     }
     for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
         if (!spinners[i] || prepare_spinner(&configured[i], spinners[i]) < 0)
             goto invalid;
-    if (compose_prompt(label, configured, states, 0u, expanded, cells) < 0)
+    if (prompt_fits(label, configured) < 0 ||
+        compose_prompt(label, configured, states, 0u, expanded, cells) < 0)
         goto invalid;
     if (snj_term_hide(term) < 0)
         return -1;

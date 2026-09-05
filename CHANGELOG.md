@@ -12,6 +12,13 @@
   and objective C/header whitespace invariants. It is read-only and leaves
   semantic readability to review.
 
+- Add one plaintext prompt-history stream per dotdir, shared by chat and
+  rollout with Up/Down and incremental Ctrl-R search. Make Ctrl-C preserve the
+  cancelled line, print `^C`, open a clean prompt, and never exit. Replace the
+  textual activity row with one configurable mode-aware prompt and independent
+  goal, provider, and tool spinner fields; literal leading `\0` selects a
+  zero-width inactive field while a space reserves a stable column.
+
 - Split `make sizecheck` into independent production-C, production-header, and
   test-C budgets. Their soft/hard levels are 32,768/49,152,
   16,384/65,536, and 16,384/32,768 lines respectively. Production translation
@@ -31,7 +38,7 @@
   assistant messages and refusals one precise, durable model-facing correction
   without exposing it in ordinary operator output.
 
-- Upgraded `models.json` to an explicit versioned provider/model registry that
+- Upgraded `models.json` to an explicit provider/model registry that
   retains advertised token capacities, exact-count capability, one coherent
   learned canonical-byte/token pair, and lower typed-failure input ceilings.
   Exact Responses input counting now defaults to `auto`, with strict `true`
@@ -43,10 +50,6 @@
   a fresh probe and preserves observations only for identical provider
   source/protocol/model bindings, while uncached manually typed model names
   remain trusted and unchanged.
-
-- Make five consecutive Ctrl-C presses within two seconds an unconditional
-  interactive exit, including during an active turn, while preserving ordinary
-  single-press draft clearing, interruption, and idle-exit behavior.
 
 - Render conventional leading-pipe Markdown tables as aligned terminal grids,
   including inline styling, escaped/code-span pipes, and delimiter-selected
@@ -73,9 +76,9 @@
   unchanged trailing goal/process controller suffix, so multi-cycle tool turns
   stay in token-domain accounting instead of falling back to whole-request
   serialized size.
-  Bytes and token bounds remain distinct, and rollout composers end in `N% ›|»`,
-  with `0%` before compatible accounting and `?%` when only the hard budget is
-  unknown.
+  Bytes and token bounds remain distinct, and rollout composers put bare `N%`
+  immediately before the configurable status fields and `›|»`, with `0%`
+  before compatible accounting and `?%` when only the hard budget is unknown.
 
 - Replaced the terse exit `resume:` label with the capitalized bullet header
   `• You can resume this session with the following command:`. It uses the

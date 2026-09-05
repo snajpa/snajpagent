@@ -128,6 +128,20 @@ test_prompt_history(void)
     snj_term_close(&term);
     assert(unlink(path) == 0 && rmdir(subdir) == 0);
 
+    if (geteuid() == 0u) {
+        assert(snprintf(subdir, sizeof(subdir), "%s/wrong-owner", temp) > 0);
+        assert(mkdir(subdir, 0700) == 0);
+        assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
+        fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        assert(fd >= 0 && close(fd) == 0);
+        assert(chown(path, 65534u, 65534u) == 0);
+        snj_term_init(&term);
+        assert(snj_term_history_open(&term, subdir) < 0);
+        assert(snj_term_take_history_warning(&term));
+        snj_term_close(&term);
+        assert(unlink(path) == 0 && rmdir(subdir) == 0);
+    }
+
     assert(snprintf(subdir, sizeof(subdir), "%s/nonregular", temp) > 0);
     assert(mkdir(subdir, 0700) == 0);
     assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
@@ -157,8 +171,10 @@ test_prompt_spinners(void)
 {
     struct snj_term term;
     const char prompt[] = {'x', (char)0xfd, (char)0xfe, (char)0xff, '>', '\0'};
+    char oversized[SNJ_TERM_LABEL_BYTES];
     const char *spinners[SNJ_TERM_SPINNER_COUNT] = {"\\0◆", " |/-", "\\0"};
     const char *bad[SNJ_TERM_SPINNER_COUNT] = {"\x80", " ", " "};
+    const char *wide[SNJ_TERM_SPINNER_COUNT] = {" 😀", " ", " "};
     char saved[SNJ_TERM_LABEL_BYTES];
 
     snj_term_init(&term);
@@ -178,6 +194,14 @@ test_prompt_spinners(void)
     assert(snj_term_set_prompt_template(&term, false, prompt, bad, 8u, 0u) < 0);
     assert(memcmp(saved, term.label, sizeof(saved)) == 0);
     assert(term.spinner_states == (1u << SNJ_TERM_SPINNER_PROVIDER));
+    assert(snj_term_set_prompt_template(&term, false, prompt, spinners, 8u,
+                                        1u << SNJ_TERM_SPINNER_COUNT) < 0);
+    memset(oversized, 'x', sizeof(oversized));
+    oversized[sizeof(oversized) - 3u] = (char)SNJ_TERM_SPINNER_MARKER_BASE;
+    oversized[sizeof(oversized) - 2u] = '\0';
+    assert(snj_term_set_prompt_template(&term, false, oversized, wide, 8u,
+                                        0u) < 0);
+    assert(memcmp(saved, term.label, sizeof(saved)) == 0);
     snj_term_close(&term);
 }
 
