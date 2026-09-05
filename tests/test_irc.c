@@ -615,7 +615,10 @@ test_client_reconnect(void)
     assert(snj_irc_open(&client, &client_config, "/client", capture_event,
                         capture_trace, &client_capture,
                         error, sizeof(error)) == 0);
-    pump_pair(server, client, 200u);
+    /* Bounded network ticks drain the extended 4 MiB history incrementally. */
+    for (unsigned int i = 0u; i < 2000u &&
+         !client_capture.events[SNJ_IRC_HISTORY_READY]; ++i)
+        pump_pair(server, client, 1u);
     assert(client_capture.events[SNJ_IRC_HISTORY_READY] != 0u);
     assert(server_capture.events[SNJ_IRC_JOIN] >= 2u);
     assert(strcmp(client_capture.last_message.text, payload) == 0);
