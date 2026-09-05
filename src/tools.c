@@ -65,7 +65,6 @@ struct managed_secret_set {
 };
 
 struct managed_process {
-    bool active;
     char handle[SNJ_ID_HEX_LEN + 1u];
     pid_t pid;
     bool pty;
@@ -81,7 +80,6 @@ struct managed_process {
     bool reaped;
     bool closing;
     bool cancelled;
-    bool kill_sent;
     int child_status;
     uint64_t started_ms;
     uint64_t deadline_ms;
@@ -1092,6 +1090,8 @@ snj_tools_service(int timeout_ms, int wake_fd, char *error, size_t error_size)
             siginfo_t info;
             memset(&info, 0, sizeof(info));
             if (waitid(P_PID, (id_t)proc->pid, &info, WEXITED | WNOHANG | WNOWAIT) < 0) {
+                if (errno == ECHILD)
+                    proc->reaped = true; /* Ownership is lost: never signal a reused PID. */
                 if (errno != EINTR)
                     goto fail;
             } else if (info.si_pid == proc->pid) {
@@ -1103,7 +1103,6 @@ snj_tools_service(int timeout_ms, int wake_fd, char *error, size_t error_size)
             proc->deadline_ms = UINT64_MAX;
             if (proc->closing) {
                 kill_child_group(proc->pid, SIGKILL);
-                proc->kill_sent = true;
             } else {
                 proc->handoff = "timeout_handoff";
             }
@@ -1199,8 +1198,11 @@ snj_tools_collect(const char *handle, const char *reason, json_t **result,
             do {
                 got = waitpid(proc->pid, &proc->child_status, WNOHANG);
             } while (got < 0 && errno == EINTR);
-            if (got != proc->pid)
+            if (got != proc->pid) {
+                if (got < 0 && errno == ECHILD)
+                    proc->reaped = true;
                 goto out;
+            }
             proc->reaped = true;
         }
         reason = NULL;
@@ -1376,7 +1378,6 @@ start_command(const char *handle, const char *command, const char *workdir,
         out_pipe[0] = -1;
         err_pipe[0] = -1;
     }
-    proc->active = true;
     proc->pid = pid;
     proc->pty = pty;
     proc->pty_rows = pty_rows;
