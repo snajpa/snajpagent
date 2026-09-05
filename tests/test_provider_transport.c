@@ -1050,7 +1050,7 @@ test_ui_output_order_and_failure(void)
         struct snj_buf delivered;
         snj_buf_init(&delivered, 16u);
         snj_ui_signal(&ui);
-        assert(snj_ui_public_begin(&ui, pipefd[1], NULL, false) == 0);
+        assert(snj_ui_public_begin(&ui, STDOUT_FILENO, NULL, false) == 0);
         assert(snj_ui_public(&ui, "stopped", 7u, &delivered, false) == 0);
         assert(delivered.len == 0u);
         assert(snj_ui_text(&ui, SNJ_UI_PUBLIC_END, NULL) == 0);
