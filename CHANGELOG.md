@@ -9,6 +9,9 @@
 - Isolate the editor and renderer on one presentation thread in every runtime
   mode. Keep engine work, history locks, provider/tool waits, and durable sync
   off that thread; use bounded queues and input-aware rendering checkpoints.
+- Give the hosted IRC server and each outgoing endpoint independent protocol
+  threads with ordered engine admission and joined shutdown. Preserve streamed
+  words when temporary spinner prompts appear, including at the right margin.
 - Restore exit on five consecutive Ctrl-C presses within two seconds,
   including while busy or input admission is full. Other input resets the
   sequence; ordinary draft cancellation and durable interruption are preserved.
