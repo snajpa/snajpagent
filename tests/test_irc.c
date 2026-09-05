@@ -10,6 +10,8 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,11 +31,14 @@ struct capture {
     bool slow_quit;
 };
 
+static pthread_t engine_thread;
+
 static int
 capture_event(void *opaque, const struct snj_irc_event *event)
 {
     struct capture *capture = opaque;
 
+    assert(pthread_equal(pthread_self(), engine_thread));
     assert(event->kind <= SNJ_IRC_HISTORY_READY);
     ++capture->events[event->kind];
     if (event->kind == SNJ_IRC_MESSAGE) {
@@ -61,6 +66,7 @@ capture_trace(void *opaque, unsigned int level, char direction,
 {
     struct capture *capture = opaque;
 
+    assert(pthread_equal(pthread_self(), engine_thread));
     assert((level == 5u || level == 6u) &&
            (direction == '<' || direction == '>'));
     assert(endpoint && *endpoint && text && len != 0u);
@@ -155,12 +161,14 @@ static void
 tick(struct snj_irc *irc, unsigned int rounds)
 {
     char error[256] = {0};
+    uint64_t until = snj_monotonic_ms() + rounds * 2u;
 
-    for (unsigned int i = 0u; i < rounds; ++i) {
+    /* Protocol I/O is independent; trace wakeups are not completed I/O ticks. */
+    do {
         if (snj_irc_tick(irc, 2, error, sizeof(error)) < 0)
             fprintf(stderr, "IRC tick failed: %s\n", error);
         assert(error[0] == '\0');
-    }
+    } while (snj_monotonic_ms() < until);
 }
 
 static size_t
@@ -201,6 +209,24 @@ register_peer(struct snj_irc *server, int fd, const char *nick,
     send_text(fd, input);
     tick(server, 20u);
     assert(drain(fd, wire, wire_size) != 0u);
+}
+
+static void
+ping_without_engine(int fd)
+{
+    char wire[65536u];
+    struct pollfd ready = {fd, POLLIN, 0};
+    uint64_t deadline = snj_monotonic_ms() + 250u;
+
+    (void)drain(fd, wire, sizeof(wire));
+    send_text(fd, "PING :independent-owner\r\n");
+    do {
+        assert(poll(&ready, 1u, 20) >= 0);
+        (void)drain(fd, wire, sizeof(wire));
+        if (strstr(wire, "PONG") && strstr(wire, "independent-owner"))
+            return;
+    } while (snj_monotonic_ms() < deadline);
+    assert(!"IRC I/O stopped while the engine was not pumping");
 }
 
 static void
@@ -541,6 +567,7 @@ test_server(void)
     assert(snj_irc_set_agent_topic(server, "denied",
                                    error, sizeof(error)) < 0);
     assert(errno == EACCES);
+    ping_without_engine(human);
     assert(close(human) == 0);
     snj_irc_close(server);
     snj_config_free(&config);
@@ -551,13 +578,14 @@ pump_pair(struct snj_irc *server, struct snj_irc *client,
           unsigned int rounds)
 {
     char error[256];
+    uint64_t until = snj_monotonic_ms() + rounds * 2u;
 
-    for (unsigned int i = 0u; i < rounds; ++i) {
+    do {
         error[0] = '\0';
         assert(snj_irc_tick(client, 2, error, sizeof(error)) == 0);
         error[0] = '\0';
         assert(snj_irc_tick(server, 0, error, sizeof(error)) == 0);
-    }
+    } while (snj_monotonic_ms() < until);
 }
 
 static void
@@ -1097,6 +1125,8 @@ test_client_events(void)
                                   error, sizeof(error)) == 0);
         assert(strcmp(capture.last_message.nick, "agent7") == 0);
     }
+    ping_without_engine(operator_fd);
+    ping_without_engine(agent_fd);
     snj_irc_close(client);
     for (size_t i = 0u; i < 2u; ++i)
         assert(close(peers[i]) == 0);
@@ -1104,9 +1134,64 @@ test_client_events(void)
     snj_config_free(&config);
 }
 
+static void
+test_independent_owners(void)
+{
+    struct snj_config config;
+    struct capture capture = {0};
+    struct snj_irc *irc = NULL;
+    unsigned short port = free_port();
+    int listeners[2u], peers[2u][2u], human;
+    char address[64u], wire[8192u], error[256u] = {0};
+    uint64_t started;
+
+    init_server_config(&config, port);
+    config.irc_client_count = 2u;
+    for (size_t i = 0u; i < 2u; ++i) {
+        unsigned short remote;
+
+        listeners[i] = listen_local(&remote);
+        endpoint(address, remote);
+        assert(snj_strcpy(config.irc_clients[i], sizeof(config.irc_clients[i]),
+                           address));
+    }
+    assert(snj_irc_open(&irc, &config, "/workspace", capture_event,
+                        capture_trace, &capture, error, sizeof(error)) == 0);
+    tick(irc, 10u);
+    for (size_t i = 0u; i < 2u; ++i)
+        for (size_t j = 0u; j < 2u; ++j) {
+            struct pollfd ready = {listeners[i], POLLIN, 0};
+
+            assert(poll(&ready, 1u, 250) == 1);
+            peers[i][j] = accept(listeners[i], NULL, NULL);
+            assert(peers[i][j] >= 0);
+            assert(fcntl(peers[i][j], F_SETFL, O_NONBLOCK) == 0);
+        }
+    human = connect_local(port, false);
+    register_peer(irc, human, "human", false, wire, sizeof(wire));
+    tick(irc, 10u);
+    /* Stop engine admission and saturate only the first endpoint's mailbox. */
+    for (size_t i = 0u; i < 100u; ++i)
+        send_text(peers[0][0], "PING :fill-mailbox\r\n");
+    ping_without_engine(human);
+    ping_without_engine(peers[1][0]);
+    ping_without_engine(peers[1][1]);
+    started = snj_monotonic_ms();
+    snj_irc_close(irc);
+    assert(snj_monotonic_ms() - started < 250u);
+    assert(close(human) == 0);
+    for (size_t i = 0u; i < 2u; ++i) {
+        for (size_t j = 0u; j < 2u; ++j)
+            assert(close(peers[i][j]) == 0);
+        assert(close(listeners[i]) == 0);
+    }
+    snj_config_free(&config);
+}
+
 int
 main(void)
 {
+    engine_thread = pthread_self();
     assert(setenv("USER", "root", 1) == 0);
     test_validation();
     test_cli_network_roles();
@@ -1116,6 +1201,7 @@ main(void)
     test_explicit_zero_nick_collision();
     test_client_nick_collision();
     test_client_events();
+    test_independent_owners();
     puts("test_irc: ok");
     return 0;
 }

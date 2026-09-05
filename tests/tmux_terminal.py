@@ -27,7 +27,6 @@ RENDER_TEXT = (
     "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ "
     "tail control:\x1b[31m"
 )
-PACED_TEXT = "Paced tokens form interfragment and finish finalword"
 MARKDOWN_TEXT = (
     "# Stream **ready**\n"
     "- split `code` and [docs](https://example.test)\n"
@@ -715,26 +714,32 @@ def wait_normalized(terminal, needle, timeout=1.0):
     raise AssertionError(f"timeout waiting for {needle!r}:\n{screen}")
 
 
-def run_paced_decode_case(binary, root):
-    case = root / "decode"
+def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None):
+    case = root / f"decode-{width}-{unicode}-{resize}"
     workspace = case / "workspace"
     workspace.mkdir(mode=0o700, parents=True)
     config = case / "config.ini"
     write_config(config, False)
     dotdir = case / "state"
     terminal = TmuxTerminal(
-        case / "terminal", binary, workspace, dotdir, config, 28, 14
+        case / "terminal", binary, workspace, dotdir, config, width, 14
     )
     try:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
-        terminal.submit("terminal_paced_decode")
+        terminal.submit("terminal_paced_unicode" if unicode else "terminal_paced_decode")
+        prefix = "Paced tokens form inter" + ("🌙" if unicode else "")
+        split = prefix + ("́" if unicode else "") + "fragment"
+        expected = split + " and finish finalword"
         wait_normalized(terminal, "Paced")
         wait_normalized(terminal, "Paced tokens")
         _, split_prefix_at = wait_normalized(
-            terminal, "Paced tokens form inter"
+            terminal, prefix
         )
+        if resize:
+            time.sleep(0.05)
+            terminal.resize(resize, 14)
         _, split_word_at = wait_normalized(
-            terminal, "Paced tokens form interfragment"
+            terminal, split
         )
         if split_word_at - split_prefix_at < 0.03:
             raise AssertionError(
@@ -742,7 +747,7 @@ def run_paced_decode_case(binary, root):
             )
         wait_normalized(terminal, "and finish")
         final_screen, final_at = wait_normalized(
-            terminal, PACED_TEXT, timeout=0.35
+            terminal, expected, timeout=0.35
         )
         if "working…" in final_screen:
             raise AssertionError(
@@ -751,7 +756,7 @@ def run_paced_decode_case(binary, root):
 
         time.sleep(0.45)
         held_screen = terminal.capture(join_wrapped=True)
-        if PACED_TEXT not in normalize_space(held_screen):
+        if expected not in normalize_space(held_screen):
             raise AssertionError("the visible final fragment was erased")
         if "working…" in held_screen:
             raise AssertionError(
@@ -770,12 +775,12 @@ def run_paced_decode_case(binary, root):
             for item in response["data"]["items"]
             if item["kind"] in {"assistant", "refusal"} and item.get("text")
         ]
-        if public != [PACED_TEXT, "paced complete"]:
+        if public != [expected, "paced complete"]:
             raise AssertionError(
                 f"paced rendered text differs from durable output: {public!r}"
             )
         final = normalize_space(terminal.capture(join_wrapped=True))
-        if final.count(PACED_TEXT) != 1:
+        if final.count(expected) != 1:
             raise AssertionError(
                 "paced text was missing, duplicated, or reordered in tmux history"
             )
@@ -1395,6 +1400,9 @@ def run_fixture(binary, workspace, root):
     root.mkdir(mode=0o700, parents=True)
     run_status_case(binary, root)
     run_paced_decode_case(binary, root)
+    run_paced_decode_case(binary, root, width=24)
+    run_paced_decode_case(binary, root, width=26, unicode=True)
+    run_paced_decode_case(binary, root, width=26, unicode=True, resize=25)
     run_markdown_case(binary, root)
     run_narrow_markdown_table_case(binary, root)
     run_render_case(binary, root)

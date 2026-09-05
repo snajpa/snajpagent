@@ -97,6 +97,7 @@ struct snj_render {
     struct snj_render_record *rollout_open;
     struct snj_buf wrap_pending;
     size_t public_column;
+    char public_style[64u];
     bool wrap_has_word;
     bool wrap_continuation;
     bool wrap_word_open;

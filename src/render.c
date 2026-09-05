@@ -145,8 +145,10 @@ write_role_chunk(struct snj_render *render, int fd, const char *color,
         goto out;
     if (render->term &&
         ((fd == STDOUT_FILENO && render->stdout_terminal) ||
-         (fd == STDERR_FILENO && render->stderr_terminal)))
-        snj_term_note_output(render->term, text, len);
+         (fd == STDERR_FILENO && render->stderr_terminal)) &&
+        snj_term_note_output(render->term, text, len,
+                             colored && colored_len == len ? color : "") < 0)
+        goto out;
     rc = 0;
 out:
     if (rc < 0)
@@ -582,6 +584,8 @@ markdown_paint_style(struct snj_render *render)
     if (md->link_url) ADD_STYLE(";4;34");
 #undef ADD_STYLE
     sequence[len++] = 'm';
+    memcpy(render->public_style, sequence, len);
+    render->public_style[len] = '\0';
     if (snj_term_write(render->public_fd, sequence, len) < 0)
         return -1;
     render->markdown_state.style_painted = true;
@@ -594,6 +598,7 @@ markdown_clear_style(struct snj_render *render)
     if (!render->markdown_state.style_painted)
         return 0;
     render->markdown_state.style_painted = false;
+    render->public_style[0] = '\0';
     return write_literal(render->public_fd, COLOR_RESET);
 }
 
@@ -712,8 +717,9 @@ public_write(struct snj_render *render, const char *text, size_t len)
     if ((terminal ? snj_term_write_safe(render->public_fd, text, len) :
                     snj_term_write(render->public_fd, text, len)) < 0)
         return -1;
-    if (terminal && render->term)
-        snj_term_note_output(render->term, text, len);
+    if (terminal && render->term &&
+        snj_term_note_output(render->term, text, len, render->public_style) < 0)
+        return -1;
     render->public_item_bytes = true;
     render->public_item_ended_lf = text[len - 1u] == '\n';
     while (trailing < len && trailing < 2u &&
@@ -2222,12 +2228,12 @@ close_public_item(struct snj_render *render, bool discard_incomplete)
             write_literal(STDERR_FILENO, "\n") < 0)
             rc = -1;
         else if (!ended_lf && render->stderr_terminal && render->term)
-            snj_term_note_output(render->term, "\n", 1u);
+            rc = snj_term_note_output(render->term, "\n", 1u, "");
     } else if (fd == STDERR_FILENO && had_bytes && !ended_lf &&
                write_literal(STDERR_FILENO, "\n") < 0) {
         rc = -1;
     } else if (fd == STDERR_FILENO && had_bytes && !ended_lf && render->term) {
-        snj_term_note_output(render->term, "\n", 1u);
+        rc = snj_term_note_output(render->term, "\n", 1u, "");
     }
     if (had_bytes && terminal) {
         if (!ended_lf)
@@ -2533,8 +2539,10 @@ irc_piece(struct snj_render *render, const char *text, bool safe)
     if ((safe ? snj_term_write_safe(STDERR_FILENO, text, len) :
                 snj_term_write(STDERR_FILENO, text, len)) < 0)
         return -1;
-    if (render->term && (len == 0u || text[0] != '\033'))
-        snj_term_note_output(render->term, text, len);
+    if (len && text[0] == '\033')
+        (void)snj_strcpy(render->public_style, sizeof(render->public_style), text);
+    else if (render->term)
+        return snj_term_note_output(render->term, text, len, render->public_style);
     return 0;
 }
 

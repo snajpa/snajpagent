@@ -309,6 +309,8 @@ snj_term_init(struct snj_term *term)
     snj_buf_init(&term->draft, SNJ_MAX_DIRECT_PROMPT + 1u);
     snj_buf_init(&term->search_label, SNJ_MAX_DIRECT_PROMPT + 64u);
     snj_buf_init(&term->search_query, SNJ_MAX_DIRECT_PROMPT + 1u);
+    snj_buf_init(&term->output_cell, SIZE_MAX);
+    snj_buf_init(&term->output_line, SIZE_MAX);
     term->columns = 80u;
     term->history_pos = SIZE_MAX;
     term->search_pos = SIZE_MAX;
@@ -349,13 +351,57 @@ snj_term_typing_active(const struct snj_term *term)
     return term && term->active && term->typing_active;
 }
 
-void
-snj_term_note_output(struct snj_term *term, const char *text, size_t len)
+static void
+output_column_add(struct snj_term *term, size_t width)
 {
+    if (width && term->output_columns + width > term->columns)
+        term->output_columns = 0u;
+    term->output_columns += width;
+}
+
+int
+snj_term_note_output(struct snj_term *term, const char *text, size_t len,
+                     const char *style)
+{
+    struct snj_buf safe;
+    int rc = -1;
+
     if (!term || !len)
-        return;
+        return 0;
     term->output_seen = true;
     term->output_ended_lf = text[len - 1u] == '\n';
+    if (!term->opened || !term->capable)
+        return 0;
+    snj_buf_init(&safe, len * 8u + 32u);
+    if (snj_term_append_safe(&safe, text, len) < 0)
+        goto out;
+    for (size_t i = 0u; i < safe.len;) {
+        uint32_t cp;
+        size_t n = decode_utf8(safe.data + i, safe.len - i, &cp);
+        int width = cp == '\n' ? 0 : wcwidth((wchar_t)cp);
+
+        if (cp == '\n') {
+            term->output_columns = 0u;
+            snj_buf_reset(&term->output_cell);
+            snj_buf_reset(&term->output_line);
+        } else {
+            if (width > 0) {
+                output_column_add(term, (size_t)width);
+                term->output_cell_width = (size_t)width;
+                snj_buf_reset(&term->output_cell);
+                (void)snj_strcpy(term->output_cell_style,
+                                 sizeof(term->output_cell_style), style);
+            }
+            if (snj_buf_append(&term->output_cell, safe.data + i, n) < 0 ||
+                snj_buf_append(&term->output_line, safe.data + i, n) < 0)
+                goto out;
+        }
+        i += n;
+    }
+    rc = 0;
+out:
+    snj_buf_free(&safe);
+    return rc;
 }
 
 unsigned int
@@ -569,6 +615,29 @@ materialize_prompt_wrap(struct snj_term *term)
     return 0;
 }
 
+static int
+restore_output_cursor(struct snj_term *term)
+{
+    if (term->output_detour) {
+        size_t column = term->output_columns;
+
+        term->output_detour = false;
+        if (snj_term_write(STDERR_FILENO, "\033[1A", 4u) < 0)
+            return -1;
+        if (column < term->columns)
+            return column ? move_cursor(column, 'C') : 0;
+        /* Repaint the final cell to restore VT pending-wrap, not column N. */
+        if (move_cursor(term->columns - term->output_cell_width, 'C') < 0 ||
+            snj_term_write(STDERR_FILENO, term->output_cell_style,
+                           strlen(term->output_cell_style)) < 0 ||
+            snj_term_write(STDERR_FILENO, term->output_cell.data,
+                           term->output_cell.len) < 0 ||
+            snj_term_write(STDERR_FILENO, "\033[0m", 4u) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 int
 snj_term_hide(struct snj_term *term)
 {
@@ -597,7 +666,7 @@ snj_term_hide(struct snj_term *term)
     term->rendered_cursor_col = 0u;
     term->rendered_end_at_margin = false;
     term->rendered_cursor_pending_wrap = false;
-    return 0;
+    return restore_output_cursor(term);
 }
 
 static int
@@ -627,6 +696,9 @@ leave_prompt(struct snj_term *term)
     term->rendered_cursor_pending_wrap = false;
     term->output_seen = false;
     term->output_ended_lf = true;
+    term->output_detour = false;
+    term->output_columns = 0u;
+    snj_buf_reset(&term->output_line);
     return 0;
 }
 
@@ -636,6 +708,7 @@ mark_input_activity(struct snj_term *term)
     if (!term->active)
         return;
     term->typing_active = true;
+    term->output_detour = false;
     term->last_input_ms = snj_monotonic_ms();
 }
 
@@ -967,7 +1040,10 @@ redraw(struct snj_term *term)
             snj_term_write(STDERR_FILENO, term->capable ? "\r\n" : "\n",
                            term->capable ? 2u : 1u) < 0)
             return -1;
-        term->output_seen = false;
+        term->output_detour = term->capable && !term->output_ended_lf &&
+                              !term->typing_active;
+        if (!term->output_detour)
+            term->output_seen = false;
     }
     if (!term->capable) {
         int fallback_rc = 0;
@@ -2026,6 +2102,9 @@ cancel_line(struct snj_term *term, enum snj_term_action *action)
     term->rendered_cursor_pending_wrap = false;
     term->output_seen = false;
     term->output_ended_lf = true;
+    term->output_detour = false;
+    term->output_columns = 0u;
+    snj_buf_reset(&term->output_line);
     history_reset_navigation(term);
     term->prompt_clock.captured = false;
     term->prompt_wanted = false;
@@ -2152,6 +2231,17 @@ consume_resize(struct snj_term *term)
     was_capable = term->capable;
     update_size(term);
     now_capable = term->capable;
+    term->output_columns = 0u;
+    for (size_t i = 0u; i < term->output_line.len;) {
+        uint32_t cp;
+        size_t n = decode_utf8(term->output_line.data + i,
+                                term->output_line.len - i, &cp);
+        int width = wcwidth((wchar_t)cp);
+
+        if (width > 0)
+            output_column_add(term, (size_t)width);
+        i += n;
+    }
     if (term->prompt_visible && was_capable) {
         if (now_capable && sync_prompt_layout_after_resize(term) < 0)
             return -1;
@@ -2282,5 +2372,7 @@ snj_term_close(struct snj_term *term)
     snj_buf_free(&term->search_label);
     snj_buf_free(&term->search_query);
     snj_buf_free(&term->draft);
+    snj_buf_free(&term->output_cell);
+    snj_buf_free(&term->output_line);
     memset(term, 0, sizeof(*term));
 }

@@ -837,11 +837,15 @@ flood_done:
             goto allocation;
         return 0;
     }
-    if (strcmp(prompt, "terminal_paced_decode") == 0) {
-        static const char full[] =
+    if (strcmp(prompt, "terminal_paced_decode") == 0 ||
+        strcmp(prompt, "terminal_paced_unicode") == 0) {
+        bool unicode = strcmp(prompt, "terminal_paced_unicode") == 0;
+        const char *full = unicode ?
+            "Paced tokens form inter🌙́fragment and finish finalword" :
             "Paced tokens form interfragment and finish finalword";
-        static const char *const fragments[] = {
-            "Paced ", "tokens ", "form inter", "fragment ",
+        const char *fragments[] = {
+            "Paced ", "tokens ", unicode ? "form inter🌙" : "form inter",
+            unicode ? "́fragment " : "fragment ",
             "and finish ", "finalword"
         };
 

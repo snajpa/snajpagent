@@ -7,13 +7,13 @@ the terminal, and how users inspect and modify queued turns.
 
 ## Runtime Ownership And Scheduling
 
-Every application mode uses two application threads: one presentation owner
+Every application mode uses the same two core threads: one presentation owner
 and one engine owner. The editor and renderer stay together on the presentation
 thread. Only actual input/output capabilities differ for interactive, execute,
 listing, and redirected output; there is no synchronous alternate runtime.
 CLI preflight, help/version, and initial piped execute input precede startup.
 
-The engine owns application state, Jansson graphs, providers, tools, IRC,
+The engine owns application state, Jansson graphs, providers, tools,
 configuration, context, session durability, and history/cache disk work. None
 of those operations runs on the presentation thread. Two bounded SPSC queues
 carry owned typed values, never pointers into the other owner's mutable state.
@@ -21,6 +21,21 @@ Release/acquire publication orders queue items; nonblocking pipes wake owners.
 Output backpressures the engine. Full input admission retains the draft and
 reports the backlog without blocking editing; urgent interrupt/exit/failure
 flags bypass ordinary backlog. Actions retain their originating prompt state.
+
+Networked operation adds one IRC server owner and one client owner per outgoing
+endpoint (its agent/operator sockets stay together). Each runs the same existing
+protocol code on private state. Bounded owned events, traces and room/identity
+snapshots reach the engine in order; commands return acknowledged results.
+No IRC thread invokes application, storage or presentation callbacks. The engine
+commits incoming events before displaying/admitting them. Backpressure or DNS
+in one endpoint cannot hold the server or another endpoint's protocol state.
+All threads are joined; there is no per-peer thread, pool or detached worker.
+Each IRC owner has 64 pending records; a short mailbox mutex orders publication,
+not protocol work. State, event and trace records share that order. Commands
+complete only after their preceding records are admitted by the engine. Owners
+sleep on nonblocking sockets/wake pipes and real reconnect deadlines. Historical
+restore precedes thread startup, and only the engine and hosted server retain
+history. Outgoing owners do not duplicate history or allocate unused peer slots.
 
 Presentation checks input/resize and due spinners before bounded output work,
 at most every 16 ms while editing/animating and 25 ms during other activity.
@@ -76,6 +91,11 @@ and terminal state, and joins the presentation thread; no thread is detached.
 - If editing resumes after more model text, that text is ended on its current
   line and the updated draft is shown on a new rollout-active prompt line. This
   cycle can repeat without losing or changing the draft.
+- An automatically revealed spinner prompt is temporary: erasing it restores
+  the streamed output cursor, including the terminal's right-margin wrap state.
+  It does not insert paragraph boundaries or split provider-fragment words.
+  Actual editing commits the separate prompt line as the snapshot described
+  above. Unicode cell widths and terminal reflow determine cursor restoration.
 - `[ui] typing_pause_ms` controls the inactivity pause. It defaults to `500`,
   accepts `0` through `5000`, and applies only to interactive terminal display.
   A value of `0` retains the line separation but disables the delay.

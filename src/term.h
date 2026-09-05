@@ -63,6 +63,11 @@ struct snj_term {
     struct snj_buf draft;
     struct snj_buf search_label;
     struct snj_buf search_query;
+    struct snj_buf output_cell;
+    struct snj_buf output_line;
+    size_t output_columns;
+    size_t output_cell_width;
+    char output_cell_style[64u];
     struct snj_history_snapshot history;
     char *history_draft;
     char *search_original;
@@ -111,6 +116,7 @@ struct snj_term {
     bool typing_active;
     bool output_seen;
     bool output_ended_lf;
+    bool output_detour;
     bool color;
     bool networked;
     bool redraw_after_output;
@@ -155,7 +161,8 @@ void snj_term_set_color(struct snj_term *term, bool enabled, bool networked);
 uint32_t snj_term_typing_pause_remaining(const struct snj_term *term,
                                          uint64_t now_ms);
 bool snj_term_typing_active(const struct snj_term *term);
-void snj_term_note_output(struct snj_term *term, const char *text, size_t len);
+int snj_term_note_output(struct snj_term *term, const char *text, size_t len,
+                         const char *style);
 unsigned int snj_term_columns(const struct snj_term *term);
 size_t snj_term_text_width(const char *text, size_t len);
 bool snj_term_consume_echoed_submission(struct snj_term *term,

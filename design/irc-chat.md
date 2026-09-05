@@ -482,6 +482,15 @@ model, UI, or other peers; a peer that exceeds its queue bound is disconnected
 with a visible reason. The application handles `SIGPIPE` safely and treats a
 socket loss as a connection event rather than a process crash.
 
+One thread owns the hosted server and all its accepted peers. Each outgoing
+endpoint has its own thread owning the paired model/operator connections.
+They run private copies of the same protocol implementation; no application
+or session callback executes there. Bounded owned events and room/alias
+snapshots reach the engine in order, and only the engine persists, displays or
+admits them. Commands acknowledge their result after all their earlier records
+have been admitted. Saturation backpressures only the producing owner; joined
+shutdown wakes blocked publishers and socket waits. See `interactive-io.md`.
+
 Failure to start the explicitly requested local listener is a startup error.
 Failure of one outgoing connection is recoverable and visible. If every
 network link is down, the local UI and agent session remain usable and queued
