@@ -2835,7 +2835,12 @@ def test_network_collision_prompts():
         for suffix in (1, 2):
             client = Child(["--no-color", "-c", address])
             children.append(client)
-            client.wait(chat_prompt(f"root{suffix}"))
+            deadline = time.monotonic() + 8.0
+            while (chat_prompt(f"root{suffix}") not in client.buf and
+                   f"\x1b[16C{suffix}".encode() not in client.buf):
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, f"collision nick was not painted: {bytes(client.buf)!r}"
+                client.read_once(remaining)
             client.send(b"/names\r")
             client.wait(f"model agent{suffix} operator root{suffix}".encode())
             assert b"agent01" not in client.buf
