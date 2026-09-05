@@ -19,7 +19,6 @@
 #define O_NOFOLLOW 0
 #endif
 
-
 static char *
 join_path(const char *left, const char *right)
 {

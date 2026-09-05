@@ -9,7 +9,6 @@
 #include <string.h>
 #include <unistd.h>
 
-
 static json_t *
 origin_user_data(void)
 {

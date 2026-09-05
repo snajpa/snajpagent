@@ -2832,7 +2832,6 @@ snj_irc_room_name(const struct snj_irc *irc)
     return irc ? irc->room : NULL;
 }
 
-
 static bool
 text_mentions_nick(const char *text, const char *nick)
 {

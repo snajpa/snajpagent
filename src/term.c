@@ -45,8 +45,6 @@ mark_sigwinch(int signal_number)
     sigwinch_pending = 1;
 }
 
-
-
 static size_t
 decode_utf8(const unsigned char *s, size_t len, uint32_t *cp)
 {
@@ -1010,7 +1008,6 @@ out:
     snj_buf_free(&out);
     return rc;
 }
-
 
 int
 snj_term_set_prompt(struct snj_term *term, bool active)

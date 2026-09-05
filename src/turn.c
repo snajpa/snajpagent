@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 const char *
 snj_item_kind_name(enum snj_item_kind kind)
 {
@@ -908,7 +907,6 @@ snj_tool_result_terminal(bool succeeded, const char *model_text)
     return snj_tool_result(succeeded ? "succeeded" : "failed", NULL,
                            model_text, succeeded ? 0 : 1, 0u);
 }
-
 
 json_t *
 snj_tool_result_outcome_unknown(const char *reason)

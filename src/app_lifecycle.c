@@ -190,8 +190,6 @@ static const char goal_help[] =
     "/goal complete|cancel         end the goal\n"
     "reserved first words: status help set pause resume lock unlock complete cancel";
 
-
-
 static int
 goal_error(struct app_state *app, const char *message)
 {

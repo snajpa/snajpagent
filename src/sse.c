@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <string.h>
 
-
 void
 snj_sse_init(struct snj_sse_parser *parser, snj_sse_record_fn record,
              void *opaque)

@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 static int
 encode_string(struct snj_buf *out, const char *s, size_t len)
 {

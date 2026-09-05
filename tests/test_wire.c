@@ -127,7 +127,6 @@ test_headers(void)
     snj_buf_free(&out);
 }
 
-
 int
 main(void)
 {

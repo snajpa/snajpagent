@@ -10,8 +10,6 @@
 #include <string.h>
 #include <unistd.h>
 
-
-
 struct resolved_session {
     char id[SNJ_ID_HEX_LEN + 1u];
     char trash_name[SNJ_TRASH_NAME_LEN + 1u];

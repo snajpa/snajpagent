@@ -96,7 +96,6 @@ struct patch_set {
     size_t total_file_bytes;
 };
 
-
 static void
 line_vec_free(struct line_vec *vec)
 {

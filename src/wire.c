@@ -9,7 +9,6 @@
 #include <string.h>
 #include <strings.h>
 
-
 static int
 secrets_valid(const struct snj_wire_secrets *secrets)
 {
@@ -128,7 +127,6 @@ key_redaction(const char *key, size_t len)
         return "<redacted:encrypted_reasoning>";
     return NULL;
 }
-
 
 static int encode_value(const json_t *value,
                         const struct snj_wire_secrets *secrets,

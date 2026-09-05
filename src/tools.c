@@ -165,7 +165,6 @@ absolute_dir_arg_valid(const char *path)
            stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-
 static int
 set_nonblock(int fd)
 {

@@ -2368,7 +2368,6 @@ render_message(struct snj_render *render, const char *message,
     return rc;
 }
 
-
 int
 snj_render_error_ctx(struct snj_render *render, const char *message)
 {

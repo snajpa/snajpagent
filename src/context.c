@@ -332,7 +332,6 @@ append_managed_gate(struct context_builder *builder)
     return append_message(builder, "managed_process_gate", "developer", text);
 }
 
-
 static int
 append_goal_controller(struct context_builder *builder)
 {
