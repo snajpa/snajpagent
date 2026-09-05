@@ -774,7 +774,8 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                          strlen(fragments[part])) < 0)
                     goto allocation;
                 for (unsigned int wait = 0u;
-                     wait < (part + 1u == fragment_count ? 60u : 4u);
+                     wait < (part + 1u == fragment_count ? 60u :
+                             part == 2u ? 20u : 4u);
                      ++wait) {
                     int pump_rc = pump(opaque, 20u);
 
