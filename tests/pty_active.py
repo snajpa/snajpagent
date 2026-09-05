@@ -2170,7 +2170,10 @@ def test_network_live_nick_prompt():
                    for text in snapshots)
         assert b"model-output-one" not in child.buf
         assert b"network stream acknowledged" not in child.buf
-        command = child.exit_now()
+        # Nick notifications may start a background turn after this one.
+        # EOF gracefully finishes it; /exit is an idle-only command.
+        child.send(b"\x04")
+        command = child.finish()
         child = None
         arguments = command_arguments(command)
         assert arguments[arguments.index("--model-nick") + 1] == "agent"
