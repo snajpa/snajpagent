@@ -2051,6 +2051,118 @@ def test_network_resume_roles():
     upstream.close()
 
 
+def test_network_collision_prompts():
+    port = free_port()
+    address = f"127.0.0.1:{port}"
+    children = []
+    peer = None
+    try:
+        server = Child(["--no-color", "-s", address, "-r", "lab",
+                        "-n", "agent", "-o", "operator"])
+        children.append(server)
+        server.wait(PROMPT)
+        for suffix in (1, 2):
+            client = Child(["--no-color", "-c", address,
+                            "-n", "agent", "-o", "operator"])
+            children.append(client)
+            client.wait(f"operator{suffix}@{socket.gethostname()}".encode())
+            client.send(b"/names\r")
+            client.wait(f"model agent{suffix} operator operator{suffix}".encode())
+        peer = IRCClient(port, "visitor", agent=True)
+        for child in children:
+            child.wait(b"visitor joined")
+            child.drain()
+        starts = [len(child.buf) for child in children]
+        peer.sock.sendall(b"NICK visitor2\r\n")
+        peer.wait(b" NICK :visitor2\r\n")
+        for child, start in zip(children, starts):
+            child.wait("visitor is now known as · visitor2".encode(), start=start)
+            child.drain()
+            assert child.buf[start:].count(b"visitor is now known as") == 1
+    finally:
+        if peer:
+            peer.close()
+        for child in reversed(children):
+            child.exit_now()
+
+
+def test_network_live_nick_prompt():
+    upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(2)
+    before = session_ids()
+    child = Child(["--no-color", "-c",
+                   f"127.0.0.1:{upstream.getsockname()[1]}",
+                   "-n", "agent", "-o", "operator"])
+    links = []
+    try:
+        child.wait(PROMPT)
+        session_id = new_session(before)
+        links = accept_connections(upstream, 2)
+        for link in links:
+            link.settimeout(4.0)
+            wire = bytearray()
+            while b"USER " not in wire:
+                wire.extend(link.recv(4096))
+            nick = re.search(rb"NICK (\w+)\r\n", wire)[1].decode()
+            accepted = nick + "7"
+            link.sendall((f":fake 001 {accepted} :welcome\r\n"
+                          f":fake 005 {accepted} SAJROOM=#lab :supported\r\n"
+                          f":fake 376 {accepted} :end\r\n").encode())
+            wire = bytearray()
+            while b"JOIN #lab\r\n" not in wire:
+                wire.extend(link.recv(4096))
+            link.sendall((f":{accepted}!u@fake JOIN #lab\r\n"
+                          f":fake 353 {accepted} = #lab :@operator7 agent7\r\n"
+                          f":fake 366 {accepted} #lab :end\r\n"
+                          ":fake BATCH +h chathistory #lab\r\n"
+                          ":fake BATCH -h\r\n").encode())
+        child.wait(f"operator7@{socket.gethostname()}".encode())
+        child.drain()
+        # Preserve a draft and its cursor through a live rename.
+        child.send(b"/stats\x1b[D")
+        child.drain()
+        start = len(child.buf)
+        for link in links:
+            link.sendall(b":operator7!u@fake NICK :operator8\r\n"
+                         b":agent7!u@fake NICK :agent8\r\n")
+        child.wait(f"operator8@{socket.gethostname()}".encode(), start=start)
+        child.wait(b"/stats", start=start)
+        child.send(b"u\r")
+        status_end = child.wait(b"verbosity: 0", start=start)
+        child.wait(PROMPT, start=status_end)
+        child.drain()
+        assert child.buf[start:].count(b"operator7 is now known as") == 1
+        assert child.buf[start:].count(b"agent7 is now known as") == 1
+        # Local input is attributed to the accepted operator and the model's
+        # request context includes a fresh snapshot with both accepted nicks.
+        child.send(b"network_one\r")
+        child.wait("@operator8 › network_one".encode(), start=start)
+        deadline = time.monotonic() + 8.0
+        while not any(event["type"] == "turn_completed"
+                      for event in events(session_id)):
+            assert time.monotonic() < deadline, bytes(child.buf)
+            child.drain(0.05)
+        log = events(session_id)
+        snapshots = [event["data"]["text"] for event in log
+                     if event["type"] == "irc_snapshot" and
+                     event["data"]["reason"] == "nick"]
+        assert any("model nick: agent8\noperator nick: operator8\n" in text
+                   for text in snapshots)
+        command = child.exit_now()
+        child = None
+        arguments = command_arguments(command)
+        assert arguments[arguments.index("--model-nick") + 1] == "agent"
+        assert arguments[arguments.index("--operator-nick") + 1] == "operator"
+        assert "operator8" not in command
+    finally:
+        if child:
+            child.kill()
+        for link in links:
+            link.close()
+        upstream.close()
+
+
 def test_prompt_identity_is_terminal_safe():
     unsafe_model = "unsafe\x1bmodel"
     unsafe_effort = "odd\u202eeffort"
@@ -2504,6 +2616,8 @@ test_known_context_meter()
 test_config_and_cli_model_passthrough()
 test_exit_resume_matrix()
 test_network_resume_roles()
+test_network_collision_prompts()
+test_network_live_nick_prompt()
 test_prompt_identity_is_terminal_safe()
 test_model_message_corrections_are_private_and_specific()
 test_network_chat_and_managed_mention()

@@ -261,6 +261,8 @@ snj_app_irc_event(void *opaque, const struct snj_irc_event *event)
     if (snj_app_commit_event(app, "irc_event", irc_event_data(event),
                              error, sizeof(error)) < 0)
         return -1;
+    (void)snprintf(app->render.model_nick, sizeof(app->render.model_nick),
+                   "%s", snj_irc_model_nick(app->irc));
     if (snj_render_irc_event(&app->render, event) < 0)
         return -1;
     chat = event->kind == SNJ_IRC_MESSAGE || event->kind == SNJ_IRC_NOTICE;

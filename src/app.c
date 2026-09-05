@@ -520,6 +520,30 @@ set_input_prompt(struct app_state *app, bool active)
     return snj_term_set_prompt_label(&app->term, active, label);
 }
 
+static int
+tick_irc(struct app_state *app, char *error, size_t error_size)
+{
+    char model[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    char operator[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    char label[SNJ_TERM_LABEL_BYTES];
+
+    (void)snprintf(model, sizeof(model), "%s", snj_irc_model_nick(app->irc));
+    (void)snprintf(operator, sizeof(operator), "%s",
+                   snj_irc_operator_nick(app->irc));
+    if (snj_irc_tick(app->irc, 0, error, error_size) < 0)
+        return -1;
+    if ((strcmp(model, snj_irc_model_nick(app->irc)) != 0 ||
+         strcmp(operator, snj_irc_operator_nick(app->irc)) != 0) &&
+        snj_app_irc_snapshot(app, "nick", error, error_size) < 0)
+        return -1;
+    if (!app->term.opened || !app->term.prompt_wanted)
+        return 0;
+    if (format_input_label(app, app->term.active, label) < 0)
+        return -1;
+    return strcmp(label, app->term.label) == 0 ? 0 :
+        set_input_prompt(app, app->term.active);
+}
+
 static struct snj_queued_turn *
 queued_by_id(struct app_state *app, const char *queue_id, size_t *index)
 {
@@ -1827,7 +1851,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (app->networked) {
         error[0] = '\0';
-        if (snj_irc_tick(app->irc, 0, error, sizeof(error)) < 0) {
+        if (tick_irc(app, error, sizeof(error)) < 0) {
             (void)snj_render_error_ctx(&app->render,
                 error[0] ? error : "IRC event loop failed");
             return -1;
@@ -1854,7 +1878,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         uint64_t now = snj_time_ms();
         if (app->networked) {
             error[0] = '\0';
-            if (snj_irc_tick(app->irc, 0, error, sizeof(error)) < 0) {
+            if (tick_irc(app, error, sizeof(error)) < 0) {
                 (void)snj_render_error_ctx(&app->render,
                     error[0] ? error : "IRC event loop failed");
                 return -1;
@@ -3655,8 +3679,7 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             if (app->networked) {
                 char irc_error[256] = {0};
-                if (snj_irc_tick(app->irc, 0, irc_error,
-                                 sizeof(irc_error)) < 0) {
+                if (tick_irc(app, irc_error, sizeof(irc_error)) < 0) {
                     (void)app_error(app, irc_error[0] ? irc_error :
                                     "IRC event loop failed");
                     return 3;

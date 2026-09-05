@@ -62,6 +62,7 @@ struct irc_conn {
     char endpoint[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char user[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    char accepted_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char room[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
     char topic[513u];
     struct irc_member members[IRC_MEMBERS_MAX];
@@ -1434,6 +1435,8 @@ server_dispatch(struct snj_irc *irc, struct irc_conn *peer, char *line)
         if (server_nick_used(irc, next, peer))
             return queue_line(peer, ":%s 433 * %s :Nickname is already in use",
                               irc->server_name, next);
+        if (strcmp(peer->nick, next) == 0)
+            return 0;
         memcpy(old, peer->nick, sizeof(old));
         (void)copy_string(peer->nick, sizeof(peer->nick), next);
         if (old[0] && peer->joined) {
@@ -1442,6 +1445,10 @@ server_dispatch(struct snj_irc *irc, struct irc_conn *peer, char *line)
                 server_emit(irc, SNJ_IRC_NICK, old, peer->nick,
                             peer->op, false) < 0)
                 return -1;
+        } else if (peer->registered &&
+                   queue_line(peer, ":%s!%s@%s NICK :%s", old,
+                              peer->user, irc->server_name, peer->nick) < 0) {
+            return -1;
         }
         return server_welcome(irc, peer);
     }
@@ -1742,8 +1749,15 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
                           message.param_count ? message.params[0] :
                                                 SNAJPAGENT_NAME);
     if (strcmp(message.command, "001") == 0) {
+        if (link->registered || !message.param_count ||
+            !nick_valid(message.params[0]))
+            return 0;
+        (void)copy_string(link->nick, sizeof(link->nick), message.params[0]);
+        (void)copy_string(link->accepted_nick, sizeof(link->accepted_nick),
+                          link->nick);
         link->registered = true;
-        return 0;
+        return link_emit(irc, link, SNJ_IRC_CONNECTED, "", link->nick,
+                         "", false, timestamp_ms);
     }
     if (strcmp(message.command, "005") == 0) {
         for (size_t i = 1u; i < message.param_count; ++i)
@@ -1857,8 +1871,25 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
     if (strcmp(message.command, "NICK") == 0 && sender && message.param_count) {
         struct irc_member *member = member_find(link, sender);
         bool op = member && member->op;
+        bool self = irc_casecmp(sender, link->nick) == 0;
 
-        if (!member || !nick_valid(message.params[0]))
+        if (!nick_valid(message.params[0]) ||
+            strcmp(sender, message.params[0]) == 0)
+            return 0;
+        /* Either role may hear its partner's rename before the self ack. */
+        if (!link->historical && (member || self))
+            for (size_t i = 0u; i < irc->link_count; ++i) {
+                struct irc_conn *own = &irc->links[i];
+                if (own->registered &&
+                    endpoint_equal(own->endpoint, link->endpoint) &&
+                    irc_casecmp(own->nick, sender) == 0) {
+                    (void)copy_string(own->nick, sizeof(own->nick),
+                                      message.params[0]);
+                    (void)copy_string(own->accepted_nick,
+                                      sizeof(own->accepted_nick), own->nick);
+                }
+            }
+        if (!member)
             return 0;
         (void)copy_string(member->nick, sizeof(member->nick), message.params[0]);
         return link_emit(irc, link, SNJ_IRC_NICK, link->room, sender,
@@ -1910,7 +1941,6 @@ client_dispatch(struct snj_irc *irc, struct irc_conn *link, char *line)
     if (strcmp(message.command, "433") == 0 && !link->registered)
         return link_retry_nick(irc, link);
     if (strcmp(message.command, "ERROR") == 0 ||
-        strcmp(message.command, "433") == 0 ||
         strcmp(message.command, "403") == 0 ||
         strcmp(message.command, "404") == 0)
         return 1;
@@ -1939,7 +1969,8 @@ link_disconnect(struct snj_irc *irc, struct irc_conn *link,
     link->retry_at_ms = snj_time_ms() + IRC_RETRY_MS;
     if (link_emit_enabled(link)) {
         event_init(irc, &event, SNJ_IRC_DISCONNECTED, link->endpoint,
-                   link->room, link->nick, reason, link->op, false, false);
+                   link->room, link->accepted_nick, reason,
+                   link->op, false, false);
         (void)emit_event(irc, &event, false);
     }
 }
@@ -2034,7 +2065,6 @@ complete_link_connect(struct snj_irc *irc, struct irc_conn *link)
 {
     int socket_error = 0;
     socklen_t size = sizeof(socket_error);
-    struct snj_irc_event event;
 
     if (getsockopt(link->fd, SOL_SOCKET, SO_ERROR, &socket_error, &size) < 0 ||
         socket_error != 0) {
@@ -2042,15 +2072,7 @@ complete_link_connect(struct snj_irc *irc, struct irc_conn *link)
             errno = socket_error;
         return 1;
     }
-    if (client_handshake(irc, link) < 0)
-        return -1;
-    if (link_emit_enabled(link)) {
-        event_init(irc, &event, SNJ_IRC_CONNECTED, link->endpoint, "",
-                   link->nick, "", false, false, false);
-        if (emit_event(irc, &event, false) < 0)
-            return -1;
-    }
-    return 0;
+    return client_handshake(irc, link);
 }
 
 static int
@@ -2069,13 +2091,6 @@ start_due_links(struct snj_irc *irc)
             return -1;
         if (rc > 0)
             link_disconnect(irc, link, "connect failed; retrying");
-        else if (!link->connecting && link_emit_enabled(link)) {
-            struct snj_irc_event event;
-            event_init(irc, &event, SNJ_IRC_CONNECTED, link->endpoint,
-                       "", link->nick, "", false, false, false);
-            if (emit_event(irc, &event, false) < 0)
-                return -1;
-        }
     }
     return 0;
 }
@@ -2185,6 +2200,8 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
                               config->irc_clients[i]);
             (void)copy_string(link->nick, sizeof(link->nick),
                               role == 0u ? irc->model_nick : irc->operator_nick);
+            (void)copy_string(link->accepted_nick, sizeof(link->accepted_nick),
+                              link->nick);
         }
     }
     if (config->irc_listen_explicit) {
@@ -2440,7 +2457,7 @@ int
 snj_irc_send_operator(struct snj_irc *irc, const char *text,
                       char *error, size_t error_size)
 {
-    return send_chat(irc, irc ? irc->operator_nick : "", LINK_OPERATOR,
+    return send_chat(irc, snj_irc_operator_nick(irc), LINK_OPERATOR,
                      SNJ_IRC_MESSAGE, text, error, error_size);
 }
 
@@ -2448,7 +2465,7 @@ int
 snj_irc_send_agent(struct snj_irc *irc, const char *text,
                    char *error, size_t error_size)
 {
-    return send_chat(irc, irc ? irc->model_nick : "", LINK_AGENT,
+    return send_chat(irc, snj_irc_model_nick(irc), LINK_AGENT,
                      SNJ_IRC_MESSAGE, text, error, error_size);
 }
 
@@ -2456,7 +2473,7 @@ int
 snj_irc_send_agent_notice(struct snj_irc *irc, const char *text,
                           char *error, size_t error_size)
 {
-    return send_chat(irc, irc ? irc->model_nick : "", LINK_AGENT,
+    return send_chat(irc, snj_irc_model_nick(irc), LINK_AGENT,
                      SNJ_IRC_NOTICE, text, error, error_size);
 }
 
@@ -2540,7 +2557,7 @@ snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
     if (snj_buf_printf(out,
             "[IRC room snapshot; @ marks a channel operator]\n"
             "model nick: %s\noperator nick: %s\nhosted: %s\n",
-            irc->model_nick, irc->operator_nick,
+            snj_irc_model_nick(irc), snj_irc_operator_nick(irc),
             irc->listener >= 0 ? irc->listen : "no") < 0 ||
         (irc->listener >= 0 &&
          snj_buf_printf(out, "room: %s\ntopic: %s\n",
@@ -2582,8 +2599,8 @@ snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
                            link->joined && link->op ? " as operator" : "") < 0)
             goto fail;
         if (snj_buf_printf(out, "aliases[%s]: model %s operator %s\n",
-                           link->endpoint, agent ? agent->nick : "",
-                           link->nick) < 0)
+                           link->endpoint, agent ? agent->accepted_nick : "",
+                           link->accepted_nick) < 0)
             goto fail;
         if (link->joined) {
             if (snj_buf_printf(out, "topic[%s]: %s\nmembers[%s]:",
@@ -2823,13 +2840,15 @@ snj_irc_restore_event(struct snj_irc *irc,
 const char *
 snj_irc_model_nick(const struct snj_irc *irc)
 {
-    return irc ? irc->model_nick : NULL;
+    return !irc ? NULL : irc->listener < 0 && irc->link_count ?
+        irc->links[0].accepted_nick : irc->model_nick;
 }
 
 const char *
 snj_irc_operator_nick(const struct snj_irc *irc)
 {
-    return irc ? irc->operator_nick : NULL;
+    return !irc ? NULL : irc->listener < 0 && irc->link_count ?
+        irc->links[1].accepted_nick : irc->operator_nick;
 }
 
 const char *

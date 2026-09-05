@@ -158,6 +158,9 @@ client retries on the same connection by appending `1`, `2`, and so on to its
 preferred nick, truncating the preferred portion at a UTF-8 boundary when the
 IRC nick bound requires it. The accepted per-server nick remains stable across
 reconnects and governs echo suppression and direct-mention recognition. The
+welcome confirms the accepted nick; live `NICK` changes update it and preserve
+channel op status. The UI reports channel renames once. A rejected rename
+leaves the existing identity and connection intact. The
 server itself follows IRC convention by rejecting collisions rather than
 silently assigning an identity. Malformed lines, overlong lines, invalid UTF-8
 chat, messages to another room, and commands used before registration or join
@@ -259,8 +262,10 @@ errors, and high-verbosity diagnostics.
 The network composer is `OPERATOR_NICK@MACHINE_HOSTNAME › ` while idle and
 `OPERATOR_NICK@MACHINE_HOSTNAME » ` during an active turn, in both views. `›`
 is U+203A RIGHT-POINTING SINGLE ANGLE QUOTATION MARK and `»` is U+00BB
-RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK. The operator nick is the configured
-local identity and the hostname comes from the local machine, not the IRC
+RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK. The prompt and local chat use the
+accepted nick on the first configured server, or the hosted nick when serving
+a room. Nick changes refresh the prompt without losing the draft. Configured
+nicks remain registration preferences. The hostname comes from the local machine, not the IRC
 endpoint, room, or remote server.
 
 Text entered at the network composer is sent as a room message from the local

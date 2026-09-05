@@ -68,6 +68,7 @@ int snj_irc_snapshot(const struct snj_irc *irc, struct snj_buf *out,
                      char *error, size_t error_size);
 int snj_irc_restore_event(struct snj_irc *irc,
                           const struct snj_irc_event *event);
+/* Hosted identity, or the first configured server's last accepted identity. */
 const char *snj_irc_model_nick(const struct snj_irc *irc);
 const char *snj_irc_operator_nick(const struct snj_irc *irc);
 const char *snj_irc_room_name(const struct snj_irc *irc);

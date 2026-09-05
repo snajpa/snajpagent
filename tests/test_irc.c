@@ -21,6 +21,8 @@ struct capture {
     unsigned int protocol_traces;
     unsigned int transport_traces;
     struct snj_irc_event last_message;
+    struct snj_irc_event last_nick;
+    struct snj_irc_event last_connected;
     bool slow_quit;
 };
 
@@ -33,6 +35,10 @@ capture_event(void *opaque, const struct snj_irc_event *event)
     ++capture->events[event->kind];
     if (event->kind == SNJ_IRC_MESSAGE)
         capture->last_message = *event;
+    if (event->kind == SNJ_IRC_NICK)
+        capture->last_nick = *event;
+    if (event->kind == SNJ_IRC_CONNECTED)
+        capture->last_connected = *event;
     if (event->kind == SNJ_IRC_QUIT && strcmp(event->nick, "slow") == 0)
         capture->slow_quit = true;
     return 0;
@@ -382,6 +388,27 @@ test_server(void)
     assert(strstr(wire, " 315 human #lab") != NULL);
     assert(capture.protocol_traces != 0u && capture.transport_traces != 0u);
 
+    send_text(human, "NICK renamed\r\nNICK renamed\r\nNICK RENAMED\r\n"
+                     "NICK agent\r\nPRIVMSG #lab :renamed speech\r\n"
+                     "TOPIC #lab :agent topic\r\n");
+    tick(server, 10u);
+    (void)drain(human, wire, sizeof(wire));
+    assert(capture.events[SNJ_IRC_NICK] == 2u);
+    assert(strcmp(capture.last_nick.nick, "renamed") == 0);
+    assert(strcmp(capture.last_nick.text, "RENAMED") == 0);
+    assert(capture.last_nick.op);
+    assert(strstr(wire, " NICK :renamed\r\n"));
+    assert(strstr(wire, " NICK :RENAMED\r\n"));
+    assert(strstr(wire, " 433 "));
+    assert(strcmp(capture.last_message.nick, "RENAMED") == 0);
+    assert(capture.last_message.op);
+    send_text(human, "PART #lab\r\nNICK away\r\nJOIN #lab\r\n");
+    tick(server, 10u);
+    (void)drain(human, wire, sizeof(wire));
+    assert(strstr(wire, " NICK :away\r\n"));
+    assert(strstr(wire, " 366 away #lab "));
+    assert(capture.events[SNJ_IRC_NICK] == 2u);
+
     {
         struct snj_irc_event foreign = {0};
 
@@ -616,14 +643,20 @@ test_client_nick_collision(void)
     assert(client_capture.events[SNJ_IRC_HISTORY_READY] != 0u);
     assert(client_capture.events[SNJ_IRC_CONNECTED] == 1u);
     assert(client_capture.events[SNJ_IRC_DISCONNECTED] == 0u);
+    assert(strcmp(client_capture.last_connected.nick, "operator2") == 0);
+    assert(strcmp(snj_irc_model_nick(client), "agent2") == 0);
+    assert(strcmp(snj_irc_operator_nick(client), "operator2") == 0);
+    assert(client_capture.events[SNJ_IRC_NICK] == 0u);
 
     assert(snj_irc_send_operator(client, "operator alias",
                                  error, sizeof(error)) == 0);
+    assert(strcmp(client_capture.last_message.nick, "operator2") == 0);
     pump_pair(server, client, 20u);
     assert(strcmp(server_capture.last_message.nick, "operator2") == 0);
     assert(strcmp(server_capture.last_message.text, "operator alias") == 0);
     assert(snj_irc_send_agent(client, "agent alias",
                               error, sizeof(error)) == 0);
+    assert(strcmp(client_capture.last_message.nick, "agent2") == 0);
     pump_pair(server, client, 20u);
     assert(strcmp(server_capture.last_message.nick, "agent2") == 0);
     assert(strcmp(server_capture.last_message.text, "agent alias") == 0);
@@ -671,7 +704,7 @@ test_client_nick_collision(void)
 }
 
 static void
-test_client_ignores_direct_messages(void)
+test_client_events(void)
 {
     struct snj_config config;
     struct snj_cli cli;
@@ -681,6 +714,7 @@ test_client_ignores_direct_messages(void)
     int listener = listen_local(&port);
     int peers[2u];
     int operator_fd = -1;
+    int agent_fd = -1;
     char address[64u];
     char wire[8192u];
     char error[256] = {0};
@@ -714,6 +748,8 @@ test_client_ignores_direct_messages(void)
         nick = strstr(wire, "NICK remoteop\r\n") ? "remoteop" : "remoteagent";
         if (strcmp(nick, "remoteop") == 0)
             operator_fd = peers[i];
+        else
+            agent_fd = peers[i];
         assert(strstr(wire, strcmp(nick, "remoteop") == 0 ?
                            "NICK remoteop\r\n" : "NICK remoteagent\r\n"));
         {
@@ -722,12 +758,16 @@ test_client_ignores_direct_messages(void)
                 ":fake 001 %s :welcome\r\n"
                 ":fake 005 %s SAJROOM=#lab :supported\r\n"
                 ":fake 376 %s :end\r\n",
-                nick, nick, nick);
+                peers[i] == agent_fd ? "acceptedagent" : nick, nick, nick);
             assert(n > 0 && (size_t)n < sizeof(welcome));
             send_text(peers[i], welcome);
         }
     }
+    /* Welcome may confirm a different nick than the registration request. */
     tick(client, 10u);
+    assert(strcmp(snj_irc_model_nick(client), "acceptedagent") == 0);
+    send_text(agent_fd, ":acceptedagent!u@fake NICK :remoteagent\r\n");
+    tick(client, 5u);
     for (size_t i = 0u; i < 2u; ++i) {
         const char *nick;
         char joined[1024u];
@@ -762,6 +802,66 @@ test_client_ignores_direct_messages(void)
         assert(strcmp(capture.last_message.text,
                       "remoteagent: room accepted") == 0);
     }
+    {
+        unsigned int messages = capture.events[SNJ_IRC_MESSAGE];
+        struct snj_buf snapshot;
+
+        /* Observer receives the model rename first, followed by its echo. */
+        send_text(operator_fd,
+            ":remoteagent!u@fake NICK :agent7\r\n"
+            ":agent7!u@fake PRIVMSG #lab :own echo\r\n"
+            ":remoteop!u@fake NICK :operator7\r\n"
+            ":operator7!u@fake NICK :Operator7\r\n"
+            ":outsider!u@fake NICK :ignored\r\n"
+            ":peer!u@fake NICK :friend\r\n"
+            ":fake 433 Operator7 taken :Nickname is already in use\r\n");
+        tick(client, 10u);
+        send_text(agent_fd,
+            ":remoteagent!u@fake NICK :agent7\r\n"
+            ":remoteop!u@fake NICK :operator7\r\n"
+            ":operator7!u@fake NICK :Operator7\r\n"
+            ":peer!u@fake NICK :friend\r\n");
+        tick(client, 10u);
+        assert(capture.events[SNJ_IRC_NICK] == 4u);
+        assert(capture.events[SNJ_IRC_MESSAGE] == messages);
+        assert(capture.events[SNJ_IRC_DISCONNECTED] == 0u);
+        assert(strcmp(snj_irc_model_nick(client), "agent7") == 0);
+        assert(strcmp(snj_irc_operator_nick(client), "Operator7") == 0);
+        assert(snj_irc_mentions_agent(client, address, "AGENT7: hello"));
+        assert(!snj_irc_mentions_agent(client, address, "remoteagent: old"));
+        snj_buf_init(&snapshot, SNJ_MAX_IRC_SNAPSHOT);
+        assert(snj_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
+        assert(snj_buf_terminate(&snapshot) == 0);
+        assert(strstr((const char *)snapshot.data,
+                      "model nick: agent7\noperator nick: Operator7\n"));
+        assert(strstr((const char *)snapshot.data,
+                      "@Operator7 agent7 friend"));
+        snj_buf_free(&snapshot);
+        assert(snj_irc_set_operator_topic(client, "renamed topic",
+                                          error, sizeof(error)) == 0);
+        send_text(operator_fd,
+            ":friend!u@fake MODE #lab -o Operator7\r\n"
+            ":friend!u@fake MODE #lab +o agent7\r\n");
+        send_text(agent_fd, ":friend!u@fake MODE #lab +o agent7\r\n");
+        tick(client, 10u);
+        assert(snj_irc_set_operator_topic(client, "not op",
+                                          error, sizeof(error)) < 0);
+        assert(snj_irc_set_agent_topic(client, "agent op",
+                                       error, sizeof(error)) == 0);
+        send_text(operator_fd,
+            ":remoteagent!u@fake JOIN #lab\r\n"
+            ":remoteagent!u@fake PRIVMSG #lab :old nick is someone else\r\n"
+            ":friend!u@fake PART #lab :bye\r\n");
+        tick(client, 10u);
+        assert(capture.events[SNJ_IRC_MESSAGE] == messages + 1u);
+        assert(strcmp(capture.last_message.nick, "remoteagent") == 0);
+        assert(snj_irc_send_operator(client, "local renamed op",
+                                     error, sizeof(error)) == 0);
+        assert(strcmp(capture.last_message.nick, "Operator7") == 0);
+        assert(snj_irc_send_agent(client, "local renamed model",
+                                  error, sizeof(error)) == 0);
+        assert(strcmp(capture.last_message.nick, "agent7") == 0);
+    }
     snj_irc_close(client);
     for (size_t i = 0u; i < 2u; ++i)
         assert(close(peers[i]) == 0);
@@ -777,7 +877,7 @@ main(void)
     test_server();
     test_client_reconnect();
     test_client_nick_collision();
-    test_client_ignores_direct_messages();
+    test_client_events();
     puts("test_irc: ok");
     return 0;
 }

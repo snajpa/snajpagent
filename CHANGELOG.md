@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Use accepted IRC nicks in the prompt and local chat. Track live nick changes,
+  preserve op status, and keep mentions, echo suppression, and model context
+  current. Notify channel renames once without losing the input draft.
+
 - Split `make sizecheck` into independent production-C, production-header, and
   test-C budgets. Their soft/hard levels are 32,768/49,152,
   16,384/65,536, and 16,384/32,768 lines respectively. Production translation

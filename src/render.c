@@ -61,10 +61,12 @@ struct snj_render_record {
     bool aborted;
     bool physical_open;
     bool label_displayed;
+    bool own_agent;
 };
 
 static int render_irc_event_now(struct snj_render *render,
-                                const struct snj_irc_event *event);
+                                const struct snj_irc_event *event,
+                                bool own_agent);
 static int flush_view(struct snj_render *render, enum snj_render_view view);
 
 static int
@@ -2589,7 +2591,7 @@ out:
 
 static int
 render_irc_event_now(struct snj_render *render,
-                     const struct snj_irc_event *event)
+                     const struct snj_irc_event *event, bool own_agent)
 {
     char when[16u];
     char prefix[768u];
@@ -2598,7 +2600,6 @@ render_irc_event_now(struct snj_render *render,
     struct tm tm;
     const char *nick_color;
     bool colored;
-    bool own_agent;
     bool markdown_body;
     int n;
     int rc = -1;
@@ -2608,8 +2609,6 @@ render_irc_event_now(struct snj_render *render,
         return -1;
     }
     irc_markdown_lifecycle(render, event);
-    own_agent = event->local && render->model_nick[0] &&
-                strcmp(event->nick, render->model_nick) == 0;
     if (own_agent && render->verbosity < 1u)
         return 0;
     seconds = (time_t)(event->timestamp_ms / 1000u);
@@ -2618,8 +2617,7 @@ render_irc_event_now(struct snj_render *render,
         memcpy(when, "--:--:--", 9u);
     colored = render->color_stderr;
     nick_color = event->op ? "\033[1;35m" :
-                 (render->model_nick[0] &&
-                  strcmp(event->nick, render->model_nick) == 0) ?
+                 own_agent ?
                  "\033[1;36m" : "\033[1;34m";
     if (output_begin(render, true) < 0)
         return -1;
@@ -2714,18 +2712,22 @@ snj_render_irc_event(struct snj_render *render,
                      const struct snj_irc_event *event)
 {
     struct snj_render_record *record;
+    bool own_agent;
 
     if (!render || !event) {
         errno = EINVAL;
         return -1;
     }
+    own_agent = event->local && render->model_nick[0] &&
+                strcmp(event->nick, render->model_nick) == 0;
     if (!render->networked || render->view == SNJ_RENDER_CHAT)
-        return render_irc_event_now(render, event);
+        return render_irc_event_now(render, event, own_agent);
     record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
     record->kind = SNJ_RENDER_RECORD_IRC;
     record->irc = *event;
+    record->own_agent = own_agent;
     queue_record(render, SNJ_RENDER_CHAT, record);
     return 0;
 }
@@ -2743,7 +2745,7 @@ flush_view(struct snj_render *render, enum snj_render_view view)
                                   record->text.len, record->colored_len,
                                   record->terminal_safe, record->persistent);
         } else if (record->kind == SNJ_RENDER_RECORD_IRC) {
-            rc = render_irc_event_now(render, &record->irc);
+            rc = render_irc_event_now(render, &record->irc, record->own_agent);
         } else {
             rc = 0;
             if (record->displayed < record->text.len)

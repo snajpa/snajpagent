@@ -846,6 +846,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
 
         if (!snj_json_exact_keys(data, keys, 3u) || !reason ||
             (strcmp(reason, "join") != 0 &&
+             strcmp(reason, "nick") != 0 &&
              strcmp(reason, "compaction") != 0) ||
             !text || !*text || strlen(text) > SNJ_MAX_IRC_SNAPSHOT ||
             !snj_utf8_valid((const unsigned char *)text, strlen(text), true) ||
