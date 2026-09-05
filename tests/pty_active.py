@@ -2097,7 +2097,8 @@ def test_network_collision_prompts():
         if peer:
             peer.close()
         for child in reversed(children):
-            child.exit_now()
+            child.send(b"\x04")
+            child.finish()
 
 
 def test_network_live_nick_prompt():
