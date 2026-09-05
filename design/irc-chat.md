@@ -493,6 +493,10 @@ have been admitted. Saturation backpressures only the producing owner; joined
 shutdown wakes blocked publishers and socket waits. See `interactive-io.md`.
 
 Failure to start the explicitly requested local listener is a startup error.
+An address-in-use collision stops startup with the endpoint and reason visible
+at verbosity zero. It does not fall through to another resolved address or
+increment the port. Other failures may try another address, allowing operation
+when an address family is unavailable.
 Failure of one outgoing connection is recoverable and visible. If every
 network link is down, the local UI and agent session remain usable and queued
 outbound chat is bounded rather than allowed to grow without limit.

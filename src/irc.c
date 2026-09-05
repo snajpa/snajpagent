@@ -592,6 +592,7 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     char host[SNJ_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char port[6u];
     int fd = -1;
+    int saved = EADDRNOTAVAIL;
     int one = 1;
     int gai;
 
@@ -612,20 +613,27 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     }
     for (it = addresses; it; it = it->ai_next) {
         fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
-        if (fd < 0)
+        if (fd < 0) {
+            saved = errno;
             continue;
+        }
         (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
         if (set_nonblocking(fd) == 0 &&
             bind(fd, it->ai_addr, it->ai_addrlen) == 0 &&
             listen(fd, 32) == 0)
             break;
+        saved = errno;
         (void)close(fd);
         fd = -1;
+        if (saved == EADDRINUSE)
+            break;
     }
     freeaddrinfo(addresses);
-    if (fd < 0)
+    if (fd < 0) {
         snj_errorf(error, error_size, "cannot listen on IRC endpoint %s: %s",
-                  endpoint, strerror(errno));
+                  endpoint, strerror(saved));
+        errno = saved;
+    }
     return fd;
 }
 

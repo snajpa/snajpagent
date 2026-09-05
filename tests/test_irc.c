@@ -262,6 +262,36 @@ open_server(struct snj_config *config, struct capture *capture)
 }
 
 static void
+test_listener_collision(void)
+{
+    static const char *const hosts[] = {"127.0.0.1", "localhost"};
+
+    for (size_t i = 0u; i < sizeof(hosts) / sizeof(hosts[0]); ++i) {
+        struct snj_config config;
+        struct capture capture = {0};
+        struct snj_irc *server;
+        struct snj_irc *duplicate = NULL;
+        unsigned short port = free_port();
+        char error[256u] = {0};
+
+        init_server_config(&config, port);
+        assert(snprintf(config.irc_listen, sizeof(config.irc_listen),
+                        "%s:%u", hosts[i], (unsigned int)port) > 0);
+        server = open_server(&config, &capture);
+        assert(snj_irc_open(&duplicate, &config, "/duplicate", capture_event,
+                            capture_trace, &capture, error, sizeof(error)) < 0);
+        assert(!duplicate);
+        assert(strstr(error, config.irc_listen));
+        assert(strstr(error, strerror(EADDRINUSE)));
+        assert(snj_irc_send_agent(server, "still here", error, sizeof(error)) == 0);
+        snj_irc_close(server);
+        server = open_server(&config, &capture);
+        snj_irc_close(server);
+        snj_config_free(&config);
+    }
+}
+
+static void
 test_validation(void)
 {
     struct snj_config config;
@@ -1242,6 +1272,7 @@ main(void)
     assert(setenv("USER", "root", 1) == 0);
     test_validation();
     test_cli_network_roles();
+    test_listener_collision();
     test_server();
     test_client_reconnect();
     test_default_nick_sequence();

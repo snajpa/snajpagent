@@ -92,6 +92,8 @@ for commands and keys.
 Host the built-in IRC server in this foreground process and select its
 listener.  This does not detach.  A missing endpoint means
 .BR localhost:6667 .
+An address already in use is a startup error, visible without verbosity flags.
+It does not try another address or increment the port after that collision.
 .TP
 .BR \-c " [" endpoint "]", " \-\-client" [= endpoint ]
 Add an outgoing IRC connection.  Repeat for up to 16 distinct endpoints.  A

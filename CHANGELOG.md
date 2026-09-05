@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Fail visibly when an IRC listen address is already in use, even without
+  `-v`. Do not silently host a separate room on another localhost address.
+
 - Make `[tool] max_output_tokens` a hard command-result context ceiling,
   defaulting to 6000. Clamp larger `exec_command` and `write_stdin` requests;
   honor smaller bounds and use the ceiling for null. Replace the former

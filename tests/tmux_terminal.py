@@ -1845,6 +1845,39 @@ def validate_irc_styles(terminal, remote_agent, local_agent=None):
             raise AssertionError(f"network UI is missing {role} styling")
 
 
+def run_listener_collision_case(binary, root, provider, environment):
+    endpoint = f"localhost:{free_loopback_port()}"
+    terminals = []
+    try:
+        for number in (1, 2):
+            case = root / f"listener-{number}"
+            workspace = case / "work"
+            workspace.mkdir(mode=0o700, parents=True)
+            config = case / "config.ini"
+            write_irc_config(config, provider.port, "host-model")
+            terminal = TmuxTerminal(case / "terminal", binary, workspace,
+                case / "state", config, 120, 24,
+                args=("-s", endpoint, "-n", f"agent{number}",
+                      "-o", f"operator{number}"), environment=environment)
+            terminals.append(terminal)
+            if number == 1:
+                terminal.wait(f"operator1@{MACHINE_HOSTNAME} :")
+            else:
+                terminal.wait_dead(timeout=5.0)
+                assert terminal.run("display-message", "-p", "-t", terminal.target,
+                                    "#{pane_dead_status}").strip() != "0"
+                screen = terminal.capture(join_wrapped=True)
+                assert f"cannot listen on IRC endpoint {endpoint}:" in screen, screen
+                assert "Address already in use" in screen, screen
+        terminals[0].submit("/names")
+        terminals[0].wait(f"members[{endpoint}]:", join_wrapped=True)
+        terminals[0].exit()
+        print("tmux_terminal listener collision: ok", flush=True)
+    finally:
+        for terminal in reversed(terminals):
+            terminal.close()
+
+
 def run_output_cap_cases(binary, root, provider, environment):
     for name, configured, selected in (("default", None, None),
                                        ("above", 1234, 9999),
@@ -1946,6 +1979,7 @@ def run_irc_case(binary, root):
     ]
     terminals = {}
     try:
+        run_listener_collision_case(binary, root, provider, environment)
         run_output_cap_cases(binary, root, provider, environment)
         run_ctrl_d_cases(binary, root, provider, environment)
         run_model_catalog_case(binary, root, provider, environment)
