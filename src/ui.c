@@ -74,7 +74,7 @@ struct ui_action {
     enum snj_term_action action;
     char *text;
     int error;
-    bool history_refresh;
+    bool history_refresh, steering;
     struct ui_snapshot snapshot;
 };
 
@@ -83,7 +83,8 @@ struct snj_ui_runtime {
     pthread_t thread, engine;
     sigset_t saved_mask;
     atomic_int fatal;
-    atomic_bool force_exit, cancel, eof, stop_public;
+    atomic_bool force_exit, cancel, eof;
+    atomic_uint steering_pending;
     _Atomic uint64_t interrupt;
     _Atomic uint64_t pause_until;
     uint64_t sequence;
@@ -353,7 +354,6 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
             snj_render_input_submitted(render, message->label, message->text) :
             snj_render_submitted(render, message->label, message->text);
     case UI_PUBLIC_BEGIN:
-        atomic_store(&display->runtime->stop_public, false);
         return message->data.public.rollout ?
             snj_render_rollout_begin(render, message->data.public.fd,
                                     message->label) :
@@ -447,10 +447,8 @@ read_input(struct snj_ui_display *display, int timeout_ms)
     }
     if (item->action == SNJ_TERM_INTERRUPT) {
         atomic_store(&runtime->interrupt, display->turn_generation);
-        atomic_store(&runtime->stop_public, true);
     } else if (item->action == SNJ_TERM_FORCE_EXIT) {
         atomic_store(&runtime->force_exit, true);
-        atomic_store(&runtime->stop_public, true);
         display->input_closed = true;
     } else if (item->action == SNJ_TERM_EXIT) {
         atomic_store(&runtime->eof, true);
@@ -463,8 +461,10 @@ read_input(struct snj_ui_display *display, int timeout_ms)
             term->prompt_wanted = true;
             if (item->action == SNJ_TERM_SUBMIT && item->snapshot.active &&
                 item->snapshot.view == SNJ_RENDER_ROLLOUT && item->text &&
-                (item->text[0] != '/' || item->text[1] == '/'))
-                atomic_store(&runtime->stop_public, true);
+                (item->text[0] != '/' || item->text[1] == '/')) {
+                item->steering = true;
+                atomic_fetch_add(&runtime->steering_pending, 1u);
+            }
         }
         if (queue_push(&runtime->actions, item))
             return 0;
@@ -486,6 +486,14 @@ render_input_checkpoint(void *opaque)
     return read_input(opaque, 0);
 }
 
+static bool
+public_stopped(struct snj_ui_runtime *runtime)
+{
+    return atomic_load(&runtime->force_exit) ||
+           atomic_load(&runtime->interrupt) ||
+           atomic_load(&runtime->steering_pending);
+}
+
 static int
 apply_public(struct snj_ui_display *display, struct ui_message *message)
 {
@@ -497,11 +505,11 @@ apply_public(struct snj_ui_display *display, struct ui_message *message)
             amount = 1024u;
         if (read_input(display, 0) < 0)
             return -1;
-        while (!atomic_load(&runtime->stop_public) &&
+        while (!public_stopped(runtime) &&
                snj_term_typing_pause_remaining(&display->term, snj_monotonic_ms()))
             if (read_input(display, 16) < 0)
                 return -1;
-        if (atomic_load(&runtime->stop_public))
+        if (public_stopped(runtime))
             return 0;
         if (message->data.public.rollout ?
             snj_render_rollout(&display->render, message->text + offset, amount,
@@ -662,7 +670,7 @@ snj_ui_init(struct snj_ui *ui)
     atomic_init(&runtime->force_exit, false);
     atomic_init(&runtime->cancel, false);
     atomic_init(&runtime->eof, false);
-    atomic_init(&runtime->stop_public, false);
+    atomic_init(&runtime->steering_pending, 0u);
     atomic_init(&runtime->pause_until, 0u);
     if (queue_open(&runtime->commands) < 0)
         goto fail;
@@ -785,7 +793,7 @@ snj_ui_pause_remaining(struct snj_ui *ui)
 {
     uint64_t until = atomic_load(&ui->runtime->pause_until);
     uint64_t now = snj_monotonic_ms();
-    if (atomic_load(&ui->runtime->stop_public))
+    if (public_stopped(ui->runtime))
         return 0u;
     return until > now ? (uint32_t)(until - now) : 0u;
 }
@@ -946,6 +954,8 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
            sizeof(ui->submitted_label));
     *action = item->action;
     *text = item->text;
+    if (item->steering)
+        atomic_fetch_sub(&runtime->steering_pending, 1u);
     if (item->history_refresh) {
         (void)snj_history_refresh(&ui->history);
         if (history_snapshot(ui, true) < 0)
@@ -972,8 +982,7 @@ void
 snj_ui_signal(struct snj_ui *ui)
 {
     if (ui) {
-        atomic_store(&ui->runtime->eof, true);
-        atomic_store(&ui->runtime->stop_public, true);
+        atomic_store(&ui->runtime->force_exit, true);
         wake_owner(&ui->runtime->actions);
     }
 }

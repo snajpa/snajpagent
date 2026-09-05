@@ -1045,6 +1045,19 @@ test_ui_output_order_and_failure(void)
     }
     assert(waitpid(reader, &status, 0) == reader);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    /* Beginning a public item must not erase an already delivered shutdown. */
+    {
+        struct snj_buf delivered;
+        snj_buf_init(&delivered, 16u);
+        snj_ui_signal(&ui);
+        assert(snj_ui_public_begin(&ui, pipefd[1], NULL, false) == 0);
+        assert(snj_ui_public(&ui, "stopped", 7u, &delivered, false) == 0);
+        assert(delivered.len == 0u);
+        assert(snj_ui_text(&ui, SNJ_UI_PUBLIC_END, NULL) == 0);
+        assert(snj_ui_poll(&ui, 0, false, &action, &line) == 1);
+        assert(action == SNJ_TERM_FORCE_EXIT);
+        snj_buf_free(&delivered);
+    }
     assert(close(pipefd[1]) == 0);
     assert(snj_ui_raw(&ui, -1, "x", 1u) < 0 && errno == EBADF);
     assert(snj_ui_raw(&ui, pipefd[1], "x", 1u) < 0);
