@@ -2527,6 +2527,9 @@ def test_network_chat_and_managed_mention():
     network_rollout_idle = (
         f"default/{DEFAULT_MODEL}/medium 0%   › ".encode()
     )
+    network_rollout_accounted_idle = (
+        f"default/{DEFAULT_MODEL}/medium ?%   › ".encode()
+    )
     try:
         child.wait(network_idle)
         session_id = new_session(before)
@@ -2606,7 +2609,7 @@ def test_network_chat_and_managed_mention():
 
         child.send(b"/rollout\r")
         rollout_end = child.wait("── rollout ──".encode(), start=chat_end)
-        child.wait(network_rollout_idle, start=rollout_end)
+        child.wait(network_rollout_accounted_idle, start=rollout_end)
         search_start = len(child.buf)
         child.send(b"\x12network_view_stream")
         child.wait(
@@ -2614,7 +2617,7 @@ def test_network_chat_and_managed_mention():
             start=search_start,
         )
         child.send(b"\x07")
-        child.wait(network_rollout_idle, start=search_start)
+        child.wait(network_rollout_accounted_idle, start=search_start)
         child.send(b"/chat\r")
         chat_end = child.wait("── chat ──".encode(), start=search_start)
         child.wait(network_idle, start=chat_end)
