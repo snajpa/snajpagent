@@ -931,23 +931,39 @@ test_read_only_and_queue_controllers(void)
     assert(snj_session_commit(&session, "turn_started", started,
                               NULL, error, sizeof(error)) == 0);
     assert(session.active_read_only && !session.active_queued);
-    for (unsigned int variant = 0; variant < 10u; ++variant) {
+    for (unsigned int variant = 0; variant < 15u; ++variant) {
         json_t *requests[3];
         struct snj_buf serialized;
         unsigned int pass = variant % 5u;
-        bool openrouter = variant >= 5u;
+        bool openrouter = variant >= 5u && variant < 10u;
+        bool codex = variant >= 10u;
         const char *search_type = openrouter ? "openrouter:web_search" : "web_search";
 
         (void)snprintf(config.providers[0].base_url, sizeof(config.providers[0].base_url),
                        "%s", openrouter ? "https://api.openai.com" : "https://openrouter.ai/api/v1");
         (void)snprintf(config.providers[1].base_url, sizeof(config.providers[1].base_url),
-                       "%s", openrouter ? "https://openrouter.ai/api/v1" : "https://api.openai.com");
+                       "%s", codex ? SNJ_CHATGPT_BASE :
+                       openrouter ? "https://openrouter.ai/api/v1" : "https://api.openai.com");
+        config.providers[1].auth = codex ? SNJ_AUTH_CHATGPT : SNJ_AUTH_ENV;
 
         session.active_read_only = pass == 0u;
         session.active_queued = pass == 1u;
         session.pending_queue_count = pass == 2u ? 1u : 0u;
         assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u,
-            empty, 0u, false, &config, NULL, &projection, error, sizeof(error)) == 0);
+            empty, 128000u, true, &config, NULL, &projection, error, sizeof(error)) == 0);
+        if (codex) {
+            assert(json_object_get(projection.create_request, "truncation") == NULL);
+            assert(json_object_get(projection.create_request, "max_output_tokens") == NULL);
+            assert(strcmp(snj_json_string(projection.create_request, "instructions"), "") == 0);
+            assert(strcmp(json_string_value(json_array_get(json_object_get(
+                projection.create_request, "include"), 0u)), "reasoning.encrypted_content") == 0);
+        } else {
+            assert(strcmp(snj_json_string(projection.create_request, "truncation"), "disabled") == 0);
+            assert(json_integer_value(json_object_get(projection.create_request, "max_output_tokens")) == 128000);
+            assert(json_object_get(projection.create_request, "include") == NULL);
+        }
+        assert(json_is_false(json_object_get(projection.create_request, "store")));
+        assert(json_is_true(json_object_get(projection.create_request, "stream")));
         requests[0] = projection.model_input;
         requests[1] = projection.create_request;
         requests[2] = projection.count_request;
