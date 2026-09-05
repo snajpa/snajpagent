@@ -1,5 +1,10 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
+Cursor-only input uses the same retained prompt painter as text and spinner
+updates. Configured spinner strings remain owned; the current label and physical
+frame describe painted output, without per-spinner paint offsets or copied frame
+metadata. Timer eligibility comes from the actual template and active slots.
+
 # Interactive Output And Queue Editing
 
 This note defines how streamed model output and the active input composer share

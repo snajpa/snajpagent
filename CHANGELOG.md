@@ -9,6 +9,11 @@
   pairing across each cut, and share normal statistical token estimation with
   compaction instead of treating its entire source as one token per byte.
 
+- Use one semantic configuration validator for loading and saving, rejecting
+  invalid auth/model-limit combinations before replacement. Route cursor-only
+  input through the retained prompt painter and remove obsolete spinner paint
+  metadata/copies while retaining owned settings and animation timing.
+
 - Fail visibly when an IRC listen address is already in use, even without
   `-v`. Do not silently host a separate room on another localhost address.
 
