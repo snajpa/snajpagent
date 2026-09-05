@@ -2742,7 +2742,11 @@ def test_network_live_nick_prompt():
             link.settimeout(4.0)
             wire = bytearray()
             while b"USER " not in wire:
-                wire.extend(link.recv(4096))
+                chunk = link.recv(4096)
+                if not chunk:
+                    child.drain(0.05)
+                    raise AssertionError(f"IRC registration closed: {bytes(child.buf)!r}")
+                wire.extend(chunk)
             nick = re.search(rb"NICK (\w+)\r\n", wire)[1].decode()
             accepted = nick + "7"
             link.sendall((f":fake 001 {accepted} :welcome\r\n"
@@ -2750,7 +2754,11 @@ def test_network_live_nick_prompt():
                           f":fake 376 {accepted} :end\r\n").encode())
             wire = bytearray()
             while b"JOIN #lab\r\n" not in wire:
-                wire.extend(link.recv(4096))
+                chunk = link.recv(4096)
+                if not chunk:
+                    child.drain(0.05)
+                    raise AssertionError(f"IRC join closed: {bytes(child.buf)!r}")
+                wire.extend(chunk)
             link.sendall((f":{accepted}!u@fake JOIN #lab\r\n"
                           f":fake 353 {accepted} = #lab :@operator7 agent7\r\n"
                           f":fake 366 {accepted} #lab :end\r\n"
