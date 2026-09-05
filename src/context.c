@@ -41,11 +41,29 @@ struct context_builder {
     size_t compact_best_request_count;
     bool compact_best_known;
     bool compact_allow_oversized_first;
+    size_t compact_pending_calls;
+    bool compact_process_open;
+    char compact_process_call[SNJ_ID_HEX_LEN + 1u];
     bool max_output_known;
 };
 
 #define SNJ_USAGE_ANCHOR_ENVELOPE_RESERVE UINT64_C(512)
 #define SNJ_USAGE_ANCHOR_ITEM_RESERVE UINT64_C(32)
+
+uint64_t
+snj_context_input_estimate(uint64_t bytes, uint64_t ratio)
+{
+    uint64_t scaled;
+
+    if (!ratio)
+        return bytes;
+    if (!bytes || bytes > (UINT64_MAX - 999999u) / ratio)
+        return SNJ_CONFIG_TOKEN_LIMIT_MAX;
+    scaled = (bytes * ratio + 999999u) / UINT64_C(1000000);
+    if (scaled > (SNJ_CONFIG_TOKEN_LIMIT_MAX - 512u) * 8u / 9u)
+        return SNJ_CONFIG_TOKEN_LIMIT_MAX;
+    return scaled + scaled / 8u + 512u;
+}
 
 void
 snj_context_projection_init(struct snj_context_projection *projection)
@@ -651,15 +669,22 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
                           char *error, size_t error_size)
 {
     struct snj_buf encoded;
-    size_t count;
+    size_t count, source_bytes;
 
     if (!builder->compact_budget)
         return 0;
     snj_buf_init(&encoded, SNJ_CONTEXT_MAX_COMPACT);
-    if (snj_json_canonical(builder->request_input, &encoded) == 0 &&
-        (encoded.len <= builder->compact_budget ||
+    if (snj_json_canonical(builder->request_input, &encoded) < 0) {
+        snj_buf_free(&encoded);
+        snj_errorf(error, error_size, "cannot encode complete compaction group within 12 MiB");
+        return -1;
+    }
+    source_bytes = encoded.len;
+    if (encoded.len <= builder->compact_budget ||
          (!builder->compact_best_known &&
-          builder->compact_allow_oversized_first))) {
+          builder->compact_allow_oversized_first) ||
+         (builder->compact_allow_oversized_first && builder->compact_best_known &&
+          json_array_size(builder->request_input) == builder->compact_best_request_count)) {
         builder->compact_best_known = true;
         builder->compact_best_seq = seq;
         builder->compact_best_request_count =
@@ -670,7 +695,10 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
     snj_buf_free(&encoded);
     if (!builder->compact_best_known) {
         snj_errorf(error, error_size,
-                  "oldest complete history prefix exceeds the conservative compaction budget");
+                  "oldest complete response/tool group through event %llu is %zu bytes, above compaction source budget %llu bytes; use exact counting/a larger model or reduce irreducible input",
+                  (unsigned long long)seq,
+                  source_bytes,
+                  (unsigned long long)builder->compact_budget);
         errno = EOVERFLOW;
         return -1;
     }
@@ -759,8 +787,24 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
 {
     struct context_builder *builder = opaque;
 
-    if (builder->session && seq <= builder->session->compact_seq)
+    if (builder->session && seq <= builder->session->compact_seq) {
+        /* A compact source may end between complete groups inside an older
+         * turn. Replay its state, but never repeat the summarized messages. */
+        if (strcmp(type, "turn_started") == 0) {
+            const char *id = snj_json_string(data, "turn_id");
+            if (!id || !snj_strcpy(builder->active_turn_id,
+                                   sizeof(builder->active_turn_id), id))
+                return -1;
+            builder->active_turn = true;
+        } else if (strcmp(type, "turn_completed") == 0 ||
+                   strcmp(type, "turn_completed_silent") == 0 ||
+                   strcmp(type, "turn_failed") == 0 ||
+                   strcmp(type, "turn_interrupted") == 0) {
+            builder->active_turn = false;
+            builder->active_turn_id[0] = '\0';
+        }
         return 0;
+    }
     if (strcmp(type, "compaction_completed") == 0)
         return 0;
     if (strcmp(type, "irc_snapshot") == 0) {
@@ -1715,7 +1759,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     if (builder->compact_stopped)
         return 0;
     if (builder->session && seq <= builder->session->compact_seq)
-        return 0;
+        return context_event(opaque, seq, type, data, error, error_size);
     builder->compact_source_seq = seq;
 
     if (builder->compact_stop_before_active &&
@@ -1858,7 +1902,23 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (append_response_items(builder, items, error, error_size) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
-        return 0;
+        builder->compact_process_call[0] = '\0';
+        for (size_t i = 0u; i < json_array_size(items); ++i) {
+            json_t *item = json_array_get(items, i);
+            if (strcmp(snj_json_string(item, "kind"), "tool_call") == 0) {
+                ++builder->compact_pending_calls;
+                if (strcmp(snj_json_string(item, "name"), "write_stdin") == 0)
+                    (void)snj_strcpy(builder->compact_process_call,
+                        sizeof(builder->compact_process_call), snj_json_string(item, "call_id"));
+            }
+        }
+        if (builder->compact_pending_calls || builder->compact_process_open)
+            return 0;
+        before = json_array_size(builder->request_input);
+        if (append_deferred_steering(builder) < 0)
+            return -1;
+        builder->compact_new_items += json_array_size(builder->request_input) - before;
+        return compact_complete_boundary(builder, seq, error, error_size);
     }
     if (strcmp(type, "tool_finished") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -1875,7 +1935,25 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (append_tool_result(builder, call_id, result) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
-        return 0;
+        if (!builder->compact_pending_calls) {
+            snj_errorf(error, error_size, "compact tool result has no pending call");
+            errno = EINVAL;
+            return -1;
+        }
+        --builder->compact_pending_calls;
+        const char *status = snj_json_string(result, "status");
+        if (strcmp(status, "running") == 0)
+            builder->compact_process_open = true;
+        else if (strcmp(call_id, builder->compact_process_call) == 0 &&
+                 strcmp(status, "not_run") != 0 && strcmp(status, "denied") != 0)
+            builder->compact_process_open = false;
+        if (builder->compact_pending_calls || builder->compact_process_open)
+            return 0;
+        before = json_array_size(builder->request_input);
+        if (append_deferred_steering(builder) < 0)
+            return -1;
+        builder->compact_new_items += json_array_size(builder->request_input) - before;
+        return compact_complete_boundary(builder, seq, error, error_size);
     }
     if (strcmp(type, "process_closed") == 0) {
         const char *turn_id = snj_json_string(data, "turn_id");
@@ -1892,7 +1970,14 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (append_process_closed(builder, cause, result) < 0)
             return -1;
         builder->compact_new_items += json_array_size(builder->request_input) - before;
-        return 0;
+        builder->compact_process_open = false;
+        if (builder->compact_pending_calls)
+            return 0;
+        before = json_array_size(builder->request_input);
+        if (append_deferred_steering(builder) < 0)
+            return -1;
+        builder->compact_new_items += json_array_size(builder->request_input) - before;
+        return compact_complete_boundary(builder, seq, error, error_size);
     }
     if (strcmp(type, "turn_completed") == 0 ||
         strcmp(type, "turn_completed_silent") == 0) {
@@ -2053,7 +2138,7 @@ compact_request_build(struct snj_session *session,
         errno = EINVAL;
         goto out;
     }
-    if (!active_prefix && builder.active_turn) {
+    if (!active_prefix && builder.active_turn && !builder.compact_stopped) {
         snj_errorf(error, error_size, "compaction source ends inside a turn");
         errno = EINVAL;
         goto out;

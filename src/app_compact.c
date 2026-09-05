@@ -485,8 +485,11 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     use_exact = snj_app_exact_count_enabled(
         app->turn_provider->exact_token_count,
         app->turn_capacity.count_capability);
-    source_budget = app->turn_capacity.hard_input_known && !use_exact ?
-        app->turn_capacity.hard_input_tokens : 0u;
+    source_budget = app->turn_capacity.hard_input_known && !use_exact &&
+        !app->turn_capacity.observed_tokens_per_million_bytes ?
+        app->turn_capacity.hard_input_tokens : SNJ_CONTEXT_MAX_COMPACT - 4096u;
+    if (source_budget > SNJ_CONTEXT_MAX_COMPACT - 4096u)
+        source_budget = SNJ_CONTEXT_MAX_COMPACT - 4096u;
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
         build_rc = build_compaction_request(app, active_prefix, model, effort,
                                             source_budget,
@@ -549,7 +552,10 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                      "compaction provider request exceeds 12 MiB");
             goto out;
         }
-        input_tokens_bound = (uint64_t)count_request_bytes;
+        input_tokens_bound = snj_context_input_estimate((uint64_t)count_request_bytes,
+            app->turn_capacity.observed_tokens_per_million_bytes);
+        count_method = app->turn_capacity.observed_tokens_per_million_bytes ?
+            "statistical_upper_estimate" : "qualified_upper_bound";
         if (use_exact) {
             stage_rc = snj_app_provider_count(app, count_request, credential, 0u,
                 &input_tokens_bound, &count_method, error, error_size);
@@ -559,7 +565,6 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             }
             if (stage_rc == SNJ_APP_COUNT_SKIPPED) {
                 use_exact = false;
-                input_tokens_bound = (uint64_t)count_request_bytes;
             }
         }
         if (input_tokens_bound == 0u ||
@@ -580,7 +585,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             errno = EOVERFLOW;
             goto out;
         }
-        if (strcmp(count_method, "exact") == 0) {
+        if (strcmp(count_method, "qualified_upper_bound") != 0) {
             uint64_t scaled;
             if ((uint64_t)source_bytes > UINT64_MAX /
                     app->turn_capacity.hard_input_tokens)

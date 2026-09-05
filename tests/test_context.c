@@ -458,6 +458,137 @@ tool_finished_data(const char *turn_id, const char *call_id, json_t *result)
     return data;
 }
 
+static void
+test_compact_groups(struct snj_store *store, const char *workspace)
+{
+    const char *turn = "a1000000000000000000000000000000";
+    const char *next_turn = "a2000000000000000000000000000000";
+    const char *handle = "a3000000000000000000000000000000";
+    struct snj_session session;
+    struct snj_instruction_set instructions;
+    struct snj_context_projection projection;
+    json_t *empty = json_array();
+    uint64_t boundaries[4];
+    char text[60001], error[512], session_id[SNJ_ID_HEX_LEN + 1u];
+    char last_response[SNJ_ID_HEX_LEN + 1u];
+
+    memset(text, 'x', sizeof(text) - 1u);
+    text[sizeof(text) - 1u] = '\0';
+    snj_session_init(&session);
+    snj_instructions_init(&instructions);
+    assert(snj_session_create(store, &session, workspace, "default",
+                              SNAJPAGENT_MODEL, "medium", error, sizeof(error)) == 0);
+    memcpy(session_id, session.id, sizeof(session_id));
+    assert(snj_session_commit(&session, "turn_started",
+        turn_started(turn, 1u, "old user must not repeat", workspace, NULL),
+        NULL, error, sizeof(error)) == 0);
+    for (unsigned int cycle = 1u; cycle <= 4u; ++cycle) {
+        char response[SNJ_ID_HEX_LEN + 1u], call[SNJ_ID_HEX_LEN + 1u];
+        json_t *data, *result;
+        snprintf(response, sizeof(response), "%032x", 0xb000u + cycle);
+        snprintf(call, sizeof(call), "%032x", 0xc000u + cycle);
+        data = response_started(turn, response, NULL);
+        assert(json_object_set_new(data, "cycle", json_integer(cycle)) == 0);
+        if (cycle == 3u)
+            assert(json_array_append_new(json_object_get(data, "steering_ids"),
+                json_string("a4000000000000000000000000000000")) == 0);
+        assert(snj_session_commit(&session, "response_started", data,
+                                  NULL, error, sizeof(error)) == 0);
+        data = response_completed_call(turn, response, call, workspace);
+        assert(json_object_set_new(data, "cycle", json_integer(cycle)) == 0);
+        if (cycle == 3u) {
+            json_t *item = json_array_get(json_object_get(data, "items"), 0u);
+            json_t *args = json_object();
+            assert(json_object_set_new(item, "name", json_string("write_stdin")) == 0);
+            assert(json_object_set_new(args, "handle", json_string(handle)) == 0);
+            assert(json_object_set_new(args, "data", json_string("")) == 0);
+            assert(json_object_set_new(args, "eof", json_false()) == 0);
+            assert(json_object_set_new(args, "terminate", json_false()) == 0);
+            assert(json_object_set_new(args, "yield_ms", json_integer(0)) == 0);
+            assert(json_object_set_new(args, "max_output_tokens", json_integer(60000)) == 0);
+            assert(json_object_set_new(item, "arguments", args) == 0);
+        }
+        assert(snj_session_commit(&session, "response_completed", data,
+                                  NULL, error, sizeof(error)) == 0);
+        assert(snj_session_commit(&session, "tool_started",
+            tool_started_data(turn, call, session.pending_calls[0].action_sha256, workspace),
+            NULL, error, sizeof(error)) == 0);
+        if (cycle == 2u)
+            assert(snj_session_commit(&session, "steering_added",
+                steering_added(turn, "a4000000000000000000000000000000", "keep the pairing"),
+                NULL, error, sizeof(error)) == 0);
+        result = running_result_limit(handle, text, NULL, 60000);
+        if (cycle != 2u) {
+            assert(json_object_set_new(result, "status", json_string("succeeded")) == 0);
+            assert(json_object_set_new(result, "exit_code", json_integer(0)) == 0);
+            assert(json_object_set_new(result, "handle", json_null()) == 0);
+        }
+        assert(snj_session_commit(&session, "tool_finished",
+            tool_finished_data(turn, call, result), &boundaries[cycle - 1u], error, sizeof(error)) == 0);
+    }
+    snprintf(last_response, sizeof(last_response), "%032x", 0xb005u);
+    json_t *data = response_started(turn, last_response, NULL);
+    assert(json_object_set_new(data, "cycle", json_integer(5)) == 0);
+    assert(snj_session_commit(&session, "response_started", data, NULL, error, sizeof(error)) == 0);
+    data = response_completed(turn, last_response, "old final suffix");
+    assert(json_object_set_new(data, "cycle", json_integer(5)) == 0);
+    assert(snj_session_commit(&session, "response_completed", data, NULL, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "turn_completed", turn_completed(turn, last_response),
+                              NULL, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "turn_started",
+        turn_started(next_turn, 2u, "active user stays verbatim", workspace, NULL),
+        NULL, error, sizeof(error)) == 0);
+
+    for (unsigned int part = 0u; part < 2u; ++part) {
+        json_t *request = NULL, *count = NULL, *output = compact_output_fixture();
+        char hash[65], request_hash[65], output_hash[65], compact[33];
+        size_t bytes, request_bytes, output_bytes;
+        uint64_t seq;
+        snprintf(compact, sizeof(compact), "%032x", 0xd000u + part);
+        assert(snj_context_compact_active_prefix_request_build(&session, SNAJPAGENT_MODEL,
+            "medium", 130000u, false, &request, &count, hash, &bytes,
+            request_hash, &request_bytes, &seq, error, sizeof(error)) == 0);
+        assert(seq == boundaries[part == 0u ? 0u : 2u]);
+        assert(bytes <= 130000u);
+        assert(snj_context_compact_output_valid(output, output_hash, &output_bytes,
+                                                error, sizeof(error)) == 0);
+        data = compaction_started_data(&session, compact, "hard_budget", seq,
+                                        hash, request_hash, bytes);
+        assert(json_object_set_new(data, "count_method", json_string("statistical_upper_estimate")) == 0);
+        assert(snj_session_commit(&session, "compaction_started", data, NULL, error, sizeof(error)) == 0);
+        data = compaction_completed_data(compact, hash, output_hash, request_hash,
+                                          bytes, output_bytes, output);
+        assert(json_object_set_new(data, "count_method", json_string("statistical_upper_estimate")) == 0);
+        assert(snj_session_commit(&session, "compaction_completed", data, NULL, error, sizeof(error)) == 0);
+        snj_context_projection_init(&projection);
+        assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
+            0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
+        json_t *input = json_object_get(projection.create_request, "input");
+        size_t calls = 0u, results = 0u, users = 0u;
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            json_t *item = json_array_get(input, i);
+            const char *type = snj_json_string(item, "type");
+            const char *content = snj_json_string(item, "content");
+            if (type && strcmp(type, "function_call") == 0) ++calls;
+            if (type && strcmp(type, "function_call_output") == 0) ++results;
+            if (content) {
+                assert(strcmp(content, "old user must not repeat") != 0);
+                users += strcmp(content, "active user stays verbatim") == 0;
+            }
+        }
+        assert(calls == (part ? 1u : 3u) && results == calls && users == 1u);
+        snj_context_projection_free(&projection);
+        json_decref(request);
+        json_decref(count);
+        json_decref(output);
+        snj_session_close(&session);
+        assert(snj_session_open(store, &session, session_id, error, sizeof(error)) == 0);
+    }
+    snj_session_close(&session);
+    snj_instructions_free(&instructions);
+    json_decref(empty);
+}
+
 static json_t *
 process_closed_data(const char *turn_id, const char *handle, json_t *result)
 {
@@ -1057,6 +1188,10 @@ main(void)
     snj_context_projection_init(&projection);
     snj_instructions_init(&instructions);
     assert(snj_store_open(&store, state, error, sizeof(error)) == 0);
+    assert(snj_context_input_estimate(318003u, 262814u) < 258400u);
+    assert(snj_context_input_estimate(318003u, 0u) == 318003u);
+    assert(snj_context_input_estimate(UINT64_MAX, UINT64_MAX) == SNJ_CONFIG_TOKEN_LIMIT_MAX);
+    test_compact_groups(&store, workspace);
     assert(snj_session_create(&store, &session, workspace, "default",
                               SNAJPAGENT_MODEL, "default",
                               error, sizeof(error)) == 0);

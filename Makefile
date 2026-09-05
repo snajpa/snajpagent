@@ -123,9 +123,9 @@ tests/test_provider_transport: $(COMMON_SRC) tests/test_provider_transport.c $(H
 	$(CC) $(CPPFLAGS) -DSNAJPAGENT_TEST_TRANSPORT_ENDPOINTS=1 $(JANSSON_CFLAGS) $(CURL_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(COMMON_SRC) tests/test_provider_transport.c $(LDLIBS) $(CURL_LIBS)
 
-tests/test_context: src/base.c src/config.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c tests/test_context.c $(HEADERS)
+tests/test_context: src/base.c src/config.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_context.c $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/config.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c \
+		-o $@ src/base.c src/config.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c \
 		tests/test_context.c $(LDLIBS)
 
 tests/test_model_cache: src/base.c src/config.c src/json.c src/instructions.c src/turn.c src/store.c src/model_cache.c tests/test_model_cache.c $(HEADERS)

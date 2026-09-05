@@ -783,6 +783,45 @@ def test_read_only_queries():
     one(log, "steering_added")
 
 
+def test_compaction_statistical_source():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    state = root / "statistical-compact"
+    state.mkdir(mode=0o700)
+    config = root / "config" / "statistical-compact.ini"
+    config.write_text("[agent]\nread_agents_md = false\n[provider]\n"
+                      "exact_token_count = false\nnative_compaction = false\n"
+                      "auto_compact_input_tokens = 1\n", encoding="utf-8")
+    model = {
+        "id": DEFAULT_MODEL, "count_capability": "unsupported",
+        "default_effort": "medium", "efforts": ["medium"],
+        "observed_hard_input_tokens": 0, "observed_input_tokens": 1000,
+        "observed_model_input_bytes": 10000,
+        "limits": {name: None for name in (
+            "auto_compact_input_tokens", "context_window_tokens",
+            "effective_context_window_percent", "input_context_window_tokens",
+            "max_context_window_tokens", "max_input_tokens", "max_output_tokens")},
+    }
+    model["limits"]["max_input_tokens"] = 10000
+    cache = state / "models.json"
+    cache.write_text(json.dumps({"schema_version": 1, "updated_at_ms": 1,
+        "providers": [{"name": "default", "protocol": "openai",
+                       "base_url": "https://api.openai.com", "models": [model]}]}),
+        encoding="utf-8")
+    cache.chmod(0o600)
+    run = subprocess.run([BINARY, "--dotdir", str(state), "--config", str(config),
+                          "-e", "--", "large prior user " + "a" * 25000],
+                         cwd=WORKSPACE, capture_output=True, timeout=10)
+    assert run.returncode == 0, run.stderr
+    logs = list((state / "sessions").glob("*/events.jsonl"))
+    assert len(logs) == 1
+    log = [json.loads(line) for line in logs[0].read_text().splitlines()]
+    compact = one(log, "compaction_started")
+    assert compact["data"]["count_method"] == "statistical_upper_estimate"
+    assert compact["data"]["input_tokens_bound"] < 10000
+    assert one(log, "compaction_completed")["data"]["count_method"] == "statistical_upper_estimate"
+    assert not any(event["type"] == "turn_failed" for event in log)
+
+
 def test_read_only_multiline_compaction_and_chat():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     config = root / "config" / "ro-compaction.ini"
@@ -3911,6 +3950,7 @@ def test_editor_during_blocked_engine():
 
 
 if __name__ == "__main__":
+    test_compaction_statistical_source()
     test_ctrl_d_exit()
     test_editor_during_render_flood()
     test_editor_during_blocked_engine()

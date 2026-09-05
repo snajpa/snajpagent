@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Recover oversized historical context by compacting complete response/tool
+  groups within older turns. Preserve replay, steering and managed-process
+  pairing across each cut, and share normal statistical token estimation with
+  compaction instead of treating its entire source as one token per byte.
+
 - Fail visibly when an IRC listen address is already in use, even without
   `-v`. Do not silently host a separate room on another localhost address.
 

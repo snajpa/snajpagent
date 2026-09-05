@@ -970,7 +970,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             "request_sha256", "source_seq", "source_sha256"
         };
         static const char *const methods[] = {
-            "exact", "anchored_upper_bound", "qualified_upper_bound"
+            "exact", "anchored_upper_bound", "statistical_upper_estimate", "qualified_upper_bound"
         };
         static const char *const reasons[] = {
             "manual", "proactive", "hard_budget", "provider_rejection"
@@ -1046,7 +1046,9 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             "output_count_method", "output_count_request_sha256",
             "output_sha256", "output_tokens_bound", "source_sha256"
         };
-        static const char *const methods[] = {"exact", "qualified_upper_bound"};
+        static const char *const methods[] = {
+            "exact", "statistical_upper_estimate", "qualified_upper_bound"
+        };
         const char *compact_id = snj_json_string(data, "compact_id");
         const char *method = snj_json_string(data, "count_method");
         const char *output_method = snj_json_string(data, "output_count_method");

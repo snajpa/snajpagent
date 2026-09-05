@@ -13,6 +13,7 @@
 #define SNJ_CONTEXT_MAX_COMPACT_ITEMS 128u
 
 int snj_context_codex_request(json_t *request);
+uint64_t snj_context_input_estimate(uint64_t bytes, uint64_t tokens_per_million_bytes);
 
 struct snj_context_projection {
     json_t *model_input;

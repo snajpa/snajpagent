@@ -49,8 +49,17 @@ below the hard budget. Oversized historical tool/process and assistant text is
 represented by a bounded provenance notice containing its byte size, digest,
 and durable rollout path. The current user input, active controller state, and
 tool schemas are never silently dropped. Responses-based recovery can compact
-the oldest complete turn prefix hierarchically while preserving all newer
-turns and the current turn.
+the oldest complete response/tool-group prefix hierarchically, including a
+prefix inside an older turn, while preserving its remaining suffix, all newer
+turns and the current turn. Cuts never separate calls from results or cross an
+unresolved managed process. Deferred steering is included before its source
+boundary; replay retains turn bookkeeping across summarized events without
+repeating their content. The original append-only log remains untouched.
+Compaction uses exact counting when available and the same source/model-bound
+statistical estimator as normal requests otherwise; without a learned ratio
+it retains the labeled byte upper bound. Prefix selection is scaled in bytes
+after accounting for the complete provider envelope in tokens. A genuinely
+indivisible group that cannot fit reports its event boundary and byte budget.
 
 The stream decoder strictly interprets only response creation, output
 structure, public text/refusals, function arguments, and terminal success or
