@@ -142,8 +142,8 @@ snag_app_abort_stream_item(struct app_state *app)
     return 0;
 }
 
-static int
-stream_public_core(void *opaque, size_t item_index, enum snag_item_kind kind,
+int
+snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind,
                    enum snag_item_phase phase, const char *provider_item_id,
                    const char *text, size_t len)
 {
@@ -258,32 +258,6 @@ fail_partial:
                        "public output could not be rendered");
 }
 
-#ifdef SNAJPAGENT_TEST_FIXTURE
-int
-snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind,
-              enum snag_item_phase phase, const char *text, size_t len)
-{
-    struct app_state *app = opaque;
-    const char *provider_item_id = NULL;
-
-    if (app->stream_graph && item_index < app->stream_graph->count)
-        provider_item_id = app->stream_graph->items[item_index].provider_item_id;
-    return stream_public_core(opaque, item_index, kind, phase, provider_item_id,
-                              text, len);
-}
-#endif
-
-#ifndef SNAJPAGENT_TEST_FIXTURE
-int
-snag_app_stream_public_response(void *opaque, size_t item_index, enum snag_item_kind kind,
-                       enum snag_item_phase phase, const char *provider_item_id,
-                       const char *text, size_t len)
-{
-    return stream_public_core(opaque, item_index, kind, phase, provider_item_id,
-                              text, len);
-}
-#endif
-
 void
 snag_app_response_cycle_release(struct app_state *app,
                                struct snag_response_graph *graph,
@@ -296,7 +270,6 @@ snag_app_response_cycle_release(struct app_state *app,
     snag_context_projection_free(projection);
     snag_buf_free(request_body);
     snag_response_graph_free(graph);
-    app->stream_graph = NULL;
     snag_app_clear_partial_public(app);
 }
 

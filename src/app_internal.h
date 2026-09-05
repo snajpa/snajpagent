@@ -60,7 +60,6 @@ struct app_state {
     const struct snag_provider_config *staged_provider;
     const char *staged_model;
     const char *staged_effort;
-    const struct snag_response_graph *stream_graph;
     struct partial_public_item partial[SNAG_MAX_RESPONSE_ITEMS];
     size_t partial_count;
     size_t partial_bytes;
@@ -289,14 +288,9 @@ json_t *snag_app_partial_public_json(const struct app_state *app);
 int snag_app_finish_stream_item(struct app_state *app);
 int snag_app_abort_stream_item(struct app_state *app);
 int snag_app_stream_public(void *opaque, size_t item_index,
-                          enum snag_item_kind kind,
-                          enum snag_item_phase phase,
+                          enum snag_item_kind kind, enum snag_item_phase phase,
+                          const char *provider_item_id,
                           const char *text, size_t len);
-int snag_app_stream_public_response(void *opaque, size_t item_index,
-                                   enum snag_item_kind kind,
-                                   enum snag_item_phase phase,
-                                   const char *provider_item_id,
-                                   const char *text, size_t len);
 void snag_app_reset_stream(struct app_state *app);
 
 #endif

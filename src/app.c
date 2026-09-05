@@ -3115,7 +3115,6 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         snag_buf_free(&request_body);
-        app->stream_graph = &graph;
         snag_app_reset_stream(app);
         response_begin_ms = snag_time_ms();
         error[0] = '\0';

@@ -13,11 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef int (*fixture_emit_fn)(void *opaque, size_t item_index,
-                               enum snag_item_kind kind,
-                               enum snag_item_phase phase,
-                               const char *text, size_t len);
-typedef int (*fixture_pump_fn)(void *opaque, unsigned int timeout_ms);
 #ifdef SNAJPAGENT_TEST_FIXTURE
 static bool fixture_capacity_rejected_once;
 
@@ -47,12 +42,12 @@ fixture_model_limits(size_t index)
 int snag_fixture_response(const char *prompt, const json_t *steering,
                          const char *workspace, unsigned int cycle,
                          const char *goal_prompt, uint64_t goal_turn_count,
-                         fixture_emit_fn emit, fixture_pump_fn pump, void *opaque,
+                         snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
                          struct snag_response_graph *graph,
                          struct snag_provider_failure *failure,
                          char *error, size_t error_size);
 int snag_fixture_tool(const struct snag_response_item *call,
-                     fixture_pump_fn pump, void *pump_opaque,
+                     snag_provider_pump_fn pump, void *pump_opaque,
                      json_t **result, char *error, size_t error_size);
 #endif
 
@@ -389,7 +384,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
     int rc = snag_provider_responses_create(create_request, app->config,
                                            app->turn_provider, credential,
                                            &app->ui,
-                                           snag_app_stream_public_response, app,
+                                           snag_app_stream_public, app,
                                            snag_app_active_input_pump, app, graph,
                                            failure, error, error_size, &cancel_code,
                                            retry_count);

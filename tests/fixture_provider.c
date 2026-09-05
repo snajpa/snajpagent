@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
 #include "json.h"
-#include "responses.h"
+#include "provider.h"
 #include "store.h"
 #include "turn.h"
 
@@ -14,12 +14,6 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-
-typedef int (*fixture_emit_fn)(void *opaque, size_t item_index,
-                               enum snag_item_kind kind,
-                               enum snag_item_phase phase,
-                               const char *text, size_t len);
-typedef int (*fixture_pump_fn)(void *opaque, unsigned int timeout_ms);
 
 static char managed_handle[SNAG_ID_HEX_LEN + 1u];
 static const char wrong_managed_handle[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -94,7 +88,7 @@ set_usage(struct snag_response_graph *graph, uint64_t input_tokens,
 }
 
 static int
-emit_public(struct snag_response_graph *graph, fixture_emit_fn emit, void *opaque,
+emit_public(struct snag_response_graph *graph, snag_responses_emit_fn emit, void *opaque,
             enum snag_item_kind kind, enum snag_item_phase phase,
             const char *provider_id, const char *text, int pattern)
 {
@@ -105,13 +99,13 @@ emit_public(struct snag_response_graph *graph, fixture_emit_fn emit, void *opaqu
     if (snag_response_graph_add_public(graph, kind, phase, provider_id, text) < 0)
         return -1;
     if (pattern == 1)
-        return emit(opaque, index, kind, phase, "ha", 2u) < 0 ||
-               emit(opaque, index, kind, phase, "ha", 2u) < 0 ? -1 : 0;
+        return emit(opaque, index, kind, phase, provider_id, "ha", 2u) < 0 ||
+               emit(opaque, index, kind, phase, provider_id, "ha", 2u) < 0 ? -1 : 0;
     if (pattern == 2)
-        return emit(opaque, index, kind, phase, text, 1u) < 0 ||
-               emit(opaque, index, kind, phase, text + 1u, len - 1u) < 0 ? -1 : 0;
-    if ((split && emit(opaque, index, kind, phase, text, split) < 0) ||
-        emit(opaque, index, kind, phase, text + split, len - split) < 0)
+        return emit(opaque, index, kind, phase, provider_id, text, 1u) < 0 ||
+               emit(opaque, index, kind, phase, provider_id, text + 1u, len - 1u) < 0 ? -1 : 0;
+    if ((split && emit(opaque, index, kind, phase, provider_id, text, split) < 0) ||
+        emit(opaque, index, kind, phase, provider_id, text + split, len - split) < 0)
         return -1;
     return 0;
 }
@@ -306,7 +300,7 @@ int
 snag_fixture_response(const char *prompt, const json_t *steering,
                      const char *workspace, unsigned int cycle,
                      const char *goal_prompt, uint64_t goal_turn_count,
-                     fixture_emit_fn emit, fixture_pump_fn pump, void *opaque,
+                     snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
                      struct snag_response_graph *graph,
                      struct snag_provider_failure *failure,
                      char *error, size_t error_size)
@@ -700,7 +694,7 @@ snag_fixture_response(const char *prompt, const json_t *steering,
         if (snag_response_graph_add_public(
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_terminal_render", full) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  first, sizeof(first) - 1u) < 0)
             goto allocation;
         for (unsigned int i = 0u; i < 50u; ++i) {
@@ -709,11 +703,11 @@ snag_fixture_response(const char *prompt, const json_t *steering,
             if (pump_rc != 0)
                 return pump_rc;
         }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  second_prefix, sizeof(second_prefix) - 1u) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  euro_first, sizeof(euro_first) - 1u) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  second_suffix, sizeof(second_suffix) - 1u) < 0)
             goto allocation;
         /* Leave time for the test to begin its second typing pause. */
@@ -723,7 +717,7 @@ snag_fixture_response(const char *prompt, const json_t *steering,
             if (pump_rc != 0)
                 return pump_rc;
         }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  third, sizeof(third) - 1u) < 0)
             goto allocation;
         /* Keep the turn active until that paused output becomes visible. */
@@ -759,13 +753,13 @@ flood_done:
 
         if (snag_response_graph_add_public(graph, SNAG_ITEM_ASSISTANT,
                 SNAG_PHASE_FINAL_ANSWER, "msg_engine_blocked", text) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  text, 19u) < 0)
             goto allocation;
         /* Intentionally no pump: models a sync/lock/DNS/library stall. */
         while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
             ;
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  text + 19u, sizeof(text) - 1u - 19u) < 0)
             goto allocation;
         return 0;
@@ -787,7 +781,7 @@ flood_done:
             if (pump_rc != 0)
                 return pump_rc;
         }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  first, sizeof(first) - 1u) < 0)
             goto allocation;
         for (unsigned int i = 0u; i < 60u; ++i) {
@@ -796,7 +790,7 @@ flood_done:
             if (pump_rc != 0)
                 return pump_rc;
         }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  second, sizeof(second) - 1u) < 0)
             goto allocation;
         return 0;
@@ -832,9 +826,9 @@ flood_done:
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_index_one", "index one") < 0 ||
             emit(opaque, 1u, SNAG_ITEM_ASSISTANT,
-                 SNAG_PHASE_FINAL_ANSWER, "index one", 9u) < 0 ||
+                 SNAG_PHASE_FINAL_ANSWER, graph->items[1u].provider_item_id, "index one", 9u) < 0 ||
             emit(opaque, 0u, SNAG_ITEM_ASSISTANT,
-                 SNAG_PHASE_COMMENTARY, "index zero", 10u) < 0)
+                 SNAG_PHASE_COMMENTARY, graph->items[0u].provider_item_id, "index zero", 10u) < 0)
             goto allocation;
         return 0;
     }
@@ -861,7 +855,7 @@ flood_done:
                 goto allocation;
             for (size_t part = 0u; part < fragment_count; ++part) {
                 if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, fragments[part],
+                         SNAG_PHASE_COMMENTARY, graph->items[index].provider_item_id, fragments[part],
                          strlen(fragments[part])) < 0)
                     goto allocation;
                 for (unsigned int wait = 0u;
@@ -915,7 +909,7 @@ flood_done:
         for (size_t part = 0u;
              part < sizeof(fragments) / sizeof(fragments[0]); ++part) {
             if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                     SNAG_PHASE_FINAL_ANSWER, fragments[part],
+                     SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id, fragments[part],
                      strlen(fragments[part])) < 0)
                 goto allocation;
             for (unsigned int wait = 0u; wait < 4u; ++wait) {
@@ -943,7 +937,7 @@ flood_done:
         if (snag_response_graph_add_public(
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_typing_stream", full) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  first, sizeof(first) - 1u) < 0)
             goto allocation;
         for (unsigned int part = 0u; part < 2u; ++part) {
@@ -954,7 +948,7 @@ flood_done:
                     return pump_rc;
             }
             if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                     SNAG_PHASE_FINAL_ANSWER,
+                     SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                      part == 0u ? second : third,
                      part == 0u ? sizeof(second) - 1u :
                                   sizeof(third) - 1u) < 0)
@@ -992,7 +986,7 @@ flood_done:
                         graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
                         "msg_fixture_slow_utf8_commentary", euro) < 0 ||
                     emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, euro, 1u) < 0)
+                         SNAG_PHASE_COMMENTARY, graph->items[index].provider_item_id, euro, 1u) < 0)
                     goto allocation;
             } else if (emit_public(
                            graph, emit, opaque, SNAG_ITEM_ASSISTANT,
@@ -1010,7 +1004,7 @@ flood_done:
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";
                 if (emit(opaque, 0u, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, euro + 1u,
+                         SNAG_PHASE_COMMENTARY, graph->items[0u].provider_item_id, euro + 1u,
                          sizeof(euro) - 2u) < 0)
                     goto allocation;
             }
@@ -1152,7 +1146,7 @@ allocation:
 
 int
 snag_fixture_tool(const struct snag_response_item *call,
-                 fixture_pump_fn pump, void *pump_opaque,
+                 snag_provider_pump_fn pump, void *pump_opaque,
                  json_t **result, char *error, size_t error_size)
 {
     const char *command;
