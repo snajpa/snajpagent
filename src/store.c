@@ -231,6 +231,20 @@ snag_session_init(struct snag_session *session)
     session->prev_sha256[SNAG_SHA256_HEX_LEN] = '\0';
     session->next_seq = 1;
 }
+static void
+free_session_state(struct snag_session *session)
+{
+    free_pending_user_state(session);
+    free(session->workspace);
+    free(session->first_user);
+    free(session->last_user);
+    free(session->last_assistant);
+    free(session->goal_prompt);
+    free(session->goal_blocker);
+    if (session->compact_output)
+        json_decref(session->compact_output);
+}
+
 void
 snag_session_close(struct snag_session *session)
 {
@@ -240,16 +254,8 @@ snag_session_close(struct snag_session *session)
         (void)close(session->lock_fd);
     if (session->dir_fd >= 0)
         (void)close(session->dir_fd);
-    free_pending_user_state(session);
-    free(session->workspace);
+    free_session_state(session);
     free(session->dir_path);
-    free(session->first_user);
-    free(session->last_user);
-    free(session->last_assistant);
-    free(session->goal_prompt);
-    free(session->goal_blocker);
-    if (session->compact_output)
-        json_decref(session->compact_output);
     snag_session_init(session);
 }
 static int
@@ -323,7 +329,6 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
                    uint64_t *written_seq, char *error, size_t error_size)
 {
     json_t *event = NULL;
-    json_t *digest_event = NULL;
     struct snag_buf line;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     off_t actual_end;
@@ -336,26 +341,12 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
         errno = ENOSPC;
         goto out;
     }
-    event = json_object();
-    if (!event)
+    event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}",
+        "data", data, "prev_sha256", session->prev_sha256,
+        "seq", (json_int_t)seq, "session_id", session->id,
+        "time_ms", (json_int_t)snag_time_ms(), "type", type, "v", 1);
+    if (!event || snag_json_digest(event, digest) < 0)
         goto memory_error;
-    if (snag_json_set_new(event, "data", data) < 0) {
-        data = NULL;
-        goto memory_error;
-    }
-    data = NULL;
-    if (snag_json_set_new(event, "prev_sha256", json_string(session->prev_sha256)) < 0 ||
-        snag_json_set_new(event, "seq", json_integer((json_int_t)seq)) < 0 ||
-        snag_json_set_new(event, "session_id", json_string(session->id)) < 0 ||
-        snag_json_set_new(event, "time_ms", json_integer((json_int_t)snag_time_ms())) < 0 ||
-        snag_json_set_new(event, "type", json_string(type)) < 0 ||
-        snag_json_set_new(event, "v", json_integer(1)) < 0)
-        goto memory_error;
-    digest_event = json_deep_copy(event);
-    if (!digest_event || snag_json_digest(digest_event, digest) < 0)
-        goto memory_error;
-    json_decref(digest_event);
-    digest_event = NULL;
     if (snag_json_set_new(event, "event_sha256", json_string(digest)) < 0 ||
         snag_json_canonical(event, &line) < 0 || snag_buf_putc(&line, '\n') < 0)
         goto memory_error;
@@ -387,10 +378,6 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
 memory_error:
     snag_errorf(error, error_size, "cannot encode %s event", type);
 out:
-    if (data)
-        json_decref(data);
-    if (digest_event)
-        json_decref(digest_event);
     if (event)
         json_decref(event);
     snag_buf_free(&line);
@@ -439,7 +426,7 @@ common_event_valid(json_t *event, struct snag_session *session, uint64_t seq,
                   (unsigned long long)seq);
         return false;
     }
-    copy = json_deep_copy(event);
+    copy = json_copy(event);
     if (!copy || json_object_del(copy, "event_sha256") < 0 ||
         snag_json_digest(copy, computed) < 0) {
         if (copy)
@@ -702,7 +689,7 @@ snag_goal_unfinished(enum snag_goal_status status)
 }
 
 static int
-apply_event(struct snag_session *session, const char *type, json_t *data,
+apply_event(struct snag_session *session, const char *type, const json_t *data,
             uint64_t seq, char *error, size_t error_size)
 {
     uint64_t n;
@@ -2250,39 +2237,11 @@ clone_optional(const char *value, size_t max)
     return value ? snag_strdup_checked(value, max) : NULL;
 }
 
-static void
-free_staged_state(struct snag_session *session)
-{
-    free_pending_user_state(session);
-    free(session->workspace);
-    free(session->first_user);
-    free(session->last_user);
-    free(session->last_assistant);
-    free(session->goal_prompt);
-    free(session->goal_blocker);
-    if (session->compact_output)
-        json_decref(session->compact_output);
-    session->workspace = NULL;
-    session->first_user = NULL;
-    session->last_user = NULL;
-    session->last_assistant = NULL;
-    session->goal_prompt = NULL;
-    session->goal_blocker = NULL;
-    session->compact_output = NULL;
-}
-
 static int
 clone_session_state(const struct snag_session *source,
                     struct snag_session *staged)
 {
     *staged = *source;
-    staged->workspace = NULL;
-    staged->first_user = NULL;
-    staged->last_user = NULL;
-    staged->last_assistant = NULL;
-    staged->goal_prompt = NULL;
-    staged->goal_blocker = NULL;
-    staged->compact_output = NULL;
     for (size_t i = 0; i < staged->pending_steering_count; ++i)
         staged->pending_steering[i].text = NULL;
     for (size_t i = 0; i < staged->pending_queue_count; ++i)
@@ -2297,8 +2256,7 @@ clone_session_state(const struct snag_session *source,
                                          SNAG_MAX_GOAL_PROMPT);
     staged->goal_blocker = clone_optional(source->goal_blocker,
                                           SNAG_MAX_GOAL_BLOCKER);
-    if (source->compact_output)
-        staged->compact_output = json_deep_copy(source->compact_output);
+    staged->compact_output = json_incref(source->compact_output);
     if ((source->workspace && !staged->workspace) ||
         (source->first_user && !staged->first_user) ||
         (source->last_user && !staged->last_user) ||
@@ -2323,89 +2281,34 @@ clone_session_state(const struct snag_session *source,
     }
     return 0;
 fail:
-    free_staged_state(staged);
     return -1;
-}
-
-static void
-adopt_session_state(struct snag_session *session, struct snag_session *staged)
-{
-    char *dir_path = session->dir_path;
-    int dir_fd = session->dir_fd;
-    int log_fd = session->log_fd;
-    int lock_fd = session->lock_fd;
-    off_t log_end = session->log_end;
-    uint64_t next_seq = session->next_seq;
-    uint64_t last_time_ms = session->last_time_ms;
-    char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
-
-    memcpy(prev_sha256, session->prev_sha256, sizeof(prev_sha256));
-    free_pending_user_state(session);
-    free(session->workspace);
-    free(session->first_user);
-    free(session->last_user);
-    free(session->last_assistant);
-    free(session->goal_prompt);
-    free(session->goal_blocker);
-    if (session->compact_output)
-        json_decref(session->compact_output);
-    *session = *staged;
-    session->dir_path = dir_path;
-    session->dir_fd = dir_fd;
-    session->log_fd = log_fd;
-    session->lock_fd = lock_fd;
-    session->log_end = log_end;
-    session->next_seq = next_seq;
-    session->last_time_ms = last_time_ms;
-    memcpy(session->prev_sha256, prev_sha256, sizeof(prev_sha256));
-    staged->workspace = NULL;
-    staged->first_user = NULL;
-    staged->last_user = NULL;
-    staged->last_assistant = NULL;
-    staged->goal_prompt = NULL;
-    staged->goal_blocker = NULL;
-    staged->compact_output = NULL;
-    for (size_t i = 0; i < staged->pending_steering_count; ++i)
-        staged->pending_steering[i].text = NULL;
-    for (size_t i = 0; i < staged->pending_queue_count; ++i)
-        staged->pending_queue[i].text = NULL;
-    staged->pending_steering_count = 0;
-    staged->pending_queue_count = 0;
 }
 
 int
 snag_session_commit(struct snag_session *session, const char *type, json_t *data,
                    uint64_t *written_seq, char *error, size_t error_size)
 {
-    struct snag_session staged;
-    json_t *apply = data ? json_deep_copy(data) : NULL;
-    uint64_t seq = session->next_seq;
+    struct snag_session staged = {0};
+    int rc = -1;
 
-    memset(&staged, 0, sizeof(staged));
-    if (!apply || clone_session_state(session, &staged) < 0) {
-        if (data)
-            json_decref(data);
-        if (apply)
-            json_decref(apply);
-        free_staged_state(&staged);
+    if (!data || clone_session_state(session, &staged) < 0) {
         snag_errorf(error, error_size, "cannot stage %s event", type);
         errno = ENOMEM;
-        return -1;
+    } else if (apply_event(&staged, type, data, session->next_seq,
+                          error, error_size) == 0) {
+        /* Append updates the staged metadata too. No live state is adopted
+         * until durable append succeeds; descriptors and dir_path are borrowed. */
+        rc = snag_session_append(&staged, type, data, written_seq,
+                                 error, error_size);
     }
-    if (apply_event(&staged, type, apply, seq, error, error_size) < 0) {
-        json_decref(data);
-        json_decref(apply);
-        free_staged_state(&staged);
-        return -1;
+    json_decref(data);
+    if (rc < 0)
+        free_session_state(&staged);
+    else {
+        free_session_state(session);
+        *session = staged;
     }
-    json_decref(apply);
-    if (snag_session_append(session, type, data, written_seq,
-                           error, error_size) < 0) {
-        free_staged_state(&staged);
-        return -1;
-    }
-    adopt_session_state(session, &staged);
-    return 0;
+    return rc;
 }
 
 static char *

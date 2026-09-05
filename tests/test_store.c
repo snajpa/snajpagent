@@ -259,6 +259,25 @@ main(void)
                     "new_workspace", workspace2),
         NULL, error, sizeof(error)) == 0);
     assert(strcmp(session.workspace, workspace2) == 0);
+    {
+        int writable = session.log_fd;
+        uint64_t written = UINT64_MAX;
+        json_t *change = change_data("old_workspace", workspace2,
+                                    "new_workspace", workspace);
+
+        session.log_fd = openat(session.dir_fd, "events.jsonl", O_RDONLY);
+        assert(session.log_fd >= 0);
+        struct snag_session before = session;
+        assert(snag_session_commit(&session, "workspace_changed",
+            json_incref(change), &written, error, sizeof(error)) < 0);
+        assert(memcmp(&session, &before, sizeof(session)) == 0);
+        assert(written == UINT64_MAX);
+        assert(strcmp(session.workspace, workspace2) == 0);
+        assert(strcmp(snag_json_string(change, "new_workspace"), workspace) == 0);
+        json_decref(change);
+        assert(close(session.log_fd) == 0);
+        session.log_fd = writable;
+    }
     durable_end = session.log_end;
     durable_seq = session.next_seq;
     bad = json_object();

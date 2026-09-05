@@ -17,16 +17,7 @@ json_t *
 snag_app_preference_changed_data(const char *old_key, const char *old_value,
                         const char *new_key, const char *new_value)
 {
-    json_t *data = json_object();
-
-    if (!data ||
-        snag_json_set_new(data, new_key, json_string(new_value)) < 0 ||
-        snag_json_set_new(data, old_key, json_string(old_value)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s}", new_key, new_value, old_key, old_value);
 }
 
 json_t *
@@ -35,20 +26,10 @@ snag_app_model_selection_changed_data(
     const char *old_model, const char *new_model,
     const char *old_effort, const char *new_effort)
 {
-    json_t *data = json_object();
-
-    if (!data ||
-        snag_json_set_new(data, "new_effort", json_string(new_effort)) < 0 ||
-        snag_json_set_new(data, "new_model", json_string(new_model)) < 0 ||
-        snag_json_set_new(data, "new_provider", json_string(new_provider)) < 0 ||
-        snag_json_set_new(data, "old_effort", json_string(old_effort)) < 0 ||
-        snag_json_set_new(data, "old_model", json_string(old_model)) < 0 ||
-        snag_json_set_new(data, "old_provider", json_string(old_provider)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+        "new_effort", new_effort, "new_model", new_model,
+        "new_provider", new_provider, "old_effort", old_effort,
+        "old_model", old_model, "old_provider", old_provider);
 }
 
 static json_t *
@@ -143,26 +124,11 @@ irc_kind_parse(const char *name, enum snag_irc_event_kind *kind)
 static json_t *
 irc_event_data(const struct snag_irc_event *event)
 {
-    json_t *data = json_object();
-
-    if (!data ||
-        snag_json_set_new(data, "endpoint", json_string(event->endpoint)) < 0 ||
-        snag_json_set_new(data, "historical",
-                         json_boolean(event->historical)) < 0 ||
-        snag_json_set_new(data, "kind",
-                         json_string(irc_kind_name(event->kind))) < 0 ||
-        snag_json_set_new(data, "local", json_boolean(event->local)) < 0 ||
-        snag_json_set_new(data, "nick", json_string(event->nick)) < 0 ||
-        snag_json_set_new(data, "op", json_boolean(event->op)) < 0 ||
-        snag_json_set_new(data, "room", json_string(event->room)) < 0 ||
-        snag_json_set_new(data, "text", json_string(event->text)) < 0 ||
-        snag_json_set_new(data, "timestamp_ms",
-                         json_integer((json_int_t)event->timestamp_ms)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:I}",
+        "endpoint", event->endpoint, "historical", event->historical,
+        "kind", irc_kind_name(event->kind), "local", event->local,
+        "nick", event->nick, "op", event->op, "room", event->room,
+        "text", event->text, "timestamp_ms", (json_int_t)event->time_ms);
 }
 
 static int
@@ -742,33 +708,16 @@ snag_app_response_completed_data(const char *turn_id, const char *response_id,
                         unsigned int cycle,
                         const struct snag_response_graph *graph)
 {
-    json_t *data = json_object();
     json_t *items = snag_response_graph_json(graph);
-    json_t *value;
-
-    if (!data || !items)
-        goto fail;
-    if (snag_json_set_new(data, "cycle", json_integer((json_int_t)cycle)) < 0)
-        goto fail;
-    value = items;
-    items = NULL;
-    if (snag_json_set_new(data, "items", value) < 0)
-        goto fail;
-    if (snag_json_set_new(data, "provider_response_id",
-                         json_string(graph->provider_response_id)) < 0 ||
-        snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
-        snag_json_set_new(data, "status", json_string("completed")) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0 ||
-        snag_json_set_new(data, "usage",
-                         snag_response_usage_json(&graph->usage)) < 0)
-        goto fail;
+    json_t *usage = snag_response_usage_json(&graph->usage);
+    json_t *data = json_pack("{s:I,s:O,s:s,s:s,s:s,s:s,s:O}",
+        "cycle", (json_int_t)cycle, "items", items,
+        "provider_response_id", graph->provider_response_id,
+        "response_id", response_id, "status", "completed",
+        "turn_id", turn_id, "usage", usage);
+    json_decref(items);
+    json_decref(usage);
     return data;
-fail:
-    if (items)
-        json_decref(items);
-    if (data)
-        json_decref(data);
-    return NULL;
 }
 
 json_t *
@@ -779,97 +728,44 @@ snag_app_response_output_correction_data(const char *turn_id,
                                         const char *text,
                                         json_t *partial_public)
 {
-    json_t *data = json_object();
-    json_t *partial = partial_public;
-
-    if (!data || !partial ||
-        snag_json_set_new(data, "correction_id",
-                         json_string(correction_id)) < 0 ||
-        snag_json_set_new(data, "cycle",
-                         json_integer((json_int_t)cycle)) < 0)
-        goto fail;
-    {
-        int rc = snag_json_set_new(data, "partial_public", partial);
-        partial = NULL;
-        if (rc < 0)
-            goto fail;
-    }
-    if (
-        snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
-        snag_json_set_new(data, "text", json_string(text)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0)
-        goto fail;
+    json_t *data = json_pack("{s:s,s:I,s:O,s:s,s:s,s:s}",
+        "correction_id", correction_id, "cycle", (json_int_t)cycle,
+        "partial_public", partial_public, "response_id", response_id,
+        "text", text, "turn_id", turn_id);
+    json_decref(partial_public);
     return data;
-fail:
-    if (partial)
-        json_decref(partial);
-    if (data)
-        json_decref(data);
-    return NULL;
 }
 
 json_t *
 snag_app_turn_completed_data(const char *turn_id, const char *response_id,
                     const char *item_id)
 {
-    json_t *data = json_object();
-    if (!data ||
-        snag_json_set_new(data, "final_item_id", json_string(item_id)) < 0 ||
-        snag_json_set_new(data, "final_response_id", json_string(response_id)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s}", "final_item_id", item_id,
+        "final_response_id", response_id, "turn_id", turn_id);
 }
 
 json_t *
 snag_app_steering_added_data(const char *turn_id, const char *steering_id,
                     const char *text)
 {
-    json_t *data = json_object();
-    if (!data ||
-        snag_json_set_new(data, "steering_id", json_string(steering_id)) < 0 ||
-        snag_json_set_new(data, "text", json_string(text)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s}", "steering_id", steering_id,
+        "text", text, "turn_id", turn_id);
 }
 
 json_t *
 snag_app_future_turn_queued_data(const char *turn_id, const char *queue_id,
                         const char *text, bool read_only)
 {
-    json_t *data = json_object();
-    if (!data || snag_json_set_new(data, "read_only", json_boolean(read_only)) < 0 ||
-        snag_json_set_new(data, "queue_id", json_string(queue_id)) < 0 ||
-        snag_json_set_new(data, "text", json_string(text)) < 0 ||
-        snag_json_set_new(data, "while_turn_id", json_string(turn_id)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:b,s:s,s:s,s:s}", "read_only", read_only,
+        "queue_id", queue_id, "text", text, "while_turn_id", turn_id);
 }
 
 json_t *
 snag_app_future_turn_edited_data(const char *queue_id, const char *text,
                                bool read_only)
 {
-    json_t *data = json_object();
-
-    if (!data || snag_json_set_new(data, "read_only", json_boolean(read_only)) < 0 ||
-        snag_json_set_new(data, "queue_id", json_string(queue_id)) < 0 ||
-        snag_json_set_new(data, "text", json_string(text)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:b,s:s,s:s}", "read_only", read_only,
+        "queue_id", queue_id, "text", text);
 }
 
 json_t *
@@ -910,46 +806,19 @@ snag_app_response_interrupted_data(const char *turn_id, const char *response_id,
                           unsigned int cycle, const char *origin,
                           const char *reason, json_t *partial_public)
 {
-    json_t *data = json_object();
     json_t *partial = partial_public ? partial_public : json_array();
-
-    if (!data || !partial)
-        goto fail;
-    if (
-        snag_json_set_new(data, "cycle", json_integer((json_int_t)cycle)) < 0 ||
-        snag_json_set_new(data, "origin", json_string(origin)) < 0)
-        goto fail;
-    {
-        int rc = snag_json_set_new(data, "partial_public", partial);
-        partial = NULL;
-        if (rc < 0)
-            goto fail;
-    }
-    if (snag_json_set_new(data, "reason", json_string(reason)) < 0 ||
-        snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0)
-        goto fail;
+    json_t *data = json_pack("{s:I,s:s,s:O,s:s,s:s,s:s}",
+        "cycle", (json_int_t)cycle, "origin", origin, "partial_public", partial,
+        "reason", reason, "response_id", response_id, "turn_id", turn_id);
+    json_decref(partial);
     return data;
-fail:
-    if (partial)
-        json_decref(partial);
-    if (data)
-        json_decref(data);
-    return NULL;
 }
 
 json_t *
 snag_app_turn_interrupted_data(const char *turn_id, const char *origin, const char *reason)
 {
-    json_t *data = json_object();
-    if (!data || snag_json_set_new(data, "origin", json_string(origin)) < 0 ||
-        snag_json_set_new(data, "reason", json_string(reason)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s}", "origin", origin,
+        "reason", reason, "turn_id", turn_id);
 }
 
 json_t *
@@ -958,118 +827,46 @@ snag_app_response_failed_data(const char *turn_id, const char *response_id,
                      const char *message, json_t *partial_public,
                      unsigned int retry_count)
 {
-    json_t *data = json_object();
     json_t *partial = partial_public ? partial_public : json_array();
-
-    if (!data || !partial ||
-        snag_json_set_new(data, "class", json_string(class_name)) < 0 ||
-        snag_json_set_new(data, "cycle", json_integer((json_int_t)cycle)) < 0 ||
-        snag_json_set_new(data, "message", json_string(message)) < 0)
-        goto fail;
-    {
-        int rc = snag_json_set_new(data, "partial_public", partial);
-        partial = NULL;
-        if (rc < 0)
-            goto fail;
-    }
-    if (
-        snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
-        snag_json_set_new(data, "retry_count",
-                         json_integer((json_int_t)retry_count)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0)
-        goto fail;
+    json_t *data = json_pack("{s:s,s:I,s:s,s:O,s:s,s:I,s:s}",
+        "class", class_name, "cycle", (json_int_t)cycle, "message", message,
+        "partial_public", partial, "response_id", response_id,
+        "retry_count", (json_int_t)retry_count, "turn_id", turn_id);
+    json_decref(partial);
     return data;
-fail:
-    if (partial)
-        json_decref(partial);
-    if (data)
-        json_decref(data);
-    return NULL;
 }
 
 json_t *
 snag_app_turn_failed_data(const char *turn_id, const char *class_name, const char *message)
 {
-    json_t *data = json_object();
-    if (!data || snag_json_set_new(data, "class", json_string(class_name)) < 0 ||
-        snag_json_set_new(data, "message", json_string(message)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s}", "class", class_name,
+        "message", message, "turn_id", turn_id);
 }
 
 json_t *
 snag_app_tool_started_data(const char *turn_id, const char *call_id,
                   const char *action_sha256, const char *workspace)
 {
-    json_t *data = json_object();
-    if (!data ||
-        snag_json_set_new(data, "action_sha256", json_string(action_sha256)) < 0 ||
-        snag_json_set_new(data, "call_id", json_string(call_id)) < 0 ||
-        snag_json_set_new(data, "resolved_workdir", json_string(workspace)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s,s:s}", "action_sha256", action_sha256,
+        "call_id", call_id, "resolved_workdir", workspace, "turn_id", turn_id);
 }
 
 /* Takes ownership of result, including on failure. */
 json_t *
 snag_app_tool_finished_data(const char *turn_id, const char *call_id, json_t *result)
 {
-    json_t *data = json_object();
-    json_t *value;
-    if (!data) {
-        if (result)
-            json_decref(result);
-        return NULL;
-    }
-    if (snag_json_set_new(data, "call_id", json_string(call_id)) < 0)
-        goto fail;
-    value = result;
-    result = NULL;
-    if (snag_json_set_new(data, "result", value) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0)
-        goto fail;
+    json_t *data = json_pack("{s:s,s:O,s:s}",
+        "call_id", call_id, "result", result, "turn_id", turn_id);
+    json_decref(result);
     return data;
-fail:
-    if (result)
-        json_decref(result);
-    json_decref(data);
-    return NULL;
 }
 /* Takes ownership of result, including on failure. */
 json_t *
 snag_app_process_closed_data(const char *turn_id, const char *handle,
                             const char *cause, json_t *result)
 {
-    json_t *data = json_object();
-    json_t *value;
-
-    if (!data) {
-        if (result)
-            json_decref(result);
-        return NULL;
-    }
-    if (snag_json_set_new(data, "cause", json_string(cause)) < 0 ||
-        snag_json_set_new(data, "handle", json_string(handle)) < 0)
-        goto fail;
-    value = result;
-    result = NULL;
-    if (snag_json_set_new(data, "result", value) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0)
-        goto fail;
+    json_t *data = json_pack("{s:s,s:s,s:O,s:s}",
+        "cause", cause, "handle", handle, "result", result, "turn_id", turn_id);
+    json_decref(result);
     return data;
-
-fail:
-    if (result)
-        json_decref(result);
-    if (data)
-        json_decref(data);
-    return NULL;
 }
