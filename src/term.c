@@ -296,7 +296,7 @@ snag_term_set_destinations(struct snag_term *term,
     *term->destinations = *destinations;
     if (!term->destination.id && !term->draft.len && destinations->count)
         term->destination = destinations->items[0].target;
-    return 0;
+    return redraw(term);
 }
 
 int
@@ -305,10 +305,33 @@ snag_term_select_destination(struct snag_term *term, uint32_t id)
     for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i)
         if (term->destinations->items[i].target.id == id) {
             term->destination = term->destinations->items[i].target;
-            return 0;
+            return redraw(term);
         }
     errno = ENOENT;
     return -1;
+}
+
+void
+snag_term_destination_prefix(const struct snag_term *term, char *out, size_t size)
+{
+    const struct snag_irc_destination *selected = NULL;
+
+    if (!size)
+        return;
+    out[0] = '\0';
+    if (!term->chat || !term->destinations)
+        return;
+    for (size_t i = 0u; i < term->destinations->count; ++i)
+        if (term->destinations->items[i].target.id == term->destination.id &&
+            term->destinations->items[i].target.revision == term->destination.revision)
+            selected = &term->destinations->items[i];
+    if (!selected && term->destination.id)
+        (void)snprintf(out, size, "[%u unavailable] ", term->destination.id);
+    else if (!selected && term->destinations->count)
+        (void)snprintf(out, size, "[choose destination] ");
+    else if (selected && (!selected->joined || term->destinations->count > 1u))
+        (void)snprintf(out, size, "[%u %s] ", selected->target.id,
+            selected->joined ? selected->room : "connecting");
 }
 
 void
@@ -780,14 +803,17 @@ prompt_render_max(const unsigned char *text, size_t len, size_t indent,
 }
 
 static const char *
-prompt_label(const struct snag_term *term, size_t *len)
+prompt_label(struct snag_term *term, size_t *len)
 {
     if (term->searching) {
         *len = term->search_label.len;
         return (const char *)term->search_label.data;
     }
-    *len = strlen(term->label);
-    return term->label;
+    snag_term_destination_prefix(term, term->destination_label, 128u);
+    size_t prefix = strlen(term->destination_label);
+    memcpy(term->destination_label + prefix, term->label, strlen(term->label) + 1u);
+    *len = strlen(term->destination_label);
+    return term->destination_label;
 }
 
 void

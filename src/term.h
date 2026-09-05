@@ -106,6 +106,7 @@ struct snag_term {
     size_t input_len;
     size_t paste_end_match;
     char label[SNAG_TERM_LABEL_BYTES];
+    char destination_label[SNAG_TERM_LABEL_BYTES + 128u];
     char prompt_template[SNAG_TERM_LABEL_BYTES];
     struct snag_prompt_clock prompt_clock;
     struct snag_term_spinner spinner[SNAG_TERM_SPINNER_COUNT];
@@ -144,6 +145,8 @@ void snag_term_init(struct snag_term *term);
 int snag_term_set_destinations(struct snag_term *term,
                               const struct snag_irc_destinations *destinations);
 int snag_term_select_destination(struct snag_term *term, uint32_t id);
+void snag_term_destination_prefix(const struct snag_term *term,
+                                   char *out, size_t size);
 void snag_term_destination_route(const struct snag_term *term,
                                  const char *text, struct snag_irc_route *route);
 void snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds);

@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 enum ui_kind {
-    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_COMMANDS, UI_PAUSE,
+    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_DESTINATIONS, UI_COMMANDS, UI_PAUSE,
     UI_OPEN, UI_EXTERNAL, UI_PROMPT, UI_SPINNERS, UI_DRAFT,
     UI_VIEW, UI_SUBMITTED, UI_PUBLIC_BEGIN, UI_PUBLIC, UI_VALIDATE,
     UI_ORIENTATION, UI_HISTORY, UI_IRC, UI_DURABLE, UI_EVENT,
@@ -27,6 +27,7 @@ struct ui_snapshot {
     bool opened, prompt_wanted, active;
     char label[SNAG_TERM_LABEL_BYTES];
     uint64_t turn_generation;
+    struct snag_irc_target selection;
 };
 
 struct ui_prompt {
@@ -60,6 +61,7 @@ struct ui_message {
         uint64_t seq;
         struct { const struct snag_term_command *items; size_t count; } commands;
         struct { struct snag_history_snapshot entries; bool refresh; } history;
+        const struct snag_irc_destinations *destinations;
     } data;
 };
 
@@ -77,6 +79,7 @@ struct ui_action {
     int error;
     bool history_refresh, steering, local;
     struct ui_snapshot snapshot;
+    struct snag_irc_route route;
 };
 
 struct snag_ui_runtime {
@@ -224,6 +227,7 @@ take_snapshot(struct snag_ui_display *display, struct ui_snapshot *snapshot)
     snapshot->prompt_wanted = display->term.prompt_wanted;
     snapshot->active = display->term.active;
     snapshot->turn_generation = display->turn_generation;
+    snapshot->selection = display->term.destination;
     memcpy(snapshot->label, display->term.label, sizeof(snapshot->label));
 }
 
@@ -235,6 +239,7 @@ adopt_snapshot(struct snag_ui *ui, const struct ui_snapshot *snapshot)
     ui->prompt_wanted = snapshot->prompt_wanted;
     ui->active = snapshot->active;
     ui->turn_generation = snapshot->turn_generation;
+    ui->selection = snapshot->selection;
     memcpy(ui->label, snapshot->label, sizeof(ui->label));
 }
 
@@ -332,6 +337,8 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
         term->nicks = message->text;
         message->text = NULL;
         return 0;
+    case UI_DESTINATIONS:
+        return snag_term_set_destinations(term, message->data.destinations);
     case UI_COMMANDS:
         snag_term_set_commands(term, message->data.commands.items,
                              message->data.commands.count);
@@ -460,6 +467,8 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     rc = snag_term_poll(term, timeout_ms, runtime->commands.wake[0],
                        &item->action, &item->text);
     take_snapshot(display, &item->snapshot);
+    if (item->text)
+        snag_term_destination_route(term, item->text, &item->route);
     if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT ||
         item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
         bool deferred = term->defer_redraw;
@@ -479,6 +488,27 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     if (term->history_refresh_requested && !term->input_backlog) {
         term->history_refresh_requested = false;
         item->history_refresh = true;
+    }
+    if (item->action == SNAG_TERM_SUBMIT && item->text) {
+        uint32_t id;
+        size_t body;
+        enum snag_irc_target_command command = snag_irc_target_parse(
+            item->text, strlen(item->text), &id, &body);
+        if (command == SNAG_IRC_TARGET_SELECT) {
+            if (snag_term_select_destination(term, id) == 0)
+                (void)snprintf(display->feedback, sizeof(display->feedback),
+                               "destination: %u", id);
+            else
+                (void)snprintf(display->feedback, sizeof(display->feedback),
+                               "destination %u is unavailable; use /names", id);
+            take_snapshot(display, &item->snapshot);
+            item->local = true;
+            item->action = SNAG_TERM_NONE;
+            term->prompt_wanted = true;
+            display->local = item;
+            display->local_acknowledged = false;
+            return 0;
+        }
     }
     if (item->action == SNAG_TERM_SUBMIT && item->text &&
         snag_verbosity_command(item->text, strlen(item->text))) {
@@ -854,6 +884,16 @@ snag_ui_nicks(struct snag_ui *ui, const char *nicks)
 }
 
 int
+snag_ui_destinations(struct snag_ui *ui,
+                     const struct snag_irc_destinations *destinations)
+{
+    struct ui_message message = {
+        .kind = UI_DESTINATIONS, .data.destinations = destinations
+    };
+    return send_message(ui, &message, NULL);
+}
+
+int
 snag_ui_commands(struct snag_ui *ui, const struct snag_term_command *commands,
                 size_t count)
 {
@@ -1030,6 +1070,8 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
         }
     }
     ui->input_view = item->snapshot.view;
+    ui->input_route = item->route;
+    ui->selection = item->snapshot.selection;
     memcpy(ui->submitted_label, item->snapshot.label,
            sizeof(ui->submitted_label));
     if (item->local) {

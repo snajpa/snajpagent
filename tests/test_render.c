@@ -530,6 +530,9 @@ test_destination_editor(void)
     destinations.count = 2u;
     destinations.items[0].target = (struct snag_irc_target){2u, 1u};
     destinations.items[1].target = (struct snag_irc_target){17u, 1u};
+    destinations.items[0].joined = destinations.items[1].joined = true;
+    strcpy(destinations.items[0].room, "#one");
+    strcpy(destinations.items[1].room, "#two");
     strcpy(destinations.items[0].nicks, "agent2\n");
     strcpy(destinations.items[1].nicks, "agent17\n");
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
@@ -551,7 +554,11 @@ test_destination_editor(void)
         snag_term_close(&term);
     }
     snag_term_init(&term);
+    term.chat = true;
     assert(snag_term_set_destinations(&term, &destinations) == 0);
+    char label[128u];
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(strcmp(label, "[2 #one] ") == 0);
     snag_term_destination_route(&term, "hello", &route);
     assert(route.count == 1u && route.targets[0].id == 2u);
     snag_term_destination_route(&term, "/17 hello", &route);
@@ -565,6 +572,8 @@ test_destination_editor(void)
     destinations.count = 1u;
     assert(snag_term_set_destinations(&term, &destinations) == 0);
     assert(term.destination.id == 17u && term.draft.len == 7u);
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(strcmp(label, "[17 unavailable] ") == 0);
     snag_term_destination_route(&term, "keep me", &route);
     assert(route.count == 1u && route.targets[0].id == 17u);
     assert(frozen.count == 2u && frozen.targets[1].id == 17u);
@@ -572,9 +581,17 @@ test_destination_editor(void)
     assert(route.count == 0u);
     snag_term_destination_route(&term, "/all hello", &route);
     assert(route.count == 1u && route.targets[0].id == 2u);
+    assert(snag_term_select_destination(&term, 2u) == 0);
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(!label[0]);
+    destinations.items[0].joined = false;
+    assert(snag_term_set_destinations(&term, &destinations) == 0);
+    snag_term_destination_prefix(&term, label, sizeof(label));
+    assert(strcmp(label, "[2 connecting] ") == 0);
+    assert(snag_term_select_destination(&term, 2u) == 0);
     destinations.count = 0u;
     assert(snag_term_set_destinations(&term, &destinations) == 0);
-    assert(term.destination.id == 17u);
+    assert(term.destination.id == 2u);
     snag_term_destination_route(&term, "/all hello", &route);
     assert(route.count == 0u);
     snag_term_close(&term);

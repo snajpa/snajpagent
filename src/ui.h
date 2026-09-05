@@ -16,6 +16,8 @@ struct snag_ui {
     char label[SNAG_TERM_LABEL_BYTES];
     char submitted_label[SNAG_TERM_LABEL_BYTES];
     enum snag_render_view input_view;
+    struct snag_irc_route input_route;
+    struct snag_irc_target selection;
 };
 
 enum snag_ui_operation {
@@ -34,6 +36,8 @@ int snag_ui_color(struct snag_ui *ui, enum snag_color_mode mode);
 int snag_ui_markdown(struct snag_ui *ui, bool enabled);
 int snag_ui_networked(struct snag_ui *ui, bool enabled, const char *nick);
 int snag_ui_nicks(struct snag_ui *ui, const char *nicks);
+int snag_ui_destinations(struct snag_ui *ui,
+                          const struct snag_irc_destinations *destinations);
 /* The immutable command catalog must outlive the UI (the app uses static data). */
 int snag_ui_commands(struct snag_ui *ui, const struct snag_term_command *commands,
                       size_t count);
