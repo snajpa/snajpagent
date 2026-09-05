@@ -23,6 +23,8 @@
   device authentication, stored API keys, and existing environment credentials.
   Keep OpenRouter and other Responses providers independent; coordinate OAuth
   refresh across instances and adapt direct Codex requests without a proxy.
+  If the native compact endpoint is unavailable, use one Responses summary
+  attempt with the same account and durable, replayable attempt boundaries.
 
 - Automatically use OpenRouter's hosted web-search tool for its provider URL,
   in normal and `/ro` turns, without extra search configuration.

@@ -1706,6 +1706,9 @@ snj_provider_responses_compact(const json_t *compact_request,
     if (rc == 0)
         rc = parse_compact_body(&ctx, output, output_tokens_bound,
                                 error, error_size);
+    if (rc < 0 && provider->auth == SNJ_AUTH_CHATGPT &&
+        (ctx.http_status == 404 || ctx.http_status == 405 || ctx.http_status == 501))
+        rc = SNJ_PROVIDER_UNSUPPORTED;
     if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
         rc = ctx.cancel_code;
         if (cancel_code)

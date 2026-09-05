@@ -655,6 +655,37 @@ assert completed[0]["data"]["output"][0]["role"] == "developer"
 assert completed[0]["data"]["output"][0]["content"] == "fixture responses compact summary"
 PY
 
+# Direct Codex falls back once for an absent native endpoint and remains resumable.
+fallback_state="$root/codex-compact-fallback"
+mkdir -m 700 "$fallback_state"
+cat >"$root/codex-compact-fallback.ini" <<'EOF'
+[provider]
+auth = chatgpt
+base_url = https://chatgpt.com/backend-api/codex
+auto_compact_input_tokens = 1
+EOF
+$bin --dotdir "$fallback_state" --config "$root/codex-compact-fallback.ini" \
+    -e -- native_compact_unavailable >"$root/fallback.out" 2>"$root/fallback.err"
+grep -q 'native compaction unavailable; compacting through Responses' "$root/fallback.err"
+fallback_id=$(find "$fallback_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+python3 - "$fallback_state/sessions/$fallback_id/events.jsonl" <<'PY'
+import json
+import sys
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+starts = [e for e in events if e["type"] == "compaction_started"]
+interrupted = [e for e in events if e["type"] == "compaction_interrupted"]
+completed = [e for e in events if e["type"] == "compaction_completed"]
+assert len(starts) == 2 and len(interrupted) == len(completed) == 1
+assert interrupted[0]["data"]["reason"] == "endpoint_unavailable"
+assert starts[0]["data"]["compact_id"] == interrupted[0]["data"]["compact_id"]
+assert starts[1]["data"]["compact_id"] == completed[0]["data"]["compact_id"]
+assert starts[0]["data"]["request_sha256"] != starts[1]["data"]["request_sha256"]
+assert completed[0]["data"]["output"][0]["content"] == "fixture responses compact summary"
+PY
+$bin --dotdir "$fallback_state" -e --resume "$fallback_id" -- ping \
+    >"$root/fallback-resume.out" 2>"$root/fallback-resume.err"
+[ "$(cat "$root/fallback-resume.out")" = pong ]
+
 # Automatic pre-response compaction can compact existing history before a
 # resumed turn's response, then post-turn compaction can compact that new turn.
 pre_state="$root/pre-response-compact-state"

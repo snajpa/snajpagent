@@ -61,6 +61,8 @@ enum model_fixture {
     MODEL_COUNT_501,
     MODEL_COUNT_401,
     MODEL_COUNT_403,
+    MODEL_COMPACT_404,
+    MODEL_COMPACT_403,
     MODEL_AUTH_DEVICE,
     MODEL_AUTH_CANCEL,
     MODEL_AUTH_EXPIRED,
@@ -336,6 +338,19 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
 {
     if (models >= MODEL_AUTH_DEVICE)
         auth_server_child(listen_fd, models);
+    if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403) {
+        struct http_request request;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0)
+            server_fail("compact accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") ||
+            (strcmp(request.path, "/responses/compact") && strcmp(request.path, "/v1/responses/compact")))
+            server_fail("invalid native compact path");
+        send_status(fd, models == MODEL_COMPACT_404 ? 404u : 403u, "{\"detail\":\"Not Found\"}");
+        (void)close(fd);
+        _exit(0);
+    }
     static const char create_sse[] =
         "event: response.created\n"
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_transport\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
@@ -1411,6 +1426,26 @@ test_provider_auth(void)
         stop_server(&server);
     }
     assert(unsetenv("SNAJPAGENT_TEST_AUTH_BASE") == 0);
+    for (unsigned int pass = 0u; pass < 3u; ++pass) {
+        json_t *request = request_with_marker("transport-compact"), *output = NULL;
+        uint64_t bytes;
+        credential_set(&credential, "transport-secret");
+        credential.root_fd = -1;
+        config.providers[0].auth = pass == 0u ? SNJ_AUTH_ENV : SNJ_AUTH_CHATGPT;
+        strcpy(config.providers[0].base_url, pass == 0u ? "https://api.openai.com" : SNJ_CHATGPT_BASE);
+        strcpy(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent");
+        strcpy(config.providers[0].openrouter_title, "snajpagent");
+        start_server(&server, pass == 2u ? MODEL_COMPACT_403 : MODEL_COMPACT_404, false);
+        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+        int rc = snj_provider_responses_compact(request, &config, &config.providers[0],
+            &credential, NULL, NULL, NULL, &output, &bytes, error, sizeof(error), NULL, NULL);
+        assert(rc == (pass == 1u ? SNJ_PROVIDER_UNSUPPORTED : -1));
+        assert(output == NULL);
+        stop_server(&server);
+        json_decref(request);
+    }
+    assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
     assert(snj_auth_logout(store.root_fd, &config.providers[0], NULL, NULL, error, sizeof(error)) == 0);
     assert(unlinkat(store.root_fd, "auth/default.lock", 0) == 0);
     assert(unlinkat(store.root_fd, "auth", AT_REMOVEDIR) == 0);

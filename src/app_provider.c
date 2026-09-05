@@ -290,6 +290,12 @@ snj_app_provider_compact(struct app_state *app, const json_t *compact_request,
 
     (void)compact_request;
     (void)credential;
+    if (app->turn_provider->auth == SNJ_AUTH_CHATGPT &&
+        app->session.last_user && strcmp(app->session.last_user, "native_compact_unavailable") == 0) {
+        json_decref(item);
+        json_decref(fixture_output);
+        return SNJ_PROVIDER_UNSUPPORTED;
+    }
     if (app && app->session.last_user &&
         (strcmp(app->session.last_user, "compaction_steer") == 0 ||
          strcmp(app->session.last_user, "capacity_recovery_steer") == 0))

@@ -62,6 +62,12 @@ Output capacity still reserves input-budget headroom. Exact input-token
 preflight is unavailable on this route; the existing auto/strict/off policy
 handles that distinction. Generic/API-key transports are unchanged.
 
+If direct Codex native compaction returns 404/405/501, close that attempt with
+`compaction_interrupted` reason `endpoint_unavailable`, then perform one
+Responses summary attempt using the same provider/account. Each attempt has
+its own exact request hash. Do not guess alternate paths, fall back on auth
+errors, or rewrite configuration. The standard hard-budget recount still runs.
+
 Ordinary fake-agent tests explicitly bypass onboarding; focused login PTYs opt
 into the real first-run decision. The existing transport fixture exercises
 the real auth HTTP/file/refresh paths on loopback. Production builds cannot

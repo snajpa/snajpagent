@@ -13,6 +13,9 @@
 
 typedef int (*snj_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 
+/* Optional native operation is absent; no semantic output was returned. */
+#define SNJ_PROVIDER_UNSUPPORTED 4
+
 /* Fixed-issuer auth transport: bounded, cancellable, and never body-logged. */
 int snj_provider_auth_post(const char *issuer, const char *path, const char *type,
                             const void *body, size_t size, json_t **response,

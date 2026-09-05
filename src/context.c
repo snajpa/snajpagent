@@ -1599,6 +1599,22 @@ model_input_object(struct context_builder *builder)
     return input;
 }
 
+int
+snj_context_codex_request(json_t *request)
+{
+    json_t *include = json_array();
+    (void)json_object_del(request, "truncation");
+    (void)json_object_del(request, "max_output_tokens");
+    if (!include || json_array_append_new(include, json_string("reasoning.encrypted_content")) < 0) {
+        json_decref(include);
+        return -1;
+    }
+    if (snj_json_set_new(request, "include", include) < 0 ||
+        snj_json_set_new(request, "instructions", json_string("")) < 0)
+        return -1;
+    return 0;
+}
+
 static json_t *
 create_request_object(struct context_builder *builder)
 {
@@ -1636,20 +1652,10 @@ create_request_object(struct context_builder *builder)
         json_decref(request);
         return NULL;
     }
-    if (provider && provider->auth == SNJ_AUTH_CHATGPT) {
-        json_t *include = json_array();
-        (void)json_object_del(request, "truncation");
-        (void)json_object_del(request, "max_output_tokens");
-        if (!include || json_array_append_new(include, json_string("reasoning.encrypted_content")) < 0) {
-            json_decref(include);
-            json_decref(request);
-            return NULL;
-        }
-        if (snj_json_set_new(request, "include", include) < 0 ||
-            snj_json_set_new(request, "instructions", json_string("")) < 0) {
-            json_decref(request);
-            return NULL;
-        }
+    if (provider && provider->auth == SNJ_AUTH_CHATGPT &&
+        snj_context_codex_request(request) < 0) {
+        json_decref(request);
+        return NULL;
     }
     return request;
 }

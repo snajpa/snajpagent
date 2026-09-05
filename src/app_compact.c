@@ -402,7 +402,8 @@ out:
 }
 
 static int
-run_compaction(struct app_state *app, const char *reason, bool active_prefix,
+run_compaction_attempt(struct app_state *app, const char *reason, bool active_prefix,
+               bool allow_native,
                const struct snj_credential *provided_credential,
                bool *compacted, char *error, size_t error_size)
 {
@@ -435,6 +436,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
     uint64_t threshold;
     bool use_exact;
     bool started = false;
+    bool native;
     int build_rc;
     int stage_rc;
     int rc = -1;
@@ -459,6 +461,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         errno = ENOENT;
         goto out;
     }
+    native = allow_native && app->turn_provider->native_compaction;
     if (!active_prefix &&
         snj_app_capacity_resolve(app, app->turn_provider, model,
                                  &app->turn_capacity,
@@ -513,7 +516,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             errno = EINVAL;
             goto out;
         }
-        if (app->turn_provider->native_compaction) {
+        if (native) {
             provider_request = json_incref(request);
         } else {
             provider_request = responses_compact_create_request(
@@ -523,8 +526,11 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
                 request, model, effort, &app->turn_capacity);
         }
         if (provider_request && app->turn_provider->auth == SNJ_AUTH_CHATGPT &&
-            app->turn_provider->native_compaction &&
+            native &&
             snj_json_set_new(provider_request, "instructions", json_string("")) < 0)
+            goto out;
+        if (provider_request && !native && app->turn_provider->auth == SNJ_AUTH_CHATGPT &&
+            snj_context_codex_request(provider_request) < 0)
             goto out;
         if (!provider_request || !count_request) {
             snprintf(error, error_size,
@@ -616,11 +622,18 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
             error, error_size) < 0)
         goto out;
     started = true;
-    if (app->turn_provider->native_compaction) {
+    if (native) {
         stage_rc = snj_app_provider_compact(app, provider_request, credential,
                                             &output,
                                             &output_tokens_bound,
                                             error, error_size);
+        if (stage_rc == SNJ_PROVIDER_UNSUPPORTED) {
+            if (commit_rendered(app, "compaction_interrupted",
+                    compaction_interrupted_data(compact_id, "endpoint_unavailable"),
+                    error, error_size) < 0)
+                goto out;
+            started = false;
+        }
         if (stage_rc != 0) {
             rc = stage_rc;
             goto out;
@@ -698,6 +711,24 @@ out:
         json_decref(request);
     snj_credential_clear(&owned_credential);
     return rc;
+}
+
+static int
+run_compaction(struct app_state *app, const char *reason, bool active_prefix,
+               const struct snj_credential *credential, bool *compacted,
+               char *error, size_t error_size)
+{
+    int rc = run_compaction_attempt(app, reason, active_prefix, true,
+                                    credential, compacted, error, error_size);
+    if (rc != SNJ_PROVIDER_UNSUPPORTED)
+        return rc;
+    if (snj_ui_text(&app->ui, SNJ_UI_WARNING,
+        "native compaction unavailable; compacting through Responses") < 0)
+        return -1;
+    if (error_size)
+        error[0] = '\0';
+    return run_compaction_attempt(app, reason, active_prefix, false,
+                                  credential, compacted, error, error_size);
 }
 
 int

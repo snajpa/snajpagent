@@ -737,6 +737,10 @@ authentication failures do not disable exact counting.
 Use the provider's native compaction endpoint.  When false, use an ordinary
 Responses summarization request instead.  Default:
 .BR true .
+.PP
+For direct ChatGPT/Codex, an unavailable native compaction endpoint falls back
+once to Responses summarization. Authentication failures do not trigger this
+fallback, and the configured provider/account and hard context guard stay intact.
 .TP
 .B openrouter_referer
 Optional printable ASCII

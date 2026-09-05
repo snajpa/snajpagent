@@ -12,6 +12,8 @@
 #define SNJ_CONTEXT_MAX_COMPACT (12u * 1024u * 1024u)
 #define SNJ_CONTEXT_MAX_COMPACT_ITEMS 128u
 
+int snj_context_codex_request(json_t *request);
+
 struct snj_context_projection {
     json_t *model_input;
     json_t *create_request;

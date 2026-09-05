@@ -1027,7 +1027,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
         session->active_compact_source_seq = source_seq;
     } else if (strcmp(type, "compaction_interrupted") == 0) {
         static const char *const keys[] = {"compact_id", "reason"};
-        static const char *const reasons[] = {"steering", "user"};
+        static const char *const reasons[] = {"steering", "user", "endpoint_unavailable"};
         const char *compact_id = snj_json_string(data, "compact_id");
         const char *reason = snj_json_string(data, "reason");
 
