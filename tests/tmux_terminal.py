@@ -1421,6 +1421,13 @@ def run_retained_composer_case(binary, root):
         terminal.send_key("C-u")
         terminal.send_text("a" * 21)  # Exact right margin, including p>.
         terminal.wait("p> " + "a" * 21, join_wrapped=True)
+        terminal.send_text("xyz")
+        terminal.wait("p> " + "a" * 21 + "xyz", join_wrapped=True)
+        for _ in range(3):
+            terminal.send_key("BSpace")
+        terminal.send_text("Q")
+        terminal.wait("p> " + "a" * 21 + "Q", join_wrapped=True)
+        terminal.send_key("BSpace")
         terminal.send_key("BSpace")
         terminal.send_text("Z")
         terminal.wait("p> " + "a" * 20 + "Z", join_wrapped=True)

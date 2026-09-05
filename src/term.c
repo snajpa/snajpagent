@@ -1176,6 +1176,7 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
     size_t col = term->prompt_visible ? term->rendered_cursor_col : 0u;
     size_t old_rows = term->prompt_visible ? term->rendered_rows : 0u;
     bool stable = same_prompt_layout(term, frame);
+    bool repair_wrap = false;
     size_t max;
     int rc = -1;
 
@@ -1240,6 +1241,8 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
                 }
                 if (next.width < old.width && snj_buf_append(&out, "\033[K", 3u) < 0)
                     goto out;
+                if (next.width < old.width && end_row && !end_col && row == end_row)
+                    repair_wrap = true;
             }
             a = old.next;
             b = next.next;
@@ -1278,10 +1281,24 @@ paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
             goto out;
         row = end_row;
         col = end_col;
+        repair_wrap = end_row && !end_col && old_rows > end_row;
         for (size_t y = end_row + 1u; y < old_rows; ++y)
             if (prompt_move(&out, &row, &col, y, 0u) < 0 ||
                 snj_buf_append(&out, "\033[K", 3u) < 0)
                 goto out;
+    }
+    /* EL on an empty continuation row can clear the preceding soft-wrap
+     * marker (not just its cells). Restore it after shrinking to a margin. */
+    if (repair_wrap) {
+        size_t last = prompt_cell_start(frame->data, 0u, frame->len);
+        size_t last_row, last_col;
+        frame_position(frame, last, term->columns, &last_row, &last_col);
+        if (prompt_move(&out, &row, &col, last_row, last_col) < 0 ||
+            prompt_span(&out, term, frame, label, last, frame->len) < 0 ||
+            snj_buf_append(&out, " \b", 2u) < 0)
+            goto out;
+        row = end_row;
+        col = 0u;
     }
     if (prompt_move(&out, &row, &col, cursor_row, cursor_col) < 0 ||
         snj_term_write(STDERR_FILENO, out.data, out.len) < 0)
