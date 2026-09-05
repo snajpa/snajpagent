@@ -1362,14 +1362,10 @@ model_input_object(struct context_builder *builder)
 int
 snag_context_codex_request(json_t *request)
 {
-    json_t *include = json_array();
     (void)json_object_del(request, "truncation");
     (void)json_object_del(request, "max_output_tokens");
-    if (!include || json_array_append_new(include, json_string("reasoning.encrypted_content")) < 0) {
-        json_decref(include);
-        return -1;
-    }
-    if (snag_json_set_new(request, "include", include) < 0 ||
+    if (snag_json_set_new(request, "include",
+                         json_pack("[s]", "reasoning.encrypted_content")) < 0 ||
         snag_json_set_new(request, "instructions", json_string("")) < 0)
         return -1;
     return 0;

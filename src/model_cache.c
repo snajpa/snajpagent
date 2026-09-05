@@ -395,15 +395,11 @@ write_cache(struct snag_store *store, const json_t *providers,
         errno = EINVAL;
         return -1;
     }
-    root = json_object();
+    root = json_pack("{s:O,s:i,s:I}", "providers", providers,
+                     "schema_version", SNAG_MODEL_CACHE_SCHEMA,
+                     "updated_at_ms", (json_int_t)updated_at_ms);
     snag_buf_init(&data, SNAG_MODEL_CACHE_FILE_MAX);
     if (!root ||
-        snag_json_set_new(root, "providers",
-                         json_incref((json_t *)providers)) < 0 ||
-        snag_json_set_new(root, "schema_version",
-                         json_integer(SNAG_MODEL_CACHE_SCHEMA)) < 0 ||
-        snag_json_set_new(root, "updated_at_ms",
-                         json_integer((json_int_t)updated_at_ms)) < 0 ||
         snag_json_canonical(root, &data) < 0 || snag_buf_putc(&data, '\n') < 0 ||
         snag_random_id(id) < 0) {
         snag_errorf(error, error_size, "cannot encode model cache");

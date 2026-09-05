@@ -224,26 +224,17 @@ snag_response_usage_valid(const struct snag_response_usage *usage)
 json_t *
 snag_response_usage_json(const struct snag_response_usage *usage)
 {
-    json_t *value = json_object();
-
-    if (!value || snag_response_usage_valid(usage) < 0 ||
-        snag_json_set_new(value, "input_tokens",
-            usage->input_known ? json_integer((json_int_t)usage->input_tokens) :
-                                 json_null()) < 0 ||
-        snag_json_set_new(value, "output_tokens",
-            usage->output_known ? json_integer((json_int_t)usage->output_tokens) :
-                                  json_null()) < 0 ||
-        snag_json_set_new(value, "reasoning_tokens",
-            usage->reasoning_known ?
-                json_integer((json_int_t)usage->reasoning_tokens) : json_null()) < 0 ||
-        snag_json_set_new(value, "total_tokens",
-            usage->total_known ? json_integer((json_int_t)usage->total_tokens) :
-                                 json_null()) < 0) {
-        if (value)
-            json_decref(value);
+    if (snag_response_usage_valid(usage) < 0)
         return NULL;
-    }
-    return value;
+    return json_pack("{s:o,s:o,s:o,s:o}",
+        "input_tokens", usage->input_known ?
+            json_integer((json_int_t)usage->input_tokens) : json_null(),
+        "output_tokens", usage->output_known ?
+            json_integer((json_int_t)usage->output_tokens) : json_null(),
+        "reasoning_tokens", usage->reasoning_known ?
+            json_integer((json_int_t)usage->reasoning_tokens) : json_null(),
+        "total_tokens", usage->total_known ?
+            json_integer((json_int_t)usage->total_tokens) : json_null());
 }
 
 int
@@ -949,10 +940,6 @@ snag_tool_result_valid(const json_t *result)
         "duration_ms", "exit_code", "handle", "model_text", "reason",
         "signal", "status", "stderr", "stdout", "max_output_tokens"
     };
-    static const char *const legacy_keys[] = {
-        "duration_ms", "exit_code", "handle", "model_text", "reason",
-        "signal", "status", "stderr", "stdout"
-    };
     const char *status;
     const char *reason;
     const char *model_text;
@@ -964,7 +951,7 @@ snag_tool_result_valid(const json_t *result)
     json_t *limit_value;
 
     if ((!snag_json_exact_keys((json_t *)result, keys, 10u) &&
-         !snag_json_exact_keys((json_t *)result, legacy_keys, 9u)) ||
+         !snag_json_exact_keys((json_t *)result, keys, 9u)) ||
         snag_json_integer_u64(result, "duration_ms", &duration) < 0 ||
         !(status = snag_json_string(result, "status")) ||
         !(model_text = snag_json_string(result, "model_text")) ||
