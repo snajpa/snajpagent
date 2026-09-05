@@ -630,16 +630,9 @@ prompt_spinner_states(const struct app_state *app, bool active)
 static int
 tick_irc(struct app_state *app, char *error, size_t error_size)
 {
-    char model[SNJ_CONFIG_IRC_NICK_MAX + 1u];
-    char operator[SNJ_CONFIG_IRC_NICK_MAX + 1u];
-
-    (void)snprintf(model, sizeof(model), "%s", snj_irc_model_nick(app->irc));
-    (void)snprintf(operator, sizeof(operator), "%s",
-                   snj_irc_operator_nick(app->irc));
     if (snj_irc_tick(app->irc, 0, error, error_size) < 0)
         return -1;
-    if (strcmp(model, snj_irc_model_nick(app->irc)) == 0 &&
-        strcmp(operator, snj_irc_operator_nick(app->irc)) == 0)
+    if (!snj_irc_identity_changed(app->irc))
         return 0;
     if (snj_app_irc_snapshot(app, "nick", error, error_size) < 0)
         return -1;

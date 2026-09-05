@@ -64,6 +64,7 @@ struct snj_irc {
     uint64_t published, admitted;
     int wake[2];
     bool stopping, hosting;
+    bool identity_changed; /* Engine-only, retained across command drains. */
     int failure;
 };
 
@@ -326,8 +327,13 @@ drain(struct snj_irc *irc, int timeout_ms)
         --irc->owners[record->source].queued;
         pthread_cond_broadcast(&irc->changed);
         pthread_mutex_unlock(&irc->mutex);
-        if (record->kind != IRC_TRACE)
+        if (record->kind != IRC_TRACE) {
+            if (!record->source &&
+                (strcmp(irc->owners[0].view.model, record->view.model) != 0 ||
+                 strcmp(irc->owners[0].view.operator, record->view.operator) != 0))
+                irc->identity_changed = true;
             irc->owners[record->source].view = record->view;
+        }
         if (record->kind == IRC_EVENT) {
             snj_irc_core_remember(irc->history, &record->event);
             if (irc->event_fn)
@@ -631,6 +637,16 @@ const char *
 snj_irc_room_name(const struct snj_irc *irc)
 {
     return snj_irc_core_room_name(irc ? irc->history : NULL);
+}
+
+bool
+snj_irc_identity_changed(struct snj_irc *irc)
+{
+    bool changed = irc && irc->identity_changed;
+
+    if (irc)
+        irc->identity_changed = false;
+    return changed;
 }
 
 bool

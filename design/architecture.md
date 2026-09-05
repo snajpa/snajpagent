@@ -112,8 +112,9 @@ literal path handling, no-follow semantics, regular-text requirements, and
 fixed pagination/scan/output bounds. This is a capability restriction, not a
 filesystem confidentiality sandbox or a freeze of independent processes.
 
-The active input pump services terminal input and IRC sockets during provider
-streams and tool execution. Local Enter submits immediate steering: it
+The active input pump admits queued UI and IRC events during provider streams
+and tool execution. Independent UI and IRC owners service the terminal and
+sockets even when the engine is busy. Local Enter submits immediate steering: it
 interrupts a provider response or returns a running command with a live handle,
 then re-arms the empty active composer before the next model cycle. Local Tab
 instead appends a future FIFO turn and changes neither the active response nor
