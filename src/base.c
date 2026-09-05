@@ -214,46 +214,39 @@ snag_text_blank(const char *text)
     return true;
 }
 
+/* Return the first scalar's byte length, or zero for invalid/incomplete UTF-8. */
+size_t
+snag_utf8_decode(const unsigned char *text, size_t len, uint32_t *out)
+{
+    size_t size = len ? snag_utf8_size(text[0]) : 0u;
+    uint32_t cp;
+
+    if (!size || size > len)
+        return 0u;
+    cp = text[0] & (size == 1u ? 0x7fu : size == 2u ? 0x1fu :
+                   size == 3u ? 0x0fu : 0x07u);
+    for (size_t i = 1u; i < size; ++i) {
+        if ((text[i] & 0xc0u) != 0x80u)
+            return 0u;
+        cp = (cp << 6) | (text[i] & 0x3fu);
+    }
+    if ((size == 2u && cp < 0x80u) || (size == 3u && cp < 0x800u) ||
+        (size == 4u && cp < 0x10000u) || cp > 0x10ffffu ||
+        (cp >= 0xd800u && cp <= 0xdfffu))
+        return 0u;
+    *out = cp;
+    return size;
+}
+
 bool
 snag_utf8_valid(const unsigned char *s, size_t len, bool reject_nul)
 {
-    size_t i = 0;
-
-    while (i < len) {
+    for (size_t i = 0u; i < len;) {
         uint32_t cp;
-        unsigned char c = s[i++];
-        unsigned int need;
-
-        if (c < 0x80u) {
-            if (reject_nul && c == 0)
-                return false;
-            continue;
-        }
-        if (c >= 0xc2u && c <= 0xdfu) {
-            cp = (uint32_t)(c & 0x1fu);
-            need = 1;
-        } else if (c >= 0xe0u && c <= 0xefu) {
-            cp = (uint32_t)(c & 0x0fu);
-            need = 2;
-        } else if (c >= 0xf0u && c <= 0xf4u) {
-            cp = (uint32_t)(c & 0x07u);
-            need = 3;
-        } else {
+        size_t size = snag_utf8_decode(s + i, len - i, &cp);
+        if (!size || (reject_nul && cp == 0u))
             return false;
-        }
-        if (len - i < need)
-            return false;
-        for (unsigned int j = 0; j < need; ++j) {
-            unsigned char d = s[i++];
-            if ((d & 0xc0u) != 0x80u)
-                return false;
-            cp = (cp << 6) | (uint32_t)(d & 0x3fu);
-        }
-        if ((need == 1 && cp < 0x80u) ||
-            (need == 2 && cp < 0x800u) ||
-            (need == 3 && cp < 0x10000u) ||
-            cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu))
-            return false;
+        i += size;
     }
     return true;
 }

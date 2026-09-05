@@ -43,30 +43,6 @@ mark_sigwinch(int signal_number)
     sigwinch_pending = 1;
 }
 
-static size_t
-decode_utf8(const unsigned char *s, size_t len, uint32_t *cp)
-{
-    size_t need = snag_utf8_size(s[0]);
-    uint32_t value;
-
-    if (!need || len < need)
-        return 0u;
-    if (need == 1u) {
-        *cp = s[0];
-        return 1u;
-    }
-    value = s[0] & (need == 2u ? 0x1fu : need == 3u ? 0x0fu : 0x07u);
-    for (size_t i = 1u; i < need; ++i) {
-        if ((s[i] & 0xc0u) != 0x80u)
-            return 0u;
-        value = (value << 6) | (uint32_t)(s[i] & 0x3fu);
-    }
-    if (!snag_utf8_valid(s, need, true))
-        return 0u;
-    *cp = value;
-    return need;
-}
-
 static bool
 format_unsafe(uint32_t cp)
 {
@@ -99,7 +75,7 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
         *cursor_byte = out->len;
     while (i < len) {
         uint32_t cp;
-        size_t n = decode_utf8(text + i, len - i, &cp);
+        size_t n = snag_utf8_decode(text + i, len - i, &cp);
         int width = 0;
         size_t before = out->len;
         bool invalid = !n;
@@ -169,65 +145,35 @@ snag_term_text_width(const char *value, size_t len)
 {
     const unsigned char *text = (const unsigned char *)value;
     size_t width = 0u;
-    size_t i = 0u;
 
-    while (i < len) {
+    for (size_t i = 0u; i < len;) {
         uint32_t cp;
-        size_t n = decode_utf8(text + i, len - i, &cp);
+        size_t n = snag_utf8_decode(text + i, len - i, &cp);
+        size_t amount;
         int w;
 
         if (!n) {
             cp = text[i];
             n = 1u;
         }
-        if (cp == '\t') {
-            size_t spaces = 4u - (width % 4u);
-            if (width > SIZE_MAX - spaces) {
-                errno = EOVERFLOW;
+        w = cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;
+        if (cp == '\t')
+            amount = 4u - (width % 4u);
+        else if (cp < 0x20u || cp == 0x7fu ||
+                 (cp >= 0x80u && cp <= 0x9fu) || format_unsafe(cp) || w < 0) {
+            char escaped[16];
+            int count = snprintf(escaped, sizeof(escaped),
+                                 cp <= 0xffu ? "\\x%02X" : "\\u{%X}",
+                                 (unsigned int)cp);
+            if (count < 0)
                 return SIZE_MAX;
-            }
-            width += spaces;
-        } else if (cp < 0x20u || cp == 0x7fu ||
-                   (cp >= 0x80u && cp <= 0x9fu) || format_unsafe(cp)) {
-            struct snag_buf out;
-            size_t escaped;
-
-            snag_buf_init(&out, 32u);
-            if (append_escape(&out, cp) < 0) {
-                snag_buf_free(&out);
-                return SIZE_MAX;
-            }
-            escaped = out.len;
-            snag_buf_free(&out);
-            if (width > SIZE_MAX - escaped) {
-                errno = EOVERFLOW;
-                return SIZE_MAX;
-            }
-            width += escaped;
+            amount = (size_t)count;
         } else {
-            w = cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;
-            if (w < 0) {
-                struct snag_buf out;
-                size_t escaped;
-
-                snag_buf_init(&out, 32u);
-                if (append_escape(&out, cp) < 0) {
-                    snag_buf_free(&out);
-                    return SIZE_MAX;
-                }
-                escaped = out.len;
-                snag_buf_free(&out);
-                if (width > SIZE_MAX - escaped) {
-                    errno = EOVERFLOW;
-                    return SIZE_MAX;
-                }
-                width += escaped;
-            } else if ((size_t)w > SIZE_MAX - width) {
-                errno = EOVERFLOW;
-                return SIZE_MAX;
-            } else {
-                width += (size_t)w;
-            }
+            amount = (size_t)w;
+        }
+        if (!snag_size_add(width, amount, &width)) {
+            errno = EOVERFLOW;
+            return SIZE_MAX;
         }
         i += n;
     }
@@ -391,7 +337,7 @@ snag_term_note_output(struct snag_term *term, const char *text, size_t len,
         goto out;
     for (size_t i = 0u; i < safe.len;) {
         uint32_t cp;
-        size_t n = decode_utf8(safe.data + i, safe.len - i, &cp);
+        size_t n = snag_utf8_decode(safe.data + i, safe.len - i, &cp);
         int width = cp == '\n' ? 0 : wcwidth((wchar_t)cp);
 
         if (cp == '\n') {
@@ -2502,7 +2448,7 @@ consume_resize(struct snag_term *term)
     term->output_columns = 0u;
     for (size_t i = 0u; i < term->output_line.len;) {
         uint32_t cp;
-        size_t n = decode_utf8(term->output_line.data + i,
+        size_t n = snag_utf8_decode(term->output_line.data + i,
                                 term->output_line.len - i, &cp);
         int width = wcwidth((wchar_t)cp);
 

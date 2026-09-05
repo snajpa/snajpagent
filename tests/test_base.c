@@ -24,6 +24,19 @@ main(void)
     assert(snag_utf8_valid(valid, sizeof(valid) - 1u, true));
     assert(!snag_utf8_valid(invalid, sizeof(invalid), true));
     assert(!snag_utf8_valid((const unsigned char *)"a\0b", 3u, true));
+    {
+        uint32_t cp = 42u;
+        const unsigned char *text = (const unsigned char *)"\xf4\x8f\xbf\xbf";
+        assert(snag_utf8_decode(NULL, 0u, &cp) == 0u && cp == 42u);
+        assert(snag_utf8_decode(text, 4u, &cp) == 4u && cp == 0x10ffffu);
+        assert(snag_utf8_decode(text, 3u, &cp) == 0u);
+        assert(!snag_utf8_valid((const unsigned char *)"\xf4\x90\x80\x80", 4u, true));
+        assert(!snag_utf8_valid((const unsigned char *)"\xed\xa0\x80", 3u, true));
+        assert(!snag_utf8_valid((const unsigned char *)"\xe0\x80\x80", 3u, true));
+        assert(!snag_utf8_valid((const unsigned char *)"\xf0\x80\x80\x80", 4u, true));
+        assert(snag_utf8_decode((const unsigned char *)"", 1u, &cp) == 1u && cp == 0u);
+        assert(snag_utf8_valid((const unsigned char *)"a\0b", 3u, false));
+    }
     assert(snag_random_id(id) == 0);
     assert(snag_hex_is_lower(id, SNAG_ID_HEX_LEN));
 

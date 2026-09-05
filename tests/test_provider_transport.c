@@ -565,40 +565,6 @@ credential_set(struct snag_credential *credential, const char *value)
     memcpy(credential->value, value, credential->len + 1u);
 }
 
-static int
-capture_stderr_begin(int pipefd[2])
-{
-    int saved;
-
-    assert(pipe(pipefd) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0);
-    assert(dup2(pipefd[1], STDERR_FILENO) == STDERR_FILENO);
-    assert(close(pipefd[1]) == 0);
-    return saved;
-}
-
-static void
-capture_stderr_end(int pipefd[2], int saved, char *out, size_t out_size)
-{
-    size_t used = 0u;
-
-    assert(dup2(saved, STDERR_FILENO) == STDERR_FILENO);
-    assert(close(saved) == 0);
-    while (used + 1u < out_size) {
-        ssize_t got = read(pipefd[0], out + used, out_size - used - 1u);
-        if (got < 0) {
-            assert(errno == EINTR);
-            continue;
-        }
-        if (got == 0)
-            break;
-        used += (size_t)got;
-    }
-    out[used] = '\0';
-    assert(close(pipefd[0]) == 0);
-}
-
 static void
 test_local_provider_transport(void)
 {
