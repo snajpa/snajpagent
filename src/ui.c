@@ -1173,7 +1173,6 @@ snj_ui_event(struct snj_ui *ui, uint64_t seq, const char *type)
     return send_message(ui, &message, type);
 }
 
-
 int
 snj_ui_resume_hint(struct snj_ui *ui, const char *text, size_t len)
 {

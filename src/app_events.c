@@ -1122,7 +1122,6 @@ snj_app_tool_read(void *opaque, const char *handle, unsigned int stream,
     return read.seen == to - from ? 0 : -1;
 }
 
-
 /* Takes ownership of result, including on failure. */
 json_t *
 snj_app_tool_finished_data(const char *turn_id, const char *call_id, json_t *result)

@@ -635,7 +635,6 @@ kill_child_group(pid_t pid, int signo)
         (void)kill(pid, signo);
 }
 
-
 static int
 write_stdin_chunk(int *fd, const char *data, size_t len, size_t *written,
                   bool *open_flag, bool close_on_done)
