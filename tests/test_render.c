@@ -25,10 +25,10 @@ count_text(const char *haystack, const char *needle)
 }
 
 static bool
-term_history_has(const struct snj_term *term, const char *text)
+term_history_has(const struct snj_history *term, const char *text)
 {
-    for (size_t i = 0u; i < term->history_count; ++i)
-        if (strcmp(term->history[i], text) == 0)
+    for (size_t i = 0u; i < term->snapshot.count; ++i)
+        if (strcmp(term->snapshot.items[i], text) == 0)
             return true;
     return false;
 }
@@ -39,7 +39,7 @@ test_prompt_history(void)
     const char sample[] = "one\\two\nthree\r\t\x01z";
     char build[4096], temp[4096], path[4096], subdir[4096], entry[64];
     char bytes[4096];
-    struct snj_term term;
+    struct snj_history term;
     struct stat st;
     ssize_t got;
     int fd, status;
@@ -49,12 +49,12 @@ test_prompt_history(void)
     assert(snprintf(temp, sizeof(temp), "%s/test-history-XXXXXX", build) > 0);
     assert(mkdtemp(temp));
     assert(snprintf(path, sizeof(path), "%s/prompt_history", temp) > 0);
-    snj_term_init(&term);
-    assert(snj_term_history_open(&term, temp) == 0);
-    assert(snj_term_history_add(&term, sample) == 0);
-    assert(snj_term_history_add(&term, "duplicate") == 0);
-    assert(snj_term_history_add(&term, "duplicate") == 0);
-    snj_term_close(&term);
+    memset(&term, 0, sizeof(term));
+    assert(snj_history_open(&term, temp) == 0);
+    assert(snj_history_add(&term, sample) == 0);
+    assert(snj_history_add(&term, "duplicate") == 0);
+    assert(snj_history_add(&term, "duplicate") == 0);
+    snj_history_free(&term);
     assert(stat(path, &st) == 0 && (st.st_mode & 0777u) == 0600u);
     fd = open(path, O_RDONLY);
     assert(fd >= 0 && (got = read(fd, bytes, sizeof(bytes) - 1u)) > 0);
@@ -66,33 +66,33 @@ test_prompt_history(void)
     fd = open(path, O_WRONLY | O_APPEND);
     assert(fd >= 0 && snj_write_full(fd, "bad\\q\nunfinished", 17u) == 0);
     assert(close(fd) == 0 && chmod(path, 0644) == 0);
-    snj_term_init(&term);
-    assert(snj_term_history_open(&term, temp) == 0);
-    assert(snj_term_take_history_warning(&term));
-    assert(!snj_term_take_history_warning(&term));
-    assert(term.history_count == 3u);
-    assert(strcmp(term.history[0], sample) == 0);
-    assert(strcmp(term.history[1], "duplicate") == 0);
-    assert(strcmp(term.history[2], "duplicate") == 0);
+    memset(&term, 0, sizeof(term));
+    assert(snj_history_open(&term, temp) == 0);
+    assert(snj_history_take_warning(&term));
+    assert(!snj_history_take_warning(&term));
+    assert(term.snapshot.count == 3u);
+    assert(strcmp(term.snapshot.items[0], sample) == 0);
+    assert(strcmp(term.snapshot.items[1], "duplicate") == 0);
+    assert(strcmp(term.snapshot.items[2], "duplicate") == 0);
     assert(stat(path, &st) == 0 && (st.st_mode & 0777u) == 0600u);
-    snj_term_close(&term);
+    snj_history_free(&term);
 
     assert(unlink(path) == 0);
     for (unsigned int process = 0u; process < 2u; ++process) {
         pid_t child = fork();
         assert(child >= 0);
         if (child == 0) {
-            struct snj_term writer;
+            struct snj_history writer;
             int rc = 0;
-            snj_term_init(&writer);
-            if (snj_term_history_open(&writer, temp) < 0)
+            memset(&writer, 0, sizeof(writer));
+            if (snj_history_open(&writer, temp) < 0)
                 rc = 1;
             for (unsigned int i = 0u; !rc && i < 10u; ++i) {
                 (void)snprintf(entry, sizeof(entry), "child-%u-%u", process, i);
-                if (snj_term_history_add(&writer, entry) < 0)
+                if (snj_history_add(&writer, entry) < 0)
                     rc = 1;
             }
-            snj_term_close(&writer);
+            snj_history_free(&writer);
             _exit(rc);
         }
     }
@@ -100,9 +100,9 @@ test_prompt_history(void)
         assert(wait(&status) > 0);
         assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     }
-    snj_term_init(&term);
-    assert(snj_term_history_open(&term, temp) == 0);
-    assert(term.history_count == 20u);
+    memset(&term, 0, sizeof(term));
+    assert(snj_history_open(&term, temp) == 0);
+    assert(term.snapshot.count == 20u);
     for (unsigned int process = 0u; process < 2u; ++process)
         for (unsigned int i = 0u; i < 10u; ++i) {
             (void)snprintf(entry, sizeof(entry), "child-%u-%u", process, i);
@@ -110,22 +110,22 @@ test_prompt_history(void)
         }
     for (unsigned int i = 0u; i < 105u; ++i) {
         (void)snprintf(entry, sizeof(entry), "bounded-%03u", i);
-        assert(snj_term_history_add(&term, entry) == 0);
+        assert(snj_history_add(&term, entry) == 0);
     }
-    assert(term.history_count == SNJ_TERM_HISTORY_COUNT);
-    assert(strcmp(term.history[0], "bounded-005") == 0);
-    assert(strcmp(term.history[99], "bounded-104") == 0);
-    snj_term_close(&term);
+    assert(term.snapshot.count == SNJ_HISTORY_COUNT);
+    assert(strcmp(term.snapshot.items[0], "bounded-005") == 0);
+    assert(strcmp(term.snapshot.items[99], "bounded-104") == 0);
+    snj_history_free(&term);
     assert(unlink(path) == 0);
 
     assert(snprintf(subdir, sizeof(subdir), "%s/symlink", temp) > 0);
     assert(mkdir(subdir, 0700) == 0);
     assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
     assert(symlink("../target", path) == 0);
-    snj_term_init(&term);
-    assert(snj_term_history_open(&term, subdir) < 0);
-    assert(snj_term_take_history_warning(&term));
-    snj_term_close(&term);
+    memset(&term, 0, sizeof(term));
+    assert(snj_history_open(&term, subdir) < 0);
+    assert(snj_history_take_warning(&term));
+    snj_history_free(&term);
     assert(unlink(path) == 0 && rmdir(subdir) == 0);
 
     if (geteuid() == 0u) {
@@ -135,10 +135,10 @@ test_prompt_history(void)
         fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
         assert(fd >= 0 && close(fd) == 0);
         assert(chown(path, 65534u, 65534u) == 0);
-        snj_term_init(&term);
-        assert(snj_term_history_open(&term, subdir) < 0);
-        assert(snj_term_take_history_warning(&term));
-        snj_term_close(&term);
+        memset(&term, 0, sizeof(term));
+        assert(snj_history_open(&term, subdir) < 0);
+        assert(snj_history_take_warning(&term));
+        snj_history_free(&term);
         assert(unlink(path) == 0 && rmdir(subdir) == 0);
     }
 
@@ -146,9 +146,9 @@ test_prompt_history(void)
     assert(mkdir(subdir, 0700) == 0);
     assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
     assert(mkdir(path, 0700) == 0);
-    snj_term_init(&term);
-    assert(snj_term_history_open(&term, subdir) < 0);
-    snj_term_close(&term);
+    memset(&term, 0, sizeof(term));
+    assert(snj_history_open(&term, subdir) < 0);
+    snj_history_free(&term);
     assert(rmdir(path) == 0 && rmdir(subdir) == 0);
 
     assert(snprintf(subdir, sizeof(subdir), "%s/oversized", temp) > 0);
@@ -156,12 +156,12 @@ test_prompt_history(void)
     assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
     fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
     assert(fd >= 0);
-    assert(ftruncate(fd, (off_t)(SNJ_TERM_HISTORY_BYTES * 4u +
-                                 SNJ_TERM_HISTORY_COUNT + 1u)) == 0);
+    assert(ftruncate(fd, (off_t)(SNJ_HISTORY_BYTES * 4u +
+                                 SNJ_HISTORY_COUNT + 1u)) == 0);
     assert(close(fd) == 0);
-    snj_term_init(&term);
-    assert(snj_term_history_open(&term, subdir) < 0);
-    snj_term_close(&term);
+    memset(&term, 0, sizeof(term));
+    assert(snj_history_open(&term, subdir) < 0);
+    snj_history_free(&term);
     assert(unlink(path) == 0 && rmdir(subdir) == 0);
     assert(rmdir(temp) == 0);
 }

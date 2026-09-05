@@ -2013,7 +2013,7 @@ link_disconnect(struct snj_irc *irc, struct irc_conn *link,
 static int
 read_conn(struct snj_irc *irc, struct irc_conn *conn)
 {
-    for (;;) {
+    for (unsigned int batch = 0u; batch < 4u; ++batch) {
         ssize_t got;
         size_t available = sizeof(conn->input) - conn->input_len;
 
@@ -2071,7 +2071,7 @@ read_conn(struct snj_irc *irc, struct irc_conn *conn)
 static int
 accept_peers(struct snj_irc *irc)
 {
-    for (;;) {
+    for (unsigned int batch = 0u; batch < 8u; ++batch) {
         int fd = accept(irc->listener, NULL, NULL);
         struct irc_conn *peer = NULL;
 
@@ -2093,6 +2093,7 @@ accept_peers(struct snj_irc *irc)
         peer->fd = fd;
         peer->used = true;
     }
+    return 0;
 }
 
 static int

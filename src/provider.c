@@ -304,16 +304,10 @@ write_cb(char *ptr, size_t size, size_t nmemb, void *opaque)
 }
 
 static int
-progress_cb(void *opaque, curl_off_t dltotal, curl_off_t dlnow,
-            curl_off_t ultotal, curl_off_t ulnow)
+process_controls(struct provider_ctx *ctx)
 {
-    struct provider_ctx *ctx = opaque;
     int rc;
 
-    (void)dltotal;
-    (void)dlnow;
-    (void)ultotal;
-    (void)ulnow;
     if (!ctx->pump)
         return 0;
     rc = ctx->pump(ctx->pump_opaque, 0u);
@@ -327,6 +321,46 @@ progress_cb(void *opaque, curl_off_t dltotal, curl_off_t dlnow,
         return 1;
     }
     return 0;
+}
+
+static CURLcode
+perform_request(CURL *curl, struct provider_ctx *ctx)
+{
+    CURLM *multi = curl_multi_init();
+    CURLcode result = CURLE_FAILED_INIT;
+    int running = 0;
+
+    if (!multi)
+        return CURLE_OUT_OF_MEMORY;
+    if (curl_multi_add_handle(multi, curl) != CURLM_OK)
+        goto out;
+    for (;;) {
+        struct curl_waitfd wake = {
+            .fd = snj_ui_wake_fd(ctx->render), .events = CURL_WAIT_POLLIN
+        };
+        CURLMsg *message;
+        int remaining;
+
+        if (process_controls(ctx)) {
+            result = CURLE_ABORTED_BY_CALLBACK;
+            break;
+        }
+        if (curl_multi_perform(multi, &running) != CURLM_OK)
+            break;
+        if (!running) {
+            while ((message = curl_multi_info_read(multi, &remaining)))
+                if (message->msg == CURLMSG_DONE && message->easy_handle == curl)
+                    result = message->data.result;
+            break;
+        }
+        if (curl_multi_poll(multi, wake.fd < 0 ? NULL : &wake,
+                            wake.fd < 0 ? 0u : 1u, 25, NULL) != CURLM_OK)
+            break;
+    }
+    (void)curl_multi_remove_handle(multi, curl);
+out:
+    (void)curl_multi_cleanup(multi);
+    return result;
 }
 
 static int
@@ -508,7 +542,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
 {
     uint32_t delay_ms = snj_provider_retry_delay_ms(retries_done,
         ctx->retry_after_present, ctx->retry_after_ms);
-    uint32_t remaining = delay_ms;
+    uint64_t deadline = snj_time_ms() + delay_ms;
 
     if (ctx->render && ctx->render->verbosity >= 3u) {
         char line[160];
@@ -522,8 +556,12 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
             return -1;
         }
     }
-    while (remaining > 0u) {
-        uint32_t slice = remaining > 100u ? 100u : remaining;
+    for (;;) {
+        uint64_t now = snj_time_ms();
+        uint64_t remaining = now < deadline ? deadline - now : 0u;
+        uint32_t slice = remaining > 25u ? 25u : (uint32_t)remaining;
+        if (!remaining)
+            break;
         if (ctx->pump) {
             int rc = ctx->pump(ctx->pump_opaque, slice);
             if (rc < 0) {
@@ -540,7 +578,6 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
             snj_errorf(error, error_size, "provider retry sleep failed");
             return -1;
         }
-        remaining -= slice;
     }
     return 0;
 }
@@ -581,7 +618,7 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx,
     for (;;) {
         long request_size = 0;
         begin_attempt(ctx);
-        code = curl_easy_perform(curl);
+        code = perform_request(curl, ctx);
         if (curl_easy_getinfo(curl, CURLINFO_REQUEST_SIZE,
                               &request_size) == CURLE_OK && request_size > 0)
             ctx->request_may_have_been_sent = true;
@@ -1331,6 +1368,7 @@ provider_request_setup(struct provider_ctx *ctx,
         return -1;
     }
     if (curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK ||
         (has_body ?
          (curl_easy_setopt(ctx->curl, CURLOPT_POST, 1L) != CURLE_OK ||
@@ -1343,11 +1381,6 @@ provider_request_setup(struct provider_ctx *ctx,
         curl_easy_setopt(ctx->curl, CURLOPT_WRITEDATA, ctx) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_HEADERFUNCTION, header_cb) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_HEADERDATA, ctx) != CURLE_OK ||
-        (ctx->pump &&
-         (curl_easy_setopt(ctx->curl, CURLOPT_XFERINFOFUNCTION,
-                           progress_cb) != CURLE_OK ||
-          curl_easy_setopt(ctx->curl, CURLOPT_XFERINFODATA, ctx) != CURLE_OK ||
-          curl_easy_setopt(ctx->curl, CURLOPT_NOPROGRESS, 0L) != CURLE_OK)) ||
         curl_easy_setopt(ctx->curl, CURLOPT_CONNECTTIMEOUT_MS,
                          (long)ctx->provider->connect_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_TIMEOUT_MS,
@@ -1405,7 +1438,9 @@ int
 snj_provider_models_list(const struct snj_config *config,
                          const struct snj_provider_config *provider,
                          const struct snj_credential *credential,
-                         struct snj_ui *render, json_t **models,
+                         struct snj_ui *render,
+                         snj_provider_pump_fn pump, void *pump_opaque,
+                         json_t **models,
                          char *error, size_t error_size)
 {
     struct provider_ctx ctx;
@@ -1421,7 +1456,7 @@ snj_provider_models_list(const struct snj_config *config,
         errno = EINVAL;
         return -1;
     }
-    provider_ctx_init(&ctx, config, provider, credential, render, NULL, NULL,
+    provider_ctx_init(&ctx, config, provider, credential, render, pump, pump_opaque,
                       SNJ_WIRE_BODY_MAX, SNJ_WIRE_BODY_MAX);
     codex = provider_uses_codex_catalog(provider);
     path = codex ? SNJ_CODEX_CATALOG_PATH : "/v1/models";

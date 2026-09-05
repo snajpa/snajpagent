@@ -99,7 +99,7 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
     error[0] = '\0';
     {
         int rc = snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                               pump, pump_opaque, &result, error, sizeof(error));
+                               pump, pump_opaque, -1, &result, error, sizeof(error));
         if (rc != 0)
             fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
         assert(rc == 0);
@@ -147,7 +147,7 @@ run_pty_command(const char *command, int timeout_ms)
     error[0] = '\0';
     {
         int rc = snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                               NULL, NULL, &result, error, sizeof(error));
+                               NULL, NULL, -1, &result, error, sizeof(error));
         if (rc != 0)
             fprintf(stderr, "pty tool error: %s errno=%d\n", error, errno);
         assert(rc == 0);
@@ -183,7 +183,7 @@ run_tool_with_args_pump(const char *name, json_t *args,
                                        "call_managed_test", name, args) == 0);
     error[0] = '\0';
     rc = snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                       pump, pump_opaque, &result, error, sizeof(error));
+                       pump, pump_opaque, -1, &result, error, sizeof(error));
     if (rc != 0)
         fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
     assert(rc == 0);
@@ -359,7 +359,7 @@ run_apply_patch(const char *workdir, const char *patch)
                                        args) == 0);
     error[0] = '\0';
     rc = snj_tools_run(&graph.items[0], &config, &credential, workdir,
-                       NULL, NULL, &result, error, sizeof(error));
+                       NULL, NULL, -1, &result, error, sizeof(error));
     if (rc != 0)
         fprintf(stderr, "patch tool error: %s errno=%d\n", error, errno);
     assert(rc == 0);
@@ -443,7 +443,7 @@ test_managed_process_hands_off_on_steering(void)
                   "steering arrived") != NULL);
     handle = snj_json_string(result, "handle");
     assert(handle != NULL);
-    assert(snj_tools_close_managed(handle, false, NULL, NULL,
+    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL && snj_tool_result_valid(closed) == 0);
     assert(json_integer_value(json_object_get(closed,
@@ -499,12 +499,12 @@ test_command_output_limit_is_required_and_positive(void)
     assert(json_object_del(graph.items[0].arguments,
                            "max_output_tokens") == 0);
     assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                         NULL, NULL, &result, error, sizeof(error)) < 0);
+                         NULL, NULL, -1, &result, error, sizeof(error)) < 0);
     assert(result == NULL);
     assert(json_object_set_new(graph.items[0].arguments,
                "max_output_tokens", json_integer(0)) == 0);
     assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                         NULL, NULL, &result, error, sizeof(error)) < 0);
+                         NULL, NULL, -1, &result, error, sizeof(error)) < 0);
     assert(result == NULL);
     snj_response_graph_free(&graph);
     snj_config_free(&config);
@@ -837,7 +837,7 @@ test_managed_process_close_returns_terminal_result(void)
     handle = snj_json_string(result, "handle");
     assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
     error[0] = '\0';
-    assert(snj_tools_close_managed(handle, false, NULL, NULL,
+    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL);
     assert(snj_tool_result_valid(closed) == 0);
@@ -899,7 +899,7 @@ test_managed_close_kills_process_family(void)
     handle = snj_json_string(result, "handle");
     assert(handle != NULL && snj_hex_is_lower(handle, SNJ_ID_HEX_LEN));
     error[0] = '\0';
-    assert(snj_tools_close_managed(handle, false, NULL, NULL,
+    assert(snj_tools_close_managed(handle, false, NULL, NULL, -1,
                                    &closed, error, sizeof(error)) == 0);
     assert(closed != NULL);
     assert(snj_tool_result_valid(closed) == 0);
@@ -976,7 +976,7 @@ test_all_provider_secrets_removed_and_redacted(void)
               "printf \"${SECOND_PROVIDER_KEY-unset}:second-provider-secret\"",
               cwd, 1000, NULL);
     assert(snj_tools_run(&graph.items[0], &config, &credential, cwd,
-                         NULL, NULL, &result, error, sizeof(error)) == 0);
+                         NULL, NULL, -1, &result, error, sizeof(error)) == 0);
     retained = snj_json_string(json_object_get(result, "stdout"), "retained");
     assert(strcmp(retained, "unset:<redacted:secret>") == 0);
     assert(unsetenv("SECOND_PROVIDER_KEY") == 0);

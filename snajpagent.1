@@ -205,7 +205,8 @@ Insert a newline without submitting.
 Leave the visible draft in scrollback, append literal
 .BR ^C ,
 start a new line, and open a clean prompt.  With an empty active composer, also
-interrupt the turn.  Ctrl-C never exits; use Ctrl-D or
+interrupt the turn.  Five consecutive presses within two seconds exit;
+other input resets the sequence.  Ctrl-D or
 .BR /exit .
 .TP
 .B Ctrl-D

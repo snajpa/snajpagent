@@ -666,7 +666,7 @@ drain_fd_common(int fd, struct capture_redactor *redactor, bool *open_flag,
 {
     unsigned char buf[8192];
 
-    for (;;) {
+    for (unsigned int batch = 0u; batch < 8u; ++batch) {
         ssize_t n = read(fd, buf, sizeof(buf));
         if (n > 0) {
             if (redactor_feed(redactor, buf, (size_t)n) < 0)
@@ -683,6 +683,7 @@ drain_fd_common(int fd, struct capture_redactor *redactor, bool *open_flag,
             return 0;
         return -1;
     }
+    return 0;
 }
 
 static int
@@ -1102,7 +1103,7 @@ managed_write_pty_input(struct managed_process *proc, const char *input,
 static int
 managed_drive(struct managed_process *proc, const char *input, size_t input_len,
               bool input_supplied, bool close_after_input, uint32_t yield_ms,
-              snj_tool_pump_fn pump, void *pump_opaque,
+              snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
               json_t **result, char *error, size_t error_size)
 {
     uint64_t yield_deadline = yield_ms ? saturating_deadline(snj_time_ms(), yield_ms) : UINT64_MAX;
@@ -1116,7 +1117,7 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
         proc->stdin_open && !proc->pty)
         managed_close_input(proc);
     for (;;) {
-        struct pollfd fds[3];
+        struct pollfd fds[4];
         nfds_t nfds = 0;
         int stdout_index = -1;
         int stderr_index = -1;
@@ -1207,6 +1208,8 @@ managed_drive(struct managed_process *proc, const char *input, size_t input_len,
         } else if (yield_enabled && input_done) {
             timeout = 0;
         }
+        if (wake_fd >= 0)
+            fds[nfds++] = (struct pollfd){wake_fd, POLLIN, 0};
         pr = poll(nfds ? fds : NULL, nfds, timeout);
         if (pr < 0) {
             if (errno == EINTR)
@@ -1278,7 +1281,7 @@ run_exec_command_managed(const char *command, const char *workdir,
                          bool pty,
                          const struct snj_config *config,
                          const struct snj_credential *credential,
-                         snj_tool_pump_fn pump, void *pump_opaque,
+                         snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                          json_t **result, char *error, size_t error_size)
 {
     int in_pipe[2] = {-1, -1};
@@ -1343,6 +1346,9 @@ run_exec_command_managed(const char *command, const char *workdir,
         goto out;
     }
     if (pid == 0) {
+        sigset_t signals;
+        sigemptyset(&signals);
+        (void)sigprocmask(SIG_SETMASK, &signals, NULL);
         if (pty) {
             close_if_open(&pty_master);
 #if defined(SNAJPAGENT_HAVE_PTY)
@@ -1403,7 +1409,7 @@ run_exec_command_managed(const char *command, const char *workdir,
     free(env);
     env = NULL;
     rc = managed_drive(proc, stdin_text ? stdin_text : "", stdin_len,
-                       stdin_text != NULL, true, yield_ms, pump, pump_opaque,
+                       stdin_text != NULL, true, yield_ms, pump, pump_opaque, wake_fd,
                        result, error, error_size);
     if (rc < 0)
         goto out_active;
@@ -1427,7 +1433,7 @@ out:
 static int
 run_write_stdin(const struct snj_response_item *call,
                 const struct snj_config *config,
-                snj_tool_pump_fn pump, void *pump_opaque,
+                snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                 json_t **result, char *error, size_t error_size)
 {
     const char *handle = snj_json_string(call->arguments, "handle");
@@ -1493,17 +1499,17 @@ run_write_stdin(const struct snj_response_item *call,
     }
     proc->max_output_tokens = max_output_tokens;
     if (terminate)
-        return snj_tools_close_managed(handle, false, pump, pump_opaque,
+        return snj_tools_close_managed(handle, false, pump, pump_opaque, wake_fd,
                                        result, error, error_size);
     {
         int rc;
 
         if (!proc->stdin_open && len > 0u)
             rc = managed_drive(proc, "", 0u, false, false, yield_ms, pump,
-                               pump_opaque, result, error, error_size);
+                               pump_opaque, wake_fd, result, error, error_size);
         else
             rc = managed_drive(proc, data, len, true, eof, yield_ms, pump,
-                               pump_opaque, result, error, error_size);
+                               pump_opaque, wake_fd, result, error, error_size);
         if (rc < 0)
             managed_cleanup();
         return rc;
@@ -1515,7 +1521,7 @@ run_exec_command(const struct snj_response_item *call,
                  const struct snj_config *config,
                  const struct snj_credential *credential,
                  const char *session_workspace,
-                 snj_tool_pump_fn pump, void *pump_opaque,
+                 snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                  json_t **result, char *error, size_t error_size)
 {
     const char *command = snj_json_string(call->arguments, "command");
@@ -1553,7 +1559,7 @@ run_exec_command(const struct snj_response_item *call,
     return run_exec_command_managed(command, workdir, stdin_text,
                                     timeout_ms, yield_ms, max_output_tokens,
                                     pty, config,
-                                    credential, pump, pump_opaque,
+                                    credential, pump, pump_opaque, wake_fd,
                                     result, error, error_size);
 }
 
@@ -1602,7 +1608,7 @@ simple_result(const char *status, const char *reason, const char *message,
 
 int
 snj_tools_close_managed(const char *handle, bool user_interrupt,
-                        snj_tool_pump_fn pump, void *pump_opaque,
+                        snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                         json_t **result, char *error, size_t error_size)
 {
     struct managed_process *proc = &managed_process;
@@ -1635,7 +1641,7 @@ snj_tools_close_managed(const char *handle, bool user_interrupt,
     now = snj_time_ms();
     close_deadline = saturating_deadline(now, SNJ_TOOL_CLOSE_GRACE_MS);
     proc->deadline_ms = close_deadline;
-    if (managed_drive(proc, "", 0u, false, false, 0u, pump, pump_opaque,
+    if (managed_drive(proc, "", 0u, false, false, 0u, pump, pump_opaque, wake_fd,
                       result, error, error_size) < 0) {
         managed_cleanup();
         return -1;
@@ -1648,7 +1654,7 @@ snj_tools_run(const struct snj_response_item *call,
               const struct snj_config *config,
               const struct snj_credential *credential,
               const char *session_workspace,
-              snj_tool_pump_fn pump, void *pump_opaque,
+              snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
               json_t **result, char *error, size_t error_size)
 {
     int rc;
@@ -1663,9 +1669,9 @@ snj_tools_run(const struct snj_response_item *call,
     }
     if (strcmp(call->name, "exec_command") == 0)
         rc = run_exec_command(call, config, credential, session_workspace,
-                              pump, pump_opaque, result, error, error_size);
+                              pump, pump_opaque, wake_fd, result, error, error_size);
     else if (strcmp(call->name, "write_stdin") == 0)
-        rc = run_write_stdin(call, config, pump, pump_opaque, result,
+        rc = run_write_stdin(call, config, pump, pump_opaque, wake_fd, result,
                              error, error_size);
     else if (strcmp(call->name, "apply_patch") == 0)
         return snj_tools_apply_patch(call, session_workspace, result,

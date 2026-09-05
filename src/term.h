@@ -3,6 +3,7 @@
 #define SNAJPAGENT_TERM_H
 
 #include "base.h"
+#include "history.h"
 
 #include <stdbool.h>
 #include <signal.h>
@@ -11,8 +12,6 @@
 #include <termios.h>
 #include <time.h>
 
-#define SNJ_TERM_HISTORY_COUNT 100u
-#define SNJ_TERM_HISTORY_BYTES (4u * 1024u * 1024u)
 #define SNJ_TERM_SPINNER_COUNT 3u
 #define SNJ_TERM_SPINNER_MARKER_BASE 0xfdu
 
@@ -64,15 +63,12 @@ struct snj_term {
     struct snj_buf draft;
     struct snj_buf search_label;
     struct snj_buf search_query;
-    char *history[SNJ_TERM_HISTORY_COUNT];
+    struct snj_history_snapshot history;
     char *history_draft;
-    char *history_path;
     char *search_original;
     const struct snj_term_command *commands;
     size_t cursor;
     size_t command_count;
-    size_t history_count;
-    size_t history_bytes;
     size_t history_pos;
     size_t search_original_cursor;
     size_t search_pos;
@@ -121,8 +117,8 @@ struct snj_term {
     bool rendered_cursor_pending_wrap;
     bool searching;
     bool search_failed;
-    bool history_warning;
-    bool history_warned;
+    bool history_refresh_requested;
+    bool input_backlog;
 };
 
 void snj_term_init(struct snj_term *term);
@@ -148,11 +144,10 @@ const char *snj_term_prompt_label(const struct snj_term *term);
 int snj_term_hide(struct snj_term *term);
 int snj_term_output_begin(struct snj_term *term, bool persistent);
 int snj_term_output_end(struct snj_term *term);
-int snj_term_poll(struct snj_term *term, int timeout_ms,
+int snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
                   enum snj_term_action *action, char **text);
-int snj_term_history_open(struct snj_term *term, const char *dotdir);
-int snj_term_history_add(struct snj_term *term, const char *text);
-bool snj_term_take_history_warning(struct snj_term *term);
+int snj_term_history_set(struct snj_term *term,
+                         struct snj_history_snapshot *snapshot, bool refresh);
 int snj_term_restore_draft(struct snj_term *term, const char *text);
 void snj_term_set_typing_pause(struct snj_term *term, uint32_t pause_ms);
 void snj_term_set_color(struct snj_term *term, bool enabled, bool networked);

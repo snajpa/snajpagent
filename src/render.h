@@ -63,6 +63,8 @@ struct snj_irc_markdown_state {
 };
 
 struct snj_render {
+    int (*checkpoint)(void *);
+    void *checkpoint_opaque;
     unsigned int verbosity;
     bool stdout_terminal;
     bool stderr_terminal;

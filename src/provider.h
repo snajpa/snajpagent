@@ -58,6 +58,7 @@ int snj_provider_models_list(const struct snj_config *config,
                              const struct snj_provider_config *provider,
                              const struct snj_credential *credential,
                              struct snj_ui *render,
+                             snj_provider_pump_fn pump, void *pump_opaque,
                              json_t **models,
                              char *error, size_t error_size);
 

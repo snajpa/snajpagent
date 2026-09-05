@@ -177,7 +177,8 @@ fail:
                             error, error_size) < 0)
         return -1;
     rc = snj_provider_models_list(app->config, provider, &credential,
-                                  &app->ui, models, error, error_size);
+                                  &app->ui, snj_app_active_input_pump, app,
+                                  models, error, error_size);
     snj_credential_clear(&credential);
     return rc;
 #endif
@@ -532,7 +533,7 @@ snj_app_tool_run(struct app_state *app, const struct snj_response_item *call,
 #else
     return snj_tools_run(call, app->config, credential,
                          app->session.workspace,
-                         tool_input_pump, app,
+                         tool_input_pump, app, snj_ui_wake_fd(&app->ui),
                          result, error, error_size);
 #endif
 }

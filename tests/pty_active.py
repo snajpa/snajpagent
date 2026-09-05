@@ -1130,11 +1130,11 @@ def test_interrupt():
     child.drain(0.1)
     assert os.waitpid(child.pid, os.WNOHANG) == (0, 0), bytes(child.buf)
     idle_cancel = len(child.buf)
-    child.send(b"\x03" * 5)
+    child.send(b"x\x03")
     child.wait(b"^C\r\n", start=idle_cancel)
     child.drain(0.2)
     assert os.waitpid(child.pid, os.WNOHANG) == (0, 0), bytes(child.buf)
-    assert bytes(child.buf[idle_cancel:]).count(b"^C\r\n") == 5
+    assert bytes(child.buf[idle_cancel:]).count(b"^C\r\n") == 1
     child.exit_now()
 
     log = events(new_session(before))
@@ -3426,6 +3426,22 @@ def test_network_chat_and_managed_mention():
     assert all(event["data"]["result"]["status"] == "succeeded"
                for event in cycle3_finished)
 
+def test_five_ctrl_c_exit():
+    for prompt in (None, b"slow", b"engine_blocked"):
+        child = Child([])
+        child.wait_idle_prompt()
+        if prompt:
+            child.send(prompt + b"\r")
+            child.wait(b"engine-block-start" if prompt == b"engine_blocked"
+                       else b"working slowly")
+        child.send(b"\x03" * 4)
+        child.drain(0.1)
+        assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
+        child.send(b"\x03")
+        child.wait(RESUME_HEADER, timeout=4.0)
+        child.finish()
+
+
 def test_editor_during_blocked_engine():
     child = Child([])
     failure = None
@@ -3437,9 +3453,11 @@ def test_editor_during_blocked_engine():
         try:
             deadline = time.monotonic() + 0.25
             while b"responsive-draft" not in re.sub(
-                    rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", child.buf[after:]):
+                    rb"\x1b\[[0-?]*[ -/]*[@-~]|\r", b"", child.buf[after:]):
                 remaining = deadline - time.monotonic()
-                assert remaining > 0, "engine stall stopped local editing"
+                assert remaining > 0, (
+                    f"engine stall stopped local editing: {bytes(child.buf[after:])!r}"
+                )
                 child.read_once(remaining)
         except AssertionError as exc:
             failure = exc
@@ -3452,6 +3470,7 @@ def test_editor_during_blocked_engine():
 
 
 test_editor_during_blocked_engine()
+test_five_ctrl_c_exit()
 test_incremental_prompt_edit_and_utf8_cursor_column()
 test_incremental_active_prompt_keeps_status_stable()
 test_static_zero_width_spinner_has_no_refresh()

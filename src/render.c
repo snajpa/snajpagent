@@ -68,6 +68,27 @@ static int render_irc_event_now(struct snj_render *render,
                                 const struct snj_irc_event *event,
                                 bool own_agent);
 static int flush_view(struct snj_render *render, enum snj_render_view view);
+static int close_public_output(struct snj_render *render);
+
+static int
+render_checkpoint(struct snj_render *render)
+{
+    if (!render->checkpoint)
+        return 0;
+    if (!render->markdown_measuring && close_public_output(render) < 0)
+        return -1;
+    return render->checkpoint(render->checkpoint_opaque);
+}
+
+static size_t
+text_slice(const char *text, size_t len)
+{
+    size_t amount = len < 1024u ? len : 1024u;
+    while (amount < len && amount &&
+           ((unsigned char)text[amount] & 0xc0u) == 0x80u)
+        --amount;
+    return amount ? amount : len < 4u ? len : 4u;
+}
 
 static int
 write_literal(int fd, const char *s)
@@ -94,7 +115,7 @@ color_enabled(const struct snj_render *render, int fd)
 }
 
 static int
-write_role_block(struct snj_render *render, int fd, const char *color,
+write_role_chunk(struct snj_render *render, int fd, const char *color,
                  const char *text, size_t len, size_t colored_len,
                  bool terminal_safe, bool persistent)
 {
@@ -139,6 +160,29 @@ out:
     if (saved_errno)
         errno = saved_errno;
     return rc;
+}
+
+static int
+write_role_block(struct snj_render *render, int fd, const char *color,
+                 const char *text, size_t len, size_t colored_len,
+                 bool terminal_safe, bool persistent)
+{
+    if (!len)
+        return write_role_chunk(render, fd, color, text, len, colored_len,
+                                 terminal_safe, persistent);
+    while (len) {
+        size_t amount = text_slice(text, len);
+        size_t colored = colored_len < amount ? colored_len : amount;
+        if (write_role_chunk(render, fd, color, text, amount, colored,
+                              terminal_safe, persistent) < 0)
+            return -1;
+        text += amount;
+        len -= amount;
+        colored_len -= colored;
+        if (len && render_checkpoint(render) < 0)
+            return -1;
+    }
+    return 0;
 }
 
 static void
@@ -218,24 +262,8 @@ static int
 write_block(struct snj_render *render, int fd, const char *text, size_t len,
             bool terminal_safe, bool persistent)
 {
-    int rc;
-    int saved_errno = 0;
-
-    if (output_begin(render, persistent) < 0)
-        return -1;
-    rc = terminal_safe ? snj_term_write_safe(fd, text, len) :
-                         snj_write_full(fd, text, len);
-    if (rc == 0 && render->term &&
-        ((fd == STDOUT_FILENO && render->stdout_terminal) ||
-         (fd == STDERR_FILENO && render->stderr_terminal)))
-        snj_term_note_output(render->term, text, len);
-    if (rc < 0)
-        saved_errno = errno;
-    if (output_end(render) < 0 && rc == 0)
-        rc = -1;
-    if (saved_errno)
-        errno = saved_errno;
-    return rc;
+    return write_role_block(render, fd, "", text, len, 0u,
+                             terminal_safe, persistent);
 }
 
 void
@@ -969,7 +997,13 @@ markdown_inline(struct snj_render *render, const unsigned char *text, size_t len
     struct snj_markdown_state *md = &render->markdown_state;
     size_t i = 0u;
 
+    size_t checkpoint_at = 0u;
     while (i < len) {
+        if (i >= checkpoint_at) {
+            checkpoint_at = i + 1024u;
+            if (render_checkpoint(render) < 0)
+                return -1;
+        }
         size_t n = utf8_sequence_size(text[i]);
         bool word;
 
@@ -1043,7 +1077,7 @@ markdown_inline(struct snj_render *render, const unsigned char *text, size_t len
             size_t start = i;
             do {
                 i += n;
-                if (i >= len)
+                if (i >= len || i - start >= 1024u)
                     break;
                 n = utf8_sequence_size(text[i]);
                 if (!n || n > len - i)
@@ -1287,7 +1321,8 @@ markdown_table_grid_row(struct snj_render *render,
         size_t before;
         size_t after;
 
-        if (markdown_table_cell_width(render, cell, &width) < 0 ||
+        if (render_checkpoint(render) < 0 ||
+            markdown_table_cell_width(render, cell, &width) < 0 ||
             width > widths[i]) {
             errno = EINVAL;
             return -1;
@@ -1371,6 +1406,8 @@ markdown_table_render(struct snj_render *render)
     body_offset = offset;
     while (markdown_table_next_line(text, md->table.len, &offset, &line,
                                     &line_len)) {
+        if (render_checkpoint(render) < 0)
+            return -1;
         struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
         size_t count;
 
@@ -1413,7 +1450,9 @@ markdown_table_render(struct snj_render *render)
         offset = body_offset;
         while (markdown_table_next_line(text, md->table.len, &offset, &line,
                                         &line_len)) {
-            struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+            if (render_checkpoint(render) < 0)
+            return -1;
+        struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
             size_t count;
 
             if (!markdown_table_cells(line, line_len, cells, &count) ||
@@ -1432,7 +1471,9 @@ markdown_table_render(struct snj_render *render)
         offset = body_offset;
         while (markdown_table_next_line(text, md->table.len, &offset, &line,
                                         &line_len)) {
-            struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+            if (render_checkpoint(render) < 0)
+            return -1;
+        struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
             size_t count;
 
             if (!markdown_table_cells(line, line_len, cells, &count) ||
@@ -1890,7 +1931,13 @@ markdown_write(struct snj_render *render, const unsigned char *text, size_t len)
     struct snj_markdown_state *md = &render->markdown_state;
     size_t i = 0u;
 
+    size_t checkpoint_at = 0u;
     while (i < len) {
+        if (i >= checkpoint_at) {
+            checkpoint_at = i + 1024u;
+            if (render_checkpoint(render) < 0)
+                return -1;
+        }
         size_t n = utf8_sequence_size(text[i]);
 
         if (!n || n > len - i) {
@@ -1931,7 +1978,7 @@ markdown_write(struct snj_render *render, const unsigned char *text, size_t len)
         } else {
             size_t start = i;
 
-            while (i + n < len && text[i + n] != '\n') {
+            while (i + n < len && n < 1024u && text[i + n] != '\n') {
                 size_t next = utf8_sequence_size(text[i + n]);
                 if (!next || next > len - i - n)
                     break;
@@ -2017,8 +2064,8 @@ markdown_abort(struct snj_render *render)
     return markdown_clear_style(render);
 }
 
-int
-snj_render_public(struct snj_render *render, const char *text, size_t len,
+static int
+render_public_chunk(struct snj_render *render, const char *text, size_t len,
                   struct snj_buf *delivered)
 {
     const unsigned char *input = (const unsigned char *)text;
@@ -2076,6 +2123,24 @@ out:
     if (saved_errno)
         errno = saved_errno;
     return rc;
+}
+
+int
+snj_render_public(struct snj_render *render, const char *text, size_t len,
+                   struct snj_buf *delivered)
+{
+    if (!len)
+        return render_public_chunk(render, text, len, delivered);
+    while (len) {
+        size_t amount = text_slice(text, len);
+        if (render_public_chunk(render, text, amount, delivered) < 0)
+            return -1;
+        text += amount;
+        len -= amount;
+        if (len && render_checkpoint(render) < 0)
+            return -1;
+    }
+    return 0;
 }
 
 static int
@@ -2713,6 +2778,8 @@ flush_view(struct snj_render *render, enum snj_render_view view)
         if (rc < 0)
             return -1;
         pop_record(render, view);
+        if (render->view_head[view] && render_checkpoint(render) < 0)
+            return -1;
     }
     return 0;
 }

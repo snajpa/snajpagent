@@ -534,7 +534,7 @@ test_local_provider_transport(void)
     credential_set(&credential, "transport-secret");
 
     assert(snj_provider_models_list(&config, &config.providers[1],
-                                    &credential, NULL, &models,
+                                    &credential, NULL, NULL, NULL, &models,
                                     error, sizeof(error)) == 0);
     assert(json_array_size(models) == 2u);
     assert(strcmp(snj_json_string(json_array_get(models, 0), "id"),
@@ -656,7 +656,7 @@ test_codex_model_list(void)
     snj_ui_color(&render, SNJ_COLOR_NEVER);
     saved_stderr = capture_stderr_begin(pipefd);
     assert(snj_provider_models_list(&config, &config.providers[0],
-                                    &credential, &render, &models,
+                                    &credential, &render, NULL, NULL, &models,
                                     error, sizeof(error)) == 0);
     snj_ui_free(&render);
     capture_stderr_end(pipefd, saved_stderr, diagnostic, sizeof(diagnostic));
@@ -723,7 +723,7 @@ test_codex_path_selection(void)
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
     assert(snj_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, &models,
+                                    &credential, NULL, NULL, NULL, &models,
                                     error, sizeof(error)) == 0);
     assert(json_array_size(models) == 1u);
     assert(strcmp(snj_json_string(json_array_get(models, 0), "id"),
@@ -740,7 +740,7 @@ test_codex_path_selection(void)
                     sizeof(config.providers[0].base_url), "%s",
                     "http://backend-api/codex") > 0);
     assert(snj_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, &models,
+                                    &credential, NULL, NULL, NULL, &models,
                                     error, sizeof(error)) == 0);
     assert(json_array_size(models) == 2u);
     json_decref(models);
@@ -755,7 +755,7 @@ test_codex_path_selection(void)
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
     assert(snj_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, &models,
+                                    &credential, NULL, NULL, NULL, &models,
                                     error, sizeof(error)) < 0);
     assert(models == NULL);
     assert(strstr(error, "invalid model entry") != NULL);
@@ -771,7 +771,7 @@ test_codex_path_selection(void)
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
     assert(snj_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, &models,
+                                    &credential, NULL, NULL, NULL, &models,
                                     error, sizeof(error)) < 0);
     assert(models == NULL);
     assert(strstr(error, "catalog rejected") != NULL);
@@ -784,7 +784,7 @@ test_codex_path_selection(void)
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
     assert(snj_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, &models,
+                                    &credential, NULL, NULL, NULL, &models,
                                     error, sizeof(error)) < 0);
     assert(models == NULL);
     assert(strstr(error, "invalid model entry") != NULL);

@@ -6,13 +6,17 @@
 
 /* Engine-owned preferences and last acknowledged input state, not a renderer. */
 struct snj_ui {
-    struct snj_ui_display *display;
+    struct snj_ui_runtime *runtime;
+    struct snj_history history;
     unsigned int verbosity;
     enum snj_render_view view;
     bool opened;
     bool prompt_wanted;
     bool active;
     char label[SNJ_TERM_LABEL_BYTES];
+    char submitted_label[SNJ_TERM_LABEL_BYTES];
+    bool input_active;
+    enum snj_render_view input_view;
 };
 
 enum snj_ui_operation {
@@ -39,6 +43,9 @@ int snj_ui_external(struct snj_ui *ui, bool begin,
 int snj_ui_prompt(struct snj_ui *ui, bool active, const char *label,
                     const char *const spinners[SNJ_TERM_SPINNER_COUNT],
                     uint32_t per_second, unsigned int states);
+int snj_ui_validate_prompt(struct snj_ui *ui, const char *label,
+                    const char *const spinners[SNJ_TERM_SPINNER_COUNT],
+                    uint32_t per_second);
 int snj_ui_simple_prompt(struct snj_ui *ui, bool active);
 int snj_ui_spinner_states(struct snj_ui *ui, unsigned int states);
 int snj_ui_restore_draft(struct snj_ui *ui, const char *text);
@@ -69,5 +76,7 @@ int snj_ui_raw(struct snj_ui *ui, int fd, const char *text, size_t len);
 int snj_ui_history_open(struct snj_ui *ui, const char *dotdir);
 int snj_ui_history_add(struct snj_ui *ui, const char *text);
 bool snj_ui_history_warning(struct snj_ui *ui);
+int snj_ui_wake_fd(const struct snj_ui *ui);
+int snj_ui_signal_fd(const struct snj_ui *ui);
 
 #endif

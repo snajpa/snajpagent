@@ -21,6 +21,7 @@
 #include <locale.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,13 +43,21 @@ struct app_signal_handlers {
     bool sigterm_installed;
 };
 
-static volatile sig_atomic_t pending_shutdown_signal;
+static atomic_int pending_shutdown_signal;
+static atomic_int shutdown_wake_fd = -1;
 
 static void
 mark_shutdown_signal(int signal_number)
 {
-    if (!pending_shutdown_signal)
-        pending_shutdown_signal = signal_number;
+    int expected = 0;
+    int saved = errno;
+    int fd = atomic_load(&shutdown_wake_fd);
+    char byte = 0;
+    (void)atomic_compare_exchange_strong(&pending_shutdown_signal,
+                                         &expected, signal_number);
+    if (fd >= 0)
+        (void)write(fd, &byte, 1u);
+    errno = saved;
 }
 
 static void
@@ -91,7 +100,7 @@ fail:
 static bool
 capture_shutdown_signal(struct app_state *app)
 {
-    sig_atomic_t signal_number = pending_shutdown_signal;
+    int signal_number = atomic_load(&pending_shutdown_signal);
 
     if (!signal_number)
         return false;
@@ -558,7 +567,7 @@ fail:
 }
 
 static int
-validate_prompt_values(const struct snj_config *config,
+validate_prompt_values(struct snj_ui *ui, const struct snj_config *config,
                        const struct snj_provider_config *provider,
                        const char *model, const char *effort,
                        bool networked)
@@ -570,7 +579,6 @@ validate_prompt_values(const struct snj_config *config,
         config->prompt_spinner_provider,
         config->prompt_spinner_tool
     };
-    struct snj_term probe;
     char label[SNJ_TERM_LABEL_BYTES];
     int rc = -1;
 
@@ -593,20 +601,17 @@ validate_prompt_values(const struct snj_config *config,
     values[SNJ_PROMPT_HOUR] = "23";
     values[SNJ_PROMPT_MINUTE] = "59";
     values[SNJ_PROMPT_SECOND] = "60";
-    snj_term_init(&probe);
     for (unsigned int mode = 0u; mode < 3u; ++mode) {
         values[6] = mode == 0u ? "chat" : mode == 1u ?
                     "rollout-idle" : "rollout-active";
         if (snj_config_prompt_expand(config->prompt, mode, values,
                 SNJ_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0 ||
-            snj_term_set_prompt_template(&probe, mode == 2u, label, spinners,
-                config->prompt_spinner_per_second,
-                (1u << SNJ_TERM_SPINNER_COUNT) - 1u) < 0)
+            snj_ui_validate_prompt(ui, label, spinners,
+                config->prompt_spinner_per_second) < 0)
             goto out;
     }
     rc = 0;
 out:
-    snj_term_close(&probe);
     return rc;
 }
 
@@ -618,7 +623,7 @@ validate_prompt_candidate(struct app_state *app,
         config, app->session.default_provider[0] ?
         app->session.default_provider : NULL);
 
-    return validate_prompt_values(config, provider, next_model(app),
+    return validate_prompt_values(&app->ui, config, provider, next_model(app),
                                   resolve_effort(next_effort(app)),
                                   snj_irc_enabled(config));
 }
@@ -1824,6 +1829,9 @@ run_config_editor(struct app_state *app, int *status,
         return -1;
     child = fork();
     if (child == 0) {
+        sigset_t signals;
+        sigemptyset(&signals);
+        (void)sigprocmask(SIG_SETMASK, &signals, NULL);
         execl("/bin/sh", "sh", "-c", "exec $EDITOR \"$1\"",
               "snajpagent-editor", app->config_path, (char *)NULL);
         _exit(127);
@@ -2264,7 +2272,7 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
     (void)user_interrupt;
     result = snj_tool_result_outcome_unknown("owner_lost");
 #else
-    if (snj_tools_close_managed(handle, user_interrupt, snj_app_active_input_pump, app,
+    if (snj_tools_close_managed(handle, user_interrupt, snj_app_active_input_pump, app, snj_ui_wake_fd(&app->ui),
                                 &result, error, error_size) < 0)
         return -1;
 #endif
@@ -4114,6 +4122,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     snj_session_init(&app.session);
     if (snj_ui_init(&app.ui) < 0)
         return 3;
+    shutdown_wake_fd = snj_ui_signal_fd(&app.ui);
     snj_ui_color(&app.ui,
         cli->color == SNJ_CLI_COLOR_NEVER ? SNJ_COLOR_NEVER :
         cli->color == SNJ_CLI_COLOR_ALWAYS ? SNJ_COLOR_ALWAYS :
@@ -4249,7 +4258,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
             rc = 3;
             goto out;
         }
-        if (!cli->execute && validate_prompt_values(&config,
+        if (!cli->execute && validate_prompt_values(&app.ui, &config,
                 snj_config_provider(&config, app.session.default_provider),
                 cli->model ? new_model : app.session.default_model,
                 resolve_effort(cli->effort ? cli->effort :
@@ -4300,7 +4309,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
             snj_config_provider(&config,
                                 config.provider[0] ? config.provider : NULL);
         if (!cli->execute && validate_prompt_values(
-                &config, selected_provider, new_model,
+                &app.ui, &config, selected_provider, new_model,
                 resolve_effort(new_effort), app.networked) < 0) {
             (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
                 "configured prompt cannot be rendered with the current selection");
@@ -4365,6 +4374,7 @@ out:
     (void)snj_ui_text(&app.ui, SNJ_UI_CLOSE, NULL);
     snj_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);
+    shutdown_wake_fd = -1;
     snj_ui_free(&app.ui);
     (void)capture_shutdown_signal(&app);
     if (signal_handlers_installed)

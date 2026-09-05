@@ -23,7 +23,7 @@ int snj_tools_run(const struct snj_response_item *call,
                   const struct snj_config *config,
                   const struct snj_credential *credential,
                   const char *session_workspace,
-                  snj_tool_pump_fn pump, void *pump_opaque,
+                  snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                   json_t **result,
                   char *error, size_t error_size);
 
@@ -32,7 +32,7 @@ int snj_tools_attach_output_limit(const struct snj_response_item *call,
                                   json_t *result);
 
 int snj_tools_close_managed(const char *handle, bool user_interrupt,
-                            snj_tool_pump_fn pump, void *pump_opaque,
+                            snj_tool_pump_fn pump, void *pump_opaque, int wake_fd,
                             json_t **result,
                             char *error, size_t error_size);
 

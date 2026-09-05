@@ -92,8 +92,9 @@ or expose the text to the current model cycle. Ctrl-C is composer-first in
 both idle and active states: it leaves the displayed draft in scrollback,
 appends literal `^C` and a newline, discards the draft/search state, and opens a
 clean prompt. A nonempty active draft does not interrupt the turn; an empty
-active composer requests safe turn interruption. Ctrl-C never exits and no
-press count or timing is retained. Ctrl-D, terminal EOF, and `/exit` remain
+active composer requests safe turn interruption. Five consecutive Ctrl-C
+presses within two seconds request exit through normal durable cleanup. Other
+input or expiry resets the sequence. Ctrl-D, terminal EOF, and `/exit` remain
 explicit exits. After every accepted Enter steer, an empty active composer is
 armed immediately, before provider cancellation or the next response cycle
 completes, so another steer can be entered at once.
@@ -340,7 +341,7 @@ non-steering behavior as `/queue TEXT`.
   active response or command running, and drains queued turns later in FIFO
   order.
 - PTY coverage asserts persistent cross-mode/cross-process history, Ctrl-R
-  search controls, exact append-only `^C` cancellation, no count-based Ctrl-C
+  search controls, exact append-only `^C` cancellation, five-press Ctrl-C
   exit, prompt expansions, exact spinner-cell updates, and no periodic refresh
   for a selected one-frame state. Separate coverage retains explicit turn
   interruption for Ctrl-C on an empty active composer.
