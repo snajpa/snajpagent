@@ -329,9 +329,8 @@ def assert_bytes_in_order(output, expected):
 
 def wait_prompt_painted(child, prompt, start=0, timeout=8.0):
     prompt_end = child.wait(prompt, start=start, timeout=timeout)
-    columns = len(prompt.decode())
     return child.wait(
-        f"\x1b[K\r\x1b[{columns}C".encode(),
+        b"\x1b[K",
         start=prompt_end,
         timeout=timeout,
     )
@@ -351,7 +350,7 @@ def test_incremental_prompt_edit_and_utf8_cursor_column():
         child.send(b"a")
         child.drain()
         edit = bytes(child.buf[start:])
-        assert b"a\x1b[K" in edit, edit
+        assert edit == b"a", edit
         assert b"\x1b[2K" not in edit, edit
         assert DEFAULT_IDLE_PROMPT not in edit, edit
 
@@ -379,7 +378,7 @@ def test_incremental_active_prompt_keeps_status_stable():
 
         start = len(child.buf)
         child.send(b"a")
-        end = child.wait(b"a\x1b[K", start=start)
+        end = child.wait(b"a", start=start)
         edit = bytes(child.buf[start:end])
         assert b"\x1b[2K" not in edit, edit
         assert b"working\xe2\x80\xa6" not in edit, edit
@@ -503,17 +502,18 @@ def test_incremental_multiline_delete_clears_old_tail():
     try:
         child.wait(DEFAULT_IDLE_PROMPT)
         child.send(b"abcdef\nsecond")
-        child.wait(b"d\x1b[K")
+        child.wait(b"second")
         child.drain(0.05)
         child.send(b"\x1b[H" + b"\x1b[C" * 6)
         child.drain(0.05)
 
         start = len(child.buf)
         child.send(b"\x7f\x7f\x7f")
-        end = child.wait(b"second\x1b[K", start=start)
+        child.drain(0.1)
+        end = len(child.buf)
         edit = bytes(child.buf[start:end])
-        indent = b" " * len(DEFAULT_IDLE_PROMPT.decode())
-        assert b"\r\n" + indent + b"second" in edit, edit
+        assert edit.count(b"\x1b[K") == 3, edit
+        assert b"second" not in edit and b"\n" not in edit, edit
         assert b"\x1b[2K" not in edit, edit
         assert DEFAULT_IDLE_PROMPT not in edit, edit
     finally:
@@ -528,7 +528,7 @@ def test_incremental_wrapped_long_prompt_multiline_indent():
         child.wait(prompt)
         start = len(child.buf)
         child.send(b"x\n" * 8 + b"z")
-        end = child.wait(b"z\x1b[K", start=start)
+        end = child.wait(b"z", start=start)
         edit = bytes(child.buf[start:end])
         assert b"\x1b[2K" not in edit, edit
         assert prompt not in edit, edit
@@ -661,7 +661,7 @@ def test_typing_pause_and_stream_snapshots():
     time.sleep(0.1)
     edit_start = len(child.buf)
     child.send(b"b")
-    child.wait(b"b\x1b[K", start=edit_start)
+    child.wait(b"b", start=edit_start)
     second_start = time.monotonic()
     quiet_start = len(child.buf)
     child.drain(0.15)
@@ -671,7 +671,7 @@ def test_typing_pause_and_stream_snapshots():
 
     edit_start = len(child.buf)
     child.send(b"c")
-    child.wait(b"c\x1b[K", start=edit_start)
+    child.wait(b"c", start=edit_start)
     third_start = time.monotonic()
     quiet_start = len(child.buf)
     child.drain(0.15)
@@ -1171,7 +1171,7 @@ def test_active_ctrl_c_clears_draft():
 
     edit_start = len(child.buf)
     child.send(b"discard this")
-    child.wait(b"t\x1b[Kh\x1b[Ki\x1b[Ks\x1b[K", start=edit_start)
+    child.wait(b"this", start=edit_start)
     clear_start = len(child.buf)
     child.send(b"\x03")
     clear_end = child.wait(b"^C\r\n", start=clear_start)
@@ -1747,7 +1747,7 @@ def test_command_name_completion():
 
     start = len(child.buf)
     child.send(b"/he\t")
-    end = child.wait(PROMPT + b"/help", start=start)
+    end = child.wait(b"/help", start=start)
     child.send(b"\r")
     help_end = child.wait(b"/compact", start=end)
     child.wait(b"Empty Tab no-op", start=help_end)
@@ -1781,22 +1781,22 @@ def test_command_name_completion():
     ):
         start = len(child.buf)
         child.send(prefix + b"\t")
-        end = child.wait(PROMPT + command, start=start)
+        end = child.wait(command, start=start)
         clear_draft_incrementally(child)
 
     start = len(child.buf)
     child.send(b"/mo gpt\x1b[D\x1b[D\x1b[D\x1b[D\t")
-    end = child.wait(PROMPT + b"/model gpt", start=start)
+    end = child.wait(b"del gpt", start=start)
     clear_draft_incrementally(child)
 
     start = len(child.buf)
     child.send(b"/h\ti\t")
-    end = child.wait(PROMPT + b"/history", start=start)
+    end = child.wait(b"/history", start=start)
     clear_draft_incrementally(child)
 
     start = len(child.buf)
     child.send(b"x\t")
-    end = child.wait(b"x\x1b[K   \x1b[K", start=start)
+    end = child.wait(b"x   ", start=start)
     edit = bytes(child.buf[start:end])
     assert b"\x1b[2K" not in edit, edit
     assert DEFAULT_IDLE_PROMPT not in edit, edit
@@ -2915,7 +2915,7 @@ def test_network_live_nick_prompt():
         child.drain()
         start = len(child.buf)
         child.send(b"@ag\t")
-        child.wait(chat_prompt("operator7") + b"@agent7 ", start=start)
+        child.wait(b"@agent7 ", start=start)
         child.send(b"\x03")
         child.drain(0.03)
         # Preserve a draft and its cursor through a live rename.
@@ -2935,7 +2935,7 @@ def test_network_live_nick_prompt():
         assert child.buf[start:].count(b"agent7 is now known as") == 1
         start = len(child.buf)
         child.send(b"@ag\t")
-        child.wait(chat_prompt("operator8") + b"@agent8 ", start=start)
+        child.wait(b"@agent8 ", start=start)
         child.send(b"\x03")
         child.drain(0.03)
         # Local input is attributed to the accepted operator and the model's
@@ -3352,7 +3352,7 @@ def test_network_chat_and_managed_mention():
 
         draft_start = len(child.buf)
         child.send(b"x\t")
-        draft_end = child.wait(b"x\x1b[K   \x1b[K", start=draft_start)
+        draft_end = child.wait(b"x   ", start=draft_start)
         edit = bytes(child.buf[draft_start:draft_end])
         assert b"\x1b[2K" not in edit, edit
         assert network_idle not in edit, edit
@@ -3814,7 +3814,7 @@ def test_history_lock_keeps_editing_live():
             child.wait(b"locked-history", start=start, timeout=0.25)
             child.send(b"\x07draft-alive")
             child.drain(0.1)
-            visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]|\r", b"", child.buf[start:])
+            visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]| \x08|\r", b"", child.buf[start:])
             assert b"draft-alive" in visible, visible
             fcntl.lockf(history, fcntl.LOCK_UN)
         child.send(b"\x03")
@@ -3835,7 +3835,7 @@ def test_editor_during_render_flood():
             child.send(b"live-draft")
             deadline = time.monotonic() + 0.25
             while b"live-draft" not in re.sub(
-                    rb"\x1b\[[0-?]*[ -/]*[@-~]|\r", b"", child.buf[start:]):
+                    rb"\x1b\[[0-?]*[ -/]*[@-~]| \x08|\r", b"", child.buf[start:]):
                 remaining = deadline - time.monotonic()
                 assert remaining > 0, "rendering stopped local editing"
                 child.read_once(remaining)
@@ -3875,7 +3875,7 @@ def test_editor_during_blocked_engine():
         try:
             deadline = time.monotonic() + 0.25
             while b"responsive-draft" not in re.sub(
-                    rb"\x1b\[[0-?]*[ -/]*[@-~]|\r", b"", child.buf[after:]):
+                    rb"\x1b\[[0-?]*[ -/]*[@-~]| \x08|\r", b"", child.buf[after:]):
                 remaining = deadline - time.monotonic()
                 assert remaining > 0, (
                     f"engine stall stopped local editing: {bytes(child.buf[after:])!r}"

@@ -286,7 +286,8 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
     case UI_COLOR: {
         bool previous = render->color_stderr;
         snj_render_set_color(render, (enum snj_color_mode)message->data.value);
-        return previous != render->color_stderr ? snj_term_hide(term) : 0;
+        return previous != render->color_stderr && display->prompt_source ?
+            apply_prompt(display) : 0;
     }
     case UI_MARKDOWN:
         snj_render_set_markdown(render, message->data.value != 0u);

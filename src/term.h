@@ -31,7 +31,7 @@ struct snj_prompt_clock {
 };
 
 struct snj_term_spinner {
-    const char *value;
+    char value[80];
     size_t label_offset;
     size_t frame_offset[16];
     unsigned char frame_len[16];
@@ -65,6 +65,11 @@ struct snj_term {
     struct snj_buf search_query;
     struct snj_buf output_cell;
     struct snj_buf output_line;
+    struct snj_buf painted_prompt;
+    size_t painted_label_len;
+    unsigned int painted_columns;
+    unsigned int painted_style;
+    uint64_t last_output_ms;
     size_t output_columns;
     size_t output_cell_width;
     char output_cell_style[64u];

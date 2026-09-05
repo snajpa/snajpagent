@@ -83,8 +83,15 @@ and terminal state, and joins the presentation thread; no thread is detached.
   `steer`.
 - Ordinary character insertion, deletion, and cursor movement update the
   visible composer in place. They do not erase and repaint its unchanged rows;
-  complete composer reconstruction is reserved for structural transitions such
-  as interposed output, status changes, and terminal resize.
+  status, spinner, search, and history updates use the same retained-frame
+  painter. Unchanged rows emit nothing. Changed rows preserve common leading
+  characters and, when their widths match, common trailing characters too.
+  Styles, wide characters and combining marks participate in that comparison.
+  Cursor controls, changed spans and obsolete suffix erasures are batched;
+  ordinary updates never clear the whole composer before repainting it.
+  Changes to wrapping or row count overwrite in natural wrap order, clearing
+  obsolete suffixes afterward. Interposed output and resize invalidate the
+  retained frame; conversation scrollback is never part of the frame.
 - Visible model output pauses while the user is editing. Each edit restarts the
   pause. After the pause expires, the current composer line remains as a
   readable snapshot and model output resumes on the following line.
@@ -96,6 +103,10 @@ and terminal state, and joins the presentation thread; no thread is detached.
   It does not insert paragraph boundaries or split provider-fragment words.
   Actual editing commits the separate prompt line as the snapshot described
   above. Unicode cell widths and terminal reflow determine cursor restoration.
+  Automatic reveal waits for 150 ms without terminal output, so short gaps
+  between provider deltas do not repeatedly show and erase the composer.
+  Typing reveals the composer immediately; this interval does not buffer model
+  text, alter typing-pause configuration, or add a timer thread or setting.
 - `[ui] typing_pause_ms` controls the inactivity pause. It defaults to `500`,
   accepts `0` through `5000`, and applies only to interactive terminal display.
   A value of `0` retains the line separation but disables the delay.

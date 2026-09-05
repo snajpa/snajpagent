@@ -22,6 +22,10 @@ static volatile sig_atomic_t sigwinch_pending;
 static int redraw(struct snj_term *term);
 static int move_prompt_cursor(struct snj_term *term);
 static int position_prompt_cursor(struct snj_term *term, size_t row, size_t col);
+static size_t previous_cp(const unsigned char *s, size_t pos);
+static int compose_frame(struct snj_term *term, struct snj_buf *out, size_t *label_bytes,
+                         size_t *cursor_row, size_t *cursor_col,
+                         size_t *end_row, size_t *end_col);
 
 static void
 mark_sigint(int signal_number)
@@ -82,26 +86,21 @@ append_escape(struct snj_buf *out, uint32_t cp)
 static int
 append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
             bool prompt, size_t indent, unsigned int columns,
-            size_t stop, size_t *stop_row, size_t *stop_col,
-            size_t *end_row, size_t *end_col)
+            size_t stop, size_t *cursor_byte)
 {
-    size_t row = 0u;
     size_t col = indent;
     size_t i = 0u;
 
-    if (columns >= 20u && col >= columns) {
-        row = col / columns;
+    if (columns >= 20u)
         col %= columns;
-    }
-    if (stop == 0u) {
-        *stop_row = row;
-        *stop_col = col;
-    }
+    if (stop == 0u && cursor_byte)
+        *cursor_byte = out->len;
     while (i < len) {
         uint32_t cp;
         size_t n = decode_utf8(text + i, len - i, &cp);
         int width = 0;
         size_t before = out->len;
+        bool invalid = !n;
 
         if (!n) {
             cp = text[i];
@@ -114,12 +113,9 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
                 for (size_t j = 0u; j < indent; ++j)
                     if (snj_buf_putc(out, ' ') < 0)
                         return -1;
-                ++row;
                 col = indent;
-                if (columns >= 20u && col >= columns) {
-                    row += col / columns;
+                if (columns >= 20u)
                     col %= columns;
-                }
             } else if (snj_buf_putc(out, '\n') < 0) {
                 return -1;
             }
@@ -129,7 +125,7 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
                 if (snj_buf_putc(out, ' ') < 0)
                     return -1;
             width = (int)spaces;
-        } else if (cp < 0x20u || cp == 0x7fu ||
+        } else if (invalid || cp < 0x20u || cp == 0x7fu ||
                    (cp >= 0x80u && cp <= 0x9fu) || format_unsafe(cp)) {
             if (append_escape(out, cp) < 0)
                 return -1;
@@ -149,25 +145,20 @@ append_safe(struct snj_buf *out, const unsigned char *text, size_t len,
         if (cp != '\n' || !prompt) {
             if (columns >= 20u && width > 0) {
                 size_t w = (size_t)width;
+                if (w == 2u && out->len - before == n && col + w > columns)
+                    col = 0u;
                 if (col > SIZE_MAX - w)
                     return -1;
                 col += w;
-                while (col >= columns) {
-                    col -= columns;
-                    ++row;
-                }
+                col %= columns;
             } else if (width > 0) {
                 col += (size_t)width;
             }
         }
         i += n;
-        if (i == stop) {
-            *stop_row = row;
-            *stop_col = col;
-        }
+        if (i == stop && cursor_byte)
+            *cursor_byte = out->len;
     }
-    *end_row = row;
-    *end_col = col;
     return 0;
 }
 
@@ -275,7 +266,6 @@ int
 snj_term_write_safe(int fd, const char *text, size_t len)
 {
     struct snj_buf out;
-    size_t unused = 0u;
     size_t max;
     int rc;
 
@@ -286,7 +276,7 @@ snj_term_write_safe(int fd, const char *text, size_t len)
     max = len * 8u + 32u;
     snj_buf_init(&out, max);
     rc = append_safe(&out, (const unsigned char *)text, len, false, 0u, 0u,
-                     len + 1u, &unused, &unused, &unused, &unused);
+                     len + 1u, NULL);
     if (rc == 0)
         rc = snj_term_write(fd, out.data, out.len);
     snj_buf_free(&out);
@@ -296,10 +286,8 @@ snj_term_write_safe(int fd, const char *text, size_t len)
 static int
 snj_term_append_safe(struct snj_buf *out, const char *text, size_t len)
 {
-    size_t unused = 0u;
-
     return append_safe(out, (const unsigned char *)text, len, false, 0u, 0u,
-                       len + 1u, &unused, &unused, &unused, &unused);
+                       len + 1u, NULL);
 }
 
 void
@@ -311,6 +299,7 @@ snj_term_init(struct snj_term *term)
     snj_buf_init(&term->search_query, SNJ_MAX_DIRECT_PROMPT + 1u);
     snj_buf_init(&term->output_cell, SIZE_MAX);
     snj_buf_init(&term->output_line, SIZE_MAX);
+    snj_buf_init(&term->painted_prompt, SIZE_MAX);
     term->columns = 80u;
     term->history_pos = SIZE_MAX;
     term->search_pos = SIZE_MAX;
@@ -369,6 +358,7 @@ snj_term_note_output(struct snj_term *term, const char *text, size_t len,
     if (!term || !len)
         return 0;
     term->output_seen = true;
+    term->last_output_ms = snj_monotonic_ms();
     term->output_ended_lf = text[len - 1u] == '\n';
     if (!term->opened || !term->capable)
         return 0;
@@ -615,58 +605,64 @@ materialize_prompt_wrap(struct snj_term *term)
     return 0;
 }
 
-static int
-restore_output_cursor(struct snj_term *term)
-{
-    if (term->output_detour) {
-        size_t column = term->output_columns;
-
-        term->output_detour = false;
-        if (snj_term_write(STDERR_FILENO, "\033[1A", 4u) < 0)
-            return -1;
-        if (column < term->columns)
-            return column ? move_cursor(column, 'C') : 0;
-        /* Repaint the final cell to restore VT pending-wrap, not column N. */
-        if (move_cursor(term->columns - term->output_cell_width, 'C') < 0 ||
-            snj_term_write(STDERR_FILENO, term->output_cell_style,
-                           strlen(term->output_cell_style)) < 0 ||
-            snj_term_write(STDERR_FILENO, term->output_cell.data,
-                           term->output_cell.len) < 0 ||
-            snj_term_write(STDERR_FILENO, "\033[0m", 4u) < 0)
-            return -1;
-    }
-    return 0;
-}
-
 int
 snj_term_hide(struct snj_term *term)
 {
+    struct snj_buf out;
+    size_t max;
+    int rc = -1;
+
     if (!term->opened || !term->prompt_visible)
         return 0;
+    snj_buf_reset(&term->painted_prompt);
     if (!term->capable) {
         term->prompt_visible = false;
         return snj_term_write(STDERR_FILENO, "\n", 1u);
     }
-    if (materialize_prompt_wrap(term) < 0 ||
-        (term->rendered_cursor_row + 1u < term->rendered_rows &&
-         move_cursor(term->rendered_rows - term->rendered_cursor_row - 1u,
-                     'B') < 0))
+    if (term->rendered_rows > (SIZE_MAX - 256u) / 16u ||
+        !snj_size_add(term->rendered_rows * 16u + 256u, term->output_cell.len, &max)) {
+        errno = EOVERFLOW;
         return -1;
-    for (size_t row = term->rendered_rows; row != 0u; --row) {
-        if (snj_term_write(STDERR_FILENO, "\r\033[2K", 5u) < 0)
-            return -1;
-        if (row > 1u && snj_term_write(STDERR_FILENO, "\033[1A", 4u) < 0)
-            return -1;
     }
-    if (snj_term_write(STDERR_FILENO, "\r", 1u) < 0)
-        return -1;
+    snj_buf_init(&out, max);
+    if ((term->rendered_cursor_pending_wrap && snj_buf_append(&out, " \b", 2u) < 0) ||
+        (term->rendered_cursor_row + 1u < term->rendered_rows &&
+         snj_buf_printf(&out, "\033[%zuB",
+            term->rendered_rows - term->rendered_cursor_row - 1u) < 0))
+        goto out;
+    for (size_t row = term->rendered_rows; row != 0u; --row)
+        if (snj_buf_append(&out, "\r\033[2K", 5u) < 0 ||
+            (row > 1u && snj_buf_append(&out, "\033[1A", 4u) < 0))
+            goto out;
+    if (snj_buf_putc(&out, '\r') < 0)
+        goto out;
+    if (term->output_detour) {
+        size_t column = term->output_columns < term->columns ?
+                        term->output_columns : term->columns - term->output_cell_width;
+        if (snj_buf_append(&out, "\033[1A", 4u) < 0 ||
+            (column && snj_buf_printf(&out, "\033[%zuC", column) < 0))
+            goto out;
+        /* Restore VT pending-wrap by repainting the final output cell. */
+        if (term->output_columns >= term->columns &&
+            (snj_buf_append(&out, term->output_cell_style,
+                            strlen(term->output_cell_style)) < 0 ||
+             snj_buf_append(&out, term->output_cell.data, term->output_cell.len) < 0 ||
+             snj_buf_append(&out, "\033[0m", 4u) < 0))
+            goto out;
+    }
+    if (snj_term_write(STDERR_FILENO, out.data, out.len) < 0)
+        goto out;
     term->prompt_visible = false;
     term->rendered_rows = 0u;
     term->rendered_cursor_row = 0u;
     term->rendered_cursor_col = 0u;
     term->rendered_end_at_margin = false;
     term->rendered_cursor_pending_wrap = false;
-    return restore_output_cursor(term);
+    term->output_detour = false;
+    rc = 0;
+out:
+    snj_buf_free(&out);
+    return rc;
 }
 
 static int
@@ -674,6 +670,7 @@ leave_prompt(struct snj_term *term)
 {
     if (!term->opened || !term->prompt_visible)
         return 0;
+    snj_buf_reset(&term->painted_prompt);
     if (term->capable &&
         (materialize_prompt_wrap(term) < 0 ||
          (term->rendered_cursor_row + 1u < term->rendered_rows &&
@@ -775,7 +772,8 @@ prepare_spinner(struct snj_term_spinner *spinner, const char *value)
                  snj_utf8_size((unsigned char)value[0]);
 
     memset(spinner, 0, sizeof(*spinner));
-    spinner->value = value;
+    if (!snj_strcpy(spinner->value, sizeof(spinner->value), value))
+        return -1;
     spinner->inactive_len = value[0] == '\\' && value[1] == '0' ? 0u :
                             (unsigned char)pos;
     while (value[pos]) {
@@ -884,79 +882,20 @@ install_prompt(struct snj_term *term, const char *label,
     memcpy(term->spinner, cells, sizeof(term->spinner));
 }
 
-static unsigned int
-spinner_slot_id(const struct snj_term_spinner *cells, unsigned int slot)
-{
-    return slot == SNJ_TERM_SPINNER_PROVIDER && cells[SNJ_TERM_SPINNER_TOOL].present ?
-           SNJ_TERM_SPINNER_TOOL : slot;
-}
-
-static int
-paint_spinners(struct snj_term *term, const char *old_label,
-               const struct snj_term_spinner old[SNJ_TERM_SPINNER_COUNT])
-{
-    bool painted = false;
-
-    for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_SLOTS; ++i) {
-        const struct snj_term_spinner *cell =
-            &term->spinner[spinner_slot_id(term->spinner, i)];
-        const struct snj_term_spinner *previous = &old[spinner_slot_id(old, i)];
-        size_t width, row, col;
-
-        if (!cell->present || !cell->current_len ||
-            (previous->current_len == cell->current_len &&
-             memcmp(old_label + previous->label_offset,
-                    term->label + cell->label_offset,
-                    cell->current_len) == 0))
-            continue;
-        width = snj_term_text_width(old_label, previous->label_offset);
-        if (width == SIZE_MAX)
-            return -1;
-        row = width / term->columns;
-        col = width % term->columns;
-        if (position_prompt_cursor(term, row, col) < 0 ||
-            (term->color && snj_term_write(STDERR_FILENO,
-                term->networked ? "\033[1;35m" : "\033[1;36m", 7u) < 0) ||
-            snj_term_write(STDERR_FILENO, term->label + cell->label_offset,
-                           cell->current_len) < 0 ||
-            (term->color && snj_term_write(STDERR_FILENO, "\033[0m", 4u) < 0))
-            return -1;
-        if (++col == term->columns) {
-            ++row;
-            col = 0u;
-            term->rendered_cursor_pending_wrap = true;
-        }
-        term->rendered_cursor_row = row;
-        term->rendered_cursor_col = col;
-        painted = true;
-    }
-    return painted ? move_prompt_cursor(term) : 0;
-}
-
 static int
 update_spinners(struct snj_term *term, uint64_t step)
 {
-    struct snj_term_spinner old[SNJ_TERM_SPINNER_COUNT], next[SNJ_TERM_SPINNER_COUNT];
-    char old_label[SNJ_TERM_LABEL_BYTES], label[SNJ_TERM_LABEL_BYTES];
-    bool stable = true, visible;
+    struct snj_term_spinner next[SNJ_TERM_SPINNER_COUNT];
+    char label[SNJ_TERM_LABEL_BYTES];
+    bool changed;
 
-    memcpy(old, term->spinner, sizeof(old));
-    memcpy(old_label, term->label, sizeof(old_label));
     if (compose_prompt(term->prompt_template, term->spinner,
                        term->spinner_states, step, label, next) < 0)
         return -1;
-    for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_SLOTS; ++i)
-        if (!!old[spinner_slot_id(old, i)].current_len !=
-            !!next[spinner_slot_id(next, i)].current_len)
-            stable = false;
-    visible = term->prompt_visible && term->capable && !term->searching &&
-              !term->output_depth;
-    if (visible && !stable && snj_term_hide(term) < 0)
-        return -1;
+    changed = strcmp(label, term->label) != 0;
     install_prompt(term, label, next);
-    if (!visible)
-        return 0;
-    return stable ? paint_spinners(term, old_label, old) : redraw(term);
+    return changed && term->prompt_visible && term->capable &&
+           !term->searching && !term->output_depth ? redraw(term) : 0;
 }
 
 static bool
@@ -1001,19 +940,10 @@ sync_prompt_layout_after_resize(struct snj_term *term)
     size_t cursor_row = 0u, cursor_col = 0u;
     size_t end_row = 0u, end_col = 0u;
     size_t label_len;
-    const char *label = prompt_label(term, &label_len);
-    size_t label_cols = snj_term_text_width(label, label_len);
-    size_t max;
     int rc = -1;
 
-    if (label_cols == SIZE_MAX ||
-        prompt_render_max(term->draft.data, term->draft.len, label_cols, 32u,
-                          &max) < 0)
-        return -1;
-    snj_buf_init(&scratch, max);
-    if (append_safe(&scratch, term->draft.data, term->draft.len, true,
-                    label_cols, term->columns, term->cursor,
-                    &cursor_row, &cursor_col, &end_row, &end_col) < 0)
+    if (compose_frame(term, &scratch, &label_len, &cursor_row, &cursor_col,
+                       &end_row, &end_col) < 0)
         goto out;
     /*
      * tmux and VT terminals represent an exact-margin cursor as the pending
@@ -1035,6 +965,335 @@ out:
     return rc;
 }
 
+/* Views into sanitized prompt bytes, not a terminal-sized cell grid. */
+struct prompt_row {
+    size_t start, end, next, width;
+    bool soft;
+};
+
+static struct prompt_row
+prompt_row(const struct snj_buf *frame, size_t start, unsigned int columns)
+{
+    struct prompt_row row = {.start = start, .end = start};
+
+    while (row.end < frame->len) {
+        uint32_t cp;
+        size_t n = decode_utf8(frame->data + row.end, frame->len - row.end, &cp);
+        int width = wcwidth((wchar_t)cp);
+
+        if (cp == '\r') {
+            row.next = row.end + 2u; /* append_safe emits CRLF. */
+            return row;
+        }
+        if (width > 0 && row.width + (size_t)width > columns) {
+            row.next = row.end;
+            row.soft = true;
+            return row;
+        }
+        row.end += n;
+        if (width > 0)
+            row.width += (size_t)width;
+    }
+    row.soft = row.width == columns;
+    row.next = row.end + (row.soft ? 0u : 1u);
+    return row;
+}
+
+static void
+frame_position(const struct snj_buf *frame, size_t offset, unsigned int columns,
+                size_t *row, size_t *col)
+{
+    size_t start = 0u;
+    *row = 0u;
+    for (;;) {
+        struct prompt_row line = prompt_row(frame, start, columns);
+        if (offset <= line.end) {
+            *col = snj_term_text_width((char *)frame->data + start, offset - start);
+            if (*col == columns) {
+                ++*row;
+                *col = 0u;
+            }
+            return;
+        }
+        start = line.next;
+        ++*row;
+    }
+}
+
+static int
+compose_frame(struct snj_term *term, struct snj_buf *out, size_t *label_bytes,
+               size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col)
+{
+    size_t label_len, cursor_byte = 0u, max;
+    const char *label = prompt_label(term, &label_len);
+    size_t indent = snj_term_text_width(label, label_len);
+
+    snj_buf_init(out, 0u);
+    if (label_len > (SIZE_MAX - 32u) / 4u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    out->max = label_len * 4u + 32u;
+    if (indent == SIZE_MAX || snj_term_append_safe(out, label, label_len) < 0)
+        return -1;
+    *label_bytes = out->len;
+    frame_position(out, out->len, term->columns, end_row, end_col);
+    indent = *end_row * term->columns + *end_col;
+    if (prompt_render_max(term->draft.data, term->draft.len, indent,
+                          out->len + 64u, &max) < 0)
+        return -1;
+    out->max = max;
+    if (append_safe(out, term->draft.data, term->draft.len, true, indent,
+                    term->columns, term->cursor, &cursor_byte) < 0)
+        return -1;
+    frame_position(out, cursor_byte, term->columns, cursor_row, cursor_col);
+    frame_position(out, out->len, term->columns, end_row, end_col);
+    return 0;
+}
+
+/* Keep a base character and its combining marks in the same paint span. */
+static size_t
+prompt_cell_end(const unsigned char *data, size_t start, size_t end)
+{
+    uint32_t cp;
+    size_t pos = start + decode_utf8(data + start, end - start, &cp);
+
+    while (pos < end) {
+        size_t n = decode_utf8(data + pos, end - pos, &cp);
+        if (wcwidth((wchar_t)cp) != 0)
+            break;
+        pos += n;
+    }
+    return pos;
+}
+
+static size_t
+prompt_cell_start(const unsigned char *data, size_t start, size_t end)
+{
+    uint32_t cp;
+    size_t pos = previous_cp(data, end);
+
+    while (pos > start) {
+        (void)decode_utf8(data + pos, end - pos, &cp);
+        if (wcwidth((wchar_t)cp) != 0)
+            break;
+        pos = previous_cp(data, pos);
+    }
+    return pos;
+}
+
+static size_t
+colored_prefix(size_t label, size_t start, size_t end)
+{
+    return label <= start ? 0u : label < end ? label - start : end - start;
+}
+
+static bool
+same_prompt_cell(const struct snj_term *term, const struct snj_buf *next,
+                 size_t label, size_t a, size_t ae, size_t b, size_t be)
+{
+    size_t old_color = colored_prefix(term->painted_label_len, a, ae);
+    size_t new_color = colored_prefix(label, b, be);
+    unsigned int style = term->color ? term->networked ? 2u : 1u : 0u;
+
+    if (!term->painted_style)
+        old_color = 0u;
+    if (!style)
+        new_color = 0u;
+    return ae - a == be - b && old_color == new_color &&
+           (!new_color || term->painted_style == style) &&
+           memcmp(term->painted_prompt.data + a, next->data + b, be - b) == 0;
+}
+
+static int
+prompt_move(struct snj_buf *out, size_t *row, size_t *col,
+            size_t target_row, size_t target_col)
+{
+    if (target_row != *row &&
+        snj_buf_printf(out, "\033[%zu%c", target_row > *row ? target_row - *row :
+                       *row - target_row, target_row > *row ? 'B' : 'A') < 0)
+        return -1;
+    if (target_col != *col &&
+        (snj_buf_putc(out, '\r') < 0 ||
+         (target_col && snj_buf_printf(out, "\033[%zuC", target_col) < 0)))
+        return -1;
+    *row = target_row;
+    *col = target_col;
+    return 0;
+}
+
+static int
+prompt_span(struct snj_buf *out, const struct snj_term *term,
+            const struct snj_buf *frame, size_t label, size_t start, size_t end)
+{
+    size_t colored = term->color ? colored_prefix(label, start, end) : 0u;
+
+    if (colored &&
+        (snj_buf_append(out, term->networked ? "\033[1;35m" : "\033[1;36m", 7u) < 0 ||
+         snj_buf_append(out, frame->data + start, colored) < 0 ||
+         snj_buf_append(out, "\033[0m", 4u) < 0))
+        return -1;
+    return snj_buf_append(out, frame->data + start + colored, end - start - colored);
+}
+
+static bool
+same_prompt_layout(const struct snj_term *term, const struct snj_buf *next)
+{
+    size_t a = 0u, b = 0u;
+
+    if (!term->prompt_visible || !term->painted_prompt.len ||
+        term->painted_columns != term->columns)
+        return false;
+    while (a <= term->painted_prompt.len && b <= next->len) {
+        struct prompt_row old = prompt_row(&term->painted_prompt, a, term->columns);
+        struct prompt_row row = prompt_row(next, b, term->columns);
+        if (old.soft != row.soft ||
+            (old.next <= term->painted_prompt.len) != (row.next <= next->len) ||
+            (old.soft && old.width != row.width))
+            return false;
+        a = old.next;
+        b = row.next;
+    }
+    return a > term->painted_prompt.len && b > next->len;
+}
+
+static int
+paint_prompt(struct snj_term *term, struct snj_buf *frame, size_t label,
+             size_t cursor_row, size_t cursor_col, size_t end_row, size_t end_col)
+{
+    struct snj_buf out;
+    size_t row = term->prompt_visible ? term->rendered_cursor_row : 0u;
+    size_t col = term->prompt_visible ? term->rendered_cursor_col : 0u;
+    size_t old_rows = term->prompt_visible ? term->rendered_rows : 0u;
+    bool stable = same_prompt_layout(term, frame);
+    int rc = -1;
+
+    if (frame->max > (SIZE_MAX - 256u) / 16u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    snj_buf_init(&out, frame->max * 16u + 256u);
+    if (term->rendered_cursor_pending_wrap && snj_buf_append(&out, " \b", 2u) < 0)
+        goto out;
+    if (stable) {
+        size_t a = 0u, b = 0u, y = 0u;
+        while (b <= frame->len) {
+            struct prompt_row old = prompt_row(&term->painted_prompt, a, term->columns);
+            struct prompt_row next = prompt_row(frame, b, term->columns);
+            size_t ae = old.end, be = next.end, prefix = 0u;
+            a = old.start;
+            b = next.start;
+            while (a < ae && b < be) {
+                size_t ac = prompt_cell_end(term->painted_prompt.data, a, ae);
+                size_t bc = prompt_cell_end(frame->data, b, be);
+                if (!same_prompt_cell(term, frame, label, a, ac, b, bc))
+                    break;
+                prefix += snj_term_text_width((char *)frame->data + b, bc - b);
+                a = ac;
+                b = bc;
+            }
+            /* Equal-width rows can retain their unchanged trailing cells too. */
+            while (old.width == next.width && a < ae && b < be) {
+                size_t ac = prompt_cell_start(term->painted_prompt.data, a, ae);
+                size_t bc = prompt_cell_start(frame->data, b, be);
+                if (!same_prompt_cell(term, frame, label, ac, ae, bc, be))
+                    break;
+                ae = ac;
+                be = bc;
+            }
+            if (a != ae || b != be) {
+                if (prompt_move(&out, &row, &col, y, prefix) < 0 ||
+                    prompt_span(&out, term, frame, label, b, be) < 0)
+                    goto out;
+                col += snj_term_text_width((char *)frame->data + b, be - b);
+                /* Materialize soft wrap with the next row's actual first cell.
+                 * CR here would discard the terminal's reflow/join marker. */
+                if (col == term->columns) {
+                    col = 0u;
+                    if (next.soft) {
+                        struct prompt_row following = prompt_row(frame, next.next, term->columns);
+                        ++row;
+                        if (following.start < following.end) {
+                            size_t first = prompt_cell_end(frame->data, following.start, following.end);
+                            if (prompt_span(&out, term, frame, label, following.start, first) < 0)
+                                goto out;
+                            col = snj_term_text_width((char *)frame->data + following.start,
+                                                       first - following.start);
+                        } else if (snj_buf_append(&out, " \b", 2u) < 0) {
+                            goto out;
+                        }
+                    } else if (snj_buf_putc(&out, '\r') < 0) {
+                        goto out;
+                    }
+                }
+                if (next.width < old.width && snj_buf_append(&out, "\033[K", 3u) < 0)
+                    goto out;
+            }
+            a = old.next;
+            b = next.next;
+            ++y;
+        }
+    } else {
+        size_t start = 0u, prefix_row = 0u, prefix_col = 0u;
+        if (term->prompt_visible && term->painted_columns == term->columns) {
+            while (start < frame->len && start < term->painted_prompt.len) {
+                size_t a = term->painted_prompt.data[start] == '\r' ? start + 2u :
+                    prompt_cell_end(term->painted_prompt.data, start, term->painted_prompt.len);
+                size_t b = frame->data[start] == '\r' ? start + 2u :
+                    prompt_cell_end(frame->data, start, frame->len);
+                if (!same_prompt_cell(term, frame, label, start, a, start, b))
+                    break;
+                start = b;
+            }
+            frame_position(&term->painted_prompt, start, term->columns,
+                            &prefix_row, &prefix_col);
+        }
+        if (prompt_move(&out, &row, &col, prefix_row, prefix_col) < 0)
+            goto out;
+        /* Overwrite in natural wrap order; clear only obsolete row suffixes. */
+        for (size_t i = start; i + 1u < frame->len; ++i) {
+            if (frame->data[i] != '\r' || frame->data[i + 1u] != '\n')
+                continue;
+            if (prompt_span(&out, term, frame, label, start, i) < 0 ||
+                snj_buf_append(&out, "\033[K\r\n", 5u) < 0)
+                goto out;
+            start = i + 2u;
+            ++i;
+        }
+        if (prompt_span(&out, term, frame, label, start, frame->len) < 0 ||
+            (end_row && !end_col && snj_buf_append(&out, " \b", 2u) < 0) ||
+            ((end_col || old_rows > end_row) && snj_buf_append(&out, "\033[K", 3u) < 0))
+            goto out;
+        row = end_row;
+        col = end_col;
+        for (size_t y = end_row + 1u; y < old_rows; ++y)
+            if (prompt_move(&out, &row, &col, y, 0u) < 0 ||
+                snj_buf_append(&out, "\033[K", 3u) < 0)
+                goto out;
+    }
+    if (prompt_move(&out, &row, &col, cursor_row, cursor_col) < 0 ||
+        snj_term_write(STDERR_FILENO, out.data, out.len) < 0)
+        goto out;
+    snj_buf_free(&term->painted_prompt);
+    term->painted_prompt = *frame;
+    memset(frame, 0, sizeof(*frame));
+    term->painted_label_len = label;
+    term->painted_columns = term->columns;
+    term->painted_style = term->color ? term->networked ? 2u : 1u : 0u;
+    term->rendered_rows = end_row + 1u;
+    term->rendered_cursor_row = cursor_row;
+    term->rendered_cursor_col = cursor_col;
+    term->rendered_end_at_margin = end_row != 0u && end_col == 0u;
+    term->rendered_cursor_pending_wrap = false;
+    term->prompt_visible = true;
+    rc = 0;
+out:
+    if (rc < 0)
+        snj_buf_reset(&term->painted_prompt);
+    snj_buf_free(&out);
+    return rc;
+}
+
 static int
 redraw(struct snj_term *term)
 {
@@ -1045,8 +1304,6 @@ redraw(struct snj_term *term)
     size_t end_row = 0u, end_col = 0u;
     size_t label_len;
     const char *label;
-    size_t label_cols;
-    size_t max;
     int rc = -1;
 
     if (!term->opened || !term->prompt_wanted || term->output_depth)
@@ -1059,7 +1316,6 @@ redraw(struct snj_term *term)
     if (term->prompt_template[0])
         install_prompt(term, current, cells);
     label = prompt_label(term, &label_len);
-    label_cols = snj_term_text_width(label, label_len);
     if (term->active && !term->prompt_visible && term->output_seen) {
         if (!term->output_ended_lf &&
             snj_term_write(STDERR_FILENO, term->capable ? "\r\n" : "\n",
@@ -1094,48 +1350,10 @@ redraw(struct snj_term *term)
             term->prompt_visible = true;
         return fallback_rc;
     }
-    if (term->prompt_visible && snj_term_hide(term) < 0)
-        return -1;
-    if (label_cols == SIZE_MAX ||
-        prompt_render_max(term->draft.data, term->draft.len, label_cols,
-                          SNJ_TERM_LABEL_BYTES * 4u + 64u, &max) < 0)
-        return -1;
-    snj_buf_init(&out, max);
-    if ((term->color &&
-         snj_buf_append(&out, term->networked ? "\033[1;35m" : "\033[1;36m",
-                        7u) < 0) ||
-        snj_term_append_safe(&out, label, label_len) < 0 ||
-        (term->color && snj_buf_append(&out, "\033[0m", 4u) < 0) ||
-        append_safe(&out, term->draft.data, term->draft.len, true, label_cols,
-                    term->columns, term->cursor,
-                    &cursor_row, &cursor_col, &end_row, &end_col) < 0)
+    if (compose_frame(term, &out, &label_len, &cursor_row, &cursor_col,
+                       &end_row, &end_col) < 0)
         goto out;
-    /*
-     * A VT-style terminal keeps the cursor in a pending-wrap state after a
-     * printable character fills the right margin.  Our row accounting already
-     * places that cursor at column zero of the next row.  Force the pending
-     * wrap before emitting cursor controls, otherwise a later redraw can think
-     * the prompt occupies one row more than it really does and erase the model
-     * output immediately above it.
-     */
-    if (end_row != 0u && end_col == 0u &&
-        snj_buf_append(&out, " \b", 2u) < 0)
-        goto out;
-    if (snj_buf_append(&out, "\033[K", 3u) < 0 ||
-        snj_term_write(STDERR_FILENO, out.data, out.len) < 0)
-        goto out;
-    if (end_row > cursor_row && move_cursor(end_row - cursor_row, 'A') < 0)
-        goto out;
-    if (snj_term_write(STDERR_FILENO, "\r", 1u) < 0 ||
-        move_cursor(cursor_col, 'C') < 0)
-        goto out;
-    term->rendered_rows = end_row + 1u;
-    term->rendered_cursor_row = cursor_row;
-    term->rendered_cursor_col = cursor_col;
-    term->rendered_end_at_margin = end_row != 0u && end_col == 0u;
-    term->rendered_cursor_pending_wrap = false;
-    term->prompt_visible = true;
-    rc = 0;
+    rc = paint_prompt(term, &out, label_len, cursor_row, cursor_col, end_row, end_col);
 out:
     snj_buf_free(&out);
     return rc;
@@ -1159,8 +1377,6 @@ snj_term_set_prompt_label(struct snj_term *term, bool active,
         errno = EINVAL;
         return -1;
     }
-    if (snj_term_hide(term) < 0)
-        return -1;
     term->active = active;
     if (!active)
         term->typing_active = false;
@@ -1197,18 +1413,22 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
         if (!spinners[i] || prepare_spinner(&configured[i], spinners[i]) < 0)
             goto invalid;
-    if (prompt_fits(label, configured) < 0 ||
-        compose_prompt(label, configured, states, 0u, expanded, cells) < 0)
+    if (prompt_fits(label, configured) < 0)
         goto invalid;
-    unchanged = term->prompt_visible && term->prompt_wanted &&
-                term->active == active && strcmp(term->label, expanded) == 0;
-    if (!unchanged && snj_term_hide(term) < 0)
+    unchanged = strcmp(term->prompt_template, label) == 0 &&
+                term->spinner_states == states && term->spinner_per_second == per_second;
+    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT && unchanged; ++i)
+        unchanged = strcmp(term->spinner[i].value, spinners[i]) == 0;
+    if (compose_prompt(label, configured, states,
+                       unchanged ? spinner_step(term, snj_monotonic_ms()) : 0u,
+                       expanded, cells) < 0)
         return -1;
     memcpy(term->prompt_template, label, len + 1u);
     install_prompt(term, expanded, cells);
     term->spinner_states = states;
     term->spinner_per_second = per_second;
-    term->spinner_epoch_ms = snj_monotonic_ms();
+    if (!unchanged)
+        term->spinner_epoch_ms = snj_monotonic_ms();
     term->active = active;
     if (!active)
         term->typing_active = false;
@@ -1216,7 +1436,7 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     term->line_submission_echoed = false;
     if (term->output_depth)
         term->redraw_after_output = true;
-    return term->defer_redraw || unchanged ? 0 : redraw(term);
+    return term->defer_redraw ? 0 : redraw(term);
 invalid:
     errno = EINVAL;
     return -1;
@@ -1296,8 +1516,6 @@ history_reset_navigation(struct snj_term *term)
     term->history_draft = NULL;
     term->history_pos = SIZE_MAX;
 }
-
-static size_t previous_cp(const unsigned char *s, size_t pos);
 
 static void
 history_clear(struct snj_term *term)
@@ -1588,66 +1806,18 @@ position_prompt_cursor(struct snj_term *term, size_t row, size_t col)
 }
 
 static int
-write_prompt_suffix(const unsigned char *data, size_t len, size_t start_col,
-                    bool start_pending, unsigned int columns,
-                    bool *end_pending)
-{
-    size_t start = 0u;
-    bool reset = false;
-    size_t width;
-
-    for (size_t i = 0u; i + 1u < len; ++i) {
-        if (data[i] != '\r' || data[i + 1u] != '\n')
-            continue;
-        if (snj_term_write(STDERR_FILENO, data + start, i - start) < 0 ||
-            snj_term_write(STDERR_FILENO, "\033[K\r\n", 5u) < 0)
-            return -1;
-        start = i + 2u;
-        reset = true;
-        ++i;
-    }
-    if (snj_term_write(STDERR_FILENO, data + start, len - start) < 0)
-        return -1;
-    if (columns < 20u) {
-        *end_pending = false;
-        return 0;
-    }
-    width = snj_term_text_width((const char *)data + start, len - start);
-    if (width == SIZE_MAX)
-        return -1;
-    if (reset) {
-        start_col = 0u;
-        start_pending = false;
-    }
-    if (!width)
-        *end_pending = start_pending;
-    else
-        *end_pending = ((start_col % columns + width % columns) % columns) == 0u;
-    return 0;
-}
-
-static int
 move_prompt_cursor(struct snj_term *term)
 {
     struct snj_buf scratch;
     size_t cursor_row = 0u, cursor_col = 0u;
     size_t end_row = 0u, end_col = 0u;
     size_t label_len;
-    const char *label = prompt_label(term, &label_len);
-    size_t label_cols = snj_term_text_width(label, label_len);
-    size_t max;
     int rc = -1;
 
     if (!term->capable || !term->prompt_visible || term->output_depth)
         return redraw(term);
-    if (label_cols == SIZE_MAX ||
-        prompt_render_max(term->draft.data, term->draft.len, label_cols, 32u,
-                          &max) < 0)
-        return -1;
-    snj_buf_init(&scratch, max);
-    if (append_safe(&scratch, term->draft.data, term->draft.len, true,
-                    label_cols, term->columns, term->cursor,
-                    &cursor_row, &cursor_col, &end_row, &end_col) < 0)
+    if (compose_frame(term, &scratch, &label_len, &cursor_row, &cursor_col,
+                       &end_row, &end_col) < 0)
         goto out;
     rc = position_prompt_cursor(term, cursor_row, cursor_col);
 out:
@@ -1656,89 +1826,8 @@ out:
 }
 
 static int
-redraw_edit(struct snj_term *term, size_t changed_at)
-{
-    struct snj_buf prefix;
-    struct snj_buf rendered;
-    size_t unused_row = 0u, unused_col = 0u;
-    size_t prefix_row = 0u, prefix_col = 0u;
-    size_t cursor_row = 0u, cursor_col = 0u;
-    size_t end_row = 0u, end_col = 0u;
-    size_t label_len;
-    const char *label = prompt_label(term, &label_len);
-    size_t label_cols = snj_term_text_width(label, label_len);
-    size_t old_rows = term->rendered_rows;
-    size_t new_rows;
-    size_t max;
-    bool cursor_pending;
-    int rc = -1;
-
-    if (!term->capable || !term->prompt_visible || term->output_depth)
-        return redraw(term);
-    if (changed_at > term->cursor || changed_at > term->draft.len) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (label_cols == SIZE_MAX ||
-        prompt_render_max(term->draft.data, term->draft.len, label_cols, 32u,
-                          &max) < 0)
-        return -1;
-    snj_buf_init(&prefix, max);
-    snj_buf_init(&rendered, max);
-    if (append_safe(&prefix, term->draft.data, changed_at, true,
-                    label_cols, term->columns, changed_at + 1u,
-                    &unused_row, &unused_col, &prefix_row, &prefix_col) < 0 ||
-        append_safe(&rendered, term->draft.data, term->draft.len, true,
-                    label_cols, term->columns, term->cursor,
-                    &cursor_row, &cursor_col, &end_row, &end_col) < 0)
-        goto out;
-
-    new_rows = end_row + 1u;
-    if (position_prompt_cursor(term, prefix_row, prefix_col) < 0)
-        goto out;
-    cursor_pending = term->rendered_cursor_pending_wrap;
-    if (rendered.len > prefix.len &&
-        write_prompt_suffix(rendered.data + prefix.len,
-                            rendered.len - prefix.len, prefix_col,
-                            cursor_pending, term->columns,
-                            &cursor_pending) < 0)
-        goto out;
-    if (snj_term_write(STDERR_FILENO, "\033[K", 3u) < 0)
-        goto out;
-
-    term->rendered_cursor_row = end_row;
-    term->rendered_cursor_col = end_col;
-    term->rendered_cursor_pending_wrap = cursor_pending;
-    if (old_rows > new_rows) {
-        size_t obsolete = old_rows - new_rows;
-
-        if (materialize_prompt_wrap(term) < 0)
-            goto out;
-        for (size_t row = 0u; row < obsolete; ++row) {
-            if (move_cursor(1u, 'B') < 0 ||
-                snj_term_write(STDERR_FILENO, "\r\033[2K", 5u) < 0)
-                goto out;
-        }
-        if (move_cursor(obsolete, 'A') < 0)
-            goto out;
-        term->rendered_cursor_col = 0u;
-    }
-    term->rendered_rows = new_rows;
-    term->rendered_end_at_margin = end_col == 0u && end_row != 0u;
-    if (position_prompt_cursor(term, cursor_row, cursor_col) < 0)
-        goto out;
-    rc = 0;
-out:
-    snj_buf_free(&rendered);
-    snj_buf_free(&prefix);
-    return rc;
-}
-
-static int
 insert_bytes(struct snj_term *term, const unsigned char *data, size_t len)
 {
-    size_t changed_at = term->cursor;
-
     if (len > SNJ_MAX_DIRECT_PROMPT - term->draft.len) {
         errno = EOVERFLOW;
         return -1;
@@ -1753,7 +1842,7 @@ insert_bytes(struct snj_term *term, const unsigned char *data, size_t len)
     term->cursor += len;
     history_reset_navigation(term);
     mark_input_activity(term);
-    return redraw_edit(term, changed_at);
+    return redraw(term);
 }
 
 static int
@@ -1769,7 +1858,7 @@ delete_range(struct snj_term *term, size_t start, size_t end)
     term->cursor = start;
     history_reset_navigation(term);
     mark_input_activity(term);
-    return redraw_edit(term, start);
+    return redraw(term);
 }
 
 static bool
@@ -2376,8 +2465,11 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
         bool reveal = timeout_ms != 0 && term->active && term->prompt_wanted &&
                       !term->prompt_visible && !term->output_depth &&
                       !term->defer_redraw;
-        if (reveal && (timeout_ms < 0 || timeout_ms > 16))
-            timeout_ms = 16;
+        uint64_t now = snj_monotonic_ms();
+        uint64_t quiet = now >= term->last_output_ms ? now - term->last_output_ms : 0u;
+        int reveal_wait = quiet < 150u ? (int)(150u - quiet) : 0;
+        if (reveal && (timeout_ms < 0 || timeout_ms > reveal_wait))
+            timeout_ms = reveal_wait;
         rc = poll(pfd, 2u, timeout_ms);
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
@@ -2393,7 +2485,8 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
             term->escape_len = 0u;
             return search_accept(term, false);
         }
-        if (rc == 0 && reveal && redraw(term) < 0)
+        if (rc == 0 && reveal &&
+            snj_monotonic_ms() - term->last_output_ms >= 150u && redraw(term) < 0)
             return -1;
         if (rc == 0 && animated_spinners(term) &&
             update_spinners(term, spinner_step(term, snj_monotonic_ms())) < 0)
@@ -2462,5 +2555,6 @@ snj_term_close(struct snj_term *term)
     snj_buf_free(&term->draft);
     snj_buf_free(&term->output_cell);
     snj_buf_free(&term->output_line);
+    snj_buf_free(&term->painted_prompt);
     memset(term, 0, sizeof(*term));
 }

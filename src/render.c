@@ -127,6 +127,8 @@ write_role_chunk(struct snj_render *render, int fd, const char *color,
         errno = EINVAL;
         return -1;
     }
+    if (!len)
+        return 0;
     if (output_begin(render, persistent) < 0)
         return -1;
     if (colored && write_literal(fd, color) < 0)

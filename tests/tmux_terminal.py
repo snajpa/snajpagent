@@ -1374,6 +1374,68 @@ def wait_idle_prompt_at_bottom(terminal, prompt, timeout=5.0):
     raise AssertionError(f"idle prompt is not at the bottom:\n{screen}")
 
 
+def run_retained_composer_case(binary, root):
+    case = root / "retained"
+    workspace = case / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False)
+    with config.open("a", encoding="utf-8") as output:
+        output.write("prompt = {chat:p>}{rollout-idle:p>}{rollout-active:p>}\n")
+    terminal = TmuxTerminal(
+        case / "terminal", binary, workspace, case / "state", config, 24, 18,
+    )
+    try:
+        terminal.wait("p>")
+        draft = "first-row-unchanged second-row-unchanged third-row"
+        terminal.send_text(draft)
+        terminal.wait("p> " + draft, join_wrapped=True)
+        terminal.send_key("Home")
+        terminal.send_text("X")
+        terminal.wait("p> X" + draft, join_wrapped=True)
+        terminal.send_key("DC")
+        terminal.wait("p> X" + draft[1:], join_wrapped=True)
+        terminal.send_key("C-u")
+        terminal.send_text("short")
+        screen = terminal.wait("p> short")
+        if "row-unchanged" in screen or "third-row" in screen:
+            raise AssertionError(f"shrinking composer left obsolete rows:\n{screen}")
+
+        terminal.send_key("C-u")
+        wide = "a" * 20 + "界é tail"
+        terminal.send_text(wide)
+        screen = terminal.wait("界é tail")
+        if "p> " + "a" * 20 not in screen:
+            raise AssertionError(f"wide boundary damaged the previous row:\n{screen}")
+        cursor = terminal.run("display-message", "-p", "-t", terminal.target,
+                              "#{cursor_x}").strip()
+        if cursor != "8":
+            raise AssertionError(f"wide/combining cursor column was {cursor}")
+        terminal.send_key("BSpace")
+        terminal.wait("界é tai")
+        terminal.resize(25, 18)
+        terminal.wait("界é tai", join_wrapped=True)
+        terminal.resize(24, 18)
+        terminal.wait("界é tai", join_wrapped=True)
+
+        terminal.send_key("C-u")
+        terminal.send_text("a" * 21)  # Exact right margin, including p>.
+        terminal.wait("p> " + "a" * 21, join_wrapped=True)
+        terminal.send_key("BSpace")
+        terminal.send_text("Z")
+        terminal.wait("p> " + "a" * 20 + "Z", join_wrapped=True)
+        terminal.resize(30, 18)
+        terminal.wait("p> " + "a" * 20 + "Z", join_wrapped=True)
+        terminal.send_key("C-u")
+        terminal.exit()
+    finally:
+        try:
+            screen = terminal.last_screen or terminal.capture()
+            (case / "screen.txt").write_text(screen, encoding="utf-8")
+        finally:
+            close_fixture_terminal(terminal)
+
+
 def run_lifecycle_case(binary, root):
     case = root / "lifecycle"
     workspace = case / "workspace"
@@ -1468,6 +1530,7 @@ def run_fixture(binary, workspace, root):
     run_render_case(binary, root)
     run_queue_case(binary, root)
     run_tool_case(binary, root)
+    run_retained_composer_case(binary, root)
     run_lifecycle_case(binary, root)
     print("tmux_terminal fixture: ok")
 

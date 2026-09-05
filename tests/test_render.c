@@ -290,12 +290,14 @@ test_prompt_spinners(void)
         assert(snj_buf_append(&term.draft, "draft", 5u) == 0);
         term.cursor = term.draft.len;
         term.columns = 80u;
-        term.prompt_visible = term.capable = true;
-        term.rendered_cursor_col = 13u;
+        term.opened = term.capable = true;
         assert(pipe(fds) == 0);
         saved_fd = dup(STDERR_FILENO);
         assert(saved_fd >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
         close(fds[1]);
+        assert(snj_term_set_prompt_template(&term, true, "\xfd\xfe  9%> ",
+                                            frames, 8u, 2u) == 0);
+        assert(read(fds[0], output, sizeof(output)) > 0);
         assert(snj_term_set_spinner_states(&term, 6u) == 0);
         assert(snj_term_set_spinner_states(&term, 2u) == 0);
         assert(term.cursor == 5u && term.rendered_cursor_col == 13u);
@@ -310,6 +312,127 @@ test_prompt_spinners(void)
         assert(!strstr(output, "\033[2K") && !strchr(output, '\n'));
         term.prompt_visible = false;
     }
+    snj_term_close(&term);
+}
+
+static size_t
+prompt_output(int fd, char *output, size_t size)
+{
+    ssize_t n = read(fd, output, size - 1u);
+    assert(n >= 0 || errno == EAGAIN);
+    size_t len = n > 0 ? (size_t)n : 0u;
+    output[len] = '\0';
+    return len;
+}
+
+static void
+test_retained_prompt(void)
+{
+    struct snj_term term;
+    const char *frames[SNJ_TERM_SPINNER_COUNT] = {" ⚑", " |/-", " ⠋⠙"};
+    char output[4096];
+    int fds[2], saved_fd;
+
+    snj_term_init(&term);
+    term.opened = term.capable = true;
+    term.columns = 24u;
+    assert(pipe(fds) == 0);
+    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
+    saved_fd = dup(STDERR_FILENO);
+    assert(saved_fd >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
+    close(fds[1]);
+    assert(snj_term_set_prompt_label(&term, true, "  9%> ") == 0);
+    assert(snj_term_restore_draft(&term, "first row stays\nsecond row stays") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(snj_term_set_prompt_label(&term, true, "  9%> ") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+    size_t cursor_row = term.rendered_cursor_row, cursor_col = term.rendered_cursor_col;
+    assert(snj_term_set_prompt_label(&term, true, " 10%> ") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(strstr(output, "10") && !strstr(output, "stays") && !strchr(output, '\n'));
+    assert(!strstr(output, "\033[K") && !strstr(output, "\033[2K"));
+    assert(term.rendered_cursor_row == cursor_row && term.rendered_cursor_col == cursor_col);
+    assert(snj_term_restore_draft(&term, "first row stays\nsecond row short") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(!strstr(output, "first") && !strstr(output, "10%"));
+    assert(snj_term_restore_draft(&term, "small") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(strstr(output, "\033[K") && !strstr(output, "\033[2K"));
+    assert(term.rendered_rows == 1u && term.rendered_cursor_col == 11u);
+    assert(snj_term_restore_draft(&term, "invalid:\xff") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(strstr(output, "invalid:\\xFF"));
+
+    assert(snj_term_restore_draft(&term, "café界 tail") == 0);
+    (void)prompt_output(fds[0], output, sizeof(output));
+    assert(snj_term_restore_draft(&term, "cafè界 tail") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(strstr(output, "è") && !strstr(output, "caf") && !strstr(output, "tail"));
+    assert(snj_term_restore_draft(&term, "cafè語 tail") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(strstr(output, "語") && !strstr(output, "tail"));
+    assert(snj_term_restore_draft(&term, "aaaaaaaaaaaaaaaaa界") == 0);
+    assert(term.rendered_rows == 2u && term.rendered_cursor_col == 2u);
+    assert(snj_term_restore_draft(&term, "aaaaaaaaaaaaaaaaaa\nnext") == 0);
+    assert(term.rendered_rows == 2u && term.rendered_cursor_col == 10u);
+    assert(snj_term_restore_draft(&term, "cafè語 tail") == 0);
+    (void)prompt_output(fds[0], output, sizeof(output));
+    snj_term_set_color(&term, true, false);
+    assert(snj_term_set_prompt_label(&term, true, " 10%> ") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(strstr(output, "\033[1;36m") && !strstr(output, "tail"));
+    snj_term_set_color(&term, false, false);
+    assert(snj_term_set_prompt_label(&term, true, " 10%> ") == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(!strstr(output, "tail"));
+
+    assert(snj_term_restore_draft(&term, "") == 0);
+    assert(snj_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
+    (void)prompt_output(fds[0], output, sizeof(output));
+    term.spinner_epoch_ms -= 125u;
+    uint64_t epoch = term.spinner_epoch_ms;
+    assert(snj_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
+    assert(term.spinner_epoch_ms == epoch);
+    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(strchr(output, '/') && !strchr(output, '>'));
+    assert(snj_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+
+    assert(snj_term_output_begin(&term, true) == 0);
+    assert(snj_term_note_output(&term, "public", 6u, "") == 0);
+    assert(snj_term_output_end(&term) == 0);
+    (void)prompt_output(fds[0], output, sizeof(output));
+    assert(!term.prompt_visible && term.painted_prompt.len == 0u);
+    enum snj_term_action action;
+    char *text;
+    int input[2], stdin_fd = dup(STDIN_FILENO);
+    assert(stdin_fd >= 0 && pipe(input) == 0 && dup2(input[0], STDIN_FILENO) >= 0);
+    assert(snj_term_poll(&term, 20, -1, &action, &text) == 0);
+    assert(!term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) == 0u);
+    term.input[0] = 'x';
+    term.input_len = 1u;
+    assert(snj_term_poll(&term, 0, -1, &action, &text) == 0);
+    assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(snj_term_output_begin(&term, true) == 0);
+    assert(snj_term_note_output(&term, "more", 4u, "") == 0);
+    assert(snj_term_output_end(&term) == 0);
+    (void)prompt_output(fds[0], output, sizeof(output));
+    term.last_output_ms -= 200u;
+    assert(snj_term_poll(&term, 20, -1, &action, &text) == 0);
+    assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(dup2(stdin_fd, STDIN_FILENO) >= 0);
+    close(stdin_fd);
+    close(input[0]);
+    close(input[1]);
+    int readonly = open("/dev/null", O_RDONLY);
+    assert(readonly >= 0 && dup2(readonly, STDERR_FILENO) >= 0);
+    close(readonly);
+    assert(snj_term_set_prompt_label(&term, true, "failure> ") < 0);
+    assert(term.painted_prompt.len == 0u);
+    assert(dup2(saved_fd, STDERR_FILENO) >= 0);
+    close(saved_fd);
+    close(fds[0]);
+    term.opened = false;
     snj_term_close(&term);
 }
 
@@ -1407,6 +1530,7 @@ main(void)
     test_prompt_history();
     test_prompt_clock();
     test_prompt_spinners();
+    test_retained_prompt();
     test_mention_completion();
     test_markdown_streaming();
     test_markdown_tables();

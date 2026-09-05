@@ -14,6 +14,11 @@
   session and nonempty-draft forward delete. Stop interrupted tool turns before
   starting another model request.
 
+- Retain the bottom composer and repaint only changed rows/spans, including
+  status, search and spinner updates. Batch terminal controls and erasures,
+  preserve Unicode/cursor layout, and avoid automatic prompt reveal during
+  short inter-token gaps. Identical prompt updates retain animation timing.
+
 - In chat, steer active work only for model-nick mentions, not ordinary local
   or channel-operator messages. Tab completes `@nick` at the cursor from live
   room membership without submitting or queueing the draft.
