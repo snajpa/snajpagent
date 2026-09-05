@@ -2932,12 +2932,12 @@ run_turn(struct app_state *app, const char *prompt,
                            sizeof(rejected_request_hash));
                     ceiling_matches = capacity_ceiling_matches(
                         app, app->turn_provider, app->turn_model);
-                    if (provider_failure.requested_input_known ||
+                    if (provider_failure.requested_input_tokens ||
                         ceiling_matches)
                         snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
-                            provider_failure.requested_input_known ?
+                            provider_failure.requested_input_tokens ?
                                 projection.model_input_bytes : 0u,
-                            provider_failure.requested_input_known ?
+                            provider_failure.requested_input_tokens ?
                                 provider_failure.requested_input_tokens : 0u,
                             ceiling_matches ?
                                 app->session.capacity_ceiling_input_tokens :

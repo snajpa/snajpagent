@@ -803,7 +803,6 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
         return -1;
     }
     memset(capacity, 0, sizeof(*capacity));
-    capacity->codex_protocol = strcmp(protocol, "codex") == 0;
     cached_provider = provider_entry(cache ? cache->providers : NULL,
                                      provider->name);
     if (cached_provider) {
@@ -862,7 +861,7 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
         minimum_budget(context_budget, &capacity->hard_input_tokens,
                        &capacity->hard_input_known);
         if (!capacity->effective_context_window_percent) {
-            if (capacity->codex_protocol) {
+            if (strcmp(protocol, "codex") == 0) {
                 capacity->effective_context_window_percent = 95u;
                 capacity->effective_context_window_derived = true;
             } else if (!capacity->max_output_tokens) {

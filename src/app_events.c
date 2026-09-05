@@ -555,32 +555,31 @@ snag_app_response_capacity_rejected_data(
 {
     json_t *data = json_object();
     uint64_t safety_ceiling = 0u;
-    bool safety_ceiling_known;
 
-    safety_ceiling_known = capacity &&
-        snag_provider_failure_safety_ceiling(failure,
-            capacity->max_output_tokens, capacity->max_output_tokens,
-            &safety_ceiling);
+    if (failure && capacity)
+        safety_ceiling = snag_capacity_safety_ceiling(
+            failure->context_limit_tokens, failure->requested_input_tokens,
+            capacity->max_output_tokens);
 
     if (!data || !turn_id || !response_id || !request_hash || !failure ||
         !capacity || !provider_source_sha256 ||
         !snag_hex_is_lower(provider_source_sha256, SNAG_SHA256_HEX_LEN) ||
         snag_json_set_new(data, "code", json_string(failure->code)) < 0 ||
         snag_json_set_new(data, "context_limit_tokens",
-            failure->context_limit_known ?
+            failure->context_limit_tokens ?
                 json_integer((json_int_t)failure->context_limit_tokens) :
                 json_null()) < 0 ||
         snag_json_set_new(data, "cycle", json_integer((json_int_t)cycle)) < 0 ||
         snag_json_set_new(data, "message", json_string(failure->message)) < 0 ||
         snag_json_set_new(data, "observed_hard_input_tokens",
-            safety_ceiling_known ?
+            safety_ceiling ?
                 json_integer((json_int_t)safety_ceiling) : json_null()) < 0 ||
         snag_json_set_new(data, "provider_source_sha256",
                          json_string(provider_source_sha256)) < 0 ||
         snag_json_set_new(data, "request_sha256",
                          json_string(request_hash)) < 0 ||
         snag_json_set_new(data, "requested_input_tokens",
-            failure->requested_input_known ?
+            failure->requested_input_tokens ?
                 json_integer((json_int_t)failure->requested_input_tokens) :
                 json_null()) < 0 ||
         snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||

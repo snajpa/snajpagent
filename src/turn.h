@@ -114,6 +114,10 @@ int snag_response_graph_classify(const struct snag_response_graph *graph,
                                 char *error, size_t error_size);
 json_t *snag_response_graph_json(const struct snag_response_graph *graph);
 int snag_response_usage_valid(const struct snag_response_usage *usage);
+/* Positive rejection facts, zero for absence; result is positive or unknown. */
+uint64_t snag_capacity_safety_ceiling(uint64_t context_limit_tokens,
+                                     uint64_t requested_input_tokens,
+                                     uint64_t requested_output_tokens);
 json_t *snag_response_usage_json(const struct snag_response_usage *usage);
 int snag_response_usage_from_json(const json_t *value,
                                  struct snag_response_usage *usage);

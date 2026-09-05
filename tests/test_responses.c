@@ -713,20 +713,17 @@ test_structured_capacity_failure(void)
     assert(snag_responses_sse_record(&stream, &record) < 0);
     assert(snag_provider_failure_is_capacity(&stream.provider_failure));
     assert(strcmp(stream.provider_failure.message, "too large") == 0);
-    assert(stream.provider_failure.context_limit_known);
     assert(stream.provider_failure.context_limit_tokens == 272000u);
-    assert(stream.provider_failure.requested_input_known);
     assert(stream.provider_failure.requested_input_tokens == 300000u);
-    {
-        uint64_t ceiling = 0u;
-
-        assert(snag_provider_failure_safety_ceiling(
-            &stream.provider_failure, true, 128000u, &ceiling));
-        assert(ceiling == 144000u);
-        memset(&failure, 0, sizeof(failure));
-        assert(!snag_provider_failure_safety_ceiling(
-            &failure, false, 0u, &ceiling));
-    }
+    assert(snag_capacity_safety_ceiling(
+        stream.provider_failure.context_limit_tokens,
+        stream.provider_failure.requested_input_tokens, 128000u) == 144000u);
+    assert(snag_capacity_safety_ceiling(0u, 0u, 0u) == 0u);
+    assert(snag_capacity_safety_ceiling(0u, 1u, 0u) == 0u);
+    assert(snag_capacity_safety_ceiling(0u, 2u, 0u) == 1u);
+    assert(snag_capacity_safety_ceiling(42u, 12u, 0u) == 11u);
+    assert(snag_capacity_safety_ceiling(42u, 0u, 42u) == 1u);
+    assert(snag_capacity_safety_ceiling(42u, 0u, 43u) == 1u);
     snag_responses_stream_free(&stream);
 
     {
@@ -757,8 +754,22 @@ test_structured_capacity_failure(void)
     assert(snag_provider_failure_from_json(root, &failure) == 0);
     assert(snag_provider_failure_is_capacity(&failure));
     assert(strcmp(failure.message, "top-level failure") == 0);
-    assert(failure.context_limit_known);
     assert(failure.context_limit_tokens == 42u);
+    assert(json_object_set_new(root, "context_length", json_integer(42)) == 0);
+    assert(snag_provider_failure_from_json(root, &failure) == 0);
+    assert(json_object_set_new(root, "context_length", json_integer(43)) == 0);
+    assert(snag_provider_failure_from_json(root, &failure) < 0);
+    assert(json_object_set_new(root, "context_length", json_integer(0)) == 0);
+    assert(snag_provider_failure_from_json(root, &failure) < 0);
+    assert(json_object_set_new(root, "context_length", json_null()) == 0);
+    assert(snag_provider_failure_from_json(root, &failure) == 0);
+    assert(failure.context_limit_tokens == 42u);
+    assert(failure.requested_input_tokens == 0u);
+    assert(json_object_set_new(root, "requested_input_tokens", json_integer(0)) == 0);
+    assert(snag_provider_failure_from_json(root, &failure) < 0);
+    assert(json_object_set_new(root, "requested_input_tokens", json_integer(1)) == 0);
+    assert(snag_provider_failure_from_json(root, &failure) == 0);
+    assert(failure.requested_input_tokens == 1u);
     json_decref(root);
 }
 

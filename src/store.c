@@ -469,34 +469,6 @@ clear_response_state(struct snag_session *session)
 }
 
 static bool
-replayed_capacity_ceiling(bool context_limit_known,
-                          uint64_t context_limit_tokens,
-                          bool requested_input_known,
-                          uint64_t requested_input_tokens,
-                          bool requested_output_known,
-                          uint64_t requested_output_tokens,
-                          uint64_t *ceiling_tokens)
-{
-    uint64_t ceiling = 0u;
-    bool known = false;
-
-    if (context_limit_known) {
-        ceiling = context_limit_tokens;
-        if (requested_output_known)
-            ceiling = ceiling > requested_output_tokens ?
-                ceiling - requested_output_tokens : 1u;
-        known = true;
-    }
-    if (requested_input_known && requested_input_tokens > 1u &&
-        (!known || requested_input_tokens - 1u < ceiling)) {
-        ceiling = requested_input_tokens - 1u;
-        known = true;
-    }
-    if (known)
-        *ceiling_tokens = ceiling;
-    return known;
-}
-static bool
 all_pending_finished(const struct snag_session *session)
 {
     for (size_t i = 0; i < session->pending_call_count; ++i)
@@ -1580,12 +1552,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
             cycle != session->active_cycle)
             goto invalid;
-        expected_ceiling_known = replayed_capacity_ceiling(
-            !json_is_null(context_limit), context_limit_tokens,
-            !json_is_null(requested_input), requested_input_tokens,
-            session->active_response_requested_output_known,
-            session->active_response_requested_output_tokens,
-            &expected_ceiling);
+        expected_ceiling = snag_capacity_safety_ceiling(
+            context_limit_tokens, requested_input_tokens,
+            session->active_response_requested_output_known ?
+                session->active_response_requested_output_tokens : 0u);
+        expected_ceiling_known = expected_ceiling != 0u;
         if (expected_ceiling_known != !json_is_null(observed_ceiling) ||
             (expected_ceiling_known && expected_ceiling != recorded_ceiling))
             goto invalid;

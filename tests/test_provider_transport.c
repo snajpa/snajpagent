@@ -832,12 +832,10 @@ test_structured_create_failures(void)
                    NULL, NULL, NULL, NULL, &graph, &failure,
                    error, sizeof(error), &cancel, NULL) < 0);
         assert(snag_provider_failure_is_capacity(&failure));
-        assert(failure.context_limit_known);
         assert(failure.context_limit_tokens ==
                (fixtures[i] == MODEL_CREATE_HTTP_FAILURE ?
                     272000u : 872000u));
         if (fixtures[i] == MODEL_CREATE_HTTP_FAILURE) {
-            assert(failure.requested_input_known);
             assert(failure.requested_input_tokens == 300000u);
         }
         snag_response_graph_free(&graph);

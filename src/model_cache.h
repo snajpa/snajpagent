@@ -45,7 +45,6 @@ struct snag_model_capacity {
     bool hard_input_known; /* Zero is a known exhausted budget, not absence. */
     bool source_bound;
     bool cache_source_mismatch;
-    bool codex_protocol;
 };
 
 void snag_model_cache_init(struct snag_model_cache *cache);

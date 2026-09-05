@@ -22,8 +22,7 @@ stream_fail(struct snag_responses_stream *stream, int code, const char *fmt, ...
 }
 
 static int
-failure_limit(const json_t *object, const char *key, uint64_t *value,
-              bool *known)
+failure_limit(const json_t *object, const char *key, uint64_t *value)
 {
     json_t *entry;
     json_int_t integer;
@@ -33,9 +32,8 @@ failure_limit(const json_t *object, const char *key, uint64_t *value,
         return 0;
     if (!json_is_integer(entry) || (integer = json_integer_value(entry)) <= 0 ||
         (uint64_t)integer > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
-        (*known && *value != (uint64_t)integer))
+        (*value && *value != (uint64_t)integer))
         return -1;
-    *known = true;
     *value = (uint64_t)integer;
     return 0;
 }
@@ -45,35 +43,6 @@ snag_provider_failure_is_capacity(const struct snag_provider_failure *failure)
 {
     return failure && strcmp(failure->code,
                              "context_length_exceeded") == 0;
-}
-
-bool
-snag_provider_failure_safety_ceiling(
-    const struct snag_provider_failure *failure,
-    bool requested_output_known, uint64_t requested_output_tokens,
-    uint64_t *ceiling_tokens)
-{
-    uint64_t ceiling = 0u;
-    bool known = false;
-
-    if (!failure || !ceiling_tokens)
-        return false;
-    if (failure->context_limit_known) {
-        ceiling = failure->context_limit_tokens;
-        if (requested_output_known)
-            ceiling = ceiling > requested_output_tokens ?
-                ceiling - requested_output_tokens : 1u;
-        known = true;
-    }
-    if (failure->requested_input_known &&
-        failure->requested_input_tokens > 1u &&
-        (!known || failure->requested_input_tokens - 1u < ceiling)) {
-        ceiling = failure->requested_input_tokens - 1u;
-        known = true;
-    }
-    if (known)
-        *ceiling_tokens = ceiling;
-    return known;
 }
 
 int
@@ -126,13 +95,11 @@ snag_provider_failure_from_json(const json_t *root,
         memcpy(failure->message, message, strlen(message) + 1u);
     for (size_t i = 0; i < sizeof(limit_keys) / sizeof(limit_keys[0]); ++i)
         if (failure_limit(object, limit_keys[i],
-                          &failure->context_limit_tokens,
-                          &failure->context_limit_known) < 0)
+                          &failure->context_limit_tokens) < 0)
             return -1;
     for (size_t i = 0; i < sizeof(requested_keys) / sizeof(requested_keys[0]); ++i)
         if (failure_limit(object, requested_keys[i],
-                          &failure->requested_input_tokens,
-                          &failure->requested_input_known) < 0)
+                          &failure->requested_input_tokens) < 0)
             return -1;
     return 0;
 }

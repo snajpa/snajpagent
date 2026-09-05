@@ -45,6 +45,22 @@ snag_item_kind_name(enum snag_item_kind kind)
     return NULL;
 }
 
+uint64_t
+snag_capacity_safety_ceiling(uint64_t context_limit_tokens,
+                            uint64_t requested_input_tokens,
+                            uint64_t requested_output_tokens)
+{
+    uint64_t ceiling = 0u;
+
+    if (context_limit_tokens)
+        ceiling = context_limit_tokens > requested_output_tokens ?
+            context_limit_tokens - requested_output_tokens : 1u;
+    if (requested_input_tokens > 1u &&
+        (!ceiling || requested_input_tokens - 1u < ceiling))
+        ceiling = requested_input_tokens - 1u;
+    return ceiling;
+}
+
 const char *
 snag_item_phase_name(enum snag_item_phase phase)
 {
@@ -353,12 +369,8 @@ add_public(struct snag_response_graph *graph, enum snag_item_kind kind,
     if (set_local_id(item->local_item_id, local_item_id) < 0 ||
         !(item->provider_item_id =
           snag_strdup_checked(provider_item_id, SNAG_MAX_PROVIDER_ID)) ||
-        !(item->text = snag_strdup_checked(text, SNAG_MAX_PUBLIC_ITEM))) {
-        item_free(item);
-        --graph->count;
-        return -1;
-    }
-    if (account_last_item(graph) < 0) {
+        !(item->text = snag_strdup_checked(text, SNAG_MAX_PUBLIC_ITEM)) ||
+        account_last_item(graph) < 0) {
         item_free(item);
         --graph->count;
         return -1;
@@ -436,12 +448,8 @@ add_call(struct snag_response_graph *graph, const char *provider_item_id,
           snag_strdup_checked(provider_item_id, SNAG_MAX_PROVIDER_ID)) ||
         !(item->provider_call_id =
           snag_strdup_checked(provider_call_id, SNAG_MAX_PROVIDER_ID)) ||
-        !(item->name = snag_strdup_checked(name, 64u))) {
-        item_free(item);
-        --graph->count;
-        return -1;
-    }
-    if (account_last_item(graph) < 0) {
+        !(item->name = snag_strdup_checked(name, 64u)) ||
+        account_last_item(graph) < 0) {
         item_free(item);
         --graph->count;
         return -1;
@@ -484,12 +492,8 @@ snag_response_graph_add_opaque(struct snag_response_graph *graph,
     if (!(item->provider_item_id =
           snag_strdup_checked(provider_item_id, SNAG_MAX_PROVIDER_ID)) ||
         !(item->provider_type =
-          snag_strdup_checked(provider_type, SNAG_MAX_PROVIDER_ID))) {
-        item_free(item);
-        --graph->count;
-        return -1;
-    }
-    if (account_last_item(graph) < 0) {
+          snag_strdup_checked(provider_type, SNAG_MAX_PROVIDER_ID)) ||
+        account_last_item(graph) < 0) {
         item_free(item);
         --graph->count;
         return -1;
@@ -682,46 +686,28 @@ snag_tool_action_digest(const struct snag_response_item *call,
 static json_t *
 item_json(const struct snag_response_item *item)
 {
-    json_t *out = json_object();
-    if (!out)
-        return NULL;
-    if (snag_json_set_new(out, "kind", json_string(snag_item_kind_name(item->kind))) < 0)
-        goto fail;
+    const char *kind = snag_item_kind_name(item->kind);
+
     switch (item->kind) {
     case SNAG_ITEM_ASSISTANT:
     case SNAG_ITEM_REFUSAL:
     case SNAG_ITEM_REASONING_SUMMARY:
-        if (snag_json_set_new(out, "local_item_id",
-                             json_string(item->local_item_id)) < 0 ||
-            snag_json_set_new(out, "phase",
-                             json_string(snag_item_phase_name(item->phase))) < 0 ||
-            snag_json_set_new(out, "provider_item_id",
-                             json_string(item->provider_item_id)) < 0 ||
-            snag_json_set_new(out, "text", json_string(item->text)) < 0)
-            goto fail;
-        break;
+        return json_pack("{s:s,s:s,s:s,s:s,s:s}",
+            "kind", kind, "local_item_id", item->local_item_id,
+            "phase", snag_item_phase_name(item->phase),
+            "provider_item_id", item->provider_item_id, "text", item->text);
     case SNAG_ITEM_TOOL_CALL:
-        if (snag_json_set_new(out, "arguments", json_deep_copy(item->arguments)) < 0 ||
-            snag_json_set_new(out, "call_id", json_string(item->call_id)) < 0 ||
-            snag_json_set_new(out, "name", json_string(item->name)) < 0 ||
-            snag_json_set_new(out, "provider_call_id",
-                             json_string(item->provider_call_id)) < 0 ||
-            snag_json_set_new(out, "provider_item_id",
-                             json_string(item->provider_item_id)) < 0)
-            goto fail;
-        break;
+        return json_pack("{s:o,s:s,s:s,s:s,s:s,s:s}",
+            "arguments", json_deep_copy(item->arguments),
+            "kind", kind, "call_id", item->call_id, "name", item->name,
+            "provider_call_id", item->provider_call_id,
+            "provider_item_id", item->provider_item_id);
     case SNAG_ITEM_OPAQUE:
-        if (snag_json_set_new(out, "payload", json_deep_copy(item->payload)) < 0 ||
-            snag_json_set_new(out, "provider_item_id",
-                             json_string(item->provider_item_id)) < 0 ||
-            snag_json_set_new(out, "provider_type",
-                             json_string(item->provider_type)) < 0)
-            goto fail;
-        break;
+        return json_pack("{s:o,s:s,s:s,s:s}",
+            "payload", json_deep_copy(item->payload), "kind", kind,
+            "provider_item_id", item->provider_item_id,
+            "provider_type", item->provider_type);
     }
-    return out;
-fail:
-    json_decref(out);
     return NULL;
 }
 
