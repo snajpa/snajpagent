@@ -853,6 +853,29 @@ def test_active_ctrl_c_clears_draft():
     assert not [item for item in log if item["type"] == "turn_interrupted"]
 
 
+def test_ctrl_c_cancels_partial_editor_states():
+    child = Child([])
+    try:
+        child.wait(DEFAULT_IDLE_PROMPT)
+        escape_start = len(child.buf)
+        child.send(b"escape-draft\x1b")
+        child.send(b"\x03")
+        escape_end = child.wait(b"^C\r\n", start=escape_start)
+        assert b"escape-draft" in bytes(child.buf[escape_start:escape_end])
+        child.wait(DEFAULT_IDLE_PROMPT, start=escape_end)
+
+        paste_start = len(child.buf)
+        child.send(b"\x1b[200~paste-draft")
+        child.send(b"\x03")
+        paste_end = child.wait(b"^C\r\n", start=paste_start)
+        assert b"paste-draft" in bytes(child.buf[paste_start:paste_end])
+        child.wait(DEFAULT_IDLE_PROMPT, start=paste_end)
+        child.send(b"clean-after-cancel\r")
+        child.wait(b"fixture answer", start=paste_end)
+    finally:
+        child.kill()
+
+
 def test_prompt_history_and_reverse_search():
     history = Path(DOTDIR) / "prompt_history"
     second = Child([])
@@ -2847,6 +2870,7 @@ test_steering_during_pre_response_compaction()
 test_steering_during_capacity_recovery_compaction()
 test_agents_md_config()
 test_active_ctrl_c_clears_draft()
+test_ctrl_c_cancels_partial_editor_states()
 test_interrupt()
 test_prompt_history_and_reverse_search()
 test_multiline_and_paste()

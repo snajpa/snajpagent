@@ -2285,6 +2285,8 @@ static int
 feed_byte(struct snj_term *term, unsigned char byte,
           enum snj_term_action *action, char **text)
 {
+    if (byte == 0x03u)
+        return cancel_line(term, action);
     if (term->paste)
         return feed_paste(term, byte);
     if (term->escape_len)
@@ -2326,8 +2328,6 @@ feed_byte(struct snj_term *term, unsigned char byte,
             size_t count = 4u - (term->cursor % 4u);
             return insert_bytes(term, spaces, count);
         }
-    case 0x03u:
-        return cancel_line(term, action);
     case 0x04u:
         if (!term->draft.len)
             return complete_exit(term, action);
