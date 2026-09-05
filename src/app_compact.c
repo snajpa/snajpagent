@@ -363,10 +363,12 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                                                app->session.default_model;
     effort = active_prefix && app->turn_effort ? app->turn_effort :
                                                  app->session.default_effort;
-    if (!active_prefix)
+    if (!active_prefix) {
+        app->turn_model = model;
         app->turn_provider = snag_config_provider(
             app->config, app->session.default_provider[0] ?
                          app->session.default_provider : NULL);
+    }
     if (!app->turn_provider) {
         snprintf(error, error_size,
                  "selected provider is not present in the current configuration");
@@ -446,7 +448,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         if (provider_request && !native && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
             snag_context_codex_request(provider_request) < 0)
             goto out;
-        if (!provider_request || !count_request) {
+        if (!provider_request || !count_request ||
+            snag_context_provider_model(app->turn_provider, model, provider_request) < 0 ||
+            snag_context_provider_model(app->turn_provider, model, count_request) < 0) {
             snprintf(error, error_size,
                      "cannot build bounded compaction provider request");
             errno = ENOMEM;
@@ -570,7 +574,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                                          error, error_size) < 0)
         goto out;
     output_tokens_bound = (uint64_t)output_bytes;
-    if (snag_context_compact_output_count_request_build(output, model,
+    if (snag_context_compact_output_count_request_build(output,
+            snag_config_model_upstream(app->turn_provider, model),
             &output_count_request, output_count_request_hash,
             &output_count_request_bytes, error, error_size) < 0 ||
         output_count_request_bytes == 0u)

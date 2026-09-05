@@ -1155,7 +1155,7 @@ test_read_only_and_queue_controllers(void)
     snag_context_projection_init(&projection);
     snag_config_init(&config);
     config.irc.listen_explicit = true;
-    config.providers[1] = config.providers[0];
+    snag_config_provider_init(&config.providers[1], "selected");
     config.provider_count = 2u;
     (void)snprintf(config.providers[1].name, sizeof(config.providers[1].name), "selected");
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
@@ -1184,7 +1184,7 @@ test_read_only_and_queue_controllers(void)
         (void)snprintf(config.providers[1].base_url, sizeof(config.providers[1].base_url),
                        "%s", codex ? SNAG_CHATGPT_BASE :
                        openrouter ? "https://openrouter.ai/api/v1" : "https://api.openai.com");
-        config.providers[1].auth = codex ? SNAG_AUTH_CHATGPT : SNAG_AUTH_ENV;
+        config.providers[1].auth = codex ? SNAG_AUTH_CHATGPT : SNAG_AUTH_API_KEY;
 
         session.active_read_only = pass == 0u;
         session.active_queued = pass == 1u;
@@ -1252,6 +1252,48 @@ test_read_only_and_queue_controllers(void)
     json_decref(empty);
 }
 
+static void
+test_provider_model_projection(void)
+{
+    char temp[] = "/tmp/snajpagent-projection-XXXXXX";
+    char error[256] = {0};
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    struct snag_config config;
+    struct snag_store store;
+    struct snag_session session;
+    struct snag_context_projection projection;
+    json_t *empty = json_array(), *started;
+
+    assert(mkdtemp(temp));
+    snag_config_init(&config);
+    strcpy(config.providers[0].name, "codex-lb");
+    config.providers[0].models = calloc(1u, sizeof(*config.providers[0].models));
+    assert(config.providers[0].models);
+    config.providers[0].model_count = 1u;
+    strcpy(config.providers[0].models[0].name, "small");
+    strcpy(config.providers[0].models[0].upstream, "gpt-6-astra");
+    snag_store_init(&store);
+    snag_session_init(&session);
+    snag_context_projection_init(&projection);
+    assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
+    assert(snag_session_create(&store, &session, temp, "codex-lb", "small", "high", error, sizeof(error)) == 0);
+    started = turn_started_model("01010101010101010101010101010101", 1u, "hello", temp, "small");
+    assert(json_object_set_new(json_object_get(started, "config"), "provider", json_string("codex-lb")) == 0);
+    assert(snag_session_commit(&session, "turn_started", started, NULL, error, sizeof(error)) == 0);
+    assert(snag_context_build(&session, "small", "high", 1u, empty, 16000u, true,
+                              &config, NULL, &projection, error, sizeof(error)) == 0);
+    assert(strcmp(session.default_model, "small") == 0 && strcmp(session.active_turn_model, "small") == 0);
+    assert(strcmp(snag_json_string(projection.create_request, "model"), "gpt-6-astra") == 0);
+    assert(strcmp(snag_json_string(projection.count_request, "model"), "gpt-6-astra") == 0);
+    assert(snag_json_digest(projection.create_request, digest) == 0);
+    assert(strcmp(digest, projection.request_sha256) == 0);
+    snag_context_projection_free(&projection);
+    snag_session_close(&session);
+    snag_store_close(&store);
+    snag_config_free(&config);
+    json_decref(empty);
+}
+
 int
 main(void)
 {
@@ -1281,6 +1323,7 @@ main(void)
     char closure_output[4097];
 
     test_read_only_and_queue_controllers();
+    test_provider_model_projection();
     test_usage_anchor();
     test_usage_anchor_before_controller_suffix();
     assert(mkdtemp(temp));

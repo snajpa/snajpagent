@@ -109,6 +109,7 @@ for option in --name --operator-name; do
 done
 
 cat >"$root/network-config.ini" <<'EOF'
+[provider openai]
 [irc]
 listen = localhost:6667
 model_nick = worker
@@ -123,6 +124,7 @@ grep -q 'networked initial chat text must follow --' \
     "$root/network-config.err"
 
 cat >"$root/color-network-error.ini" <<'EOF'
+[provider openai]
 [ui]
 color = always
 [irc]
@@ -267,8 +269,8 @@ quoted_dotdir="$root/quoted ' state"
 quoted_config="$root/config/quoted ' config.ini"
 mkdir -m 700 "$quoted_dotdir"
 cat >"$quoted_config" <<'EOF'
-[provider]
-api_key_env = RESUME_COMMAND_SECRET
+[provider openai]
+api_key = ${RESUME_COMMAND_SECRET}
 EOF
 export RESUME_COMMAND_SECRET='must-not-appear-in-the-resume-command'
 out=$($bin --dotdir "$quoted_dotdir" --config "$quoted_config" \
@@ -469,6 +471,7 @@ grep -Fq '  arguments:' "$root/text-tool.err"
 grep -q '^fixture command succeeded$' "$root/text-tool.err"
 
 cat >"$root/tool-output-cap.ini" <<'EOF'
+[provider openai]
 [tool]
 max_output_bytes = 8
 EOF
@@ -545,6 +548,8 @@ grep -q '"status":"outcome_unknown"' "$dotdir/sessions/$tool_crash_id/events.jso
 
 # Configuration is strict and applied before any state mutation.
 cat >"$root/config.ini" <<'EOF'
+[provider openai]
+api_key = ${OPENAI_API_KEY}
 [agent]
 model = default
 reasoning_effort = high
@@ -552,8 +557,9 @@ reasoning_effort = high
 resume_history_turns = 0
 [tool]
 shell = /bin/sh
-secret_env = EXTRA_TOKEN
+secret = ${EXTRA_TOKEN}
 EOF
+export EXTRA_TOKEN=extra-test-secret
 out=$($bin --config "$root/config.ini" -e -vvvv -- ping 2>"$root/config.err")
 [ "$out" = pong ]
 grep -q '^turn › .* effort=high ' "$root/config.err"
@@ -563,6 +569,7 @@ grep -q '^event › .* turn_completed synced$' "$root/config.err"
 default_config_dotdir="$root/default-config-dotdir"
 mkdir -m 700 "$default_config_dotdir"
 cat >"$default_config_dotdir/config.ini" <<'EOF'
+[provider openai]
 [agent]
 model = config-default-model
 reasoning_effort = custom-default-effort
@@ -706,7 +713,7 @@ PY
 auto_state="$root/auto-compact-state"
 mkdir -m 700 "$auto_state"
 cat >"$root/auto-compact.ini" <<'EOF'
-[provider]
+[provider openai]
 auto_compact_input_tokens = 1
 EOF
 $bin --dotdir "$auto_state" --config "$root/auto-compact.ini" -e -- ping >"$root/auto-compact.out" 2>"$root/auto-compact.err"
@@ -733,7 +740,7 @@ PY
 responses_compact_state="$root/responses-compact-state"
 mkdir -m 700 "$responses_compact_state"
 cat >"$root/responses-compact.ini" <<'EOF'
-[provider]
+[provider openai]
 auto_compact_input_tokens = 1
 native_compaction = false
 EOF
@@ -756,7 +763,7 @@ PY
 fallback_state="$root/codex-compact-fallback"
 mkdir -m 700 "$fallback_state"
 cat >"$root/codex-compact-fallback.ini" <<'EOF'
-[provider]
+[provider openai]
 auth = chatgpt
 base_url = https://chatgpt.com/backend-api/codex
 auto_compact_input_tokens = 1
@@ -828,7 +835,7 @@ for compact_case in default auto larger fixed below off fallback; do
     # The fixture counter reports 90,000 tokens, exactly 90% of the small
     # budget. Exercise both pre-response and post-turn/recount boundaries.
     {
-        printf '[provider]\nexact_token_count = true\n'
+        printf '[provider openai]\nexact_token_count = true\n'
         case "$compact_case" in
             auto|larger) printf 'auto_compact_input_tokens = auto\n' ;;
             fixed) printf 'auto_compact_input_tokens = 90000\n' ;;
@@ -838,7 +845,7 @@ for compact_case in default auto larger fixed below off fallback; do
         case "$compact_case" in
             fallback) ;;
             *)
-                printf '[model-limit default/gpt-5.5-2026-04-23]\n'
+                printf '[model-limit openai/gpt-5.5-2026-04-23]\n'
                 if [ "$compact_case" = larger ]; then
                     printf 'max_input_tokens = 1000000\n'
                 else
@@ -877,11 +884,11 @@ done
 statistical_state="$root/statistical-budget-state"
 mkdir -m 700 "$statistical_state"
 cat >"$statistical_state/models.json" <<'EOF'
-{"providers":[{"base_url":"https://api.openai.com","models":[{"count_capability":"unsupported","default_effort":"medium","efforts":["low","medium","high"],"id":"gpt-5.5-2026-04-23","limits":{"auto_compact_input_tokens":null,"context_window_tokens":null,"effective_context_window_percent":null,"input_context_window_tokens":null,"max_context_window_tokens":null,"max_input_tokens":null,"max_output_tokens":null},"observed_hard_input_tokens":1,"observed_input_tokens":100,"observed_input_bytes":100}],"name":"default","protocol":"openai"}],"schema_version":1,"updated_at_ms":1}
+{"providers":[{"base_url":"https://api.openai.com","models":[{"count_capability":"unsupported","default_effort":"medium","efforts":["low","medium","high"],"id":"gpt-5.5-2026-04-23","limits":{"auto_compact_input_tokens":null,"context_window_tokens":null,"effective_context_window_percent":null,"input_context_window_tokens":null,"max_context_window_tokens":null,"max_input_tokens":null,"max_output_tokens":null},"observed_hard_input_tokens":1,"observed_input_tokens":100,"observed_input_bytes":100}],"name":"openai","protocol":"openai"}],"schema_version":1,"updated_at_ms":1}
 EOF
 chmod 600 "$statistical_state/models.json"
 cat >"$root/statistical-budget.ini" <<'EOF'
-[provider]
+[provider openai]
 auto_compact_input_tokens = 0
 exact_token_count = false
 EOF
@@ -905,11 +912,11 @@ PY
 hard_state="$root/hard-budget-state"
 mkdir -m 700 "$hard_state"
 cat >"$root/hard-budget.ini" <<'EOF'
-[provider]
+[provider openai]
 auto_compact_input_tokens = 0
 exact_token_count = true
 
-[model-limit default/gpt-5.5-2026-04-23]
+[model-limit openai/gpt-5.5-2026-04-23]
 max_input_tokens = 1
 EOF
 set +e
@@ -940,11 +947,11 @@ cat >"$root/context-anchor.ini" <<'EOF'
 model = gpt-5.6-luna
 reasoning_effort = high
 
-[provider]
+[provider openai]
 base_url = http://127.0.0.1:2455/backend-api/codex
 auto_compact_input_tokens = 0
 
-[model-limit default/gpt-5.6-luna]
+[model-limit openai/gpt-5.6-luna]
 context_window_tokens = 1050000
 max_input_tokens = 922000
 max_output_tokens = 128000

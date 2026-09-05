@@ -431,7 +431,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                   "event: response.failed\n"
                   "data: {\"type\":\"response.failed\",\"response\":{"
                   "\"error\":{\"code\":\"context_length_exceeded\","
-                  "\"message\":\"stream too large\","
+                  "\"message\":\"stream too large transport-secret\","
                   "\"context_length\":872000}}}\n\n");
         _exit(0);
     }
@@ -587,7 +587,7 @@ test_local_provider_transport(void)
     assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
                     (unsigned int)server.port) > 0);
     snag_config_init(&config);
-    config.providers[1] = config.providers[0];
+    snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name,
                     sizeof(config.providers[1].name), "transport") > 0);
@@ -832,6 +832,8 @@ test_structured_create_failures(void)
                    NULL, NULL, NULL, NULL, &graph, &failure,
                    error, sizeof(error), &cancel, NULL) < 0);
         assert(snag_provider_failure_is_capacity(&failure));
+        assert(!strstr(error, "transport-secret"));
+        assert(!strstr(failure.message, "transport-secret"));
         assert(failure.context_limit_tokens ==
                (fixtures[i] == MODEL_CREATE_HTTP_FAILURE ?
                     272000u : 872000u));
@@ -1177,6 +1179,8 @@ test_provider_auth(void)
     assert(snprintf(path, sizeof(path), "%s/snajpagent-auth-XXXXXX", tmp ? tmp : "/tmp") > 0);
     assert(mkdtemp(path));
     snag_config_init(&config);
+    snag_secret_source_free(&config.providers[0].api_key);
+    strcpy(config.providers[0].name, "default");
     snag_store_init(&store);
     assert(snag_store_open(&store, path, error, sizeof(error)) == 0);
     config.providers[0].auth = SNAG_AUTH_API_KEY;
@@ -1191,7 +1195,20 @@ test_provider_auth(void)
                          NULL, NULL, error, sizeof(error)) == 0);
     assert(strcmp(credential.value, "stored-key") == 0);
     assert(credential.root_fd == store.root_fd);
-    config.providers[1] = config.providers[0];
+    assert(snag_secret_source_parse(&config.providers[0].api_key, "${SNAG_MISSING_EXPLICIT_KEY}",
+                                    NULL, error, sizeof(error)) == 0);
+    assert(unsetenv("SNAG_MISSING_EXPLICIT_KEY") == 0);
+    assert(snag_auth_read(store.root_fd, &config.providers[0], false, NULL, &credential,
+                         NULL, NULL, error, sizeof(error)) < 0);
+    assert(credential.len == 0u);
+    assert(snag_secret_source_parse(&config.providers[0].api_key, "\"explicit-key\"",
+                                    NULL, error, sizeof(error)) == 0);
+    assert(snag_auth_read(store.root_fd, &config.providers[0], false, NULL, &credential,
+                         NULL, NULL, error, sizeof(error)) == 0);
+    assert(strcmp(credential.value, "explicit-key") == 0);
+    snag_secret_source_free(&config.providers[0].api_key);
+    error[0] = '\0';
+    snag_config_provider_init(&config.providers[1], "other");
     strcpy(config.providers[1].name, "other");
     assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) == 1);
     strcpy(config.providers[0].base_url, "https://different.test");
@@ -1307,7 +1324,7 @@ test_provider_auth(void)
         uint64_t bytes;
         credential_set(&credential, "transport-secret");
         credential.root_fd = -1;
-        config.providers[0].auth = pass == 0u ? SNAG_AUTH_ENV : SNAG_AUTH_CHATGPT;
+        config.providers[0].auth = pass == 0u ? SNAG_AUTH_API_KEY : SNAG_AUTH_CHATGPT;
         strcpy(config.providers[0].base_url, pass == 0u ? "https://api.openai.com" : SNAG_CHATGPT_BASE);
         strcpy(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent");
         strcpy(config.providers[0].openrouter_title, "snajpagent");

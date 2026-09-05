@@ -25,6 +25,7 @@ snag_cli_free(struct snag_cli *cli)
     free(cli->workspace);
     free(cli->dotdir);
     free(cli->model);
+    free(cli->provider);
     free(cli->effort);
     free(cli->config_path);
     free(cli->irc_listen);
@@ -319,7 +320,7 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first,
         if (argv[i][0] != '-' && !cli->auth_provider)
             goto invalid;
     }
-    if (cli->list || cli->last || cli->all || cli->irc_listen || cli->irc_client_count ||
+    if (cli->list || cli->last || cli->all || cli->provider || cli->irc_listen || cli->irc_client_count ||
         cli->irc_no_listen || cli->irc_no_client ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
         (cli->device_auth && cli->with_api_key) ||
@@ -460,6 +461,13 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
             if (!value || set_once(&cli->dotdir, value, "--dotdir",
                                    error, error_size) < 0)
                 return -1;
+        } else if (strcmp(arg, "--provider") == 0 ||
+                   strncmp(arg, "--provider=", 11u) == 0) {
+            const char *attached = arg[10] == '=' ? arg + 11u : NULL;
+            const char *value = option_argument(argc, argv, &i, attached,
+                                                "--provider", error, error_size);
+            if (!value || set_once(&cli->provider, value, "--provider", error, error_size) < 0)
+                return -1;
         } else if (strcmp(arg, "--config") == 0 ||
                    strncmp(arg, "--config=", 9u) == 0) {
             const char *attached = arg[8] == '=' ? arg + 9u : NULL;
@@ -501,7 +509,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->workspace ||
-                      cli->model || cli->effort || cli->verbosity ||
+                      cli->model || cli->provider || cli->effort || cli->verbosity ||
                       cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
                       cli->irc_client_count || cli->irc_model_nick ||
                       cli->irc_operator_nick || cli->irc_room_name)) {
@@ -534,6 +542,10 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
                                           SNAG_CONFIG_MODEL_MAX)) {
         snag_errorf(error, error_size,
                   "model exceeds the supported structural bounds");
+        return -1;
+    }
+    if (cli->provider && !bounded_preference(cli->provider, SNAG_CONFIG_PROVIDER_NAME_MAX + 1u)) {
+        snag_errorf(error, error_size, "provider name is empty or oversized");
         return -1;
     }
     if (cli->effort && !bounded_preference(cli->effort,
@@ -616,6 +628,7 @@ snag_cli_usage(int fd)
         "  -r, --room-name ROOM         hosted room name\n"
         "      --dotdir DIR             private application directory\n"
         "      --config FILE            explicit configuration file\n"
+        "      --provider NAME          select a configured provider (also on resume)\n"
         "      --effort LEVEL           reasoning effort override\n"
         "      --color[=WHEN]            auto, always, or never\n"
         "      --no-color               alias for --color=never\n"

@@ -29,20 +29,20 @@ Configuration may contain multiple named provider sections in source order:
 ```ini
 [provider openai]
 base_url = https://api.openai.com
-api_key_env = OPENAI_API_KEY
+api_key = ${OPENAI_API_KEY}
 
 [provider codex-lb]
 base_url = http://127.0.0.1:2455/backend-api/codex
-api_key_env = CODEX_LB_API_KEY
+api_key = ${CODEX_LB_API_KEY}
 exact_token_count = auto
 native_compaction = false
 ```
 
-The existing unnamed `[provider]` spelling remains valid and gives that entry
-the name `default`. Provider names are unique. When a model selector does not
-name a provider, the first provider loaded from the configuration is used. If
-there is no provider section, the built-in OpenAI-compatible default is the
-single first provider.
+Provider names are unique and have no privileged spelling. Anonymous `[provider]`
+sections are rejected. The first declaration is the startup default unless an
+explicit provider preference/CLI option selects another. Unqualified interactive
+model changes stay on the selected provider. A present config has only declared
+providers; missing-config OpenAI key use uses the ordinary `openai` preset.
 
 Provider selection is part of durable session preferences so a numbered model
 choice continues to use the same provider after resume. Requests, token
@@ -194,7 +194,7 @@ model names are deliberately not checked against the cache. The provider API,
 not snajpagent, decides whether a user-supplied model or effort is usable.
 After the normal `model for next turn` confirmation, a typed selection whose
 provider/model pair is not present in the readable cache prints a warning that
-the model is unknown to the cache and will still be sent unchanged. The warning
+the model is unknown to the cache and the configured provider will still be used. The warning
 does not reject or revert the selection, contact a provider, or validate the
 model name. Numbered selections necessarily resolve through the cache and do
 not print this warning.
@@ -225,11 +225,24 @@ max_input_tokens = 922000
 max_output_tokens = 128000
 ```
 
-All three keys are optional, but a section must provide at least one and its
-known values must be internally consistent. A matching configured tuple takes
-precedence as a whole over source-bound catalog limits. Otherwise matching
-catalog limits are used; without either source the hard capacity is unknown.
+All three keys are optional, but a section must provide at least one. Support
+provider-wide `[model-limit PROVIDER]`, `*`-pattern targets and exact model names.
+Merge each field in that order, with later patterns winning and exact rules last.
+Match the whole provider-local model name once, not its upstream mapping. Reject
+duplicate targets and duplicate keys. Unspecified fields use source-bound catalog
+metadata; specified fields supersede it. Independent ceilings intersect, while an
+output reservation that leaves no input is an error. Without usable configured
+or catalog values the hard capacity is unknown.
 Configuration facts are never written into `models.json`.
+
+`[model-alias PROVIDER/NAME] model = UPSTREAM` defines an ordinary model exposed by
+that provider. Targets are literal upstream IDs; no recursive aliases or alias
+type is carried by sessions, turns, compaction or tools. Provider-owned lookup
+uses upstream catalog/capability facts while local model budgets stay independent.
+Picker rows combine configured models and downloaded metadata in one namespace.
+Requests resolve their wire model before hashing; source bindings change when
+routing changes. Learned backend ceilings remain source/upstream-bound and may
+constrain several local models, but user-configured rules never leak between them.
 
 For Codex catalogs, the ordinary `context_window` is the default working
 window and `max_context_window` remains separately visible as an advertised

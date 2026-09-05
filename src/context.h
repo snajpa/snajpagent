@@ -14,6 +14,9 @@
 
 int snag_context_codex_request(json_t *request);
 uint64_t snag_context_input_estimate(uint64_t bytes, uint64_t tokens_per_million_bytes);
+/* Bind the ordinary local model once when constructing a provider wire request. */
+int snag_context_provider_model(const struct snag_provider_config *provider,
+                                const char *model, json_t *request);
 
 struct snag_context_projection {
     json_t *model_input;

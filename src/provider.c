@@ -1348,14 +1348,29 @@ provider_ctx_init(struct provider_ctx *ctx, const struct snag_config *config,
     ctx->pump = pump;
     ctx->pump_opaque = pump_opaque;
     ctx->credential = *credential;
-    snag_secret_set_build(&ctx->secrets, config, &ctx->credential);
     snag_buf_init(&ctx->body, body_max);
     snag_buf_init(&ctx->error_body, response_max);
 }
 
 static void
-provider_ctx_free(struct provider_ctx *ctx)
+redact_diagnostic(const struct snag_secret_set *secrets, char *error, size_t error_size)
 {
+    json_t *message;
+    const char *text = NULL;
+    if (!error || !error_size || !error[0])
+        return;
+    message = json_object();
+    if (message && json_object_set_new(message, "model_text", json_string(error)) == 0 &&
+        snag_secret_result(secrets, message, NULL, 0u) == 0)
+        text = snag_json_string(message, "model_text");
+    (void)snprintf(error, error_size, "%s", text ? text : "provider diagnostic omitted");
+    json_decref(message);
+}
+
+static void
+provider_ctx_free(struct provider_ctx *ctx, char *error, size_t error_size)
+{
+    redact_diagnostic(&ctx->secrets, error, error_size);
     if (ctx->curl)
         curl_easy_cleanup(ctx->curl);
     curl_slist_free_all(ctx->headers);
@@ -1366,6 +1381,7 @@ provider_ctx_free(struct provider_ctx *ctx)
     snag_sse_free(&ctx->sse);
     snag_responses_stream_free(&ctx->stream);
     snag_credential_clear(&ctx->credential);
+    snag_secret_set_free(&ctx->secrets);
 }
 
 static int
@@ -1410,12 +1426,14 @@ provider_request_setup(struct provider_ctx *ctx,
 
     ctx->accept = accept;
     ctx->has_body = has_body;
-    if (ctx->provider->auth != SNAG_AUTH_ENV && credential->root_fd >= 0 &&
+    if (credential->root_fd >= 0 &&
         snag_auth_read(credential->root_fd, ctx->provider, false, NULL,
                       &ctx->credential, auth_pump, ctx,
                       error, error_size) < 0)
         return -1;
-    snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
+    if (snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential,
+                              error, error_size) < 0)
+        return -1;
     if (has_body && snag_json_canonical(request, &ctx->body) < 0) {
         snag_errorf(error, error_size, "%s", body_error);
         return -1;
@@ -1511,7 +1529,9 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
         }
         ctx->credential = refreshed;
         snag_credential_clear(&refreshed);
-        snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential);
+        if (snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential,
+                                  error, error_size) < 0)
+            return -1;
         if (request_auth_headers(ctx) < 0 ||
             curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK)
             return -1;
@@ -1576,7 +1596,7 @@ snag_provider_models_list(const struct snag_config *config,
         provider_request_perform(&ctx, "model discovery failed",
                                  error, error_size, NULL, &retry_count) == 0)
         rc = parse_models_body(&ctx, codex, models, error, error_size);
-    provider_ctx_free(&ctx);
+    provider_ctx_free(&ctx, rc != 0 ? error : NULL, error_size);
     return rc;
 }
 
@@ -1637,7 +1657,7 @@ snag_provider_responses_count(const json_t *count_request,
         if (cancel_code)
             *cancel_code = rc;
     }
-    provider_ctx_free(&ctx);
+    provider_ctx_free(&ctx, rc != 0 ? error : NULL, error_size);
     return rc;
 }
 
@@ -1693,7 +1713,7 @@ snag_provider_responses_compact(const json_t *compact_request,
         if (cancel_code)
             *cancel_code = rc;
     }
-    provider_ctx_free(&ctx);
+    provider_ctx_free(&ctx, rc != 0 ? error : NULL, error_size);
     return rc;
 }
 
@@ -1760,12 +1780,13 @@ out:
         else
             *failure = ctx.provider_failure;
         failure->output_correction = ctx.stream.output_correction;
+        redact_diagnostic(&ctx.secrets, failure->message, sizeof(failure->message));
     }
     if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
         rc = ctx.cancel_code;
         if (cancel_code)
             *cancel_code = rc;
     }
-    provider_ctx_free(&ctx);
+    provider_ctx_free(&ctx, rc != 0 ? error : NULL, error_size);
     return rc;
 }

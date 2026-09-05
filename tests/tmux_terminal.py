@@ -38,10 +38,10 @@ MARKDOWN_TEXT = (
     "second paragraph\n\n"
     "> final quoted boundary"
 )
-DEFAULT_IDLE_PROMPT = "    0% default/gpt-5.5-2026-04-23/medium ›"
-DEFAULT_ACCOUNTED_IDLE_PROMPT = "    ?% default/gpt-5.5-2026-04-23/medium ›"
-DEFAULT_ACTIVE_PROMPT = " ◴  ?% default/gpt-5.5-2026-04-23/medium »"
-DEFAULT_GOAL_ACTIVE_PROMPT = "⚑◴  ?% default/gpt-5.5-2026-04-23/medium »"
+DEFAULT_IDLE_PROMPT = "    0% openai/gpt-5.5-2026-04-23/medium ›"
+DEFAULT_ACCOUNTED_IDLE_PROMPT = "    ?% openai/gpt-5.5-2026-04-23/medium ›"
+DEFAULT_ACTIVE_PROMPT = " ◴  ?% openai/gpt-5.5-2026-04-23/medium »"
+DEFAULT_GOAL_ACTIVE_PROMPT = "⚑◴  ?% openai/gpt-5.5-2026-04-23/medium »"
 MACHINE_HOSTNAME = socket.gethostname()
 IRC_SECOND_MESSAGE = "integration two from twoop " + "long chat text " * 80 + "end"
 EMPTY_OUTPUT_CORRECTION = (
@@ -736,7 +736,7 @@ def write_config(path, read_agents, pause_ms=300, markdown=None):
         f"markdown = {'true' if markdown else 'false'}\n"
     )
     path.write_text(
-        f"[agent]\nread_agents_md = {'true' if read_agents else 'false'}\n"
+        f"[provider openai]\n[agent]\nread_agents_md = {'true' if read_agents else 'false'}\n"
         f"[ui]\ntyping_pause_ms = {pause_ms}\n"
         'prompt_spinner_provider = " ◴"\n'
         'prompt_spinner_tool = " ⠋"\n'
@@ -1622,7 +1622,7 @@ def write_irc_config(path, provider_port, model):
     path.write_text(
         f"[agent]\nmodel = {model}\nread_agents_md = false\n"
         f"[provider fake]\nbase_url = http://127.0.0.1:{provider_port}/v1\n"
-        "api_key_env = SNAJPAGENT_IRC_UI_KEY\n"
+        "api_key = ${SNAJPAGENT_IRC_UI_KEY}\n"
         "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
         "request_timeout_ms = 5000\nauto_compact_input_tokens = 0\n"
         "exact_token_count = false\nnative_compaction = false\n"
@@ -1636,12 +1636,12 @@ def write_catalog_config(path, provider_port):
         "[agent]\nmodel = uncached-start\nreasoning_effort = low\n"
         "read_agents_md = false\n"
         f"[provider ordinary]\nbase_url = http://127.0.0.1:{provider_port}\n"
-        "api_key_env = SNAJPAGENT_IRC_UI_KEY\n"
+        "api_key = ${SNAJPAGENT_IRC_UI_KEY}\n"
         "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
         "request_timeout_ms = 5000\n"
         f"[provider codex]\nbase_url = http://127.0.0.1:{provider_port}"
         "/backend-api/codex/\n"
-        "api_key_env = SNAJPAGENT_IRC_UI_KEY\n"
+        "api_key = ${SNAJPAGENT_IRC_UI_KEY}\n"
         "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
         "request_timeout_ms = 5000\n"
         "[ui]\ncolor = never\n",

@@ -1390,6 +1390,14 @@ snag_context_codex_request(json_t *request)
     return 0;
 }
 
+int
+snag_context_provider_model(const struct snag_provider_config *provider,
+                            const char *model, json_t *request)
+{
+    return request && model ? snag_json_set_new(request, "model",
+        json_string(snag_config_model_upstream(provider, model))) : -1;
+}
+
 static json_t *
 create_request_object(struct context_builder *builder)
 {
@@ -1907,6 +1915,12 @@ snag_context_build(struct snag_session *session, const char *model,
     projection->count_request = count_request_object(projection->create_request);
     if (!projection->model_input || !projection->create_request ||
         !projection->count_request ||
+        snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
+                                     model, projection->model_input) < 0 ||
+        snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
+                                     model, projection->create_request) < 0 ||
+        snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
+                                     model, projection->count_request) < 0 ||
         snag_json_digest_bounded(projection->model_input, SNAG_CONTEXT_MAX_REQUEST,
                           projection->model_input_sha256,
                           &projection->model_input_bytes) < 0 ||

@@ -29,7 +29,7 @@ enables the terminal integration tests.
 
 On a fresh interactive launch, `snajpagent` offers provider setup: ChatGPT/Codex
 device login, OpenRouter, OpenAI, or another Responses-compatible service.
-Choose the provider, authenticate, optionally fetch its model list, and select
+Choose the backend and a local provider name, authenticate, optionally fetch its model list, and select
 a model. Settings go into a minimal private `config.ini`; stored credentials
 go separately under the dotdir's private `auth/` directory.
 
@@ -52,7 +52,7 @@ snajpagent -m vendor/model login openrouter --with-api-key < /private/key-file
 Existing configuration and environment-key use still work. There is no setup
 wizard for piped input, `-e`, resume, listing, or an explicit missing/invalid
 configuration. Login for an existing provider leaves the default model alone;
-`/model PROVIDER/MODEL` selects it. Codex tokens refresh on use and coordinate
+`/model PROVIDER/MODEL/EFFORT` selects it. Codex tokens refresh on use and coordinate
 across processes, while OpenRouter keeps its own credentials and capabilities.
 
 Choose a model your Responses-compatible provider supports. For example,
@@ -66,21 +66,81 @@ Save this as `$HOME/.snajpagent/config.ini`:
 
 ```ini
 [agent]
-provider = openai
 model = gpt-5.5
 
 [provider openai]
 base_url = https://api.openai.com
-api_key_env = OPENAI_API_KEY
+api_key = ${OPENAI_API_KEY}
 ```
 
-Export the credential named by `api_key_env`, then start in your project:
+Export the referenced credential, then start in your project:
 
 ```sh
 export OPENAI_API_KEY='your-key'
 cd /path/to/project
 snajpagent
 ```
+
+Providers need no special name: the first declaration is used for a new session
+unless `[agent] provider` or `--provider NAME` selects another. Unqualified
+`/model` changes stay on the current provider. `--provider NAME` also permits
+explicitly resuming a session after a provider rename; history is not rewritten.
+Without `--provider`, a resumed `-m`/`--effort` remains a one-turn override.
+
+`api_key` accepts `${ENV_NAME}`, a double-quoted literal (JSON escaping), or an
+unquoted file path. Relative paths use the config directory; leading `~/` uses
+the user's home. Bare `OPENAI_API_KEY` means a filename, not an environment name.
+Files may end with one LF/CRLF and may be symlinks for secret rotation. Literal
+secrets require a private config file, normally mode `0600`. Missing/bad explicit
+sources fail; they never fall back to a stored login. With no `api_key`,
+`auth = api_key` (the default) uses the provider's stored login. `auth = chatgpt`
+requires managed OAuth and no `api_key`. Obsolete `api_key_env`, `auth = env`,
+anonymous `[provider]`, and `[tool] secret_env` are rejected.
+
+Use repeatable `[tool] secret` entries with the same source syntax for additional
+values to redact. They do not export credentials to tools; referenced environment
+variables are removed from child environments. Do not put secrets in prompts.
+
+### Provider models and token budgets
+
+Several local models can use the same upstream model with independent limits:
+
+```ini
+[provider codex-lb]
+base_url = http://127.0.0.1:2455/backend-api/codex
+api_key = ${CODEX_LB_API_KEY}
+
+[model-limit codex-lb]
+context_window_tokens = 500000
+
+[model-alias codex-lb/astra-small]
+model = gpt-6-astra
+
+[model-alias codex-lb/astra-large]
+model = gpt-6-astra
+
+[model-limit codex-lb/astra-*]
+max_output_tokens = 16000
+
+[model-limit codex-lb/astra-small]
+context_window_tokens = 128000
+```
+
+Select `--provider codex-lb -m astra-small` or `/model astra-large/high`.
+These are ordinary provider-local models in sessions, prompts and limit rules;
+only provider routing maps them upstream. Targets are literal, never recursive.
+
+Limits merge per field: provider-wide, all matching `*` patterns in file order,
+then the exact local model. Unspecified fields inherit. Exact rules win even
+when placed earlier; duplicate targets/keys are rejected. Patterns match the
+whole local name, including `/` in model IDs. Upstream model names do not add
+another matching tier. Supported fields are `context_window_tokens`,
+`max_input_tokens` and `max_output_tokens`.
+
+Catalog metadata supplies remaining fields; explicit limits can override it,
+but cannot grant backend capacity. Output reservation and observed backend
+ceilings still constrain input. `/status` shows effective limits and their
+winning rules; automatic compaction follows the selected model's usable budget.
 
 Use `/config` to edit and reload the configuration through `$EDITOR`.
 `--config FILE` selects another configuration; `--dotdir DIR` selects another

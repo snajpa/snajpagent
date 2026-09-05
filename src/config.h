@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "secret_source.h"
 
 #define SNAG_CONFIG_MODEL_MAX 256u
 #define SNAG_CONFIG_EFFORT_MAX 64u
@@ -14,11 +15,12 @@
 #define SNAG_CONFIG_PATH_MAX (16u * 1024u)
 #define SNAG_CONFIG_FILE_MAX (64u * 1024u)
 #define SNAG_CONFIG_URL_MAX 2048u
-#define SNAG_CONFIG_SECRET_ENV_MAX 64u
+#define SNAG_CONFIG_SECRET_MAX 64u
 #define SNAG_CONFIG_ENV_NAME_MAX 255u
 #define SNAG_CONFIG_PROVIDER_MAX 16u
 #define SNAG_CONFIG_PROVIDER_NAME_MAX 63u
 #define SNAG_CONFIG_MODEL_LIMIT_MAX 128u
+#define SNAG_CONFIG_MODEL_ALIAS_MAX 128u
 #define SNAG_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
 /* Outside the numeric compaction range; zero continues to mean disabled. */
 #define SNAG_CONFIG_COMPACT_AUTO UINT32_MAX
@@ -55,7 +57,6 @@ enum snag_token_count_mode {
 };
 
 enum snag_auth_kind {
-    SNAG_AUTH_ENV,
     SNAG_AUTH_API_KEY,
     SNAG_AUTH_CHATGPT
 };
@@ -76,6 +77,11 @@ struct snag_irc_config {
     uint32_t history_lines;
 };
 
+struct snag_provider_model {
+    char name[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
+    char upstream[SNAG_CONFIG_MODEL_MAX];
+};
+
 struct snag_provider_config {
     char name[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     enum snag_auth_kind auth;
@@ -87,9 +93,11 @@ struct snag_provider_config {
     bool native_compaction;
     bool parallel_tool_calls;
     char base_url[SNAG_CONFIG_URL_MAX];
-    char api_key_env[SNAG_CONFIG_ENV_NAME_MAX + 1u];
+    struct snag_secret_source api_key;
     char openrouter_referer[SNAG_CONFIG_URL_MAX];
     char openrouter_title[SNAG_CONFIG_MODEL_MAX];
+    struct snag_provider_model *models;
+    size_t model_count;
 };
 
 /* Configured/advertised limits use zero for unknown; positive values are known. */
@@ -128,11 +136,13 @@ struct snag_config {
     uint32_t max_timeout_ms;
     uint32_t max_output_tokens;
     uint32_t max_output_bytes;
-    char *secret_env[SNAG_CONFIG_SECRET_ENV_MAX];
-    size_t secret_env_count;
+    struct snag_secret_source secrets[SNAG_CONFIG_SECRET_MAX];
+    size_t secret_count;
+    char source_path[SNAG_CONFIG_PATH_MAX + 1u];
 };
 
 void snag_config_init(struct snag_config *config);
+void snag_config_provider_init(struct snag_provider_config *provider, const char *name);
 void snag_config_free(struct snag_config *config);
 int snag_config_load(struct snag_config *config, const char *explicit_path,
                     const char *dotdir,
@@ -156,7 +166,11 @@ int snag_config_prompt_expand(const char *text, unsigned int mode,
 const struct snag_provider_config *snag_config_provider(
     const struct snag_config *config, const char *name);
 bool snag_config_provider_is_openrouter(const struct snag_provider_config *provider);
-const struct snag_model_limit_config *snag_config_model_limit(
-    const struct snag_config *config, const char *provider, const char *model);
+const char *snag_config_model_upstream(const struct snag_provider_config *provider,
+                                      const char *model);
+bool snag_config_resolve_limits(const struct snag_config *config, const char *provider,
+                               const char *model,
+                               struct snag_model_limit_config *out,
+                               const struct snag_model_limit_config *sources[3]);
 
 #endif

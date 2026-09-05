@@ -10,7 +10,7 @@
 #define SNAG_WIRE_HEADER_MAX (16u * 1024u)
 #define SNAG_WIRE_URL_MAX (16u * 1024u)
 #define SNAG_WIRE_SECRET_MAX 16384u
-#define SNAG_WIRE_SECRET_COUNT_MAX 81u
+#define SNAG_WIRE_SECRET_COUNT_MAX 128u
 
 struct snag_wire_secrets {
     const char *const *values;

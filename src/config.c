@@ -31,6 +31,7 @@ enum section {
     SECTION_AGENT,
     SECTION_PROVIDER,
     SECTION_MODEL_LIMIT,
+    SECTION_MODEL_ALIAS,
     SECTION_UI,
     SECTION_IRC,
     SECTION_TOOL,
@@ -41,11 +42,18 @@ struct parse_state {
     struct snag_config *config;
     enum section section;
     unsigned int seen_sections;
-    const char *seen_keys[SECTION_COUNT][10];
-    const char *seen_provider_keys[SNAG_CONFIG_PROVIDER_MAX][10];
-    const char *seen_model_limit_keys[SNAG_CONFIG_MODEL_LIMIT_MAX][10];
+    const char *seen_keys[SECTION_COUNT][16];
+    const char *seen_provider_keys[SNAG_CONFIG_PROVIDER_MAX][16];
+    const char *seen_model_limit_keys[SNAG_CONFIG_MODEL_LIMIT_MAX][16];
+    const char *seen_alias_keys[SNAG_CONFIG_MODEL_ALIAS_MAX][16];
     size_t provider_index;
     size_t model_limit_index;
+    size_t model_alias_index;
+    struct {
+        char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
+        struct snag_provider_model model;
+    } models[SNAG_CONFIG_MODEL_ALIAS_MAX];
+    size_t model_count;
     bool providers_started;
 };
 
@@ -79,8 +87,8 @@ invalid:
     return -1;
 }
 
-static void
-provider_init(struct snag_provider_config *provider, const char *name)
+void
+snag_config_provider_init(struct snag_provider_config *provider, const char *name)
 {
     memset(provider, 0, sizeof(*provider));
     (void)snprintf(provider->name, sizeof(provider->name), "%s", name);
@@ -92,7 +100,6 @@ provider_init(struct snag_provider_config *provider, const char *name)
     provider->native_compaction = true;
     provider->parallel_tool_calls = true;
     memcpy(provider->base_url, "https://api.openai.com", 23u);
-    memcpy(provider->api_key_env, "OPENAI_API_KEY", 15u);
 }
 
 void
@@ -109,7 +116,10 @@ snag_config_init(struct snag_config *config)
     memset(config, 0, sizeof(*config));
     memcpy(config->model, "default", 8u);
     memcpy(config->reasoning_effort, "default", 8u);
-    provider_init(&config->providers[0], "default");
+    snag_config_provider_init(&config->providers[0], "openai");
+    if (snag_secret_source_parse(&config->providers[0].api_key,
+                                 "${OPENAI_API_KEY}", NULL, NULL, 0u) < 0)
+        return;
     config->provider_count = 1u;
     config->max_goal_prompt_bytes = 256u * 1024u;
     config->read_agents_md = true;
@@ -138,8 +148,12 @@ void
 snag_config_free(struct snag_config *config)
 {
     free(config->shell);
-    for (size_t i = 0; i < config->secret_env_count; ++i)
-        free(config->secret_env[i]);
+    for (size_t i = 0; i < config->provider_count; ++i) {
+        snag_secret_source_free(&config->providers[i].api_key);
+        free(config->providers[i].models);
+    }
+    for (size_t i = 0; i < config->secret_count; ++i)
+        snag_secret_source_free(&config->secrets[i]);
     memset(config, 0, sizeof(*config));
 }
 
@@ -465,19 +479,6 @@ out:
     return rc;
 }
 
-static bool
-env_name_valid(const char *name)
-{
-    const unsigned char *p = (const unsigned char *)name;
-    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_'))
-        return false;
-    for (++p; *p; ++p)
-        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
-              (*p >= '0' && *p <= '9') || *p == '_'))
-            return false;
-    return true;
-}
-
 static int
 copy_base_url(char *dst, size_t size, const char *value)
 {
@@ -516,57 +517,6 @@ invalid:
 }
 
 static int
-parse_secret_env(struct snag_config *config, const char *value)
-{
-    char *copy;
-    char *cursor;
-
-    for (size_t i = 0; i < config->secret_env_count; ++i) {
-        free(config->secret_env[i]);
-        config->secret_env[i] = NULL;
-    }
-    config->secret_env_count = 0u;
-    if (!*value)
-        return 0;
-    copy = snag_strdup_checked(value, SNAG_CONFIG_FILE_MAX);
-    if (!copy)
-        return -1;
-    cursor = copy;
-    for (;;) {
-        char *comma = strchr(cursor, ',');
-        char *name;
-        if (comma)
-            *comma = '\0';
-        name = trim(cursor);
-        if (!*name || strlen(name) > SNAG_CONFIG_ENV_NAME_MAX ||
-            !env_name_valid(name) ||
-            config->secret_env_count >= SNAG_CONFIG_SECRET_ENV_MAX) {
-            free(copy);
-            errno = EINVAL;
-            return -1;
-        }
-        for (size_t i = 0; i < config->secret_env_count; ++i)
-            if (strcmp(config->secret_env[i], name) == 0) {
-                free(copy);
-                errno = EINVAL;
-                return -1;
-            }
-        config->secret_env[config->secret_env_count] =
-            snag_strdup_checked(name, SNAG_CONFIG_ENV_NAME_MAX);
-        if (!config->secret_env[config->secret_env_count]) {
-            free(copy);
-            return -1;
-        }
-        ++config->secret_env_count;
-        if (!comma)
-            break;
-        cursor = comma + 1u;
-    }
-    free(copy);
-    return 0;
-}
-
-static int
 set_provider_section(struct parse_state *state, const char *name)
 {
     struct snag_config *config = state->config;
@@ -581,6 +531,8 @@ set_provider_section(struct parse_state *state, const char *name)
               *p == '.' || *p == '_' || *p == '-'))
             goto invalid;
     if (!state->providers_started) {
+        for (size_t i = 0; i < config->provider_count; ++i)
+            snag_secret_source_free(&config->providers[i].api_key);
         memset(config->providers, 0, sizeof(config->providers));
         config->provider_count = 0u;
         state->providers_started = true;
@@ -591,7 +543,7 @@ set_provider_section(struct parse_state *state, const char *name)
     if (config->provider_count >= SNAG_CONFIG_PROVIDER_MAX)
         goto invalid;
     state->provider_index = config->provider_count++;
-    provider_init(&config->providers[state->provider_index], name);
+    snag_config_provider_init(&config->providers[state->provider_index], name);
     state->section = SECTION_PROVIDER;
     return 0;
 invalid:
@@ -621,27 +573,52 @@ set_model_limit_section(struct parse_state *state, char *name)
     struct snag_config *config = state->config;
     struct snag_model_limit_config *limit;
     char *slash = strchr(name, '/');
+    const char *model = slash ? slash + 1u : "";
 
-    if (!slash || slash == name || !slash[1] ||
-        (size_t)(slash - name) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
-        strlen(slash + 1u) >= SNAG_CONFIG_MODEL_MAX ||
-        !snag_utf8_valid((const unsigned char *)(slash + 1u),
-                        strlen(slash + 1u), true) ||
+    if ((slash && (slash == name || !slash[1])) ||
+        strlen(model) >= SNAG_CONFIG_MODEL_MAX ||
+        !snag_utf8_valid((const unsigned char *)model, strlen(model), true) ||
         config->model_limit_count >= SNAG_CONFIG_MODEL_LIMIT_MAX)
         goto invalid;
-    *slash = '\0';
+    if (slash)
+        *slash = '\0';
     if (!provider_name_valid(name))
         goto invalid;
     for (size_t i = 0; i < config->model_limit_count; ++i)
         if (strcmp(config->model_limits[i].provider, name) == 0 &&
-            strcmp(config->model_limits[i].model, slash + 1u) == 0)
+            strcmp(config->model_limits[i].model, model) == 0)
             goto invalid;
     state->model_limit_index = config->model_limit_count++;
     limit = &config->model_limits[state->model_limit_index];
     memset(limit, 0, sizeof(*limit));
     (void)snprintf(limit->provider, sizeof(limit->provider), "%s", name);
-    (void)snprintf(limit->model, sizeof(limit->model), "%s", slash + 1u);
+    (void)snprintf(limit->model, sizeof(limit->model), "%s", model);
     state->section = SECTION_MODEL_LIMIT;
+    return 0;
+invalid:
+    errno = EINVAL;
+    return -1;
+}
+
+static int
+set_model_alias_section(struct parse_state *state, char *name)
+{
+    char *slash = strchr(name, '/');
+    size_t index;
+
+    if (!slash || state->model_count >= SNAG_CONFIG_MODEL_ALIAS_MAX)
+        goto invalid;
+    *slash = '\0';
+    if (!provider_name_valid(name) || !provider_name_valid(slash + 1u))
+        goto invalid;
+    for (size_t i = 0; i < state->model_count; ++i)
+        if (strcmp(state->models[i].provider, name) == 0 &&
+            strcmp(state->models[i].model.name, slash + 1u) == 0)
+            goto invalid;
+    index = state->model_alias_index = state->model_count++;
+    (void)snag_strcpy(state->models[index].provider, sizeof(state->models[index].provider), name);
+    (void)snag_strcpy(state->models[index].model.name, sizeof(state->models[index].model.name), slash + 1u);
+    state->section = SECTION_MODEL_ALIAS;
     return 0;
 invalid:
     errno = EINVAL;
@@ -654,12 +631,12 @@ set_section(struct parse_state *state, char *name)
     enum section section;
     if (strcmp(name, "agent") == 0)
         section = SECTION_AGENT;
-    else if (strcmp(name, "provider") == 0)
-        return set_provider_section(state, "default");
     else if (strncmp(name, "provider ", 9u) == 0)
         return set_provider_section(state, trim(name + 9u));
     else if (strncmp(name, "model-limit ", 12u) == 0)
         return set_model_limit_section(state, trim(name + 12u));
+    else if (strncmp(name, "model-alias ", 12u) == 0)
+        return set_model_alias_section(state, trim(name + 12u));
     else if (strcmp(name, "ui") == 0)
         section = SECTION_UI;
     else if (strcmp(name, "irc") == 0)
@@ -686,10 +663,13 @@ claim_key(struct parse_state *state, const char *key)
         state->seen_provider_keys[state->provider_index] :
         state->section == SECTION_MODEL_LIMIT ?
         state->seen_model_limit_keys[state->model_limit_index] :
+        state->section == SECTION_MODEL_ALIAS ?
+        state->seen_alias_keys[state->model_alias_index] :
         state->seen_keys[state->section];
 
     /* Keys borrow the parsed file until parse_file returns. IRC clients repeat. */
-    if (state->section == SECTION_IRC && strcmp(key, "client") == 0)
+    if ((state->section == SECTION_IRC && strcmp(key, "client") == 0) ||
+        (state->section == SECTION_TOOL && strcmp(key, "secret") == 0))
         return 0;
     for (size_t i = 0; i < sizeof(state->seen_keys[0]) /
                            sizeof(state->seen_keys[0][0]); ++i) {
@@ -744,9 +724,7 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "request_timeout_ms") == 0)
         return parse_u32(value, 1000u, 3600000u, &provider->request_timeout_ms);
     if (strcmp(key, "auth") == 0) {
-        if (strcmp(value, "env") == 0)
-            provider->auth = SNAG_AUTH_ENV;
-        else if (strcmp(value, "api_key") == 0)
+        if (strcmp(value, "api_key") == 0)
             provider->auth = SNAG_AUTH_API_KEY;
         else if (strcmp(value, "chatgpt") == 0)
             provider->auth = SNAG_AUTH_CHATGPT;
@@ -765,13 +743,9 @@ parse_provider(struct parse_state *state, const char *key, const char *value)
     if (strcmp(key, "base_url") == 0)
         return copy_base_url(provider->base_url,
                              sizeof(provider->base_url), value);
-    if (strcmp(key, "api_key_env") == 0) {
-        if (strlen(value) > SNAG_CONFIG_ENV_NAME_MAX ||
-            !env_name_valid(value))
-            goto invalid;
-        return copy_value(provider->api_key_env,
-                          sizeof(provider->api_key_env), value);
-    }
+    if (strcmp(key, "api_key") == 0)
+        return snag_secret_source_parse(&provider->api_key, value,
+                                          state->config->source_path, NULL, 0u);
     if (strcmp(key, "exact_token_count") == 0)
         return parse_token_count(value, &provider->exact_token_count);
     if (strcmp(key, "native_compaction") == 0)
@@ -924,8 +898,14 @@ parse_tool(struct parse_state *state, const char *key, const char *value)
                          &config->default_timeout_ms);
     if (strcmp(key, "max_timeout_ms") == 0)
         return parse_u32(value, 1u, UINT32_MAX, &config->max_timeout_ms);
-    if (strcmp(key, "secret_env") == 0)
-        return parse_secret_env(config, value);
+    if (strcmp(key, "secret") == 0) {
+        if (config->secret_count >= SNAG_CONFIG_SECRET_MAX ||
+            snag_secret_source_parse(&config->secrets[config->secret_count], value,
+                                       config->source_path, NULL, 0u) < 0)
+            goto invalid;
+        ++config->secret_count;
+        return 0;
+    }
     if (strcmp(key, "max_output_bytes") == 0)
         return parse_u32(value, 0u, UINT32_MAX, &config->max_output_bytes);
     if (strcmp(key, "max_output_tokens") == 0)
@@ -955,6 +935,11 @@ parse_assignment(struct parse_state *state, char *line)
     case SECTION_AGENT: return parse_agent(state, key, value);
     case SECTION_PROVIDER: return parse_provider(state, key, value);
     case SECTION_MODEL_LIMIT: return parse_model_limit(state, key, value);
+    case SECTION_MODEL_ALIAS:
+        if (strcmp(key, "model") != 0)
+            goto invalid;
+        return copy_header_value(state->models[state->model_alias_index].model.upstream,
+                                  SNAG_CONFIG_MODEL_MAX, value);
     case SECTION_UI: return parse_ui(state, key, value);
     case SECTION_IRC: return parse_irc(state, key, value);
     case SECTION_TOOL: return parse_tool(state, key, value);
@@ -974,6 +959,12 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
 
     memset(&state, 0, sizeof(state));
     state.config = config;
+    /* A present file has only its declared providers, including zero. */
+    for (size_t i = 0; i < config->provider_count; ++i) {
+        snag_secret_source_free(&config->providers[i].api_key);
+        free(config->providers[i].models);
+    }
+    config->provider_count = 0u;
     for (;;) {
         char *next = strchr(line, '\n');
         char *clean;
@@ -995,7 +986,8 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
             }
             if (rc < 0) {
                 snag_errorf(error, error_size,
-                          "invalid configuration at line %u", number);
+                          "invalid configuration at line %u; use named [provider NAME], "
+                          "api_key with ${ENV}, quoted literal or path, and repeatable tool secret", number);
                 return -1;
             }
         }
@@ -1003,6 +995,23 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
             break;
         line = next + 1u;
         ++number;
+    }
+    for (size_t i = 0; i < state.model_count; ++i) {
+        struct snag_provider_config *provider = NULL;
+        struct snag_provider_model *models;
+        for (size_t j = 0; j < config->provider_count; ++j)
+            if (strcmp(config->providers[j].name, state.models[i].provider) == 0)
+                provider = &config->providers[j];
+        if (!provider || !state.models[i].model.upstream[0]) {
+            snag_errorf(error, error_size, "model-alias %s/%s needs a configured provider and one real upstream target",
+                       state.models[i].provider, state.models[i].model.name);
+            return -1;
+        }
+        models = realloc(provider->models, (provider->model_count + 1u) * sizeof(*models));
+        if (!models)
+            return -1;
+        provider->models = models;
+        provider->models[provider->model_count++] = state.models[i].model;
     }
     return 0;
 }
@@ -1137,14 +1146,33 @@ invalid:
     return -1;
 }
 
-static int
-validate_config(struct snag_config *config, char *error, size_t error_size)
+static bool
+config_has_literals(const struct snag_config *config)
 {
+    for (size_t i = 0; i < config->provider_count; ++i)
+        if (config->providers[i].api_key.kind == SNAG_SECRET_LITERAL)
+            return true;
+    for (size_t i = 0; i < config->secret_count; ++i)
+        if (config->secrets[i].kind == SNAG_SECRET_LITERAL)
+            return true;
+    return false;
+}
+
+static int
+validate_config(struct snag_config *config, bool private_file,
+                 char *error, size_t error_size)
+{
+    if (config_has_literals(config) && !private_file) {
+        snag_errorf(error, error_size, "literal secrets require an owner-private configuration file (0600)");
+        errno = EACCES;
+        return -1;
+    }
     for (size_t i = 0; i < config->provider_count; ++i) {
         if (config->providers[i].auth == SNAG_AUTH_CHATGPT &&
-            strcmp(config->providers[i].base_url, SNAG_CHATGPT_BASE) != 0) {
+            (strcmp(config->providers[i].base_url, SNAG_CHATGPT_BASE) != 0 ||
+             config->providers[i].api_key.kind != SNAG_SECRET_NONE)) {
             snag_errorf(error, error_size,
-                       "chatgpt authentication requires " SNAG_CHATGPT_BASE);
+                       "chatgpt authentication requires " SNAG_CHATGPT_BASE " and no api_key");
             errno = EINVAL;
             return -1;
         }
@@ -1154,14 +1182,8 @@ validate_config(struct snag_config *config, char *error, size_t error_size)
         if (!snag_config_provider(config, limit->provider) ||
             (!limit->context_window_tokens && !limit->max_input_tokens &&
              !limit->max_output_tokens) ||
-            (limit->context_window_tokens && limit->max_input_tokens &&
-             limit->max_input_tokens > limit->context_window_tokens) ||
             (limit->context_window_tokens && limit->max_output_tokens &&
-             limit->max_output_tokens > limit->context_window_tokens) ||
-            (limit->context_window_tokens && limit->max_input_tokens &&
-             limit->max_output_tokens &&
-             limit->max_input_tokens >
-                 limit->context_window_tokens - limit->max_output_tokens)) {
+             limit->max_output_tokens >= limit->context_window_tokens)) {
             snag_errorf(error, error_size,
                       "invalid model-limit section for %s/%s",
                       limit->provider, limit->model);
@@ -1194,6 +1216,7 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
     struct snag_buf text;
     char *owned_path = NULL;
     const char *path = explicit_path;
+    struct stat file_stat;
     int read_rc;
     int rc = -1;
 
@@ -1206,17 +1229,20 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
     if (!owned_path)
         return -1;
     path = owned_path;
+    (void)snag_strcpy(config->source_path, sizeof(config->source_path), path);
     snag_buf_init(&text, SNAG_CONFIG_FILE_MAX + 1u);
-    read_rc = read_config(path, explicit_path != NULL, &text, NULL,
+    read_rc = read_config(path, explicit_path != NULL, &text, &file_stat,
                           error, error_size);
     if (read_rc < 0)
         goto out;
     if (read_rc == 0 && parse_file(config, (char *)text.data,
                                    error, error_size) < 0)
         goto out;
-    rc = validate_config(config, error, error_size);
+    rc = validate_config(config, read_rc != 0 ||
+        (file_stat.st_uid == geteuid() && !(file_stat.st_mode & 077u)), error, error_size);
 out:
     free(owned_path);
+    snag_secret_clear(text.data, text.len);
     snag_buf_free(&text);
     return rc;
 }
@@ -1386,7 +1412,8 @@ same_file(const struct stat *left, const struct stat *right)
 }
 
 static int
-validate_config_text(const struct snag_buf *text,
+validate_config_text(const struct snag_buf *text, const char *path,
+                     bool private_file,
                      char *error, size_t error_size)
 {
     struct snag_config candidate;
@@ -1399,15 +1426,17 @@ validate_config_text(const struct snag_buf *text,
     memcpy(copy, text->data, text->len);
     copy[text->len] = '\0';
     snag_config_init(&candidate);
+    (void)snag_strcpy(candidate.source_path, sizeof(candidate.source_path), path);
     if (!candidate.shell) {
         snag_errorf(error, error_size, "cannot initialize configuration defaults");
         goto out;
     }
     if (parse_file(&candidate, copy, error, error_size) < 0)
         goto out;
-    rc = validate_config(&candidate, error, error_size);
+    rc = validate_config(&candidate, private_file, error, error_size);
 out:
     snag_config_free(&candidate);
+    snag_secret_clear(copy, text->len);
     free(copy);
     return rc;
 }
@@ -1416,20 +1445,21 @@ static int
 provider_settings(struct snag_buf *output, const struct snag_provider_config *p)
 {
     const char *auth = p->auth == SNAG_AUTH_CHATGPT ? "chatgpt" :
-                       p->auth == SNAG_AUTH_API_KEY ? "api_key" : "env";
-    return snag_buf_printf(output,
-        "auth = %s\nbase_url = %s\napi_key_env = %s\nnative_compaction = %s\nparallel_tool_calls = %s\n",
-        auth, p->base_url, p->api_key_env, p->native_compaction ? "true" : "false",
-        p->parallel_tool_calls ? "true" : "false");
+                       "api_key";
+    if (snag_buf_printf(output, "auth = %s\nbase_url = %s\nnative_compaction = %s\nparallel_tool_calls = %s\n",
+                        auth, p->base_url, p->native_compaction ? "true" : "false",
+                        p->parallel_tool_calls ? "true" : "false") < 0)
+        return -1;
+    return p->api_key.kind == SNAG_SECRET_NONE ? 0 :
+        snag_buf_printf(output, "api_key = %s\n", p->api_key.expression);
 }
 
 static int
 replace_provider_settings(const struct snag_buf *input, struct snag_buf *output,
-                           const struct snag_provider_config *provider,
-                           bool existing)
+                           const struct snag_provider_config *provider)
 {
     size_t at = 0u;
-    bool selected = false, found = false, any = false;
+    bool selected = false, found = false;
 
     while (at < input->len) {
         size_t end = at;
@@ -1446,9 +1476,8 @@ replace_provider_settings(const struct snag_buf *input, struct snag_buf *output,
             if (close) {
                 *close = '\0';
                 s = trim(s + 1);
-                if (strcmp(s, "provider") == 0 || strncmp(s, "provider ", 9u) == 0) {
-                    const char *name = s[8] ? trim(s + 9) : "default";
-                    any = true;
+                if (strncmp(s, "provider ", 9u) == 0) {
+                    const char *name = trim(s + 9);
                     selected = strcmp(name, provider->name) == 0;
                 }
             }
@@ -1467,7 +1496,7 @@ replace_provider_settings(const struct snag_buf *input, struct snag_buf *output,
                 *equal = '\0';
                 s = trim(s);
                 replaced = strcmp(s, "auth") == 0 || strcmp(s, "base_url") == 0 ||
-                    strcmp(s, "api_key_env") == 0 || strcmp(s, "native_compaction") == 0 ||
+                    strcmp(s, "api_key") == 0 || strcmp(s, "native_compaction") == 0 ||
                     strcmp(s, "parallel_tool_calls") == 0;
             }
             if (!replaced && snag_buf_append(output, input->data + at,
@@ -1477,13 +1506,6 @@ replace_provider_settings(const struct snag_buf *input, struct snag_buf *output,
         at = end + 1u;
     }
     if (!found) {
-        if (existing && !any && strcmp(provider->name, "default") != 0) {
-            struct snag_provider_config implicit;
-            provider_init(&implicit, "default");
-            if (snag_buf_printf(output, "\n[provider default]\n") < 0 ||
-                provider_settings(output, &implicit) < 0)
-                return -1;
-        }
         if (snag_buf_printf(output, "\n[provider %s]\n", provider->name) < 0 ||
             provider_settings(output, provider) < 0)
             return -1;
@@ -1498,14 +1520,16 @@ snag_config_validate_provider(const struct snag_provider_config *provider,
     struct snag_buf text;
     int rc = -1;
     if (!provider || !provider_name_valid(provider->name) ||
-        (provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE))) {
+        (provider->auth == SNAG_AUTH_CHATGPT &&
+         (strcmp(provider->base_url, SNAG_CHATGPT_BASE) || provider->api_key.kind != SNAG_SECRET_NONE))) {
         snag_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
         return -1;
     }
     snag_buf_init(&text, SNAG_CONFIG_FILE_MAX);
     if (snag_buf_printf(&text, "[provider %s]\n", provider->name) == 0 &&
         provider_settings(&text, provider) == 0)
-        rc = validate_config_text(&text, error, error_size);
+        rc = validate_config_text(&text, "/config.ini", true, error, error_size);
+    snag_secret_clear(text.data, text.len);
     snag_buf_free(&text);
     return rc;
 }
@@ -1581,7 +1605,7 @@ save_config_settings(const char *path, bool allow_create,
     if (read_rc < 0)
         goto out;
     if ((provider_config ?
-         replace_provider_settings(&input, &output, provider_config, read_rc == 0) :
+         replace_provider_settings(&input, &output, provider_config) :
          replace_model_settings(&input, &output, provider, model, effort)) < 0) {
         snag_errorf(error, error_size, "configuration update exceeds 64 KiB");
         goto out;
@@ -1596,7 +1620,9 @@ save_config_settings(const char *path, bool allow_create,
         snag_buf_free(&output);
         output = selected;
     }
-    if (validate_config_text(&output, error, error_size) < 0)
+    if (validate_config_text(&output, path,
+                              read_rc != 0 || (before.st_uid == geteuid() && !(before.st_mode & 077u)),
+                              error, error_size) < 0)
         goto out;
     if (snag_random_id(id) < 0)
         goto out;
@@ -1654,6 +1680,8 @@ out:
         (void)close(parent_fd);
     }
     free(path_copy);
+    snag_secret_clear(output.data, output.len);
+    snag_secret_clear(input.data, input.len);
     snag_buf_free(&output);
     snag_buf_free(&input);
     errno = saved;
@@ -1677,8 +1705,7 @@ snag_config_save_provider(const char *path, bool allow_create,
 {
     if (!provider || !provider_name_valid(provider->name) ||
         (provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
-        strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r') ||
-        strchr(provider->api_key_env, '\n') || strchr(provider->api_key_env, '\r')) {
+        strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r')) {
         snag_errorf(error, error_size, "invalid provider settings");
         return -1;
     }
@@ -1735,15 +1762,75 @@ snag_config_provider_is_openrouter(const struct snag_provider_config *provider)
     return *suffix == '\0' || *suffix == '/';
 }
 
-const struct snag_model_limit_config *
-snag_config_model_limit(const struct snag_config *config, const char *provider,
-                       const char *model)
+const char *
+snag_config_model_upstream(const struct snag_provider_config *provider, const char *model)
 {
-    if (!config || !provider || !model)
-        return NULL;
-    for (size_t i = 0; i < config->model_limit_count; ++i)
-        if (strcmp(config->model_limits[i].provider, provider) == 0 &&
-            strcmp(config->model_limits[i].model, model) == 0)
-            return &config->model_limits[i];
-    return NULL;
+    if (provider && model)
+        for (size_t i = 0; i < provider->model_count; ++i)
+            if (strcmp(provider->models[i].name, model) == 0)
+                return provider->models[i].upstream;
+    return model;
+}
+
+static bool
+model_pattern_matches(const char *pattern, const char *name)
+{
+    const char *star = NULL, *retry = NULL;
+
+    while (*name) {
+        if (*pattern == '*') {
+            star = ++pattern;
+            retry = name;
+        } else if (*pattern == *name) {
+            ++pattern;
+            ++name;
+        } else if (star) {
+            pattern = star;
+            name = ++retry;
+        } else {
+            return false;
+        }
+    }
+    while (*pattern == '*')
+        ++pattern;
+    return !*pattern;
+}
+
+bool
+snag_config_resolve_limits(const struct snag_config *config, const char *provider,
+                          const char *name,
+                          struct snag_model_limit_config *out,
+                          const struct snag_model_limit_config *sources[3])
+{
+    memset(out, 0, sizeof(*out));
+    if (sources)
+        memset(sources, 0, 3u * sizeof(*sources));
+    for (unsigned int tier = 0u; tier < 3u; ++tier) {
+        for (size_t i = 0; i < config->model_limit_count; ++i) {
+            const struct snag_model_limit_config *rule = &config->model_limits[i];
+            bool wildcard = strchr(rule->model, '*') != NULL;
+            if (strcmp(rule->provider, provider) != 0)
+                continue;
+            if (tier == 0u ? rule->model[0] != '\0' :
+                (!rule->model[0] || wildcard != (tier == 1u) ||
+                 !model_pattern_matches(rule->model, name)))
+                continue;
+            if (rule->context_window_tokens) {
+                out->context_window_tokens = rule->context_window_tokens;
+                if (sources)
+                    sources[0] = rule;
+            }
+            if (rule->max_input_tokens) {
+                out->max_input_tokens = rule->max_input_tokens;
+                if (sources)
+                    sources[1] = rule;
+            }
+            if (rule->max_output_tokens) {
+                out->max_output_tokens = rule->max_output_tokens;
+                if (sources)
+                    sources[2] = rule;
+            }
+        }
+    }
+    return out->context_window_tokens || out->max_input_tokens || out->max_output_tokens;
 }

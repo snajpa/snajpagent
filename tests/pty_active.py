@@ -25,9 +25,9 @@ DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
-DEFAULT_IDLE_PROMPT = f"    0% default/{DEFAULT_MODEL}/medium › ".encode()
-DEFAULT_ACCOUNTED_IDLE_PROMPT = f"    ?% default/{DEFAULT_MODEL}/medium › ".encode()
-DEFAULT_ACTIVE_PROMPT = f" ◴  ?% default/{DEFAULT_MODEL}/medium » ".encode()
+DEFAULT_IDLE_PROMPT = f"    0% openai/{DEFAULT_MODEL}/medium › ".encode()
+DEFAULT_ACCOUNTED_IDLE_PROMPT = f"    ?% openai/{DEFAULT_MODEL}/medium › ".encode()
+DEFAULT_ACTIVE_PROMPT = f" ◴  ?% openai/{DEFAULT_MODEL}/medium » ".encode()
 GOAL_SET = "• Goal set".encode()
 GOAL_CLEARED = "• Goal cleared".encode()
 COMPACTED = "• Compacted".encode()
@@ -388,15 +388,15 @@ def test_static_zero_width_spinner_has_no_refresh():
     config = (Path(os.environ["SNAJPAGENT_TEST_ROOT"]) /
               "config" / "static-spinner.ini")
     config.write_text(
-        "[ui]\n"
+        "[provider openai]\n[ui]\n"
         'prompt_spinner_goal = "\\0"\n'
         'prompt_spinner_provider = "\\0◆"\n'
         'prompt_spinner_tool = "\\0"\n'
         "prompt_spinner_per_second = 60\n",
         encoding="utf-8",
     )
-    idle = f"  0% default/{DEFAULT_MODEL}/medium › ".encode()
-    active = f"◆  ?% default/{DEFAULT_MODEL}/medium » ".encode()
+    idle = f"  0% openai/{DEFAULT_MODEL}/medium › ".encode()
+    active = f"◆  ?% openai/{DEFAULT_MODEL}/medium » ".encode()
     child = Child(["--config", str(config)])
     try:
         child.wait(idle)
@@ -414,7 +414,7 @@ def test_prompt_clock_lifetime():
               "config" / "prompt-clock.ini")
     clock = "@{hour:02}:{minute:02}:{second:02}"
     config.write_text(
-        "[ui]\nprompt = {chat:" + clock + ":}"
+        "[provider openai]\n[ui]\nprompt = {chat:" + clock + ":}"
         "{rollout-idle:" + clock + " {context:4}{activity_spinner}›}"
         "{rollout-active:" + clock + " {context:4}{activity_spinner}»}\n"
         'prompt_spinner_provider = " P"\n', encoding="utf-8")
@@ -481,7 +481,7 @@ def test_initial_unrenderable_prompt_is_rejected_atomically():
     before = session_ids()
 
     config.write_text(
-        "[ui]\n"
+        "[provider openai]\n[ui]\n"
         "prompt = {chat:x}{rollout-idle:" + ("x" * 600) +
         "}{rollout-active:z}\n",
         encoding="utf-8",
@@ -519,7 +519,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
-    prompt = f"    0% default/{model}/medium › ".encode()
+    prompt = f"    0% openai/{model}/medium › ".encode()
     child = Child(["-m", model])
     try:
         child.wait(prompt)
@@ -646,7 +646,7 @@ def test_split_utf8_steering():
 def test_typing_pause_and_stream_snapshots():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
         "typing-pause.ini"
-    config.write_text("[ui]\ntyping_pause_ms = 300\n", encoding="utf-8")
+    config.write_text("[provider openai]\n[ui]\ntyping_pause_ms = 300\n", encoding="utf-8")
     before = session_ids()
     child = Child(["--config", str(config)])
     child.wait(DEFAULT_IDLE_PROMPT)
@@ -788,7 +788,7 @@ def test_compaction_statistical_source():
     state = root / "statistical-compact"
     state.mkdir(mode=0o700)
     config = root / "config" / "statistical-compact.ini"
-    config.write_text("[agent]\nread_agents_md = false\n[provider]\n"
+    config.write_text("[agent]\nread_agents_md = false\n[provider openai]\n"
                       "exact_token_count = false\nnative_compaction = false\n"
                       "auto_compact_input_tokens = 1\n", encoding="utf-8")
     model = {
@@ -804,7 +804,7 @@ def test_compaction_statistical_source():
     model["limits"]["max_input_tokens"] = 10000
     cache = state / "models.json"
     cache.write_text(json.dumps({"schema_version": 1, "updated_at_ms": 1,
-        "providers": [{"name": "default", "protocol": "openai",
+        "providers": [{"name": "openai", "protocol": "openai",
                        "base_url": "https://api.openai.com", "models": [model]}]}),
         encoding="utf-8")
     cache.chmod(0o600)
@@ -825,7 +825,7 @@ def test_compaction_statistical_source():
 def test_read_only_multiline_compaction_and_chat():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     config = root / "config" / "ro-compaction.ini"
-    config.write_text("[provider]\nauto_compact_input_tokens = 1\n", encoding="utf-8")
+    config.write_text("[provider openai]\nauto_compact_input_tokens = 1\n", encoding="utf-8")
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
@@ -1000,7 +1000,7 @@ def test_steering_during_pre_response_compaction():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     config = root / "config" / "steering-compaction.ini"
     config.write_text(
-        "[provider]\nauto_compact_input_tokens = 1\n",
+        "[provider openai]\nauto_compact_input_tokens = 1\n",
         encoding="utf-8",
     )
     before = session_ids()
@@ -1116,7 +1116,7 @@ def test_steering_during_capacity_recovery_compaction():
         "capacity-source-mismatch.ini"
     )
     mismatch_config.write_text(
-        "[provider]\nbase_url = https://different.example.test\n",
+        "[provider openai]\nbase_url = https://different.example.test\n",
         encoding="utf-8",
     )
     mismatched = Child([
@@ -1142,7 +1142,7 @@ def test_agents_md_config():
 
     enabled_config = root / "config" / "agents-enabled.ini"
     enabled_config.write_text(
-        "[agent]\nread_agents_md = true\n",
+        "[provider openai]\n[agent]\nread_agents_md = true\n",
         encoding="utf-8",
     )
     before = session_ids()
@@ -1162,7 +1162,7 @@ def test_agents_md_config():
 
     disabled_config = root / "config" / "agents-disabled.ini"
     disabled_config.write_text(
-        "[agent]\nread_agents_md = false\n",
+        "[provider openai]\n[agent]\nread_agents_md = false\n",
         encoding="utf-8",
     )
     before = session_ids()
@@ -1258,8 +1258,10 @@ def test_ctrl_c_cancels_partial_editor_states():
 
 def test_prompt_history_and_reverse_search():
     history = Path(DOTDIR) / "prompt_history"
+    before_second = session_ids()
     second = Child([])
     second.wait(DEFAULT_IDLE_PROMPT)
+    second_id = new_session(before_second)
     first = Child([])
     first.wait(DEFAULT_IDLE_PROMPT)
     for entry in (
@@ -1275,13 +1277,17 @@ def test_prompt_history_and_reverse_search():
 
     second.send(b"draft-restore")
     second.send(b"\x12")
-    second.wait(b"(failed reverse-i-search)`draft-restore': ")
+    # The terminal may reuse the existing trailing blank instead of emitting it.
+    second.wait(b"(failed reverse-i-search)`draft-restore':")
     second.send(b"\x07")
+    restored = len(second.buf)
+    second.send(b"\r")
+    answer = second.wait(b"fixture answer", start=restored)
+    second.wait_idle_prompt(start=answer)
+    assert one(events(second_id), "turn_started")["data"]["text"] == "draft-restore"
     cancel = len(second.buf)
-    second.send(b"\x03")
+    second.send(b"draft-cancel\x03")
     cancel_end = second.wait(b"^C\r\n", start=cancel)
-    cancelled = bytes(second.buf[cancel:cancel_end])
-    assert b"draft-restore" in cancelled
 
     search = len(second.buf)
     second.send(b"\x12history-repeat")
@@ -1297,7 +1303,7 @@ def test_prompt_history_and_reverse_search():
 
     search = len(second.buf)
     second.send(b"\x12" + "history-café-uniqueX".encode())
-    second.wait("failed reverse-i-search)`history-café-uniqueX': ".encode(),
+    second.wait("failed reverse-i-search)`history-café-uniqueX':".encode(),
                 start=search)
     second.send(b"\x7f")
     second.wait(
@@ -1353,7 +1359,8 @@ def test_prompt_history_and_reverse_search():
     assert records.count("history-repeat-new") == 1
     assert records.count("history-café-unique") == 1
     assert records.count("/history-invalid-command") == 1
-    assert "draft-restore" not in records
+    assert "draft-restore" in records
+    assert "draft-cancel" not in records
     assert "history-cancelled-draft" not in records
     assert "history-confirmation-excluded" not in records
     assert "confirmation-cancelled-draft" not in records
@@ -1470,7 +1477,7 @@ def test_goal_configured_wording_limit():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
         "goal-limit.ini"
     config.write_text(
-        "[agent]\nmax_goal_prompt_bytes = 4\n",
+        "[provider openai]\n[agent]\nmax_goal_prompt_bytes = 4\n",
         encoding="utf-8",
     )
     before = session_ids()
@@ -1952,11 +1959,11 @@ def test_uncached_typed_model_selection():
         # A typed model is trusted without discovery or any cache mutation.
         child.send(b"/model gpt-5.6-luna / high\r")
         end = child.wait(
-            b"model for next turn: default / gpt-5.6-luna / high", start=end
+            b"model for next turn: openai / gpt-5.6-luna / high", start=end
         )
         end = child.wait(
             b"snajpagent: model is not known in the model cache; "
-            b"it will still be sent unchanged",
+            b"the configured provider will still be used",
             start=end,
         )
         child.wait(PROMPT.rstrip(), start=end)
@@ -2052,6 +2059,8 @@ def test_provider_login_and_first_run():
             try:
                 child.wait(b"Provider: ")
                 child.send(b"openrouter\n")
+                child.wait(b"Local provider name [openrouter]: ")
+                child.send(b"\n")
                 child.wait(b"API key (hidden;")
                 child.send(b"hidden-first-run-key\n")
                 end = child.wait(b"Fetch this provider's model list now?")
@@ -2126,6 +2135,69 @@ def test_compaction_policy_selection():
             cache_path.write_bytes(old_cache)
 
 
+def test_provider_local_models(native=True):
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "provider-models.ini"
+    text = (
+        "[agent]\nmodel=small\nreasoning_effort=high\n"
+        "[provider codex-lb]\nbase_url=https://fixture.test/backend-api/codex\n"
+        "auto_compact_input_tokens=0\nexact_token_count=true\n"
+        f"native_compaction={'true' if native else 'false'}\n"
+        "[provider second]\n"
+        "[model-alias codex-lb/small]\nmodel=gpt-6-astra\n"
+        "[model-alias codex-lb/large]\nmodel=gpt-6-astra\n"
+        "[model-limit codex-lb]\ncontext_window_tokens=500000\n"
+        "[model-limit codex-lb/small]\ncontext_window_tokens=128000\n"
+    )
+    config.write_text(text, encoding="utf-8")
+    before = session_ids()
+    child = Child(["--config", str(config)])
+    try:
+        child.wait(b"codex-lb/small/high")
+        sid = new_session(before)
+        child.send(b"/status\r")
+        child.wait(b"hard-input=121600")
+        child.wait(b"context rule: [model-limit codex-lb/small]")
+        start = len(child.buf)
+        child.send(b"ping\r")
+        answer_end = child.wait(b"pong", start=start)
+        wait_turn_completed(child, sid, "ping")
+        child.wait_idle_prompt(start=answer_end)
+        child.send(b"/compact\r")
+        end = child.wait(COMPACTED, start=start)
+        child.wait_idle_prompt(start=end)
+        child.send(b"/model large/high save\r")
+        child.wait(b"model for next turn: codex-lb / large / high")
+        end = child.wait(b"configuration saved:")
+        child.wait_idle_prompt(start=end)
+        start = len(child.buf)
+        child.send(b"/status\r")
+        child.wait(b"hard-input=475000", start=start)
+        child.wait_idle_prompt(start=start)
+        child.exit_now()
+        log = events(sid)
+        assert one(log, "session_created")["data"]["default_model"] == "small"
+        assert one(log, "turn_started")["data"]["config"]["model"] == "small"
+        assert one(log, "compaction_started")["data"]["model"] == "small"
+        assert one(log, "model_selection_changed")["data"]["new_model"] == "large"
+        assert "model_alias" not in json.dumps(log)
+        assert "model = large" in config.read_text()
+        prefix = (STATE_ROOT / sid / "events.jsonl").read_bytes()
+        # A provider rename is recovered explicitly; old history stays byte-identical.
+        config.write_text(config.read_text().replace("codex-lb", "renamed"))
+        resumed = Child(["--config", str(config), "--provider", "renamed", "--resume", sid])
+        try:
+            resumed.wait(b"renamed/large/high")
+            resumed.exit_now()
+            assert (STATE_ROOT / sid / "events.jsonl").read_bytes().startswith(prefix)
+            changes = [e["data"] for e in events(sid) if e["type"] == "model_selection_changed"]
+            assert changes[-1]["new_provider"] == "renamed"
+            assert changes[-1]["new_model"] == "large"
+        finally:
+            resumed.kill()
+    finally:
+        child.kill()
+
+
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
     initial_prompt = b"    0% first/uncached-start/low \xe2\x80\xba "
@@ -2136,9 +2208,9 @@ def test_model_cache_and_selection():
         "model = uncached-start\n"
         "reasoning_effort = low\n"
         "[provider first]\n"
-        "api_key_env = FIRST_API_KEY\n"
+        "api_key = ${FIRST_API_KEY}\n"
         "[provider second]\n"
-        "api_key_env = SECOND_API_KEY\n",
+        "api_key = ${SECOND_API_KEY}\n",
         encoding="utf-8",
     )
     before = session_ids()
@@ -2301,9 +2373,9 @@ def test_model_configuration_save():
         "reasoning_effort = low\n"
         "max_goal_prompt_bytes = 123456\n"
         "[provider first]\n"
-        "api_key_env = FIRST_API_KEY\n"
+        "api_key = ${FIRST_API_KEY}\n"
         "[provider second]\n"
-        "api_key_env = SECOND_API_KEY\n",
+        "api_key = ${SECOND_API_KEY}\n",
         encoding="utf-8",
     )
     original = config.read_bytes()
@@ -2357,12 +2429,12 @@ def test_model_configuration_save():
 
     # Without a preceding selector, save and s remain literal model IDs.
     child.send(b"/model save\r")
-    end = child.wait(b"model for next turn: first / save / cosmic", start=end)
+    end = child.wait(b"model for next turn: second / save / cosmic", start=end)
     end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT.rstrip(), start=end)
     assert config.read_bytes() == saved
     child.send(b"/model s\r")
-    end = child.wait(b"model for next turn: first / s / cosmic", start=end)
+    end = child.wait(b"model for next turn: second / s / cosmic", start=end)
     end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT.rstrip(), start=end)
     assert config.read_bytes() == saved
@@ -2415,13 +2487,13 @@ def test_config_editor_reload():
     editor = root / "config" / "editor"
     config.write_text(
         "[agent]\nmodel = editor-base\nreasoning_effort = medium\n"
-        "[provider]\napi_key_env = OPENAI_API_KEY\n"
+        "[provider openai]\napi_key = ${OPENAI_API_KEY}\n"
         "[ui]\n",
         encoding="utf-8",
     )
     valid_two.write_text(
         "[agent]\nmodel = ignored-default\nreasoning_effort = high\n"
-        "[provider]\napi_key_env = OPENAI_API_KEY\n"
+        "[provider openai]\napi_key = ${OPENAI_API_KEY}\n"
         "[ui]\ntyping_pause_ms = 25\n"
         "prompt = {chat:{hour:2}:{minute:02}:{second:02}:}"
         "{rollout-idle:W{context:4}{goal_spinner}{activity_spinner}›}"
@@ -2433,7 +2505,7 @@ def test_config_editor_reload():
     )
     valid_one.write_text(
         "[agent]\nmodel = another-default\nreasoning_effort = low\n"
-        "[provider]\napi_key_env = OPENAI_API_KEY\n"
+        "[provider openai]\napi_key = ${OPENAI_API_KEY}\n"
         "[ui]\n",
         encoding="utf-8",
     )
@@ -2442,7 +2514,7 @@ def test_config_editor_reload():
         "prompt = {chat:{hour:002}}{rollout-idle:x}{rollout-active:y}\n",
         encoding="utf-8")
     unrenderable.write_text(
-        "[ui]\n"
+        "[provider openai]\n[ui]\n"
         "prompt = {chat:x}{rollout-idle:" + ("x" * 600) +
         "}{rollout-active:z}\n",
         encoding="utf-8",
@@ -2450,7 +2522,7 @@ def test_config_editor_reload():
     network_port = free_port()
     network.write_text(
         "[agent]\nmodel = network-default\nreasoning_effort = medium\n"
-        "[provider]\napi_key_env = OPENAI_API_KEY\n"
+        "[provider openai]\napi_key = ${OPENAI_API_KEY}\n"
         "[irc]\n"
         f"listen = 127.0.0.1:{network_port}\n"
         "model_nick = reloadagent\noperator_nick = reloadop\n"
@@ -2692,12 +2764,12 @@ def test_known_context_meter():
 def test_config_and_cli_model_passthrough():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "model-passthrough.ini"
     config.write_text(
-        "[agent]\nmodel = openai/gpt-5.6\nreasoning_effort = default\n",
+        "[provider openai]\n[agent]\nmodel = openai/gpt-5.6\nreasoning_effort = default\n",
         encoding="utf-8",
     )
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"    0% default/openai/gpt-5.6/medium \xe2\x80\xba ")
+    child.wait(b"    0% openai/openai/gpt-5.6/medium \xe2\x80\xba ")
 
     child.send(b"/status\r")
     end = child.wait(b"model: openai/gpt-5.6")
@@ -2717,7 +2789,7 @@ def test_config_and_cli_model_passthrough():
         "--config", str(config), "-m", "vendor/future-model",
         "--effort", "custom-effort", "--resume", session_id
     ])
-    resumed.wait(b"    0% default/vendor/future-model/custom-effort \xe2\x80\xba ")
+    resumed.wait(b"    0% openai/vendor/future-model/custom-effort \xe2\x80\xba ")
     start = len(resumed.buf)
     resumed.send(b"/status\r")
     end = resumed.wait(
@@ -2729,7 +2801,7 @@ def test_config_and_cli_model_passthrough():
                  start=end)
     answer_end = resumed.wait(b"pong", start=end)
     idle_end = resumed.wait(
-        b"    0% default/openai/gpt-5.6/medium \xe2\x80\xba ", start=answer_end
+        b"    0% openai/openai/gpt-5.6/medium \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -3234,7 +3306,7 @@ def test_prompt_identity_is_terminal_safe():
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(b"    0% default/" + visible + " › ".encode())
+    child.wait(b"    0% openai/" + visible + " › ".encode())
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send(b"ping\r")
@@ -3304,7 +3376,7 @@ def test_network_view_routing_and_atomic_catchup():
     peer_agent = None
     exited = False
     network_idle = f"localop@{socket.gethostname()} : ".encode()
-    rollout_idle = f"    ?% default/{DEFAULT_MODEL}/medium › ".encode()
+    rollout_idle = f"    ?% openai/{DEFAULT_MODEL}/medium › ".encode()
 
     def queue_rollout_and_enter(trigger, first, second, switch):
         chat_start = len(child.buf)
@@ -3407,7 +3479,7 @@ def test_network_view_routing_and_atomic_catchup():
         active_output = bytes(child.buf[active_start:])
         frames = ["◴", "◷", "◶", "◵"]
         active_labels = [
-            f" {frame}  ?% default/{DEFAULT_MODEL}/medium » ".encode() +
+            f" {frame}  ?% openai/{DEFAULT_MODEL}/medium » ".encode() +
             b"rollout active steer" for frame in frames
         ]
         assert active_output.count(submitted_start) == 1, active_output
@@ -3557,10 +3629,10 @@ def test_network_chat_and_managed_mention():
     network_idle = f"localop@{socket.gethostname()} : ".encode()
     network_active = f"localop@{socket.gethostname()} : ".encode()
     network_rollout_idle = (
-        f"    0% default/{DEFAULT_MODEL}/medium › ".encode()
+        f"    0% openai/{DEFAULT_MODEL}/medium › ".encode()
     )
     network_rollout_accounted_idle = (
-        f"    ?% default/{DEFAULT_MODEL}/medium › ".encode()
+        f"    ?% openai/{DEFAULT_MODEL}/medium › ".encode()
     )
     try:
         child.wait(network_idle)
@@ -4222,6 +4294,8 @@ if __name__ == "__main__":
     test_uncached_typed_model_selection()
     test_provider_login_and_first_run()
     test_compaction_policy_selection()
+    test_provider_local_models()
+    test_provider_local_models(False)
     test_model_cache_and_selection()
     test_model_configuration_save()
     test_config_editor_reload()

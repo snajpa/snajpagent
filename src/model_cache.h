@@ -71,6 +71,17 @@ int snag_model_cache_record(struct snag_store *store,
 const json_t *snag_model_cache_find(const struct snag_model_cache *cache,
                                    const char *provider,
                                    const char *model);
+/* Ordinary provider-local model view over source-bound upstream facts. */
+const json_t *snag_model_metadata(const struct snag_model_cache *cache,
+                                 const struct snag_provider_config *provider,
+                                 const char *model);
+int snag_model_entry(const struct snag_model_cache *cache, const struct snag_config *config,
+                     size_t index, const char *fallback_effort,
+                     const char **provider, const char **model, const char **effort);
+typedef int (*snag_model_entry_fn)(void *, size_t, const char *, const char *,
+                                    const char *, const json_t *);
+int snag_model_each(const struct snag_model_cache *cache, const struct snag_config *config,
+                     const char *fallback_effort, snag_model_entry_fn visit, void *opaque);
 const char *snag_model_cache_best_effort(const json_t *model,
                                         const char *fallback);
 int snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,

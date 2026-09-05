@@ -581,12 +581,12 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
     rc = 0;
     if (snag_ui_enabled(&app->ui, SNAG_PRESENT_PROTOCOL)) {
         struct snag_buf encoded;
-        struct snag_secret_set secrets;
+        struct snag_secret_set secrets = {0};
 
         snag_buf_init(request_body, SNAG_WIRE_BODY_MAX);
         snag_buf_init(&encoded, SNAG_WIRE_BODY_MAX);
-        snag_secret_set_build(&secrets, app->config, credential);
-        if (projection->create_request_bytes > SNAG_WIRE_BODY_MAX ||
+        if (snag_secret_set_build(&secrets, app->config, credential, error, error_size) < 0 ||
+            projection->create_request_bytes > SNAG_WIRE_BODY_MAX ||
             snag_json_canonical(projection->create_request, &encoded) < 0 ||
             snag_wire_json_redact(encoded.data, encoded.len, &secrets.wire,
                                  request_body, error, error_size) < 0) {
@@ -596,6 +596,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
                 projection->create_request_bytes, projection->request_sha256);
         }
         snag_buf_free(&encoded);
+        snag_secret_set_free(&secrets);
     }
     /* Only the request views and accounting facts survive into the cycle. */
     json_decref(projection->model_input);

@@ -127,8 +127,8 @@ test_auth_settings(const char *path)
     struct snag_provider_config provider;
     char error[256] = {0};
     static const char initial[] = "# retain this\n[ui]\ntyping_pause_ms=2\n";
-    static const char invalid[] = "[provider]\nauth=chatgpt\nbase_url=https://other.test\n";
-    static const char duplicate[] = "[provider]\nauth=env\nauth=api_key\n";
+    static const char invalid[] = "[provider default]\nauth=chatgpt\nbase_url=https://other.test\n";
+    static const char duplicate[] = "[provider default]\nauth=env\nauth=api_key\n";
 
     write_bytes(path, invalid, sizeof(invalid) - 1u);
     expect_invalid(path);
@@ -136,20 +136,18 @@ test_auth_settings(const char *path)
     expect_invalid(path);
     write_bytes(path, initial, sizeof(initial) - 1u);
     snag_config_init(&config);
-    provider = config.providers[0];
-    strcpy(provider.name, "openrouter");
+    snag_config_provider_init(&provider, "openrouter");
     strcpy(provider.base_url, "https://openrouter.ai/api/v1");
-    strcpy(provider.api_key_env, "OPENROUTER_API_KEY");
     provider.auth = SNAG_AUTH_API_KEY;
     provider.native_compaction = false;
     assert(snag_config_save_provider(path, false, &provider, NULL, NULL,
                                      error, sizeof(error)) == 0);
     assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
-    assert(config.provider_count == 2u);
-    assert(strcmp(config.providers[0].name, "default") == 0);
-    assert(config.providers[0].auth == SNAG_AUTH_ENV);
-    assert(config.providers[1].auth == SNAG_AUTH_API_KEY);
-    assert(!config.providers[1].native_compaction);
+    assert(config.provider_count == 1u);
+    assert(strcmp(config.providers[0].name, "openrouter") == 0);
+    assert(config.providers[0].auth == SNAG_AUTH_API_KEY);
+    assert(config.providers[0].api_key.kind == SNAG_SECRET_NONE);
+    assert(!config.providers[0].native_compaction);
     assert(config.typing_pause_ms == 2u);
     snag_config_free(&config);
     provider.auth = SNAG_AUTH_CHATGPT;
@@ -160,8 +158,8 @@ test_auth_settings(const char *path)
                                      error, sizeof(error)) == 0);
     snag_config_init(&config);
     assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
-    assert(config.provider_count == 2u);
-    assert(config.providers[1].auth == SNAG_AUTH_CHATGPT);
+    assert(config.provider_count == 1u);
+    assert(config.providers[0].auth == SNAG_AUTH_CHATGPT);
     assert(strcmp(config.provider, "openrouter") == 0);
     assert(strcmp(config.model, "chosen/model") == 0);
     snag_config_free(&config);
@@ -186,6 +184,82 @@ test_auth_settings(const char *path)
         int fd = open(path, O_RDONLY);
         assert(fd >= 0 && read(fd, bytes, sizeof(bytes)) == (ssize_t)len);
         assert(close(fd) == 0 && memcmp(bytes, invalid_save[i], len) == 0);
+    }
+}
+
+static void
+test_layered_limits_and_secrets(const char *path)
+{
+    static const char text[] =
+        "[model-limit codex-lb/gpt-6-astra]\nmax_output_tokens=16000\n"
+        "[model-limit codex-lb]\ncontext_window_tokens=500000\n"
+        "[model-limit codex-lb/gpt-*]\nmax_input_tokens=450000\nmax_output_tokens=32000\n"
+        "[model-limit codex-lb/gpt-6-*]\nmax_input_tokens=460000\n"
+        "[model-limit codex-lb/small*]\nmax_output_tokens=8000\n"
+        "[model-limit codex-lb/small]\ncontext_window_tokens=128000\n"
+        "[model-alias codex-lb/small]\nmodel=gpt-6-astra\n"
+        "[model-alias codex-lb/large]\nmodel=gpt-6-astra\n"
+        "[provider codex-lb]\napi_key=${CODEX_LB_API_KEY}\n"
+        "[provider default]\napi_key=./keys/key\n"
+        "[model-alias default/small]\nmodel=org/model\n"
+        "[model-limit default/org/*]\ncontext_window_tokens=64000\n"
+        "[tool]\nsecret=${ONE}\nsecret=./file key\nsecret=\"${literal}\"\n";
+    static const char *const invalid[] = {
+        "[provider]\n", "[provider:first]\n", "[provider p]\napi_key_env=OLD\n",
+        "[provider p]\nauth=env\n", "[tool]\nsecret_env=OLD\n",
+        "[provider p]\n[model-limit p]\n", "[model-limit missing]\nmax_input_tokens=1\n",
+        "[provider p]\n[model-limit p]\nmax_input_tokens=1\n[model-limit p]\nmax_output_tokens=2\n",
+        "[provider p]\n[model-limit p/*]\nmax_input_tokens=1\nmax_input_tokens=2\n",
+        "[provider p]\n[model-alias p/a]\n",
+        "[provider p]\n[model-alias p/a]\nmodel=m\nmodel=n\n",
+        "[provider p]\n[model-alias p/a]\nmodel=m\n[model-alias p/a]\nmodel=n\n",
+        "[provider p]\n[model-alias p/a/b]\nmodel=m\n"
+    };
+    struct snag_config config;
+    struct snag_model_limit_config limits;
+    const struct snag_model_limit_config *sources[3];
+    char error[256] = {0};
+
+    write_bytes(path, text, sizeof(text) - 1u);
+    assert(chmod(path, 0600) == 0);
+    snag_config_init(&config);
+    assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+    assert(strcmp(snag_config_provider(&config, NULL)->name, "codex-lb") == 0);
+    assert(config.providers[0].model_count == 2u && config.providers[1].model_count == 1u);
+    assert(strcmp(snag_config_model_upstream(&config.providers[0], "small"), "gpt-6-astra") == 0);
+    assert(snag_config_resolve_limits(&config, "codex-lb", "gpt-6-astra", &limits, sources));
+    assert(limits.context_window_tokens == 500000u);
+    assert(limits.max_input_tokens == 460000u && limits.max_output_tokens == 16000u);
+    assert(strcmp(sources[2]->model, "gpt-6-astra") == 0);
+    assert(snag_config_resolve_limits(&config, "codex-lb", "small", &limits, sources));
+    assert(limits.context_window_tokens == 128000u && !limits.max_input_tokens);
+    assert(limits.max_output_tokens == 8000u && strcmp(sources[0]->model, "small") == 0);
+    assert(snag_config_resolve_limits(&config, "codex-lb", "large", &limits, sources));
+    assert(limits.context_window_tokens == 500000u && !limits.max_output_tokens);
+    assert(!snag_config_resolve_limits(&config, "default", "small", &limits, sources));
+    assert(snag_config_resolve_limits(&config, "default", "org/model", &limits, sources));
+    assert(limits.context_window_tokens == 64000u && !limits.max_input_tokens);
+    assert(!snag_config_resolve_limits(&config, "default", "xorg/model", &limits, sources));
+    assert(config.secret_count == 3u && config.secrets[2].kind == SNAG_SECRET_LITERAL);
+    assert(strcmp(config.secrets[2].value, "${literal}") == 0);
+    snag_config_free(&config);
+    assert(chmod(path, 0644) == 0);
+    expect_invalid(path);
+    assert(chmod(path, 0600) == 0);
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        write_bytes(path, invalid[i], strlen(invalid[i]));
+        expect_invalid(path);
+    }
+    {
+        const char literal_targets[] = "[provider p]\n[model-alias p/a]\nmodel=b\n"
+            "[model-alias p/b]\nmodel=c\n[model-alias p/self]\nmodel=self\n";
+        write_bytes(path, literal_targets, sizeof(literal_targets) - 1u);
+        snag_config_init(&config);
+        assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+        assert(strcmp(snag_config_model_upstream(&config.providers[0], "a"), "b") == 0);
+        assert(strcmp(snag_config_model_upstream(&config.providers[0], "b"), "c") == 0);
+        assert(strcmp(snag_config_model_upstream(&config.providers[0], "self"), "self") == 0);
+        snag_config_free(&config);
     }
 }
 
@@ -324,20 +398,20 @@ main(void)
         "reasoning_effort = future-effort\n"
         "max_goal_prompt_bytes = 123456\n"
         "read_agents_md = false\n"
-        "\n[provider]\n"
+        "\n[provider default]\n"
         "connect_timeout_ms = 1000\n"
         "idle_timeout_ms = 2000\n"
         "request_timeout_ms = 3000\n"
         "auto_compact_input_tokens = 12345\n"
         "base_url = http://127.0.0.1:2455/backend-api/codex/\n"
-        "api_key_env = CODEX_LB_API_KEY\n"
+        "api_key = ${CODEX_LB_API_KEY}\n"
         "openrouter_referer = https://github.com/snajpa/snajpagent\n"
         "openrouter_title = snajpagent\n"
         "exact_token_count = false\n"
         "native_compaction = 0\n"
         "\n[provider backup]\n"
         "base_url = https://backup.example.test/v1\n"
-        "api_key_env = BACKUP_API_KEY\n"
+        "api_key = ${BACKUP_API_KEY}\n"
         "exact_token_count = true\n"
         "\n[model-limit default/gpt-5.5]\n"
         "context_window_tokens = 1050000\n"
@@ -370,7 +444,7 @@ main(void)
         "max_timeout_ms = 5000\n"
         "max_output_tokens = 7654\n"
         "max_output_bytes = 123456\n"
-        "secret_env = TOKEN_ONE, TOKEN_TWO\n";
+        "secret = ${TOKEN_ONE}\nsecret = ${TOKEN_TWO}\n";
     char temp[] = "/tmp/snajpagent-config-XXXXXX";
     char dotdir[4096];
     char path[4096];
@@ -433,17 +507,17 @@ main(void)
     assert(config.providers[0].parallel_tool_calls);
     assert(config.max_output_bytes == 0u);
     assert(config.provider_count == 1u);
-    assert(strcmp(config.providers[0].name, "default") == 0);
+    assert(strcmp(config.providers[0].name, "openai") == 0);
     assert(config.providers[0].auto_compact_input_tokens ==
            SNAG_CONFIG_COMPACT_AUTO);
     assert(config.providers[0].exact_token_count == SNAG_TOKEN_COUNT_AUTO);
     assert(config.providers[0].native_compaction);
     test_openrouter_provider();
     assert(strcmp(config.providers[0].base_url, "https://api.openai.com") == 0);
-    assert(strcmp(config.providers[0].api_key_env, "OPENAI_API_KEY") == 0);
+    assert(strcmp(config.providers[0].api_key.value, "OPENAI_API_KEY") == 0);
     assert(config.providers[0].openrouter_referer[0] == '\0');
     assert(config.providers[0].openrouter_title[0] == '\0');
-    assert(config.secret_env_count == 0u);
+    assert(config.secret_count == 0u);
     shell = realpath("/bin/sh", NULL);
     assert(shell);
     assert(strcmp(config.shell, shell) == 0);
@@ -470,7 +544,7 @@ main(void)
     assert(config.providers[0].auto_compact_input_tokens == 12345u);
     assert(strcmp(config.providers[0].base_url,
                   "http://127.0.0.1:2455/backend-api/codex") == 0);
-    assert(strcmp(config.providers[0].api_key_env, "CODEX_LB_API_KEY") == 0);
+    assert(strcmp(config.providers[0].api_key.value, "CODEX_LB_API_KEY") == 0);
     assert(strcmp(config.providers[0].openrouter_referer,
                   "https://github.com/snajpa/snajpagent") == 0);
     assert(strcmp(config.providers[0].openrouter_title, "snajpagent") == 0);
@@ -479,27 +553,29 @@ main(void)
     assert(strcmp(config.providers[1].name, "backup") == 0);
     assert(strcmp(config.providers[1].base_url,
                   "https://backup.example.test/v1") == 0);
-    assert(strcmp(config.providers[1].api_key_env, "BACKUP_API_KEY") == 0);
+    assert(strcmp(config.providers[1].api_key.value, "BACKUP_API_KEY") == 0);
     assert(config.providers[1].exact_token_count == SNAG_TOKEN_COUNT_STRICT);
     assert(config.model_limit_count == 2u);
     {
-        const struct snag_model_limit_config *limit =
-            snag_config_model_limit(&config, "default", "gpt-5.5");
-        assert(limit);
+        struct snag_model_limit_config resolved;
+        const struct snag_model_limit_config *limit = &resolved;
+        assert(snag_config_resolve_limits(&config, "default", "gpt-5.5", &resolved, NULL));
         assert(limit->context_window_tokens == UINT64_C(1050000));
         assert(limit->max_input_tokens == UINT64_C(922000));
         assert(limit->max_output_tokens == UINT64_C(128000));
     }
     {
-        const struct snag_model_limit_config *limit =
-            snag_config_model_limit(&config, "backup",
-                                   "org/model/with/slashes");
-        assert(limit);
+        struct snag_model_limit_config resolved;
+        const struct snag_model_limit_config *limit = &resolved;
+        assert(snag_config_resolve_limits(&config, "backup", "org/model/with/slashes", &resolved, NULL));
         assert(!limit->context_window_tokens);
         assert(limit->max_input_tokens == SNAG_CONFIG_TOKEN_LIMIT_MAX);
         assert(!limit->max_output_tokens);
     }
-    assert(snag_config_model_limit(&config, "default", "missing") == NULL);
+    {
+        struct snag_model_limit_config resolved;
+        assert(!snag_config_resolve_limits(&config, "default", "missing", &resolved, NULL));
+    }
     assert(snag_config_provider(&config, NULL) == &config.providers[0]);
     assert(snag_config_provider(&config, "backup") == &config.providers[1]);
     assert(snag_config_provider(&config, "missing") == NULL);
@@ -528,9 +604,9 @@ main(void)
     assert(config.max_timeout_ms == 5000u);
     assert(config.max_output_tokens == 7654u);
     assert(config.max_output_bytes == 123456u);
-    assert(config.secret_env_count == 2u);
-    assert(strcmp(config.secret_env[0], "TOKEN_ONE") == 0);
-    assert(strcmp(config.secret_env[1], "TOKEN_TWO") == 0);
+    assert(config.secret_count == 2u);
+    assert(strcmp(config.secrets[0].value, "TOKEN_ONE") == 0);
+    assert(strcmp(config.secrets[1].value, "TOKEN_TWO") == 0);
     snag_config_free(&config);
 
     assert(snprintf(path, sizeof(path), "%s/config.ini", dotdir) > 0);
@@ -720,14 +796,21 @@ main(void)
         snag_config_free(&config);
 
         assert(snprintf(created, sizeof(created), "%s/new.ini", dotdir) > 0);
+        /* A model-only writer cannot invent the selected provider. */
         assert(snag_config_save_model(created, true, "default", "created-model",
-                                     "medium", error, sizeof(error)) == 0);
+                                     "medium", error, sizeof(error)) < 0);
+        {
+            struct snag_provider_config created_provider;
+            snag_config_provider_init(&created_provider, "named");
+            assert(snag_config_save_provider(created, true, &created_provider,
+                                             "created-model", "medium", error, sizeof(error)) == 0);
+        }
         assert(stat(created, &st) == 0);
         assert((st.st_mode & 0777u) == 0600u);
         snag_config_init(&config);
         assert(snag_config_load(&config, created, dotdir,
                                error, sizeof(error)) == 0);
-        assert(strcmp(config.provider, "default") == 0);
+        assert(strcmp(config.provider, "named") == 0);
         assert(strcmp(config.model, "created-model") == 0);
         snag_config_free(&config);
 
@@ -755,6 +838,8 @@ main(void)
         }
     }
 
+    test_layered_limits_and_secrets(path);
+    assert(unlink(path) == 0);
     puts("test_config: ok");
     return 0;
 }

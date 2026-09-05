@@ -58,12 +58,6 @@ struct capture_redactor {
     size_t max_secret;
 };
 
-struct managed_secret_set {
-    char storage[SNAG_SECRET_VALUES_MAX][SNAG_WIRE_SECRET_MAX + 1u];
-    const char *values[SNAG_SECRET_VALUES_MAX];
-    struct snag_wire_secrets wire;
-};
-
 struct managed_process {
     char handle[SNAG_ID_HEX_LEN + 1u];
     pid_t pid;
@@ -84,7 +78,7 @@ struct managed_process {
     uint64_t started_ms;
     uint64_t deadline_ms;
     uint32_t max_output_tokens;
-    struct managed_secret_set secrets;
+    struct snag_secret_set secrets;
     struct capture_stream stdout_stream;
     struct capture_stream stderr_stream;
     struct capture_redactor stdout_redactor;
@@ -533,10 +527,12 @@ remove_env_entry(const char *entry, const struct snag_config *config)
     if (env_name_matches(entry, "OPENAI_API_KEY"))
         return true;
     for (size_t i = 0; i < config->provider_count; ++i)
-        if (env_name_matches(entry, config->providers[i].api_key_env))
+        if (config->providers[i].api_key.kind == SNAG_SECRET_ENV &&
+            env_name_matches(entry, config->providers[i].api_key.value))
             return true;
-    for (size_t i = 0; i < config->secret_env_count; ++i)
-        if (env_name_matches(entry, config->secret_env[i]))
+    for (size_t i = 0; i < config->secret_count; ++i)
+        if (config->secrets[i].kind == SNAG_SECRET_ENV &&
+            env_name_matches(entry, config->secrets[i].value))
             return true;
     for (size_t i = 0; i < sizeof(proxy_names) / sizeof(proxy_names[0]); ++i)
         if (env_name_matches(entry, proxy_names[i]) && proxy_with_userinfo(entry))
@@ -726,65 +722,6 @@ saturating_deadline(uint64_t start, uint32_t delta_ms)
     return deadline < start ? UINT64_MAX : deadline;
 }
 
-static void
-managed_secret_set_build(struct managed_secret_set *set,
-                         const struct snag_config *config,
-                         const struct snag_credential *credential)
-{
-    size_t count = 0u;
-
-    memset(set, 0, sizeof(*set));
-    if (credential && credential->len && count < SNAG_SECRET_VALUES_MAX) {
-        size_t len = credential->len;
-        if (len > SNAG_WIRE_SECRET_MAX)
-            len = SNAG_WIRE_SECRET_MAX;
-        memcpy(set->storage[count], credential->value, len);
-        set->storage[count][len] = '\0';
-        set->values[count] = set->storage[count];
-        ++count;
-    }
-    if (config) {
-        for (size_t i = 0; i < config->provider_count &&
-             count < SNAG_SECRET_VALUES_MAX; ++i) {
-            const char *value = getenv(config->providers[i].api_key_env);
-            size_t len;
-            bool duplicate = false;
-            if (!value)
-                continue;
-            len = strnlen(value, SNAG_WIRE_SECRET_MAX + 1u);
-            if (!len || len > SNAG_WIRE_SECRET_MAX)
-                continue;
-            for (size_t j = 0; j < count; ++j)
-                if (strcmp(set->values[j], value) == 0) {
-                    duplicate = true;
-                    break;
-                }
-            if (duplicate)
-                continue;
-            memcpy(set->storage[count], value, len);
-            set->storage[count][len] = '\0';
-            set->values[count] = set->storage[count];
-            ++count;
-        }
-        for (size_t i = 0; i < config->secret_env_count &&
-             count < SNAG_SECRET_VALUES_MAX; ++i) {
-            const char *value = getenv(config->secret_env[i]);
-            size_t len;
-            if (!value)
-                continue;
-            len = strnlen(value, SNAG_WIRE_SECRET_MAX + 1u);
-            if (!len || len > SNAG_WIRE_SECRET_MAX)
-                continue;
-            memcpy(set->storage[count], value, len);
-            set->storage[count][len] = '\0';
-            set->values[count] = set->storage[count];
-            ++count;
-        }
-    }
-    set->wire.values = set->values;
-    set->wire.count = count;
-}
-
 static struct managed_process *
 find_process(const char *handle)
 {
@@ -832,7 +769,7 @@ managed_release(struct managed_process *proc)
     for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i)
         if (processes[i] == proc)
             processes[i] = NULL;
-    memset(&proc->secrets, 0, sizeof(proc->secrets));
+    snag_secret_set_free(&proc->secrets);
     free(proc);
 }
 
@@ -1250,6 +1187,8 @@ start_command(const char *handle, const char *command, const char *workdir,
     proc->stdin_fd = proc->stdout_fd = proc->stderr_fd = -1;
     processes[slot] = proc;
     managed_register_cleanup();
+    if (snag_secret_set_build(&proc->secrets, config, credential, error, error_size) < 0)
+        goto out;
     if (pty) {
         if (open_pty_pair(&pty_master, &pty_slave,
                           &pty_rows, &pty_cols) < 0) {
@@ -1342,7 +1281,6 @@ start_command(const char *handle, const char *command, const char *workdir,
         goto out;
     proc->input_accepted_total = stdin_len;
     proc->input_eof = stdin_text != NULL;
-    managed_secret_set_build(&proc->secrets, config, credential);
     capture_init(&proc->stdout_stream);
     capture_init(&proc->stderr_stream);
     proc->stdout_stream.owner = proc->stderr_stream.owner = proc;
@@ -1580,8 +1518,16 @@ snag_tools_run(const struct snag_response_item *call,
     *result = NULL;
     if (!call || call->kind != SNAG_ITEM_TOOL_CALL || !config || !session_workspace)
         return -1;
-    if (!strcmp(call->name, "apply_patch"))
-        return snag_tools_apply_patch(call, session_workspace, result, error, error_size);
+    if (!strcmp(call->name, "apply_patch")) {
+        struct snag_secret_set secrets = {0};
+        rc = snag_secret_set_build(&secrets, config, credential, error, error_size);
+        if (rc == 0)
+            rc = snag_tools_apply_patch(call, session_workspace, result, error, error_size);
+        if (rc == 0 && *result)
+            rc = snag_secret_result(&secrets, *result, error, error_size);
+        snag_secret_set_free(&secrets);
+        return rc;
+    }
     rc = snag_tools_prepare(call, config, handle, &yield_ms, result);
     if (rc != 0)
         return rc < 0 ? -1 : 0;

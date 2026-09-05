@@ -34,6 +34,67 @@ write_file_at(int dirfd, const char *name, const char *text)
     assert(close(fd) == 0);
 }
 
+static void
+test_local_models(struct snag_store *store, struct snag_model_cache *cache)
+{
+    struct snag_config config;
+    struct snag_provider_config *provider;
+    struct snag_model_capacity capacity;
+    const char *name, *model, *effort;
+    char error[256] = {0};
+    bool saw_small = false, saw_large = false;
+
+    snag_config_init(&config);
+    provider = &config.providers[0];
+    strcpy(provider->name, "codex");
+    strcpy(provider->base_url, "https://chat.example.test/backend-api/codex");
+    provider->models = calloc(2u, sizeof(*provider->models));
+    assert(provider->models);
+    provider->model_count = 2u;
+    strcpy(provider->models[0].name, "small");
+    strcpy(provider->models[0].upstream, "codex-context-only");
+    strcpy(provider->models[1].name, "large");
+    strcpy(provider->models[1].upstream, "codex-context-only");
+    config.model_limit_count = 3u;
+    for (size_t i = 0; i < config.model_limit_count; ++i)
+        strcpy(config.model_limits[i].provider, "codex");
+    config.model_limits[0].context_window_tokens = 500000u;
+    strcpy(config.model_limits[1].model, "small");
+    config.model_limits[1].context_window_tokens = 128000u;
+    strcpy(config.model_limits[2].model, "codex-context-only");
+    config.model_limits[2].max_output_tokens = 4000u;
+    assert(snag_model_capacity_resolve(cache, &config, provider, "small", "codex",
+                                      &capacity, error, sizeof(error)) == 0);
+    assert(capacity.context_window_tokens == 128000u && capacity.hard_input_tokens == 121600u);
+    assert(!capacity.max_output_tokens); /* No inheritance from a different local name. */
+    config.model_limits[1].max_output_tokens = 128000u;
+    assert(snag_model_capacity_resolve(cache, &config, provider, "small", "codex",
+                                      &capacity, error, sizeof(error)) < 0);
+    assert(strstr(error, "rule small"));
+    config.model_limits[1].max_output_tokens = 0u;
+    assert(snag_model_capacity_resolve(cache, &config, provider, "large", "codex",
+                                      &capacity, error, sizeof(error)) == 0);
+    assert(capacity.context_window_tokens == 500000u && capacity.hard_input_tokens == 475000u);
+    assert(snag_model_compact_threshold(provider, &capacity) == 427500u);
+    for (size_t i = 1u; snag_model_entry(cache, &config, i, "medium", &name, &model, &effort) == 0; ++i) {
+        saw_small |= strcmp(model, "small") == 0;
+        saw_large |= strcmp(model, "large") == 0;
+        assert(strcmp(name, "codex") == 0);
+    }
+    assert(saw_small && saw_large);
+    assert(snag_model_cache_record(store, cache, provider, "codex", "large",
+                                  SNAG_COUNT_UNKNOWN, 0u, 0u, 400000u, error, sizeof(error)) == 0);
+    assert(snag_model_cache_find(cache, "codex", "large") == NULL);
+    assert(snag_model_capacity_resolve(cache, &config, provider, "large", "codex",
+                                      &capacity, error, sizeof(error)) == 0);
+    assert(capacity.hard_input_tokens == 400000u);
+    strcpy(provider->models[1].upstream, "unknown");
+    assert(snag_model_capacity_resolve(cache, &config, provider, "large", "codex",
+                                      &capacity, error, sizeof(error)) == 0);
+    assert(capacity.hard_input_tokens == 475000u);
+    snag_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -257,8 +318,8 @@ main(void)
                error, sizeof(error)) == 0);
     assert(capacity.source == SNAG_CAPACITY_CONFIG);
     assert(capacity.source_bound);
-    assert(!capacity.context_window_tokens);
-    assert(!capacity.max_output_tokens);
+    assert(capacity.context_window_tokens == 1050000u);
+    assert(capacity.max_output_tokens == 128000u);
     assert(capacity.hard_input_tokens == 900000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            810000u);
@@ -268,21 +329,20 @@ main(void)
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.source == SNAG_CAPACITY_CONFIG);
-    assert(!capacity.context_window_tokens);
-    assert(!capacity.max_output_tokens);
-    assert(capacity.hard_input_tokens == 1100000u);
+    assert(capacity.context_window_tokens && capacity.max_output_tokens);
+    assert(capacity.hard_input_tokens == 922000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
-           990000u);
+           829800u);
 
     config.model_limits[0].max_input_tokens = 0u;
     config.model_limits[0].context_window_tokens = 100u;
-    config.model_limits[0].max_output_tokens = 100u;
+    config.model_limits[0].max_output_tokens = 99u;
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
-    assert(capacity.hard_input_known && capacity.hard_input_tokens == 0u);
+    assert(capacity.hard_input_known && capacity.hard_input_tokens == 1u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) == 1u);
-    config.model_limits[0].max_output_tokens = 101u;
+    config.model_limits[0].max_output_tokens = 100u;
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "org/model", "openai", &capacity,
                error, sizeof(error)) < 0);
@@ -415,6 +475,7 @@ main(void)
     assert(capacity.observed_tokens_per_million_bytes == 0u);
     assert(capacity.hard_input_tokens == 922000u);
 
+    test_local_models(&store, &cache);
     json_decref(providers);
     snag_config_free(&config);
     snag_model_cache_free(&cache);

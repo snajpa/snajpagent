@@ -74,7 +74,7 @@ model = gpt-5.5
 
 [provider openai]
 base_url = https://api.openai.com
-api_key_env = OPENAI_API_KEY
+api_key = ${OPENAI_API_KEY}
 .fi
 .PP
 Export the named credential, change to the project directory, and run:
@@ -147,6 +147,11 @@ Use an absolute private application directory instead of
 .BI \-\-config " file"
 Read an absolute configuration path.  This does not move sessions or the model
 cache.  Unlike the default path, an explicit file must exist.
+.TP
+.BI \-\-provider " name"
+Select a configured provider. On resume this explicitly changes the saved
+selection after local recovery, without rewriting past events. A missing name
+is an error. Combine with -m MODEL when changing models too.
 .TP
 .BR \-v
 Set verbosity to the number of flags, starting at 0 without flags.
@@ -722,31 +727,36 @@ Project instructions are reread before turns; see
 .SS "provider NAME"
 Up to 16 ordered named sections are accepted.  The spelling
 .B [provider]
-defines the name
-.BR default .
+is no longer accepted. Names have no privileged meaning. New sessions use the
+first declaration unless an explicit provider preference or
+.B --provider NAME
+selects another. Unqualified model changes stay on the current provider.
 .TP
 .B base_url
 HTTP or HTTPS API base without query or fragment.  Default:
 .BR https://api.openai.com .
 .TP
-.B api_key_env
-Credential environment-variable name.  Default:
-.BR OPENAI_API_KEY .
+.B api_key
+Credential source: ${ENV_NAME}, a double-quoted literal with JSON escaping,
+or an unquoted file path. A bare environment name means a file, not a variable.
+Relative files use the config directory; leading ~/ expands the user's home.
+Files may have one final LF/CRLF and may be symlinks for rotation.
+Literal secrets require a user-owned private configuration file (0600).
+Absent means use the provider's managed stored login; empty is invalid.
 .TP
 .B auth
-Credential source:
-.B env
-(default) reads
-.BR api_key_env ;
+Authentication method:
 .B api_key
-reads the provider's stored key; and
+(default) uses the explicit source or, when absent, the provider's stored key; and
 .B chatgpt
 uses stored Codex OAuth credentials with automatic refresh.
 ChatGPT auth requires the exact base
-.BR https://chatgpt.com/backend-api/codex .
+.BR https://chatgpt.com/backend-api/codex
+and no api_key setting.
 These tokens are never sent to a custom endpoint.  Existing bearer-auth
-Codex-compatible proxies retain
-.BR auth=env .
+Codex-compatible proxies use
+.BR auth=api_key .
+Missing/bad explicit sources never fall back to a stored login.
 .TP
 .B connect_timeout_ms
 Connect timeout, 1000 through 120000.  Default: 30000.
@@ -812,7 +822,10 @@ Optional printable ASCII
 .B X-Title
 value.
 .SS "model-limit PROVIDER/MODEL"
-An exact operator capacity override.  Set at least one of:
+Set provider-wide defaults with [model-limit PROVIDER], patterned rules with
+[model-limit PROVIDER/PATTERN], and exact rules with [model-limit PROVIDER/MODEL].
+The first slash separates the provider; remaining slashes belong to the model.
+Set at least one of:
 .TP
 .B context_window_tokens
 Total context tokens, 1 through 4000000000.
@@ -823,8 +836,17 @@ Maximum input tokens, 1 through 4000000000.
 .B max_output_tokens
 Maximum output tokens, 1 through 4000000000.
 .PP
-Known values must be internally consistent.  A matching override takes
-precedence over source-bound catalog limits.
+Rules merge per field: provider-wide, matching patterns in file order, then
+exact model. The star matches zero or more characters over the whole local
+model name. Duplicate targets/keys are errors. Unspecified fields inherit
+catalog metadata. Explicit values supersede the catalog, but output headroom
+and learned backend ceilings still constrain usable input.
+.SS "model-alias PROVIDER/NAME"
+The required model key is a literal upstream model ID. These declarations
+define ordinary provider-local models with independent limits; several names
+may route to the same upstream model. Targets never resolve recursively.
+Selection, sessions and limits use the local name; provider requests use the
+upstream ID. Upstream names do not add another limit-rule matching tier.
 .SS ui
 .TP
 .B color
@@ -967,9 +989,11 @@ means unlimited.  The
 durable session retains complete redacted output; model context has its own
 tool-call bound.  Default: 0.
 .TP
-.B secret_env
-Comma-separated environment names removed from tool children and redacted from
-captured output.  Up to 64 unique names; empty clears the list.
+.B secret
+Repeatable additional value to protect, using the same source syntax as api_key.
+Up to 64 sources. Environment references are removed from child environments;
+files/literals are not exported. Missing required sources fail before protected
+work. The obsolete secret_env key is rejected.
 .SS irc
 .TP
 .B listen
@@ -1086,12 +1110,12 @@ Must select a UTF-8 locale.
 .B PATH
 Used to resolve the executable path printed in a resume command.
 .TP
-.I api_key_env
-Each provider names its credential variable.  It must contain a nonempty value
+.I "api_key = ${ENV_NAME}"
+An explicit environment credential source must contain a nonempty value
 of 1 through 16384 ASCII bytes without whitespace or controls.
 .TP
-.I secret_env
-Names additional variables hidden from tool children and redacted from output.
+.I "secret = ${ENV_NAME}"
+Names an additional value hidden from tool children and redacted from output.
 .SH AUTOMATION AND INTEGRATION
 Use
 .B \-e
@@ -1373,8 +1397,9 @@ typed by the operator; remove or protect the history file with the same care as
 shell history.  Session archive and deletion do not erase it.
 .PP
 Provider credential variables and configured
-.B secret_env
-values are removed from tool environments or redacted before tool output is
+.B secret
+sources are removed from tool environments when environment-backed, and resolved
+values are redacted before tool output is
 stored and displayed.  This does not make arbitrary workspace content safe to
 send to a provider or publish.
 .PP

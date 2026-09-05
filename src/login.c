@@ -134,11 +134,13 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
     *existing = found != NULL;
     if (found) {
         *provider = *found;
+        memset(&provider->api_key, 0, sizeof(provider->api_key));
+        if (found->api_key.kind != SNAG_SECRET_NONE &&
+            snag_secret_source_parse(&provider->api_key, found->api_key.expression,
+                                      config->source_path, error, error_size) < 0)
+            return -1;
     } else {
-        struct snag_config defaults;
-        snag_config_init(&defaults);
-        *provider = defaults.providers[0];
-        snag_config_free(&defaults);
+        snag_config_provider_init(provider, selection);
         if (!snag_strcpy(provider->name, sizeof(provider->name), selection))
             return -1;
         provider->auth = SNAG_AUTH_API_KEY;
@@ -149,7 +151,6 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
             (void)snag_strcpy(provider->base_url, sizeof(provider->base_url), SNAG_CHATGPT_BASE);
         } else if (strcmp(selection, "openrouter") == 0) {
             (void)snag_strcpy(provider->base_url, sizeof(provider->base_url), "https://openrouter.ai/api/v1");
-            (void)snag_strcpy(provider->api_key_env, sizeof(provider->api_key_env), "OPENROUTER_API_KEY");
         } else if (strcmp(selection, "openai") != 0) {
             if (strcmp(selection, "custom") == 0 &&
                 (read_line("Provider name: ", provider->name, sizeof(provider->name), false,
@@ -166,9 +167,25 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
             return -1;
         }
         provider->auth = SNAG_AUTH_CHATGPT;
+        snag_secret_source_free(&provider->api_key);
     }
-    if (cli->with_api_key)
+    if (!*existing && !cli->auth_provider && strcmp(selection, "custom") != 0) {
+        char local_name[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
+        char prompt[128];
+        (void)snprintf(prompt, sizeof(prompt), "Local provider name [%s]: ", provider->name);
+        if (read_line(prompt, local_name, sizeof(local_name), false, false, error, error_size) < 0)
+            return -1;
+        if (local_name[0])
+            (void)snag_strcpy(provider->name, sizeof(provider->name), local_name);
+        if (snag_config_provider(config, provider->name)) {
+            snag_errorf(error, error_size, "provider name is already configured");
+            return -1;
+        }
+    }
+    if (cli->with_api_key) {
         provider->auth = SNAG_AUTH_API_KEY;
+        snag_secret_source_free(&provider->api_key);
+    }
     for (const unsigned char *p = (const unsigned char *)provider->name; *p; ++p)
         if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
               (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-')) {
@@ -189,12 +206,13 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
 
 static int
 acquire_login(const struct snag_cli *cli, struct snag_provider_config *provider,
+               const char *config_path,
                int root_fd, struct snag_auth_tokens *tokens,
                char *error, size_t error_size)
 {
     char key[SNAG_CREDENTIAL_MAX + 1u];
     int rc;
-    if (provider->auth != SNAG_AUTH_ENV && root_fd >= 0 &&
+    if (provider->api_key.kind == SNAG_SECRET_NONE && root_fd >= 0 &&
         !cli->device_auth && !cli->with_api_key) {
         rc = snag_auth_load(root_fd, provider, tokens, error, error_size);
         if (rc < 0)
@@ -214,20 +232,19 @@ acquire_login(const struct snag_cli *cli, struct snag_provider_config *provider,
     }
     if (provider->auth == SNAG_AUTH_CHATGPT)
         return snag_auth_device(tokens, login_pump, NULL, error, error_size);
-    if (provider->auth == SNAG_AUTH_ENV)
-        return snag_credential_read(&tokens->credential, provider->api_key_env,
-                                    error, error_size);
-    rc = read_line("API key (hidden; blank selects an environment variable): ",
+    if (provider->api_key.kind != SNAG_SECRET_NONE)
+        return snag_credential_resolve(&tokens->credential, &provider->api_key,
+                                       error, error_size);
+    rc = read_line("API key (hidden; blank selects a secret source): ",
                     key, sizeof(key), true, cli->with_api_key, error, error_size);
     if (rc == 0 && !key[0] && !cli->with_api_key) {
-        if (read_line("Credential environment variable name: ", provider->api_key_env,
-                       sizeof(provider->api_key_env), false, false, error, error_size) < 0 ||
-            !provider->api_key_env[0]) {
+        if (read_line("Secret source (${ENV}, quoted literal, or path; hidden): ", key,
+                       sizeof(key), true, false, error, error_size) < 0 ||
+            snag_secret_source_parse(&provider->api_key, key, config_path, error, error_size) < 0) {
             rc = -1;
         } else {
-            provider->auth = SNAG_AUTH_ENV;
-            rc = snag_credential_read(&tokens->credential, provider->api_key_env,
-                                      error, error_size);
+            rc = snag_credential_resolve(&tokens->credential, &provider->api_key,
+                                         error, error_size);
         }
     } else if (rc == 0) {
         rc = snag_auth_key(tokens, key, error, error_size);
@@ -306,10 +323,10 @@ login_status(const struct snag_config *config, int root_fd,
             continue;
         found = true;
         snag_auth_clear(&tokens);
-        if (provider->auth == SNAG_AUTH_ENV) {
-            rc = snag_credential_read(&tokens.credential, provider->api_key_env,
-                                      error, error_size);
-            (void)printf("%s: env %s (%s)\n", provider->name, provider->api_key_env,
+        if (provider->api_key.kind != SNAG_SECRET_NONE) {
+            rc = snag_credential_resolve(&tokens.credential, &provider->api_key,
+                                         error, error_size);
+            (void)printf("%s: %s (%s)\n", provider->name, snag_secret_source_kind(&provider->api_key),
                           rc == 0 ? "available" : "missing or invalid");
         } else {
             rc = root_fd < 0 ? 1 : snag_auth_load(root_fd, provider, &tokens, error, error_size);
@@ -333,7 +350,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
 {
     struct snag_config config;
     struct snag_store store;
-    struct snag_provider_config provider;
+    struct snag_provider_config provider = {0};
     struct snag_auth_tokens tokens, previous;
     struct sigaction action, old_int, old_term;
     struct stat st;
@@ -350,7 +367,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     if (setup && !getenv("SNAJPAGENT_TEST_LOGIN"))
         return 0;
 #endif
-    if (setup && (cli->execute || cli->resume || cli->list || cli->config_path ||
+    if (setup && (cli->execute || cli->resume || cli->list || cli->config_path || cli->provider ||
                    !isatty(STDIN_FILENO) || !isatty(STDERR_FILENO)))
         return 0;
     snag_config_init(&config);
@@ -371,6 +388,11 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     *handled = true;
     if (snag_config_load(&config, cli->config_path, dotdir, error, sizeof(error)) < 0)
         goto out;
+    if (first) {
+        for (size_t i = 0; i < config.provider_count; ++i)
+            snag_secret_source_free(&config.providers[i].api_key);
+        config.provider_count = 0u;
+    }
     if (cli->auth_command == SNAG_CLI_LOGIN_STATUS || cli->auth_command == SNAG_CLI_LOGOUT) {
         root_fd = open(dotdir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
         if (root_fd < 0 && errno != ENOENT)
@@ -384,8 +406,8 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
                 snag_errorf(error, sizeof(error), "provider is not configured");
                 goto out;
             }
-            if (p->auth == SNAG_AUTH_ENV) {
-                (void)printf("%s uses environment credentials; no stored login removed\n", p->name);
+            if (p->api_key.kind != SNAG_SECRET_NONE) {
+                (void)printf("%s uses config-owned credentials; no stored login removed\n", p->name);
                 rc = 0;
             } else {
                 rc = root_fd < 0 ? 0 : snag_auth_logout(root_fd, p, NULL, NULL, error, sizeof(error));
@@ -415,7 +437,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     root_fd = open(dotdir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (root_fd < 0 && errno != ENOENT)
         goto out;
-    if (acquire_login(cli, &provider, root_fd, &tokens, error, sizeof(error)) < 0)
+    if (acquire_login(cli, &provider, path, root_fd, &tokens, error, sizeof(error)) < 0)
         goto out;
     if (first && choose_model(cli, &config, &provider, &tokens, model, error, sizeof(error)) < 0)
         goto out;
@@ -423,7 +445,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         goto out;
     if (snag_store_open(&store, dotdir, error, sizeof(error)) < 0)
         goto out;
-    if (provider.auth != SNAG_AUTH_ENV) {
+    if (provider.api_key.kind == SNAG_SECRET_NONE) {
         if (snag_auth_save(store.root_fd, &provider, &tokens, &previous,
                           login_pump, NULL, error, sizeof(error)) < 0)
             goto out;
@@ -437,7 +459,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
             (void)fprintf(stderr, "snajpagent: %s\n", rollback_error);
         goto out;
     }
-    (void)fprintf(stderr, "%s: %s configured; credentials are not stored in config.ini\n",
+    (void)fprintf(stderr, "%s: %s configured\n",
                    provider.name, snag_auth_kind_name(provider.auth));
     if (first)
         (void)fprintf(stderr, "Default model: %s / %s\n", provider.name, model);
@@ -455,6 +477,7 @@ out:
         (void)close(root_fd);
     snag_store_close(&store);
     snag_config_free(&config);
+    snag_secret_source_free(&provider.api_key);
     snag_auth_clear(&tokens);
     snag_auth_clear(&previous);
     free(path);

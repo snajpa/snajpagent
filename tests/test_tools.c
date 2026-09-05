@@ -2,6 +2,7 @@
 #include "base.h"
 #include "config.h"
 #include "credential.h"
+#include "secret.h"
 #include "json.h"
 #include "tools.h"
 #include "tools_patch.h"
@@ -1063,13 +1064,12 @@ test_all_provider_secrets_removed_and_redacted(void)
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     snag_config_init(&config);
-    config.providers[1] = config.providers[0];
+    snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name,
                     sizeof(config.providers[1].name), "second") > 0);
-    assert(snprintf(config.providers[1].api_key_env,
-                    sizeof(config.providers[1].api_key_env),
-                    "SECOND_PROVIDER_KEY") > 0);
+    assert(snag_secret_source_parse(&config.providers[1].api_key, "${SECOND_PROVIDER_KEY}",
+                                    NULL, error, sizeof(error)) == 0);
     assert(setenv("SECOND_PROVIDER_KEY", "second-provider-secret", 1) == 0);
     snag_credential_clear(&credential);
     make_call(&graph,
@@ -1082,6 +1082,50 @@ test_all_provider_secrets_removed_and_redacted(void)
     assert(unsetenv("SECOND_PROVIDER_KEY") == 0);
     json_decref(result);
     snag_response_graph_free(&graph);
+    snag_config_free(&config);
+}
+
+static void
+test_secret_snapshot_rotation(void)
+{
+    struct snag_config config;
+    struct snag_secret_set secrets = {0};
+    struct snag_buf result;
+    char error[256] = {0};
+    static const char body[] = "{\"text\":\"old-protected new-protected literal-protected\"}";
+
+    snag_config_init(&config);
+    config.secret_count = 2u;
+    assert(snag_secret_source_parse(&config.secrets[0], "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
+    assert(snag_secret_source_parse(&config.secrets[1], "\"literal-protected\"", NULL, error, sizeof(error)) == 0);
+    assert(setenv("SNAG_ROTATING_SECRET", "old-protected", 1) == 0);
+    assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) == 0);
+    assert(setenv("SNAG_ROTATING_SECRET", "new-protected", 1) == 0);
+    assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) == 0);
+    snag_config_free(&config);
+    assert(unsetenv("SNAG_ROTATING_SECRET") == 0);
+    snag_buf_init(&result, 4096u);
+    assert(snag_wire_json_redact((const unsigned char *)body, strlen(body), &secrets.wire,
+                                &result, error, sizeof(error)) == 0);
+    assert(snag_buf_terminate(&result) == 0);
+    assert(!strstr((const char *)result.data, "old-protected"));
+    assert(!strstr((const char *)result.data, "new-protected"));
+    assert(!strstr((const char *)result.data, "literal-protected"));
+    {
+        json_t *native = snag_tool_result_terminal(true, "old-protected literal-protected");
+        assert(native && snag_secret_result(&secrets, native, error, sizeof(error)) == 0);
+        assert(strcmp(snag_json_string(native, "status"), "succeeded") == 0);
+        assert(strstr(snag_json_string(native, "model_text"), "<redacted:secret>"));
+        assert(!strstr(snag_json_string(native, "model_text"), "old-protected"));
+        json_decref(native);
+    }
+    snag_buf_free(&result);
+    snag_secret_set_free(&secrets);
+    snag_config_init(&config);
+    config.secret_count = 1u;
+    assert(snag_secret_source_parse(&config.secrets[0], "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
+    assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) < 0);
+    snag_secret_set_free(&secrets);
     snag_config_free(&config);
 }
 
@@ -1575,6 +1619,7 @@ main(void)
     test_managed_close_kills_process_family();
     test_provider_secret_removed_from_environment();
     test_all_provider_secrets_removed_and_redacted();
+    test_secret_snapshot_rotation();
     test_apply_patch_rejects_null_result();
     test_apply_patch_add_update_delete();
     test_patch_line_endings();

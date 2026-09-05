@@ -20,6 +20,7 @@ snag_auth_clear(struct snag_auth_tokens *tokens)
     volatile unsigned char *p = (volatile unsigned char *)tokens;
     for (size_t i = 0; i < sizeof(*tokens); ++i)
         p[i] = 0;
+    tokens->credential.root_fd = -1;
 }
 
 void
@@ -43,7 +44,6 @@ const char *
 snag_auth_kind_name(enum snag_auth_kind kind)
 {
     switch (kind) {
-    case SNAG_AUTH_ENV: return "env";
     case SNAG_AUTH_API_KEY: return "api_key";
     case SNAG_AUTH_CHATGPT: return "chatgpt";
     }
@@ -400,8 +400,12 @@ snag_auth_read(int root_fd, const struct snag_provider_config *provider,
     struct snag_auth_tokens tokens;
     int dir = -1, lock = -1, rc;
     snag_credential_clear(out);
-    if (provider->auth == SNAG_AUTH_ENV)
-        return snag_credential_read(out, provider->api_key_env, error, error_size);
+    if (provider->api_key.kind != SNAG_SECRET_NONE) {
+        rc = snag_credential_resolve(out, &provider->api_key, error, error_size);
+        if (rc == 0)
+            out->root_fd = root_fd;
+        return rc;
+    }
     rc = snag_auth_load(root_fd, provider, &tokens, error, error_size);
     if (rc != 0) {
         rc = -1;

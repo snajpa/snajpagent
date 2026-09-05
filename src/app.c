@@ -243,18 +243,25 @@ next_provider(const struct app_state *app)
 
 static void
 provider_capacity_source_sha256(
-    const struct snag_provider_config *provider,
+    const struct snag_provider_config *provider, const char *model,
     char digest[SNAG_SHA256_HEX_LEN + 1u])
 {
-    char source[SNAG_CONFIG_URL_MAX + 16u];
+    char source[SNAG_CONFIG_URL_MAX + SNAG_CONFIG_MODEL_MAX + 32u];
     const char *protocol = snag_provider_catalog_protocol(provider);
     size_t protocol_len = strlen(protocol);
     size_t base_url_len = strlen(provider->base_url);
+    const char *upstream = snag_config_model_upstream(provider, model);
+    size_t len = protocol_len + 1u + base_url_len;
 
     memcpy(source, protocol, protocol_len);
     source[protocol_len] = '\n';
     memcpy(source + protocol_len + 1u, provider->base_url, base_url_len);
-    snag_sha256_hex(source, protocol_len + 1u + base_url_len, digest);
+    if (strcmp(upstream, model) != 0) {
+        source[len++] = '\n';
+        memcpy(source + len, upstream, strlen(upstream));
+        len += strlen(upstream);
+    }
+    snag_sha256_hex(source, len, digest);
 }
 
 static bool
@@ -268,7 +275,7 @@ capacity_ceiling_matches(const struct app_state *app,
         strcmp(app->session.capacity_ceiling_provider, provider->name) != 0 ||
         strcmp(app->session.capacity_ceiling_model, model) != 0)
         return false;
-    provider_capacity_source_sha256(provider, source_hash);
+    provider_capacity_source_sha256(provider, model, source_hash);
     return strcmp(app->session.capacity_ceiling_source_sha256,
                   source_hash) == 0;
 }
@@ -442,7 +449,7 @@ format_context_meter(struct app_state *app, bool active,
             return -1;
         capacity = &resolved;
     }
-    provider_capacity_source_sha256(provider, provider_source_hash);
+    provider_capacity_source_sha256(provider, model, provider_source_hash);
     if (!app->session.context_meter_valid ||
         strcmp(app->session.context_meter_provider, provider->name) != 0 ||
         strcmp(app->session.context_meter_model, model) != 0 ||
@@ -947,6 +954,8 @@ render_status(struct app_state *app)
     const char *id = app->session.id;
     const struct snag_provider_config *provider = next_provider(app);
     const struct snag_model_limit_config *configured = NULL;
+    struct snag_model_limit_config configured_values;
+    const struct snag_model_limit_config *rule_sources[3];
     const json_t *advertised = NULL;
     struct snag_model_capacity capacity;
     struct snag_buf text;
@@ -962,16 +971,16 @@ render_status(struct app_state *app)
                                  error, sizeof(error)) < 0)
         return app_error(app, error[0] ? error :
                          "model capacity could not be resolved");
-    configured = snag_config_model_limit(app->config, provider->name,
-                                        next_model(app));
+    if (snag_config_resolve_limits(app->config, provider->name, next_model(app),
+                                  &configured_values, rule_sources))
+        configured = &configured_values;
     ceiling_selection_matches = app->session.capacity_ceiling_valid &&
         strcmp(app->session.capacity_ceiling_provider, provider->name) == 0 &&
         strcmp(app->session.capacity_ceiling_model, next_model(app)) == 0;
     ceiling_source_matches = ceiling_selection_matches &&
         capacity_ceiling_matches(app, provider, next_model(app));
     if (capacity.source_bound)
-        advertised = snag_model_cache_find(&app->model_cache, provider->name,
-                                          next_model(app));
+        advertised = snag_model_metadata(&app->model_cache, provider, next_model(app));
     snag_buf_init(&text, 64u * 1024u);
     if (snag_buf_printf(&text,
         "session: %s\n"
@@ -1034,6 +1043,15 @@ render_status(struct app_state *app)
     }
     if (append_advertised_capacity(&text, advertised) < 0)
         goto out;
+    if (snag_buf_printf(&text, "\nprovider model: %s", snag_config_model_upstream(provider, next_model(app))) < 0)
+        goto out;
+    for (size_t i = 0; i < 3u; ++i) {
+        static const char *const fields[] = {"context", "max-input", "max-output"};
+        const struct snag_model_limit_config *rule = rule_sources[i];
+        if (rule && snag_buf_printf(&text, "\n%s rule: [model-limit %s%s%s]", fields[i],
+                                    rule->provider, rule->model[0] ? "/" : "", rule->model) < 0)
+            goto out;
+    }
     if (capacity.cache_source_mismatch &&
         snag_buf_append(&text,
             "\ncatalog source: mismatch; advertised limits ignored",
@@ -1202,6 +1220,9 @@ load_model_cache(struct app_state *app, bool refresh,
     rc = snag_model_cache_load(&app->store, &app->model_cache,
                               error, error_size);
     if (rc == 1) {
+        for (size_t i = 0; i < app->config->provider_count; ++i)
+            if (app->config->providers[i].model_count)
+                return 0; /* Configured models do not require discovery. */
         snag_errorf(error, error_size,
                   "model cache is empty; use /model cache while idle");
         errno = ENOENT;
@@ -1249,6 +1270,43 @@ append_catalog_limits(struct snag_buf *text, const json_t *model)
 }
 
 static int
+model_picker_entry(struct app_state *app, size_t index,
+                    const char **provider, const char **model, const char **effort)
+{
+    return snag_model_entry(&app->model_cache, app->config, index,
+                            resolve_effort(app->config->reasoning_effort), provider, model, effort);
+}
+
+struct model_catalog_view {
+    const struct snag_config *config;
+    struct snag_buf *text;
+};
+
+static int
+append_model_row(void *opaque, size_t index, const char *provider, const char *model,
+                  const char *effort, const json_t *metadata)
+{
+    struct model_catalog_view *view = opaque;
+    struct snag_model_limit_config limits;
+
+    if (snag_buf_printf(view->text, "\n%zu. %s / %s / %s", index, provider, model, effort) < 0 ||
+        append_catalog_limits(view->text, metadata) < 0)
+        return -1;
+    if (snag_config_resolve_limits(view->config, provider, model, &limits, NULL)) {
+        if (limits.context_window_tokens &&
+            append_capacity_value(view->text, "configured-context", true, limits.context_window_tokens) < 0)
+            return -1;
+        if (limits.max_input_tokens &&
+            append_capacity_value(view->text, "configured-input", true, limits.max_input_tokens) < 0)
+            return -1;
+        if (limits.max_output_tokens &&
+            append_capacity_value(view->text, "configured-output", true, limits.max_output_tokens) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int
 render_model_catalog(struct app_state *app)
 {
     const struct snag_provider_config *selected = next_provider(app);
@@ -1258,7 +1316,7 @@ render_model_catalog(struct app_state *app)
     char timestamp[64];
     time_t seconds;
     struct tm broken;
-    size_t index = 0u;
+    struct model_catalog_view view = {app->config, &text};
     int rc = -1;
 
     if (!selected)
@@ -1277,29 +1335,12 @@ render_model_catalog(struct app_state *app)
                        app->staged_effort ? " (staged once)" : "") < 0 ||
         append_compact_threshold(&text, selected, &capacity) < 0)
         goto out;
-    for (size_t i = 0; i < json_array_size(app->model_cache.providers); ++i) {
-        json_t *provider = json_array_get(app->model_cache.providers, i);
-        json_t *models = json_object_get(provider, "models");
-
-        for (size_t j = 0; j < json_array_size(models); ++j) {
-            json_t *model = json_array_get(models, j);
-            json_t *efforts = json_object_get(model, "efforts");
-            size_t variants = json_array_size(efforts);
-
-            for (size_t k = 0; k < (variants ? variants : 1u); ++k) {
-                const char *effort = variants ?
-                    json_string_value(json_array_get(efforts, k)) :
-                    snag_model_cache_best_effort(model,
-                        resolve_effort(app->config->reasoning_effort));
-
-                if (!effort || snag_buf_printf(&text, "\n%zu. %s / %s / %s",
-                        ++index, snag_json_string(provider, "name"),
-                        snag_json_string(model, "id"), effort) < 0 ||
-                    append_catalog_limits(&text, model) < 0)
-                    goto out;
-            }
-        }
-    }
+    if (append_capacity_value(&text, "effective-context", capacity.context_window_tokens,
+                                capacity.context_window_tokens) < 0 ||
+        append_capacity_value(&text, "hard-input", capacity.hard_input_known, capacity.hard_input_tokens) < 0 ||
+        snag_model_each(&app->model_cache, app->config,
+                          resolve_effort(app->config->reasoning_effort), append_model_row, &view) < 0)
+        goto out;
     if (gmtime_r(&seconds, &broken) &&
         strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ",
                  &broken) != 0u) {
@@ -1352,35 +1393,43 @@ trim_selector_part(char *part)
     return part;
 }
 static int
+record_model_selection(struct app_state *app,
+                        const struct snag_provider_config *provider,
+                        const char *model, const char *effort,
+                        char *error, size_t error_size)
+{
+    if (strcmp(app->session.default_provider, provider->name) == 0 &&
+        strcmp(app->session.default_model, model) == 0 &&
+        strcmp(app->session.default_effort, effort) == 0)
+        return 0;
+    return commit_event(app, "model_selection_changed",
+        snag_app_model_selection_changed_data(app->session.default_provider, provider->name,
+            app->session.default_model, model, app->session.default_effort, effort),
+        error, error_size);
+}
+
+static int
 commit_model_selection(struct app_state *app,
                        const struct snag_provider_config *provider,
                        const char *model, const char *effort,
                        bool known_in_cache, bool save)
 {
-    const char *old_provider = app->session.default_provider;
     char error[256] = {0};
     int rc;
 
-    if (save && snag_config_save_model(app->config_path,
-            app->config_allow_create, provider->name, model, effort,
-            error, sizeof(error)) < 0)
-        return app_error(app, error[0] ? error :
-                         "model settings could not be written to configuration");
-    if (!old_provider[0])
-        old_provider = "";
-    if (strcmp(old_provider, provider->name) != 0 ||
-        strcmp(app->session.default_model, model) != 0 ||
-        strcmp(app->session.default_effort, effort) != 0) {
-        if (commit_event(app, "model_selection_changed",
-                snag_app_model_selection_changed_data(
-                    old_provider, provider->name,
-                    app->session.default_model, model,
-                    app->session.default_effort, effort),
-                error, sizeof(error)) < 0) {
-            (void)app_error(app, error[0] ? error :
-                            "model selection could not be saved");
-            return -1;
-        }
+    if (save) {
+        struct stat st;
+        bool missing = app->config_allow_create && lstat(app->config_path, &st) < 0 && errno == ENOENT;
+        int save_rc = missing ? snag_config_save_provider(app->config_path, true, provider,
+                                model, effort, error, sizeof(error)) :
+            snag_config_save_model(app->config_path, app->config_allow_create, provider->name,
+                                   model, effort, error, sizeof(error));
+        if (save_rc < 0)
+            return app_error(app, error[0] ? error : "model settings could not be written to configuration");
+    }
+    if (record_model_selection(app, provider, model, effort, error, sizeof(error)) < 0) {
+        (void)app_error(app, error[0] ? error : "model selection could not be saved");
+        return -1;
     }
     app->staged_provider = NULL;
     app->staged_model = NULL;
@@ -1398,7 +1447,7 @@ commit_model_selection(struct app_state *app,
     if (rc < 0)
         return rc;
     if (!known_in_cache && app_warning(app,
-            "model is not known in the model cache; it will still be sent unchanged") < 0)
+            "model is not known in the model cache; the configured provider will still be used") < 0)
         return -1;
     return save ? app_hostf(app, "configuration saved: %s", app->config_path) : 0;
 }
@@ -1417,9 +1466,7 @@ select_cached_model(struct app_state *app, const char *value, bool save)
         return 1;
     if (load_model_cache(app, false, error, sizeof(error)) < 0)
         return app_error(app, error);
-    entry_rc = snag_model_cache_entry(&app->model_cache, index,
-                                     resolve_effort(app->config->reasoning_effort),
-                                     &provider, &model, &effort);
+    entry_rc = model_picker_entry(app, index, &provider, &model, &effort);
     if (entry_rc != 0)
         return app_error(app, "model index is not in the displayed cache");
     provider_config = snag_config_provider(app->config, provider);
@@ -1463,7 +1510,7 @@ select_typed_model(struct app_state *app, const char *value, bool save)
         }
     }
     provider = count == 3u ? snag_config_provider(app->config, parts[0]) :
-                             snag_config_provider(app->config, NULL);
+                             next_provider(app);
     if (!provider) {
         (void)app_error(app, count == 3u ?
             "model selector names an unconfigured provider" :
@@ -1483,8 +1530,7 @@ select_typed_model(struct app_state *app, const char *value, bool save)
         char ignored[256] = {0};
         if (snag_model_cache_load(&app->store, &app->model_cache,
                                  ignored, sizeof(ignored)) == 0) {
-            const json_t *cached = snag_model_cache_find(&app->model_cache,
-                                                        provider->name, model);
+            const json_t *cached = snag_model_metadata(&app->model_cache, provider, model);
             known_in_cache = cached != NULL;
             if (count == 1u)
                 effort = snag_model_cache_best_effort(cached,
@@ -1793,6 +1839,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     memset(&candidate, 0, sizeof(candidate));
     app->irc_file_config = file_network;
     app->turn_provider = snag_config_provider(app->config, selected_provider);
+    app->turn_model = app->session.default_model;
     app->staged_provider = NULL;
     snag_ui_color(&app->ui, configured_color(app, app->config));
     snag_ui_markdown(&app->ui,
@@ -2842,7 +2889,7 @@ run_turn(struct app_state *app, const char *prompt,
         (void)app_error(app, error);
         return 2;
     }
-    provider_capacity_source_sha256(app->turn_provider, provider_source_hash);
+    provider_capacity_source_sha256(app->turn_provider, app->turn_model, provider_source_hash);
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
                       &credential, snag_app_active_input_pump, app,
@@ -3233,7 +3280,7 @@ run_turn(struct app_state *app, const char *prompt,
                 bool compacted = false;
                 char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
 
-                provider_capacity_source_sha256(app->turn_provider,
+                provider_capacity_source_sha256(app->turn_provider, app->turn_model,
                                                 provider_source_hash);
 
                 if (strcmp(rejected_request_hash, projection.request_sha256) == 0) {
@@ -4280,6 +4327,14 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         rc = 2;
         goto out;
     }
+    if (!cli->list && ((!config.provider_count) ||
+        (cli->provider && !snag_config_provider(&config, cli->provider)))) {
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, cli->provider ?
+            "--provider names an unconfigured provider" :
+            "no provider is configured; run snajpagent login");
+        rc = 2;
+        goto out;
+    }
     config_path = snag_config_path(cli->config_path, dotdir,
                                   error, sizeof(error));
     if (!config_path) {
@@ -4350,6 +4405,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     }
     if (cli->resume) {
+        const struct snag_provider_config *resume_provider;
+        const char *resume_model;
         if (cli->workspace) {
             relocated_workspace = resolve_workspace_path(cli->workspace, "relocation",
                                                          error, sizeof(error));
@@ -4377,8 +4434,16 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             rc = 3;
             goto out;
         }
+        resume_provider = snag_config_provider(&config,
+            cli->provider ? cli->provider : app.session.default_provider);
+        resume_model = cli->model ? new_model : app.session.default_model;
+        if (!resume_provider) {
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, "selected provider is not configured; use --provider NAME");
+            rc = 2;
+            goto out;
+        }
         if (!cli->execute && validate_prompt_values(&app.ui, &config,
-                snag_config_provider(&config, app.session.default_provider),
+                resume_provider,
                 cli->model ? new_model : app.session.default_model,
                 resolve_effort(cli->effort ? cli->effort :
                                app.session.default_effort)) < 0) {
@@ -4416,8 +4481,16 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             rc = 3;
             goto out;
         }
-        app.staged_model = cli->model ? new_model : NULL;
-        app.staged_effort = cli->effort;
+        if (cli->provider &&
+            record_model_selection(&app, resume_provider, resume_model,
+                cli->effort ? cli->effort : app.session.default_effort,
+                error, sizeof(error)) < 0) {
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
+            rc = 3;
+            goto out;
+        }
+        app.staged_model = cli->provider ? NULL : cli->model ? new_model : NULL;
+        app.staged_effort = cli->provider ? NULL : cli->effort;
         app.turn_model = next_model(&app);
         app.turn_effort = resolve_effort(next_effort(&app));
         app.turn_provider = next_provider(&app);
@@ -4425,7 +4498,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         const char *selected_workspace = cli->workspace ? cli->workspace : workspace;
         const struct snag_provider_config *selected_provider =
             snag_config_provider(&config,
-                                config.provider[0] ? config.provider : NULL);
+                cli->provider ? cli->provider : config.provider[0] ? config.provider : NULL);
         if (!cli->execute && validate_prompt_values(
                 &app.ui, &config, selected_provider, new_model,
                 resolve_effort(new_effort)) < 0) {
@@ -4440,7 +4513,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
             goto out;
         }
-        app.turn_model = app.session.default_model;
+        app.turn_model = next_model(&app);
         app.turn_effort = resolve_effort(app.session.default_effort);
         app.turn_provider = selected_provider;
     }

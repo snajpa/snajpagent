@@ -5,6 +5,7 @@
 #include "json.h"
 #include "tools.h"
 #include "wire.h"
+#include "secret.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -158,6 +159,11 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
 {
 #ifdef SNAJPAGENT_TEST_FIXTURE
     (void)credential;
+    if (strcmp(snag_json_string(count_request, "model"),
+               snag_config_model_upstream(app->turn_provider, app->turn_model)) != 0) {
+        snag_errorf(error, error_size, "fixture count request did not resolve the provider model");
+        return -1;
+    }
     (void)input_tokens;
     (void)model_input_bytes;
     if (app->turn_provider->exact_token_count == SNAG_TOKEN_COUNT_STRICT)
@@ -444,9 +450,17 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     static const char *const topic_keys[] = {"destination", "topic"};
 
     if (app->session.active_read_only) {
-        if (call && snag_read_only_tool(call->name))
-            return snag_tools_read_only(call, app->session.workspace,
-                                       snag_app_active_input_pump, app, result);
+        if (call && snag_read_only_tool(call->name)) {
+            struct snag_secret_set secrets = {0};
+            int rc = snag_secret_set_build(&secrets, app->config, credential, error, error_size);
+            if (rc == 0)
+                rc = snag_tools_read_only(call, app->session.workspace,
+                                         snag_app_active_input_pump, app, result);
+            if (rc == 0 && *result)
+                rc = snag_secret_result(&secrets, *result, error, error_size);
+            snag_secret_set_free(&secrets);
+            return rc;
+        }
         *result = snag_tool_result_terminal(false,
             "Tool unavailable: this turn is read-only; use list_files, read_file or grep.");
         return *result ? 0 : -1;

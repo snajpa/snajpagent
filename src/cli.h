@@ -46,6 +46,7 @@ struct snag_cli {
     char *workspace;
     char *dotdir;
     char *model;
+    char *provider;
     char *effort;
     char *config_path;
     char *irc_listen;
