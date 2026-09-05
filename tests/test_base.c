@@ -6,6 +6,48 @@
 #include <stdio.h>
 #include <string.h>
 
+static void
+test_irc_target_parse(void)
+{
+    static const struct {
+        const char *text, *body;
+        enum snag_irc_target_command command;
+        uint32_t id;
+    } cases[] = {
+        {"hello", "", SNAG_IRC_TARGET_NONE, 0u},
+        {"/", "", SNAG_IRC_TARGET_NONE, 0u},
+        {"//2 hi", "", SNAG_IRC_TARGET_NONE, 0u},
+        {"/topic x", "", SNAG_IRC_TARGET_NONE, 0u},
+        {"/alligator", "", SNAG_IRC_TARGET_NONE, 0u},
+        {"/1", "", SNAG_IRC_TARGET_SELECT, 1u},
+        {"/2 \t", "", SNAG_IRC_TARGET_SELECT, 2u},
+        {"/17 hi", "hi", SNAG_IRC_TARGET_SEND, 17u},
+        {"/02 café\nnext", "café\nnext", SNAG_IRC_TARGET_SEND, 2u},
+        {"/2 /all literal", "/all literal", SNAG_IRC_TARGET_SEND, 2u},
+        {"/all hi", "hi", SNAG_IRC_TARGET_ALL, 0u},
+        {"/all\nhi", "hi", SNAG_IRC_TARGET_ALL, 0u},
+        {"/4294967295 hi", "hi", SNAG_IRC_TARGET_SEND, UINT32_MAX},
+        {"/0", "", SNAG_IRC_TARGET_INVALID, 0u},
+        {"/2oops", "", SNAG_IRC_TARGET_INVALID, 0u},
+        {"/4294967296", "", SNAG_IRC_TARGET_INVALID, 0u},
+        {"/999999999999999999999", "", SNAG_IRC_TARGET_INVALID, 0u},
+        {"/all", "", SNAG_IRC_TARGET_INVALID, 0u},
+        {"/all \t", "", SNAG_IRC_TARGET_INVALID, 0u}
+    };
+
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        size_t body;
+        uint32_t id;
+        enum snag_irc_target_command command = snag_irc_target_parse(
+            cases[i].text, strlen(cases[i].text), &id, &body);
+        assert(command == cases[i].command);
+        if (command > SNAG_IRC_TARGET_NONE) {
+            assert(id == cases[i].id);
+            assert(strcmp(cases[i].text + body, cases[i].body) == 0);
+        }
+    }
+}
+
 int
 main(void)
 {
@@ -45,6 +87,7 @@ main(void)
     errno = 0;
     assert(snag_buf_putc(&buf, 'e') < 0 && errno == EOVERFLOW);
     snag_buf_free(&buf);
+    test_irc_target_parse();
     puts("test_base: ok");
     return 0;
 }

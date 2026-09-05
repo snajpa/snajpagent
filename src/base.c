@@ -39,6 +39,40 @@ snag_irc_nick_char(unsigned char c)
            c == '|' || c == '-';
 }
 
+enum snag_irc_target_command
+snag_irc_target_parse(const char *text, size_t len, uint32_t *id, size_t *body)
+{
+    size_t i = 1u;
+    bool all;
+
+    *id = 0u;
+    *body = 0u;
+    if (!text || len < 2u || text[0] != '/')
+        return SNAG_IRC_TARGET_NONE;
+    all = len >= 4u && memcmp(text, "/all", 4u) == 0 &&
+          (len == 4u || text[4] == ' ' || text[4] == '\t' || text[4] == '\n');
+    if (all) {
+        i = 4u;
+    } else {
+        if (text[i] < '0' || text[i] > '9')
+            return SNAG_IRC_TARGET_NONE;
+        while (i < len && text[i] >= '0' && text[i] <= '9') {
+            unsigned int digit = (unsigned int)(text[i++] - '0');
+            if (*id > (UINT32_MAX - digit) / 10u)
+                return SNAG_IRC_TARGET_INVALID;
+            *id = *id * 10u + digit;
+        }
+        if (!*id || (i < len && text[i] != ' ' && text[i] != '\t' && text[i] != '\n'))
+            return SNAG_IRC_TARGET_INVALID;
+    }
+    while (i < len && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n'))
+        ++i;
+    *body = i;
+    if (all)
+        return i < len ? SNAG_IRC_TARGET_ALL : SNAG_IRC_TARGET_INVALID;
+    return i < len ? SNAG_IRC_TARGET_SEND : SNAG_IRC_TARGET_SELECT;
+}
+
 void
 snag_errorf(char *error, size_t size, const char *fmt, ...)
 {

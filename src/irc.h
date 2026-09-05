@@ -12,6 +12,33 @@
 
 #define SNAG_IRC_TEXT_MAX 4096u
 #define SNAG_IRC_LINE_MAX 8192u /* Includes CRLF. */
+#define SNAG_IRC_DESTINATIONS_MAX (SNAG_CONFIG_IRC_CLIENT_MAX + 1u)
+
+/* Process-local handles; frozen routes never retain owner pointers. */
+struct snag_irc_target {
+    uint32_t id;
+    uint64_t revision;
+};
+
+struct snag_irc_route {
+    struct snag_irc_target targets[SNAG_IRC_DESTINATIONS_MAX];
+    size_t count;
+};
+
+struct snag_irc_destination {
+    struct snag_irc_target target;
+    char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    char model[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char operator[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char nicks[4096u];
+    bool joined;
+};
+
+struct snag_irc_destinations {
+    struct snag_irc_destination items[SNAG_IRC_DESTINATIONS_MAX];
+    size_t count;
+};
 
 enum snag_irc_event_kind {
     SNAG_IRC_CONNECTED,

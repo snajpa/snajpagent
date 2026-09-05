@@ -280,6 +280,61 @@ snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms)
         term->typing_pause_ms = pause_ms;
 }
 
+int
+snag_term_set_destinations(struct snag_term *term,
+                          const struct snag_irc_destinations *destinations)
+{
+    if (!destinations || destinations->count > SNAG_IRC_DESTINATIONS_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!term->destinations) {
+        term->destinations = malloc(sizeof(*destinations));
+        if (!term->destinations)
+            return -1;
+    }
+    *term->destinations = *destinations;
+    if (!term->destination.id && !term->draft.len && destinations->count)
+        term->destination = destinations->items[0].target;
+    return 0;
+}
+
+int
+snag_term_select_destination(struct snag_term *term, uint32_t id)
+{
+    for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i)
+        if (term->destinations->items[i].target.id == id) {
+            term->destination = term->destinations->items[i].target;
+            return 0;
+        }
+    errno = ENOENT;
+    return -1;
+}
+
+void
+snag_term_destination_route(const struct snag_term *term, const char *text,
+                           struct snag_irc_route *route)
+{
+    uint32_t id;
+    size_t body;
+    enum snag_irc_target_command command = snag_irc_target_parse(
+        text, text ? strlen(text) : 0u, &id, &body);
+
+    memset(route, 0, sizeof(*route));
+    if (command == SNAG_IRC_TARGET_INVALID)
+        return;
+    if (command == SNAG_IRC_TARGET_NONE) {
+        if (term->destination.id)
+            route->targets[route->count++] = term->destination;
+        return;
+    }
+    for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
+        const struct snag_irc_target *target = &term->destinations->items[i].target;
+        if (command == SNAG_IRC_TARGET_ALL || target->id == id)
+            route->targets[route->count++] = *target;
+    }
+}
+
 void
 snag_term_set_color(struct snag_term *term, bool enabled, bool networked)
 {
@@ -1859,14 +1914,14 @@ replace_completion(struct snag_term *term, const char *name, size_t name_len,
 static int
 complete_command_name(struct snag_term *term, bool *handled)
 {
-    const char *match = NULL;
+    char match[SNAG_TERM_LABEL_BYTES] = {0};
     size_t match_len = 0u;
     size_t matches = 0u;
     size_t token_end = 0u;
     size_t prefix_len = term->cursor;
 
     *handled = false;
-    if (!term->command_count || !prefix_len || !term->draft.len ||
+    if (!prefix_len || !term->draft.len ||
         term->draft.data[0] != '/' ||
         (term->draft.len > 1u && term->draft.data[1] == '/'))
         return 0;
@@ -1876,30 +1931,39 @@ complete_command_name(struct snag_term *term, bool *handled)
     if (prefix_len > token_end)
         return 0;
     *handled = true;
-    for (size_t i = 0u; i < term->command_count; ++i) {
-        const struct snag_term_command *command = &term->commands[i];
+    size_t destinations = term->destinations ? term->destinations->count : 0u;
+    for (size_t i = 0u; i < term->command_count + destinations; ++i) {
+        char numeric[16u];
+        struct snag_term_command command;
         size_t name_len;
         size_t common;
 
-        if (!command->syntax)
+        if (i < term->command_count) {
+            command = term->commands[i];
+        } else {
+            (void)snprintf(numeric, sizeof(numeric), "/%u",
+                term->destinations->items[i - term->command_count].target.id);
+            command = (struct snag_term_command){numeric, NULL};
+        }
+        if (!command.syntax)
             continue;
-        name_len = command_name_length(command);
-        if (name_len < prefix_len ||
-            memcmp(command->syntax, term->draft.data, prefix_len) != 0)
+        name_len = command_name_length(&command);
+        if (name_len >= sizeof(match) || name_len < prefix_len ||
+            memcmp(command.syntax, term->draft.data, prefix_len) != 0)
             continue;
         ++matches;
-        if (!match) {
-            match = command->syntax;
+        if (!match[0]) {
+            memcpy(match, command.syntax, name_len);
             match_len = name_len;
             continue;
         }
         common = prefix_len;
         while (common < match_len && common < name_len &&
-               match[common] == command->syntax[common])
+               match[common] == command.syntax[common])
             ++common;
         match_len = common;
     }
-    if (!match || (matches > 1u && match_len == prefix_len) ||
+    if (!match[0] || (matches > 1u && match_len == prefix_len) ||
         (token_end == match_len &&
          memcmp(term->draft.data, match, match_len) == 0))
         return 0;
@@ -1918,9 +1982,13 @@ complete_mention(struct snag_term *term, bool *handled)
     const char *match = NULL;
     size_t start = term->cursor, end = term->cursor, common = 0u, first_len = 0u;
     bool unique = true;
+    uint32_t id;
+    size_t body;
+    enum snag_irc_target_command command = snag_irc_target_parse(
+        (const char *)term->draft.data, term->draft.len, &id, &body);
 
     *handled = false;
-    if (!term->chat)
+    if (!term->chat && command != SNAG_IRC_TARGET_SEND && command != SNAG_IRC_TARGET_ALL)
         return 0;
     while (start && nick_byte(term->draft.data[start - 1u]))
         --start;
@@ -1931,7 +1999,18 @@ complete_mention(struct snag_term *term, bool *handled)
     while (end < term->draft.len && nick_byte(term->draft.data[end]))
         ++end;
     size_t prefix = term->cursor - start;
-    for (const char *nick = term->nicks; nick && *nick;) {
+    size_t destinations = term->destinations ? term->destinations->count : 1u;
+    for (size_t destination = 0u; destination < destinations; ++destination) {
+      const char *nicks = term->nicks;
+      if (term->destinations) {
+        const struct snag_irc_destination *item = &term->destinations->items[destination];
+        if (command == SNAG_IRC_TARGET_INVALID ||
+            (command != SNAG_IRC_TARGET_ALL && item->target.id !=
+             (command == SNAG_IRC_TARGET_SEND ? id : term->destination.id)))
+            continue;
+        nicks = item->nicks;
+      }
+      for (const char *nick = nicks; nick && *nick;) {
         const char *line = strchr(nick, '\n');
         size_t len = line ? (size_t)(line - nick) : strlen(nick), i = 0u;
 
@@ -1954,6 +2033,7 @@ complete_mention(struct snag_term *term, bool *handled)
             }
         }
         nick = line ? line + 1u : NULL;
+      }
     }
     if (!match)
         return 0;
@@ -2517,6 +2597,7 @@ snag_term_close(struct snag_term *term)
     history_clear(term);
     free(term->search_original);
     free(term->nicks);
+    free(term->destinations);
     snag_buf_free(&term->search_label);
     snag_buf_free(&term->search_query);
     snag_buf_free(&term->draft);

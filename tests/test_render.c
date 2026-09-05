@@ -508,6 +508,78 @@ test_mention_completion(void)
     }
 }
 
+static void
+test_destination_editor(void)
+{
+    static const struct {
+        const char *draft, *expected;
+        bool chat;
+    } cases[] = {
+        {"@ag", "@agent2 ", true},
+        {"/17 @ag", "/17 @agent17 ", true},
+        {"/17 @ag", "/17 @agent17 ", false},
+        {"/all @ag", "/all @agent", true},
+        {"/9 @ag", "/9 @ag", true},
+        {"/2oops @ag", "/2oops @ag", true},
+        {"/1", "/17", true}
+    };
+    struct snag_irc_destinations destinations = {0};
+    struct snag_irc_route route, frozen;
+    struct snag_term term;
+
+    destinations.count = 2u;
+    destinations.items[0].target = (struct snag_irc_target){2u, 1u};
+    destinations.items[1].target = (struct snag_irc_target){17u, 1u};
+    strcpy(destinations.items[0].nicks, "agent2\n");
+    strcpy(destinations.items[1].nicks, "agent17\n");
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        enum snag_term_action action;
+        char *text = NULL;
+        snag_term_init(&term);
+        term.chat = cases[i].chat;
+        term.active = true;
+        assert(snag_term_set_destinations(&term, &destinations) == 0);
+        assert(term.destination.id == 2u);
+        assert(snag_term_restore_draft(&term, cases[i].draft) == 0);
+        term.input[0] = '\t';
+        term.input_len = 1u;
+        assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+        assert(action == SNAG_TERM_NONE && !text);
+        assert(term.draft.len == strlen(cases[i].expected));
+        assert(memcmp(term.draft.data, cases[i].expected, term.draft.len) == 0);
+        assert(term.destination.id == 2u);
+        snag_term_close(&term);
+    }
+    snag_term_init(&term);
+    assert(snag_term_set_destinations(&term, &destinations) == 0);
+    snag_term_destination_route(&term, "hello", &route);
+    assert(route.count == 1u && route.targets[0].id == 2u);
+    snag_term_destination_route(&term, "/17 hello", &route);
+    assert(route.count == 1u && route.targets[0].id == 17u);
+    assert(term.destination.id == 2u);
+    snag_term_destination_route(&term, "/all hello", &frozen);
+    assert(frozen.count == 2u);
+    assert(snag_term_select_destination(&term, 17u) == 0);
+    assert(snag_term_select_destination(&term, 9u) < 0);
+    assert(snag_term_restore_draft(&term, "keep me") == 0);
+    destinations.count = 1u;
+    assert(snag_term_set_destinations(&term, &destinations) == 0);
+    assert(term.destination.id == 17u && term.draft.len == 7u);
+    snag_term_destination_route(&term, "keep me", &route);
+    assert(route.count == 1u && route.targets[0].id == 17u);
+    assert(frozen.count == 2u && frozen.targets[1].id == 17u);
+    snag_term_destination_route(&term, "/17 no", &route);
+    assert(route.count == 0u);
+    snag_term_destination_route(&term, "/all hello", &route);
+    assert(route.count == 1u && route.targets[0].id == 2u);
+    destinations.count = 0u;
+    assert(snag_term_set_destinations(&term, &destinations) == 0);
+    assert(term.destination.id == 17u);
+    snag_term_destination_route(&term, "/all hello", &route);
+    assert(route.count == 0u);
+    snag_term_close(&term);
+}
+
 static size_t
 capture(unsigned int verbosity, char *out, size_t out_size)
 {
@@ -1777,6 +1849,7 @@ main(void)
     test_prompt_spinners();
     test_retained_prompt();
     test_mention_completion();
+    test_destination_editor();
     test_markdown_streaming();
     test_markdown_tables();
     test_tool_previews();

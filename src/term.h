@@ -4,6 +4,7 @@
 
 #include "base.h"
 #include "history.h"
+#include "irc.h"
 
 #include <stdbool.h>
 #include <signal.h>
@@ -78,6 +79,8 @@ struct snag_term {
     char *history_draft;
     char *search_original;
     char *nicks;
+    struct snag_irc_destinations *destinations;
+    struct snag_irc_target destination;
     const struct snag_term_command *commands;
     size_t cursor;
     size_t command_count;
@@ -138,6 +141,11 @@ struct snag_term {
 };
 
 void snag_term_init(struct snag_term *term);
+int snag_term_set_destinations(struct snag_term *term,
+                              const struct snag_irc_destinations *destinations);
+int snag_term_select_destination(struct snag_term *term, uint32_t id);
+void snag_term_destination_route(const struct snag_term *term,
+                                 const char *text, struct snag_irc_route *route);
 void snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds);
 void snag_term_set_commands(struct snag_term *term,
                            const struct snag_term_command *commands,
