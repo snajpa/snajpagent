@@ -1935,6 +1935,8 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             strcmp(action, call->action_sha256) != 0 ||
             call->started || call->finished)
             goto invalid;
+        if (session->active_read_only && !snj_read_only_tool(call->tool_name))
+            goto invalid;
         if (!strcmp(call->tool_name, "exec_command")) {
             struct snj_process_state *process;
             if (session->process_count >= SNJ_MAX_PROCESSES ||

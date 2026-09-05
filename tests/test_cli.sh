@@ -459,7 +459,7 @@ done
 after=$($bin -e -vvv -- text_tool 2>"$root/text-tool.err")
 [ "$after" = done ]
 grep -q '^Checking first\.$' "$root/text-tool.err"
-grep -Fq '→ exec_command  {"command":"fixture ok"' "$root/text-tool.err"
+grep -Eq '→ exec_command \[[0-9a-f]{8}\]  \{"command":"fixture ok"' "$root/text-tool.err"
 grep -Fq '  arguments:' "$root/text-tool.err"
 grep -q '^fixture command succeeded$' "$root/text-tool.err"
 

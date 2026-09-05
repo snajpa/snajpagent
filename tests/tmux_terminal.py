@@ -384,6 +384,8 @@ class FakeResponses:
                 "touch peer-ready; printf second"])
             if mode == "failure":
                 commands[1] = "touch peer-ready; printf failed-peer; exit 7"
+            if mode == "full-output":
+                commands[0] += "; printf '%080000d' 0; printf full-output-tail"
             if mode in ("steer", "cancel"):
                 commands = ["echo $$ > a.pid; sleep 10; printf first",
                             "echo $$ > b.pid; sleep 10; printf second",
@@ -1911,7 +1913,7 @@ def run_listener_collision_case(binary, root, provider, environment):
             terminal.close()
 
 def run_multi_tool_cases(binary, root, provider, environment):
-    for mode in ("parallel", "serial", "yield", "failure", "single-request", "steer", "cancel"):
+    for mode in ("parallel", "serial", "yield", "failure", "single-request", "steer", "cancel", "full-output"):
         case = root / ("multi-" + mode)
         workspace = case / "work"
         workspace.mkdir(mode=0o700, parents=True)
@@ -1926,7 +1928,7 @@ def run_multi_tool_cases(binary, root, provider, environment):
                           ("1" if mode == "serial" else "2" if mode in ("steer", "cancel") else "4") + "\n", encoding="utf-8")
         terminal = TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
-                                args=("-v",), environment=environment)
+                                args=("-vvv" if mode == "full-output" else "-v",), environment=environment)
         try:
             terminal.wait("host-model/medium ›")
             terminal.submit("multi-tools " + mode)
@@ -1962,6 +1964,9 @@ def run_multi_tool_cases(binary, root, provider, environment):
             if mode == "steer":
                 assert not (workspace / "must-not-run").exists()
                 assert len(event_list(events, "steering_added")) == 1
+            elif mode == "full-output":
+                assert sum(len(event["data"]["data"]) for event in chunks) > 80000
+                assert "full-output-tail" in terminal.capture(join_wrapped=True)
             else:
                 assert chunks and all(event["data"]["offset"] == 0 for event in chunks)
                 assert len({event["data"]["handle"] for event in chunks}) == 2

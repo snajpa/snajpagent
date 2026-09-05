@@ -973,6 +973,7 @@ static bool
 reason_is_not_run(const char *reason)
 {
     return reason && (strcmp(reason, "protocol_conflict") == 0 ||
+                      strcmp(reason, "read_only") == 0 ||
                       strcmp(reason, "process_limit") == 0 ||
                       strcmp(reason, "batch_yield") == 0 ||
                       strcmp(reason, "process_busy") == 0 ||

@@ -51,8 +51,11 @@ and durable rollout path. The current user input, active controller state, and
 tool schemas are never silently dropped. Responses-based recovery can compact
 the oldest complete response/tool-group prefix hierarchically, including a
 prefix inside an older turn, while preserving its remaining suffix, all newer
-turns and the current turn. Cuts never separate calls from results or cross an
-unresolved managed process. Deferred steering is included before its source
+turns and the current request. Historical cuts never separate calls from results
+or cross an unresolved managed process. If history has already been reduced,
+completed groups in the active turn may be compacted even while command handles
+remain: its exact user request, unconsumed steering and live process controller
+are reprojected outside the summary. Deferred historical steering is included before its source
 boundary; replay retains turn bookkeeping across summarized events without
 repeating their content. The original append-only log remains untouched.
 Compaction uses exact counting when available and the same source/model-bound
@@ -324,10 +327,11 @@ and tail plus digest/provenance when the selected conservative
 one-token-per-UTF-8-byte bound permits; it does not call bytes an exact token
 count. The former `default_max_output_tokens` configuration key is removed.
 `[tool] max_output_bytes` is presentation-only: it limits the number of
-model-result UTF-8 bytes shown for each tool call. At level 3 and above, `0`
+output bytes shown for each tool call. At level 3 and above, `0`
 (the default) shows the complete retained result; level 2 also applies its
 512-character preview budget, and levels 0/1 show no output body.
-It never truncates the durable result or changes
+The renderer streams the referenced journal chunks rather than retaining the
+whole body in memory. Display limits never truncate the durable journal or change
 the independently bounded model-context projection.
 
 ## Rendering

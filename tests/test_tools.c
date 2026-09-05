@@ -26,6 +26,7 @@ static struct {
     struct snj_buf streams[2];
 } output_journal[128];
 static size_t output_count;
+static bool fail_output;
 
 static size_t
 output_index(const char *handle)
@@ -47,6 +48,10 @@ retain_output(void *opaque, const char *handle, unsigned int stream,
                uint64_t offset, const void *bytes, size_t len)
 {
     (void)opaque;
+    if (fail_output) {
+        errno = ENOSPC;
+        return -1;
+    }
     struct snj_buf *out = &output_journal[output_index(handle)].streams[stream];
     assert(offset == out->len);
     return snj_buf_append(out, bytes, len);
@@ -1470,6 +1475,35 @@ test_steering_with_blocked_stdin(void)
     json_decref(result);
 }
 
+static void
+test_journal_failure_closes_owned_commands(void)
+{
+    struct snj_config config;
+    struct snj_credential credential;
+    struct snj_response_graph graph;
+    char cwd[4096], handle[SNJ_ID_HEX_LEN + 1u], error[256] = {0};
+    snj_config_init(&config);
+    snj_credential_clear(&credential);
+    assert(getcwd(cwd, sizeof(cwd)));
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        uint32_t yield;
+        json_t *result = NULL;
+        make_call(&graph, "printf pending; sleep 5", cwd, 5000, NULL);
+        assert(snj_tools_prepare(&graph.items[0], &config, handle, &yield, &result) == 0);
+        assert(snj_tools_start(&graph.items[0], &config, &credential, &result, error, sizeof(error)) == 0);
+        snj_response_graph_free(&graph);
+    }
+    fail_output = true;
+    uint64_t deadline = snj_monotonic_ms() + 2000u;
+    while (snj_tools_service(10, -1, error, sizeof(error)) == 0)
+        assert(snj_monotonic_ms() < deadline);
+    assert(errno == ENOSPC);
+    snj_tools_shutdown();
+    assert(!snj_tools_busy());
+    fail_output = false;
+    snj_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -1477,6 +1511,7 @@ main(void)
     snj_tools_journal(retain_output, read_output, NULL);
     test_process_capacity_and_ready_collection();
     test_steering_with_blocked_stdin();
+    test_journal_failure_closes_owned_commands();
     test_native_read_tools();
     test_success_and_streams();
     test_command_output_limit_selection();

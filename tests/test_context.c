@@ -614,6 +614,111 @@ turn_interrupted_data(const char *turn_id)
     return data;
 }
 
+static void
+test_parallel_journal_recovery(struct snj_store *store, const char *workspace)
+{
+    const char *turn = "c1000000000000000000000000000000";
+    const char *response = "c2000000000000000000000000000000";
+    const char *a = "c3000000000000000000000000000000";
+    const char *b = "c4000000000000000000000000000000";
+    struct snj_session session;
+    char error[256], id[SNJ_ID_HEX_LEN + 1u];
+    snj_session_init(&session);
+    assert(snj_session_create(store, &session, workspace, "default", SNAJPAGENT_MODEL,
+                              "medium", error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    assert(snj_session_commit(&session, "turn_started", turn_started(turn, 1, "batch", workspace, NULL),
+                              NULL, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "response_started", response_started(turn, response, NULL),
+                              NULL, error, sizeof(error)) == 0);
+    json_t *data = response_completed_call(turn, response, a, workspace);
+    json_t *second = tool_call_item(b, workspace);
+    assert(json_object_set_new(second, "provider_call_id", json_string("call_second")) == 0);
+    assert(json_object_set_new(second, "provider_item_id", json_string("item_second")) == 0);
+    assert(json_array_append_new(json_object_get(data, "items"), second) == 0);
+    assert(snj_session_commit(&session, "response_completed", data, NULL, error, sizeof(error)) == 0);
+    for (size_t i = 0u; i < 2u; ++i)
+        assert(snj_session_commit(&session, "tool_started",
+            tool_started_data(turn, i ? b : a, session.pending_calls[i].action_sha256, workspace),
+            NULL, error, sizeof(error)) == 0);
+    assert(session.process_count == 2u);
+    data = json_object();
+    assert(snj_json_set_new(data, "turn_id", json_string(turn)) == 0);
+    assert(snj_json_set_new(data, "handle", json_string(b)) == 0);
+    assert(snj_json_set_new(data, "stream", json_integer(0)) == 0);
+    assert(snj_json_set_new(data, "offset", json_integer(0)) == 0);
+    assert(snj_json_set_new(data, "encoding", json_string("utf8")) == 0);
+    assert(snj_json_set_new(data, "data", json_string("B\n")) == 0);
+    assert(snj_session_commit(&session, "process_output", json_deep_copy(data), NULL, error, sizeof(error)) == 0);
+    off_t end = session.log_end;
+    assert(snj_session_commit(&session, "process_output", data, NULL, error, sizeof(error)) < 0);
+    assert(session.log_end == end && snj_session_process(&session, b)->output_bytes[0] == 2u);
+    /* Resolve B first without claiming its lost owner completed successfully. */
+    assert(snj_session_commit(&session, "tool_finished", tool_finished_data(turn, b,
+        snj_tool_result_outcome_unknown("owner_lost")), NULL, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "tool_finished", tool_finished_data(turn, a,
+        running_result_limit(a, "alive", NULL, 6000)), NULL, error, sizeof(error)) == 0);
+    assert(!session.pending_call_count && session.process_count == 2u);
+    snj_session_close(&session);
+    assert(snj_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.process_count == 2u && !session.pending_call_count);
+    assert(snj_session_process(&session, b)->output_bytes[0] == 2u);
+    const char *steer = "c5000000000000000000000000000000";
+    const char *compact = "c6000000000000000000000000000000";
+    assert(snj_session_commit(&session, "steering_added", steering_added(turn, steer, "fresh steer"),
+                              NULL, error, sizeof(error)) == 0);
+    json_t *request = NULL, *count = NULL, *output = compact_output_fixture();
+    char hash[65], request_hash[65], output_hash[65];
+    size_t bytes, request_bytes, output_bytes;
+    uint64_t seq;
+    assert(snj_context_compact_active_prefix_request_build(&session, SNAJPAGENT_MODEL,
+        "medium", 0u, false, &request, &count, hash, &bytes,
+        request_hash, &request_bytes, &seq, error, sizeof(error)) == 0);
+    assert(seq < session.next_seq - 1u); /* Unconsumed steering is not summarized. */
+    assert(snj_context_compact_output_valid(output, output_hash, &output_bytes, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "compaction_started",
+        compaction_started_data(&session, compact, "hard_budget", seq, hash, request_hash, bytes),
+        NULL, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "compaction_completed",
+        compaction_completed_data(compact, hash, output_hash, request_hash, bytes, output_bytes, output),
+        NULL, error, sizeof(error)) == 0);
+    struct snj_context_projection projection;
+    struct snj_instruction_set instructions;
+    snj_context_projection_init(&projection);
+    snj_instructions_init(&instructions);
+    json_t *snapshot = json_array(), *item = json_object();
+    assert(snj_json_set_new(item, "id", json_string(steer)) == 0);
+    assert(snj_json_set_new(item, "text", json_string("fresh steer")) == 0);
+    assert(json_array_append_new(snapshot, item) == 0);
+    assert(snj_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, snapshot, 0u, false,
+        NULL, &instructions, &projection, error, sizeof(error)) == 0);
+    json_t *input = json_object_get(projection.create_request, "input");
+    unsigned int user = 0u, steering = 0u;
+    for (size_t i = 0u; i < json_array_size(input); ++i) {
+        const char *text = snj_json_string(json_array_get(input, i), "content");
+        if (text) {
+            user += !strcmp(text, "batch");
+            steering += !strcmp(text, "fresh steer");
+        }
+    }
+    assert(user == 1u && steering == 1u && session.process_count == 2u);
+    const char *summary = snj_json_string(json_array_get(input, json_array_size(input) - 1u), "content");
+    assert(strstr(summary, a) && strstr(summary, b));
+    snj_context_projection_free(&projection);
+    snj_instructions_free(&instructions);
+    json_decref(snapshot);
+    json_decref(request);
+    json_decref(count);
+    json_decref(output);
+    assert(snj_session_commit(&session, "process_closed", process_closed_data(turn, b,
+        snj_tool_result_outcome_unknown("owner_lost")), NULL, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "process_closed", process_closed_data(turn, a,
+        snj_tool_result_outcome_unknown("owner_lost")), NULL, error, sizeof(error)) == 0);
+    assert(snj_session_commit(&session, "turn_interrupted", turn_interrupted_data(turn),
+                              NULL, error, sizeof(error)) == 0);
+    snj_session_close(&session);
+}
+
 static int
 array_has_string(json_t *array, const char *value)
 {
@@ -1194,6 +1299,7 @@ main(void)
     assert(snj_context_input_estimate(318003u, 0u) == 318003u);
     assert(snj_context_input_estimate(UINT64_MAX, UINT64_MAX) == SNJ_CONFIG_TOKEN_LIMIT_MAX);
     test_compact_groups(&store, workspace);
+    test_parallel_journal_recovery(&store, workspace);
     assert(snj_session_create(&store, &session, workspace, "default",
                               SNAJPAGENT_MODEL, "default",
                               error, sizeof(error)) == 0);

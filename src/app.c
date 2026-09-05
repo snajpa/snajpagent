@@ -2500,7 +2500,12 @@ execute_calls(struct app_state *app, const char *turn_id,
                 handoff = "batch_yield";
                 goto handoff;
             }
-            if (calls[i].process) {
+            if (app->session.active_read_only && !snj_read_only_tool(call->name)) {
+                result = snj_tool_result("not_run", "read_only",
+                    "Tool unavailable: this turn is read-only.", -1, 0u);
+                if (!result)
+                    return -1;
+            } else if (calls[i].process) {
                 uint32_t yield_ms = 0u;
                 int rc = snj_tools_prepare(call, app->config, calls[i].handle, &yield_ms, &result);
                 if (rc < 0)
@@ -3483,6 +3488,10 @@ run_turn(struct app_state *app, const char *prompt,
             snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             if (tool_rc < 0) {
                 (void)app_error(app, error);
+                /* An adapter/journal failure leaves effects uncertain. Stop
+                 * admission and close every owned job before exiting. */
+                app->input_closed = true;
+                snj_tools_shutdown();
                 result = 3;
                 goto out;
             }

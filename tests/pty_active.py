@@ -741,7 +741,7 @@ def test_read_only_queries():
     assert all(x["status"] == "succeeded" for x in results[:3])
     assert "1:native text\n2:second line\n" in results[1]["model_text"]
     assert "ro-input.txt:1:native text" in results[2]["model_text"]
-    assert all(x["status"] == "failed" and "read-only" in x["model_text"]
+    assert all(x["status"] == "not_run" and "read-only" in x["model_text"]
                for x in results[3:])
     assert not any(x["type"] == "goal_started" for x in log)
 

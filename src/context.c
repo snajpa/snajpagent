@@ -27,6 +27,7 @@ struct context_builder {
     bool active_turn;
     bool networked;
     bool compact_stop_before_active;
+    bool compact_current;
     bool compact_stopped;
     size_t base_semantic_count;
     size_t base_request_count;
@@ -243,89 +244,65 @@ append_tool_result(struct context_builder *builder, const char *call_id,
     const char *model_text = snj_json_string(result, "model_text");
     const char *output_text = model_text;
     json_t *limit_value = json_object_get(result, "max_output_tokens");
-    struct snj_buf bounded;
-    struct snj_buf notice;
-    char digest[SNJ_SHA256_HEX_LEN + 1u];
-    json_t *semantic = json_object();
-    json_t *request = json_object();
-    bool historical;
-
-    uint32_t limit = json_is_integer(limit_value) ? (uint32_t)json_integer_value(limit_value) : 0u;
-    if (limit > SNJ_CONTEXT_MAX_REQUEST / (8u * SNJ_MAX_CALLS_PER_RESPONSE))
-        limit = SNJ_CONTEXT_MAX_REQUEST / (8u * SNJ_MAX_CALLS_PER_RESPONSE);
-    snj_buf_init(&bounded, (size_t)limit + 1u);
-    snj_buf_init(&notice, 4096u);
-    historical = builder->session &&
-        strcmp(builder->active_turn_id, builder->target_turn_id) != 0;
-    if (model_text && limit && strlen(model_text) > limit) {
-        if (bounded_command_output(&bounded, model_text, strlen(model_text),
-                limit) < 0)
-            goto fail;
-        output_text = (const char *)bounded.data;
-    } else if (model_text && historical && strlen(model_text) > 64u * 1024u) {
-        const char *status = snj_json_string(result, "status");
-        snj_sha256_hex(model_text, strlen(model_text), digest);
-        if (snj_buf_printf(&notice,
-                "[historical tool/process output omitted from model context; type=%s; bytes=%zu; sha256=%s; durable_log=%s/events.jsonl]",
-                status ? status : "unknown", strlen(model_text), digest,
-                builder->session->dir_path) < 0 ||
-            snj_buf_terminate(&notice) < 0)
-            goto fail;
-        output_text = (const char *)notice.data;
-    }
-
     json_t *ref = json_object_get(result, "output_ref");
+    uint32_t limit = json_is_integer(limit_value) ? (uint32_t)json_integer_value(limit_value) : 0u;
+    struct snj_buf bounded, notice, full;
+    char digest[SNJ_SHA256_HEX_LEN + 1u];
+    json_t *semantic = json_object(), *request = json_object();
+    int rc = -1;
+
+    if (limit > SNJ_CONTEXT_MAX_REQUEST / (16u * SNJ_MAX_CALLS_PER_RESPONSE))
+        limit = SNJ_CONTEXT_MAX_REQUEST / (16u * SNJ_MAX_CALLS_PER_RESPONSE);
+    snj_buf_init(&bounded, (size_t)limit + 1u);
+    snj_buf_init(&notice, SNJ_PATH_MAX_BYTES + 4096u);
+    snj_buf_init(&full, SNJ_MAX_EVENT_LINE);
+    if (!model_text || !semantic || !request)
+        goto out;
     if (ref) {
-        snj_buf_reset(&notice);
-        if (snj_json_canonical(ref, &notice) < 0 ||
-            snj_buf_printf(&notice, "\n[command status=%s; preceding JSON references full redacted bytes in %s/events.jsonl]\n",
-                            snj_json_string(result, "status"), builder->session->dir_path) < 0)
-            goto fail;
-        struct snj_buf combined;
-        snj_buf_init(&combined, notice.len + strlen(output_text) + 1u);
-        if (snj_buf_append(&combined, notice.data, notice.len) < 0 ||
-            snj_buf_append(&combined, output_text, strlen(output_text)) < 0 ||
-            snj_buf_terminate(&combined) < 0) {
-            snj_buf_free(&combined);
-            goto fail;
-        }
-        snj_buf_free(&notice);
-        notice = combined;
-        output_text = (const char *)notice.data;
-        if (limit && notice.len > limit) {
-            snj_buf_reset(&bounded);
-            if (bounded_command_output(&bounded, output_text, notice.len, limit) < 0)
-                goto fail;
-            output_text = (const char *)bounded.data;
-        }
+        char *encoded = canonical_string(ref, 4096u);
+        if (!encoded)
+            goto out;
+        int pr = snj_buf_printf(&full,
+            "[command status=%s; output_ref=%s; full redacted bytes in %s/events.jsonl]\n%s",
+            snj_json_string(result, "status"), encoded, builder->session->dir_path, model_text);
+        free(encoded);
+        if (pr < 0 || snj_buf_terminate(&full) < 0)
+            goto out;
+        output_text = (const char *)full.data;
     }
-    if (!output_text || !semantic || !request ||
-        snj_json_set_new(semantic, "call_id", json_string(call_id)) < 0 ||
+    size_t len = strlen(output_text);
+    if (limit && len > limit) {
+        if (bounded_command_output(&bounded, output_text, len, limit) < 0)
+            goto out;
+        output_text = (const char *)bounded.data;
+    } else if (builder->session && strcmp(builder->active_turn_id, builder->target_turn_id) &&
+               len > 64u * 1024u) {
+        snj_sha256_hex(output_text, len, digest);
+        if (snj_buf_printf(&notice,
+            "[historical tool/process output omitted from model context; type=%s; bytes=%zu; sha256=%s; durable_log=%s/events.jsonl]",
+            snj_json_string(result, "status"), len, digest, builder->session->dir_path) < 0 ||
+            snj_buf_terminate(&notice) < 0)
+            goto out;
+        output_text = (const char *)notice.data;
+    }
+    if (snj_json_set_new(semantic, "call_id", json_string(call_id)) < 0 ||
         snj_json_set_new(semantic, "kind", json_string("tool_result")) < 0 ||
         snj_json_set_new(semantic, "model_text", json_string(output_text)) < 0 ||
         snj_json_set_new(request, "call_id", json_string(call_id)) < 0 ||
         snj_json_set_new(request, "output", json_string(output_text)) < 0 ||
-        snj_json_set_new(request, "type", json_string("function_call_output")) < 0 ||
-        json_array_append_new(builder->semantic_items, semantic) < 0) {
-fail:
-        if (semantic)
-            json_decref(semantic);
-        if (request)
-            json_decref(request);
-        snj_buf_free(&bounded);
-        snj_buf_free(&notice);
-        return -1;
-    }
-    semantic = NULL;
-    if (json_array_append_new(builder->request_input, request) < 0) {
-        json_decref(request);
-        snj_buf_free(&bounded);
-        snj_buf_free(&notice);
-        return -1;
-    }
+        snj_json_set_new(request, "type", json_string("function_call_output")) < 0)
+        goto out;
+    if (json_array_append(builder->semantic_items, semantic) < 0 ||
+        json_array_append(builder->request_input, request) < 0)
+        goto out;
+    rc = 0;
+out:
+    json_decref(semantic);
+    json_decref(request);
     snj_buf_free(&bounded);
     snj_buf_free(&notice);
-    return 0;
+    snj_buf_free(&full);
+    return rc;
 }
 
 static int
@@ -715,8 +692,12 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
     struct snj_buf encoded;
     size_t count, source_bytes;
 
-    if (!builder->compact_budget)
+    if (!builder->compact_budget) {
+        builder->compact_best_known = true;
+        builder->compact_best_seq = seq;
+        builder->compact_best_request_count = json_array_size(builder->request_input);
         return 0;
+    }
     snj_buf_init(&encoded, SNJ_CONTEXT_MAX_COMPACT);
     if (snj_json_canonical(builder->request_input, &encoded) < 0) {
         int saved = errno;
@@ -844,6 +825,26 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                                    sizeof(builder->active_turn_id), id))
                 return -1;
             builder->active_turn = true;
+            if (builder->compact_stop_before_active && !strcmp(id, builder->target_turn_id))
+                builder->compact_current = true;
+            if (builder->steering && !strcmp(id, builder->target_turn_id)) {
+                const char *text = snj_json_string(data, "text");
+                const char *kind = snj_json_string(data, "input_kind");
+                if (!text || !kind ||
+                    snj_instructions_match_metadata(builder->instructions,
+                        json_object_get(data, "instructions"), error, error_size) < 0)
+                    return -1;
+                if (append_message(builder, !strcmp(kind, "goal") ? "goal_continuation" : "user_request",
+                    !strcmp(kind, "goal") ? "developer" : "user", text) < 0)
+                    return -1;
+            }
+        } else if (builder->steering && !strcmp(type, "steering_added") &&
+                   !strcmp(builder->active_turn_id, builder->target_turn_id)) {
+            const char *id = snj_json_string(data, "steering_id");
+            const char *text = snj_json_string(data, "text");
+            if (id && text && steering_matches_snapshot(builder, id, text) &&
+                defer_steering(builder, text) < 0)
+                return -1;
         } else if (strcmp(type, "turn_completed") == 0 ||
                    strcmp(type, "turn_completed_silent") == 0 ||
                    strcmp(type, "turn_failed") == 0 ||
@@ -1795,9 +1796,12 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             return -1;
         }
         if (strcmp(turn_id, builder->target_turn_id) == 0) {
-            builder->compact_stopped = true;
-            builder->compact_source_seq = seq > 0u ? seq - 1u : 0u;
-            return 0;
+            if (builder->compact_new_items) {
+                builder->compact_stopped = true;
+                builder->compact_source_seq = seq > 0u ? seq - 1u : 0u;
+                return 0;
+            }
+            builder->compact_current = true;
         }
     }
 
@@ -1886,6 +1890,12 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             errno = EINVAL;
             return -1;
         }
+        if (builder->compact_current && !strcmp(type, "steering_added")) {
+            const char *id = snj_json_string(data, "steering_id");
+            for (size_t i = 0u; id && i < builder->session->pending_steering_count; ++i)
+                if (!strcmp(id, builder->session->pending_steering[i].steering_id))
+                    return 0;
+        }
         if (strcmp(type, "steering_added") == 0)
             return defer_steering(builder, text);
         before = json_array_size(builder->request_input);
@@ -1944,7 +1954,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                     (void)snj_strcpy(builder->compact_calls[slot].handle, sizeof(builder->compact_calls[slot].handle), handle);
             }
         }
-        if (builder->compact_pending_calls || builder->compact_live_count)
+        if (builder->compact_pending_calls || (builder->compact_live_count && !builder->compact_current))
             return 0;
         before = json_array_size(builder->request_input);
         if (append_deferred_steering(builder) < 0)
@@ -1983,7 +1993,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                     return -1;
                 break;
             }
-        if (builder->compact_pending_calls || builder->compact_live_count)
+        if (builder->compact_pending_calls || (builder->compact_live_count && !builder->compact_current))
             return 0;
         before = json_array_size(builder->request_input);
         if (append_deferred_steering(builder) < 0)
@@ -2008,7 +2018,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         builder->compact_new_items += json_array_size(builder->request_input) - before;
         if (compact_process(builder, snj_json_string(data, "handle"), false) < 0)
             return -1;
-        if (builder->compact_pending_calls || builder->compact_live_count)
+        if (builder->compact_pending_calls || (builder->compact_live_count && !builder->compact_current))
             return 0;
         before = json_array_size(builder->request_input);
         if (append_deferred_steering(builder) < 0)
@@ -2170,7 +2180,17 @@ compact_request_build(struct snj_session *session,
         goto out;
     if (append_deferred_steering(&builder) < 0)
         goto out;
-    if (active_prefix && !builder.compact_stopped) {
+    if (builder.compact_current && !builder.compact_stopped) {
+        if (!builder.compact_best_known) {
+            rc = 1;
+            goto out;
+        }
+        while (json_array_size(builder.request_input) > builder.compact_best_request_count)
+            if (json_array_remove(builder.request_input, json_array_size(builder.request_input) - 1u) < 0)
+                goto out;
+        builder.compact_source_seq = builder.compact_best_seq;
+    }
+    if (active_prefix && !builder.compact_stopped && !builder.compact_current) {
         snj_errorf(error, error_size,
                   "automatic compact source did not stop before the active turn");
         errno = EINVAL;
