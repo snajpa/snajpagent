@@ -1665,6 +1665,9 @@ irc_config_equal(const struct snj_config *left,
         left->irc_client_count != right->irc_client_count ||
         strcmp(left->irc_model_nick, right->irc_model_nick) != 0 ||
         strcmp(left->irc_operator_nick, right->irc_operator_nick) != 0 ||
+        left->irc_model_nick_implicit != right->irc_model_nick_implicit ||
+        left->irc_operator_nick_implicit !=
+            right->irc_operator_nick_implicit ||
         strcmp(left->irc_room_name, right->irc_room_name) != 0 ||
         left->irc_history_lines != right->irc_history_lines)
         return false;
@@ -3681,8 +3684,11 @@ build_resume_command(const struct app_state *app, const char *program,
             if (append_command_option(command, "--client",
                                       config->irc_clients[i]) < 0)
                 goto out;
-        if (append_command_option(command, "--model-nick",
-                                  config->irc_model_nick) < 0 ||
+        if (!config->irc_model_nick_implicit &&
+            append_command_option(command, "--model-nick",
+                                  config->irc_model_nick) < 0)
+            goto out;
+        if (!config->irc_operator_nick_implicit &&
             append_command_option(command, "--operator-nick",
                                   config->irc_operator_nick) < 0)
             goto out;

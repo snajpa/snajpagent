@@ -773,15 +773,17 @@ occurrences replace this entire list, preserving their order.
 .TP
 .B model_nick
 Preferred model nick.  Default:
-.BR agent .
+.BR agent0 .
 .TP
 .B operator_nick
 Local operator nick.  Default: valid
-.BR USER ,
+.B USER
+plus
+.BR 0 ,
 then a distinct
-.B operator
+.B operator0
 or
-.BR localop .
+.BR localop0 .
 .TP
 .B room_name
 Hosted room, requires a listener.  Default: hostname.  Leading

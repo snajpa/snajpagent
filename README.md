@@ -131,8 +131,10 @@ the agents. Only the model's `irc_send` tool posts to the room; other model
 text stays in the local rollout. Joining, history, and reconnects are automatic.
 
 Networked mode opens the timestamped chat view. Empty Tab switches between
-chat and rollout; `/chat` and `/rollout` select them explicitly. `-n` defaults
-to `agent`, and `-o` to a valid `$USER`; nick collisions get numeric suffixes.
+chat and rollout; `/chat` and `/rollout` select them explicitly. Implicit nicks
+start at `agent0` and a valid `$USER` plus `0`; further default clients use
+`agent1`/`USER1`, then `agent2`/`USER2`, without doubled zeroes. Explicit nicks
+still get appended numeric collision suffixes.
 Repeat `-c ENDPOINT` to join multiple servers, or combine it with `-s ENDPOINT`.
 Text entered in chat goes to the rooms and local model. Text entered in rollout
 stays local, starting or steering a local model turn without sending an IRC

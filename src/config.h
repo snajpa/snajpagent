@@ -104,6 +104,8 @@ struct snj_config {
     size_t irc_client_count;
     char irc_model_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char irc_operator_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    bool irc_model_nick_implicit;
+    bool irc_operator_nick_implicit;
     char irc_room_name[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
     uint32_t irc_history_lines;
     char *shell;

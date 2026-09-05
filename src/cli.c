@@ -548,7 +548,7 @@ snj_cli_usage(int fd)
         "       " SNAJPAGENT_NAME " -l [OPTIONS]\n"
         "  -s, --listen[=ENDPOINT]      host the IRC server on ENDPOINT\n"
         "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"
-        "  -n, --model-nick NICK        model nick (default agent)\n"
+        "  -n, --model-nick NICK        model nick (default agent0)\n"
         "  -o, --operator-nick NICK     local operator nick\n"
         "  -r, --room-name ROOM         hosted room name\n"
         "      --dotdir DIR             private application directory\n"

@@ -46,10 +46,11 @@
   units are no longer counted or constrained; the 2,000-line per-file review
   trigger remains unchanged.
 
-- Default the IRC model nick to `agent`. Make outgoing clients resolve nickname
-  collisions in-place by trying numeric suffixes, and use the accepted
-  per-server identities for echo suppression and mention recognition instead
-  of reconnecting forever.
+- Default IRC identities to `agent0` and `LOGIN0`; subsequent implicit clients
+  replace the terminal zero with `1`, `2`, and so on. Make outgoing clients
+  resolve explicit nickname collisions by appending numeric suffixes, and use
+  the accepted per-server identities for echo suppression and mention
+  recognition instead of reconnecting forever.
 
 - Make `irc_send` the exclusive model-authored IRC transmission path. Final
   assistant and refusal text remains in the local rollout, and only a

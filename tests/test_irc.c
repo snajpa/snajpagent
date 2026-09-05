@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -233,10 +234,29 @@ test_validation(void)
     snj_config_init(&config);
     config.irc_listen_explicit = true;
     assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
-    assert(strcmp(config.irc_model_nick, "agent") == 0);
-    assert(config.irc_operator_nick[0] != '\0');
+    assert(strcmp(config.irc_model_nick, "agent0") == 0);
+    assert(strcmp(config.irc_operator_nick, "root0") == 0);
     assert(strcmp(config.irc_operator_nick, config.irc_model_nick) != 0);
+    assert(config.irc_model_nick_implicit);
+    assert(config.irc_operator_nick_implicit);
     snj_config_free(&config);
+
+    assert(setenv("USER", "agent", 1) == 0);
+    snj_config_init(&config);
+    config.irc_listen_explicit = true;
+    assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
+    assert(strcmp(config.irc_operator_nick, "localop0") == 0);
+    assert(config.irc_operator_nick_implicit);
+    snj_config_free(&config);
+
+    assert(setenv("USER", "not valid", 1) == 0);
+    snj_config_init(&config);
+    config.irc_listen_explicit = true;
+    assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
+    assert(strcmp(config.irc_operator_nick, "operator0") == 0);
+    assert(config.irc_operator_nick_implicit);
+    snj_config_free(&config);
+    assert(setenv("USER", "root", 1) == 0);
 
     snj_config_init(&config);
     config.irc_client_count = 2u;
@@ -313,8 +333,17 @@ test_cli_network_roles(void)
     assert(config.irc_listen_explicit);
     assert(strcmp(config.irc_listen, "irc.example:7667") == 0);
     assert(config.irc_client_count == 0u);
-    assert(strcmp(config.irc_model_nick, "agent") == 0);
-    assert(config.irc_operator_nick[0] != '\0');
+    assert(strcmp(config.irc_model_nick, "agent0") == 0);
+    assert(strcmp(config.irc_operator_nick, "root0") == 0);
+    assert(config.irc_model_nick_implicit);
+    assert(config.irc_operator_nick_implicit);
+    cli.irc_model_nick = "worker";
+    cli.irc_operator_nick = "operator";
+    assert(snj_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
+    assert(strcmp(config.irc_model_nick, "worker") == 0);
+    assert(strcmp(config.irc_operator_nick, "operator") == 0);
+    assert(!config.irc_model_nick_implicit);
+    assert(!config.irc_operator_nick_implicit);
     snj_config_free(&config);
 
     memset(&cli, 0, sizeof(cli));
@@ -330,6 +359,8 @@ test_cli_network_roles(void)
     assert(strcmp(config.irc_listen, "127.0.0.1:7667") == 0);
     assert(config.irc_client_count == 1u);
     assert(strcmp(config.irc_clients[0], "upstream.example:6667") == 0);
+    assert(!config.irc_model_nick_implicit);
+    assert(!config.irc_operator_nick_implicit);
     snj_config_free(&config);
 }
 
@@ -600,6 +631,123 @@ test_client_reconnect(void)
 }
 
 static void
+test_default_nick_sequence(void)
+{
+    struct snj_config server_config;
+    struct snj_config client_config[2u];
+    struct snj_cli cli;
+    struct capture server_capture = {0};
+    struct capture client_capture[2u];
+    struct snj_irc *server;
+    struct snj_irc *client[2u] = {NULL, NULL};
+    unsigned short port = free_port();
+    char address[64u];
+    char expected[32u];
+    char error[256] = {0};
+
+    snj_config_init(&server_config);
+    endpoint(address, port);
+    server_config.irc_listen_explicit = true;
+    assert(snprintf(server_config.irc_listen,
+                    sizeof(server_config.irc_listen), "%s", address) > 0);
+    memcpy(server_config.irc_room_name, "#lab", 5u);
+    server = open_server(&server_config, &server_capture);
+    assert(strcmp(server_config.irc_model_nick, "agent0") == 0);
+    assert(strcmp(server_config.irc_operator_nick, "root0") == 0);
+    assert(server_config.irc_model_nick_implicit);
+    assert(server_config.irc_operator_nick_implicit);
+    assert(strcmp(snj_irc_model_nick(server), "agent0") == 0);
+    assert(strcmp(snj_irc_operator_nick(server), "root0") == 0);
+
+    memset(&cli, 0, sizeof(cli));
+    memset(client_capture, 0, sizeof(client_capture));
+    for (size_t i = 0u; i < 2u; ++i) {
+        snj_config_init(&client_config[i]);
+        client_config[i].irc_client_count = 1u;
+        assert(snprintf(client_config[i].irc_clients[0],
+                        sizeof(client_config[i].irc_clients[0]),
+                        "%s", address) > 0);
+        assert(snj_irc_apply_cli(&client_config[i], &cli,
+                                 error, sizeof(error)) == 0);
+        assert(strcmp(client_config[i].irc_model_nick, "agent0") == 0);
+        assert(strcmp(client_config[i].irc_operator_nick, "root0") == 0);
+        assert(client_config[i].irc_model_nick_implicit);
+        assert(client_config[i].irc_operator_nick_implicit);
+        assert(snj_irc_open(&client[i], &client_config[i], "/client",
+                            capture_event, capture_trace, &client_capture[i],
+                            error, sizeof(error)) == 0);
+        pump_pair(server, client[i], 300u);
+        assert(client_capture[i].events[SNJ_IRC_CONNECTED] == 1u);
+        assert(client_capture[i].events[SNJ_IRC_DISCONNECTED] == 0u);
+        assert(snprintf(expected, sizeof(expected), "agent%zu", i + 1u) > 0);
+        assert(strcmp(snj_irc_model_nick(client[i]), expected) == 0);
+        assert(snprintf(expected, sizeof(expected), "root%zu", i + 1u) > 0);
+        assert(strcmp(snj_irc_operator_nick(client[i]), expected) == 0);
+        assert(strstr(snj_irc_model_nick(client[i]), "01") == NULL);
+        assert(strstr(snj_irc_operator_nick(client[i]), "01") == NULL);
+    }
+
+    for (size_t i = 0u; i < 2u; ++i) {
+        snj_irc_close(client[i]);
+        snj_config_free(&client_config[i]);
+    }
+    snj_irc_close(server);
+    snj_config_free(&server_config);
+}
+
+static void
+test_explicit_zero_nick_collision(void)
+{
+    struct snj_config server_config;
+    struct snj_config client_config;
+    struct snj_cli cli;
+    struct capture server_capture = {0};
+    struct capture client_capture = {0};
+    struct snj_irc *server;
+    struct snj_irc *client = NULL;
+    unsigned short port = free_port();
+    int occupied[2u];
+    char address[64u];
+    char wire[8192u];
+    char error[256] = {0};
+
+    init_server_config(&server_config, port);
+    server = open_server(&server_config, &server_capture);
+    occupied[0] = connect_local(port, false);
+    register_peer(server, occupied[0], "worker0", true, wire, sizeof(wire));
+    occupied[1] = connect_local(port, false);
+    register_peer(server, occupied[1], "local0", false, wire, sizeof(wire));
+
+    snj_config_init(&client_config);
+    memset(&cli, 0, sizeof(cli));
+    endpoint(address, port);
+    client_config.irc_client_count = 1u;
+    assert(snprintf(client_config.irc_clients[0],
+                    sizeof(client_config.irc_clients[0]), "%s", address) > 0);
+    memcpy(client_config.irc_model_nick, "worker0", 8u);
+    memcpy(client_config.irc_operator_nick, "local0", 7u);
+    assert(snj_irc_apply_cli(&client_config, &cli,
+                             error, sizeof(error)) == 0);
+    assert(!client_config.irc_model_nick_implicit);
+    assert(!client_config.irc_operator_nick_implicit);
+    assert(snj_irc_open(&client, &client_config, "/client", capture_event,
+                        capture_trace, &client_capture,
+                        error, sizeof(error)) == 0);
+    pump_pair(server, client, 300u);
+    assert(client_capture.events[SNJ_IRC_CONNECTED] == 1u);
+    assert(client_capture.events[SNJ_IRC_DISCONNECTED] == 0u);
+    assert(strcmp(snj_irc_model_nick(client), "worker01") == 0);
+    assert(strcmp(snj_irc_operator_nick(client), "local01") == 0);
+
+    snj_irc_close(client);
+    for (size_t i = 0u; i < 2u; ++i)
+        assert(close(occupied[i]) == 0);
+    snj_irc_close(server);
+    snj_config_free(&client_config);
+    snj_config_free(&server_config);
+}
+
+static void
 test_client_nick_collision(void)
 {
     struct snj_config server_config;
@@ -636,6 +784,8 @@ test_client_nick_collision(void)
     memcpy(client_config.irc_operator_nick, "operator", 9u);
     assert(snj_irc_apply_cli(&client_config, &cli,
                              error, sizeof(error)) == 0);
+    assert(!client_config.irc_model_nick_implicit);
+    assert(!client_config.irc_operator_nick_implicit);
     assert(snj_irc_open(&client, &client_config, "/client", capture_event,
                         capture_trace, &client_capture,
                         error, sizeof(error)) == 0);
@@ -872,10 +1022,13 @@ test_client_events(void)
 int
 main(void)
 {
+    assert(setenv("USER", "root", 1) == 0);
     test_validation();
     test_cli_network_roles();
     test_server();
     test_client_reconnect();
+    test_default_nick_sequence();
+    test_explicit_zero_nick_collision();
     test_client_nick_collision();
     test_client_events();
     puts("test_irc: ok");

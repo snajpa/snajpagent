@@ -2451,18 +2451,23 @@ def test_network_collision_prompts():
     address = f"127.0.0.1:{port}"
     children = []
     peer = None
+    old_user = os.environ.get("USER")
+    os.environ["USER"] = "root"
     try:
-        server = Child(["--no-color", "-s", address, "-r", "lab",
-                        "-n", "agent", "-o", "operator"])
+        server = Child(["--no-color", "-s", address, "-r", "lab"])
         children.append(server)
-        server.wait(chat_prompt("operator"))
+        server.wait(chat_prompt("root0"))
+        server.send(b"/names\r")
+        names_end = server.wait(b"model nick: agent0")
+        server.wait(b"operator nick: root0", start=names_end)
         for suffix in (1, 2):
-            client = Child(["--no-color", "-c", address,
-                            "-n", "agent", "-o", "operator"])
+            client = Child(["--no-color", "-c", address])
             children.append(client)
-            client.wait(chat_prompt(f"operator{suffix}"))
+            client.wait(chat_prompt(f"root{suffix}"))
             client.send(b"/names\r")
-            client.wait(f"model agent{suffix} operator operator{suffix}".encode())
+            client.wait(f"model agent{suffix} operator root{suffix}".encode())
+            assert b"agent01" not in client.buf
+            assert b"root01" not in client.buf
         peer = IRCClient(port, "visitor", agent=True)
         for child in children:
             child.wait(b"visitor  joined")
@@ -2475,11 +2480,19 @@ def test_network_collision_prompts():
             child.drain()
             assert child.buf[start:].count(b"visitor  is now known as") == 1
     finally:
-        if peer:
-            peer.close()
-        for child in reversed(children):
-            child.send(b"\x04")
-            child.finish()
+        try:
+            if peer:
+                peer.close()
+            for child in reversed(children):
+                child.send(b"\x04")
+                arguments = command_arguments(child.finish())
+                assert "--model-nick" not in arguments
+                assert "--operator-nick" not in arguments
+        finally:
+            if old_user is None:
+                os.environ.pop("USER", None)
+            else:
+                os.environ["USER"] = old_user
 
 
 def test_network_live_nick_prompt():

@@ -17,7 +17,7 @@ The network options are:
 ```text
 -s, --listen[=ENDPOINT]      host the built-in IRC server
 -c, --client[=ENDPOINT]      connect to a server; repeatable
--n, --model-nick NICK        preferred model IRC nick (default agent)
+-n, --model-nick NICK        preferred model IRC nick (default agent0)
 -o, --operator-nick NICK     local operator IRC nick
 -r, --room-name ROOM         hosted room name
     --color[=WHEN]           color: auto, always, or never
@@ -39,10 +39,10 @@ mode any initial chat text must follow `--`, which removes the only ambiguity
 between an optional endpoint and positional text.
 
 `-n`/`--model-nick` selects the preferred nick used for model-authored chat and
-defaults to `agent`. `-o`/`--operator-nick` controls the separate preferred nick
-used for text typed in the local UI. Its default is the current login identifier
-when that is a valid IRC nick, then `operator`. The two preferred local nicks
-must differ under IRC case folding.
+defaults to `agent0`. `-o`/`--operator-nick` controls the separate preferred nick
+used for text typed in the local UI. Its default is the current valid login
+identifier plus `0`, then `operator0`. The two preferred local nicks must differ
+under IRC case folding.
 
 `-r`/`--room-name` applies to the hosted room and requires `-s`. A leading `#`
 is optional on input and is present on the wire and in the UI.
@@ -158,14 +158,17 @@ IRC clients:
 The snajpagent agent connection identifies its role during capability
 negotiation and is not granted `+o`. Its UI operator connection is distinct
 and is granted `+o` when it joins. A regular IRC client is an operator-facing
-client. On a pre-registration `433 ERR_NICKNAMEINUSE`, an outgoing snajpagent
-client retries on the same connection by appending `1`, `2`, and so on to its
-preferred nick, truncating the preferred portion at a UTF-8 boundary when the
-IRC nick bound requires it. The accepted per-server nick remains stable across
-reconnects and governs echo suppression and direct-mention recognition. The
-welcome confirms the accepted nick; live `NICK` changes update it and preserve
-channel op status. The UI reports channel renames once. A rejected rename
-leaves the existing identity and connection intact. The
+client. The implicit identities form zero-based sequences: the hosting/default
+instance uses `agent0` and `LOGIN0`, and outgoing default clients replace that
+terminal zero with `1`, `2`, and so on after pre-registration
+`433 ERR_NICKNAMEINUSE` replies. Explicitly configured nicknames retain the
+existing rule of appending `1`, `2`, and so on. Both paths truncate the
+preferred portion at a UTF-8 boundary when the IRC nick bound requires it. The
+accepted per-server nick remains stable across reconnects and governs echo
+suppression and direct-mention recognition. The welcome confirms the accepted
+nick; live `NICK` changes update it and preserve channel op status. The UI
+reports channel renames once. A rejected rename leaves the existing identity
+and connection intact. The
 server itself follows IRC convention by rejecting collisions rather than
 silently assigning an identity. Malformed lines, overlong lines, invalid UTF-8
 chat, messages to another room, and commands used before registration or join

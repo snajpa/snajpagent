@@ -912,14 +912,22 @@ parse_irc(struct parse_state *state, const char *key, const char *value)
         ++config->irc_client_count;
         return 0;
     }
-    if (strcmp(key, "model_nick") == 0)
-        return claim_key(state, 1u) < 0 ? -1 :
-               copy_value(config->irc_model_nick,
-                          sizeof(config->irc_model_nick), value);
-    if (strcmp(key, "operator_nick") == 0)
-        return claim_key(state, 2u) < 0 ? -1 :
-               copy_value(config->irc_operator_nick,
-                          sizeof(config->irc_operator_nick), value);
+    if (strcmp(key, "model_nick") == 0) {
+        if (claim_key(state, 1u) < 0 ||
+            copy_value(config->irc_model_nick,
+                       sizeof(config->irc_model_nick), value) < 0)
+            return -1;
+        config->irc_model_nick_implicit = false;
+        return 0;
+    }
+    if (strcmp(key, "operator_nick") == 0) {
+        if (claim_key(state, 2u) < 0 ||
+            copy_value(config->irc_operator_nick,
+                       sizeof(config->irc_operator_nick), value) < 0)
+            return -1;
+        config->irc_operator_nick_implicit = false;
+        return 0;
+    }
     if (strcmp(key, "room_name") == 0)
         return claim_key(state, 3u) < 0 ? -1 :
                copy_value(config->irc_room_name,

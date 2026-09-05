@@ -99,6 +99,8 @@ struct snj_irc {
     char server_name[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char model_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char operator_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];
+    bool model_nick_implicit;
+    bool operator_nick_implicit;
     char room[SNJ_CONFIG_IRC_ROOM_MAX + 2u];
     char topic[513u];
     struct irc_conn peers[IRC_SERVER_PEERS];
@@ -275,6 +277,37 @@ nick_valid(const char *nick)
     return true;
 }
 
+static int
+numbered_nick(char out[SNJ_CONFIG_IRC_NICK_MAX + 1u],
+              const char *preferred, size_t number, bool replace_zero)
+{
+    char suffix[32u];
+    size_t len = strlen(preferred);
+    int n;
+
+    if (replace_zero) {
+        if (!len || preferred[len - 1u] != '0') {
+            errno = EINVAL;
+            return -1;
+        }
+        --len;
+    }
+    n = snprintf(suffix, sizeof(suffix), "%zu", number);
+    if (n < 0 || (size_t)n >= sizeof(suffix) ||
+        (size_t)n > SNJ_CONFIG_IRC_NICK_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if (len + (size_t)n > SNJ_CONFIG_IRC_NICK_MAX) {
+        len = SNJ_CONFIG_IRC_NICK_MAX - (size_t)n;
+        while (len && ((unsigned char)preferred[len] & 0xc0u) == 0x80u)
+            --len;
+    }
+    memcpy(out, preferred, len);
+    memcpy(out + len, suffix, (size_t)n + 1u);
+    return 0;
+}
+
 static bool
 room_valid(const char *room)
 {
@@ -447,16 +480,21 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
             ++config->irc_client_count;
         }
     }
-    if (cli->irc_model_nick &&
-        config_copy(config->irc_model_nick, sizeof(config->irc_model_nick),
-                    cli->irc_model_nick, "IRC model nick", error,
-                    error_size) < 0)
-        return -1;
-    if (cli->irc_operator_nick &&
-        config_copy(config->irc_operator_nick,
-                    sizeof(config->irc_operator_nick), cli->irc_operator_nick,
-                    "IRC operator nick", error, error_size) < 0)
-        return -1;
+    if (cli->irc_model_nick) {
+        if (config_copy(config->irc_model_nick,
+                        sizeof(config->irc_model_nick), cli->irc_model_nick,
+                        "IRC model nick", error, error_size) < 0)
+            return -1;
+        config->irc_model_nick_implicit = false;
+    }
+    if (cli->irc_operator_nick) {
+        if (config_copy(config->irc_operator_nick,
+                        sizeof(config->irc_operator_nick),
+                        cli->irc_operator_nick, "IRC operator nick", error,
+                        error_size) < 0)
+            return -1;
+        config->irc_operator_nick_implicit = false;
+    }
     if (cli->irc_room_name &&
         config_copy(config->irc_room_name, sizeof(config->irc_room_name),
                     cli->irc_room_name, "IRC room name", error,
@@ -489,8 +527,11 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
         errno = EINVAL;
         return -1;
     }
-    if (!config->irc_model_nick[0])
-        memcpy(config->irc_model_nick, "agent", 6u);
+    if (!config->irc_model_nick[0]) {
+        if (numbered_nick(config->irc_model_nick, "agent", 0u, false) < 0)
+            return -1;
+        config->irc_model_nick_implicit = true;
+    }
     if (!nick_valid(config->irc_model_nick)) {
         snj_errorf(error, error_size, "IRC model nick is invalid");
         errno = EINVAL;
@@ -518,13 +559,16 @@ snj_irc_apply_cli(struct snj_config *config, const struct snj_cli *cli,
     }
     if (!config->irc_operator_nick[0]) {
         login = getenv("USER");
-        if (!login || !nick_valid(login) ||
-            irc_casecmp(login, config->irc_model_nick) == 0)
+        if (!login || !nick_valid(login))
             login = "operator";
-        if (irc_casecmp(login, config->irc_model_nick) == 0)
-            login = "localop";
-        (void)snj_strcpy(config->irc_operator_nick,
-                          sizeof(config->irc_operator_nick), login);
+        if (numbered_nick(config->irc_operator_nick, login, 0u, false) < 0)
+            return -1;
+        if (irc_casecmp(config->irc_operator_nick,
+                        config->irc_model_nick) == 0 &&
+            numbered_nick(config->irc_operator_nick,
+                          "localop", 0u, false) < 0)
+            return -1;
+        config->irc_operator_nick_implicit = true;
     }
     if (!nick_valid(config->irc_operator_nick) ||
         irc_casecmp(config->irc_operator_nick, config->irc_model_nick) == 0) {
@@ -1600,27 +1644,16 @@ link_retry_nick(struct snj_irc *irc, struct irc_conn *link)
 {
     const char *preferred = link->role == LINK_AGENT ? irc->model_nick :
                                                        irc->operator_nick;
-    char suffix[32u];
-    size_t len = strlen(preferred);
-    int n;
+    bool implicit = link->role == LINK_AGENT ? irc->model_nick_implicit :
+                                               irc->operator_nick_implicit;
 
     if (link->nick_suffix == SIZE_MAX) {
         errno = EOVERFLOW;
         return -1;
     }
-    n = snprintf(suffix, sizeof(suffix), "%zu", ++link->nick_suffix);
-    if (n < 0 || (size_t)n >= sizeof(suffix) ||
-        (size_t)n >= sizeof(link->nick)) {
-        errno = EOVERFLOW;
+    if (numbered_nick(link->nick, preferred, ++link->nick_suffix,
+                      implicit) < 0)
         return -1;
-    }
-    if (len + (size_t)n >= sizeof(link->nick)) {
-        len = sizeof(link->nick) - (size_t)n - 1u;
-        while (len && ((unsigned char)preferred[len] & 0xc0u) == 0x80u)
-            --len;
-    }
-    memcpy(link->nick, preferred, len);
-    memcpy(link->nick + len, suffix, (size_t)n + 1u);
     return queue_line(link, "NICK %s", link->nick);
 }
 
@@ -2144,6 +2177,8 @@ snj_irc_open(struct snj_irc **out, const struct snj_config *config,
         !snj_strcpy(irc->operator_nick, sizeof(irc->operator_nick),
                     config->irc_operator_nick))
         goto fail;
+    irc->model_nick_implicit = config->irc_model_nick_implicit;
+    irc->operator_nick_implicit = config->irc_operator_nick_implicit;
     derive_server_name(irc->server_name);
     if (config->irc_room_name[0]) {
         if (normalize_room(irc->room, sizeof(irc->room),

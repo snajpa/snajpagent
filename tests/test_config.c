@@ -249,6 +249,8 @@ main(void)
     assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
     write_bytes(path, valid, sizeof(valid) - 1u);
     snj_config_init(&config);
+    config.irc_model_nick_implicit = true;
+    config.irc_operator_nick_implicit = true;
     assert(snj_config_load(&config, path, dotdir,
                            error, sizeof(error)) == 0);
     assert(strcmp(config.model, "gpt-5.5") == 0);
@@ -318,6 +320,8 @@ main(void)
     assert(strcmp(config.irc_clients[1], "[2001:db8::20]:7667") == 0);
     assert(strcmp(config.irc_model_nick, "builder") == 0);
     assert(strcmp(config.irc_operator_nick, "alice") == 0);
+    assert(!config.irc_model_nick_implicit);
+    assert(!config.irc_operator_nick_implicit);
     assert(strcmp(config.irc_room_name, "build-host") == 0);
     assert(config.irc_history_lines == 321u);
     assert(config.default_yield_ms == 0u);
