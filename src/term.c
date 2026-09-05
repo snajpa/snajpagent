@@ -2313,8 +2313,21 @@ static int
 feed_byte(struct snj_term *term, unsigned char byte,
           enum snj_term_action *action, char **text)
 {
-    if (byte == 0x03u)
+    if (byte == 0x03u) {
+        uint64_t now = monotonic_ms();
+        if (!term->ctrl_c_count || now - term->ctrl_c_since_ms > 2000u) {
+            term->ctrl_c_since_ms = now;
+            term->ctrl_c_count = 0u;
+        }
+        if (++term->ctrl_c_count == 5u) {
+            int rc = complete_exit(term, action);
+            if (rc > 0)
+                *action = SNJ_TERM_FORCE_EXIT;
+            return rc;
+        }
         return cancel_line(term, action);
+    }
+    term->ctrl_c_count = 0u;
     if (term->paste)
         return feed_paste(term, byte);
     if (term->escape_len)

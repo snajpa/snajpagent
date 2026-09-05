@@ -314,9 +314,10 @@ snj_session_open_last(struct snj_store *store, struct snj_session *session,
     return open_full_id(store, session, best, error, error_size);
 }
 
-static int
-store_list(struct snj_store *store, const char *workspace, bool all,
-           bool include_archived, int fd, char *error, size_t error_size)
+int
+snj_store_list(struct snj_store *store, const char *workspace, bool all,
+                bool include_archived, snj_store_emit_fn emit, void *opaque,
+                char *error, size_t error_size)
 {
     DIR *dir;
     struct dirent *entry;
@@ -348,7 +349,7 @@ store_list(struct snj_store *store, const char *workspace, bool all,
                            archived ? "archived" : "active",
                            first ? first : "", all ? "\t" : "",
                            all ? saved_workspace : "") < 0 ||
-            snj_write_full(fd, row.data, row.len) < 0) {
+            emit(opaque, (const char *)row.data, row.len) < 0) {
             snj_buf_free(&row);
             free(first);
             free(saved_workspace);
@@ -365,18 +366,4 @@ store_list(struct snj_store *store, const char *workspace, bool all,
     if (!shown)
         snj_errorf(error, error_size, "no matching sessions");
     return 0;
-}
-
-int
-snj_store_list_active(struct snj_store *store, const char *workspace, bool all,
-                      int fd, char *error, size_t error_size)
-{
-    return store_list(store, workspace, all, false, fd, error, error_size);
-}
-
-int
-snj_store_list(struct snj_store *store, const char *workspace, bool all, int fd,
-               char *error, size_t error_size)
-{
-    return store_list(store, workspace, all, true, fd, error, error_size);
 }

@@ -32,7 +32,7 @@ struct provider_ctx {
     CURL *curl;
     const struct snj_config *config;
     const struct snj_provider_config *provider;
-    struct snj_render *render;
+    struct snj_ui *render;
     snj_provider_pump_fn pump;
     void *pump_opaque;
     long http_status;
@@ -120,7 +120,7 @@ render_config_header(struct provider_ctx *ctx, struct snj_buf *redacted,
     if (snj_buf_printf(&line, "%s: %s", name, value) < 0 ||
         snj_wire_header_redact(line.data, line.len, &ctx->secrets.wire,
                                redacted) < 0 ||
-        snj_render_transport(ctx->render, '>', (const char *)redacted->data,
+        snj_ui_transport(ctx->render, '>', (const char *)redacted->data,
                              redacted->len) < 0)
         rc = -1;
     snj_buf_free(&line);
@@ -144,19 +144,19 @@ render_request_headers(struct provider_ctx *ctx, const char *request_line,
     if (append_host_header(&host, ctx->provider->base_url) < 0 ||
         snj_buf_printf(&accept_line, "accept: %s", accept) < 0)
         goto fail;
-    if (snj_render_transport(ctx->render, '>',
+    if (snj_ui_transport(ctx->render, '>',
                              request_line, strlen(request_line)) < 0 ||
-        snj_render_transport(ctx->render, '>',
+        snj_ui_transport(ctx->render, '>',
                              (const char *)host.data, host.len) < 0 ||
-        snj_render_transport(ctx->render, '>',
+        snj_ui_transport(ctx->render, '>',
                              (const char *)accept_line.data,
                              accept_line.len) < 0 ||
-        (has_body && snj_render_transport(ctx->render, '>',
+        (has_body && snj_ui_transport(ctx->render, '>',
              "content-type: application/json",
              strlen("content-type: application/json")) < 0) ||
         snj_wire_header_redact((const unsigned char *)"authorization: Bearer x",
                                23u, &ctx->secrets.wire, &redacted) < 0 ||
-        snj_render_transport(ctx->render, '>', (const char *)redacted.data,
+        snj_ui_transport(ctx->render, '>', (const char *)redacted.data,
                              redacted.len) < 0)
         rc = -1;
     snj_buf_reset(&redacted);
@@ -252,7 +252,7 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
     if (ctx->render && ctx->render->verbosity >= 6u) {
         if (status) {
             if (!ascii_printable(line, clean_len) ||
-                snj_render_transport(ctx->render, '<', (const char *)line,
+                snj_ui_transport(ctx->render, '<', (const char *)line,
                                      clean_len) < 0) {
                 ctx_error(ctx, "HTTP status diagnostics could not be rendered");
                 return 0;
@@ -261,7 +261,7 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
             snj_buf_init(&redacted, SNJ_WIRE_HEADER_MAX);
             if (snj_wire_header_redact(line, clean_len, &ctx->secrets.wire,
                                        &redacted) < 0 ||
-                snj_render_transport(ctx->render, '<', (const char *)redacted.data,
+                snj_ui_transport(ctx->render, '<', (const char *)redacted.data,
                                      redacted.len) < 0) {
                 snj_buf_free(&redacted);
                 ctx_error(ctx, "HTTP header diagnostics could not be rendered");
@@ -516,7 +516,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
                        "provider retry %u/%u after %s in %llums",
                        retries_done + 1u, SNJ_PROVIDER_MAX_RETRIES,
                        reason, (unsigned long long)delay_ms);
-        if (snj_render_runtime(ctx->render, line) < 0) {
+        if (snj_ui_text(ctx->render, SNJ_UI_RUNTIME, line) < 0) {
             snj_errorf(error, error_size, "provider retry diagnostics could not be rendered");
             errno = EIO;
             return -1;
@@ -669,7 +669,7 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
                               &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));
     if (rc == 0 && ctx->render && ctx->render->verbosity >= 5u)
-        (void)snj_render_protocol(ctx->render, "response.error.body",
+        (void)snj_ui_protocol(ctx->render, "response.error.body",
                                   (const char *)redacted.data, redacted.len);
     if (ctx->error_body.len) {
         if (rc == 0)
@@ -1249,7 +1249,7 @@ static void
 provider_ctx_init(struct provider_ctx *ctx, const struct snj_config *config,
                   const struct snj_provider_config *provider,
                   const struct snj_credential *credential,
-                  struct snj_render *render, snj_provider_pump_fn pump,
+                  struct snj_ui *render, snj_provider_pump_fn pump,
                   void *pump_opaque, size_t body_max, size_t response_max)
 {
     memset(ctx, 0, sizeof(*ctx));
@@ -1405,7 +1405,7 @@ int
 snj_provider_models_list(const struct snj_config *config,
                          const struct snj_provider_config *provider,
                          const struct snj_credential *credential,
-                         struct snj_render *render, json_t **models,
+                         struct snj_ui *render, json_t **models,
                          char *error, size_t error_size)
 {
     struct provider_ctx ctx;
@@ -1440,7 +1440,7 @@ snj_provider_responses_count(const json_t *count_request,
                              const struct snj_config *config,
                              const struct snj_provider_config *provider,
                              const struct snj_credential *credential,
-                             struct snj_render *render,
+                             struct snj_ui *render,
                              snj_provider_pump_fn pump,
                              void *pump_opaque,
                              uint64_t *input_tokens,
@@ -1488,7 +1488,7 @@ snj_provider_responses_compact(const json_t *compact_request,
                                const struct snj_config *config,
                                const struct snj_provider_config *provider,
                                const struct snj_credential *credential,
-                               struct snj_render *render,
+                               struct snj_ui *render,
                                snj_provider_pump_fn pump,
                                void *pump_opaque,
                                json_t **output,
@@ -1536,7 +1536,7 @@ snj_provider_responses_create(const json_t *create_request,
                               const struct snj_config *config,
                               const struct snj_provider_config *provider,
                               const struct snj_credential *credential,
-                              struct snj_render *render,
+                              struct snj_ui *render,
                               snj_responses_emit_fn emit,
                               void *emit_opaque,
                               snj_provider_pump_fn pump,

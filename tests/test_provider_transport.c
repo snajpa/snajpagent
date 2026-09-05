@@ -624,7 +624,7 @@ test_codex_model_list(void)
     struct local_server server;
     struct snj_config config;
     struct snj_credential credential;
-    struct snj_render render;
+    struct snj_ui render;
     json_t *models = NULL;
     json_t *model;
     json_t *efforts;
@@ -651,12 +651,14 @@ test_codex_model_list(void)
     config.providers[0].idle_timeout_ms = 1000u;
     config.providers[0].request_timeout_ms = 3000u;
     credential_set(&credential, "transport-secret");
-    snj_render_init(&render, 6u);
-    snj_render_set_color(&render, SNJ_COLOR_NEVER);
+    assert(snj_ui_init(&render) == 0);
+    render.verbosity = 6u;
+    snj_ui_color(&render, SNJ_COLOR_NEVER);
     saved_stderr = capture_stderr_begin(pipefd);
     assert(snj_provider_models_list(&config, &config.providers[0],
                                     &credential, &render, &models,
                                     error, sizeof(error)) == 0);
+    snj_ui_free(&render);
     capture_stderr_end(pipefd, saved_stderr, diagnostic, sizeof(diagnostic));
     assert(strstr(diagnostic,
                   "> GET /backend-api/codex/models?client_version=0.146.0 HTTP/1.1") != NULL);
@@ -950,7 +952,7 @@ test_count_modes(void)
         snj_store_init(&app.store);
         assert(snj_store_open(&app.store, temp, error, sizeof(error)) == 0);
         snj_model_cache_init(&app.model_cache);
-        snj_render_init(&app.render, 0u);
+        assert(snj_ui_init(&app.ui) == 0);
         app.config = &config;
         app.turn_provider = &config.providers[0];
         app.turn_model = "gpt-transport-test";
@@ -958,6 +960,7 @@ test_count_modes(void)
                                     &tokens, &method, error, sizeof(error));
         assert((cases[i].result < 0 && rc < 0) || rc == cases[i].result);
         assert(app.turn_capacity.count_capability == cases[i].capability);
+        snj_ui_free(&app.ui);
         snj_model_cache_free(&app.model_cache);
         if (unlinkat(app.store.root_fd, "models.lock", 0) < 0)
             assert(errno == ENOENT);

@@ -14,6 +14,7 @@
 #include "responses.h"
 #include "store.h"
 #include "term.h"
+#include "ui.h"
 #include "turn.h"
 
 #include "snj_jansson.h"
@@ -33,8 +34,7 @@ struct partial_public_item {
 struct app_state {
     struct snj_store store;
     struct snj_session session;
-    struct snj_render render;
-    struct snj_term term;
+    struct snj_ui ui;
     struct snj_irc *irc;
     struct snj_buf irc_urgent;
     struct snj_buf irc_background;

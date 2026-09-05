@@ -13,6 +13,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static int
+list_to_fd(void *opaque, const char *text, size_t len)
+{
+    return snj_write_full(*(int *)opaque, text, len);
+}
+
 static json_t *
 change_data(const char *old_key, const char *old_value,
             const char *new_key, const char *new_value)
@@ -412,7 +418,7 @@ main(void)
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
-        assert(snj_store_list_active(&store, workspace2, false, fd,
+        assert(snj_store_list(&store, workspace2, false, false, list_to_fd, &fd,
                                      error, sizeof(error)) == 0);
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) == 0u);
@@ -420,7 +426,7 @@ main(void)
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
-        assert(snj_store_list(&store, workspace2, false, fd,
+        assert(snj_store_list(&store, workspace2, false, true, list_to_fd, &fd,
                               error, sizeof(error)) == 0);
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);

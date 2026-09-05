@@ -104,23 +104,23 @@ capture_shutdown_signal(struct app_state *app)
 static int
 app_error(struct app_state *app, const char *message)
 {
-    return snj_render_error_ctx(&app->render, message);
+    return snj_ui_text(&app->ui, SNJ_UI_ERROR, message);
 }
 static int
 app_warning(struct app_state *app, const char *message)
 {
-    return snj_render_warning_ctx(&app->render, message);
+    return snj_ui_text(&app->ui, SNJ_UI_WARNING, message);
 }
 static void
 history_warning(struct app_state *app)
 {
-    if (snj_term_take_history_warning(&app->term))
+    if (snj_ui_history_warning(&app->ui))
         (void)app_warning(app, "prompt history is unavailable or contained damaged records");
 }
 static void
 remember_input(struct app_state *app, const char *text)
 {
-    (void)snj_term_history_add(&app->term, text);
+    (void)snj_ui_history_add(&app->ui, text);
     history_warning(app);
 }
 static int
@@ -147,7 +147,7 @@ app_hostf(struct app_state *app, const char *fmt, ...)
     (void)vsnprintf((char *)text.data, (size_t)needed + 1u, fmt, ap);
     va_end(ap);
     text.len = (size_t)needed;
-    rc = snj_render_host(&app->render, (const char *)text.data);
+    rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
     snj_buf_free(&text);
     return rc;
 }
@@ -158,7 +158,7 @@ app_runtimef(struct app_state *app, const char *fmt, ...)
     va_list ap;
     int needed;
     int rc;
-    if (app->render.verbosity < 3u)
+    if (app->ui.verbosity < 3u)
         return 0;
     snj_buf_init(&text, 4u * 1024u * 1024u);
     va_start(ap, fmt);
@@ -177,7 +177,7 @@ app_runtimef(struct app_state *app, const char *fmt, ...)
     (void)vsnprintf((char *)text.data, (size_t)needed + 1u, fmt, ap);
     va_end(ap);
     text.len = (size_t)needed;
-    rc = snj_render_runtime(&app->render, (const char *)text.data);
+    rc = snj_ui_text(&app->ui, SNJ_UI_RUNTIME, (const char *)text.data);
     snj_buf_free(&text);
     return rc;
 }
@@ -397,7 +397,7 @@ snj_app_commit_event(struct app_state *app, const char *type, json_t *data,
     if (snj_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;
-    if (snj_render_event(&app->render, seq, type) < 0) {
+    if (snj_ui_event(&app->ui, seq, type) < 0) {
         snj_errorf(error, error_size, "durable event output failed");
         return -1;
     }
@@ -416,8 +416,8 @@ render_queue(struct app_state *app)
         (void)snprintf(label, sizeof(label), "%zu %.8s%s › ", i + 1u,
                        app->session.pending_queue[i].queue_id,
                        app->session.pending_queue[i].read_only ? " /ro" : "");
-        if (snj_render_submitted(&app->render, label,
-                                 app->session.pending_queue[i].text) < 0)
+        if (snj_ui_submitted(&app->ui, label,
+                                 app->session.pending_queue[i].text, false) < 0)
             return -1;
     }
     return 0;
@@ -494,8 +494,8 @@ format_input_label(struct app_state *app, bool active,
                                   resolve_effort(next_effort(app));
     char hostname[256u], meter[32u], hour[12u], minute[12u], second[12u];
     const char *values[SNJ_PROMPT_FIELD_COUNT];
-    const struct snj_prompt_clock *clock = &app->term.prompt_clock;
-    unsigned int selected = snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
+    const struct snj_prompt_clock *clock = &app->ui.prompt_clock;
+    unsigned int selected = app->ui.view == SNJ_RENDER_CHAT ?
                             0u : active ? 2u : 1u;
 
     if (!provider || !model || !effort ||
@@ -510,7 +510,7 @@ format_input_label(struct app_state *app, bool active,
         if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
             hostname[i] = '_';
     if (!clock->captured)
-        snj_term_capture_prompt_clock(&app->term, time(NULL));
+        snj_ui_capture_prompt_clock(&app->ui);
     if (clock->valid) {
         (void)snprintf(hour, sizeof(hour), "%u", (unsigned int)clock->hour);
         (void)snprintf(minute, sizeof(minute), "%u", (unsigned int)clock->minute);
@@ -645,9 +645,9 @@ set_input_prompt(struct app_state *app, bool active)
     unsigned int states = prompt_spinner_states(app, active);
 
     if (format_input_label(app, active, label) < 0 ||
-        snj_render_before_prompt(&app->render) < 0)
+        snj_ui_text(&app->ui, SNJ_UI_BEFORE_PROMPT, NULL) < 0)
         return -1;
-    return snj_term_set_prompt_template(&app->term, active, label, spinners,
+    return snj_ui_prompt(&app->ui, active, label, spinners,
         app->config->prompt_spinner_per_second, states);
 }
 
@@ -668,12 +668,12 @@ tick_irc(struct app_state *app, char *error, size_t error_size)
         return 0;
     if (snj_app_irc_snapshot(app, "nick", error, error_size) < 0)
         return -1;
-    if (!app->term.opened || !app->term.prompt_wanted)
+    if (!app->ui.opened || !app->ui.prompt_wanted)
         return 0;
-    if (format_input_label(app, app->term.active, label) < 0)
+    if (format_input_label(app, app->ui.active, label) < 0)
         return -1;
-    return strcmp(label, app->term.label) == 0 ? 0 :
-        set_input_prompt(app, app->term.active);
+    return strcmp(label, app->ui.label) == 0 ? 0 :
+        set_input_prompt(app, app->ui.active);
 }
 
 static struct snj_queued_turn *
@@ -712,7 +712,7 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
     if (draft_rc == 0)
         draft_rc = snj_buf_terminate(&draft);
     if (draft_rc == 0 && set_input_prompt(app, active) == 0)
-        draft_rc = snj_term_restore_draft(&app->term, (char *)draft.data);
+        draft_rc = snj_ui_restore_draft(&app->ui, (char *)draft.data);
     else draft_rc = -1;
     snj_buf_free(&draft);
     if (draft_rc < 0) {
@@ -743,7 +743,7 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
     queued = queued_by_id(app, app->queue_edit_id, NULL);
     if (!queued) {
         snj_errorf(error, error_size, "the queued turn being edited no longer exists");
-        (void)snj_render_error_ctx(&app->render, error);
+        (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
         error[0] = '\0';
         rc = 1;
         goto clear;
@@ -752,10 +752,10 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
         !snj_utf8_valid((const unsigned char *)text, len, true)) {
         snj_errorf(error, error_size,
                   "queued text must be nonempty valid UTF-8 within 256 KiB");
-        (void)snj_render_error_ctx(&app->render, error);
+        (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
         error[0] = '\0';
         if (set_input_prompt(app, active) < 0 ||
-            snj_term_restore_draft(&app->term, original) < 0)
+            snj_ui_restore_draft(&app->ui, original) < 0)
             return -1;
         return 1;
     }
@@ -764,11 +764,11 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
                      snj_app_future_turn_edited_data(queued->queue_id, text, read_only),
                      error, error_size) < 0) {
         if (set_input_prompt(app, active) == 0)
-            (void)snj_term_restore_draft(&app->term, original);
+            (void)snj_ui_restore_draft(&app->ui, original);
         return -1;
     }
-    if (snj_render_submitted(&app->render,
-            snj_term_prompt_label(&app->term), original) < 0) {
+    if (snj_ui_submitted(&app->ui,
+            app->ui.label, original, false) < 0) {
         snj_errorf(error, error_size, "edited turn acknowledgement could not be rendered");
         return -1;
     }
@@ -821,7 +821,7 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
                                              queue_id, queued_text, read_only),
                      error, error_size) < 0)
         return -1;
-    if (snj_render_submitted(&app->render, "next › ", text) < 0) {
+    if (snj_ui_submitted(&app->ui, "next › ", text, false) < 0) {
         snj_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
         return -1;
     }
@@ -976,7 +976,7 @@ append_advertised_capacity(struct snj_buf *text, const json_t *model)
 static int
 render_status(struct app_state *app)
 {
-    const char *id = app->render.verbosity >= 3u ? app->session.id : NULL;
+    const char *id = app->ui.verbosity >= 3u ? app->session.id : NULL;
     const struct snj_provider_config *provider = next_provider(app);
     const struct snj_model_limit_config *configured = NULL;
     const json_t *advertised = NULL;
@@ -1031,7 +1031,7 @@ render_status(struct app_state *app)
         (unsigned long long)app->session.turn_count,
         app->session.pending_queue_count,
         app->session.pending_queue_count && !app->queue_armed ? " paused" : "",
-        app->render.verbosity, snj_capacity_source_name(capacity.source)) < 0 ||
+        app->ui.verbosity, snj_capacity_source_name(capacity.source)) < 0 ||
         append_capacity_value(&text, "hard-input",
                               capacity.hard_input_known,
                               capacity.hard_input_tokens) < 0 ||
@@ -1109,7 +1109,7 @@ render_status(struct app_state *app)
     }
     if (snj_buf_terminate(&text) < 0)
         goto out;
-    rc = snj_render_host(&app->render, (const char *)text.data);
+    rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
 out:
     snj_buf_free(&text);
     return rc;
@@ -1135,7 +1135,7 @@ render_help(struct app_state *app)
     if (snj_buf_append(&text, keys, strlen(keys)) < 0 ||
         snj_buf_terminate(&text) < 0)
         goto out;
-    rc = snj_render_host(&app->render, (const char *)text.data);
+    rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
 out:
     snj_buf_free(&text);
     return rc;
@@ -1314,7 +1314,7 @@ render_model_catalog(struct app_state *app)
     }
     if (snj_buf_terminate(&text) < 0)
         goto out;
-    rc = snj_render_host(&app->render, (const char *)text.data);
+    rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
 out:
     snj_buf_free(&text);
     return rc;
@@ -1785,15 +1785,15 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     app->networked = new_networked;
     app->turn_provider = snj_config_provider(app->config, selected_provider);
     app->staged_provider = NULL;
-    snj_render_set_color(&app->render, configured_color(app, app->config));
-    snj_render_set_markdown(&app->render,
+    snj_ui_color(&app->ui, configured_color(app, app->config));
+    snj_ui_markdown(&app->ui,
                             configured_markdown(app, app->config));
-    app->render.verbosity = configured_verbosity(app, app->config);
-    snj_render_set_networked(&app->render, app->networked,
+    app->ui.verbosity = configured_verbosity(app, app->config);
+    snj_ui_networked(&app->ui, app->networked,
                              app->networked ?
                                  app->config->irc_model_nick : NULL);
-    snj_term_set_commands(&app->term, commands, command_count(app));
-    snj_term_set_typing_pause(&app->term, app->config->typing_pause_ms);
+    snj_ui_commands(&app->ui, commands, command_count(app));
+    snj_ui_typing_pause(&app->ui, app->config->typing_pause_ms);
     snj_config_free(&previous);
     if (replace_irc && app->networked &&
         app->config->irc_listen_explicit &&
@@ -1820,7 +1820,7 @@ run_config_editor(struct app_state *app, int *status,
         errno = ENOENT;
         return 1;
     }
-    if (snj_term_external_begin(&app->term, error, error_size) < 0)
+    if (snj_ui_external(&app->ui, true, error, error_size) < 0)
         return -1;
     child = fork();
     if (child == 0) {
@@ -1831,13 +1831,13 @@ run_config_editor(struct app_state *app, int *status,
     if (child < 0) {
         snj_errorf(error, error_size, "cannot start $EDITOR: %s",
                   strerror(errno));
-        (void)snj_term_external_end(&app->term, NULL, 0u);
+        (void)snj_ui_external(&app->ui, false, NULL, 0u);
         return -1;
     }
     do {
         got = waitpid(child, status, 0);
     } while (got < 0 && errno == EINTR);
-    if (snj_term_external_end(&app->term, error, error_size) < 0)
+    if (snj_ui_external(&app->ui, false, error, error_size) < 0)
         return -1;
     if (got != child) {
         snj_errorf(error, error_size, "cannot wait for $EDITOR: %s",
@@ -1928,11 +1928,11 @@ static int
 change_verbosity(struct app_state *app, const char *value)
 {
     if (!value)
-        return app_hostf(app, "verbosity: %u", app->render.verbosity);
+        return app_hostf(app, "verbosity: %u", app->ui.verbosity);
     if (value[0] < '0' || value[0] > '6' || value[1] != '\0')
         return app_error(app, "/verbose expects one integer from 0 through 6");
-    app->render.verbosity = (unsigned int)(value[0] - '0');
-    return app_hostf(app, "verbosity: %u", app->render.verbosity);
+    app->ui.verbosity = (unsigned int)(value[0] - '0');
+    return app_hostf(app, "verbosity: %u", app->ui.verbosity);
 }
 static int
 select_view(struct app_state *app, enum snj_render_view view, bool active)
@@ -1942,14 +1942,14 @@ select_view(struct app_state *app, enum snj_render_view view, bool active)
 
     if (!app->networked)
         return 0;
-    if (snj_term_output_begin(&app->term, true) < 0)
+    if (snj_ui_text(&app->ui, SNJ_UI_OUTPUT_BEGIN, NULL) < 0)
         return -1;
-    if (snj_render_set_view(&app->render, view) < 0 ||
+    if (snj_ui_set_view(&app->ui, view) < 0 ||
         set_input_prompt(app, active) < 0) {
         rc = -1;
         saved_errno = errno;
     }
-    if (snj_term_output_end(&app->term) < 0 && rc == 0)
+    if (snj_ui_text(&app->ui, SNJ_UI_OUTPUT_END, NULL) < 0 && rc == 0)
         rc = -1;
     if (saved_errno)
         errno = saved_errno;
@@ -1962,7 +1962,7 @@ toggle_view(struct app_state *app)
 
     if (!app->networked)
         return 0;
-    view = snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
+    view = app->ui.view == SNJ_RENDER_CHAT ?
            SNJ_RENDER_ROLLOUT : SNJ_RENDER_CHAT;
     return select_view(app, view, app->session.active_turn);
 }
@@ -1979,7 +1979,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     if (strcmp(line, "/status") == 0)
         return render_status(app);
     if (strcmp(line, "/history") == 0)
-        return snj_render_history(&app->render, &app->session);
+        return snj_ui_history(&app->ui, &app->session);
     if (app->networked && strcmp(line, "/chat") == 0) {
         int rc = select_view(app, SNJ_RENDER_CHAT, active);
 
@@ -2018,7 +2018,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         if (rc == 0)
             rc = snj_buf_terminate(&state);
         if (rc == 0)
-            rc = snj_render_host(&app->render, (const char *)state.data);
+            rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)state.data);
         snj_buf_free(&state);
         return rc < 0 ? app_error(app, error[0] ? error :
                                   "IRC state could not be displayed") : 0;
@@ -2048,7 +2048,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     if (app->networked) {
         error[0] = '\0';
         if (tick_irc(app, error, sizeof(error)) < 0) {
-            (void)snj_render_error_ctx(&app->render,
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
                 error[0] ? error : "IRC event loop failed");
             return -1;
         }
@@ -2057,7 +2057,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (app->execute || app->input_closed)
         return 0;
-    rc = snj_term_poll(&app->term, (int)timeout_ms, &action, &line);
+    rc = snj_ui_poll(&app->ui, (int)timeout_ms, &action, &line);
     history_warning(app);
     if (rc < 0) {
         if (capture_shutdown_signal(app)) {
@@ -2065,7 +2065,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
             free(line);
             return 2;
         }
-        (void)snj_render_error_ctx(&app->render,
+        (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
             errno == EOVERFLOW ? "active submission exceeds 1 MiB" :
             errno == EILSEQ ? "active submission contains invalid UTF-8" :
             "active input could not be read");
@@ -2075,16 +2075,20 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         if (app->networked) {
             error[0] = '\0';
             if (tick_irc(app, error, sizeof(error)) < 0) {
-                (void)snj_render_error_ctx(&app->render,
+                (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
                     error[0] ? error : "IRC event loop failed");
                 return -1;
             }
         }
         return 0;
     }
-    if (action == SNJ_TERM_EXIT) {
+    if (action == SNJ_TERM_EXIT || action == SNJ_TERM_FORCE_EXIT) {
         app->input_closed = true;
         free(line);
+        if (action == SNJ_TERM_FORCE_EXIT) {
+            app->interrupt_requested = true;
+            return 2;
+        }
         return 0;
     }
     if ((action == SNJ_TERM_CANCEL || action == SNJ_TERM_INTERRUPT) &&
@@ -2105,7 +2109,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (action == SNJ_TERM_VIEW) {
         if (app->queue_edit_id[0]) {
-            (void)snj_render_error_ctx(&app->render,
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
                 "queue replacement must be nonempty");
             return 0;
         }
@@ -2118,13 +2122,13 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     if (app->queue_edit_id[0]) {
         rc = finish_queue_edit(app, line, true, error, sizeof(error));
         if (rc != 0 && error[0])
-            (void)snj_render_error_ctx(&app->render, error);
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
     } else if (action == SNJ_TERM_QUEUE) {
         rc = queue_future_turn(app, line, true, error, sizeof(error));
         if (rc != 0) {
-            (void)snj_render_error_ctx(&app->render, error);
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
             if (set_input_prompt(app, true) < 0 ||
-                snj_term_restore_draft(&app->term, line) < 0)
+                snj_ui_restore_draft(&app->ui, line) < 0)
                 rc = -1;
         } else rc = set_input_prompt(app, true);
     } else {
@@ -2152,7 +2156,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
             rc = handle_queue_command(app, line, true, &handled,
                                       error, sizeof(error));
             if (rc != 0 && error[0])
-                (void)snj_render_error_ctx(&app->render, error);
+                (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
             if (rc < 0)
                 goto active_done;
         }
@@ -2161,7 +2165,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 set_input_prompt(app, true) < 0)
                 rc = -1;
         } else if (single_line && line[0] == '/' && line[1] != '/') {
-            (void)snj_render_error_ctx(&app->render,
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
                 "that command is unavailable while a turn is active");
             rc = set_input_prompt(app, true);
         } else {
@@ -2169,19 +2173,19 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
             char steering_id[SNJ_ID_HEX_LEN + 1u];
             size_t len = strlen(text);
             if (!len || len > SNJ_MAX_STEERING_TEXT) {
-                (void)snj_render_error_ctx(&app->render,
+                (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
                     "active-turn input must be nonempty valid UTF-8 within 256 KiB");
                 rc = 0;
             } else if (app->networked &&
-                       snj_render_view(&app->render) == SNJ_RENDER_CHAT) {
+                       app->ui.view == SNJ_RENDER_CHAT) {
                 error[0] = '\0';
                 rc = snj_irc_send_operator(app->irc, text,
                                            error, sizeof(error));
                 if (rc < 0) {
-                    (void)snj_render_error_ctx(&app->render,
+                    (void)snj_ui_text(&app->ui, SNJ_UI_ERROR,
                         error[0] ? error : "IRC message could not be queued");
                     if (set_input_prompt(app, true) == 0)
-                        (void)snj_term_restore_draft(&app->term, line);
+                        (void)snj_ui_restore_draft(&app->ui, line);
                 } else rc = set_input_prompt(app, true);
             } else if (snj_random_id(steering_id) < 0) {
                 rc = -1;
@@ -2190,14 +2194,14 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                         snj_app_steering_added_data(app->session.active_turn_id,
                                             steering_id, text),
                         error, sizeof(error));
-                if (rc == 0 && snj_render_input_submitted(&app->render,
-                        snj_term_prompt_label(&app->term), text) < 0)
+                if (rc == 0 && snj_ui_submitted(&app->ui,
+                        app->ui.label, text, true) < 0)
                     rc = -1;
                 if (rc < 0) {
-                    (void)snj_render_error_ctx(&app->render, error[0] ? error :
+                    (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error[0] ? error :
                                                "active-turn input could not be persisted");
                     if (set_input_prompt(app, true) == 0)
-                        (void)snj_term_restore_draft(&app->term, line);
+                        (void)snj_ui_restore_draft(&app->ui, line);
                 } else {
                     app->steering_requested = true;
                     rc = set_input_prompt(app, true);
@@ -2431,7 +2435,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                                            app->session.workspace),
                          error, error_size) < 0)
             return -1;
-        if (snj_render_tool_start(&app->render, call,
+        if (snj_ui_tool_start(&app->ui, call,
                                   app->session.workspace,
                                   app->config->default_timeout_ms) < 0) {
             snj_errorf(error, error_size, "tool activity could not be rendered");
@@ -2442,7 +2446,7 @@ execute_calls(struct app_state *app, const char *turn_id,
             int run_rc;
 
             app->tool_active = true;
-            if (snj_term_set_spinner_states(&app->term,
+            if (snj_ui_spinner_states(&app->ui,
                     prompt_spinner_states(app, true)) < 0) {
                 app->tool_active = false;
                 snj_errorf(error, error_size,
@@ -2452,7 +2456,7 @@ execute_calls(struct app_state *app, const char *turn_id,
             run_rc = snj_app_tool_run(app, call, credential, &result, tool_error,
                                       sizeof(tool_error));
             app->tool_active = false;
-            if (snj_term_set_spinner_states(&app->term,
+            if (snj_ui_spinner_states(&app->ui,
                     prompt_spinner_states(app, true)) < 0) {
                 if (result)
                     json_decref(result);
@@ -2499,7 +2503,7 @@ execute_calls(struct app_state *app, const char *turn_id,
         {
             const char *status = snj_json_string(result, "status");
             bool yielded = status && strcmp(status, "running") == 0;
-            json_t *render_result = app->render.verbosity >= 1u ?
+            json_t *render_result = app->ui.verbosity >= 1u ?
                                     json_incref(result) : NULL;
             if (commit_pending_result(app, turn_id, call->call_id, result,
                                       error, error_size) < 0) {
@@ -2508,7 +2512,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                 return -1;
             }
             if (render_result &&
-                snj_render_tool_finish(&app->render, call->name,
+                snj_ui_tool_finish(&app->ui, call->name,
                                        render_result,
                                        app->config->max_output_bytes) < 0) {
                 json_decref(render_result);
@@ -2909,7 +2913,7 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (request_body.len &&
-            snj_render_protocol(&app->render, "request.body",
+            snj_ui_protocol(&app->ui, "request.body",
                                 (const char *)request_body.data,
                                 request_body.len) < 0) {
             json_t *partial = json_array();
@@ -3379,7 +3383,7 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             if (app->execute &&
-                snj_write_full(STDOUT_FILENO, final->text,
+                snj_ui_raw(&app->ui, STDOUT_FILENO, final->text,
                                strlen(final->text)) < 0) {
                 snj_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "final answer could not be written to stdout");
@@ -3743,7 +3747,7 @@ out:
 }
 
 static void
-write_resume_command(const struct app_state *app, const char *program,
+write_resume_command(struct app_state *app, const char *program,
                      const char *dotdir)
 {
     struct snj_buf command;
@@ -3752,34 +3756,44 @@ write_resume_command(const struct app_state *app, const char *program,
         return;
     snj_buf_init(&command, RESUME_COMMAND_MAX);
     if (build_resume_command(app, program, dotdir, &command) == 0)
-        (void)snj_render_resume_hint(&app->render, (char *)command.data,
+        (void)snj_ui_resume_hint(&app->ui, (char *)command.data,
                                      command.len);
     snj_buf_free(&command);
+}
+
+static int
+list_row(void *opaque, const char *text, size_t len)
+{
+    struct app_state *app = opaque;
+    return snj_ui_raw(&app->ui, app->cli->list ? STDOUT_FILENO : STDERR_FILENO,
+                      text, len);
 }
 
 static int
 pick_session(struct app_state *app, const char *workspace,
              char *error, size_t error_size)
 {
-    char prefix[128];
-    size_t len;
-    if (snj_store_list_active(&app->store, workspace, app->cli->all, STDERR_FILENO,
-                       error, error_size) < 0)
+    const char *frames[SNJ_TERM_SPINNER_COUNT] = {" ", " ", " "};
+    enum snj_term_action action;
+    char *prefix = NULL;
+    int rc = -1;
+
+    if (snj_store_list(&app->store, workspace, app->cli->all, false,
+                       list_row, app, error, error_size) < 0 ||
+        snj_ui_open(&app->ui, error, error_size) < 0 ||
+        snj_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0)
         return -1;
-    if (snj_render_prompt(&app->render, "session › ") < 0 ||
-        !fgets(prefix, sizeof(prefix), stdin)) {
+    if (snj_ui_poll(&app->ui, -1, &action, &prefix) <= 0 ||
+        action != SNJ_TERM_SUBMIT || !prefix) {
         snj_errorf(error, error_size, "session selection cancelled");
-        return -1;
-    }
-    len = strlen(prefix);
-    if (len && prefix[len - 1u] == '\n')
-        prefix[--len] = '\0';
-    if (len < 8u || len > SNJ_ID_HEX_LEN) {
+    } else if (strlen(prefix) < 8u || strlen(prefix) > SNJ_ID_HEX_LEN) {
         snj_errorf(error, error_size, "enter an 8..32 character session id prefix");
-        return -1;
+    } else {
+        rc = snj_session_open(&app->store, &app->session, prefix,
+                              error, error_size);
     }
-    return snj_session_open(&app->store, &app->session, prefix,
-                            error, error_size);
+    free(prefix);
+    return rc;
 }
 static int
 run_queued_chain(struct app_state *app)
@@ -3883,7 +3897,7 @@ interactive_loop(struct app_state *app, const char *initial)
             }
         }
         if (!prompt) {
-            int poll_rc = snj_term_poll(&app->term,
+            int poll_rc = snj_ui_poll(&app->ui,
                                         app->networked ? 25 : -1,
                                         &action, &owned);
             history_warning(app);
@@ -3910,7 +3924,7 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             if (poll_rc == 0)
                 continue;
-            if (action == SNJ_TERM_EXIT) {
+            if (action == SNJ_TERM_EXIT || action == SNJ_TERM_FORCE_EXIT) {
                 free(owned);
                 return 0;
             }
@@ -3958,8 +3972,8 @@ interactive_loop(struct app_state *app, const char *initial)
             continue;
         }
         if (!app->networked) {
-            if (snj_render_input_submitted(&app->render,
-                    snj_term_prompt_label(&app->term), prompt) < 0) {
+            if (snj_ui_submitted(&app->ui,
+                    app->ui.label, prompt, true) < 0) {
                 free(owned);
                 return 6;
             }
@@ -4013,7 +4027,7 @@ interactive_loop(struct app_state *app, const char *initial)
             } else if (!read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
             } else if (!read_only && app->networked &&
-                       snj_render_view(&app->render) == SNJ_RENDER_CHAT) {
+                       app->ui.view == SNJ_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
                 char irc_error[256] = {0};
@@ -4037,8 +4051,8 @@ interactive_loop(struct app_state *app, const char *initial)
                 }
 
                 if (app->networked &&
-                    snj_render_input_submitted(&app->render,
-                        snj_term_prompt_label(&app->term), actual) < 0) {
+                    snj_ui_submitted(&app->ui,
+                        app->ui.label, actual, true) < 0) {
                     free(owned);
                     return 6;
                 }
@@ -4070,7 +4084,7 @@ interactive_loop(struct app_state *app, const char *initial)
 static int
 render_room_history(void *opaque, const struct snj_irc_event *event)
 {
-    return snj_render_irc_event(opaque, event);
+    return snj_ui_irc_event(opaque, event);
 }
 
 int
@@ -4098,9 +4112,9 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     snj_model_cache_init(&app.model_cache);
     snj_store_init(&app.store);
     snj_session_init(&app.session);
-    snj_term_init(&app.term);
-    snj_render_init(&app.render, 0u);
-    snj_render_set_color(&app.render,
+    if (snj_ui_init(&app.ui) < 0)
+        return 3;
+    snj_ui_color(&app.ui,
         cli->color == SNJ_CLI_COLOR_NEVER ? SNJ_COLOR_NEVER :
         cli->color == SNJ_CLI_COLOR_ALWAYS ? SNJ_COLOR_ALWAYS :
                                               SNJ_COLOR_AUTO);
@@ -4109,7 +4123,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     app.config_allow_create = cli->config_path == NULL;
     app.execute = cli->execute;
     if (install_shutdown_handlers(&signal_handlers) < 0) {
-        (void)snj_render_error_ctx(&app.render,
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
                                    "cannot install shutdown signal handlers");
         rc = 2;
         goto out;
@@ -4121,7 +4135,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         if (!locale_name || !codeset ||
             (strcasecmp(codeset, "UTF-8") != 0 &&
              strcasecmp(codeset, "UTF8") != 0)) {
-            (void)snj_render_error_ctx(&app.render,
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
                                        "a UTF-8 locale is required");
             rc = 2;
             goto out;
@@ -4130,21 +4144,21 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     error[0] = '\0';
     dotdir = resolve_dotdir(cli->dotdir, error, sizeof(error));
     if (!dotdir) {
-        (void)snj_render_error_ctx(&app.render,
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
                                    error[0] ? error : "dotdir is unavailable");
         rc = 2;
         goto out;
     }
     if (snj_config_load(&config, cli->config_path, dotdir,
                         error, sizeof(error)) < 0) {
-        (void)snj_render_error_ctx(&app.render, error);
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
         rc = 2;
         goto out;
     }
     config_path = snj_config_path(cli->config_path, dotdir,
                                   error, sizeof(error));
     if (!config_path) {
-        (void)snj_render_error_ctx(&app.render, error);
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
         rc = 2;
         goto out;
     }
@@ -4157,27 +4171,27 @@ snj_app_run(const struct snj_cli *cli, const char *program)
             color = SNJ_COLOR_ALWAYS;
         else if (cli->color == SNJ_CLI_COLOR_NEVER)
             color = SNJ_COLOR_NEVER;
-        snj_render_set_color(&app.render, color);
+        snj_ui_color(&app.ui, color);
     }
-    snj_render_set_markdown(&app.render,
+    snj_ui_markdown(&app.ui,
         cli->markdown == SNJ_CLI_MARKDOWN_ENABLED ? true :
         cli->markdown == SNJ_CLI_MARKDOWN_DISABLED ? false : config.markdown);
     if (!cli->execute && !cli->list &&
         snj_irc_apply_cli(&config, cli, error, sizeof(error)) < 0) {
-        (void)snj_render_error_ctx(&app.render, error);
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
         rc = 2;
         goto out;
     }
     app.networked = !cli->execute && !cli->list && snj_irc_enabled(&config);
-    snj_term_set_commands(&app.term, commands, command_count(&app));
-    snj_render_set_networked(&app.render, app.networked,
+    snj_ui_commands(&app.ui, commands, command_count(&app));
+    snj_ui_networked(&app.ui, app.networked,
                              app.networked ? config.irc_model_nick : NULL);
-    snj_term_set_typing_pause(&app.term, config.typing_pause_ms);
+    snj_ui_typing_pause(&app.ui, config.typing_pause_ms);
     effective_verbosity = configured_verbosity(&app, &config);
-    app.render.verbosity = effective_verbosity;
+    app.ui.verbosity = effective_verbosity;
     if (!cli->execute && !cli->list &&
         (isatty(STDIN_FILENO) != 1 || isatty(STDERR_FILENO) != 1)) {
-        (void)snj_render_error_ctx(&app.render,
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
             "interactive mode requires terminal stdin and stderr; use -e for scripts");
         rc = 2;
         goto out;
@@ -4186,25 +4200,25 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         new_model = effective_model(cli->model ? cli->model : config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
     if ((!cli->resume || cli->effort) && !resolve_effort(new_effort)) {
-        (void)snj_render_error_ctx(&app.render,
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
             "reasoning effort is empty, oversized, or invalid UTF-8");
         rc = 2;
         goto out;
     }
     if (snj_store_open(&app.store, dotdir, error, sizeof(error)) < 0) {
-        (void)snj_render_error_ctx(&app.render, error);
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
         goto out;
     }
     workspace = current_workspace(error, sizeof(error));
     if (!workspace) {
-        (void)snj_render_error_ctx(&app.render, error);
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
         goto out;
     }
     if (cli->list) {
-        rc = snj_store_list(&app.store, workspace, cli->all, STDOUT_FILENO,
+        rc = snj_store_list(&app.store, workspace, cli->all, true, list_row, &app,
                             error, sizeof(error)) < 0 ? 3 : 0;
         if (rc)
-            (void)snj_render_error_ctx(&app.render, error);
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
         goto out;
     }
     if (cli->resume) {
@@ -4212,7 +4226,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
             relocated_workspace = resolve_workspace_path(cli->workspace, "relocation",
                                                          error, sizeof(error));
             if (!relocated_workspace) {
-                (void)snj_render_error_ctx(&app.render, error);
+                (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
                 rc = 2;
                 goto out;
             }
@@ -4226,12 +4240,12 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         else
             rc = pick_session(&app, workspace, error, sizeof(error));
         if (rc == 1) {
-            (void)snj_render_warning_ctx(&app.render, error);
+            (void)snj_ui_text(&app.ui, SNJ_UI_WARNING, error);
             rc = 0;
             goto out;
         }
         if (rc < 0) {
-            (void)snj_render_error_ctx(&app.render, error);
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
             rc = 3;
             goto out;
         }
@@ -4241,23 +4255,23 @@ snj_app_run(const struct snj_cli *cli, const char *program)
                 resolve_effort(cli->effort ? cli->effort :
                                app.session.default_effort),
                 app.networked) < 0) {
-            (void)snj_render_error_ctx(&app.render,
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
                 "configured prompt cannot be rendered with the current selection");
             rc = 2;
             goto out;
         }
         if (app.session.archived && snj_session_unarchive(&app.session, NULL, error, sizeof(error)) < 0) {
-            (void)snj_render_error_ctx(&app.render, error); rc = 3; goto out;
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error); rc = 3; goto out;
         }
         if (recover_session(&app, error, sizeof(error)) < 0) {
-            (void)snj_render_error_ctx(&app.render, error);
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
             rc = 3;
             goto out;
         }
         if (app.session.goal_status == SNJ_GOAL_ACTIVE) {
             if (snj_app_goal_pause(&app, "session_resumed",
                                    error, sizeof(error)) < 0) {
-                (void)snj_render_error_ctx(&app.render, error);
+                (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
                 rc = 3;
                 goto out;
             }
@@ -4271,7 +4285,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
                                                 "new_workspace",
                                                 relocated_workspace),
                          error, sizeof(error)) < 0) {
-            (void)snj_render_error_ctx(&app.render, error);
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
             rc = 3;
             goto out;
         }
@@ -4288,7 +4302,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         if (!cli->execute && validate_prompt_values(
                 &config, selected_provider, new_model,
                 resolve_effort(new_effort), app.networked) < 0) {
-            (void)snj_render_error_ctx(&app.render,
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR,
                 "configured prompt cannot be rendered with the current selection");
             rc = 2;
             goto out;
@@ -4296,7 +4310,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
         if (snj_session_create(&app.store, &app.session, selected_workspace,
                                selected_provider->name, new_model, new_effort,
                                error, sizeof(error)) < 0) {
-            (void)snj_render_error_ctx(&app.render, error);
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
             goto out;
         }
         app.turn_model = app.session.default_model;
@@ -4310,7 +4324,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
             snj_app_irc_restore(&app, error, sizeof(error)) < 0 ||
             (config.irc_listen_explicit &&
              snj_app_irc_snapshot(&app, "join", error, sizeof(error)) < 0)) {
-            (void)snj_render_error_ctx(&app.render, error[0] ? error :
+            (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error[0] ? error :
                                    "IRC startup failed");
             rc = 3;
             goto out;
@@ -4324,19 +4338,18 @@ snj_app_run(const struct snj_cli *cli, const char *program)
             rc = run_ready_chains(&app);
         goto out;
     }
-    if (snj_term_open(&app.term, error, sizeof(error)) < 0) {
-        (void)snj_render_error_ctx(&app.render, error);
+    if (snj_ui_open(&app.ui, error, sizeof(error)) < 0) {
+        (void)snj_ui_text(&app.ui, SNJ_UI_ERROR, error);
         rc = 3;
         goto out;
     }
-    snj_render_attach_term(&app.render, &app.term);
-    (void)snj_term_history_open(&app.term, dotdir);
+    (void)snj_ui_history_open(&app.ui, dotdir);
     history_warning(&app);
-    if (snj_render_orientation(&app.render, &app.session, cli->resume) < 0 ||
+    if (snj_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||
         (app.networked && snj_irc_replay_hosted_history(
-            app.irc, render_room_history, &app.render) < 0) ||
+            app.irc, render_room_history, &app.ui) < 0) ||
         (cli->resume && config.resume_history_turns != 0u && !app.networked &&
-         snj_render_history(&app.render, &app.session) < 0) ||
+         snj_ui_history(&app.ui, &app.session) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u &&
          app_warning(&app,
              "queued future turns are paused; use /next to continue FIFO") < 0) ||
@@ -4349,10 +4362,10 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     rc = interactive_loop(&app, cli->prompt);
 out:
     (void)capture_shutdown_signal(&app);
-    snj_render_free(&app.render);
-    snj_term_close(&app.term);
+    (void)snj_ui_text(&app.ui, SNJ_UI_CLOSE, NULL);
     snj_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);
+    snj_ui_free(&app.ui);
     (void)capture_shutdown_signal(&app);
     if (signal_handlers_installed)
         restore_shutdown_handlers(&signal_handlers);

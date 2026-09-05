@@ -115,9 +115,10 @@ void snj_render_attach_term(struct snj_render *render, struct snj_term *term);
 enum snj_render_view snj_render_view(const struct snj_render *render);
 int snj_render_set_view(struct snj_render *render, enum snj_render_view view);
 int snj_render_orientation(struct snj_render *render,
-                           const struct snj_session *session, bool resumed);
+                           const char *workspace, const char *id,
+                           uint64_t turns, size_t queued, bool resumed);
 int snj_render_history(struct snj_render *render,
-                       const struct snj_session *session);
+                       const char *user, const char *assistant);
 int snj_render_prompt(struct snj_render *render, const char *label);
 int snj_render_submitted(struct snj_render *render, const char *label,
                          const char *text);
@@ -144,11 +145,24 @@ int snj_render_host(struct snj_render *render, const char *text);
 int snj_render_runtime(struct snj_render *render, const char *text);
 int snj_render_irc_event(struct snj_render *render,
                          const struct snj_irc_event *event);
-int snj_render_tool_start(struct snj_render *render,
+enum snj_render_role {
+    SNJ_ROLE_ACTIVITY, SNJ_ROLE_SUCCESS, SNJ_ROLE_WARNING, SNJ_ROLE_ERROR
+};
+
+struct snj_render_block {
+    struct snj_buf text;
+    size_t colored_len;
+    enum snj_render_role role;
+};
+
+/* Engine-side formatting; no terminal state or writes. */
+int snj_render_prepare_tool_start(struct snj_render_block *block,
                           const struct snj_response_item *call,
                           const char *workdir, uint32_t default_timeout_ms);
-int snj_render_tool_finish(struct snj_render *render, const char *name,
+int snj_render_prepare_tool_finish(struct snj_render_block *block, const char *name,
                            const json_t *result, uint32_t max_output_bytes);
+int snj_render_tool_block(struct snj_render *render,
+                          const struct snj_render_block *block);
 int snj_render_event(struct snj_render *render, uint64_t seq,
                      const char *type);
 int snj_render_resume_hint(const struct snj_render *render,

@@ -262,9 +262,10 @@ snj_app_irc_event(void *opaque, const struct snj_irc_event *event)
     if (snj_app_commit_event(app, "irc_event", irc_event_data(event),
                              error, sizeof(error)) < 0)
         return -1;
-    (void)snprintf(app->render.model_nick, sizeof(app->render.model_nick),
-                   "%s", snj_irc_model_nick(app->irc));
-    if (snj_render_irc_event(&app->render, event) < 0)
+    if (snj_ui_networked(&app->ui, app->networked,
+                         snj_irc_model_nick(app->irc)) < 0)
+        return -1;
+    if (snj_ui_irc_event(&app->ui, event) < 0)
         return -1;
     chat = event->kind == SNJ_IRC_MESSAGE || event->kind == SNJ_IRC_NOTICE;
     own_agent = event->local &&
@@ -308,7 +309,7 @@ snj_app_irc_trace(void *opaque, unsigned int level, char direction,
         errno = EINVAL;
         return -1;
     }
-    if (app->render.verbosity < level)
+    if (app->ui.verbosity < level)
         return 0;
     snj_buf_init(&safe, 4u * SNJ_IRC_LINE_MAX);
     for (size_t i = 0u; i < len; ++i) {
@@ -330,7 +331,7 @@ snj_app_irc_trace(void *opaque, unsigned int level, char direction,
             snj_buf_free(&line);
             goto out;
         }
-        rc = snj_render_transport(&app->render, direction,
+        rc = snj_ui_transport(&app->ui, direction,
                                   (const char *)line.data, line.len);
         snj_buf_free(&line);
     } else {
@@ -340,7 +341,7 @@ snj_app_irc_trace(void *opaque, unsigned int level, char direction,
             errno = EOVERFLOW;
             goto out;
         }
-        rc = snj_render_protocol(&app->render, label,
+        rc = snj_ui_protocol(&app->ui, label,
                                  (const char *)safe.data, safe.len);
     }
 out:
@@ -575,7 +576,7 @@ snj_app_request_digests(struct app_state *app, const char *prompt,
             *create_request = json_incref(projection.create_request);
         if (count_request)
             *count_request = json_incref(projection.count_request);
-        if (app->render.verbosity >= 5u && request_body) {
+        if (app->ui.verbosity >= 5u && request_body) {
             struct snj_buf encoded;
             struct snj_secret_set secrets;
 

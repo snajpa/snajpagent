@@ -317,7 +317,9 @@ capture_orientation(bool resumed, char *out, size_t out_size)
     session.workspace = "/work/tree";
     session.turn_count = 3u;
     session.pending_queue_count = 2u;
-    assert(snj_render_orientation(&render, &session, resumed) == 0);
+    assert(snj_render_orientation(&render, session.workspace, session.id,
+                                  session.turn_count, session.pending_queue_count,
+                                  resumed) == 0);
     assert(dup2(saved, STDERR_FILENO) >= 0);
     close(saved);
     while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
@@ -736,14 +738,14 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     memset(&session, 0, sizeof(session));
     session.last_user = "**literal user**";
     session.last_assistant = "## Saved *answer*";
-    assert(snj_render_history(&render, &session) == 0);
+    assert(snj_render_history(&render, session.last_user, session.last_assistant) == 0);
     snj_render_set_markdown(&render, false);
     event.kind = SNJ_IRC_MESSAGE;
     memcpy(event.text, "**literal agent**", 18u);
     assert(snj_render_irc_event(&render, &event) == 0);
     session.last_user = NULL;
     session.last_assistant = "## Literal assistant";
-    assert(snj_render_history(&render, &session) == 0);
+    assert(snj_render_history(&render, session.last_user, session.last_assistant) == 0);
     assert(dup2(saved, STDERR_FILENO) >= 0);
     close(saved);
     while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
@@ -770,7 +772,7 @@ test_history_failure(void)
     render.stderr_terminal = true;
     session.last_assistant = "\xff";
     errno = 0;
-    assert(snj_render_history(&render, &session) < 0);
+    assert(snj_render_history(&render, session.last_user, session.last_assistant) < 0);
     assert(errno == EILSEQ && !render.public_item_open);
     assert(snj_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     assert(snj_render_public_end(&render) == 0);
@@ -966,8 +968,13 @@ capture_color(enum snj_color_mode mode, bool networked,
                                                 json_integer(timeout_ms)) == 0);
     call.name = "exec_command";
     call.arguments = arguments;
-    assert(snj_render_tool_start(&render, &call, "/tmp",
-                                 default_timeout_ms) == 0);
+    {
+        struct snj_render_block block;
+        assert(snj_render_prepare_tool_start(&block, &call, "/tmp",
+                                             default_timeout_ms) == 0);
+        assert(snj_render_tool_block(&render, &block) == 0);
+        snj_buf_free(&block.text);
+    }
     json_decref(arguments);
     result = json_object();
     assert(result != NULL);
@@ -977,8 +984,13 @@ capture_color(enum snj_color_mode mode, bool networked,
                                json_string("fixture tool output: café\n")) == 0);
     assert(json_object_set_new(result, "reason", json_null()) == 0);
     assert(json_object_set_new(result, "status", json_string("succeeded")) == 0);
-    assert(snj_render_tool_finish(&render, call.name, result,
-                                  max_output_bytes) == 0);
+    {
+        struct snj_render_block block;
+        assert(snj_render_prepare_tool_finish(&block, call.name, result,
+                                              max_output_bytes) == 0);
+        assert(snj_render_tool_block(&render, &block) == 0);
+        snj_buf_free(&block.text);
+    }
     json_decref(result);
     memset(&event, 0, sizeof(event));
     event.kind = SNJ_IRC_MESSAGE;

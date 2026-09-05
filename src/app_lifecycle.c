@@ -9,7 +9,7 @@
 static int
 render_event_seq(struct app_state *app, uint64_t seq, const char *type)
 {
-    return snj_render_event(&app->render, seq, type) < 0 ? -1 : 0;
+    return snj_ui_event(&app->ui, seq, type) < 0 ? -1 : 0;
 }
 
 static bool
@@ -92,13 +92,13 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
 
     memcpy(prefix, app->session.id, 8u);
     prefix[8] = '\0';
-    if (snj_render_host(&app->render,
+    if (snj_ui_text(&app->ui, SNJ_UI_HOST,
             "delete is irreversible; type the displayed 8-character id prefix to confirm") < 0 ||
-        snj_term_set_prompt(&app->term, false) < 0) {
+        snj_ui_simple_prompt(&app->ui, false) < 0) {
         snprintf(error, error_size, "delete confirmation prompt could not be displayed");
         return -1;
     }
-    rc = snj_term_poll(&app->term, -1, &action, &line);
+    rc = snj_ui_poll(&app->ui, -1, &action, &line);
     if (rc < 0) {
         free(line);
         snprintf(error, error_size, "delete confirmation input could not be read");
@@ -138,11 +138,11 @@ snj_app_lifecycle_command(struct app_state *app, const char *line,
     if (strcmp(line, "/archive") == 0) {
         seq = app->session.next_seq;
         if (snj_session_archive(&app->session, &seq, error, sizeof(error)) < 0) {
-            (void)snj_render_error_ctx(&app->render, error);
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
             return -1;
         }
         if (render_event_seq(app, seq, "session_archived") < 0 ||
-            snj_render_host(&app->render, "session archived") < 0)
+            snj_ui_text(&app->ui, SNJ_UI_HOST, "session archived") < 0)
             return -1;
         *exit_now = true;
         return 0;
@@ -150,7 +150,7 @@ snj_app_lifecycle_command(struct app_state *app, const char *line,
     if (strcmp(line, "/compact") == 0) {
         if (snj_app_compact_idle_command(app, "manual",
                                          error, sizeof(error)) < 0) {
-            (void)snj_render_error_ctx(&app->render, error);
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
             return -1;
         }
         return 0;
@@ -160,17 +160,17 @@ snj_app_lifecycle_command(struct app_state *app, const char *line,
         int confirm_rc = confirm_delete(app, prefix, error, sizeof(error));
         if (confirm_rc != 0) {
             if (error[0])
-                (void)snj_render_error_ctx(&app->render, error);
+                (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
             return confirm_rc < 0 ? -1 : 0;
         }
         seq = app->session.next_seq;
         if (snj_session_delete(&app->store, &app->session, prefix, &seq,
                                error, sizeof(error)) < 0) {
-            (void)snj_render_error_ctx(&app->render, error);
+            (void)snj_ui_text(&app->ui, SNJ_UI_ERROR, error);
             return -1;
         }
         if (render_event_seq(app, seq, "session_delete_requested") < 0 ||
-            snj_render_host(&app->render, "session deleted") < 0)
+            snj_ui_text(&app->ui, SNJ_UI_HOST, "session deleted") < 0)
             return -1;
         *exit_now = true;
         return 0;
@@ -193,7 +193,7 @@ static const char goal_help[] =
 static int
 goal_error(struct app_state *app, const char *message)
 {
-    return snj_render_error_ctx(&app->render, message);
+    return snj_ui_text(&app->ui, SNJ_UI_ERROR, message);
 }
 
 static json_t *
@@ -265,7 +265,7 @@ render_goal(struct app_state *app)
     int rc;
 
     if (app->session.goal_status == SNJ_GOAL_NONE)
-        return snj_render_warning_ctx(&app->render, "no goal has been set");
+        return snj_ui_text(&app->ui, SNJ_UI_WARNING, "no goal has been set");
     snj_buf_init(&text, SNJ_MAX_GOAL_PROMPT + SNJ_MAX_GOAL_BLOCKER + 512u);
     rc = snj_buf_printf(&text,
         "goal %.8s: %s%s\n"
@@ -283,7 +283,7 @@ render_goal(struct app_state *app)
     if (rc == 0 && snj_buf_terminate(&text) < 0)
         rc = -1;
     if (rc == 0)
-        rc = snj_render_host(&app->render, (const char *)text.data);
+        rc = snj_ui_text(&app->ui, SNJ_UI_HOST, (const char *)text.data);
     snj_buf_free(&text);
     return rc;
 }
@@ -389,7 +389,7 @@ set_goal_prompt(struct app_state *app, const char *argument)
     if (snj_goal_unfinished(app->session.goal_status)) {
         if (strcmp(prompt, app->session.goal_prompt) == 0) {
             free(prompt);
-            return snj_render_warning_ctx(&app->render,
+            return snj_ui_text(&app->ui, SNJ_UI_WARNING,
                                            "goal wording is unchanged");
         }
         rc = commit_goal_event(app, "goal_reworded",
@@ -443,7 +443,7 @@ goal_simple_command(struct app_state *app, const char *command)
             return goal_error(app, "only an active goal can be paused");
         if (snj_app_goal_pause(app, "user", error, sizeof(error)) < 0)
             return goal_error(app, error);
-        return snj_render_host(&app->render,
+        return snj_ui_text(&app->ui, SNJ_UI_HOST,
                                "goal paused at the current turn boundary");
     }
     if (strcmp(command, "resume") == 0) {
@@ -456,14 +456,14 @@ goal_simple_command(struct app_state *app, const char *command)
         app->goal_armed = true;
         if (app->session.pending_queue_count != 0u && !app->queue_edit_id[0])
             app->queue_armed = true;
-        return snj_render_host(&app->render, "goal resumed");
+        return snj_ui_text(&app->ui, SNJ_UI_HOST, "goal resumed");
     }
     if (strcmp(command, "lock") == 0 || strcmp(command, "unlock") == 0) {
         bool locked = strcmp(command, "lock") == 0;
         if (!snj_goal_unfinished(app->session.goal_status))
             return goal_error(app, "no unfinished goal can be locked or unlocked");
         if (app->session.goal_locked == locked)
-            return snj_render_warning_ctx(&app->render,
+            return snj_ui_text(&app->ui, SNJ_UI_WARNING,
                 locked ? "goal wording is already locked" :
                          "goal wording is already unlocked");
         data = goal_id_data(&app->session);
@@ -475,7 +475,7 @@ goal_simple_command(struct app_state *app, const char *command)
         if (commit_goal_event(app, "goal_lock_changed", data,
                               error, sizeof(error)) < 0)
             return goal_error(app, error);
-        return snj_render_host(&app->render,
+        return snj_ui_text(&app->ui, SNJ_UI_HOST,
             locked ? "goal wording locked against model changes" :
                      "goal wording unlocked for model changes");
     }
@@ -507,7 +507,7 @@ snj_app_goal_command(struct app_state *app, const char *line, bool active)
     if (strcmp(line, "/goal") == 0 || strcmp(line, "/goal status") == 0)
         return render_goal(app);
     if (strcmp(line, "/goal help") == 0)
-        return snj_render_host(&app->render, goal_help);
+        return snj_ui_text(&app->ui, SNJ_UI_HOST, goal_help);
     if (strncmp(line, "/goal ", 6u) != 0)
         return goal_error(app, "invalid /goal command; use /goal help");
     argument = line + 6u;
@@ -532,7 +532,7 @@ snj_app_goal_command(struct app_state *app, const char *line, bool active)
         if (word_len == 6u && memcmp(argument, "status", 6u) == 0)
             return render_goal(app);
         if (word_len == 4u && memcmp(argument, "help", 4u) == 0)
-            return snj_render_host(&app->render, goal_help);
+            return snj_ui_text(&app->ui, SNJ_UI_HOST, goal_help);
         return goal_simple_command(app, argument);
     }
     return set_goal_prompt(app, argument);
@@ -640,7 +640,7 @@ snj_app_goal_tool(struct app_state *app,
                               error, error_size) < 0)
             return -1;
         app->goal_armed = false;
-        if (snj_render_host(&app->render, "goal blocked by model") < 0)
+        if (snj_ui_text(&app->ui, SNJ_UI_HOST, "goal blocked by model") < 0)
             return -1;
         return tool_result(true, "goal marked blocked", result);
     }

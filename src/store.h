@@ -185,10 +185,10 @@ int snj_session_open(struct snj_store *store, struct snj_session *session,
 int snj_session_open_last(struct snj_store *store, struct snj_session *session,
                           const char *workspace, bool all,
                           char *error, size_t error_size);
+typedef int (*snj_store_emit_fn)(void *, const char *, size_t);
 int snj_store_list(struct snj_store *store, const char *workspace, bool all,
-                   int fd, char *error, size_t error_size);
-int snj_store_list_active(struct snj_store *store, const char *workspace,
-                          bool all, int fd, char *error, size_t error_size);
+                    bool include_archived, snj_store_emit_fn emit, void *opaque,
+                    char *error, size_t error_size);
 int snj_session_archive(struct snj_session *session, uint64_t *written_seq,
                         char *error, size_t error_size);
 int snj_session_unarchive(struct snj_session *session, uint64_t *written_seq,

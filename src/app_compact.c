@@ -159,7 +159,7 @@ commit_rendered(struct app_state *app, const char *type, json_t *data,
     if (snj_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;
-    if (snj_render_event(&app->render, seq, type) < 0) {
+    if (snj_ui_event(&app->ui, seq, type) < 0) {
         snprintf(error, error_size, "durable compaction event output failed");
         return -1;
     }
@@ -364,7 +364,7 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     snj_response_graph_init(&graph);
     provider_rc = snj_provider_responses_create(
         create_request, app->config, app->turn_provider, credential,
-        &app->render, NULL, NULL, snj_app_active_input_pump, app, &graph,
+        &app->ui, NULL, NULL, snj_app_active_input_pump, app, &graph,
         NULL, error, error_size, &cancel_code, NULL);
     if (provider_rc != 0) {
         rc = provider_rc;
@@ -493,7 +493,7 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
                 goto out;
             }
             if (!active_prefix && strcmp(reason, "manual") == 0 &&
-                snj_render_host(&app->render,
+                snj_ui_text(&app->ui, SNJ_UI_HOST,
                     "compaction skipped; no new context since the previous compact output") < 0)
                 goto out;
             rc = 0;

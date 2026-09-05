@@ -177,7 +177,7 @@ fail:
                             error, error_size) < 0)
         return -1;
     rc = snj_provider_models_list(app->config, provider, &credential,
-                                  &app->render, models, error, error_size);
+                                  &app->ui, models, error, error_size);
     snj_credential_clear(&credential);
     return rc;
 #endif
@@ -244,7 +244,7 @@ snj_app_provider_count(struct app_state *app, const json_t *count_request,
         return SNJ_APP_COUNT_SKIPPED;
     rc = snj_provider_responses_count(count_request, app->config,
                                       app->turn_provider, credential,
-                                      &app->render,
+                                      &app->ui,
                                       snj_app_active_input_pump, app,
                                       input_tokens, &endpoint_unsupported,
                                       error, error_size,
@@ -319,7 +319,7 @@ snj_app_provider_compact(struct app_state *app, const json_t *compact_request,
     int cancel_code = 0;
     int rc = snj_provider_responses_compact(compact_request, app->config,
                                             app->turn_provider,
-                                            credential, &app->render,
+                                            credential, &app->ui,
                                             snj_app_active_input_pump, app,
                                             output, output_tokens_bound,
                                             error, error_size, &cancel_code, NULL);
@@ -413,7 +413,7 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
         *retry_count = 0u;
     int rc = snj_provider_responses_create(create_request, app->config,
                                            app->turn_provider, credential,
-                                           &app->render,
+                                           &app->ui,
                                            snj_app_stream_public_response, app,
                                            snj_app_active_input_pump, app, graph,
                                            failure, error, error_size, &cancel_code,
