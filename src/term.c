@@ -22,8 +22,6 @@ static volatile sig_atomic_t sigwinch_pending;
 /* Only the existing terminal owner uses these privately reopened descriptions. */
 static _Thread_local struct snag_term *output_owner;
 static int redraw(struct snag_term *term);
-static int move_prompt_cursor(struct snag_term *term);
-static int position_prompt_cursor(struct snag_term *term, size_t row, size_t col);
 static size_t previous_cp(const unsigned char *s, size_t pos);
 static int compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
                          size_t *cursor_row, size_t *cursor_col,
@@ -782,20 +780,15 @@ prepare_spinner(struct snag_term_spinner *spinner, const char *value)
 
 static int
 compose_prompt(const char *prompt, const struct snag_term_spinner *spinners,
-               unsigned int states, uint64_t step, char *label,
-               struct snag_term_spinner next[SNAG_TERM_SPINNER_COUNT])
+               unsigned int states, uint64_t step, char *label)
 {
     size_t used = 0u;
+    unsigned int seen = 0u;
 
-    memcpy(next, spinners, sizeof(*spinners) * SNAG_TERM_SPINNER_COUNT);
-    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
-        next[i].present = false;
-        next[i].current_len = 0u;
-    }
     for (const unsigned char *p = (const unsigned char *)prompt; *p; ++p) {
         if (*p >= SNAG_TERM_SPINNER_MARKER_BASE) {
             unsigned int id = *p - SNAG_TERM_SPINNER_MARKER_BASE;
-            struct snag_term_spinner *cell;
+            const struct snag_term_spinner *cell;
             size_t offset = 0u, len;
 
             if (id >= SNAG_TERM_SPINNER_SLOTS)
@@ -803,13 +796,12 @@ compose_prompt(const char *prompt, const struct snag_term_spinner *spinners,
             if (id == SNAG_TERM_SPINNER_PROVIDER &&
                 (states & (1u << SNAG_TERM_SPINNER_TOOL)))
                 id = SNAG_TERM_SPINNER_TOOL;
-            cell = &next[id];
+            cell = &spinners[id];
             len = cell->inactive_len;
 
-            if (cell->present)
+            if (seen & (1u << id))
                 return -1;
-            cell->present = true;
-            cell->label_offset = used;
+            seen |= 1u << id;
             if ((states & (1u << id)) && cell->frame_count) {
                 unsigned int frame = (unsigned int)(step % cell->frame_count);
                 offset = cell->frame_offset[frame];
@@ -818,7 +810,6 @@ compose_prompt(const char *prompt, const struct snag_term_spinner *spinners,
             if (used > SNAG_TERM_LABEL_BYTES - 1u - len)
                 return -1;
             memcpy(label + used, cell->value + offset, len);
-            cell->current_len = (unsigned char)len;
             used += len;
         } else {
             if (used == SNAG_TERM_LABEL_BYTES - 1u)
@@ -866,28 +857,19 @@ prompt_fits(const char *prompt,
     return used ? 0 : -1;
 }
 
-static void
-install_prompt(struct snag_term *term, const char *label,
-               const struct snag_term_spinner cells[SNAG_TERM_SPINNER_COUNT])
-{
-    memcpy(term->label, label, strlen(label) + 1u);
-    memcpy(term->spinner, cells, sizeof(term->spinner));
-}
-
 static int
 update_spinners(struct snag_term *term, uint64_t step)
 {
-    struct snag_term_spinner next[SNAG_TERM_SPINNER_COUNT];
     char label[SNAG_TERM_LABEL_BYTES];
     bool changed;
 
     if (term->input_only)
         return 0;
     if (compose_prompt(term->prompt_template, term->spinner,
-                       term->spinner_states, step, label, next) < 0)
+                       term->spinner_states, step, label) < 0)
         return -1;
     changed = strcmp(label, term->label) != 0;
-    install_prompt(term, label, next);
+    memcpy(term->label, label, strlen(label) + 1u);
     return changed && term->prompt_visible && term->capable &&
            !term->searching && !term->output_depth ? redraw(term) : 0;
 }
@@ -895,10 +877,14 @@ update_spinners(struct snag_term *term, uint64_t step)
 static bool
 animated_spinners(const struct snag_term *term)
 {
-    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
-        if (term->spinner[i].present && term->spinner[i].frame_count > 1u &&
-            (term->spinner_states & (1u << i)))
+    for (unsigned int slot = 0u; slot < SNAG_TERM_SPINNER_SLOTS; ++slot) {
+        unsigned int id = slot == SNAG_TERM_SPINNER_PROVIDER &&
+            (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) ?
+            SNAG_TERM_SPINNER_TOOL : slot;
+        if (strchr(term->prompt_template, SNAG_TERM_SPINNER_MARKER_BASE + slot) &&
+            term->spinner[id].frame_count > 1u && (term->spinner_states & (1u << id)))
             return true;
+    }
     return false;
 }
 
@@ -1020,7 +1006,7 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
 {
     size_t label_len, cursor_byte = 0u, max;
     const char *label = prompt_label(term, &label_len);
-    size_t indent = snag_term_text_width(label, label_len);
+    size_t indent;
 
     snag_buf_init(out, 0u);
     if (label_len > (SIZE_MAX - 32u) / 4u) {
@@ -1028,8 +1014,6 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
         return -1;
     }
     out->max = label_len * 4u + 32u;
-    if (indent == SIZE_MAX)
-        return -1;
     /* Search labels can contain a multiline draft; keep labels on their
      * logical line instead of letting a bare LF desynchronize row layout. */
     for (size_t start = 0u, pos = 0u; pos <= label_len; ++pos) {
@@ -1321,7 +1305,6 @@ static int
 redraw(struct snag_term *term)
 {
     struct snag_buf out;
-    struct snag_term_spinner cells[SNAG_TERM_SPINNER_COUNT];
     char current[SNAG_TERM_LABEL_BYTES];
     size_t cursor_row = 0u, cursor_col = 0u;
     size_t end_row = 0u, end_col = 0u;
@@ -1334,10 +1317,10 @@ redraw(struct snag_term *term)
     if (term->prompt_template[0] &&
         compose_prompt(term->prompt_template, term->spinner,
                        term->spinner_states,
-                       spinner_step(term, snag_monotonic_ms()), current, cells) < 0)
+                       spinner_step(term, snag_monotonic_ms()), current) < 0)
         return -1;
     if (term->prompt_template[0])
-        install_prompt(term, current, cells);
+        memcpy(term->label, current, strlen(current) + 1u);
     label = prompt_label(term, &label_len);
     if (term->active && !term->prompt_visible && term->output_seen) {
         if (!term->output_ended_lf &&
@@ -1350,28 +1333,19 @@ redraw(struct snag_term *term)
             term->output_seen = false;
     }
     if (!term->capable) {
-        int fallback_rc = 0;
-
         if (term->prompt_visible)
             return 0;
-        if (fallback_rc == 0 && term->color &&
-            snag_term_write(STDERR_FILENO,
-                           term->networked ? "\033[1;35m" : "\033[1;36m",
-                           7u) < 0)
-            fallback_rc = -1;
-        if (fallback_rc == 0 &&
-            snag_term_write_safe(STDERR_FILENO, label, label_len) < 0)
-            fallback_rc = -1;
-        if (fallback_rc == 0 && term->color &&
-            snag_term_write(STDERR_FILENO, "\033[0m", 4u) < 0)
-            fallback_rc = -1;
-        if (fallback_rc == 0 && term->draft.len &&
-            snag_term_write_safe(STDERR_FILENO, (char *)term->draft.data,
-                                term->draft.len) < 0)
-            fallback_rc = -1;
-        if (fallback_rc == 0)
-            term->prompt_visible = true;
-        return fallback_rc;
+        if ((term->color &&
+             snag_term_write(STDERR_FILENO,
+                             term->networked ? "\033[1;35m" : "\033[1;36m", 7u) < 0) ||
+            snag_term_write_safe(STDERR_FILENO, label, label_len) < 0 ||
+            (term->color && snag_term_write(STDERR_FILENO, "\033[0m", 4u) < 0) ||
+            (term->draft.len &&
+             snag_term_write_safe(STDERR_FILENO, (char *)term->draft.data,
+                                  term->draft.len) < 0))
+            return -1;
+        term->prompt_visible = true;
+        return 0;
     }
     if (compose_frame(term, &out, &label_len, &cursor_row, &cursor_col,
                        &end_row, &end_col) < 0)
@@ -1425,7 +1399,6 @@ snag_term_set_prompt_template(struct snag_term *term, bool active,
                              uint32_t per_second, unsigned int states)
 {
     struct snag_term_spinner configured[SNAG_TERM_SPINNER_COUNT];
-    struct snag_term_spinner cells[SNAG_TERM_SPINNER_COUNT];
     char expanded[SNAG_TERM_LABEL_BYTES];
     size_t len;
     bool unchanged;
@@ -1448,14 +1421,15 @@ snag_term_set_prompt_template(struct snag_term *term, bool active,
         unchanged = strcmp(term->spinner[i].value, spinners[i]) == 0;
     if (compose_prompt(label, configured, states,
                        unchanged ? spinner_step(term, snag_monotonic_ms()) : 0u,
-                       expanded, cells) < 0)
+                       expanded) < 0)
         return -1;
     if (!term->capable &&
         (term->active != active || strcmp(term->label, expanded) != 0) &&
         snag_term_hide(term) < 0)
         return -1;
     memcpy(term->prompt_template, label, len + 1u);
-    install_prompt(term, expanded, cells);
+    memcpy(term->label, expanded, strlen(expanded) + 1u);
+    memcpy(term->spinner, configured, sizeof(term->spinner));
     term->spinner_states = states;
     term->spinner_per_second = per_second;
     if (!unchanged)
@@ -1758,7 +1732,7 @@ search_accept(struct snag_term *term, bool abort)
         rc = replace_draft(term, original ? original : "");
         if (rc == 0) {
             term->cursor = cursor;
-            rc = move_prompt_cursor(term);
+            rc = redraw(term);
         }
     } else {
         rc = redraw(term);
@@ -1812,48 +1786,6 @@ next_cp(const unsigned char *s, size_t len, size_t pos)
         return len;
     n = snag_utf8_size(s[pos]);
     return n && n <= len - pos ? pos + n : pos + 1u;
-}
-
-static int
-position_prompt_cursor(struct snag_term *term, size_t row, size_t col)
-{
-    if ((row != term->rendered_cursor_row ||
-         col != term->rendered_cursor_col) &&
-        materialize_prompt_wrap(term) < 0)
-        return -1;
-    if (row < term->rendered_cursor_row &&
-        move_cursor(term->rendered_cursor_row - row, 'A') < 0)
-        return -1;
-    if (row > term->rendered_cursor_row &&
-        move_cursor(row - term->rendered_cursor_row, 'B') < 0)
-        return -1;
-    if (col != term->rendered_cursor_col &&
-        (snag_term_write(STDERR_FILENO, "\r", 1u) < 0 ||
-         move_cursor(col, 'C') < 0))
-        return -1;
-    term->rendered_cursor_row = row;
-    term->rendered_cursor_col = col;
-    return 0;
-}
-
-static int
-move_prompt_cursor(struct snag_term *term)
-{
-    struct snag_buf scratch;
-    size_t cursor_row = 0u, cursor_col = 0u;
-    size_t end_row = 0u, end_col = 0u;
-    size_t label_len;
-    int rc = -1;
-
-    if (term->input_only || !term->capable || !term->prompt_visible || term->output_depth)
-        return redraw(term);
-    if (compose_frame(term, &scratch, &label_len, &cursor_row, &cursor_col,
-                       &end_row, &end_col) < 0)
-        goto out;
-    rc = position_prompt_cursor(term, cursor_row, cursor_col);
-out:
-    snag_buf_free(&scratch);
-    return rc;
 }
 
 static int
@@ -2187,16 +2119,16 @@ apply_key(struct snag_term *term, int key)
         return history_down(term);
     case KEY_RIGHT:
         term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
-        return move_prompt_cursor(term);
+        return redraw(term);
     case KEY_LEFT:
         term->cursor = previous_cp(term->draft.data, term->cursor);
-        return move_prompt_cursor(term);
+        return redraw(term);
     case KEY_HOME:
         term->cursor = 0u;
-        return move_prompt_cursor(term);
+        return redraw(term);
     case KEY_END:
         term->cursor = term->draft.len;
-        return move_prompt_cursor(term);
+        return redraw(term);
     case KEY_DELETE:
         return term->cursor < term->draft.len ?
             delete_range(term, term->cursor,
@@ -2285,7 +2217,7 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
         return -1;
     if (!term->input_only && term->capable && term->prompt_visible) {
         term->cursor = term->draft.len;
-        if (move_prompt_cursor(term) < 0)
+        if (redraw(term) < 0)
             return -1;
     }
     if (!term->input_only && snag_term_write(STDERR_FILENO, "^C\n", 3u) < 0)

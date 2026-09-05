@@ -262,12 +262,9 @@ test_prompt_spinners(void)
         assert(strcmp(term.label, "P  9%> ") == 0);
         assert(snag_term_set_spinner_states(&term, 4u) == 0);
         assert(strcmp(term.label, "T  9%> ") == 0);
-        assert(term.spinner[SNAG_TERM_SPINNER_PROVIDER].current_len == 0u);
-        assert(term.spinner[SNAG_TERM_SPINNER_TOOL].current_len == 1u);
         assert(snag_term_set_prompt_template(&term, true, padded, blank,
                                             8u, 2u) == 0);
         assert(strcmp(term.label, "    9%> ") == 0);
-        assert(term.spinner[SNAG_TERM_SPINNER_PROVIDER].current_len == 1u);
         assert(snag_term_set_spinner_states(&term, 0u) == 0);
         assert(strcmp(term.label, "   9%> ") == 0);
         assert(snag_term_set_prompt_template(&term, true, "  9%> ", compact,
@@ -433,6 +430,21 @@ test_retained_prompt(void)
     term.last_output_ms -= 200u;
     assert(snag_term_poll(&term, 20, -1, &action, &text) == 0);
     assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(snag_term_set_prompt_label(&term, false, "cursor> ") == 0);
+    assert(snag_term_restore_draft(&term, "unchanged") == 0);
+    (void)prompt_output(fds[0], output, sizeof(output));
+    const char *moves[] = {"\033[H", "\033[F", "\033[D"};
+    const size_t columns[] = {8u, 17u, 16u};
+    for (size_t i = 0u; i < 3u; ++i) {
+        memcpy(term.input, moves[i], 3u);
+        term.input_pos = 0u;
+        term.input_len = 3u;
+        assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+        assert(term.rendered_cursor_col == columns[i] && term.rendered_cursor_row == 0u);
+        assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+        assert(!strstr(output, "unchanged") && !strchr(output, '>'));
+        assert(!strstr(output, "\033[K") && !strstr(output, "\033[2K"));
+    }
     assert(dup2(stdin_fd, STDIN_FILENO) >= 0);
     close(stdin_fd);
     close(input[0]);
