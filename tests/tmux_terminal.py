@@ -367,7 +367,7 @@ class FakeResponses:
 
     def multi_tool_body(self, request, sequence, prompt):
         mode = prompt.split()[-1]
-        assert request["parallel_tool_calls"] is (mode != "single-request")
+        assert request["parallel_tool_calls"] is (not mode.startswith("single-"))
         calls = [item for item in request["input"] if item.get("type") == "function_call"]
         outputs = {item["call_id"]: item["output"] for item in request["input"]
                    if item.get("type") == "function_call_output"}
@@ -379,7 +379,7 @@ class FakeResponses:
         if not calls:
             # A cannot finish until B launches: this detects actual overlap,
             # not merely several call items or a fast serial timing result.
-            commands = (["sleep 0.1; printf first", "printf second"] if mode == "serial" else [
+            commands = (["sleep 0.1; printf first", "printf second"] if mode in ("serial", "single-serial") else [
                 "while test ! -f peer-ready; do sleep 0.02; done; sleep 0.2; printf first",
                 "touch peer-ready; printf second"])
             if mode == "failure":
@@ -1935,7 +1935,7 @@ def run_listener_collision_case(binary, root, provider, environment):
             terminal.close()
 
 def run_multi_tool_cases(binary, root, provider, environment):
-    for mode in ("parallel", "serial", "yield", "failure", "single-request", "steer", "cancel", "full-output"):
+    for mode in ("parallel", "serial", "yield", "failure", "single-request", "single-serial", "steer", "cancel", "full-output"):
         case = root / ("multi-" + mode)
         workspace = case / "work"
         workspace.mkdir(mode=0o700, parents=True)
@@ -1943,11 +1943,11 @@ def run_multi_tool_cases(binary, root, provider, environment):
         config = case / "config.ini"
         write_irc_config(config, provider.port, "host-model")
         text = config.read_text()
-        if mode == "single-request":
+        if mode.startswith("single-"):
             # The runtime must still handle a provider returning several calls.
             text = text.replace("[provider fake]\n", "[provider fake]\nparallel_tool_calls = false\n")
         config.write_text(text + "[tool]\nmax_parallel_commands = " +
-                          ("1" if mode == "serial" else "2" if mode in ("steer", "cancel") else "4") + "\n", encoding="utf-8")
+                          ("1" if mode in ("serial", "single-serial") else "2" if mode in ("steer", "cancel") else "4") + "\n", encoding="utf-8")
         terminal = TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
                                 args=("-vvv" if mode == "full-output" else "-v",), environment=environment)
@@ -1974,7 +1974,7 @@ def run_multi_tool_cases(binary, root, provider, environment):
             finishes = event_list(events, "tool_finished")
             assert len(finishes) == len(starts) + (1 if mode == "steer" else 0)
             assert not event_list(events, "turn_failed")
-            if mode != "serial":
+            if mode not in ("serial", "single-serial"):
                 assert starts[1]["seq"] < finishes[0]["seq"]
             else:
                 assert finishes[0]["seq"] < starts[1]["seq"]

@@ -1009,16 +1009,16 @@ render_status(struct app_state *app)
                               capacity.max_output_tokens) < 0 ||
         append_compact_threshold(&text, provider, &capacity) < 0)
         goto out;
-    if (snag_buf_printf(&text, "\nmax_parallel_commands: %u\nparallel_tool_calls: %s",
-        app->session.active_turn ? app->session.max_parallel_commands : app->config->max_parallel_commands,
-        (app->session.active_turn ? app->session.parallel_tool_calls : provider->parallel_tool_calls) ?
-        "true" : "false") < 0)
-        goto out;
     if (capacity.effective_context_window_percent &&
         snag_buf_printf(&text, " · effective=%u%%%s",
                        capacity.effective_context_window_percent,
                        capacity.effective_context_window_derived ?
                            " (derived client policy)" : " (advertised)") < 0)
+        goto out;
+    if (snag_buf_printf(&text, "\nmax_parallel_commands: %u\nparallel_tool_calls: %s",
+        app->session.active_turn ? app->session.max_parallel_commands : app->config->max_parallel_commands,
+        (app->session.active_turn ? app->session.parallel_tool_calls : provider->parallel_tool_calls) ?
+        "true" : "false") < 0)
         goto out;
     if (configured) {
         if (snag_buf_append(&text, "\nconfigured", 11u) < 0 ||
