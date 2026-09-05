@@ -2933,7 +2933,12 @@ def test_network_live_nick_prompt():
         for link in links:
             link.sendall(b":operator7!u@fake NICK :operator8\r\n"
                          b":agent7!u@fake NICK :agent8\r\n")
-        child.wait(b"\x1b[20C8", start=start)
+        deadline = time.monotonic() + 8.0
+        while (chat_prompt("operator8") not in child.buf[start:] and
+               b"\x1b[20C8" not in child.buf[start:]):
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, "renamed idle prompt was not painted"
+            child.read_once(remaining)
         child.wait(b"/stats", start=start)
         child.send(b"u\r")
         status_end = child.wait(b"verbosity: 0", start=start)
@@ -2960,8 +2965,13 @@ def test_network_live_nick_prompt():
         for link in links:
             link.sendall(b":operator8!u@fake NICK :operator9\r\n"
                          b":agent8!u@fake NICK :agent9\r\n")
-        renamed = child.wait(b"\x1b[20C9",
-                             start=start)
+        deadline = time.monotonic() + 8.0
+        while (chat_prompt("operator9") not in child.buf[start:] and
+               b"\x1b[20C9" not in child.buf[start:]):
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, "renamed active prompt was not painted"
+            child.read_once(remaining)
+        renamed = len(child.buf)
         assert b"/stats" in child.buf[end:renamed]
         child.send(b"u\r")
         child.wait(b"verbosity: 0", start=renamed)
