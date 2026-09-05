@@ -19,7 +19,7 @@ The linked/runtime dependencies for a normal provider-capable build are:
 
 | Dependency | Source in this tarball | How it is used |
 |---|---|---|
-| POSIX/libc/platform terminal and process APIs | system | terminal, files, processes, signals, and memory allocation |
+| POSIX/libc/platform APIs and pthreads | system | terminal, files, processes, signals, memory allocation, and the engine/presentation thread pair (`-pthread`) |
 | system Jansson | not vendored | strict JSON parsing, construction, and canonical event/request encoding |
 | system libcurl | not vendored | bounded OpenAI Responses create/count/compact HTTPS transport |
 | libcurl backend closure | not vendored | TLS, resolver, compression, HTTP, and other backends selected by the system libcurl build |

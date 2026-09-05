@@ -243,6 +243,32 @@ snj_term_text_width(const char *value, size_t len)
 }
 
 int
+snj_term_write(int fd, const void *text, size_t len)
+{
+    const unsigned char *bytes = text;
+    struct pollfd output = {fd, POLLOUT, 0};
+
+    while (len) {
+        size_t amount = len < 1024u ? len : 1024u;
+        int rc;
+        do {
+            rc = poll(&output, 1u, -1);
+        } while (rc < 0 && errno == EINTR);
+        if (rc < 0)
+            return -1;
+        if (output.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            errno = EIO;
+            return -1;
+        }
+        if (snj_write_full(fd, bytes, amount) < 0)
+            return -1;
+        bytes += amount;
+        len -= amount;
+    }
+    return 0;
+}
+
+int
 snj_term_write_safe(int fd, const char *text, size_t len)
 {
     struct snj_buf out;
@@ -259,7 +285,7 @@ snj_term_write_safe(int fd, const char *text, size_t len)
     rc = append_safe(&out, (const unsigned char *)text, len, false, 0u, 0u,
                      len + 1u, &unused, &unused, &unused, &unused);
     if (rc == 0)
-        rc = snj_write_full(fd, out.data, out.len);
+        rc = snj_term_write(fd, out.data, out.len);
     snj_buf_free(&out);
     return rc;
 }
@@ -444,7 +470,7 @@ snj_term_open(struct snj_term *term, char *error, size_t error_size)
     sigint_pending = 0;
     sigwinch_pending = 0;
     term->opened = true;
-    if (term->capable && snj_write_full(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
+    if (term->capable && snj_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
         int saved_errno = errno;
         (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
         (void)sigaction(SIGINT, &term->saved_sigint, NULL);
@@ -474,7 +500,7 @@ snj_term_external_begin(struct snj_term *term,
     if (snj_term_hide(term) < 0)
         goto fail;
     if (term->bracketed_paste &&
-        snj_write_full(STDERR_FILENO, "\033[?2004l", 8u) < 0)
+        snj_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
         goto fail;
     term->bracketed_paste = false;
     if (term->raw && tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved) < 0)
@@ -503,7 +529,7 @@ snj_term_external_end(struct snj_term *term,
     if (term->capable && set_raw(term) < 0)
         goto fail;
     if (term->capable &&
-        snj_write_full(STDERR_FILENO, "\033[?2004h", 8u) < 0)
+        snj_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0)
         goto fail;
     term->bracketed_paste = term->capable;
     return 0;
@@ -526,7 +552,7 @@ move_cursor(size_t amount, char direction)
         errno = EOVERFLOW;
         return -1;
     }
-    return snj_write_full(STDERR_FILENO, sequence, (size_t)n);
+    return snj_term_write(STDERR_FILENO, sequence, (size_t)n);
 }
 
 static int
@@ -534,7 +560,7 @@ materialize_prompt_wrap(struct snj_term *term)
 {
     if (!term->rendered_cursor_pending_wrap)
         return 0;
-    if (snj_write_full(STDERR_FILENO, " \b", 2u) < 0)
+    if (snj_term_write(STDERR_FILENO, " \b", 2u) < 0)
         return -1;
     term->rendered_cursor_pending_wrap = false;
     return 0;
@@ -547,7 +573,7 @@ snj_term_hide(struct snj_term *term)
         return 0;
     if (!term->capable) {
         term->prompt_visible = false;
-        return snj_write_full(STDERR_FILENO, "\n", 1u);
+        return snj_term_write(STDERR_FILENO, "\n", 1u);
     }
     if (materialize_prompt_wrap(term) < 0 ||
         (term->rendered_cursor_row + 1u < term->rendered_rows &&
@@ -555,12 +581,12 @@ snj_term_hide(struct snj_term *term)
                      'B') < 0))
         return -1;
     for (size_t row = term->rendered_rows; row != 0u; --row) {
-        if (snj_write_full(STDERR_FILENO, "\r\033[2K", 5u) < 0)
+        if (snj_term_write(STDERR_FILENO, "\r\033[2K", 5u) < 0)
             return -1;
-        if (row > 1u && snj_write_full(STDERR_FILENO, "\033[1A", 4u) < 0)
+        if (row > 1u && snj_term_write(STDERR_FILENO, "\033[1A", 4u) < 0)
             return -1;
     }
-    if (snj_write_full(STDERR_FILENO, "\r", 1u) < 0)
+    if (snj_term_write(STDERR_FILENO, "\r", 1u) < 0)
         return -1;
     term->prompt_visible = false;
     term->rendered_rows = 0u;
@@ -583,9 +609,9 @@ leave_prompt(struct snj_term *term)
                       'B') < 0)))
         return -1;
     if (term->capable && term->rendered_end_at_margin) {
-        if (snj_write_full(STDERR_FILENO, "\r", 1u) < 0)
+        if (snj_term_write(STDERR_FILENO, "\r", 1u) < 0)
             return -1;
-    } else if (snj_write_full(STDERR_FILENO,
+    } else if (snj_term_write(STDERR_FILENO,
                               term->capable ? "\r\n" : "\n",
                               term->capable ? 2u : 1u) < 0) {
         return -1;
@@ -607,7 +633,7 @@ mark_input_activity(struct snj_term *term)
     if (!term->active)
         return;
     term->typing_active = true;
-    term->last_input_ms = snj_time_ms();
+    term->last_input_ms = snj_monotonic_ms();
 }
 
 static int
@@ -642,16 +668,6 @@ prompt_label(const struct snj_term *term, size_t *len)
     }
     *len = strlen(term->label);
     return term->label;
-}
-
-static uint64_t
-monotonic_ms(void)
-{
-    struct timespec now;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
-        return 0u;
-    return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
 }
 
 void
@@ -799,11 +815,11 @@ paint_spinners(struct snj_term *term, const char *old_label,
         row = width / term->columns;
         col = width % term->columns;
         if (position_prompt_cursor(term, row, col) < 0 ||
-            (term->color && snj_write_full(STDERR_FILENO,
+            (term->color && snj_term_write(STDERR_FILENO,
                 term->networked ? "\033[1;35m" : "\033[1;36m", 7u) < 0) ||
-            snj_write_full(STDERR_FILENO, term->label + cell->label_offset,
+            snj_term_write(STDERR_FILENO, term->label + cell->label_offset,
                            cell->current_len) < 0 ||
-            (term->color && snj_write_full(STDERR_FILENO, "\033[0m", 4u) < 0))
+            (term->color && snj_term_write(STDERR_FILENO, "\033[0m", 4u) < 0))
             return -1;
         if (++col == term->columns) {
             ++row;
@@ -868,7 +884,7 @@ spinner_timeout(struct snj_term *term, int timeout_ms)
     if (!term->prompt_visible || !term->capable || term->searching ||
         term->output_depth || !animated_spinners(term))
         return timeout_ms;
-    now = monotonic_ms();
+    now = snj_monotonic_ms();
     elapsed = now >= term->spinner_epoch_ms ? now - term->spinner_epoch_ms : 0u;
     step = spinner_step(term, now);
     boundary = ((step + 1u) * 1000u + term->spinner_per_second - 1u) /
@@ -905,7 +921,7 @@ sync_prompt_layout_after_resize(struct snj_term *term)
      * wrap before erase/movement commands use the recomputed row counts.
      */
     if (cursor_row != 0u && cursor_col == 0u &&
-        snj_write_full(STDERR_FILENO, " \b", 2u) < 0)
+        snj_term_write(STDERR_FILENO, " \b", 2u) < 0)
         goto out;
     term->rendered_rows = end_row + 1u;
     term->rendered_cursor_row = cursor_row;
@@ -937,7 +953,7 @@ redraw(struct snj_term *term)
     if (term->prompt_template[0] &&
         compose_prompt(term->prompt_template, term->spinner,
                        term->spinner_states,
-                       spinner_step(term, monotonic_ms()), current, cells) < 0)
+                       spinner_step(term, snj_monotonic_ms()), current, cells) < 0)
         return -1;
     if (term->prompt_template[0])
         install_prompt(term, current, cells);
@@ -946,7 +962,7 @@ redraw(struct snj_term *term)
     if (term->active && term->typing_active && !term->prompt_visible &&
         term->output_seen) {
         if (!term->output_ended_lf &&
-            snj_write_full(STDERR_FILENO, term->capable ? "\r\n" : "\n",
+            snj_term_write(STDERR_FILENO, term->capable ? "\r\n" : "\n",
                            term->capable ? 2u : 1u) < 0)
             return -1;
         term->output_seen = false;
@@ -957,7 +973,7 @@ redraw(struct snj_term *term)
         if (term->prompt_visible)
             return 0;
         if (fallback_rc == 0 && term->color &&
-            snj_write_full(STDERR_FILENO,
+            snj_term_write(STDERR_FILENO,
                            term->networked ? "\033[1;35m" : "\033[1;36m",
                            7u) < 0)
             fallback_rc = -1;
@@ -965,7 +981,7 @@ redraw(struct snj_term *term)
             snj_term_write_safe(STDERR_FILENO, label, label_len) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 && term->color &&
-            snj_write_full(STDERR_FILENO, "\033[0m", 4u) < 0)
+            snj_term_write(STDERR_FILENO, "\033[0m", 4u) < 0)
             fallback_rc = -1;
         if (fallback_rc == 0 && term->draft.len &&
             snj_term_write_safe(STDERR_FILENO, (char *)term->draft.data,
@@ -1003,11 +1019,11 @@ redraw(struct snj_term *term)
         snj_buf_append(&out, " \b", 2u) < 0)
         goto out;
     if (snj_buf_append(&out, "\033[K", 3u) < 0 ||
-        snj_write_full(STDERR_FILENO, out.data, out.len) < 0)
+        snj_term_write(STDERR_FILENO, out.data, out.len) < 0)
         goto out;
     if (end_row > cursor_row && move_cursor(end_row - cursor_row, 'A') < 0)
         goto out;
-    if (snj_write_full(STDERR_FILENO, "\r", 1u) < 0 ||
+    if (snj_term_write(STDERR_FILENO, "\r", 1u) < 0 ||
         move_cursor(cursor_col, 'C') < 0)
         goto out;
     term->rendered_rows = end_row + 1u;
@@ -1086,7 +1102,7 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     install_prompt(term, expanded, cells);
     term->spinner_states = states;
     term->spinner_per_second = per_second;
-    term->spinner_epoch_ms = monotonic_ms();
+    term->spinner_epoch_ms = snj_monotonic_ms();
     term->active = active;
     if (!active)
         term->typing_active = false;
@@ -1094,7 +1110,7 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
     term->line_submission_echoed = false;
     if (term->output_depth)
         term->redraw_after_output = true;
-    return redraw(term);
+    return term->defer_redraw ? 0 : redraw(term);
 invalid:
     errno = EINVAL;
     return -1;
@@ -1110,7 +1126,7 @@ snj_term_set_spinner_states(struct snj_term *term, unsigned int states)
     if (!term->prompt_template[0] || term->spinner_states == states)
         return 0;
     term->spinner_states = states;
-    term->spinner_epoch_ms = monotonic_ms();
+    term->spinner_epoch_ms = snj_monotonic_ms();
     return update_spinners(term, 0u);
 }
 
@@ -1163,7 +1179,8 @@ snj_term_output_end(struct snj_term *term)
         return 0;
     redraw_requested = term->redraw_after_output;
     term->redraw_after_output = false;
-    return term->active && !redraw_requested ? 0 : redraw(term);
+    return (term->active || term->defer_redraw) && !redraw_requested ?
+        0 : redraw(term);
 }
 
 static void
@@ -1456,7 +1473,7 @@ position_prompt_cursor(struct snj_term *term, size_t row, size_t col)
         move_cursor(row - term->rendered_cursor_row, 'B') < 0)
         return -1;
     if (col != term->rendered_cursor_col &&
-        (snj_write_full(STDERR_FILENO, "\r", 1u) < 0 ||
+        (snj_term_write(STDERR_FILENO, "\r", 1u) < 0 ||
          move_cursor(col, 'C') < 0))
         return -1;
     term->rendered_cursor_row = row;
@@ -1476,14 +1493,14 @@ write_prompt_suffix(const unsigned char *data, size_t len, size_t start_col,
     for (size_t i = 0u; i + 1u < len; ++i) {
         if (data[i] != '\r' || data[i + 1u] != '\n')
             continue;
-        if (snj_write_full(STDERR_FILENO, data + start, i - start) < 0 ||
-            snj_write_full(STDERR_FILENO, "\033[K\r\n", 5u) < 0)
+        if (snj_term_write(STDERR_FILENO, data + start, i - start) < 0 ||
+            snj_term_write(STDERR_FILENO, "\033[K\r\n", 5u) < 0)
             return -1;
         start = i + 2u;
         reset = true;
         ++i;
     }
-    if (snj_write_full(STDERR_FILENO, data + start, len - start) < 0)
+    if (snj_term_write(STDERR_FILENO, data + start, len - start) < 0)
         return -1;
     if (columns < 20u) {
         *end_pending = false;
@@ -1580,7 +1597,7 @@ redraw_edit(struct snj_term *term, size_t changed_at)
                             cursor_pending, term->columns,
                             &cursor_pending) < 0)
         goto out;
-    if (snj_write_full(STDERR_FILENO, "\033[K", 3u) < 0)
+    if (snj_term_write(STDERR_FILENO, "\033[K", 3u) < 0)
         goto out;
 
     term->rendered_cursor_row = end_row;
@@ -1593,7 +1610,7 @@ redraw_edit(struct snj_term *term, size_t changed_at)
             goto out;
         for (size_t row = 0u; row < obsolete; ++row) {
             if (move_cursor(1u, 'B') < 0 ||
-                snj_write_full(STDERR_FILENO, "\r\033[2K", 5u) < 0)
+                snj_term_write(STDERR_FILENO, "\r\033[2K", 5u) < 0)
                 goto out;
         }
         if (move_cursor(obsolete, 'A') < 0)
@@ -1747,7 +1764,7 @@ suspend_terminal(struct snj_term *term)
     if (snj_term_hide(term) < 0)
         return -1;
     if (term->bracketed_paste &&
-        snj_write_full(STDERR_FILENO, "\033[?2004l", 8u) < 0)
+        snj_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
         return -1;
     term->bracketed_paste = false;
     if (tcflush(STDIN_FILENO, TCIFLUSH) < 0 ||
@@ -1758,7 +1775,7 @@ suspend_terminal(struct snj_term *term)
         return -1;
     if (set_raw(term) < 0)
         return -1;
-    if (term->capable && snj_write_full(STDERR_FILENO, "\033[?2004h", 8u) < 0)
+    if (term->capable && snj_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0)
         return -1;
     term->bracketed_paste = term->capable;
     update_size(term);
@@ -1772,7 +1789,7 @@ complete_action(struct snj_term *term, enum snj_term_action action,
     char *copy;
 
     if (term->input_backlog)
-        return snj_write_full(STDERR_FILENO, "\a", 1u);
+        return snj_term_write(STDERR_FILENO, "\a", 1u);
     if (term->utf8_pending_len || !term->draft.len)
         return 0;
     if (term->capable) {
@@ -1980,7 +1997,7 @@ cancel_line(struct snj_term *term, enum snj_term_action *action)
         if (move_prompt_cursor(term) < 0)
             return -1;
     }
-    if (snj_write_full(STDERR_FILENO, "^C\n", 3u) < 0)
+    if (snj_term_write(STDERR_FILENO, "^C\n", 3u) < 0)
         return -1;
     free(term->search_original);
     term->search_original = NULL;
@@ -2016,7 +2033,7 @@ feed_byte(struct snj_term *term, unsigned char byte,
           enum snj_term_action *action, char **text)
 {
     if (byte == 0x03u) {
-        uint64_t now = monotonic_ms();
+        uint64_t now = snj_monotonic_ms();
         if (!term->ctrl_c_count || now - term->ctrl_c_since_ms > 2000u) {
             term->ctrl_c_since_ms = now;
             term->ctrl_c_count = 0u;
@@ -2055,7 +2072,7 @@ feed_byte(struct snj_term *term, unsigned char byte,
     case '\t':
         if (!term->draft.len) {
             if (term->input_backlog)
-                return snj_write_full(STDERR_FILENO, "\a", 1u);
+                return snj_term_write(STDERR_FILENO, "\a", 1u);
             *action = SNJ_TERM_VIEW;
             return 1;
         }
@@ -2083,7 +2100,7 @@ feed_byte(struct snj_term *term, unsigned char byte,
     case 0x0cu:
         if (snj_term_hide(term) < 0)
             return -1;
-        if (term->capable && snj_write_full(STDERR_FILENO,
+        if (term->capable && snj_term_write(STDERR_FILENO,
                                             "\033[2J\033[H", 7u) < 0)
             return -1;
         return redraw(term);
@@ -2159,7 +2176,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
     *text = NULL;
     if (term->prompt_visible && term->capable && !term->searching &&
         !term->output_depth && animated_spinners(term) &&
-        update_spinners(term, spinner_step(term, monotonic_ms())) < 0)
+        update_spinners(term, spinner_step(term, snj_monotonic_ms())) < 0)
         return -1;
     if (sigint_pending) {
         --sigint_pending;
@@ -2190,7 +2207,7 @@ snj_term_poll(struct snj_term *term, int timeout_ms, int wake_fd,
             return search_accept(term, false);
         }
         if (rc == 0 && animated_spinners(term) &&
-            update_spinners(term, spinner_step(term, monotonic_ms())) < 0)
+            update_spinners(term, spinner_step(term, snj_monotonic_ms())) < 0)
             return -1;
         if (rc <= 0)
             return rc;
@@ -2240,7 +2257,7 @@ snj_term_close(struct snj_term *term)
     if (term->opened) {
         (void)snj_term_hide(term);
         if (term->bracketed_paste)
-            (void)snj_write_full(STDERR_FILENO, "\033[?2004l", 8u);
+            (void)snj_term_write(STDERR_FILENO, "\033[?2004l", 8u);
         if (term->raw)
             (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
     }

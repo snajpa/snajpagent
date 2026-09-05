@@ -12,7 +12,7 @@ resumable local sessions. Agents and operators can share an IRC room.
 
 ## Build
 
-You need a C11/POSIX environment, GNU make, libcurl, and Jansson.
+You need a C11/POSIX environment with pthreads, GNU make, libcurl, and Jansson.
 
 ```sh
 git clone https://github.com/snajpa/snajpagent.git

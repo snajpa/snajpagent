@@ -98,7 +98,9 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
         snprintf(error, error_size, "delete confirmation prompt could not be displayed");
         return -1;
     }
-    rc = snj_ui_poll(&app->ui, -1, &action, &line);
+    do {
+        rc = snj_ui_poll(&app->ui, -1, false, &action, &line);
+    } while (rc == 0);
     if (rc < 0) {
         free(line);
         snprintf(error, error_size, "delete confirmation input could not be read");

@@ -77,6 +77,7 @@ struct snj_term {
     size_t rendered_cursor_col;
     unsigned int columns;
     unsigned int output_depth;
+    bool defer_redraw;
     uint32_t typing_pause_ms;
     uint64_t last_input_ms;
     uint64_t ctrl_c_since_ms;
@@ -160,5 +161,6 @@ size_t snj_term_text_width(const char *text, size_t len);
 bool snj_term_consume_echoed_submission(struct snj_term *term,
                                         const char *label);
 int snj_term_write_safe(int fd, const char *text, size_t len);
+int snj_term_write(int fd, const void *text, size_t len);
 
 #endif

@@ -143,7 +143,7 @@ snj_render_prepare_tool_finish(struct snj_render_block *block, const char *name,
              (json_is_integer(exit_value) && json_integer_value(exit_value) != 0))
         role = SNJ_ROLE_ERROR;
     model_text = snj_json_string(result, "model_text");
-    snj_buf_init(&line, SIZE_MAX);
+    snj_buf_init(&line, SNJ_MAX_RESPONSE_GRAPH + 4096u);
     if (snj_buf_printf(&line, "← %s  ", tool_label(name)) < 0)
         rc = -1;
     else if (json_is_integer(exit_value)) {

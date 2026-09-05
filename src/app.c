@@ -44,19 +44,16 @@ struct app_signal_handlers {
 };
 
 static atomic_int pending_shutdown_signal;
-static atomic_int shutdown_wake_fd = -1;
+static _Atomic(struct snj_ui *) shutdown_ui;
 
 static void
 mark_shutdown_signal(int signal_number)
 {
     int expected = 0;
     int saved = errno;
-    int fd = atomic_load(&shutdown_wake_fd);
-    char byte = 0;
     (void)atomic_compare_exchange_strong(&pending_shutdown_signal,
                                          &expected, signal_number);
-    if (fd >= 0)
-        (void)write(fd, &byte, 1u);
+    snj_ui_signal(atomic_load(&shutdown_ui));
     errno = saved;
 }
 
@@ -492,23 +489,30 @@ format_context_meter(struct app_state *app, bool active,
     return 0;
 }
 
+static unsigned int prompt_spinner_states(const struct app_state *app, bool active);
+
 static int
-format_input_label(struct app_state *app, bool active,
-                   char label[SNJ_TERM_LABEL_BYTES])
+set_input_prompt(struct app_state *app, bool active)
 {
     const struct snj_provider_config *provider = active ? app->turn_provider :
                                                         next_provider(app);
     const char *model = active ? app->turn_model : next_model(app);
     const char *effort = active ? app->turn_effort :
                                   resolve_effort(next_effort(app));
-    char hostname[256u], meter[32u], hour[12u], minute[12u], second[12u];
-    const char *values[SNJ_PROMPT_FIELD_COUNT];
-    const struct snj_prompt_clock *clock = &app->ui.prompt_clock;
+    char hostname[256u], meter[32u], label[SNJ_TERM_LABEL_BYTES];
+    const char *values[SNJ_PROMPT_HOUR];
+    const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
+        app->config->prompt_spinner_goal,
+        app->config->prompt_spinner_provider,
+        app->config->prompt_spinner_tool
+    };
+    unsigned int states = prompt_spinner_states(app, active);
     unsigned int selected = app->ui.view == SNJ_RENDER_CHAT ?
                             0u : active ? 2u : 1u;
 
     if (!provider || !model || !effort ||
-        format_context_meter(app, active, meter) < 0)
+        format_context_meter(app, active, meter) < 0 ||
+        snj_ui_text(&app->ui, SNJ_UI_BEFORE_PROMPT, NULL) < 0)
         return -1;
     if (gethostname(hostname, sizeof(hostname)) < 0)
         memcpy(hostname, "localhost", sizeof("localhost"));
@@ -518,17 +522,6 @@ format_input_label(struct app_state *app, bool active,
     for (size_t i = 0u; hostname[i]; ++i)
         if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
             hostname[i] = '_';
-    if (!clock->captured)
-        snj_ui_capture_prompt_clock(&app->ui);
-    if (clock->valid) {
-        (void)snprintf(hour, sizeof(hour), "%u", (unsigned int)clock->hour);
-        (void)snprintf(minute, sizeof(minute), "%u", (unsigned int)clock->minute);
-        (void)snprintf(second, sizeof(second), "%u", (unsigned int)clock->second);
-    } else {
-        memcpy(hour, "--", sizeof("--"));
-        memcpy(minute, "--", sizeof("--"));
-        memcpy(second, "--", sizeof("--"));
-    }
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
@@ -537,9 +530,6 @@ format_input_label(struct app_state *app, bool active,
     values[5] = meter;
     values[6] = selected == 0u ? "chat" :
                 selected == 1u ? "rollout-idle" : "rollout-active";
-    values[SNJ_PROMPT_HOUR] = hour;
-    values[SNJ_PROMPT_MINUTE] = minute;
-    values[SNJ_PROMPT_SECOND] = second;
     if (app->queue_edit_id[0]) {
         struct snj_buf out;
 
@@ -556,14 +546,14 @@ format_input_label(struct app_state *app, bool active,
             goto fail;
         memcpy(label, out.data, out.len + 1u);
         snj_buf_free(&out);
-        return 0;
+        return snj_ui_prompt(&app->ui, active, label, spinners,
+            app->config->prompt_spinner_per_second, states);
 fail:
         snj_buf_free(&out);
         return -1;
     }
-    return snj_config_prompt_expand(app->config->prompt, selected, values,
-                                    SNJ_TERM_SPINNER_MARKER_BASE, label,
-                                    SNJ_TERM_LABEL_BYTES);
+    return snj_ui_composer(&app->ui, active, app->config->prompt, values,
+        selected, spinners, app->config->prompt_spinner_per_second, states);
 }
 
 static int
@@ -639,29 +629,10 @@ prompt_spinner_states(const struct app_state *app, bool active)
 }
 
 static int
-set_input_prompt(struct app_state *app, bool active)
-{
-    char label[SNJ_TERM_LABEL_BYTES];
-    const char *spinners[SNJ_TERM_SPINNER_COUNT] = {
-        app->config->prompt_spinner_goal,
-        app->config->prompt_spinner_provider,
-        app->config->prompt_spinner_tool
-    };
-    unsigned int states = prompt_spinner_states(app, active);
-
-    if (format_input_label(app, active, label) < 0 ||
-        snj_ui_text(&app->ui, SNJ_UI_BEFORE_PROMPT, NULL) < 0)
-        return -1;
-    return snj_ui_prompt(&app->ui, active, label, spinners,
-        app->config->prompt_spinner_per_second, states);
-}
-
-static int
 tick_irc(struct app_state *app, char *error, size_t error_size)
 {
     char model[SNJ_CONFIG_IRC_NICK_MAX + 1u];
     char operator[SNJ_CONFIG_IRC_NICK_MAX + 1u];
-    char label[SNJ_TERM_LABEL_BYTES];
 
     (void)snprintf(model, sizeof(model), "%s", snj_irc_model_nick(app->irc));
     (void)snprintf(operator, sizeof(operator), "%s",
@@ -675,10 +646,7 @@ tick_irc(struct app_state *app, char *error, size_t error_size)
         return -1;
     if (!app->ui.opened || !app->ui.prompt_wanted)
         return 0;
-    if (format_input_label(app, app->ui.active, label) < 0)
-        return -1;
-    return strcmp(label, app->ui.label) == 0 ? 0 :
-        set_input_prompt(app, app->ui.active);
+    return set_input_prompt(app, app->ui.active);
 }
 
 static struct snj_queued_turn *
@@ -2054,9 +2022,10 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     }
     if (app->execute || app->input_closed)
         return 0;
-    rc = snj_ui_poll(&app->ui, (int)timeout_ms, &action, &line);
+    rc = snj_ui_poll(&app->ui, (int)timeout_ms, true, &action, &line);
     history_warning(app);
     if (rc < 0) {
+        int input_errno = errno;
         if (capture_shutdown_signal(app)) {
             app->interrupt_requested = true;
             free(line);
@@ -2066,7 +2035,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
             errno == EOVERFLOW ? "active submission exceeds 1 MiB" :
             errno == EILSEQ ? "active submission contains invalid UTF-8" :
             "active input could not be read");
-        return 0;
+        return input_errno == EOVERFLOW || input_errno == EILSEQ ? 0 : -1;
     }
     if (rc == 0) {
         if (app->networked) {
@@ -2174,7 +2143,7 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                     "active-turn input must be nonempty valid UTF-8 within 256 KiB");
                 rc = 0;
             } else if (app->networked &&
-                       app->ui.view == SNJ_RENDER_CHAT) {
+                       app->ui.input_view == SNJ_RENDER_CHAT) {
                 error[0] = '\0';
                 rc = snj_irc_send_operator(app->irc, text,
                                            error, sizeof(error));
@@ -3785,11 +3754,16 @@ pick_session(struct app_state *app, const char *workspace,
         snj_ui_open(&app->ui, error, error_size) < 0 ||
         snj_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0)
         return -1;
-    if (snj_ui_poll(&app->ui, -1, &action, &prefix) <= 0 ||
+    do {
+        rc = snj_ui_poll(&app->ui, -1, false, &action, &prefix);
+    } while (rc == 0);
+    if (rc < 0 ||
         action != SNJ_TERM_SUBMIT || !prefix) {
         snj_errorf(error, error_size, "session selection cancelled");
+        rc = -1;
     } else if (strlen(prefix) < 8u || strlen(prefix) > SNJ_ID_HEX_LEN) {
         snj_errorf(error, error_size, "enter an 8..32 character session id prefix");
+        rc = -1;
     } else {
         rc = snj_session_open(&app->store, &app->session, prefix,
                               error, error_size);
@@ -3901,9 +3875,10 @@ interactive_loop(struct app_state *app, const char *initial)
         if (!prompt) {
             int poll_rc = snj_ui_poll(&app->ui,
                                         app->networked ? 25 : -1,
-                                        &action, &owned);
+                                        false, &action, &owned);
             history_warning(app);
             if (poll_rc < 0) {
+                int input_errno = errno;
                 if (capture_shutdown_signal(app)) {
                     free(owned);
                     return 0;
@@ -3912,7 +3887,8 @@ interactive_loop(struct app_state *app, const char *initial)
                     errno == EOVERFLOW ? "prompt exceeds 1 MiB" :
                     errno == EILSEQ ? "terminal input contains invalid UTF-8" :
                     "terminal input could not be read");
-                if (set_input_prompt(app, false) < 0)
+                if ((input_errno != EOVERFLOW && input_errno != EILSEQ) ||
+                    set_input_prompt(app, false) < 0)
                     return 6;
                 continue;
             }
@@ -4029,7 +4005,7 @@ interactive_loop(struct app_state *app, const char *initial)
             } else if (!read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
             } else if (!read_only && app->networked &&
-                       app->ui.view == SNJ_RENDER_CHAT) {
+                       (owned ? app->ui.input_view : app->ui.view) == SNJ_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
                 char irc_error[256] = {0};
@@ -4116,7 +4092,7 @@ snj_app_run(const struct snj_cli *cli, const char *program)
     snj_session_init(&app.session);
     if (snj_ui_init(&app.ui) < 0)
         return 3;
-    shutdown_wake_fd = snj_ui_signal_fd(&app.ui);
+    atomic_store(&shutdown_ui, &app.ui);
     snj_ui_color(&app.ui,
         cli->color == SNJ_CLI_COLOR_NEVER ? SNJ_COLOR_NEVER :
         cli->color == SNJ_CLI_COLOR_ALWAYS ? SNJ_COLOR_ALWAYS :
@@ -4368,7 +4344,7 @@ out:
     (void)snj_ui_text(&app.ui, SNJ_UI_CLOSE, NULL);
     snj_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);
-    shutdown_wake_fd = -1;
+    atomic_store(&shutdown_ui, NULL);
     snj_ui_free(&app.ui);
     (void)capture_shutdown_signal(&app);
     if (signal_handlers_installed)

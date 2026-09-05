@@ -93,7 +93,7 @@ text_slice(const char *text, size_t len)
 static int
 write_literal(int fd, const char *s)
 {
-    return snj_write_full(fd, s, strlen(s));
+    return snj_term_write(fd, s, strlen(s));
 }
 
 static int
@@ -133,14 +133,14 @@ write_role_chunk(struct snj_render *render, int fd, const char *color,
         goto out;
     if (colored_len &&
         (terminal_safe ? snj_term_write_safe(fd, text, colored_len) :
-                         snj_write_full(fd, text, colored_len)) < 0)
+                         snj_term_write(fd, text, colored_len)) < 0)
         goto out;
     if (colored && write_literal(fd, COLOR_RESET) < 0)
         goto out;
     if (len > colored_len &&
         (terminal_safe ? snj_term_write_safe(fd, text + colored_len,
                                               len - colored_len) :
-                         snj_write_full(fd, text + colored_len,
+                         snj_term_write(fd, text + colored_len,
                                         len - colored_len)) < 0)
         goto out;
     if (render->term &&
@@ -570,7 +570,7 @@ markdown_paint_style(struct snj_render *render)
     if (md->link_url) ADD_STYLE(";4;34");
 #undef ADD_STYLE
     sequence[len++] = 'm';
-    if (snj_write_full(render->public_fd, sequence, len) < 0)
+    if (snj_term_write(render->public_fd, sequence, len) < 0)
         return -1;
     render->markdown_state.style_painted = true;
     return 0;
@@ -698,7 +698,7 @@ public_write(struct snj_render *render, const char *text, size_t len)
             return -1;
     }
     if ((terminal ? snj_term_write_safe(render->public_fd, text, len) :
-                    snj_write_full(render->public_fd, text, len)) < 0)
+                    snj_term_write(render->public_fd, text, len)) < 0)
         return -1;
     if (terminal && render->term)
         snj_term_note_output(render->term, text, len);
@@ -1236,10 +1236,14 @@ markdown_table_cell_width(struct snj_render *render,
     struct snj_render probe;
     int rc;
 
+    if (render_checkpoint(render) < 0)
+        return -1;
     memset(&probe, 0, sizeof(probe));
     probe.public_fd = render->public_fd;
     probe.markdown_rendering = true;
     probe.markdown_measuring = true;
+    probe.checkpoint = render->checkpoint;
+    probe.checkpoint_opaque = render->checkpoint_opaque;
     snj_buf_init(&probe.wrap_pending, SNJ_MAX_PUBLIC_ITEM);
     rc = markdown_inline(&probe, cell->text, cell->len);
     if (rc == 0)
@@ -1450,12 +1454,11 @@ markdown_table_render(struct snj_render *render)
         offset = body_offset;
         while (markdown_table_next_line(text, md->table.len, &offset, &line,
                                         &line_len)) {
-            if (render_checkpoint(render) < 0)
-            return -1;
-        struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+            struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
             size_t count;
 
-            if (!markdown_table_cells(line, line_len, cells, &count) ||
+            if (render_checkpoint(render) < 0 ||
+                !markdown_table_cells(line, line_len, cells, &count) ||
                 markdown_table_grid_row(render, cells, count, widths,
                                         alignment, header_count, false) < 0)
                 return -1;
@@ -1471,12 +1474,11 @@ markdown_table_render(struct snj_render *render)
         offset = body_offset;
         while (markdown_table_next_line(text, md->table.len, &offset, &line,
                                         &line_len)) {
-            if (render_checkpoint(render) < 0)
-            return -1;
-        struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+            struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
             size_t count;
 
-            if (!markdown_table_cells(line, line_len, cells, &count) ||
+            if (render_checkpoint(render) < 0 ||
+                !markdown_table_cells(line, line_len, cells, &count) ||
                 markdown_text(render, "├─ row\n", strlen("├─ row\n")) < 0)
                 return -1;
             for (size_t i = 0u; i < header_count; ++i) {
@@ -2517,7 +2519,7 @@ irc_piece(struct snj_render *render, const char *text, bool safe)
     size_t len = strlen(text);
 
     if ((safe ? snj_term_write_safe(STDERR_FILENO, text, len) :
-                snj_write_full(STDERR_FILENO, text, len)) < 0)
+                snj_term_write(STDERR_FILENO, text, len)) < 0)
         return -1;
     if (render->term && (len == 0u || text[0] != '\033'))
         snj_term_note_output(render->term, text, len);
@@ -2916,7 +2918,7 @@ snj_render_resume_hint(const struct snj_render *render, const char *command,
         snj_buf_append(&block, command, command_len) < 0 ||
         snj_buf_putc(&block, '\n') < 0)
         goto out;
-    rc = snj_write_full(STDERR_FILENO, block.data, block.len);
+    rc = snj_term_write(STDERR_FILENO, block.data, block.len);
 out:
     snj_buf_free(&block);
     return rc;

@@ -13,6 +13,7 @@
 
 #include <curl/curl.h>
 #include <errno.h>
+#include <poll.h>
 #include "snj_jansson.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -522,27 +523,12 @@ curl_code_retryable(CURLcode code, bool semantic_body_seen)
 }
 
 static int
-sleep_ms(uint32_t delay_ms)
-{
-    struct timespec ts;
-
-    ts.tv_sec = (time_t)(delay_ms / 1000u);
-    ts.tv_nsec = (long)(delay_ms % 1000u) * 1000000L;
-    while (nanosleep(&ts, &ts) < 0) {
-        if (errno == EINTR)
-            continue;
-        return -1;
-    }
-    return 0;
-}
-
-static int
 retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
            const char *reason, char *error, size_t error_size)
 {
     uint32_t delay_ms = snj_provider_retry_delay_ms(retries_done,
         ctx->retry_after_present, ctx->retry_after_ms);
-    uint64_t deadline = snj_time_ms() + delay_ms;
+    uint64_t deadline = snj_monotonic_ms() + delay_ms;
 
     if (ctx->render && ctx->render->verbosity >= 3u) {
         char line[160];
@@ -557,13 +543,14 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         }
     }
     for (;;) {
-        uint64_t now = snj_time_ms();
+        uint64_t now = snj_monotonic_ms();
         uint64_t remaining = now < deadline ? deadline - now : 0u;
         uint32_t slice = remaining > 25u ? 25u : (uint32_t)remaining;
+        struct pollfd wake = {snj_ui_wake_fd(ctx->render), POLLIN, 0};
         if (!remaining)
             break;
         if (ctx->pump) {
-            int rc = ctx->pump(ctx->pump_opaque, slice);
+            int rc = ctx->pump(ctx->pump_opaque, 0u);
             if (rc < 0) {
                 snj_errorf(error, error_size,
                           "active input could not be processed during provider retry");
@@ -574,8 +561,9 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
                 ctx->cancel_code = rc;
                 return rc;
             }
-        } else if (sleep_ms(slice) < 0) {
-            snj_errorf(error, error_size, "provider retry sleep failed");
+        }
+        if (poll(&wake, 1u, (int)slice) < 0 && errno != EINTR) {
+            snj_errorf(error, error_size, "provider retry wait failed");
             return -1;
         }
     }

@@ -120,6 +120,7 @@ class Child:
 
     def finish(self, expected=0, expect_resume=True):
         _, status = os.waitpid(self.pid, 0)
+        self.pid = None
         while self.read_once(0.05):
             pass
         os.close(self.fd)
@@ -163,8 +164,11 @@ class Child:
         return None
 
     def kill(self):
+        if self.pid is None:
+            return
         os.kill(self.pid, signal.SIGKILL)
         os.waitpid(self.pid, 0)
+        self.pid = None
         os.close(self.fd)
 
 
@@ -632,7 +636,13 @@ def test_split_utf8_steering():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT)
-    child.send(b"slow_utf8\rchange\r")
+    child.send(b"slow_utf8\r")
+    session = new_session(before)
+    deadline = time.monotonic() + 4.0
+    while not any(e["type"] == "response_started" for e in events(session)):
+        assert time.monotonic() < deadline
+        child.read_once(0.02)
+    child.send(b"change\r")
     answer_end = child.wait(b"steered: change")
     child.exit_cleanly(answer_end)
 
@@ -966,7 +976,9 @@ def test_steering_during_pre_response_compaction():
 
     child = Child(["--config", str(config), "--resume", session_id])
     child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
-    child.send(b"compaction_steer\rchange plan\r")
+    child.send(b"compaction_steer\r")
+    child.wait(DEFAULT_ACTIVE_PROMPT)
+    child.send(b"change plan\r")
     steer_end = child.wait(DEFAULT_ACTIVE_PROMPT + b"change plan")
     child.wait(DEFAULT_ACTIVE_PROMPT, start=steer_end)
     answer_end = child.wait(b"fixture answer", start=steer_end)
@@ -1006,7 +1018,14 @@ def test_steering_during_capacity_recovery_compaction():
 
     child = Child(["--resume", session_id])
     child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
-    child.send(b"capacity_recovery_steer\rchange recovery plan\r")
+    child.send(b"capacity_recovery_steer\r")
+    deadline = time.monotonic() + 4.0
+    while not any(e["type"] == "compaction_started" and
+                  e["data"]["reason"] == "provider_rejection"
+                  for e in events(session_id)):
+        assert time.monotonic() < deadline
+        child.read_once(0.02)
+    child.send(b"change recovery plan\r")
     steer_end = child.wait(b"\xc2\xbb change recovery plan")
     answer_end = child.wait(b"fixture answer", start=steer_end)
     child.exit_cleanly(answer_end)
@@ -3443,6 +3462,63 @@ def test_five_ctrl_c_exit():
         child.finish()
 
 
+def test_ctrl_c_sequence_reset():
+    child = Child([])
+    try:
+        child.wait_idle_prompt()
+        child.send(b"\x03" * 4)
+        child.drain(2.1)
+        child.send(b"\x03")
+        child.drain(0.05)
+        assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
+        child.send(b"x" + b"\x03" * 4)
+        child.drain(0.05)
+        assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
+        child.send(b"\x03")
+        child.wait(RESUME_HEADER)
+        child.finish()
+    finally:
+        child.kill()
+
+
+def test_full_input_queue_keeps_exit_live():
+    child = Child([])
+    try:
+        child.wait_idle_prompt()
+        child.send(b"engine_blocked\r")
+        child.wait(b"engine-block-start")
+        child.send(b"/verbose 1\r" * 32 + b"retained-draft\r")
+        child.wait(b"input backlog is full", timeout=1.0)
+        child.wait(b"\a", timeout=1.0)
+        child.send(b"\x03" * 5)
+        child.wait(RESUME_HEADER, timeout=4.0)
+        child.finish()
+    finally:
+        child.kill()
+
+
+def test_history_lock_keeps_editing_live():
+    child = Child([])
+    try:
+        child.wait_idle_prompt()
+        with (Path(DOTDIR) / "prompt_history").open("r+") as history:
+            fcntl.lockf(history, fcntl.LOCK_EX)
+            child.send(b"\x12")
+            start = child.wait(b"reverse-i-search")
+            child.send(b"locked-history")
+            child.wait(b"locked-history", start=start, timeout=0.25)
+            child.send(b"\x07draft-alive")
+            child.drain(0.1)
+            visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]|\r", b"", child.buf[start:])
+            assert b"draft-alive" in visible, visible
+            fcntl.lockf(history, fcntl.LOCK_UN)
+        child.send(b"\x03")
+        child.drain(0.1)
+        child.exit_now()
+    finally:
+        child.kill()
+
+
 def test_editor_during_blocked_engine():
     child = Child([])
     failure = None
@@ -3450,6 +3526,9 @@ def test_editor_during_blocked_engine():
         child.wait_idle_prompt()
         child.send(b"engine_blocked\r")
         after = child.wait(b"engine-block-start")
+        tasks = Path(f"/proc/{child.pid}/task")
+        if tasks.exists():
+            assert len(list(tasks.iterdir())) == 2
         child.send(b"responsive-draft")
         try:
             deadline = time.monotonic() + 0.25
@@ -3472,6 +3551,9 @@ def test_editor_during_blocked_engine():
 
 test_editor_during_blocked_engine()
 test_five_ctrl_c_exit()
+test_ctrl_c_sequence_reset()
+test_full_input_queue_keeps_exit_live()
+test_history_lock_keeps_editing_live()
 test_incremental_prompt_edit_and_utf8_cursor_column()
 test_incremental_active_prompt_keeps_status_stable()
 test_static_zero_width_spinner_has_no_refresh()

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "ui.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -25,6 +26,15 @@ struct ui_snapshot {
     bool opened, prompt_wanted, active;
     char label[SNJ_TERM_LABEL_BYTES];
     uint64_t generation;
+    uint64_t turn_generation;
+};
+
+struct ui_prompt {
+    bool active;
+    uint32_t rate;
+    unsigned int states, mode;
+    char frames[SNJ_TERM_SPINNER_COUNT][80];
+    char *values[SNJ_PROMPT_HOUR];
 };
 
 struct ui_message {
@@ -43,8 +53,7 @@ struct ui_message {
         enum snj_ui_operation operation;
         unsigned int value;
         struct { bool enabled; } network;
-        struct { bool active; uint32_t rate; unsigned int states;
-                 char frames[SNJ_TERM_SPINNER_COUNT][80]; } prompt;
+        struct ui_prompt prompt;
         struct { int fd; bool rollout; } public;
         struct { uint64_t turns; size_t queued; bool resumed; } orientation;
         struct snj_irc_event irc;
@@ -73,10 +82,11 @@ struct ui_action {
 
 struct snj_ui_runtime {
     struct ui_queue commands, actions;
-    pthread_t thread;
+    pthread_t thread, engine;
     sigset_t saved_mask;
     atomic_int fatal;
-    atomic_bool interrupt, force_exit, cancel, eof, stopped, stop_public;
+    atomic_bool force_exit, cancel, eof, stop_public;
+    _Atomic uint64_t interrupt;
     _Atomic uint64_t pause_until;
     uint64_t sequence;
 };
@@ -84,10 +94,12 @@ struct snj_ui_runtime {
 struct snj_ui_display {
     struct snj_render render;
     struct snj_term term;
-    char frames[SNJ_TERM_SPINNER_COUNT][80];
+    struct ui_prompt prompt;
+    char *prompt_source;
     struct ui_message commands;
     struct snj_ui_runtime *runtime;
     uint64_t generation;
+    uint64_t turn_generation;
     bool suspended;
     bool input_closed, backlog_warned;
 };
@@ -175,6 +187,7 @@ take_snapshot(struct snj_ui_display *display, struct ui_snapshot *snapshot)
     snapshot->prompt_wanted = display->term.prompt_wanted;
     snapshot->active = display->term.active;
     snapshot->generation = display->generation;
+    snapshot->turn_generation = display->turn_generation;
     memcpy(snapshot->label, display->term.label, sizeof(snapshot->label));
 }
 
@@ -185,6 +198,7 @@ adopt_snapshot(struct snj_ui *ui, const struct ui_snapshot *snapshot)
     ui->opened = snapshot->opened;
     ui->prompt_wanted = snapshot->prompt_wanted;
     ui->active = snapshot->active;
+    ui->turn_generation = snapshot->turn_generation;
     memcpy(ui->label, snapshot->label, sizeof(ui->label));
 }
 
@@ -202,6 +216,40 @@ message_free(struct ui_message *message)
     }
     free(message->text);
     free(message->label);
+    if (message->kind == UI_PROMPT)
+        for (size_t i = 0u; i < SNJ_PROMPT_HOUR; ++i)
+            free(message->data.prompt.values[i]);
+}
+
+static int
+apply_prompt(struct snj_ui_display *display)
+{
+    struct ui_prompt *prompt = &display->prompt;
+    const char *frames[SNJ_TERM_SPINNER_COUNT];
+    const char *values[SNJ_PROMPT_FIELD_COUNT];
+    const struct snj_prompt_clock *clock = &display->term.prompt_clock;
+    char hour[12], minute[12], second[12], label[SNJ_TERM_LABEL_BYTES];
+    const char *text = display->prompt_source;
+
+    snj_term_capture_prompt_clock(&display->term, time(NULL));
+    if (prompt->values[0]) {
+        (void)snprintf(hour, sizeof(hour), clock->valid ? "%u" : "--", clock->hour);
+        (void)snprintf(minute, sizeof(minute), clock->valid ? "%u" : "--", clock->minute);
+        (void)snprintf(second, sizeof(second), clock->valid ? "%u" : "--", clock->second);
+        for (size_t i = 0u; i < SNJ_PROMPT_HOUR; ++i)
+            values[i] = prompt->values[i];
+        values[SNJ_PROMPT_HOUR] = hour;
+        values[SNJ_PROMPT_MINUTE] = minute;
+        values[SNJ_PROMPT_SECOND] = second;
+        if (snj_config_prompt_expand(text, prompt->mode, values,
+                SNJ_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0)
+            return -1;
+        text = label;
+    }
+    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
+        frames[i] = prompt->frames[i];
+    return snj_term_set_prompt_template(&display->term, prompt->active, text,
+                                        frames, prompt->rate, prompt->states);
 }
 
 static int
@@ -271,15 +319,17 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
             snj_term_external_begin(term, error, error_size) :
             snj_term_external_end(term, error, error_size);
     case UI_PROMPT: {
-        const char *frames[SNJ_TERM_SPINNER_COUNT];
         ++display->generation;
-        memcpy(display->frames, message->data.prompt.frames,
-               sizeof(display->frames));
-        for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
-            frames[i] = display->frames[i];
-        return snj_term_set_prompt_template(term, message->data.prompt.active,
-                    message->text, frames, message->data.prompt.rate,
-                    message->data.prompt.states);
+        if (message->data.prompt.active && !term->active)
+            ++display->turn_generation;
+        free(display->prompt_source);
+        for (size_t i = 0u; i < SNJ_PROMPT_HOUR; ++i)
+            free(display->prompt.values[i]);
+        display->prompt = message->data.prompt;
+        display->prompt_source = message->text;
+        message->text = NULL;
+        memset(message->data.prompt.values, 0, sizeof(message->data.prompt.values));
+        return apply_prompt(display);
     }
     case UI_VALIDATE: {
         const char *frames[SNJ_TERM_SPINNER_COUNT];
@@ -295,6 +345,7 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
         return rc;
     }
     case UI_SPINNERS:
+        display->prompt.states = message->data.value;
         return snj_term_set_spinner_states(term, message->data.value);
     case UI_DRAFT: return snj_term_restore_draft(term, message->text);
     case UI_VIEW:
@@ -343,7 +394,7 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
         return snj_render_transport(render, (char)message->data.value,
                                     message->text, message->len);
     case UI_RAW:
-        return snj_write_full((int)message->data.value,
+        return snj_term_write((int)message->data.value,
                              message->text, message->len);
     case UI_HISTORY_SNAPSHOT:
         return snj_term_history_set(term, &message->data.history.entries,
@@ -383,6 +434,19 @@ read_input(struct snj_ui_display *display, int timeout_ms)
     take_snapshot(display, &item->snapshot);
     rc = snj_term_poll(term, timeout_ms, runtime->commands.wake[0],
                        &item->action, &item->text);
+    if (item->action == SNJ_TERM_CANCEL || item->action == SNJ_TERM_INTERRUPT ||
+        item->action == SNJ_TERM_SUBMIT || item->action == SNJ_TERM_QUEUE) {
+        bool deferred = term->defer_redraw;
+        term->defer_redraw = item->action == SNJ_TERM_SUBMIT ||
+                             item->action == SNJ_TERM_QUEUE;
+        ++display->generation;
+        if (apply_prompt(display) < 0) {
+            free(item->text);
+            free(item);
+            return -1;
+        }
+        term->defer_redraw = deferred;
+    }
     atomic_store(&runtime->pause_until,
         term->typing_active ? term->last_input_ms + term->typing_pause_ms : 0u);
     if (rc < 0 && errno != EINTR)
@@ -392,7 +456,7 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         item->history_refresh = true;
     }
     if (item->action == SNJ_TERM_INTERRUPT) {
-        atomic_store(&runtime->interrupt, true);
+        atomic_store(&runtime->interrupt, display->turn_generation);
         atomic_store(&runtime->stop_public, true);
     } else if (item->action == SNJ_TERM_FORCE_EXIT) {
         atomic_store(&runtime->force_exit, true);
@@ -412,8 +476,6 @@ read_input(struct snj_ui_display *display, int timeout_ms)
                 (item->text[0] != '/' || item->text[1] == '/'))
                 atomic_store(&runtime->stop_public, true);
         }
-        if (item->action == SNJ_TERM_EXIT)
-            display->input_closed = true;
         if (queue_push(&runtime->actions, item))
             return 0;
     }
@@ -445,7 +507,7 @@ apply_public(struct snj_ui_display *display, struct ui_message *message)
         if (read_input(display, 0) < 0)
             return -1;
         while (!atomic_load(&runtime->stop_public) &&
-               snj_term_typing_pause_remaining(&display->term, snj_time_ms()))
+               snj_term_typing_pause_remaining(&display->term, snj_monotonic_ms()))
             if (read_input(display, 16) < 0)
                 return -1;
         if (atomic_load(&runtime->stop_public))
@@ -464,6 +526,14 @@ apply_public(struct snj_ui_display *display, struct ui_message *message)
 static int
 apply_display(struct snj_ui_display *display, struct ui_message *message)
 {
+    if (message->kind == UI_VIEW) {
+        int rc;
+        display->term.defer_redraw = true;
+        rc = apply_message(display, message, &message->delivered,
+                            message->error, sizeof(message->error));
+        display->term.defer_redraw = false;
+        return rc;
+    }
     if (message->kind == UI_PUBLIC)
         return apply_public(display, message);
     if (message->kind == UI_RAW) {
@@ -473,7 +543,7 @@ apply_display(struct snj_ui_display *display, struct ui_message *message)
             if (amount > 1024u)
                 amount = 1024u;
             if (read_input(display, 0) < 0 ||
-                snj_write_full((int)message->data.value,
+                snj_term_write((int)message->data.value,
                                message->text + offset, amount) < 0)
                 return -1;
             offset += amount;
@@ -515,6 +585,10 @@ presentation_main(void *opaque)
         message->result = message->sequence == ++sequence ?
             apply_display(&display, message) : -1;
         message->saved_errno = errno;
+        if (message->result < 0 && message->kind != UI_VALIDATE) {
+            atomic_store(&runtime->fatal, errno ? errno : EIO);
+            display.input_closed = true;
+        }
         take_snapshot(&display, &message->snapshot);
         {
             bool stop = message->kind == UI_STOP;
@@ -527,8 +601,9 @@ presentation_main(void *opaque)
     snj_render_free(&display.render);
     snj_term_close(&display.term);
     message_free(&display.commands);
-    atomic_store(&runtime->stopped, true);
-    wake_owner(&runtime->actions);
+    free(display.prompt_source);
+    for (size_t i = 0u; i < SNJ_PROMPT_HOUR; ++i)
+        free(display.prompt.values[i]);
     return NULL;
 }
 
@@ -540,6 +615,7 @@ request(struct snj_ui *ui, struct ui_message *message, const char *label,
     int rc = -1, saved;
     struct snj_ui_runtime *runtime = ui->runtime;
     struct pollfd pfd = {runtime->actions.wake[0], POLLIN, 0};
+    assert(pthread_equal(pthread_self(), runtime->engine));
     message->verbosity = ui->verbosity;
     message->len = len;
     atomic_init(&message->done, false);
@@ -597,6 +673,14 @@ snj_ui_init(struct snj_ui *ui)
     runtime = calloc(1u, sizeof(*runtime));
     if (!runtime)
         return -1;
+    atomic_init(&runtime->fatal, 0);
+    runtime->engine = pthread_self();
+    atomic_init(&runtime->interrupt, 0u);
+    atomic_init(&runtime->force_exit, false);
+    atomic_init(&runtime->cancel, false);
+    atomic_init(&runtime->eof, false);
+    atomic_init(&runtime->stop_public, false);
+    atomic_init(&runtime->pause_until, 0u);
     if (queue_open(&runtime->commands) < 0)
         goto fail;
     if (queue_open(&runtime->actions) < 0)
@@ -717,7 +801,7 @@ uint32_t
 snj_ui_pause_remaining(struct snj_ui *ui)
 {
     uint64_t until = atomic_load(&ui->runtime->pause_until);
-    uint64_t now = snj_time_ms();
+    uint64_t now = snj_monotonic_ms();
     if (atomic_load(&ui->runtime->stop_public))
         return 0u;
     return until > now ? (uint32_t)(until - now) : 0u;
@@ -742,11 +826,13 @@ snj_ui_external(struct snj_ui *ui, bool begin, char *error, size_t error_size)
 static int
 send_prompt(struct snj_ui *ui, enum ui_kind kind, bool active, const char *label,
               const char *const spinners[SNJ_TERM_SPINNER_COUNT],
-              uint32_t per_second, unsigned int states)
+              uint32_t per_second, unsigned int states,
+              const char *const values[SNJ_PROMPT_HOUR], unsigned int mode)
 {
     struct ui_message message = {
         .kind = kind,
-        .data.prompt = {.active = active, .rate = per_second, .states = states}
+        .data.prompt = {.active = active, .rate = per_second, .states = states,
+                        .mode = mode}
     };
     for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i) {
         if (strlen(spinners[i]) >= sizeof(message.data.prompt.frames[i])) {
@@ -756,6 +842,13 @@ send_prompt(struct snj_ui *ui, enum ui_kind kind, bool active, const char *label
         memcpy(message.data.prompt.frames[i], spinners[i],
                strlen(spinners[i]) + 1u);
     }
+    for (size_t i = 0u; values && i < SNJ_PROMPT_HOUR; ++i) {
+        message.data.prompt.values[i] = snj_strdup_checked(values[i], SNJ_TERM_LABEL_BYTES);
+        if (!message.data.prompt.values[i]) {
+            message_free(&message);
+            return -1;
+        }
+    }
     return send_message(ui, &message, label);
 }
 
@@ -764,7 +857,17 @@ snj_ui_prompt(struct snj_ui *ui, bool active, const char *label,
               const char *const spinners[SNJ_TERM_SPINNER_COUNT],
               uint32_t per_second, unsigned int states)
 {
-    return send_prompt(ui, UI_PROMPT, active, label, spinners, per_second, states);
+    return send_prompt(ui, UI_PROMPT, active, label, spinners, per_second, states, NULL, 0u);
+}
+
+int
+snj_ui_composer(struct snj_ui *ui, bool active, const char *format,
+                 const char *const values[SNJ_PROMPT_HOUR], unsigned int mode,
+                 const char *const spinners[SNJ_TERM_SPINNER_COUNT],
+                 uint32_t per_second, unsigned int states)
+{
+    return send_prompt(ui, UI_PROMPT, active, format, spinners, per_second,
+                        states, values, mode);
 }
 
 int
@@ -772,7 +875,7 @@ snj_ui_validate_prompt(struct snj_ui *ui, const char *label,
                        const char *const spinners[SNJ_TERM_SPINNER_COUNT],
                        uint32_t per_second)
 {
-    return send_prompt(ui, UI_VALIDATE, false, label, spinners, per_second, 0u);
+    return send_prompt(ui, UI_VALIDATE, false, label, spinners, per_second, 0u, NULL, 0u);
 }
 
 int
@@ -800,13 +903,14 @@ static int history_snapshot(struct snj_ui *ui, bool refresh);
 
 int
 snj_ui_poll(struct snj_ui *ui, int timeout_ms,
-            enum snj_term_action *action, char **text)
+            bool active, enum snj_term_action *action, char **text)
 {
     struct snj_ui_runtime *runtime = ui->runtime;
     struct pollfd pfd = {runtime->actions.wake[0], POLLIN, 0};
     struct ui_action *item;
-    bool waited = false;
+    uint64_t deadline = snj_monotonic_ms() + (timeout_ms > 0 ? (uint32_t)timeout_ms : 0u);
 
+    assert(pthread_equal(pthread_self(), runtime->engine));
     *action = SNJ_TERM_NONE;
     *text = NULL;
     for (;;) {
@@ -820,7 +924,8 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             *action = SNJ_TERM_FORCE_EXIT;
             return 1;
         }
-        if (atomic_exchange(&runtime->interrupt, false)) {
+        uint64_t interrupted = atomic_exchange(&runtime->interrupt, 0u);
+        if (interrupted && interrupted == ui->turn_generation) {
             *action = SNJ_TERM_INTERRUPT;
             return 1;
         }
@@ -832,17 +937,27 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             *action = SNJ_TERM_EXIT;
             return 1;
         }
+        size_t tail = atomic_load_explicit(&runtime->actions.tail, memory_order_relaxed);
+        item = tail == atomic_load_explicit(&runtime->actions.head, memory_order_acquire) ?
+            NULL : runtime->actions.items[tail % UI_QUEUE_CAPACITY];
+        /* Idle input must not become steering merely because the engine was busy. */
+        if (item && active && !item->snapshot.active)
+            return 0;
         item = queue_pop(&runtime->actions);
         if (item) {
             wake_owner(&runtime->commands);
             break;
         }
-        if (waited)
+        uint64_t now = snj_monotonic_ms();
+        if (timeout_ms >= 0 && now >= deadline)
             return 0;
-        (void)poll(&pfd, 1u, timeout_ms);
-        waited = true;
+        int remaining = timeout_ms < 0 ? -1 : (int)(deadline - now);
+        if (poll(&pfd, 1u, remaining) < 0) {
+            if (errno == EINTR)
+                return 0;
+            return -1;
+        }
     }
-    adopt_snapshot(ui, &item->snapshot);
     ui->input_active = item->snapshot.active;
     ui->input_view = item->snapshot.view;
     memcpy(ui->submitted_label, item->snapshot.label,
@@ -871,10 +986,14 @@ snj_ui_wake_fd(const struct snj_ui *ui)
     return ui && ui->runtime ? ui->runtime->actions.wake[0] : -1;
 }
 
-int
-snj_ui_signal_fd(const struct snj_ui *ui)
+void
+snj_ui_signal(struct snj_ui *ui)
 {
-    return ui && ui->runtime ? ui->runtime->actions.wake[1] : -1;
+    if (ui) {
+        atomic_store(&ui->runtime->eof, true);
+        atomic_store(&ui->runtime->stop_public, true);
+        wake_owner(&ui->runtime->actions);
+    }
 }
 
 int

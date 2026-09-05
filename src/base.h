@@ -45,6 +45,7 @@ bool snj_utf8_valid(const unsigned char *s, size_t len, bool reject_nul);
 bool snj_text_blank(const char *text);
 int snj_random_id(char out[SNJ_ID_HEX_LEN + 1u]);
 uint64_t snj_time_ms(void);
+uint64_t snj_monotonic_ms(void);
 int snj_write_full(int fd, const void *data, size_t len);
 int snj_sync_file(int fd);
 int snj_sync_dir(int fd);
