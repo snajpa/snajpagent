@@ -1,6 +1,10 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Provider authentication and setup
 
+`provider.c` remains the only libcurl include/transport boundary. The auth
+module implements the device/refresh protocol through that bounded interface;
+it does not introduce a second network library or bypass the dependency rules.
+
 Authentication belongs to a named provider, independently of model selection.
 `auth=env` preserves the existing `api_key_env` contract. `auth=api_key` reads a
 private stored key; `auth=chatgpt` reads and refreshes OAuth credentials for the

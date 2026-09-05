@@ -4,7 +4,7 @@
 #include "json.h"
 #include "snajpagent.h"
 
-#include <curl/curl.h>
+#include "provider.h"
 #include <errno.h>
 #include <poll.h>
 #include <stdio.h>
@@ -33,101 +33,13 @@ auth_issuer(void)
     return AUTH_ISSUER;
 }
 
-static size_t
-receive_body(char *data, size_t size, size_t count, void *opaque)
-{
-    struct snj_buf *buf = opaque;
-    if (size && count > SIZE_MAX / size)
-        return 0;
-    size *= count;
-    return snj_buf_append(buf, data, size) == 0 ? size : 0;
-}
-
 static int
 auth_post(const char *path, const char *type, const void *body, size_t size,
            json_t **response, long *status, snj_auth_pump_fn pump, void *opaque,
            char *error, size_t error_size)
 {
-    char url[4096], header[96], parse_error[128];
-    struct snj_buf output;
-    struct curl_slist *headers = NULL;
-    CURL *curl = NULL;
-    CURLM *multi = NULL;
-    CURLMsg *message;
-    int running = 0, pending, rc = -1;
-    bool attached = false, initialized = false;
-
-    *response = NULL;
-    *status = 0;
-    snj_buf_init(&output, AUTH_BODY_MAX);
-    if (snprintf(url, sizeof(url), "%s%s", auth_issuer(), path) >= (int)sizeof(url) ||
-        curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
-        goto out;
-    initialized = true;
-    curl = curl_easy_init();
-    multi = curl_multi_init();
-    (void)snprintf(header, sizeof(header), "Content-Type: %s", type);
-    headers = curl_slist_append(NULL, header);
-    if (!curl || !multi || !headers ||
-        curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)size) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive_body) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 30000L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
-        curl_multi_add_handle(multi, curl) != CURLM_OK)
-        goto out;
-    attached = true;
-    do {
-        if (pump && pump(opaque, 0u) != 0) {
-            errno = ECANCELED;
-            snj_errorf(error, error_size, "login or token refresh cancelled");
-            goto out;
-        }
-        if (curl_multi_perform(multi, &running) != CURLM_OK)
-            goto out;
-        if (running && curl_multi_poll(multi, NULL, 0, 100, NULL) != CURLM_OK)
-            goto out;
-    } while (running);
-    message = curl_multi_info_read(multi, &pending);
-    if (!message || message->msg != CURLMSG_DONE || message->data.result != CURLE_OK ||
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status) != CURLE_OK)
-        goto out;
-    if (*status >= 200 && *status < 300) {
-        *response = snj_json_load_strict(output.data, output.len, AUTH_BODY_MAX,
-                                        parse_error, sizeof(parse_error));
-        if (!json_is_object(*response)) {
-            snj_errorf(error, error_size, "authentication server returned an invalid response");
-            goto out;
-        }
-    }
-    rc = 0;
-out:
-    if (attached)
-        (void)curl_multi_remove_handle(multi, curl);
-    if (multi)
-        (void)curl_multi_cleanup(multi);
-    if (curl)
-        curl_easy_cleanup(curl);
-    curl_slist_free_all(headers);
-    if (initialized)
-        curl_global_cleanup();
-    if (output.data)
-        memset(output.data, 0, output.len);
-    snj_buf_free(&output);
-    if (rc < 0) {
-        snj_auth_json_free(*response);
-        *response = NULL;
-        if (!error[0])
-            snj_errorf(error, error_size, "authentication request failed (response details withheld)");
-    }
-    return rc;
+    return snj_provider_auth_post(auth_issuer(), path, type, body, size,
+                                   response, status, pump, opaque, error, error_size);
 }
 
 static int
@@ -273,13 +185,30 @@ out:
     return rc;
 }
 
+static int
+snj_auth_form_field(struct snj_buf *body, const char *name, const char *value)
+{
+    if (snj_buf_printf(body, "&%s=", name) < 0)
+        return -1;
+    for (const unsigned char *p = (const unsigned char *)value; *p; ++p) {
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+            (*p >= '0' && *p <= '9') || *p == '-' || *p == '.' ||
+            *p == '_' || *p == '~') {
+            if (snj_buf_putc(body, *p) < 0)
+                return -1;
+        } else if (snj_buf_printf(body, "%%%02X", (unsigned int)*p) < 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int
 snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
                 void *opaque, char *error, size_t error_size)
 {
     json_t *request = NULL, *response = NULL, *code = NULL;
     struct snj_buf body;
-    char *authorization = NULL, *verifier = NULL, *redirect = NULL;
     char callback[4096];
     uint64_t interval = 5u, deadline;
     long status = 0;
@@ -354,14 +283,12 @@ snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
             }
         }
     }
-    authorization = curl_easy_escape(NULL, auth_string(code, "authorization_code"), 0);
-    verifier = curl_easy_escape(NULL, auth_string(code, "code_verifier"), 0);
     (void)snprintf(callback, sizeof(callback), "%s/deviceauth/callback", auth_issuer());
-    redirect = curl_easy_escape(NULL, callback, 0);
     if (!*auth_string(code, "authorization_code") || !*auth_string(code, "code_verifier") ||
-        !authorization || !verifier || !redirect ||
-        snj_buf_printf(&body, "grant_type=authorization_code&client_id=%s&code=%s&code_verifier=%s&redirect_uri=%s",
-                        AUTH_CLIENT, authorization, verifier, redirect) < 0 ||
+        snj_buf_printf(&body, "grant_type=authorization_code&client_id=%s", AUTH_CLIENT) < 0 ||
+        snj_auth_form_field(&body, "code", auth_string(code, "authorization_code")) < 0 ||
+        snj_auth_form_field(&body, "code_verifier", auth_string(code, "code_verifier")) < 0 ||
+        snj_auth_form_field(&body, "redirect_uri", callback) < 0 ||
         auth_post("/oauth/token", "application/x-www-form-urlencoded", body.data,
                    body.len, &response, &status, pump, opaque, error, error_size) < 0)
         goto out;
@@ -371,13 +298,6 @@ snj_auth_device(struct snj_auth_tokens *tokens, snj_auth_pump_fn pump,
     }
     rc = snj_auth_token_response(response, tokens, error, error_size);
 out:
-    if (authorization)
-        memset(authorization, 0, strlen(authorization));
-    if (verifier)
-        memset(verifier, 0, strlen(verifier));
-    curl_free(authorization);
-    curl_free(verifier);
-    curl_free(redirect);
     snj_auth_json_free(request);
     snj_auth_json_free(response);
     snj_auth_json_free(code);

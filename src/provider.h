@@ -13,6 +13,12 @@
 
 typedef int (*snj_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 
+/* Fixed-issuer auth transport: bounded, cancellable, and never body-logged. */
+int snj_provider_auth_post(const char *issuer, const char *path, const char *type,
+                            const void *body, size_t size, json_t **response,
+                            long *status, snj_provider_pump_fn pump, void *opaque,
+                            char *error, size_t error_size);
+
 int snj_provider_responses_count(const json_t *count_request,
                                  const struct snj_config *config,
                                  const struct snj_provider_config *provider,

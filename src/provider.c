@@ -406,6 +406,103 @@ provider_endpoint_url(const struct snj_provider_config *provider,
     return 0;
 }
 
+static size_t
+receive_body(char *data, size_t size, size_t count, void *opaque)
+{
+    struct snj_buf *buf = opaque;
+    if (size && count > SIZE_MAX / size)
+        return 0;
+    size *= count;
+    return snj_buf_append(buf, data, size) == 0 ? size : 0;
+}
+
+int
+snj_provider_auth_post(const char *issuer, const char *path, const char *type, const void *body, size_t size,
+           json_t **response, long *status, snj_provider_pump_fn pump, void *opaque,
+           char *error, size_t error_size)
+{
+    char url[4096], header[96], parse_error[128];
+    struct snj_buf output;
+    struct curl_slist *headers = NULL;
+    CURL *curl = NULL;
+    CURLM *multi = NULL;
+    CURLMsg *message;
+    int running = 0, pending, rc = -1;
+    bool attached = false, initialized = false;
+
+    *response = NULL;
+    *status = 0;
+    snj_buf_init(&output, (96u * 1024u));
+    if (snprintf(url, sizeof(url), "%s%s", issuer, path) >= (int)sizeof(url) ||
+        curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+        goto out;
+    initialized = true;
+    curl = curl_easy_init();
+    multi = curl_multi_init();
+    (void)snprintf(header, sizeof(header), "Content-Type: %s", type);
+    headers = curl_slist_append(NULL, header);
+    if (!curl || !multi || !headers ||
+        curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)size) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive_body) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 30000L) != CURLE_OK ||
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
+        curl_multi_add_handle(multi, curl) != CURLM_OK)
+        goto out;
+    attached = true;
+    do {
+        if (pump && pump(opaque, 0u) != 0) {
+            errno = ECANCELED;
+            snj_errorf(error, error_size, "login or token refresh cancelled");
+            goto out;
+        }
+        if (curl_multi_perform(multi, &running) != CURLM_OK)
+            goto out;
+        if (running && curl_multi_poll(multi, NULL, 0, 100, NULL) != CURLM_OK)
+            goto out;
+    } while (running);
+    message = curl_multi_info_read(multi, &pending);
+    if (!message || message->msg != CURLMSG_DONE || message->data.result != CURLE_OK ||
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status) != CURLE_OK)
+        goto out;
+    if (*status >= 200 && *status < 300) {
+        *response = snj_json_load_strict(output.data, output.len, (96u * 1024u),
+                                        parse_error, sizeof(parse_error));
+        if (!json_is_object(*response)) {
+            snj_errorf(error, error_size, "authentication server returned an invalid response");
+            goto out;
+        }
+    }
+    rc = 0;
+out:
+    if (attached)
+        (void)curl_multi_remove_handle(multi, curl);
+    if (multi)
+        (void)curl_multi_cleanup(multi);
+    if (curl)
+        curl_easy_cleanup(curl);
+    curl_slist_free_all(headers);
+    if (initialized)
+        curl_global_cleanup();
+    if (output.data)
+        memset(output.data, 0, output.len);
+    snj_buf_free(&output);
+    if (rc < 0) {
+        snj_auth_json_free(*response);
+        *response = NULL;
+        if (!error[0])
+            snj_errorf(error, error_size, "authentication request failed (response details withheld)");
+    }
+    return rc;
+}
+
 static int
 append_header(struct curl_slist **headers, const char *text)
 {
