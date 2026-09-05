@@ -114,19 +114,42 @@ irc_event_data(const struct snag_irc_event *event)
 static int
 append_pending(struct snag_buf *pending, const char *text, size_t len)
 {
-    static const char omitted[] =
-        "[older coalesced IRC entries omitted at the input bound]\n";
-
-    if (len > pending->max - sizeof(omitted)) {
-        errno = EOVERFLOW;
+    /* NUL separates complete projections, including multiline messages. */
+    if (snag_buf_reserve(pending, len + 1u) < 0 ||
+        snag_buf_append(pending, text, len) < 0)
         return -1;
+    return snag_buf_putc(pending, 0u);
+}
+
+static char *
+pending_batch(const struct snag_buf *pending, size_t *used)
+{
+    struct snag_buf batch;
+
+    *used = 0u;
+    snag_buf_init(&batch, SNAG_MAX_STEERING_TEXT + 1u);
+    while (*used < pending->len) {
+        const char *text = (const char *)pending->data + *used;
+        size_t len = strlen(text);
+
+        if (len > SNAG_MAX_STEERING_TEXT - batch.len)
+            break;
+        if (snag_buf_append(&batch, text, len) < 0)
+            goto fail;
+        *used += len + 1u;
     }
-    if (pending->len > pending->max - len) {
-        snag_buf_reset(pending);
-        if (snag_buf_append(pending, omitted, sizeof(omitted) - 1u) < 0)
-            return -1;
-    }
-    return snag_buf_append(pending, text, len);
+    if (*used && snag_buf_terminate(&batch) == 0)
+        return (char *)batch.data;
+fail:
+    snag_buf_free(&batch);
+    return NULL;
+}
+
+static void
+consume_pending(struct snag_buf *pending, size_t used)
+{
+    pending->len -= used;
+    memmove(pending->data, pending->data + used, pending->len);
 }
 
 static int
@@ -142,7 +165,8 @@ append_irc_projection(struct snag_buf *pending,
     if (!gmtime_r(&seconds, &tm) ||
         strftime(when, sizeof(when), "%Y-%m-%dT%H:%M:%SZ", &tm) == 0)
         memcpy(when, "1970-01-01T00:00:00Z", 21u);
-    snag_buf_init(&line, 2048u);
+    snag_buf_init(&line, SNAG_IRC_TEXT_MAX + SNAG_CONFIG_IRC_ENDPOINT_MAX +
+                         SNAG_CONFIG_IRC_ROOM_MAX + SNAG_CONFIG_IRC_NICK_MAX + 256u);
     if (snag_buf_printf(&line,
             "[IRC endpoint=%s room=%s time=%s event=%s sender=%s operator=%s]\n%s\n",
             event->endpoint, event->room, when, irc_kind_name(event->kind),
@@ -217,6 +241,10 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
                          snag_irc_model_nick(app->irc)) < 0)
         return -1;
     if (snag_ui_irc_event(&app->ui, event) < 0)
+        return -1;
+    if (event->kind == SNAG_IRC_DISCONNECTED &&
+        strstr(event->text, "endpoint removed; discarded ") == event->text &&
+        snag_ui_text(&app->ui, SNAG_UI_WARNING, event->text) < 0)
         return -1;
     chat = event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE;
     own_agent = event->local &&
@@ -306,20 +334,25 @@ snag_app_irc_flush_urgent(struct app_state *app,
 {
     char steering_id[SNAG_ID_HEX_LEN + 1u];
     bool local_operator;
+    size_t used;
+    char *text;
+    int rc;
 
     if (!app || !app->session.active_turn || !app->irc_urgent.len)
         return 0;
-    if (snag_buf_terminate(&app->irc_urgent) < 0 ||
-        snag_random_id(steering_id) < 0)
+    if (snag_random_id(steering_id) < 0 ||
+        !(text = pending_batch(&app->irc_urgent, &used)))
         return -1;
     local_operator = app->irc_urgent_local_operator;
-    if (snag_app_commit_event(app, "steering_added",
+    rc = snag_app_commit_event(app, "steering_added",
             snag_app_steering_added_data(app->session.active_turn_id,
-                steering_id, (const char *)app->irc_urgent.data),
-            error, error_size) < 0)
+                steering_id, text), error, error_size);
+    free(text);
+    if (rc < 0)
         return -1;
-    snag_buf_reset(&app->irc_urgent);
-    app->irc_urgent_local_operator = false;
+    consume_pending(&app->irc_urgent, used);
+    if (!app->irc_urgent.len)
+        app->irc_urgent_local_operator = false;
     if (local_operator) {
         app->irc_turn_local_operator = true;
         app->irc_turn_replied = false;
@@ -333,6 +366,7 @@ snag_app_irc_take_pending(struct app_state *app,
 {
     struct snag_buf *source;
     char *copy;
+    size_t used;
 
     if (local_operator)
         *local_operator = false;
@@ -349,16 +383,13 @@ snag_app_irc_take_pending(struct app_state *app,
     } else {
         return NULL;
     }
-    if (snag_buf_terminate(source) < 0)
-        return NULL;
-    copy = snag_strdup_checked((const char *)source->data,
-                              SNAG_MAX_STEERING_TEXT);
+    copy = pending_batch(source, &used);
     if (!copy)
         return NULL;
-    snag_buf_reset(source);
-    if (source == &app->irc_urgent)
+    consume_pending(source, used);
+    if (!source->len && source == &app->irc_urgent)
         app->irc_urgent_local_operator = false;
-    else
+    else if (!source->len)
         app->irc_background_since_ms = 0u;
     return copy;
 }

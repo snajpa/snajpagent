@@ -41,9 +41,11 @@ is a fast, lightweight, networked coding agent for power users.  It runs in
 the foreground, uses Responses-compatible model providers, executes coding
 tools, and keeps resumable local sessions.  There is no resident service.
 .PP
-Networked mode adds a built-in single-room IRC server and up to 16 outgoing
+An interactive session can independently host one single-room IRC server and
+maintain up to 16 outgoing
 IRC connections.  Agents and channel operators share the room; the runtime
-owns joining, history, and reconnection.
+owns joining, history, and reconnection.  Startup flags and runtime slash
+commands control these optional capabilities without changing session identity.
 .SH GETTING STARTED
 On a fresh interactive launch without configuration or existing environment
 credentials, choose ChatGPT/Codex, OpenRouter, OpenAI, or a custom provider.
@@ -100,6 +102,11 @@ Add an outgoing IRC connection.  Repeat for up to 16 distinct endpoints.  A
 missing endpoint means
 .BR localhost:6667 .
 .TP
+.BR \-\-no-listen , " \-\-no-client"
+Independently suppress a configured listener or clear configured outgoing
+connections.  Each conflicts with its positive startup flag; both negatives
+may be used together.  Nick and room preferences remain usable while offline.
+.TP
 .BI \-n " nick, " \-\-model-nick " nick"
 Set the model's preferred IRC nick.  Default:
 .BR agent0 .
@@ -116,8 +123,7 @@ or
 when needed to remain distinct from the model nick.
 .TP
 .BI \-r " room, " \-\-room-name " room"
-Set the hosted room.  This requires
-.BR \-s / \-\-listen .
+Set the preferred room for current or future hosting.
 A leading
 .B #
 is optional.  The default is derived from the hostname.
@@ -231,8 +237,8 @@ Complete a slash command when possible.  In chat, complete an
 at the cursor from current room members.  Ambiguous matches expand their common
 prefix; no match leaves the draft unchanged.  Mention completion never queues
 or sends text.  While idle, otherwise insert spaces.
-During a turn, queue the draft for a later FIFO turn.  Empty Tab switches chat
-and rollout views in networked mode and does nothing otherwise.
+During a turn, queue the draft for a later FIFO turn.  Empty Tab always switches
+chat and rollout views, including offline.
 .TP
 .B Ctrl-J
 Insert a newline without submitting.
@@ -289,11 +295,14 @@ up to 32 steering items may be pending in a turn.  Interactive EOF interrupts
 active work, pauses further queued or goal work, and exits.  The session remains
 resumable.
 .SH DISPLAY
-Ordinary mode shows the local rollout.  Networked mode opens chat; empty Tab,
+Startup without network roles opens rollout; startup with roles opens chat. Empty Tab,
 .BR /chat ,
 and
 .B /rollout
-switch views.  Hidden-view output is buffered for display on return.
+switch views at idle or during work, including offline.  Runtime networking
+changes preserve view, draft, history and verbosity.  Offline chat retains its
+transcript; Enter rejects unsendable input and restores the draft, without
+starting a private turn. Hidden-view output is buffered for display on return.
 Both views append to terminal scrollback;
 neither is a full-screen TUI.
 .PP
@@ -391,7 +400,8 @@ to submit a literal leading
 Show commands and essential keys.
 .TP
 .B /status
-Show session, selection, queue, verbosity, capacity, and token-accounting state.
+Show session, selection, queue, verbosity, capacity, token accounting, requested
+network roles and actual connection state.
 .TP
 .B /history
 Show the most recent retained user and assistant exchange.
@@ -433,9 +443,12 @@ Selection is idle only.  The final save suffix also works with numbered rows.
 Open the active configuration with
 .BR EDITOR .
 Valid changes are reloaded; invalid content remains on disk
-while the prior runtime configuration stays active.  Changed IRC settings
-reconnect the affected runtime.  Reload preserves the process's current
-verbosity.  Idle only.
+while the prior runtime configuration stays active.  Only IRC components changed
+since the last successful file load override current process state.  An unrelated
+edit preserves runtime additions/removals; editing the client list replaces that
+list.  Startup networking flags are not reapplied over deliberately edited fields.
+Only affected owners restart.  Failed restoration reports actual remaining roles.
+Reload preserves the process's current verbosity and view.  Idle only.
 .TP
 .BR /effort " [" level "]"
 Show or set reasoning effort.  Setting is idle only.
@@ -533,9 +546,31 @@ in the composer.
 .B /next
 Run the oldest queued turn after resume or another paused state.  Idle only.
 .SS Network
+All network commands are discoverable and usable at idle and during provider
+streaming, silence, retries, token counting and running tools.  They are local
+controls, not model input, steering, cancellation or future turns.  Endpoints use
+the same syntax as startup flags; an omitted endpoint defaults to localhost:6667.
+.TP
+.BR /server , " /server start " [ENDPOINT], " /server stop"
+Report hosting, start it, or stop only the hosted listener and accepted peers.
+Outgoing connections remain unchanged.  Repeating the current listener is a
+no-op; replacing it requires an explicit stop first.  Bind failure leaves the
+session and unrelated endpoints usable.  Hosting publishes only matching public
+room history, never private rollout or another room's history.
+.TP
+.BR /connect " " [ENDPOINT]
+Add an outgoing connection, up to 16.  A duplicate is a no-op, including while
+reconnecting.  Connecting is asynchronous and is not reported as a completed join.
+.TP
+.BR /disconnect " " [ENDPOINT]
+Remove the named outgoing endpoint, or all outgoing endpoints when omitted.
+Hosting is unchanged.  Stop reconnect attempts and report discarded unsent bytes;
+do not transfer them to another endpoint.  Already accepted model input remains
+eligible after final disconnection.  Old model sends are not redirected into
+replacement rooms; they receive normal not-performed tool results.
 .TP
 .B /chat
-Select the network chat transcript.
+Select the public chat transcript, including when offline.
 .TP
 .B /rollout
 Select local model activity.
@@ -1227,7 +1262,13 @@ selection, and admitted IRC state.
 Normal exit prints a two-line resume hint for every resumable session.  It
 includes the exact session, dotdir, explicit configuration, presentation
 overrides, unused one-turn preferences, and effective IRC topology.  It never
-includes prompts or credential values.
+includes prompts or credential values.  The command includes the effective
+listener and outgoing list, or explicit
+.B --no-listen
+and
+.B --no-client
+for absent roles, so reused config defaults cannot resurrect removed endpoints.
+Temporary connection outages do not remove desired roles from the command.
 .PP
 Resuming an active goal pauses it; use
 .B /goal resume

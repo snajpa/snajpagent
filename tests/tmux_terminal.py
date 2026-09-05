@@ -97,6 +97,7 @@ class FakeResponses:
         self.exit_started = threading.Event()
         self.exit_release = threading.Event()
         self.tool_workspace = None
+        self.runtime_handler = None
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -256,7 +257,11 @@ class FakeResponses:
                     "corrected": corrected,
                     "model": model,
                     "latest": latest,
+                    "body": request,
                 })
+            if self.runtime_handler is not None:
+                self.runtime_handler(handler, request, sequence)
+                return
             if latest.startswith("exit-"):
                 self.handle_exit(handler, request, sequence, latest)
                 return
@@ -2083,6 +2088,399 @@ def run_ctrl_d_cases(binary, root, provider, environment):
             terminal.close()
 
 
+def run_runtime_networking_cases(binary, root, provider, environment):
+    for level in range(7):
+        for view in (("chat", "rollout", "burst") if level == 0 else ("chat", "rollout")):
+            case = root / f"runtime-{level}-{view}"
+            workspace = case / "work"
+            workspace.mkdir(mode=0o700, parents=True)
+            config = case / "config.ini"
+            write_irc_config(config, provider.port, "host-model")
+            endpoint = f"127.0.0.1:{free_loopback_port()}"
+            arrived, release = threading.Event(), threading.Event()
+            requests = []
+            prefix = "runtime uninterrupted prefix\n"
+
+            def respond(handler, request, sequence):
+                requests.append(request)
+                first = len(requests) == 1
+                body = provider.response_body(sequence,
+                    prefix if first else f"runtime completion {len(requests)}").encode()
+                split = body.index(b"event: response.output_text.done")
+                streaming = first and level % 2 == 1
+                handler.close_connection = True
+                if streaming:
+                    handler.send_response(200)
+                    handler.send_header("Content-Type", "text/event-stream")
+                    handler.send_header("Connection", "close")
+                    handler.end_headers()
+                    handler.wfile.write(body[:split])
+                    handler.wfile.flush()
+                if first:
+                    arrived.set()
+                    assert release.wait(15.0), "runtime commands did not finish during the request"
+                if not streaming:
+                    handler.send_response(200)
+                    handler.send_header("Content-Type", "text/event-stream")
+                    handler.send_header("Content-Length", str(len(body)))
+                    handler.send_header("Connection", "close")
+                    handler.end_headers()
+                handler.wfile.write(body[split:] if streaming else body)
+
+            provider.runtime_handler = respond
+            terminal = TmuxTerminal(case / "terminal", binary, workspace,
+                case / "state", config, 120, 24,
+                args=(["-v"] * level + ["-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"]),
+                environment=environment)
+            peer = None
+            try:
+                terminal.wait("host-model/medium ›")
+                terminal.submit("runtime-main")
+                assert arrived.wait(5.0), "provider did not receive the initial request"
+                initial = json.dumps(requests[0], sort_keys=True)
+                assert "irc_send" not in {tool.get("name") for tool in requests[0]["tools"]}
+                if view == "chat":
+                    terminal.submit("/chat")
+                    terminal.wait("chat is offline")
+                terminal.submit(f"/server start {endpoint}")
+                terminal.wait(f"hosting started on {endpoint}", join_wrapped=True)
+                peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
+                peer.sendall(b"NICK runtimepeer\r\nUSER runtimepeer 0 * :human\r\nJOIN #lab\r\n")
+                backgrounds = ["runtime-background café € " + "long ordinary text " * 185]
+                mentions = ["runtimeagent: runtime-mention-one", "@runtimeagent runtime-mention-two €"]
+                if view == "burst":
+                    backgrounds = [f"background-{i:03} café € " + "ordinary " * 390 for i in range(80)]
+                    mentions = [f"runtimeagent: mention-{i:03} € " + "urgent " * 500 for i in range(80)]
+                for message in backgrounds:
+                    peer.sendall(f"PRIVMSG #lab :{message}\r\n".encode())
+                for message in mentions:
+                    peer.sendall(f"NOTICE #lab :{message}\r\n".encode())
+                peer.sendall(b"NICK renamedpeer\r\nTOPIC #lab :runtime-topic\r\n")
+                deadline = time.monotonic() + 5.0
+                while True:
+                    _, log = read_events(terminal.dotdir)
+                    received = [event["data"] for event in event_list(log, "irc_event")]
+                    if any(event["text"] == "runtime-topic" for event in received):
+                        break
+                    assert time.monotonic() < deadline, received
+                    time.sleep(0.02)
+                assert all(any(event["text"] == message for event in received) for message in backgrounds)
+                assert len(requests) == 1, "IRC input interrupted a live provider response"
+                terminal.submit("/server stop")
+                terminal.wait("hosting stopped; outgoing connections unchanged", join_wrapped=True)
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                    assert probe.connect_ex(("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))) != 0
+                assert json.dumps(requests[0], sort_keys=True) == initial
+                _, log = read_events(terminal.dotdir)
+                assert not event_list(log, "response_interrupted")
+                assert not event_list(log, "turn_completed")
+                release.set()
+                deadline = time.monotonic() + 10.0
+                expected = 4 if view == "burst" else 3
+                while len(requests) < expected:
+                    assert time.monotonic() < deadline, (len(requests), terminal.capture())
+                    time.sleep(0.02)
+                wait_irc_idle([terminal])
+                second = json.dumps(requests[1], ensure_ascii=False)
+                third = json.dumps(requests[-1], ensure_ascii=False)
+                for marker in mentions:
+                    assert marker in second, (marker, second)
+                assert all(message not in second for message in backgrounds), "topology admitted ordinary chat too early"
+                assert all(message in third for message in backgrounds), "final disconnect stranded background input"
+                assert "runtime-topic" in third and "renamedpeer" in third
+                assert endpoint in second and "sender=runtimepeer operator=true" in second
+                assert "no active endpoints" in second
+                assert prefix.rstrip() in second, "IRC mention truncated the provider's answer"
+                assert "irc_send" not in {tool.get("name") for tool in requests[1]["tools"]}
+                _, log = read_events(terminal.dotdir)
+                admitted = [event["data"]["text"] for event in event_list(log, "steering_added")]
+                assert len(admitted) == (2 if view == "burst" else 1)
+                assert all(sum(marker in text for text in admitted) == 1 for marker in mentions)
+                assert len(requests) == expected, "received input was admitted as duplicate work"
+                if view == "chat":
+                    assert "runtime completion" not in terminal.capture(), "private response leaked into offline chat"
+                    terminal.submit("/rollout")
+                    terminal.wait("runtime completion 3")
+                terminal.exit()
+                screen = terminal.capture(join_wrapped=True)
+                resume = screen.split("You can resume this session with the following command:", 1)[1]
+                assert "--no-listen" in resume and "--no-client" in resume
+                print(f"tmux_terminal runtime input delivery {level}/{view}: ok", flush=True)
+            finally:
+                release.set()
+                if peer is not None:
+                    peer.close()
+                terminal.close()
+                provider.runtime_handler = None
+
+
+def run_runtime_routing_cases(binary, root, provider, environment):
+    cases = [("irc_send", change) for change in ("noop", "replace", "readd", "off")]
+    cases += [("irc_state", "off"), ("irc_topic", "off")]
+    for tool, change in cases:
+        case = root / f"route-{tool}-{change}"
+        workspace = case / "work"
+        workspace.mkdir(mode=0o700, parents=True)
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        endpoint = f"127.0.0.1:{free_loopback_port()}"
+        destination = endpoint if change == "readd" else f"127.0.0.1:{free_loopback_port()}"
+        arrived, release = threading.Event(), threading.Event()
+        requests = []
+        marker = "runtime-stale-send-must-not-migrate"
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            if len(requests) == 1:
+                arrived.set()
+                assert release.wait(15.0)
+                arguments = {"notice": False, "text": marker} if tool == "irc_send" else \
+                    {"topic": marker} if tool == "irc_topic" else {}
+                body = provider.function_body(sequence, "runtime-route", tool, arguments).encode()
+            else:
+                body = provider.response_body(sequence, "runtime routing complete").encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(body)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "terminal", binary, workspace,
+            case / "state", config, 120, 24,
+            args=["-s", endpoint, "-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"],
+            environment=environment)
+        peer = None
+        try:
+            terminal.wait(f"runtimeop@{MACHINE_HOSTNAME} :")
+            terminal.submit("/rollout")
+            terminal.wait("host-model/medium ›")
+            terminal.submit("runtime-routing")
+            assert arrived.wait(5.0)
+            assert tool in {item.get("name") for item in requests[0]["tools"]}
+            if change == "noop":
+                terminal.submit(f"/server start {endpoint}")
+                terminal.wait(f"already hosting {endpoint}")
+                destination = endpoint
+            else:
+                terminal.submit("/server stop")
+                terminal.wait("hosting stopped; outgoing connections unchanged", join_wrapped=True)
+                if change != "off":
+                    terminal.submit(f"/server start {destination}")
+                    terminal.wait(f"hosting started on {destination}", join_wrapped=True)
+            if change != "off":
+                peer = socket.create_connection(("127.0.0.1", int(destination.rsplit(":", 1)[1])))
+                peer.sendall(b"NICK routepeer\r\nUSER routepeer 0 * :human\r\nJOIN #lab\r\n")
+                deadline = time.monotonic() + 5.0
+                while True:
+                    _, log = read_events(terminal.dotdir)
+                    if any(event["data"]["kind"] == "join" and event["data"]["nick"] == "routepeer"
+                           for event in event_list(log, "irc_event")):
+                        break
+                    assert time.monotonic() < deadline
+                    time.sleep(0.02)
+            release.set()
+            terminal.wait("runtime routing complete")
+            wait_irc_idle([terminal])
+            assert len(requests) >= 2
+            calls = {item["call_id"] for item in requests[1]["input"]
+                     if item.get("type") == "function_call" and item.get("name") == tool}
+            outputs = [item["output"] for item in requests[1]["input"]
+                       if item.get("type") == "function_call_output" and item.get("call_id") in calls]
+            assert len(outputs) == 1
+            if tool == "irc_state":
+                assert "no active endpoints" in outputs[0] and "invalid" not in outputs[0]
+            elif change != "noop":
+                assert "Not performed: IRC destinations changed" in outputs[0], outputs
+            else:
+                assert "IRC message sent" in outputs[0], outputs
+            _, log = read_events(terminal.dotdir)
+            assert not event_list(log, "turn_failed"), log
+            public = [event["data"] for event in event_list(log, "irc_event")
+                      if event["data"]["text"] == marker]
+            assert len(public) == (1 if change == "noop" else 0), public
+            if public:
+                assert public[0]["endpoint"] == endpoint
+            if peer is not None:
+                peer.settimeout(0.3)
+                wire = b""
+                try:
+                    while True:
+                        chunk = peer.recv(65536)
+                        if not chunk:
+                            break
+                        wire += chunk
+                except socket.timeout:
+                    pass
+                assert (marker.encode() in wire) == (change == "noop"), wire
+            terminal.exit()
+            print(f"tmux_terminal frozen routing {tool}/{change}: ok", flush=True)
+        finally:
+            release.set()
+            if peer is not None:
+                peer.close()
+            terminal.close()
+            provider.runtime_handler = None
+
+
+def run_runtime_boundary_cases(binary, root, provider, environment):
+    for boundary in ("tool", "steer", "queue", "goal"):
+        case = root / f"boundary-{boundary}"
+        workspace = case / "work"
+        workspace.mkdir(mode=0o700, parents=True)
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        endpoint = f"127.0.0.1:{free_loopback_port()}"
+        arrived, release = threading.Event(), threading.Event()
+        requests = []
+        pid = None
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            number = len(requests)
+            if boundary == "tool" and number == 1:
+                body = provider.function_body(sequence, "runtime-exec", "exec_command", {
+                    "command": 'printf "%s" "$$" > command.pid; IFS= read -r line; '
+                               'printf "same-process:%s:%s\\n" "$$" "$line"',
+                    "workdir": str(workspace), "stdin": None, "pty": False,
+                    "timeout_ms": None, "max_output_tokens": None, "yield_ms": 0,
+                }).encode()
+            elif boundary == "tool" and number == 2:
+                arrived.set()
+                assert release.wait(15.0)
+                _, log = read_events(case / "state")
+                handle = event_list(log, "tool_finished")[0]["data"]["result"]["handle"]
+                body = provider.functions_body(sequence, [("runtime-mixed", "irc_send",
+                    {"text": "stale-mixed-send", "notice": False}), ("runtime-stdin", "write_stdin", {
+                        "handle": handle, "data": "continue-same-handle\n", "eof": False,
+                        "terminate": False, "yield_ms": 1000, "max_output_tokens": None,
+                    })]).encode()
+            elif number == 1:
+                body = provider.response_body(sequence, "boundary delivered prefix\n").encode()
+                split = body.index(b"event: response.output_text.done")
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(body[:split])
+                handler.wfile.flush()
+                arrived.set()
+                assert release.wait(15.0)
+                try:
+                    handler.wfile.write(body[split:])
+                except (BrokenPipeError, ConnectionResetError):
+                    assert boundary == "steer"
+                handler.close_connection = True
+                return
+            elif boundary == "goal" and number == 2:
+                body = provider.function_body(sequence, "runtime-goal-done", "update_goal", {
+                    "action": "complete", "text": None,
+                }).encode()
+            else:
+                body = provider.response_body(sequence, f"boundary completion {number}").encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(body)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "terminal", binary, workspace, case / "state",
+            config, 120, 24, args=["-s", endpoint, "-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"],
+            environment=environment)
+        peer = None
+        try:
+            terminal.wait(f"runtimeop@{MACHINE_HOSTNAME} :")
+            terminal.submit("/rollout")
+            terminal.wait("host-model/medium ›")
+            terminal.submit("/goal set runtime-goal" if boundary == "goal" else "runtime-boundary")
+            if boundary == "tool":
+                deadline = time.monotonic() + 5.0
+                while not (workspace / "command.pid").exists():
+                    assert time.monotonic() < deadline, terminal.capture()
+                    time.sleep(0.02)
+                pid = int((workspace / "command.pid").read_text())
+                os.kill(pid, 0)
+                terminal.submit(f"/connect 127.0.0.1:{free_loopback_port()}")
+                terminal.wait("outgoing connection added")
+                terminal.submit("/disconnect")
+                terminal.wait("outgoing connections removed; hosting unchanged", join_wrapped=True)
+                os.kill(pid, 0)
+            else:
+                assert arrived.wait(5.0), terminal.capture()
+            peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
+            peer.sendall(b"NICK boundarypeer\r\nUSER boundarypeer 0 * :human\r\nJOIN #lab\r\n"
+                         b"PRIVMSG #lab :boundary ordinary message\r\n")
+            if boundary == "tool":
+                peer.sendall(b"NOTICE #lab :runtimeagent: boundary urgent message\r\n")
+                assert arrived.wait(5.0), terminal.capture()
+                second = json.dumps(requests[1])
+                assert "boundary urgent message" in second
+                assert "boundary ordinary message" not in second
+                os.kill(pid, 0)
+            deadline = time.monotonic() + 5.0
+            while True:
+                _, log = read_events(terminal.dotdir)
+                if any(event["data"].get("text") == "boundary ordinary message"
+                       for event in event_list(log, "irc_event")):
+                    break
+                assert time.monotonic() < deadline
+                time.sleep(0.02)
+            terminal.submit("/server stop")
+            terminal.wait("hosting stopped; outgoing connections unchanged", join_wrapped=True)
+            if boundary == "steer":
+                terminal.submit("boundary direct steer")
+                deadline = time.monotonic() + 5.0
+                while len(requests) < 2:
+                    assert time.monotonic() < deadline, terminal.capture()
+                    time.sleep(0.02)
+                second = json.dumps(requests[1])
+                assert "boundary direct steer" in second and "boundary delivered prefix" in second
+                assert "boundary ordinary message" not in second
+            elif boundary == "queue":
+                terminal.submit("/queue boundary future input")
+                terminal.wait("next › boundary future input")
+                assert len(requests) == 1
+            release.set()
+            expected = 4 if boundary == "tool" else 3
+            deadline = time.monotonic() + 10.0
+            while len(requests) < expected:
+                assert time.monotonic() < deadline, (len(requests), terminal.capture(), provider.failure)
+                time.sleep(0.02)
+            wait_irc_idle([terminal])
+            assert len(requests) == expected
+            _, log = read_events(terminal.dotdir)
+            assert not event_list(log, "turn_failed"), event_list(log, "turn_failed")
+            assert provider.failure is None, provider.failure
+            assert "boundary ordinary message" in json.dumps(requests[-1])
+            if boundary == "tool":
+                third = json.dumps(requests[2])
+                assert "Not performed: IRC destinations changed" in third
+                assert f"same-process:{pid}:continue-same-handle" in third
+                assert not any(event["data"].get("text") == "stale-mixed-send"
+                               for event in event_list(log, "irc_event"))
+                completed = event_list(log, "tool_finished")
+                assert completed[0]["data"]["result"]["reason"] == "steering_handoff"
+            elif boundary == "queue":
+                assert "boundary future input" in json.dumps(requests[1])
+                assert "boundary ordinary message" not in json.dumps(requests[1])
+            elif boundary == "goal":
+                assert "boundary ordinary message" in json.dumps(requests[1]), "goal starved background input"
+            assert bool(event_list(log, "response_interrupted")) == (boundary == "steer")
+            terminal.exit()
+            print(f"tmux_terminal runtime boundary {boundary}: ok", flush=True)
+        finally:
+            release.set()
+            if peer is not None:
+                peer.close()
+            terminal.close()
+            provider.runtime_handler = None
+
+
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
@@ -2102,6 +2500,9 @@ def run_irc_case(binary, root):
     ]
     terminals = {}
     try:
+        run_runtime_networking_cases(binary, root, provider, environment)
+        run_runtime_routing_cases(binary, root, provider, environment)
+        run_runtime_boundary_cases(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
 
         run_multi_tool_cases(binary, root, provider, environment)

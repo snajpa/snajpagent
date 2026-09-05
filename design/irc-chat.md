@@ -2,9 +2,8 @@
 
 # IRC Agent And Operator Chat
 
-This document is the implementation contract for snajpagent's networked IRC
-mode and for terminal color in every mode. Networked mode keeps one coding
-agent/session and presents its terminal as an operator-facing chat client. It
+This document is the implementation contract for optional IRC networking and
+terminal color. Every interactive launch keeps one coding agent/session. It
 may host one local IRC room, connect to one or more snajpagent IRC servers, or
 do both in the same foreground process. IRC is a first-class input, output,
 tool, event-loop, durability, context, and rendering path inside snajpagent;
@@ -17,6 +16,8 @@ The network options are:
 ```text
 -s, --listen[=ENDPOINT]      host the built-in IRC server
 -c, --client[=ENDPOINT]      connect to a server; repeatable
+    --no-listen             suppress configured hosting
+    --no-client             suppress configured outgoing connections
 -n, --model-nick NICK        preferred model IRC nick (default agent0)
 -o, --operator-nick NICK     local operator IRC nick
 -r, --room-name ROOM         hosted room name
@@ -44,7 +45,8 @@ used for text typed in the local UI. Its default is the current valid login
 identifier plus `0`, then `operator0`. The two preferred local nicks must differ
 under IRC case folding.
 
-`-r`/`--room-name` applies to the hosted room and requires `-s`. A leading `#`
+`-r`/`--room-name` applies to current or future hosting. Nicks and room
+preferences are valid without enabled networking. A leading `#`
 is optional on input and is present on the wire and in the UI.
 
 `-c`, `-r`, and `-o` replace older short aliases. Their displaced local
@@ -74,6 +76,26 @@ snajpagent -c irc-a.example:6667 -c '[2001:db8::20]:6667' -n worker
 snajpagent -s localhost:7667 -c upstream.example -n relay-worker
 ```
 
+## Runtime Commands
+
+`-s` and `-c` initialize capabilities, not permanent process identities. All
+interactive sessions offer these commands during idle or active model/tool work:
+
+- `/server` reports hosting; `/server start [ENDPOINT]` adds a listener.
+- `/server stop` removes only hosting and accepted peers, leaving outgoing
+  connections alive. A different listener requires this explicit stop first.
+- `/connect [ENDPOINT]` adds an outgoing connection.
+- `/disconnect [ENDPOINT]` removes one, or all outgoing connections if omitted;
+  it never stops hosting.
+- `/status` includes desired roles and actual connection health.
+
+Omitted endpoints mean `localhost:6667`. Validation, lexical endpoint equality,
+the 16-client bound and preferences are shared with startup. Duplicate additions
+and absent removals are informative no-ops. Adding a listener fails visibly on
+address collision without stopping the session or unrelated endpoints. Client
+connection/join completion is asynchronous. These commands are process-local:
+they never edit config, steer the model, cancel tools or silently change view.
+
 ## Configuration And Precedence
 
 Every network command-line setting has a configuration equivalent:
@@ -102,6 +124,16 @@ at most 16 distinct outgoing endpoints. Command-line `-c` occurrences replace
 the configured client list and retain their order. `-s` overrides the
 configured listener, while `listen` in configuration enables the built-in
 server directly. Other command-line scalar values override configured values.
+`--no-listen` and `--no-client` independently suppress those configured roles;
+each conflicts with its positive CLI counterpart.
+
+Runtime changes update the effective specification only. `/config` compares IRC
+components with the last successfully loaded file and applies only deliberate
+changes: an unchanged listener/client list cannot undo runtime commands. An
+edited client list replaces the whole outgoing list, and removing `listen`
+stops hosting. Startup CLI networking does not override these explicit edits.
+Only affected owners change; invalid edits preserve live state, failed changes
+attempt restoration, and a failed restoration reports actual remaining roles.
 
 `history_lines` bounds both the server's in-memory room history and the fresh
 history snapshot projected after compaction. It accepts 1 through 1000 and
@@ -115,8 +147,7 @@ The separate topic limit remains 280 bytes.
 Nicks are nonempty and at most 30 bytes, while room names are at most 50
 bytes, valid UTF-8, free of spaces, commas, controls, and IRC separators. The
 parser rejects duplicate endpoints, duplicate scalar keys, invalid ports,
-invalid nicks, a client count over the bound, and options whose required mode
-is absent.
+invalid nicks and a client count over the bound.
 
 ## One Server, One Room
 
@@ -199,8 +230,11 @@ silently consume or invent operator input.
 
 ## Operator Chat And Rollout UI
 
-Networked interactive mode has append-only `chat` and `rollout` presentation
-views, not a windowed full-screen TUI. The process starts in chat view. Every
+Every interactive session has append-only `chat` and `rollout` presentation
+views, not a windowed full-screen TUI. Startup roles select chat; no roles
+select rollout. Runtime role changes preserve view, draft, history and verbosity.
+Offline chat remains readable; Enter reports no destinations and restores the
+draft instead of starting a private model turn. Every
 chat entry has a local `HH:MM:SS` display time, sender or event marker, and
 readable IRC-client-style spacing; the composer remains at the bottom while
 output is safely redrawn around it. Chat view shows:
@@ -220,8 +254,8 @@ refusals, public text emitted on an intermediate tool cycle, raw tool calls,
 tool results, provider traffic, request bodies, and internal agent activity
 are never sent to the room implicitly.
 
-Rollout view shows the local model's streamed work using the ordinary
-non-networked visibility rules at the process verbosity. At verbosity 0 it
+Rollout view shows the local model's streamed work using the single shared
+verbosity ladder. At verbosity 0 it
 therefore shows local model text; increasing verbosity adds tools, reasoning
 summaries, runtime state, protocol, and transport detail through the existing
 single verbosity ladder. Actionable errors and direct local-command results
@@ -390,7 +424,7 @@ idle it is briefly coalesced so ordinary chat does not create one provider
 request per IRC line. During a response or tool call, the existing active
 input pump services sockets as well as terminal input. Urgent entries do not
 truncate an in-flight model stream or cancel a running tool: they accumulate
-in one bounded, durable urgent batch and are admitted through the steering
+in complete message batches and are admitted through the steering
 path at the earliest safe response/tool boundary. Messages arriving before
 that boundary are coalesced in arrival order, so several mentions cause one
 additional model cycle rather than a cancellation/restart storm. Background
@@ -427,6 +461,15 @@ whether the model sends or remains quiet. This reminder is never looped and is
 never applied to peer messages, membership traffic, history snapshots, or
 other background updates.
 
+Pending accepted input belongs to the session, not its current sockets. Both
+priority classes retain complete projections within an 8 MiB bound, enough for
+the supported 1,000-message retained history. Whole-message batches respect the
+256 KiB steering/input limit without splitting Unicode or multiline records.
+Exhaustion is an explicit error, never silent eviction. Final disconnect cannot
+strand pending input. Topology and nick snapshots contain current state only,
+so runtime changes cannot sneak background history into an urgent request.
+Removing a destination clears its outstanding local-operator reply obligation.
+
 On the first successful room join, the received topic, member nicks and server
 history are immediately admitted together as a user-role room snapshot. If a
 snapshot would make the active context cross its normal compaction threshold,
@@ -442,7 +485,7 @@ so restart and replay cannot change which network context the model saw.
 
 ## Model IRC Tools
 
-Networked requests expose native bounded IRC tools alongside the existing
+Requests constructed with network roles expose native bounded IRC tools alongside the existing
 coding tools:
 
 - `irc_send` sends a room message or notice as the agent identity;
@@ -453,9 +496,9 @@ coding tools:
   where that identity currently has the required channel mode.
 
 Tool calls are durable and use the same start/result ordering and secret-safe
-rendering as other tools. At one `-v`, both ordinary and networked modes show
-every tool invocation, its complete arguments and completion state, and its
-result text. `[tool] max_output_bytes` can bound only that terminal
+rendering as other tools. One `-v` shows compact calls without output; `-vv`
+previews 1,024 argument and 512 output characters, and `-vvv` shows full retained
+calls/results. Debug detail starts at four flags. `[tool] max_output_bytes` bounds only terminal
 presentation; its default `0` is unlimited, and the complete redacted output
 is always persisted. Command output supplied to the model is separately
 bounded by the calling command tool's `max_output_tokens`. IRC tools never open sockets,
@@ -463,6 +506,15 @@ join, poll, reconnect, wait for traffic, or expose a manual reconnect action.
 The event loop owns those operations continuously. `irc_send` is the exclusive
 room-speech path and may be used any number of times during a turn. Assistant
 response text remains local even at a terminal response boundary.
+
+The request freezes its tool contract and routing revision when constructed,
+including before token counting. Later topology changes do not rewrite or
+cancel it. Stale `irc_send`/`irc_topic` actions return individual not-performed
+results instead of migrating to new rooms; read-only `irc_state` returns live or
+offline state. Accompanying `write_stdin` calls retain their original valid
+classification and live handles. Real destination changes (also remove/re-add
+and a different advertised room) advance the revision; no-ops and same-room
+reconnects do not. A topology change alone does not force an extra model turn.
 
 ## Durability, Bounds, And Failure Semantics
 
@@ -479,6 +531,9 @@ client-only command carries every outgoing endpoint; a server command carries
 its listener, room, and local nicks; a combined command carries both sets. It
 also reuses the same dotdir and explicit config path and resumes
 the exact durable session. The output contains no credentials or chat text.
+Absent roles are explicit `--no-listen`/`--no-client`, preventing reused config
+defaults from resurrecting them. Desired clients remain present during temporary
+outages. Cleanup does not mutate the desired role specification.
 SIGHUP and SIGTERM unwind through this path; SIGKILL and machine loss cannot.
 
 The server stores no provider credential and never transports tool arguments
@@ -490,6 +545,12 @@ socket loss as a connection event rather than a process crash.
 
 One thread owns the hosted server and all its accepted peers. Each outgoing
 endpoint has its own thread owning the paired model/operator connections.
+Each owner has a stable allocation, even as ordered primary selection changes:
+hosting first, otherwise the first requested outgoing endpoint. Removing an
+owner stops it and drains accepted records before freeing it; other owners
+continue. Unsent transport bytes are discarded with an explicit local notice,
+never moved to a new destination. A new host restores only public history for
+its matching endpoint/room, not private rollout or another room's records.
 They run private copies of the same protocol implementation; no application
 or session callback executes there. Bounded owned events and room/alias
 snapshots reach the engine in order, and only the engine persists, displays or

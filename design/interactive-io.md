@@ -22,7 +22,7 @@ Output backpressures the engine. Full input admission retains the draft and
 reports the backlog without blocking editing; urgent interrupt/exit/failure
 flags bypass ordinary backlog. Actions retain their originating prompt state.
 
-Networked operation adds one IRC server owner and one client owner per outgoing
+Optional networking adds one IRC server owner and one client owner per outgoing
 endpoint (its agent/operator sockets stay together). Each runs the same existing
 protocol code on private state. Bounded owned events, traces and room/identity
 snapshots reach the engine in order; commands return acknowledged results.
@@ -286,16 +286,25 @@ Tab uses the following order in every ordinary composer:
 4. other nonempty text retains the existing contextual action: indentation
    while idle and future-turn queueing while active.
 
-Non-networked mode has only the rollout view, so empty Tab is a no-op. A
-nonempty draft never changes views. Queue-edit composers retain their explicit
-save behavior.
+Both views exist even with no network connections. Empty Tab toggles them;
+a nonempty draft never changes views. Queue-edit composers retain their
+explicit save behavior. Startup selects chat when roles are enabled, otherwise
+rollout. Runtime role changes preserve view, draft, history and verbosity.
 
-In networked mode the selected view owns both presentation and ordinary input
+The selected view owns both presentation and ordinary input
 routing. Chat submissions go through IRC and are admitted through the local
 room event. Rollout submissions remain local: an idle submission starts a turn
 and an active submission steers it. Every accepted rollout submission is
 rendered exactly once with its frozen submitted prompt label and never emits an
 IRC message.
+
+Offline chat is readable but cannot send: Enter reports no active destinations
+and restores the draft. It never falls back to private model input. `/server
+start`, `/server stop`, `/connect` and `/disconnect` use the common idle/active
+command path, including during provider silence, retry, counting and managed
+tool waits. They neither steer nor cancel work. Adding/removing one stable IRC
+owner preserves the others; removed owners stop producing and drain accepted
+records before being freed. Session-pending input survives final disconnection.
 
 ## Queue Commands
 

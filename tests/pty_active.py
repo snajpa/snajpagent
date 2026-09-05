@@ -2804,8 +2804,13 @@ def test_runtime_network_commands():
     upstream.bind(("127.0.0.1", 0))
     upstream.listen(8)
     outgoing = f"127.0.0.1:{upstream.getsockname()[1]}"
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "runtime.ini"
+    config.write_text(
+        "[provider]\napi_key_env = OPENAI_API_KEY\n[irc]\n"
+        f"listen = {endpoint}\nclient = {outgoing}\n", encoding="utf-8")
     before = session_ids()
-    child = Child(["--no-color", "-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"])
+    child = Child(["--no-color", "--config", str(config), "--no-listen", "--no-client",
+                   "-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"])
     links = []
     peer = None
     try:
@@ -2859,6 +2864,10 @@ def test_runtime_network_commands():
         try:
             resumed.wait(b"session id " + session_id[:8].encode())
             resumed.wait(PROMPT.rstrip())
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                assert probe.connect_ex(("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))) != 0
+            ready, _, _ = select.select([upstream], [], [], 0.1)
+            assert not ready, "resume resurrected an outgoing config default"
             resumed.exit_now()
         finally:
             resumed.kill()

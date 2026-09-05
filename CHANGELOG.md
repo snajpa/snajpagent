@@ -7,6 +7,16 @@
 - Remove unused render/terminal/context APIs and the provider header's terminal
   dependency. Share prompt hostname preparation and validated trash-name parsing.
 
+- Allow `/server start/stop`, `/connect` and `/disconnect` during idle or active
+  work in any interactive session. Keep chat/rollout available offline and
+  preserve drafts, history, verbosity, provider work and live command handles.
+  Target only changed endpoints, reject stale model sends without rerouting,
+  and deliver accepted mention/background input after final disconnection.
+  Preserve runtime roles across unrelated config reloads; resume exact role
+  presence and absence using independent `--no-listen`/`--no-client` flags.
+  Retain complete chat input in bounded batches instead of evicting earlier
+  pending messages when a single steering batch fills.
+
 - Recover oversized historical context by compacting complete response/tool
   groups within older turns. Preserve replay, steering and managed-process
   pairing across each cut, and share normal statistical token estimation with

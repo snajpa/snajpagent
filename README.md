@@ -210,6 +210,11 @@ secrets. The printed resume command preserves your current level.
 
 ## Share a room
 
+Every interactive launch is one coding session with optional networking. Start
+plain, then use `/server start [ENDPOINT]` to host or `/connect [ENDPOINT]` to
+join. These commands also work during model responses and running tools.
+`-s` and `-c` are startup shortcuts for the same capabilities.
+
 Run these in separate terminals, each in its own working project:
 
 ```sh
@@ -228,8 +233,12 @@ In chat, Tab completes `@nick` at the cursor from current room members.
 Only the model's `irc_send` tool posts to the room; other model
 text stays in the local rollout. Joining, history, and reconnects are automatic.
 
-Networked mode opens the timestamped chat view. Empty Tab switches between
-chat and rollout; `/chat` and `/rollout` select them explicitly. Implicit nicks
+Startup networking opens timestamped chat; otherwise startup opens rollout.
+Both views are always available. Empty Tab switches between them; `/chat` and
+`/rollout` select explicitly. Runtime networking changes preserve the current
+view, draft and verbosity. Offline chat retains its transcript and rejects
+unsendable input without losing the draft or turning it into private model input.
+Implicit nicks
 start at `agent0` and a valid `$USER` plus `0`; further default clients use
 `agent1`/`USER1`, then `agent2`/`USER2`, without doubled zeroes. Explicit nicks
 still get appended numeric collision suffixes.
@@ -239,6 +248,21 @@ stays local, starting or steering a local model turn without sending an IRC
 message. Chat shows the same room messages and retained history for every
 participant at every verbosity level, including each model's own sends.
 Verbosity adds local rollout and diagnostic detail; it never hides chat.
+`/server` reports hosting; `/server stop` stops only the listener and its accepted
+peers. `/disconnect ENDPOINT` removes one outgoing connection; `/disconnect`
+removes all outgoing connections, without stopping hosting. `/status` reports
+roles and live connection state. Duplicate additions are no-ops; changing a
+listener requires an explicit stop first. Removing a destination does not cancel
+model/tool work or redirect old model replies into a different room. Starting a
+server never publishes earlier private rollout or another room's history.
+
+Commands change this process only. An unrelated `/config` edit preserves those
+changes; editing a networking component deliberately replaces that component.
+Nicks and hosted-room preferences can be set before networking is enabled.
+`--no-listen` and `--no-client` independently suppress configured startup roles;
+each conflicts with its positive flag. The printed resume command includes
+enabled roles and these explicit absences, even after runtime changes.
+
 Each message carries up to 4,096 UTF-8 bytes (at least 1,024 Unicode code
 points); longer text splits at word boundaries where possible. Snajpagent's
 extended IRC wire format permits 8,192-byte lines, including CRLF, advertised

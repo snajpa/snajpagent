@@ -200,13 +200,17 @@ cache state.
 Interactive `/config` opens the exact active configuration path in `$EDITOR`.
 The terminal returns to ordinary cooked mode while the editor owns it. After
 the editor exits, snajpagent compares the file contents, transactionally parses
-and validates a changed file, reapplies command-line overrides, and replaces
+and validates a changed file, preserves unrelated command-line settings, and replaces
 the live configuration only on success. Invalid edits stay on disk for repair
 while the previous in-memory configuration remains active. Unchanged files are
 not reloaded. Runtime presentation, tools, providers, and IRC topology consume
-the replacement without restarting the process; a changed IRC topology is
-reopened and rolled back to the prior topology if replacement initialization
-fails. Durable session provider/model/effort preferences remain session state,
+the replacement without restarting the process. IRC file fields are compared
+against the last successfully loaded file: only changed components override
+current process roles/preferences. Thus unrelated edits do not resurrect removed
+endpoints or erase runtime additions, and original CLI networking flags do not
+override deliberate file edits. Changes target affected owners only. Failure
+attempts to restore previous roles; failed restoration reports actual remaining
+roles instead of claiming unchanged state. Durable session provider/model/effort preferences remain session state,
 so configuration defaults do not overwrite an existing session.
 
 Loading and model/provider saves use the same semantic configuration validator,
@@ -232,7 +236,10 @@ reuses the resolved dotdir and explicit config source, exact session ID,
 explicit presentation settings, unconsumed one-turn preferences, and effective
 IRC settings. Thus process-local IRC launch configuration does not enter the
 event log but the operator can immediately recreate a client, server, or
-combined process. The command contains neither prompts nor secret values.
+combined process. It explicitly carries `--no-listen`/`--no-client` for absent
+roles, preventing config defaults from resurrecting removed endpoints. Normal
+cleanup preserves the desired role specification until the hint is built.
+The command contains neither prompts nor secret values.
 
 SIGHUP and SIGTERM set signal-safe shutdown state, as does SIGINT outside the
 interactive terminal handler. Idle and active provider/tool/network pumps
@@ -257,6 +264,26 @@ liveness, topic, mode, and chat subset needed by normal clients. Outgoing
 connections join the advertised room and reconnect autonomously after socket
 or protocol failure. Per-connection read/write bounds isolate malformed or
 slow peers.
+
+Every interactive process retains an IRC runtime even offline. `/server
+start/stop`, `/connect` and `/disconnect` mutate its bounded effective role
+specification during idle or active work; `-s`/`-c` initialize that same state.
+Owners are stable allocations in an ordered pointer list. Hosting is primary
+when present, otherwise the first configured outgoing endpoint is primary.
+Removal joins only the affected owner, drains its published records before
+freeing it, and reports discarded unsent bytes. Accepted model input belongs
+to the session and is not discarded with sockets. Public history is retained;
+new hosting receives only that endpoint/room's public history.
+
+Requests freeze networking capabilities and a routing revision at construction.
+Changing destinations never rewrites a request, interrupts a provider or changes
+the interpretation of accompanying managed-command continuations. Stale
+`irc_send`/`irc_topic` calls get individual not-performed results; `irc_state`
+reads current state, including offline. Real changes (including remove/re-add
+and a changed advertised room) advance the revision; no-ops and same-room
+reconnects do not. Topology/nick snapshots contain state only, not pending room
+history that would prematurely admit background input. Goal/queue priority and
+read-only restrictions remain independent of connectivity and selected view.
 
 First join produces a user-role snapshot of topic, members/operator flags, and
 bounded history before the first networked model response. Every successful

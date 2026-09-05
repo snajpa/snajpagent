@@ -4199,8 +4199,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     bool signal_handlers_installed = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
-    snag_buf_init(&app.irc_urgent, SNAG_MAX_STEERING_TEXT + 1u);
-    snag_buf_init(&app.irc_background, SNAG_MAX_STEERING_TEXT + 1u);
+    snag_buf_init(&app.irc_urgent, SNAG_MAX_IRC_SNAPSHOT);
+    snag_buf_init(&app.irc_background, SNAG_MAX_IRC_SNAPSHOT);
     snag_config_init(&config);
     snag_instructions_init(&app.turn_instructions);
     snag_model_cache_init(&app.model_cache);
