@@ -298,8 +298,13 @@ def wait_turn_completed(child, session_id, needle, timeout=8.0):
                event["data"]["turn_id"] in turn_ids for event in log):
             return log
         if time.monotonic() >= deadline:
+            lifecycle = [(event["type"], event["data"].get("turn_id"),
+                          event["data"].get("text")) for event in log
+                         if event["type"] in {"turn_started", "turn_completed",
+                                              "turn_failed", "steering_added"}]
             raise AssertionError(
                 f"turn containing {needle!r} did not complete; "
+                f"lifecycle={lifecycle!r}; "
                 f"terminal={bytes(child.buf)!r}"
             )
         child.drain(0.05)
@@ -2693,6 +2698,11 @@ def test_network_view_routing_and_atomic_catchup():
         session_id = new_session(before)
         human = IRCClient(port, "remoteop")
         peer_agent = IRCClient(port, "peerbot", agent=True)
+
+        # Membership events also start turns. Finish setup before testing two
+        # distinct messages, or the second may legitimately steer a join turn.
+        for nick in ("remoteop", "peerbot"):
+            wait_turn_completed(child, session_id, f"event=join sender={nick}")
 
         tab_first = b"tab-catchup-one"
         tab_second = b"tab-catchup-two"
