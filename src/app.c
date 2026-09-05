@@ -2490,17 +2490,8 @@ static json_t *
 silent_turn_data(const char *turn_id, const char *response_id,
                  const char *reason)
 {
-    json_t *data = json_object();
-
-    if (!data ||
-        snag_json_set_new(data, "reason", json_string(reason)) < 0 ||
-        snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
-        if (data)
-            json_decref(data);
-        return NULL;
-    }
-    return data;
+    return json_pack("{s:s,s:s,s:s}", "reason", reason,
+        "response_id", response_id, "turn_id", turn_id);
 }
 
 static int
@@ -2525,6 +2516,11 @@ run_turn(struct app_state *app, const char *prompt,
     bool capacity_recovery_used = false;
     char *turn_prompt;
     struct snag_credential credential;
+    struct snag_response_graph graph;
+    json_t *steering = NULL;
+    json_t *create_request = NULL;
+    json_t *count_request = NULL;
+    struct snag_buf request_body;
     size_t prompt_max = queued ? SNAG_MAX_QUEUED_TEXT : SNAG_MAX_DIRECT_PROMPT;
     int result = 4;
     snag_credential_clear(&credential);
@@ -2558,8 +2554,11 @@ run_turn(struct app_state *app, const char *prompt,
     turn_prompt = snag_strdup_checked(prompt, prompt_max);
     if (!turn_prompt) {
         (void)app_error(app, "cannot retain turn input");
+        snag_credential_clear(&credential);
         return 3;
     }
+    snag_response_graph_init(&graph);
+    snag_buf_init(&request_body, SNAG_WIRE_BODY_MAX);
     if (app->config->read_agents_md) {
         if (snag_instructions_discover(&app->turn_instructions,
                                       app->session.workspace,
@@ -2599,17 +2598,15 @@ run_turn(struct app_state *app, const char *prompt,
         goto out;
     }
     for (unsigned int cycle = 1u; cycle != 0u; ++cycle) {
-        struct snag_response_graph graph;
         struct snag_graph_decision decision;
-        json_t *steering = NULL;
-        json_t *create_request = NULL;
-        json_t *count_request = NULL;
         const char *count_method = "qualified_upper_bound";
-        struct snag_buf request_body;
         uint64_t response_begin_ms;
         unsigned int provider_retry_count = 0u;
         struct snag_provider_failure provider_failure;
         int provider_rc;
+        snag_app_response_cycle_release(app, &graph, &steering,
+                                       &create_request, &count_request,
+                                       &request_body);
         memset(&provider_failure, 0, sizeof(provider_failure));
         error[0] = '\0';
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
@@ -2618,8 +2615,6 @@ run_turn(struct app_state *app, const char *prompt,
             result = 3;
             goto out;
         }
-        snag_response_graph_init(&graph);
-        snag_buf_init(&request_body, SNAG_WIRE_BODY_MAX);
         steering = snag_app_steering_snapshot(&app->session);
         error[0] = '\0';
         if (!steering || snag_random_id(response_id) < 0 ||
@@ -2632,9 +2627,6 @@ run_turn(struct app_state *app, const char *prompt,
                             &count_method,
                             &request_body, &create_request, &count_request,
                             error, sizeof(error)) < 0) {
-            snag_app_response_cycle_release(app, &graph, &steering,
-                                           &create_request, &count_request,
-                                           &request_body);
             if (commit_event(app, "turn_failed",
                              snag_app_turn_failed_data(turn_id, "context",
                                  error[0] ? error :
@@ -2653,17 +2645,11 @@ run_turn(struct app_state *app, const char *prompt,
             model_input_bytes, &input_tokens_bound, &count_method,
             error, sizeof(error));
         if (provider_rc == 1 && app->steering_requested) {
-            snag_app_response_cycle_release(app, &graph, &steering,
-                                           &create_request, &count_request,
-                                           &request_body);
             app->steering_requested = false;
             --cycle;
             continue;
         }
         if (provider_rc == 2 && app->interrupt_requested) {
-            snag_app_response_cycle_release(app, &graph, &steering,
-                                           &create_request, &count_request,
-                                           &request_body);
             if (interrupt_turn(app, turn_id, "user_interrupt", true,
                                "user", "cancelled",
                                error, sizeof(error)) < 0) {
@@ -2677,9 +2663,6 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (provider_rc != 0 && provider_rc != SNAG_APP_COUNT_SKIPPED) {
-            snag_app_response_cycle_release(app, &graph, &steering,
-                                           &create_request, &count_request,
-                                           &request_body);
             if (commit_event(app, "turn_failed",
                              snag_app_turn_failed_data(turn_id, "provider",
                                  error[0] ? error :
@@ -2695,9 +2678,6 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (app->networked && app->irc_urgent.len) {
-            snag_app_response_cycle_release(app, &graph, &steering,
-                                           &create_request, &count_request,
-                                           &request_body);
             --cycle;
             continue;
         }
@@ -2719,9 +2699,6 @@ run_turn(struct app_state *app, const char *prompt,
                         "context compaction repeated an over-budget request",
                     (unsigned long long)input_tokens_bound, count_method,
                     (unsigned long long)app->turn_capacity.hard_input_tokens);
-                snag_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
                 if (commit_event(app, "turn_failed",
                         snag_app_turn_failed_data(turn_id, "context", failure),
                         error, sizeof(error)) < 0) {
@@ -2740,17 +2717,11 @@ run_turn(struct app_state *app, const char *prompt,
                     input_tokens_bound, count_method, &compacted,
                     error, sizeof(error));
             if (compact_rc == 1 && app->steering_requested) {
-                snag_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
                 app->steering_requested = false;
                 --cycle;
                 continue;
             }
             if (compact_rc == 2 && app->interrupt_requested) {
-                snag_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
                 if (close_active_process_for_turn(app, turn_id,
                         "user_interrupt", true, error, sizeof(error)) < 0 ||
                     commit_event(app, "turn_interrupted",
@@ -2767,9 +2738,6 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             if (compact_rc != 0) {
-                snag_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
                 if (commit_event(app, "turn_failed",
                                  snag_app_turn_failed_data(turn_id,
                                      over_hard ? "context" : "provider",
@@ -2788,9 +2756,6 @@ run_turn(struct app_state *app, const char *prompt,
             if (compacted) {
                 if (over_hard)
                     ++hard_compaction_attempts;
-                snag_app_response_cycle_release(app, &graph, &steering,
-                                               &create_request, &count_request,
-                                               &request_body);
                 --cycle;
                 continue;
             }
@@ -2799,9 +2764,6 @@ run_turn(struct app_state *app, const char *prompt,
             strcmp(rejected_request_hash, request_hash) == 0) {
             static const char failure[] =
                 "capacity recovery produced an identical provider request";
-            snag_app_response_cycle_release(app, &graph, &steering,
-                                           &create_request, &count_request,
-                                           &request_body);
             if (commit_event(app, "turn_failed",
                     snag_app_turn_failed_data(turn_id, "context", failure),
                     error, sizeof(error)) < 0) {
@@ -2834,18 +2796,12 @@ run_turn(struct app_state *app, const char *prompt,
                                                &app->turn_capacity,
                                                steering),
                          error, sizeof(error)) < 0) {
-            snag_app_response_cycle_release(app, &graph, &steering,
-                                           &create_request, &count_request,
-                                           &request_body);
             (void)app_error(app, error[0] ? error :
                                    "response setup could not be persisted");
             result = 3;
             goto out;
         }
         if (!app->execute && set_input_prompt(app, true) < 0) {
-            snag_app_response_cycle_release(app, &graph, &steering,
-                                           &create_request, &count_request,
-                                           &request_body);
             (void)app_error(app, "context meter could not be displayed");
             result = 6;
             goto out;
@@ -2856,11 +2812,6 @@ run_turn(struct app_state *app, const char *prompt,
                 "response › %s started · turn=%s · cycle=%u · model=%s · profile=%s",
                 response_id, turn_id, cycle, app->turn_model,
                 SNAJPAGENT_PROFILE_ID) < 0) {
-            json_decref(steering);
-            if (create_request)
-                json_decref(create_request);
-            snag_buf_free(&request_body);
-            snag_response_graph_free(&graph);
             (void)app_error(app, "response runtime facts could not be rendered");
             result = 6;
             goto out;
@@ -2872,21 +2823,15 @@ run_turn(struct app_state *app, const char *prompt,
             json_t *partial = json_array();
             static const char failure[] =
                 "request diagnostics could not be rendered";
-            snag_buf_free(&request_body);
-            if (create_request)
-                json_decref(create_request);
-            json_decref(steering);
             if (!partial || fail_response(app, turn_id, response_id, cycle,
                                           "output", failure, partial, 0u,
                                           "output_failure", error,
                                           sizeof(error)) < 0) {
-                snag_response_graph_free(&graph);
                 (void)app_error(app, error[0] ? error :
                                 "diagnostic output failure could not be persisted");
                 result = 3;
                 goto out;
             }
-            snag_response_graph_free(&graph);
             (void)app_error(app, failure);
             result = 6;
             goto out;
@@ -2906,7 +2851,9 @@ run_turn(struct app_state *app, const char *prompt,
                 provider_rc = control_rc;
         }
         json_decref(create_request);
+        create_request = NULL;
         json_decref(steering);
+        steering = NULL;
         if ((provider_rc == 1 && app->steering_requested) ||
             (provider_rc == 2 && app->interrupt_requested) ||
             provider_failure.output_correction !=
@@ -2923,13 +2870,11 @@ run_turn(struct app_state *app, const char *prompt,
                     snag_app_response_interrupted_data(turn_id, response_id, cycle,
                                               "steering", "steered", partial),
                     error, sizeof(error)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                        "active-turn response could not be persisted");
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             continue;
         }
         if (provider_rc == 2 && app->interrupt_requested && !app->stream_failed) {
@@ -2942,13 +2887,11 @@ run_turn(struct app_state *app, const char *prompt,
                 interrupt_turn(app, turn_id, "user_interrupt", true,
                                "user", "cancelled",
                                error, sizeof(error)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                 "interruption could not be persisted");
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_warning(app, "turn interrupted");
             result = app->execute ? 6 : 1;
             goto out;
@@ -2982,15 +2925,11 @@ run_turn(struct app_state *app, const char *prompt,
                             turn_id, response_id, cycle, correction_id,
                             correction, partial),
                         error, sizeof(error)) < 0) {
-                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
-                                                   NULL, NULL);
                     (void)app_error(app, error[0] ? error :
                         "assistant output correction could not be persisted");
                     result = 3;
                     goto out;
                 }
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
-                                               NULL);
                 continue;
             }
         }
@@ -3028,8 +2967,6 @@ run_turn(struct app_state *app, const char *prompt,
                             turn_id, response_id, cycle, request_hash,
                             &provider_failure, &app->turn_capacity,
                             provider_source_hash), error, sizeof(error)) < 0) {
-                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
-                                                   NULL, NULL);
                     (void)app_error(app, error[0] ? error :
                         "capacity rejection could not be persisted");
                     result = 3;
@@ -3055,8 +2992,9 @@ run_turn(struct app_state *app, const char *prompt,
                     apply_capacity_ceiling(app, app->turn_provider,
                                            app->turn_model,
                                            &app->turn_capacity);
-                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
-                                                   NULL, NULL);
+                    snag_app_response_cycle_release(app, &graph, &steering,
+                                       &create_request, &count_request,
+                                       &request_body);
                     for (;;) {
                         error[0] = '\0';
                         recovery_rc =
@@ -3108,12 +3046,10 @@ run_turn(struct app_state *app, const char *prompt,
             }
             partial = snag_app_partial_public_json(app);
             if (!partial) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "failed response prefix could not be retained");
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             if (fail_response(app, turn_id, response_id, cycle, class_name,
                               failure, partial, provider_retry_count,
                               app->stream_failed ?
@@ -3132,7 +3068,6 @@ run_turn(struct app_state *app, const char *prompt,
         if (!app->execute) {
             int input_rc = snag_app_active_input_pump(app, 0u);
             if (input_rc < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "active input could not be processed");
                 result = 3;
                 goto out;
@@ -3146,12 +3081,10 @@ run_turn(struct app_state *app, const char *prompt,
                            error[0] ? error : "invalid provider response graph");
             partial = snag_app_partial_public_json(app);
             if (!partial) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "invalid response prefix could not be retained");
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             if (fail_response(app, turn_id, response_id, cycle, "protocol",
                               failure, partial, provider_retry_count,
                               "protocol_failure", error, sizeof(error)) < 0) {
@@ -3166,7 +3099,6 @@ run_turn(struct app_state *app, const char *prompt,
         if (commit_event(app, "response_completed",
                          snag_app_response_completed_data(turn_id, response_id, cycle, &graph),
                          error, sizeof(error)) < 0) {
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_error(app, error);
             result = 3;
             goto out;
@@ -3177,7 +3109,6 @@ run_turn(struct app_state *app, const char *prompt,
                 model_input_bytes, graph.usage.input_tokens, 0u);
         error[0] = '\0';
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_error(app, error[0] ? error :
                             "urgent IRC input could not be admitted");
             result = 3;
@@ -3203,7 +3134,6 @@ run_turn(struct app_state *app, const char *prompt,
                     (unsigned long long)(snag_time_ms() - response_begin_ms),
                     input_tokens, output_tokens, reasoning_tokens,
                     total_tokens) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "response runtime facts could not be rendered");
                 result = 6;
                 goto out;
@@ -3217,14 +3147,10 @@ run_turn(struct app_state *app, const char *prompt,
                 if (terminalize_pending(app, turn_id,
                                         "managed_process_handle_mismatch",
                                         error, sizeof(error)) < 0) {
-                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
-                                                   NULL, NULL);
                     (void)app_error(app, error);
                     result = 3;
                     goto out;
                 }
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
-                                               NULL);
                 continue;
             }
             if (managed == SNAG_MANAGED_CONTINUATION_ORDERING_VIOLATION) {
@@ -3236,14 +3162,10 @@ run_turn(struct app_state *app, const char *prompt,
                                          error, sizeof(error)) < 0) ||
                     fail_turn(app, turn_id, "protocol_failure",
                               "protocol", message, error, sizeof(error)) < 0) {
-                    snag_app_response_cycle_release(app, &graph, NULL, NULL,
-                                                   NULL, NULL);
                     (void)app_error(app, error);
                     result = 3;
                     goto out;
                 }
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL,
-                                               NULL);
                 (void)app_error(app, message);
                 result = 4;
                 goto out;
@@ -3256,12 +3178,10 @@ run_turn(struct app_state *app, const char *prompt,
                                     error, sizeof(error)) < 0 ||
                 fail_turn(app, turn_id, "protocol_failure",
                           "protocol", message, error, sizeof(error)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_error(app, message);
             result = 4;
             goto out;
@@ -3270,12 +3190,10 @@ run_turn(struct app_state *app, const char *prompt,
             if (decision.outcome == SNAG_GRAPH_CALLS &&
                 terminalize_pending(app, turn_id, "superseded_by_steering",
                                     error, sizeof(error)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             continue;
         }
         if (app->networked && !app->session.active_read_only &&
@@ -3291,15 +3209,11 @@ run_turn(struct app_state *app, const char *prompt,
                     snag_app_steering_added_data(turn_id, steering_id,
                         SNAG_IRC_REPLY_REMINDER_TEXT),
                     error, sizeof(error)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL,
-                                               NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                 "IRC reply reminder could not be persisted");
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL,
-                                           NULL, NULL);
             continue;
         }
         if (app->networked && decision.outcome == SNAG_GRAPH_NONPRODUCTIVE) {
@@ -3308,14 +3222,11 @@ run_turn(struct app_state *app, const char *prompt,
                         app->irc_turn_local_operator && !app->irc_turn_replied ?
                         "reply_reminder_exhausted" : "room_update_quiet"),
                     error, sizeof(error)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL,
-                                               NULL, NULL);
                 (void)app_error(app, error[0] ? error :
                                 "quiet IRC turn could not be completed");
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             result = 0;
             goto out;
         }
@@ -3326,7 +3237,6 @@ run_turn(struct app_state *app, const char *prompt,
                              snag_app_turn_completed_data(turn_id, response_id,
                                                  final->local_item_id),
                              error, sizeof(error)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
@@ -3335,7 +3245,6 @@ run_turn(struct app_state *app, const char *prompt,
             if (app_runtimef(app,
                     "turn › %s completed · response=%s · item=%s",
                     turn_id, response_id, final->local_item_id) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "turn runtime facts could not be rendered");
                 result = 6;
                 goto out;
@@ -3343,7 +3252,6 @@ run_turn(struct app_state *app, const char *prompt,
             if (app->execute &&
                 snag_ui_raw(&app->ui, STDOUT_FILENO, final->text,
                                strlen(final->text)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, "final answer could not be written to stdout");
                 result = 6;
                 goto out;
@@ -3351,7 +3259,6 @@ run_turn(struct app_state *app, const char *prompt,
             if (snag_app_compact_after_turn(app, input_tokens_bound, count_method,
                                            error, sizeof(error)) < 0)
                 (void)app_warning(app, error);
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             result = 0;
             goto out;
         }
@@ -3359,7 +3266,6 @@ run_turn(struct app_state *app, const char *prompt,
             int tool_rc;
             tool_rc = execute_calls(app, turn_id, &graph, &credential,
                                     error, sizeof(error));
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             if (tool_rc < 0) {
                 (void)app_error(app, error);
                 result = 3;
@@ -3382,12 +3288,10 @@ run_turn(struct app_state *app, const char *prompt,
                 "provider response was not actionable";
             if (fail_turn(app, turn_id, "protocol_failure",
                           "protocol", message, error, sizeof(error)) < 0) {
-                snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
                 (void)app_error(app, error);
                 result = 3;
                 goto out;
             }
-            snag_app_response_cycle_release(app, &graph, NULL, NULL, NULL, NULL);
             (void)app_error(app, message);
             result = 4;
             goto out;
@@ -3405,8 +3309,9 @@ run_turn(struct app_state *app, const char *prompt,
         result = 4;
     }
 out:
-    app->stream_graph = NULL;
-    snag_app_clear_partial_public(app);
+    snag_app_response_cycle_release(app, &graph, &steering,
+                                       &create_request, &count_request,
+                                       &request_body);
     if (!app->execute && result != 6 &&
         set_input_prompt(app, false) < 0)
         result = 6;
