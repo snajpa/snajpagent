@@ -37,7 +37,7 @@ partial_public_target(struct app_state *app, size_t graph_index,
     size_t id_len;
 
     *created = false;
-    if (!provider_item_id || kind == SNAG_ITEM_OPAQUE ||
+    if (!provider_item_id || kind == SNAG_ITEM_TOOL_CALL ||
         phase == SNAG_PHASE_NONE || graph_index >= SNAG_MAX_RESPONSE_ITEMS) {
         errno = EPROTO;
         return NULL;
@@ -187,10 +187,7 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
         app->stream_phase = phase;
         app->stream_item_hidden = false;
 
-        if (kind == SNAG_ITEM_REASONING_SUMMARY) {
-            fd = STDERR_FILENO;
-            label = "reason › ";
-        } else if (kind == SNAG_ITEM_ASSISTANT || kind == SNAG_ITEM_REFUSAL) {
+        if (kind == SNAG_ITEM_ASSISTANT || kind == SNAG_ITEM_REFUSAL) {
             if (app->execute && phase == SNAG_PHASE_FINAL_ANSWER)
                 app->stream_item_hidden = true;
             else if (app->execute)
@@ -200,8 +197,7 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
         }
         if (!app->stream_item_hidden) {
             if (snag_ui_public_begin(&app->ui, fd, label,
-                    kind == SNAG_ITEM_REASONING_SUMMARY ? SNAG_PRESENT_REASONING :
-                                                        SNAG_PRESENT_CONVERSATION) < 0) {
+                                    SNAG_PRESENT_CONVERSATION) < 0) {
                 return stream_fail(app, errno,
                                    "public output item could not be started");
             }
@@ -278,7 +274,6 @@ snag_app_reset_stream(struct app_state *app)
 {
     snag_app_clear_partial_public(app);
     app->stream_item_index = 0;
-    app->stream_kind = SNAG_ITEM_OPAQUE;
     app->stream_phase = SNAG_PHASE_NONE;
     app->stream_item_active = false;
     app->stream_item_seen = false;

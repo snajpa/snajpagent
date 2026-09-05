@@ -38,9 +38,7 @@ snag_item_kind_name(enum snag_item_kind kind)
     switch (kind) {
     case SNAG_ITEM_ASSISTANT: return "assistant";
     case SNAG_ITEM_REFUSAL: return "refusal";
-    case SNAG_ITEM_REASONING_SUMMARY: return "reasoning_summary";
     case SNAG_ITEM_TOOL_CALL: return "tool_call";
-    case SNAG_ITEM_OPAQUE: return "opaque";
     }
     return NULL;
 }
@@ -67,7 +65,6 @@ snag_item_phase_name(enum snag_item_phase phase)
     switch (phase) {
     case SNAG_PHASE_COMMENTARY: return "commentary";
     case SNAG_PHASE_FINAL_ANSWER: return "final_answer";
-    case SNAG_PHASE_SUMMARY: return "summary";
     case SNAG_PHASE_NONE: break;
     }
     return NULL;
@@ -107,8 +104,7 @@ text_valid(const char *s, size_t max)
 static bool
 public_kind(enum snag_item_kind kind)
 {
-    return kind == SNAG_ITEM_ASSISTANT || kind == SNAG_ITEM_REFUSAL ||
-           kind == SNAG_ITEM_REASONING_SUMMARY;
+    return kind == SNAG_ITEM_ASSISTANT || kind == SNAG_ITEM_REFUSAL;
 }
 
 static json_t *item_json(const struct snag_response_item *item);
@@ -120,11 +116,8 @@ item_free(struct snag_response_item *item)
     free(item->provider_call_id);
     free(item->text);
     free(item->name);
-    free(item->provider_type);
     if (item->arguments)
         json_decref(item->arguments);
-    if (item->payload)
-        json_decref(item->payload);
     memset(item, 0, sizeof(*item));
 }
 
@@ -341,9 +334,7 @@ add_public(struct snag_response_graph *graph, enum snag_item_kind kind,
                   (phase == SNAG_PHASE_COMMENTARY ||
                    phase == SNAG_PHASE_FINAL_ANSWER)) ||
                  (kind == SNAG_ITEM_REFUSAL &&
-                  phase == SNAG_PHASE_FINAL_ANSWER) ||
-                 (kind == SNAG_ITEM_REASONING_SUMMARY &&
-                  phase == SNAG_PHASE_SUMMARY);
+                  phase == SNAG_PHASE_FINAL_ANSWER);
 
     if (!shape || !provider_id_valid(provider_item_id) ||
         (local_item_id &&
@@ -458,40 +449,6 @@ snag_response_graph_add_call(struct snag_response_graph *graph,
                     arguments, NULL);
 }
 
-int
-snag_response_graph_add_opaque(struct snag_response_graph *graph,
-                              const char *provider_item_id,
-                              const char *provider_type, json_t *payload)
-{
-    struct snag_response_item *item;
-    if (!provider_id_valid(provider_item_id) ||
-        !provider_id_valid(provider_type) || !json_is_object(payload) ||
-        !arguments_bounded(payload)) {
-        if (payload)
-            json_decref(payload);
-        errno = EINVAL;
-        return -1;
-    }
-    item = append_item(graph);
-    if (!item) {
-        json_decref(payload);
-        return -1;
-    }
-    item->kind = SNAG_ITEM_OPAQUE;
-    item->phase = SNAG_PHASE_NONE;
-    item->payload = payload;
-    if (!(item->provider_item_id =
-          snag_strdup_checked(provider_item_id, SNAG_MAX_PROVIDER_ID)) ||
-        !(item->provider_type =
-          snag_strdup_checked(provider_type, SNAG_MAX_PROVIDER_ID)) ||
-        account_last_item(graph) < 0) {
-        item_free(item);
-        --graph->count;
-        return -1;
-    }
-    return 0;
-}
-
 static int
 identifiers_valid(const struct snag_response_graph *graph,
                   char *error, size_t error_size)
@@ -587,11 +544,6 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
             ++terminal_count;
             terminal_index = i;
             break;
-        case SNAG_ITEM_REASONING_SUMMARY:
-            if (item->phase != SNAG_PHASE_SUMMARY ||
-                !text_valid(item->text, SNAG_MAX_PUBLIC_ITEM))
-                goto bad_item;
-            break;
         case SNAG_ITEM_TOOL_CALL:
             if (!snag_hex_is_lower(item->call_id, SNAG_ID_HEX_LEN) ||
                 !provider_id_valid(item->provider_call_id) ||
@@ -599,11 +551,6 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
                 !arguments_bounded(item->arguments))
                 goto bad_item;
             ++calls;
-            break;
-        case SNAG_ITEM_OPAQUE:
-            if (!provider_id_valid(item->provider_type) ||
-                !json_is_object(item->payload) || !arguments_bounded(item->payload))
-                goto bad_item;
             break;
         }
     }
@@ -682,7 +629,6 @@ item_json(const struct snag_response_item *item)
     switch (item->kind) {
     case SNAG_ITEM_ASSISTANT:
     case SNAG_ITEM_REFUSAL:
-    case SNAG_ITEM_REASONING_SUMMARY:
         return json_pack("{s:s,s:s,s:s,s:s,s:s}",
             "kind", kind, "local_item_id", item->local_item_id,
             "phase", snag_item_phase_name(item->phase),
@@ -693,11 +639,6 @@ item_json(const struct snag_response_item *item)
             "kind", kind, "call_id", item->call_id, "name", item->name,
             "provider_call_id", item->provider_call_id,
             "provider_item_id", item->provider_item_id);
-    case SNAG_ITEM_OPAQUE:
-        return json_pack("{s:o,s:s,s:s,s:s}",
-            "payload", json_deep_copy(item->payload), "kind", kind,
-            "provider_item_id", item->provider_item_id,
-            "provider_type", item->provider_type);
     }
     return NULL;
 }
@@ -741,8 +682,6 @@ parse_public(struct snag_response_graph *graph, const json_t *value,
         p = SNAG_PHASE_COMMENTARY;
     else if (strcmp(phase, "final_answer") == 0)
         p = SNAG_PHASE_FINAL_ANSWER;
-    else if (strcmp(phase, "summary") == 0)
-        p = SNAG_PHASE_SUMMARY;
     else
         goto invalid;
     if (add_public(graph, kind, p, provider_id, text, local_id) < 0)
@@ -777,10 +716,6 @@ snag_response_graph_from_json(struct snag_response_graph *graph,
             if (parse_public(graph, value, SNAG_ITEM_REFUSAL,
                              error, error_size) < 0)
                 return -1;
-        } else if (strcmp(kind, "reasoning_summary") == 0) {
-            if (parse_public(graph, value, SNAG_ITEM_REASONING_SUMMARY,
-                             error, error_size) < 0)
-                return -1;
         } else if (strcmp(kind, "tool_call") == 0) {
             static const char *const keys[] = {
                 "arguments", "call_id", "kind", "name", "provider_call_id",
@@ -795,18 +730,6 @@ snag_response_graph_from_json(struct snag_response_graph *graph,
                 !snag_hex_is_lower(call_id, SNAG_ID_HEX_LEN) || !arguments ||
                 add_call(graph, provider_item_id, provider_call_id, name,
                          json_deep_copy(arguments), call_id) < 0)
-                goto invalid;
-        } else if (strcmp(kind, "opaque") == 0) {
-            static const char *const keys[] = {
-                "kind", "payload", "provider_item_id", "provider_type"
-            };
-            const char *provider_item_id = snag_json_string(value, "provider_item_id");
-            const char *provider_type = snag_json_string(value, "provider_type");
-            json_t *payload = json_object_get(value, "payload");
-            if (!snag_json_exact_keys(value, keys, 4u) || !payload ||
-                snag_response_graph_add_opaque(graph, provider_item_id,
-                                              provider_type,
-                                              json_deep_copy(payload)) < 0)
                 goto invalid;
         } else {
             goto invalid;

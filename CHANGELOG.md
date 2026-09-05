@@ -9,6 +9,11 @@
   and model tools to their destinations; keep stable numbers and reject stale
   targets after removal or room changes. Show extra labels only when needed.
 
+- Keep only supported messages, refusals and tool calls in the response graph.
+  Remove fixture-only opaque output and reasoning-summary storage/presentation;
+  inert provider events stay ignored. Reasoning effort, usage and compaction are
+  unchanged. Fixtures now use the production stream callback directly.
+
 - Remove unused render/terminal/context APIs and the provider header's terminal
   dependency. Share prompt hostname preparation and validated trash-name parsing.
 

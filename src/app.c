@@ -1110,7 +1110,7 @@ render_help(struct app_state *app)
     static const char levels[] =
         "\n\nVerbosity (-v count = /verbose N):\n"
         "0 conversation · 1 compact tool rows, no output\n"
-        "2 previews: 1024 argument / 512 output characters, reasoning summaries\n"
+        "2 previews: 1024 argument / 512 output characters\n"
         "3 full retained tools · 4 debug · 5 redacted protocol · 6 wire\n"
         "Chat is unchanged. Debug traces are live in /rollout only.";
     if (snag_buf_append(&text, keys, strlen(keys)) < 0 ||

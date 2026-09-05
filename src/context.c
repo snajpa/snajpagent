@@ -522,8 +522,6 @@ append_response_items(struct context_builder *builder, const json_t *items,
             snag_sha256_hex(text, strlen(text), digest);
             if (snag_buf_printf(&notice,
                     "[historical assistant material omitted from model context; type=%s; bytes=%zu; sha256=%s; durable_log=%s/events.jsonl]",
-                    item->kind == SNAG_ITEM_REASONING_SUMMARY ?
-                        "reasoning_summary" :
                     item->kind == SNAG_ITEM_REFUSAL ? "refusal" : "message",
                     strlen(text), digest, builder->session->dir_path) < 0 ||
                 snag_buf_terminate(&notice) < 0) {
@@ -532,24 +530,16 @@ append_response_items(struct context_builder *builder, const json_t *items,
             }
             text = (const char *)notice.data;
         }
-        if (item->kind == SNAG_ITEM_ASSISTANT ||
-            item->kind == SNAG_ITEM_REFUSAL ||
-            item->kind == SNAG_ITEM_REASONING_SUMMARY) {
+        if (item->kind == SNAG_ITEM_ASSISTANT || item->kind == SNAG_ITEM_REFUSAL) {
             if (append_message(builder, "assistant", text) < 0) {
                 snag_buf_free(&notice);
                 goto out;
             }
-        } else if (item->kind == SNAG_ITEM_TOOL_CALL) {
+        } else {
             if (append_tool_call(builder, item) < 0) {
                 snag_buf_free(&notice);
                 goto out;
             }
-        } else {
-            snag_buf_free(&notice);
-            snag_errorf(error, error_size,
-                      "opaque response replay is not qualified in this checkpoint");
-            errno = ENOTSUP;
-            goto out;
         }
         snag_buf_free(&notice);
     }

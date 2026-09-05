@@ -796,27 +796,18 @@ flood_done:
         return 0;
     }
     if (strcmp(prompt, "public_index_gap") == 0) {
-        json_t *payload;
-
         if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
                         SNAG_PHASE_COMMENTARY,
                         "msg_fixture_gap_commentary",
                         "Checking hidden work.\n", 0) < 0)
             goto allocation;
-        payload = json_object();
-        if (!payload ||
-            snag_json_set_new(payload, "encrypted_content",
-                             json_string("fixture-hidden-reasoning")) < 0) {
-            if (payload)
-                json_decref(payload);
+        if (snag_response_graph_add_public(graph, SNAG_ITEM_ASSISTANT,
+                SNAG_PHASE_FINAL_ANSWER, "msg_fixture_gap_final",
+                "Gap-safe final.") < 0)
             goto allocation;
-        }
-        if (snag_response_graph_add_opaque(graph, "rs_fixture_gap",
-                                          "reasoning", payload) < 0)
-            goto allocation;
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_gap_final",
-                           "Gap-safe final.", 0);
+        /* Inert wire item 1 is absent from the supported output graph. */
+        return emit(opaque, 2u, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
+                    "msg_fixture_gap_final", "Gap-safe final.", 15u);
     }
     if (strcmp(prompt, "public_index_decrease") == 0) {
         if (snag_response_graph_add_public(
@@ -1043,10 +1034,6 @@ flood_done:
         return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
                            SNAG_PHASE_COMMENTARY, "msg_fixture_commentary",
                            "I am still working.", 0);
-    if (strcmp(prompt, "summary_only") == 0)
-        return emit_public(graph, emit, opaque, SNAG_ITEM_REASONING_SUMMARY,
-                           SNAG_PHASE_SUMMARY, "sum_fixture_only",
-                           "Internal progress summary.", 0);
     if (strcmp(prompt, "final_plus_call") == 0) {
         if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
                         SNAG_PHASE_FINAL_ANSWER, "msg_fixture_conflict",
@@ -1112,9 +1099,6 @@ flood_done:
         if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
                         SNAG_PHASE_COMMENTARY, "msg_fixture_multi_commentary",
                         "Working.\n", 0) < 0 ||
-            emit_public(graph, emit, opaque, SNAG_ITEM_REASONING_SUMMARY,
-                        SNAG_PHASE_SUMMARY, "sum_fixture_multi",
-                        "Checked the fixture.", 0) < 0 ||
             emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
                         SNAG_PHASE_FINAL_ANSWER, "msg_fixture_multi_final",
                         "Done.", 0) < 0)

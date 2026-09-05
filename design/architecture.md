@@ -388,7 +388,7 @@ own sends, and retained room history. Private model speech and tool internals
 stay in rollout. One process-local level is the exact `-v` count or `/verbose N`;
 configuration reloads never replace it. Level 1 adds compact generic tool start
 and outcome rows without output. Level 2 adds 1,024 argument / 512 output
-character previews and reasoning summaries; level 3 has full retained tools.
+character previews; level 3 has full retained tools.
 Levels 4/5/6 add live runtime/durable, redacted protocol and transport diagnostics
 only in visible rollout. Unseen conversation, tool and IRC records use durable
 event references and current presentation policy; raising the level does not

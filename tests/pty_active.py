@@ -601,7 +601,7 @@ def test_public_index_gap():
     log = events(new_session(before))
     completed = one(log, "response_completed")
     assert [item["kind"] for item in completed["data"]["items"]] == [
-        "assistant", "opaque", "assistant"
+        "assistant", "assistant"
     ]
     assert not [item for item in log if item["type"] == "response_failed"]
     assert not [item for item in log if item["type"] == "turn_failed"]

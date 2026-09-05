@@ -1511,7 +1511,7 @@ test_semantic_history(void)
         snag_buf_init(&finish, 4096u);
         assert(snag_buf_printf(&response,
             "{\"data\":{\"items\":[{\"name\":\"future_tool\",\"call_id\":\"one\","
-            "\"arguments\":\"%s\"},{\"text\":\"retained-reason\"}]}}\n", args) == 0);
+            "\"arguments\":\"%s\"}]}}\n", args) == 0);
         assert(snag_buf_terminate(&response) == 0);
         assert(snag_buf_printf(&finish, "{\"data\":{\"call_id\":\"one\",\"result\":{"
                               "\"status\":\"failed\",\"model_text\":\"%s\"}}}\n", result) == 0);
@@ -1520,10 +1520,6 @@ test_semantic_history(void)
         snag_render_set_color(&render, SNAG_COLOR_NEVER);
         snag_render_set_networked(&render, true, "agent");
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-        assert(snag_render_rollout_begin(&render, STDERR_FILENO, "reason › ",
-                                        SNAG_PRESENT_REASONING) == 0);
-        assert(snag_render_rollout(&render, "retained-reason", 15u, NULL) == 0);
-        assert(snag_render_rollout_end(&render) == 0);
         struct snag_render_source source = append_event(file, (char *)response.data);
         assert(snag_render_durable(&render, fileno(file), source, "response_completed", 0u, 0u) == 0);
         source = append_event(file, "{\"data\":{\"call_id\":\"one\",\"resolved_workdir\":\"/work\"}}\n");
@@ -1536,7 +1532,6 @@ test_semantic_history(void)
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
         size_t used = drain_available(fds[0], output, sizeof(output), 0u);
         assert((strstr(output, "future_tool") != NULL) == (level >= 1u));
-        assert((strstr(output, "retained-reason") != NULL) == (level >= 2u));
         assert((strstr(output, "RRRR") != NULL) == (level >= 2u));
         assert((strstr(output, "[arguments truncated]") != NULL) == (level == 2u));
         assert((strstr(output, "[output truncated]") != NULL) == (level == 2u));

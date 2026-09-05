@@ -496,7 +496,6 @@ PY
 out=$($bin -e -vv -- multi_item 2>"$root/multi.err")
 [ "$out" = "Done." ]
 grep -q '^Working\.$' "$root/multi.err"
-grep -q '^reason › Checked the fixture\.$' "$root/multi.err"
 
 # Flags select exactly one shared ladder; low levels never leak tool output.
 flags=

@@ -77,14 +77,6 @@ main(void)
                                          "msg_commentary", "checking") == 0);
     assert(snag_response_graph_add_call(&graph, "item_call", "provider_call",
                                        "exec_command", args()) == 0);
-    {
-        json_t *payload = json_object();
-        assert(payload);
-        assert(snag_json_set_new(payload, "encrypted_content",
-                                json_string("opaque")) == 0);
-        assert(snag_response_graph_add_opaque(&graph, "item_opaque",
-                                             "reasoning", payload) == 0);
-    }
     assert(snag_response_graph_classify(&graph, &decision,
                                        error, sizeof(error)) == 0);
     assert(decision.outcome == SNAG_GRAPH_CALLS);
@@ -98,7 +90,7 @@ main(void)
     assert(snag_response_graph_from_json(&copy, encoded,
                                         error, sizeof(error)) == 0);
     assert(copy.items[1].local_item_id[0] == '\0');
-    assert(copy.items[2].local_item_id[0] == '\0');
+    assert(copy.count == 2u);
     assert(snag_response_graph_classify(&copy, &decision,
                                        error, sizeof(error)) == 0);
     assert(decision.outcome == SNAG_GRAPH_CALLS);
@@ -114,10 +106,7 @@ main(void)
         assert(a.len == b.len && memcmp(a.data, b.data, a.len) == 0);
         assert(json_object_set_new(json_object_get(json_array_get(roundtrip, 1u),
             "arguments"), "command", json_string("changed")) == 0);
-        assert(json_object_set_new(json_object_get(json_array_get(roundtrip, 2u),
-            "payload"), "encrypted_content", json_string("changed")) == 0);
         assert(json_equal(copy.items[1].arguments, graph.items[1].arguments));
-        assert(json_equal(copy.items[2].payload, graph.items[2].payload));
         assert(!json_equal(roundtrip, encoded));
         snag_buf_free(&a);
         snag_buf_free(&b);

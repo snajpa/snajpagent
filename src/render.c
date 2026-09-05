@@ -94,7 +94,7 @@ bool
 snag_presentation_enabled(enum snag_presentation kind, unsigned int level,
                           enum snag_render_view view)
 {
-    static const unsigned char minimum[] = {0, 1, 2, 2, 3, 2, 4, 5, 6, 0, 0};
+    static const unsigned char minimum[] = {0, 1, 2, 2, 3, 4, 5, 6, 0, 0};
     if ((unsigned int)kind >= sizeof(minimum) || level < minimum[kind])
         return false;
     if (kind == SNAG_PRESENT_FEEDBACK)

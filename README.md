@@ -193,7 +193,7 @@ line: verbosity is no longer a configuration setting.
 | ---: | --- |
 | 0 | Conversation, lifecycle notices, warnings and command replies |
 | 1 | Compact tool start/outcome rows; no output body |
-| 2 | 1,024-character argument and 512-character output previews; reasoning summaries |
+| 2 | 1,024-character argument and 512-character output previews |
 | 3 | Full retained tool arguments, execution context and results |
 | 4 | Runtime, accounting, durable-event and connection diagnostics |
 | 5 | Redacted protocol payloads |

@@ -47,16 +47,13 @@ enum snag_output_correction {
 enum snag_item_kind {
     SNAG_ITEM_ASSISTANT,
     SNAG_ITEM_REFUSAL,
-    SNAG_ITEM_REASONING_SUMMARY,
-    SNAG_ITEM_TOOL_CALL,
-    SNAG_ITEM_OPAQUE
+    SNAG_ITEM_TOOL_CALL
 };
 
 enum snag_item_phase {
     SNAG_PHASE_NONE,
     SNAG_PHASE_COMMENTARY,
-    SNAG_PHASE_FINAL_ANSWER,
-    SNAG_PHASE_SUMMARY
+    SNAG_PHASE_FINAL_ANSWER
 };
 
 struct snag_response_item {
@@ -69,8 +66,6 @@ struct snag_response_item {
     char *text;
     char *name;
     json_t *arguments;
-    char *provider_type;
-    json_t *payload;
 };
 
 struct snag_response_usage {
@@ -121,9 +116,6 @@ int snag_response_graph_add_call(struct snag_response_graph *graph,
                                 const char *provider_item_id,
                                 const char *provider_call_id,
                                 const char *name, json_t *arguments);
-int snag_response_graph_add_opaque(struct snag_response_graph *graph,
-                                  const char *provider_item_id,
-                                  const char *provider_type, json_t *payload);
 int snag_response_graph_classify(const struct snag_response_graph *graph,
                                 struct snag_graph_decision *decision,
                                 char *error, size_t error_size);

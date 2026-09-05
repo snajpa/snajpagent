@@ -327,7 +327,7 @@ appended to model text.
 All modes use the same process-local ladder (flag count or `/verbose N`):
 
 - verbosity 1: compact tool start/outcome rows, no output body;
-- verbosity 2: 1,024 argument / 512 output character previews and reasoning summaries;
+- verbosity 2: 1,024 argument / 512 output character previews;
 - verbosity 3: full retained arguments, execution context and results, preserving
   `[tool] max_output_bytes` and capture limits;
 - verbosity 4: runtime, accounting, durable app events and IRC connection state;
