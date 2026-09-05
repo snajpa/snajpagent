@@ -247,6 +247,10 @@ snj_term_write(int fd, const void *text, size_t len)
     const unsigned char *bytes = text;
     struct pollfd output = {fd, POLLOUT, 0};
 
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
     while (len) {
         size_t amount = len < 1024u ? len : 1024u;
         int rc;

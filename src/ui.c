@@ -315,6 +315,7 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
             snj_term_external_begin(term, error, error_size) :
             snj_term_external_end(term, error, error_size);
     case UI_PROMPT: {
+        term->defer_redraw = false;
         if (message->data.prompt.active && !term->active)
             ++display->turn_generation;
         free(display->prompt_source);
@@ -344,6 +345,7 @@ apply_message(struct snj_ui_display *display, struct ui_message *message,
         return snj_term_set_spinner_states(term, message->data.value);
     case UI_DRAFT: return snj_term_restore_draft(term, message->text);
     case UI_VIEW:
+        term->defer_redraw = true;
         return snj_render_set_view(render,
                                   (enum snj_render_view)message->data.value);
     case UI_SUBMITTED:
@@ -426,7 +428,7 @@ read_input(struct snj_ui_display *display, int timeout_ms)
     if (item->action == SNJ_TERM_CANCEL || item->action == SNJ_TERM_INTERRUPT ||
         item->action == SNJ_TERM_SUBMIT || item->action == SNJ_TERM_QUEUE) {
         bool deferred = term->defer_redraw;
-        term->defer_redraw = item->action == SNJ_TERM_SUBMIT ||
+        term->defer_redraw = deferred || item->action == SNJ_TERM_SUBMIT ||
                              item->action == SNJ_TERM_QUEUE;
         if (apply_prompt(display) < 0) {
             free(item->text);
@@ -515,14 +517,6 @@ apply_public(struct snj_ui_display *display, struct ui_message *message)
 static int
 apply_display(struct snj_ui_display *display, struct ui_message *message)
 {
-    if (message->kind == UI_VIEW) {
-        int rc;
-        display->term.defer_redraw = true;
-        rc = apply_message(display, message,
-                            message->error, sizeof(message->error));
-        display->term.defer_redraw = false;
-        return rc;
-    }
     if (message->kind == UI_PUBLIC)
         return apply_public(display, message);
     if (message->kind == UI_RAW) {

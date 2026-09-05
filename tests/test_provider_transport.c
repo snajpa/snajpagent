@@ -1046,6 +1046,7 @@ test_ui_output_order_and_failure(void)
     assert(waitpid(reader, &status, 0) == reader);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     assert(close(pipefd[1]) == 0);
+    assert(snj_ui_raw(&ui, -1, "x", 1u) < 0 && errno == EBADF);
     assert(snj_ui_raw(&ui, pipefd[1], "x", 1u) < 0);
     assert(snj_ui_poll(&ui, 0, false, &action, &line) < 0);
     snj_ui_free(&ui);
