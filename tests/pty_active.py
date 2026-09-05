@@ -2537,10 +2537,12 @@ def test_config_editor_reload():
         child.wait(b"model: editor-base", start=end)
         child.wait(PROMPT.rstrip(), start=status_end)
 
-        # Process topology reloads too: enter and leave configured IRC mode.
+        # Topology reloads preserve the selected private/public view.
         plan.write_text(str(network), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+        child.wait(PROMPT.rstrip(), start=end)
+        child.send(b"/chat\r")
         child.wait(f"reloadop@{socket.gethostname()} : ".encode(), start=end)
         peer = IRCClient(network_port, "reloadpeer")
         peer.close()
@@ -2559,6 +2561,7 @@ def test_config_editor_reload():
         plan.write_text(str(valid_one), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+        child.send(b"/rollout\r")
         child.wait(PROMPT.rstrip(), start=end)
         child.exit_now()
 
@@ -2793,6 +2796,79 @@ def test_exit_resume_matrix():
     assert failed_arguments[failed_arguments.index("--listen") + 1] == \
         occupied_endpoint
     occupied.close()
+
+
+def test_runtime_network_commands():
+    endpoint = f"127.0.0.1:{free_port()}"
+    upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(8)
+    outgoing = f"127.0.0.1:{upstream.getsockname()[1]}"
+    before = session_ids()
+    child = Child(["--no-color", "-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"])
+    links = []
+    peer = None
+    try:
+        child.wait(PROMPT.rstrip())
+        session_id = new_session(before)
+        child.send(b"/help\r")
+        end = child.wait(b"/disconnect [ENDPOINT]")
+        child.wait(PROMPT.rstrip(), start=end)
+        child.send(b"/chat\r")
+        end = child.wait(b"chat is offline")
+        child.wait(chat_prompt("runtimeop"), start=end)
+        child.send(b"keep-unsent-draft\r")
+        end = child.wait(b"no active IRC destinations")
+        child.wait(b"keep-unsent-draft", start=end)
+        assert not [event for event in events(session_id) if event["type"] == "turn_started"]
+        child.send(b"\x15/rollout\r")
+        end = child.wait("── rollout ──".encode(), start=end)
+        child.wait(PROMPT.rstrip(), start=end)
+        child.send(b"slow\r")
+        end = child.wait(b"working slowly", start=end)
+        child.send(f"/server start {endpoint}\r".encode())
+        end = child.wait(f"hosting started on {endpoint}".encode(), start=end)
+        assert not [event for event in events(session_id)
+                    if event["type"] in ("turn_completed", "turn_interrupted")]
+        peer = IRCClient(int(endpoint.rsplit(":", 1)[1]), "runtimepeer")
+        child.send(f"/connect {outgoing}\r".encode())
+        end = child.wait(b"outgoing connection added", start=end)
+        links = accept_connections(upstream, 2)
+        child.send(f"/connect {outgoing}\r".encode())
+        end = child.wait(b"outgoing connection already configured", start=end)
+        child.send(b"/disconnect\r")
+        end = child.wait(b"outgoing connections removed; hosting unchanged", start=end)
+        for connection in links:
+            connection.settimeout(2.0)
+            while connection.recv(65536):
+                pass
+        child.send(b"/server stop\r")
+        end = child.wait(b"hosting stopped; outgoing connections unchanged", start=end)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            assert probe.connect_ex(("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))) != 0
+        child.send(b"\x03")
+        end = child.wait(b"turn interrupted", start=end)
+        child.wait_idle_prompt(start=end)
+        command = child.exit_now()
+        arguments = command_arguments(command)
+        assert "--no-listen" in arguments and "--no-client" in arguments
+        assert "--listen" not in arguments and "--client" not in arguments
+        log = events(session_id)
+        assert not [event for event in log if event["type"] == "steering_added"]
+        resumed = Child.from_command(command)
+        try:
+            resumed.wait(b"session id " + session_id[:8].encode())
+            resumed.wait(PROMPT.rstrip())
+            resumed.exit_now()
+        finally:
+            resumed.kill()
+    finally:
+        if peer is not None:
+            peer.close()
+        for connection in links:
+            connection.close()
+        upstream.close()
+        child.kill()
 
 
 def test_network_resume_roles():
@@ -4089,6 +4165,7 @@ if __name__ == "__main__":
     test_known_context_meter()
     test_config_and_cli_model_passthrough()
     test_exit_resume_matrix()
+    test_runtime_network_commands()
     test_network_resume_roles()
     test_network_collision_prompts()
     test_network_live_nick_prompt()

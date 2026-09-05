@@ -406,7 +406,7 @@ tool_input_pump(void *opaque, unsigned int timeout_ms)
     struct app_state *app = opaque;
     int rc = snag_app_active_input_pump(opaque, timeout_ms);
 
-    if (rc == 0 && app->networked && app->irc_urgent.len)
+    if (rc == 0 && app->irc_urgent.len)
         return 1;
     return rc;
 }
@@ -438,18 +438,35 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         (strcmp(call->name, "create_goal") == 0 ||
          strcmp(call->name, "update_goal") == 0))
         return snag_app_goal_tool(app, call, result, error, error_size);
+    if (call && call->name &&
+        (strcmp(call->name, "irc_send") == 0 ||
+         strcmp(call->name, "irc_topic") == 0 ||
+         strcmp(call->name, "irc_state") == 0)) {
+        const char *failure = NULL;
+
+        if (!app->request_networked)
+            failure = "IRC tools were not available in this request.";
+        else if (strcmp(call->name, "irc_state") != 0 &&
+            app->request_routing_revision != snag_irc_routing_revision(app->irc))
+            failure = "Not performed: IRC destinations changed after this request was built. Nothing was sent; inspect irc_state before deciding a new action.";
+        if (failure) {
+            *result = snag_tool_result_terminal(false, failure);
+            return *result ? 0 : -1;
+        }
+    }
     if (call && call->name && strcmp(call->name, "irc_state") == 0) {
         struct snag_buf state;
         int rc;
 
         *result = NULL;
-        if (!app->irc || !snag_json_exact_keys(call->arguments, NULL, 0u)) {
+        if (!snag_json_exact_keys(call->arguments, NULL, 0u)) {
             *result = snag_tool_result_terminal(false,
                                                 "irc_state arguments are invalid");
             return *result ? 0 : -1;
         }
         snag_buf_init(&state, SNAG_MAX_IRC_SNAPSHOT);
-        rc = snag_irc_snapshot(app->irc, &state, error, error_size);
+        rc = app->irc ? snag_irc_state(app->irc, &state, error, error_size) :
+            snag_buf_printf(&state, "no active endpoints\n");
         if (rc == 0)
             rc = snag_buf_terminate(&state);
         if (rc == 0)

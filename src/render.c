@@ -323,8 +323,7 @@ view_block(struct snag_render *render, enum snag_render_view view, int fd,
 {
     struct snag_render_record *record;
 
-    if (!render->networked ||
-        (render->view == view && !render->view_head[view]))
+    if (render->view == view && !render->view_head[view])
         return write_role_block(render, fd, color, text, len, colored_len,
                                 terminal_safe, persistent);
     record = calloc(1u, sizeof(*record));
@@ -419,8 +418,6 @@ void
 snag_render_set_networked(struct snag_render *render, bool networked,
                          const char *model_nick)
 {
-    if (render->networked != networked)
-        render->view = networked ? SNAG_RENDER_CHAT : SNAG_RENDER_ROLLOUT;
     render->networked = networked;
     render->model_nick[0] = '\0';
     if (model_nick)
@@ -2841,7 +2838,7 @@ snag_render_irc_event(struct snag_render *render,
                 strcmp(event->nick, render->model_nick) == 0;
     struct snag_render_source source = render->irc_source;
     render->irc_source = (struct snag_render_source){0};
-    if (!render->networked || render->view == SNAG_RENDER_CHAT)
+    if (render->view == SNAG_RENDER_CHAT)
         return render_irc_event_now(render, event, own_agent);
     record = calloc(1u, sizeof(*record));
     if (!record)
@@ -2967,8 +2964,7 @@ snag_render_set_view(struct snag_render *render, enum snag_render_view view)
     };
     struct snag_render_record *open;
 
-    if (!render || (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT) ||
-        (!render->networked && view != SNAG_RENDER_ROLLOUT)) {
+    if (!render || (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT)) {
         errno = EINVAL;
         return -1;
     }

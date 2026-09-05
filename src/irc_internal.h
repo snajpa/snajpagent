@@ -8,19 +8,22 @@
 struct snag_irc_view {
     char model[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char operator[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char text[32768u];
     char nicks[4096u]; /* Newline-separated current members, without op prefixes. */
     bool joined;
 };
 
 struct snag_irc_core;
-bool snag_irc_endpoint_equal(const char *a, const char *b);
 bool snag_irc_nick_mentioned(const char *text, const char *nick);
 int snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
                       const char *workspace, bool network,
                       snag_irc_event_fn event_fn, snag_irc_trace_fn trace_fn,
                       void *opaque, char *error, size_t error_size);
 void snag_irc_core_close(struct snag_irc_core *irc);
+size_t snag_irc_core_pending(const struct snag_irc_core *irc);
+int snag_irc_core_copy_history(struct snag_irc_core *dst,
+                              const struct snag_irc_core *src, bool hosted_only);
 int snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, int wake_fd,
                       char *error, size_t error_size);
 int snag_irc_core_send_operator(struct snag_irc_core *irc, const char *text,

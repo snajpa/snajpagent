@@ -45,6 +45,7 @@ struct app_state {
     struct snag_model_capacity turn_capacity;
     const struct snag_cli *cli;
     struct snag_config *config;
+    struct snag_irc_config irc_file_config;
     const char *config_path;
     bool config_allow_create;
     const char *turn_model;
@@ -75,6 +76,8 @@ struct app_state {
     bool input_closed;
     bool execute;
     bool networked;
+    bool request_networked; /* Capabilities frozen when constructing a request. */
+    uint64_t request_routing_revision;
     bool tool_active;
     bool irc_urgent_local_operator;
     bool irc_turn_local_operator;

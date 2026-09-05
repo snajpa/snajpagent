@@ -422,10 +422,10 @@ main(void)
             }
         }
     }
-    assert(!config.irc_listen_explicit);
-    assert(strcmp(config.irc_listen, "localhost:6667") == 0);
-    assert(config.irc_client_count == 0u);
-    assert(config.irc_history_lines == 200u);
+    assert(!config.irc.listen_explicit);
+    assert(strcmp(config.irc.listen, "localhost:6667") == 0);
+    assert(config.irc.client_count == 0u);
+    assert(config.irc.history_lines == 200u);
     assert(config.default_timeout_ms == 0u);
     assert(config.max_timeout_ms == 86400000u);
     assert(config.max_output_tokens == 6000u);
@@ -453,8 +453,8 @@ main(void)
     assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
     write_bytes(path, valid, sizeof(valid) - 1u);
     snag_config_init(&config);
-    config.irc_model_nick_implicit = true;
-    config.irc_operator_nick_implicit = true;
+    config.irc.model_nick_implicit = true;
+    config.irc.operator_nick_implicit = true;
     assert(snag_config_load(&config, path, dotdir,
                            error, sizeof(error)) == 0);
     assert(strcmp(config.model, "gpt-5.5") == 0);
@@ -512,17 +512,17 @@ main(void)
     assert(strcmp(config.prompt_spinner_provider, " \\|/-") == 0);
     assert(strcmp(config.prompt_spinner_tool, " ") == 0);
     assert(config.prompt_spinner_per_second == 60u);
-    assert(config.irc_listen_explicit);
-    assert(strcmp(config.irc_listen, "127.0.0.1:7667") == 0);
-    assert(config.irc_client_count == 2u);
-    assert(strcmp(config.irc_clients[0], "irc-a.example") == 0);
-    assert(strcmp(config.irc_clients[1], "[2001:db8::20]:7667") == 0);
-    assert(strcmp(config.irc_model_nick, "builder") == 0);
-    assert(strcmp(config.irc_operator_nick, "alice") == 0);
-    assert(!config.irc_model_nick_implicit);
-    assert(!config.irc_operator_nick_implicit);
-    assert(strcmp(config.irc_room_name, "build-host") == 0);
-    assert(config.irc_history_lines == 321u);
+    assert(config.irc.listen_explicit);
+    assert(strcmp(config.irc.listen, "127.0.0.1:7667") == 0);
+    assert(config.irc.client_count == 2u);
+    assert(strcmp(config.irc.clients[0], "irc-a.example") == 0);
+    assert(strcmp(config.irc.clients[1], "[2001:db8::20]:7667") == 0);
+    assert(strcmp(config.irc.model_nick, "builder") == 0);
+    assert(strcmp(config.irc.operator_nick, "alice") == 0);
+    assert(!config.irc.model_nick_implicit);
+    assert(!config.irc.operator_nick_implicit);
+    assert(strcmp(config.irc.room_name, "build-host") == 0);
+    assert(config.irc.history_lines == 321u);
     assert(config.default_yield_ms == 0u);
     assert(config.default_timeout_ms == 4000u);
     assert(config.max_timeout_ms == 5000u);

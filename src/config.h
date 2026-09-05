@@ -62,6 +62,20 @@ enum snag_auth_kind {
 
 #define SNAG_CHATGPT_BASE "https://chatgpt.com/backend-api/codex"
 
+/* Bounded desired networking state; socket health belongs to the IRC owners. */
+struct snag_irc_config {
+    bool listen_explicit;
+    char listen[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    char clients[SNAG_CONFIG_IRC_CLIENT_MAX][SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    size_t client_count;
+    char model_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char operator_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    bool model_nick_implicit;
+    bool operator_nick_implicit;
+    char room_name[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    uint32_t history_lines;
+};
+
 struct snag_provider_config {
     char name[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     enum snag_auth_kind auth;
@@ -106,17 +120,7 @@ struct snag_config {
     char prompt_spinner_provider[SNAG_CONFIG_SPINNER_MAX];
     char prompt_spinner_tool[SNAG_CONFIG_SPINNER_MAX];
     uint32_t prompt_spinner_per_second;
-    bool irc_listen_explicit;
-    char irc_listen[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    char irc_clients[SNAG_CONFIG_IRC_CLIENT_MAX]
-                    [SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    size_t irc_client_count;
-    char irc_model_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
-    char irc_operator_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
-    bool irc_model_nick_implicit;
-    bool irc_operator_nick_implicit;
-    char irc_room_name[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
-    uint32_t irc_history_lines;
+    struct snag_irc_config irc;
     char *shell;
     uint32_t default_yield_ms;
     uint32_t max_parallel_commands;

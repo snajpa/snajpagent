@@ -1821,7 +1821,7 @@ snag_context_build(struct snag_session *session, const char *model,
     builder.max_output_tokens = max_output_tokens;
     builder.max_output_known = max_output_known;
     builder.networked = config && session && !session->active_read_only &&
-        (config->irc_listen_explicit || config->irc_client_count != 0u);
+        (config->irc.listen_explicit || config->irc.client_count != 0u);
     if (session && session->active_turn_id[0])
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
@@ -1856,7 +1856,7 @@ snag_context_build(struct snag_session *session, const char *model,
             "and irc_topic only when the agent has +o. A local operator mention turn "
             "requires one successful irc_send message; a notice does not count "
             "as a reply, and peer/background traffic requires no response.",
-            config->irc_model_nick, config->irc_operator_nick) < 0 ||
+            config->irc.model_nick, config->irc.operator_nick) < 0 ||
           snag_buf_terminate(&network_harness) < 0 ||
           append_message(&builder, "developer",
                          (const char *)network_harness.data) < 0)) ||

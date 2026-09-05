@@ -203,14 +203,17 @@ static const struct snag_term_command commands[] = {
     {"/chat", "show IRC room activity"},
     {"/rollout", "show local model activity"},
     {"/topic [TEXT]", "show or change the IRC room topic"},
-    {"/names", "show IRC endpoints, room members, and operator flags"}
+    {"/names", "show IRC endpoints, room members, and operator flags"},
+    {"/server [start [ENDPOINT]|stop]", "show, start, or stop hosting only"},
+    {"/connect [ENDPOINT]", "add an outgoing connection (default localhost:6667)"},
+    {"/disconnect [ENDPOINT]", "remove one or all outgoing connections; preserve hosting"}
 };
 
 static size_t
 command_count(const struct app_state *app)
 {
-    size_t count = sizeof(commands) / sizeof(commands[0]);
-    return app->networked ? count : count - 4u;
+    (void)app;
+    return sizeof(commands) / sizeof(commands[0]);
 }
 static const char *
 effective_model(const char *model)
@@ -510,7 +513,8 @@ set_input_prompt(struct app_state *app, bool active)
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
-    values[3] = app->networked ? snag_irc_operator_nick(app->irc) : "";
+    values[3] = app->irc ? snag_irc_operator_nick(app->irc) :
+                          app->config->irc.operator_nick;
     values[4] = hostname;
     values[5] = meter;
     values[6] = selected == 0u ? "chat" :
@@ -561,7 +565,7 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
-    values[3] = networked ? config->irc_operator_nick : "";
+    values[3] = networked ? config->irc.operator_nick : "";
     values[4] = hostname;
     values[5] = "100%";
     values[SNAG_PROMPT_HOUR] = "23";
@@ -609,10 +613,17 @@ static int
 tick_irc(struct app_state *app, char *error, size_t error_size)
 {
     struct snag_buf nicks;
+    uint64_t revision = snag_irc_routing_revision(app->irc);
     int rc;
 
     if (snag_irc_tick(app->irc, 0, error, error_size) < 0)
         return -1;
+    if (revision != snag_irc_routing_revision(app->irc)) {
+        app->irc_urgent_local_operator = false;
+        app->irc_turn_local_operator = false;
+        if (snag_app_irc_snapshot(app, "topology", error, error_size) < 0)
+            return -1;
+    }
     snag_buf_init(&nicks, (SNAG_CONFIG_IRC_CLIENT_MAX + 1u) * 4096u);
     rc = snag_irc_take_nicks(app->irc, &nicks);
     if (rc > 0)
@@ -1081,6 +1092,9 @@ render_status(struct app_state *app)
                               strlen("\nobserved usage: unknown")) < 0) {
         goto out;
     }
+    if (app->irc && (snag_buf_putc(&text, '\n') < 0 ||
+        snag_irc_state(app->irc, &text, NULL, 0u) < 0))
+        goto out;
     if (snag_buf_terminate(&text) < 0)
         goto out;
     rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
@@ -1091,14 +1105,11 @@ out:
 static int
 render_help(struct app_state *app)
 {
-    static const char ordinary_keys[] =
-        "Enter submit/add to active turn · Empty Tab no-op · "
-        "Tab complete/indent/queue · Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
-    static const char network_keys[] =
-        "Chat Enter send (mention to steer) · Rollout Enter submit/add to active turn · "
+    static const char keys[] =
+        "Chat Enter broadcast to enabled destinations (mention to steer) · "
+        "Rollout Enter private submit/add to active turn · "
         "Empty Tab switch view · Tab complete/indent/queue (chat: @nick) · "
         "Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
-    const char *keys = app->networked ? network_keys : ordinary_keys;
     struct snag_buf text;
     int rc = -1;
 
@@ -1665,41 +1676,94 @@ static bool
 irc_config_equal(const struct snag_config *left,
                  const struct snag_config *right)
 {
-    if (left->irc_listen_explicit != right->irc_listen_explicit ||
-        strcmp(left->irc_listen, right->irc_listen) != 0 ||
-        left->irc_client_count != right->irc_client_count ||
-        strcmp(left->irc_model_nick, right->irc_model_nick) != 0 ||
-        strcmp(left->irc_operator_nick, right->irc_operator_nick) != 0 ||
-        left->irc_model_nick_implicit != right->irc_model_nick_implicit ||
-        left->irc_operator_nick_implicit !=
-            right->irc_operator_nick_implicit ||
-        strcmp(left->irc_room_name, right->irc_room_name) != 0 ||
-        left->irc_history_lines != right->irc_history_lines)
+    if (left->irc.listen_explicit != right->irc.listen_explicit ||
+        strcmp(left->irc.listen, right->irc.listen) != 0 ||
+        left->irc.client_count != right->irc.client_count ||
+        strcmp(left->irc.model_nick, right->irc.model_nick) != 0 ||
+        strcmp(left->irc.operator_nick, right->irc.operator_nick) != 0 ||
+        left->irc.model_nick_implicit != right->irc.model_nick_implicit ||
+        left->irc.operator_nick_implicit !=
+            right->irc.operator_nick_implicit ||
+        strcmp(left->irc.room_name, right->irc.room_name) != 0 ||
+        left->irc.history_lines != right->irc.history_lines)
         return false;
-    for (size_t i = 0u; i < left->irc_client_count; ++i)
-        if (strcmp(left->irc_clients[i], right->irc_clients[i]) != 0)
+    for (size_t i = 0u; i < left->irc.client_count; ++i)
+        if (strcmp(left->irc.clients[i], right->irc.clients[i]) != 0)
             return false;
     return true;
 }
 
 static int
-open_configured_irc(struct app_state *app, const struct snag_config *config,
-                    char *error, size_t error_size)
+apply_network(struct app_state *app, struct snag_config *candidate,
+               char *error, size_t error_size)
 {
-    if (!snag_irc_enabled(config)) {
-        app->irc = NULL;
+    int rc = 0;
+    uint64_t revision = snag_irc_routing_revision(app->irc);
+
+    if (snag_irc_normalize(candidate, error, error_size) < 0)
+        return 1;
+    if (irc_config_equal(app->config, candidate))
         return 0;
+    if (snag_irc_configure(app->irc, candidate, app->session.workspace,
+                          error, error_size) < 0) {
+        char original[256], rollback[256] = {0};
+
+        (void)snag_strcpy(original, sizeof(original),
+                         error[0] ? error : "IRC change failed");
+        if (snag_irc_configure(app->irc, app->config, app->session.workspace,
+                               rollback, sizeof(rollback)) < 0)
+            snag_errorf(error, error_size, "%s; restoration failed: %s; /status shows remaining roles",
+                        original, rollback[0] ? rollback : strerror(errno));
+        else
+            snag_errorf(error, error_size, "%s; previous roles restored", original);
+        rc = 1;
+    } else {
+        app->config->irc = candidate->irc;
     }
-    if (snag_irc_open(&app->irc, config, app->session.workspace,
-                     snag_app_irc_event, snag_app_irc_trace, app,
-                     error, error_size) < 0)
-        return -1;
-    if (snag_app_irc_restore(app, error, error_size) < 0) {
-        snag_irc_close(app->irc);
-        app->irc = NULL;
-        return -1;
+    snag_irc_roles(app->irc, app->config);
+    candidate->irc = app->config->irc;
+    if (revision != snag_irc_routing_revision(app->irc)) {
+        app->irc_urgent_local_operator = false;
+        app->irc_turn_local_operator = false;
     }
-    return 0;
+    app->networked = snag_irc_enabled(app->config);
+    if (snag_ui_networked(&app->ui, app->networked,
+                          snag_irc_model_nick(app->irc)) < 0 ||
+        snag_app_irc_snapshot(app, "topology", NULL, 0u) < 0 ||
+        tick_irc(app, NULL, 0u) < 0)
+        return -1;
+    return rc;
+}
+
+static void
+merge_file_network(struct app_state *app, struct snag_config *candidate)
+{
+    const struct snag_irc_config *old = &app->irc_file_config;
+    struct snag_irc_config file = candidate->irc;
+
+    candidate->irc = app->config->irc;
+    if (file.listen_explicit != old->listen_explicit ||
+        strcmp(file.listen, old->listen) != 0) {
+        candidate->irc.listen_explicit = file.listen_explicit;
+        memcpy(candidate->irc.listen, file.listen, sizeof(file.listen));
+    }
+    if (file.client_count != old->client_count ||
+        memcmp(file.clients, old->clients, sizeof(file.clients)) != 0) {
+        candidate->irc.client_count = file.client_count;
+        memcpy(candidate->irc.clients, file.clients, sizeof(file.clients));
+    }
+    if (strcmp(file.model_nick, old->model_nick) != 0) {
+        memcpy(candidate->irc.model_nick, file.model_nick, sizeof(file.model_nick));
+        candidate->irc.model_nick_implicit = file.model_nick_implicit;
+    }
+    if (strcmp(file.operator_nick, old->operator_nick) != 0) {
+        memcpy(candidate->irc.operator_nick, file.operator_nick, sizeof(file.operator_nick));
+        candidate->irc.operator_nick_implicit = file.operator_nick_implicit;
+    }
+    if (strcmp(file.room_name, old->room_name) != 0)
+        memcpy(candidate->irc.room_name, file.room_name, sizeof(file.room_name));
+    if (file.history_lines != old->history_lines)
+        candidate->irc.history_lines = file.history_lines;
 }
 
 static int
@@ -1709,9 +1773,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     struct snag_config previous;
     const char *selected_provider = app->session.default_provider[0] ?
         app->session.default_provider : NULL;
-    bool old_networked;
-    bool new_networked;
-    bool replace_irc;
+    struct snag_irc_config file_network;
     int rc = 1;
 
     snag_config_init(&candidate);
@@ -1721,8 +1783,11 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     }
     if (snag_config_load(&candidate,
             app->config_allow_create ? NULL : app->config_path,
-            app->store.root_path, error, error_size) < 0 ||
-        snag_irc_apply_cli(&candidate, app->cli, error, error_size) < 0)
+            app->store.root_path, error, error_size) < 0)
+        goto out;
+    file_network = candidate.irc;
+    merge_file_network(app, &candidate);
+    if (snag_irc_normalize(&candidate, error, error_size) < 0)
         goto out;
     if (!snag_config_provider(&candidate, selected_provider)) {
         snag_errorf(error, error_size,
@@ -1736,39 +1801,13 @@ reload_config(struct app_state *app, char *error, size_t error_size)
         errno = EINVAL;
         goto out;
     }
-    old_networked = snag_irc_enabled(app->config);
-    new_networked = snag_irc_enabled(&candidate);
-    replace_irc = old_networked != new_networked ||
-                  (old_networked && !irc_config_equal(app->config, &candidate));
-    if (replace_irc) {
-        snag_irc_close(app->irc);
-        app->irc = NULL;
-        if (open_configured_irc(app, &candidate, error, error_size) < 0) {
-            char replacement_error[256];
-            char rollback_error[256] = {0};
-
-            (void)snprintf(replacement_error, sizeof(replacement_error), "%s",
-                           error[0] ? error : "IRC replacement failed");
-            if (old_networked &&
-                open_configured_irc(app, app->config,
-                                    rollback_error,
-                                    sizeof(rollback_error)) < 0) {
-                snag_errorf(error, error_size,
-                          "%s; prior IRC configuration could not be restored: %s",
-                          replacement_error,
-                          rollback_error[0] ? rollback_error : "unknown error");
-                rc = -1;
-                goto out;
-            }
-            snag_errorf(error, error_size, "%s; previous configuration remains active",
-                      replacement_error);
-            goto out;
-        }
-    }
+    rc = apply_network(app, &candidate, error, error_size);
+    if (rc != 0)
+        goto out;
     previous = *app->config;
     *app->config = candidate;
     memset(&candidate, 0, sizeof(candidate));
-    app->networked = new_networked;
+    app->irc_file_config = file_network;
     app->turn_provider = snag_config_provider(app->config, selected_provider);
     app->staged_provider = NULL;
     snag_ui_color(&app->ui, configured_color(app, app->config));
@@ -1776,16 +1815,10 @@ reload_config(struct app_state *app, char *error, size_t error_size)
                             configured_markdown(app, app->config));
     snag_ui_networked(&app->ui, app->networked,
                              app->networked ?
-                                 app->config->irc_model_nick : NULL);
+                                 app->config->irc.model_nick : NULL);
     snag_ui_commands(&app->ui, commands, command_count(app));
     snag_ui_typing_pause(&app->ui, app->config->typing_pause_ms);
     snag_config_free(&previous);
-    if (replace_irc && app->networked &&
-        app->config->irc_listen_explicit &&
-        snag_app_irc_snapshot(app, "join", error, error_size) < 0) {
-        rc = -1;
-        goto out;
-    }
     rc = 0;
 out:
     snag_config_free(&candidate);
@@ -1915,8 +1948,6 @@ change_effort(struct app_state *app, const char *value, bool active)
 static int
 select_view(struct app_state *app, enum snag_render_view view, bool active)
 {
-    if (!app->networked)
-        return 0;
     if (snag_ui_set_view(&app->ui, view) < 0 ||
         set_input_prompt(app, active) < 0)
         return -1;
@@ -1927,12 +1958,104 @@ toggle_view(struct app_state *app)
 {
     enum snag_render_view view;
 
-    if (!app->networked)
-        return 0;
     view = app->ui.view == SNAG_RENDER_CHAT ?
            SNAG_RENDER_ROLLOUT : SNAG_RENDER_CHAT;
     return select_view(app, view, app->session.active_turn);
 }
+static int
+network_command(struct app_state *app, const char *line, bool *handled)
+{
+    struct snag_config candidate = *app->config;
+    struct snag_irc_config *config = &candidate.irc;
+    char copy[SNAG_CONFIG_IRC_ENDPOINT_MAX + 32u], error[512] = {0};
+    char *words[4], *save = NULL, *word;
+    size_t count = 0u;
+    bool server, connect, disconnect;
+    const char *endpoint;
+    int rc;
+
+    server = strncmp(line, "/server", 7u) == 0 &&
+             (!line[7] || isspace((unsigned char)line[7]));
+    connect = strncmp(line, "/connect", 8u) == 0 &&
+              (!line[8] || isspace((unsigned char)line[8]));
+    disconnect = strncmp(line, "/disconnect", 11u) == 0 &&
+                 (!line[11] || isspace((unsigned char)line[11]));
+    *handled = server || connect || disconnect;
+    if (!*handled)
+        return 0;
+    if (!snag_strcpy(copy, sizeof(copy), line))
+        return app_error(app, "network command is too long");
+    for (word = strtok_r(copy, " \t", &save); word && count < 4u;
+         word = strtok_r(NULL, " \t", &save))
+        words[count++] = word;
+    if (!count || count == 4u || (!server && count > 2u))
+        return app_error(app, "usage: /server [start [ENDPOINT]|stop], /connect [ENDPOINT], /disconnect [ENDPOINT]");
+    if (server) {
+        if (count == 1u)
+            return app_hostf(app, config->listen_explicit ?
+                "hosting %s" : "hosting is off; use /server start [ENDPOINT]", config->listen);
+        if (count == 2u && strcmp(words[1], "stop") == 0) {
+            if (!config->listen_explicit)
+                return app_hostf(app, "hosting is already off; outgoing connections unchanged");
+            config->listen_explicit = false;
+        } else if (count >= 2u && strcmp(words[1], "start") == 0) {
+            endpoint = count == 3u ? words[2] : "localhost:6667";
+            if (config->listen_explicit) {
+                if (snag_irc_endpoint_equal(config->listen, endpoint))
+                    return app_hostf(app, "already hosting %s", config->listen);
+                return app_error(app, "already hosting another endpoint; use /server stop first");
+            }
+            if (!snag_strcpy(config->listen, sizeof(config->listen), endpoint))
+                return app_error(app, "IRC endpoint is too long");
+            config->listen_explicit = true;
+        } else {
+            return app_error(app, "usage: /server [start [ENDPOINT]|stop]");
+        }
+    } else if (connect) {
+        endpoint = count == 2u ? words[1] : "localhost:6667";
+        if (config->listen_explicit && snag_irc_endpoint_equal(config->listen, endpoint))
+            return app_hostf(app, "already hosting %s; no self-connection needed", endpoint);
+        for (size_t i = 0u; i < config->client_count; ++i)
+            if (snag_irc_endpoint_equal(config->clients[i], endpoint))
+                return app_hostf(app, "outgoing connection already configured: %s", endpoint);
+        if (config->client_count == SNAG_CONFIG_IRC_CLIENT_MAX)
+            return app_error(app, "at most 16 outgoing connections are supported");
+        if (!snag_strcpy(config->clients[config->client_count],
+                         sizeof(config->clients[0]), endpoint))
+            return app_error(app, "IRC endpoint is too long");
+        ++config->client_count;
+    } else {
+        size_t index;
+
+        if (!config->client_count)
+            return app_hostf(app, "no outgoing connections; hosting unchanged");
+        if (count == 1u) {
+            config->client_count = 0u;
+            memset(config->clients, 0, sizeof(config->clients));
+        } else {
+            for (index = 0u; index < config->client_count; ++index)
+                if (snag_irc_endpoint_equal(config->clients[index], words[1]))
+                    break;
+            if (index == config->client_count)
+                return app_hostf(app, "outgoing endpoint is not configured: %s", words[1]);
+            memmove(config->clients + index, config->clients + index + 1u,
+                    (--config->client_count - index) * sizeof(config->clients[0]));
+            memset(config->clients[config->client_count], 0, sizeof(config->clients[0]));
+        }
+    }
+    rc = apply_network(app, &candidate, error, sizeof(error));
+    if (rc != 0)
+        return rc < 0 ? -1 : app_error(app, error);
+    if (connect)
+        return app_hostf(app, "outgoing connection added; /status shows connection state; /chat opens public chat");
+    if (disconnect)
+        return app_hostf(app, "outgoing connection%s removed; hosting unchanged",
+                          count == 1u ? "s" : "");
+    return app_hostf(app, config->listen_explicit ?
+        "hosting started on %s; /chat opens public chat" :
+        "hosting stopped; outgoing connections unchanged", config->listen);
+}
+
 static int
 handle_common_command(struct app_state *app, const char *line, bool active,
                       bool *handled, bool *prompt_ready)
@@ -1941,19 +2064,28 @@ handle_common_command(struct app_state *app, const char *line, bool active,
 
     *handled = true;
     *prompt_ready = false;
+    {
+        int rc = network_command(app, line, handled);
+
+        if (*handled)
+            return rc;
+        *handled = true;
+    }
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0)
         return render_help(app);
     if (strcmp(line, "/status") == 0)
         return render_status(app);
     if (strcmp(line, "/history") == 0)
         return snag_ui_history(&app->ui, &app->session);
-    if (app->networked && strcmp(line, "/chat") == 0) {
+    if (strcmp(line, "/chat") == 0) {
         int rc = select_view(app, SNAG_RENDER_CHAT, active);
 
         *prompt_ready = rc == 0;
+        if (rc == 0 && !app->networked)
+            rc = app_hostf(app, "chat is offline; use /connect or /server start");
         return rc;
     }
-    if (app->networked && strcmp(line, "/rollout") == 0) {
+    if (strcmp(line, "/rollout") == 0) {
         int rc = select_view(app, SNAG_RENDER_ROLLOUT, active);
 
         *prompt_ready = rc == 0;
@@ -1971,13 +2103,12 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return change_effort(app, line + 8u, active);
     if (strcmp(line, "/goal") == 0 || strncmp(line, "/goal ", 6u) == 0)
         return snag_app_goal_command(app, line, active);
-    if (app->networked &&
-        (strcmp(line, "/names") == 0 || strcmp(line, "/topic") == 0)) {
+    if (strcmp(line, "/names") == 0 || strcmp(line, "/topic") == 0) {
         struct snag_buf state;
         int rc;
 
         snag_buf_init(&state, SNAG_MAX_IRC_SNAPSHOT);
-        rc = snag_irc_snapshot(app->irc, &state, error, sizeof(error));
+        rc = snag_irc_state(app->irc, &state, error, sizeof(error));
         if (rc == 0)
             rc = snag_buf_terminate(&state);
         if (rc == 0)
@@ -1986,7 +2117,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return rc < 0 ? app_error(app, error[0] ? error :
                                   "IRC state could not be displayed") : 0;
     }
-    if (app->networked && strncmp(line, "/topic ", 7u) == 0) {
+    if (strncmp(line, "/topic ", 7u) == 0) {
         if (snag_irc_set_operator_topic(app->irc, line + 7u,
                                        error, sizeof(error)) < 0)
             return app_error(app, error[0] ? error :
@@ -2147,16 +2278,16 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                     "active-turn input must be nonempty valid UTF-8 within 256 KiB");
                 rc = 0;
-            } else if (app->networked &&
-                       app->ui.input_view == SNAG_RENDER_CHAT) {
+            } else if (app->ui.input_view == SNAG_RENDER_CHAT) {
                 error[0] = '\0';
                 rc = snag_irc_send_operator(app->irc, text,
                                            error, sizeof(error));
                 if (rc < 0) {
                     (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
                         error[0] ? error : "IRC message could not be queued");
-                    if (set_input_prompt(app, true) == 0)
-                        (void)snag_ui_restore_draft(&app->ui, line);
+                    rc = set_input_prompt(app, true);
+                    if (rc == 0)
+                        rc = snag_ui_restore_draft(&app->ui, line);
                 } else rc = set_input_prompt(app, true);
             } else if (snag_random_id(steering_id) < 0) {
                 rc = -1;
@@ -2801,7 +2932,7 @@ run_turn(struct app_state *app, const char *prompt,
             }
             goto out;
         }
-        if (app->networked && app->irc_urgent.len) {
+        if (app->irc_urgent.len) {
             --cycle;
             continue;
         }
@@ -3302,7 +3433,7 @@ run_turn(struct app_state *app, const char *prompt,
             }
             continue;
         }
-        if (app->networked && decision.outcome == SNAG_GRAPH_NONPRODUCTIVE) {
+        if (app->request_networked && decision.outcome == SNAG_GRAPH_NONPRODUCTIVE) {
             if (commit_event(app, "turn_completed_silent",
                     silent_turn_data(turn_id, response_id,
                         app->irc_turn_local_operator && !app->irc_turn_replied ?
@@ -3668,28 +3799,26 @@ build_resume_command(const struct app_state *app, const char *program,
     if (app->staged_effort &&
         append_command_option(command, "--effort", app->staged_effort) < 0)
         goto out;
-    if (app->networked) {
-        if (config->irc_listen_explicit &&
-            append_command_option(command, "--listen",
-                                  config->irc_listen) < 0)
+    if (config->irc.listen_explicit) {
+        if (append_command_option(command, "--listen", config->irc.listen) < 0)
             goto out;
-        for (size_t i = 0u; i < config->irc_client_count; ++i)
-            if (append_command_option(command, "--client",
-                                      config->irc_clients[i]) < 0)
-                goto out;
-        if (!config->irc_model_nick_implicit &&
-            append_command_option(command, "--model-nick",
-                                  config->irc_model_nick) < 0)
-            goto out;
-        if (!config->irc_operator_nick_implicit &&
-            append_command_option(command, "--operator-nick",
-                                  config->irc_operator_nick) < 0)
-            goto out;
-        if (config->irc_listen_explicit && config->irc_room_name[0] &&
-            append_command_option(command, "--room-name",
-                                  config->irc_room_name) < 0)
-            goto out;
+    } else if (append_command_literal(command, "--no-listen") < 0) {
+        goto out;
     }
+    if (!config->irc.client_count && append_command_literal(command, "--no-client") < 0)
+        goto out;
+    for (size_t i = 0u; i < config->irc.client_count; ++i)
+        if (append_command_option(command, "--client", config->irc.clients[i]) < 0)
+            goto out;
+    if (config->irc.model_nick[0] && !config->irc.model_nick_implicit &&
+        append_command_option(command, "--model-nick", config->irc.model_nick) < 0)
+        goto out;
+    if (config->irc.operator_nick[0] && !config->irc.operator_nick_implicit &&
+        append_command_option(command, "--operator-nick", config->irc.operator_nick) < 0)
+        goto out;
+    if (config->irc.room_name[0] &&
+        append_command_option(command, "--room-name", config->irc.room_name) < 0)
+        goto out;
     if (append_command_literal(command, "--resume") < 0 ||
         append_command_argument(command, app->session.id) < 0)
         goto out;
@@ -3781,10 +3910,9 @@ run_ready_chains(struct app_state *app)
             app->goal_armed = false;
             return 0;
         }
-        if (app->networked &&
-            (app->irc_urgent.len ||
+        if (app->irc_urgent.len ||
              ((!app->queue_armed || app->session.pending_queue_count == 0u) &&
-              app->goal_armed && app->irc_background.len))) {
+              app->goal_armed && app->irc_background.len)) {
             bool local_operator = false;
             char *prompt = snag_app_irc_take_pending(app, &local_operator,
                                                      true);
@@ -3831,7 +3959,7 @@ interactive_loop(struct app_state *app, const char *initial)
             return 0;
         if (app->input_closed)
             return 0;
-        if (!prompt && app->networked) {
+        if (!prompt) {
             bool local_operator = false;
             char *irc_prompt = snag_app_irc_take_pending(
                 app, &local_operator, false);
@@ -3856,7 +3984,7 @@ interactive_loop(struct app_state *app, const char *initial)
         }
         if (!prompt) {
             int poll_rc = snag_ui_poll(&app->ui,
-                                        app->networked ? 25 : -1,
+                                        app->networked || app->irc_background.len ? 25 : -1,
                                         false, &action, &owned);
             history_warning(app);
             if (poll_rc < 0) {
@@ -3931,7 +4059,7 @@ interactive_loop(struct app_state *app, const char *initial)
                 return 3;
             continue;
         }
-        if (!app->networked) {
+        if ((owned ? app->ui.input_view : app->ui.view) == SNAG_RENDER_ROLLOUT) {
             if (snag_ui_submitted(&app->ui,
                     app->ui.label, prompt, true) < 0) {
                 free(owned);
@@ -3986,16 +4114,23 @@ interactive_loop(struct app_state *app, const char *initial)
                 }
             } else if (!read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
-            } else if (!read_only && app->networked &&
+            } else if (!read_only &&
                        (owned ? app->ui.input_view : app->ui.view) == SNAG_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
                 char irc_error[256] = {0};
 
                 if (snag_irc_send_operator(app->irc, actual, irc_error,
-                                          sizeof(irc_error)) < 0)
+                                          sizeof(irc_error)) < 0) {
                     (void)app_error(app, irc_error[0] ? irc_error :
                                     "IRC message could not be queued");
+                    if (set_input_prompt(app, false) < 0 ||
+                        snag_ui_restore_draft(&app->ui, prompt) < 0) {
+                        free(owned);
+                        return 6;
+                    }
+                    prompt_ready = true;
+                }
             } else {
                 const char *actual = query;
                 int turn_rc;
@@ -4124,6 +4259,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     }
     app.config_path = config_path;
+    app.irc_file_config = config.irc;
     {
         enum snag_color_mode color = config.color;
         if (cli->color == SNAG_CLI_COLOR_AUTO)
@@ -4146,7 +4282,9 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
     snag_ui_commands(&app.ui, commands, command_count(&app));
     snag_ui_networked(&app.ui, app.networked,
-                             app.networked ? config.irc_model_nick : NULL);
+                             app.networked ? config.irc.model_nick : NULL);
+    if (app.networked && snag_ui_set_view(&app.ui, SNAG_RENDER_CHAT) < 0)
+        goto out;
     snag_ui_typing_pause(&app.ui, config.typing_pause_ms);
     if (snag_ui_set_verbosity(&app.ui, cli->verbosity) < 0)
         goto out;
@@ -4278,12 +4416,12 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         app.turn_effort = resolve_effort(app.session.default_effort);
         app.turn_provider = selected_provider;
     }
-    if (app.networked) {
+    if (!cli->execute) {
         if (snag_irc_open(&app.irc, &config, app.session.workspace,
                          snag_app_irc_event, snag_app_irc_trace, &app,
                          error, sizeof(error)) < 0 ||
             snag_app_irc_restore(&app, error, sizeof(error)) < 0 ||
-            (config.irc_listen_explicit &&
+            (config.irc.listen_explicit &&
              snag_app_irc_snapshot(&app, "join", error, sizeof(error)) < 0)) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error[0] ? error :
                                    "IRC startup failed");

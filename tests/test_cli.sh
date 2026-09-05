@@ -67,10 +67,15 @@ grep -q -- '--operator-nick NICK' "$root/help"
 grep -q -- '--color\[=WHEN\]' "$root/help"
 grep -q -- '--markdown' "$root/help"
 grep -q -- '--no-markdown' "$root/help"
+grep -q -- '--no-listen' "$root/help"
+grep -q -- '--no-client' "$root/help"
 grep -q "^usage: $SNAJPAGENT_TEST_NAME " "$root/help"
 
 for args in \
-    '-r room -n worker' \
+    '-s --no-listen' \
+    '--no-listen -s' \
+    '-c --no-client' \
+    '--no-client -c' \
     '-s -n worker -o WORKER' \
     '-c localhost -c localhost:6667 -n worker' \
     '-s -n worker initial'; do

@@ -49,6 +49,8 @@ struct snag_cli {
     char *effort;
     char *config_path;
     char *irc_listen;
+    bool irc_no_listen;
+    bool irc_no_client;
     char *irc_clients[SNAG_CLI_IRC_CLIENT_MAX];
     size_t irc_client_count;
     char *irc_model_nick;

@@ -419,143 +419,145 @@ bool
 snag_irc_enabled(const struct snag_config *config)
 {
     return config &&
-        (config->irc_listen_explicit || config->irc_client_count != 0u);
+        (config->irc.listen_explicit || config->irc.client_count != 0u);
 }
 
 int
 snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
                   char *error, size_t error_size)
 {
-    const char *login;
-
     if (!config || !cli) {
         errno = EINVAL;
         return -1;
     }
+    if ((cli->irc_no_listen && cli->irc_listen) ||
+        (cli->irc_no_client && cli->irc_client_count)) {
+        snag_errorf(error, error_size, "conflicting positive and negative IRC role options");
+        errno = EINVAL;
+        return -1;
+    }
+    if (cli->irc_no_listen)
+        config->irc.listen_explicit = false;
+    if (cli->irc_no_client) {
+        config->irc.client_count = 0u;
+        memset(config->irc.clients, 0, sizeof(config->irc.clients));
+    }
     if (cli->irc_listen &&
-        config_copy(config->irc_listen, sizeof(config->irc_listen),
+        config_copy(config->irc.listen, sizeof(config->irc.listen),
                     cli->irc_listen, "IRC listen endpoint", error,
                     error_size) < 0)
         return -1;
     if (cli->irc_listen)
-        config->irc_listen_explicit = true;
+        config->irc.listen_explicit = true;
     if (cli->irc_client_count) {
-        memset(config->irc_clients, 0, sizeof(config->irc_clients));
-        config->irc_client_count = 0u;
+        memset(config->irc.clients, 0, sizeof(config->irc.clients));
+        config->irc.client_count = 0u;
         for (size_t i = 0; i < cli->irc_client_count; ++i) {
-            if (config_copy(config->irc_clients[i],
-                            sizeof(config->irc_clients[i]),
+            if (config_copy(config->irc.clients[i],
+                            sizeof(config->irc.clients[i]),
                             cli->irc_clients[i], "IRC client endpoint",
                             error, error_size) < 0)
                 return -1;
-            ++config->irc_client_count;
+            ++config->irc.client_count;
         }
     }
     if (cli->irc_model_nick) {
-        if (config_copy(config->irc_model_nick,
-                        sizeof(config->irc_model_nick), cli->irc_model_nick,
+        if (config_copy(config->irc.model_nick,
+                        sizeof(config->irc.model_nick), cli->irc_model_nick,
                         "IRC model nick", error, error_size) < 0)
             return -1;
-        config->irc_model_nick_implicit = false;
+        config->irc.model_nick_implicit = false;
     }
     if (cli->irc_operator_nick) {
-        if (config_copy(config->irc_operator_nick,
-                        sizeof(config->irc_operator_nick),
+        if (config_copy(config->irc.operator_nick,
+                        sizeof(config->irc.operator_nick),
                         cli->irc_operator_nick, "IRC operator nick", error,
                         error_size) < 0)
             return -1;
-        config->irc_operator_nick_implicit = false;
+        config->irc.operator_nick_implicit = false;
     }
     if (cli->irc_room_name &&
-        config_copy(config->irc_room_name, sizeof(config->irc_room_name),
+        config_copy(config->irc.room_name, sizeof(config->irc.room_name),
                     cli->irc_room_name, "IRC room name", error,
                     error_size) < 0)
         return -1;
-    if (cli->irc_room_name && !config->irc_listen_explicit) {
-        snag_errorf(error, error_size, "-r/--room-name requires -s/--listen");
-        errno = EINVAL;
-        return -1;
-    }
-    if (!snag_irc_enabled(config)) {
-        if (config->irc_model_nick[0] || config->irc_operator_nick[0] ||
-            config->irc_room_name[0] ||
-            config->irc_listen_explicit) {
-            snag_errorf(error, error_size,
-                      "IRC nicks, room, and listen settings require a server or client role");
-            errno = EINVAL;
-            return -1;
-        }
-        return 0;
-    }
-    if (cli->prompt && !cli->prompt_after_dashdash) {
+    if (snag_irc_enabled(config) && cli->prompt && !cli->prompt_after_dashdash) {
         snag_errorf(error, error_size,
                   "networked initial chat text must follow --");
         errno = EINVAL;
         return -1;
     }
-    if (!config->irc_listen_explicit && config->irc_room_name[0]) {
-        snag_errorf(error, error_size, "IRC room_name requires a listener");
+    return snag_irc_normalize(config, error, error_size);
+}
+
+int
+snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
+{
+    const char *login;
+
+    if (!config || config->irc.client_count > SNAG_CONFIG_IRC_CLIENT_MAX) {
+        snag_errorf(error, error_size, "invalid IRC configuration");
         errno = EINVAL;
         return -1;
     }
-    if (!config->irc_model_nick[0]) {
-        if (numbered_nick(config->irc_model_nick, "agent", 0u, false) < 0)
+    if (!config->irc.model_nick[0]) {
+        if (numbered_nick(config->irc.model_nick, "agent", 0u, false) < 0)
             return -1;
-        config->irc_model_nick_implicit = true;
+        config->irc.model_nick_implicit = true;
     }
-    if (!nick_valid(config->irc_model_nick)) {
+    if (!nick_valid(config->irc.model_nick)) {
         snag_errorf(error, error_size, "IRC model nick is invalid");
         errno = EINVAL;
         return -1;
     }
-    if (!endpoint_valid(config->irc_listen)) {
+    if (!endpoint_valid(config->irc.listen)) {
         snag_errorf(error, error_size, "invalid IRC listen endpoint");
         return -1;
     }
-    for (size_t i = 0; i < config->irc_client_count; ++i) {
-        if (!endpoint_valid(config->irc_clients[i])) {
+    for (size_t i = 0; i < config->irc.client_count; ++i) {
+        if (!endpoint_valid(config->irc.clients[i])) {
             snag_errorf(error, error_size, "invalid IRC client endpoint: %s",
-                      config->irc_clients[i]);
+                      config->irc.clients[i]);
             return -1;
         }
         for (size_t j = 0; j < i; ++j)
-            if (snag_irc_endpoint_equal(config->irc_clients[i],
-                               config->irc_clients[j])) {
+            if (snag_irc_endpoint_equal(config->irc.clients[i],
+                               config->irc.clients[j])) {
                 snag_errorf(error, error_size,
                           "duplicate IRC client endpoint: %s",
-                          config->irc_clients[i]);
+                          config->irc.clients[i]);
                 errno = EINVAL;
                 return -1;
             }
     }
-    if (!config->irc_operator_nick[0]) {
+    if (!config->irc.operator_nick[0]) {
         login = getenv("USER");
         if (!login || !nick_valid(login))
             login = "operator";
-        if (numbered_nick(config->irc_operator_nick, login, 0u, false) < 0)
+        if (numbered_nick(config->irc.operator_nick, login, 0u, false) < 0)
             return -1;
-        if (irc_casecmp(config->irc_operator_nick,
-                        config->irc_model_nick) == 0 &&
-            numbered_nick(config->irc_operator_nick,
+        if (irc_casecmp(config->irc.operator_nick,
+                        config->irc.model_nick) == 0 &&
+            numbered_nick(config->irc.operator_nick,
                           "localop", 0u, false) < 0)
             return -1;
-        config->irc_operator_nick_implicit = true;
+        config->irc.operator_nick_implicit = true;
     }
-    if (!nick_valid(config->irc_operator_nick) ||
-        irc_casecmp(config->irc_operator_nick, config->irc_model_nick) == 0) {
+    if (!nick_valid(config->irc.operator_nick) ||
+        irc_casecmp(config->irc.operator_nick, config->irc.model_nick) == 0) {
         snag_errorf(error, error_size,
                   "IRC operator and model nicks must be valid and distinct");
         errno = EINVAL;
         return -1;
     }
-    if (config->irc_room_name[0]) {
-        char normalized[sizeof(config->irc_room_name)];
+    if (config->irc.room_name[0]) {
+        char normalized[sizeof(config->irc.room_name)];
         if (normalize_room(normalized, sizeof(normalized),
-                           config->irc_room_name) < 0) {
+                           config->irc.room_name) < 0) {
             snag_errorf(error, error_size, "invalid IRC room name");
             return -1;
         }
-        memcpy(config->irc_room_name, normalized, sizeof(normalized));
+        memcpy(config->irc.room_name, normalized, sizeof(normalized));
     }
     return 0;
 }
@@ -1112,8 +1114,7 @@ hosted_history_event(const struct snag_irc_core *irc,
                       const struct snag_irc_event *event)
 {
     return strcmp(event->room, irc->room) == 0 &&
-        (strcmp(event->endpoint, irc->listen) == 0 ||
-         strcmp(event->endpoint, "local") == 0);
+        snag_irc_endpoint_equal(event->endpoint, irc->listen);
 }
 
 int
@@ -2159,7 +2160,7 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
 {
     struct snag_irc_core *irc;
 
-    if (!out || !config || !workspace || !snag_irc_enabled(config)) {
+    if (!out || !config || !workspace || (network && !snag_irc_enabled(config))) {
         errno = EINVAL;
         snag_errorf(error, error_size, "invalid IRC startup state");
         return -1;
@@ -2169,34 +2170,34 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
     if (!irc)
         return -1;
     irc->listener = -1;
-    irc->hosting = config->irc_listen_explicit;
+    irc->hosting = config->irc.listen_explicit;
     irc->event_fn = event_fn;
     irc->trace_fn = trace_fn;
     irc->event_opaque = event_opaque;
     irc->operator_op = true;
-    irc->history_limit = config->irc_history_lines;
+    irc->history_limit = config->irc.history_lines;
     irc->history = calloc(irc->history_limit, sizeof(*irc->history));
     if (irc->hosting)
         irc->peers = calloc(IRC_SERVER_PEERS, sizeof(*irc->peers));
-    if (config->irc_client_count)
-        irc->links = calloc(config->irc_client_count * 2u, sizeof(*irc->links));
+    if (config->irc.client_count)
+        irc->links = calloc(config->irc.client_count * 2u, sizeof(*irc->links));
     irc->replay_members = calloc(IRC_REPLAY_MEMBERS_MAX,
                                  sizeof(*irc->replay_members));
     if ((irc->history_limit && !irc->history) || !irc->replay_members ||
         (irc->hosting && !irc->peers) ||
-        (config->irc_client_count && !irc->links) ||
-        !snag_strcpy(irc->listen, sizeof(irc->listen), config->irc_listen) ||
+        (config->irc.client_count && !irc->links) ||
+        !snag_strcpy(irc->listen, sizeof(irc->listen), config->irc.listen) ||
         !snag_strcpy(irc->model_nick, sizeof(irc->model_nick),
-                    config->irc_model_nick) ||
+                    config->irc.model_nick) ||
         !snag_strcpy(irc->operator_nick, sizeof(irc->operator_nick),
-                    config->irc_operator_nick))
+                    config->irc.operator_nick))
         goto fail;
-    irc->model_nick_implicit = config->irc_model_nick_implicit;
-    irc->operator_nick_implicit = config->irc_operator_nick_implicit;
+    irc->model_nick_implicit = config->irc.model_nick_implicit;
+    irc->operator_nick_implicit = config->irc.operator_nick_implicit;
     derive_server_name(irc->server_name);
-    if (config->irc_room_name[0]) {
+    if (config->irc.room_name[0]) {
         if (normalize_room(irc->room, sizeof(irc->room),
-                           config->irc_room_name) < 0)
+                           config->irc.room_name) < 0)
             goto fail;
     } else {
         derive_room(irc->room);
@@ -2209,9 +2210,9 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
     }
     for (size_t i = 0; irc->peers && i < IRC_SERVER_PEERS; ++i)
         irc->peers[i].fd = -1;
-    for (size_t i = 0; i < config->irc_client_count; ++i) {
-        if (config->irc_listen_explicit &&
-            snag_irc_endpoint_equal(config->irc_clients[i], config->irc_listen))
+    for (size_t i = 0; i < config->irc.client_count; ++i) {
+        if (config->irc.listen_explicit &&
+            snag_irc_endpoint_equal(config->irc.clients[i], config->irc.listen))
             continue;
         for (size_t role = 0; role < 2u; ++role) {
             struct irc_conn *link = &irc->links[irc->link_count++];
@@ -2221,7 +2222,7 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
             link->role = role == 0u ? LINK_AGENT : LINK_OPERATOR;
             link->agent_role = role == 0u;
             (void)snag_strcpy(link->endpoint, sizeof(link->endpoint),
-                              config->irc_clients[i]);
+                              config->irc.clients[i]);
             (void)snag_strcpy(link->nick, sizeof(link->nick),
                               role == 0u ? irc->model_nick : irc->operator_nick);
             (void)snag_strcpy(link->accepted_nick,
@@ -2259,6 +2260,41 @@ snag_irc_core_close(struct snag_irc_core *irc)
     free(irc->peers);
     free(irc->links);
     free(irc);
+}
+
+size_t
+snag_irc_core_pending(const struct snag_irc_core *irc)
+{
+    size_t bytes = 0u;
+
+    for (size_t i = 0u; i < irc->link_count; ++i)
+        bytes += irc->links[i].pending.len + irc->links[i].output.len -
+                 irc->links[i].output_offset;
+    for (size_t i = 0u; irc->peers && i < IRC_SERVER_PEERS; ++i)
+        if (irc->peers[i].used)
+            bytes += irc->peers[i].output.len - irc->peers[i].output_offset;
+    return bytes;
+}
+
+int
+snag_irc_core_copy_history(struct snag_irc_core *dst, const struct snag_irc_core *src,
+                           bool hosted_only)
+{
+    for (size_t i = 0u; i < src->history_count; ++i) {
+        const struct snag_irc_event *event =
+            &src->history[(src->history_start + i) % src->history_limit];
+
+        /* These are already admitted records; a bounded tail need not contain
+         * all the membership transitions required for replay validation. */
+        if (!hosted_only || hosted_history_event(dst, event))
+            snag_irc_core_remember(dst, event);
+    }
+    if (!hosted_only) {
+        dst->replay_member_count = src->replay_member_count;
+        memcpy(dst->replay_members, src->replay_members,
+                src->replay_member_count * sizeof(*src->replay_members));
+    }
+    return 0;
 }
 
 int
@@ -2457,7 +2493,8 @@ send_chat_line(struct snag_irc_core *irc, const char *nick, enum link_role role,
             return -1;
         }
     }
-    event_init(irc, &event, kind, "local", room,
+    event_init(irc, &event, kind, irc->hosting ? irc->listen :
+               irc->links[0].endpoint, room,
                nick, clean, role_is_op(irc, role), false, true);
     return emit_event(irc, &event, true);
 }
@@ -2677,6 +2714,9 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
     (void)snag_strcpy(view->operator, sizeof(view->operator),
                       snag_irc_core_operator_nick(irc));
     view->joined = irc->hosting || (irc->link_count && irc->links[0].joined);
+    if (irc->hosting || irc->link_count)
+        (void)snag_strcpy(view->room, sizeof(view->room),
+                        irc->hosting ? irc->room : irc->links[0].room);
     snag_buf_init(&text, sizeof(view->text) - 1u);
     snag_buf_init(&nicks, sizeof(view->nicks) - 1u);
     if (snapshot_network(irc, &text, &nicks) == 0) {

@@ -49,12 +49,29 @@ struct snag_irc;
 
 int snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
                       char *error, size_t error_size);
+int snag_irc_normalize(struct snag_config *config, char *error, size_t error_size);
+bool snag_irc_endpoint_equal(const char *a, const char *b);
 bool snag_irc_enabled(const struct snag_config *config);
 int snag_irc_open(struct snag_irc **out, const struct snag_config *config,
                  const char *workspace, snag_irc_event_fn event_fn,
                  snag_irc_trace_fn trace_fn, void *event_opaque,
                  char *error, size_t error_size);
 void snag_irc_close(struct snag_irc *irc);
+/* Engine-owned transitions; unrelated endpoint owners remain running. */
+int snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
+                 const char *workspace, bool hosting, const char *endpoint,
+                 char *error, size_t error_size);
+int snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint,
+                    char *error, size_t error_size);
+int snag_irc_preferences(struct snag_irc *irc, const struct snag_config *config,
+                         const char *workspace, char *error, size_t error_size);
+int snag_irc_configure(struct snag_irc *irc, const struct snag_config *config,
+                       const char *workspace, char *error, size_t error_size);
+/* Observed owner roles, including owners still connecting or retrying. */
+void snag_irc_roles(const struct snag_irc *irc, struct snag_config *config);
+uint64_t snag_irc_routing_revision(const struct snag_irc *irc);
+int snag_irc_state(const struct snag_irc *irc, struct snag_buf *out,
+                   char *error, size_t error_size);
 int snag_irc_tick(struct snag_irc *irc, int timeout_ms,
                  char *error, size_t error_size);
 int snag_irc_send_operator(struct snag_irc *irc, const char *text,

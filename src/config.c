@@ -123,8 +123,8 @@ snag_config_init(struct snag_config *config)
     memcpy(config->prompt_spinner_tool, " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
            sizeof(" ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"));
     config->prompt_spinner_per_second = 8u;
-    memcpy(config->irc_listen, "localhost:6667", 15u);
-    config->irc_history_lines = 200u;
+    memcpy(config->irc.listen, "localhost:6667", 15u);
+    config->irc.history_lines = 200u;
     config->shell = snag_strdup_checked("/bin/sh", SNAG_CONFIG_PATH_MAX);
     config->default_yield_ms = 10000u;
     config->max_parallel_commands = 4u;
@@ -858,43 +858,43 @@ parse_irc(struct parse_state *state, const char *key, const char *value)
     struct snag_config *config = state->config;
 
     if (strcmp(key, "listen") == 0) {
-        if (copy_value(config->irc_listen, sizeof(config->irc_listen),
+        if (copy_value(config->irc.listen, sizeof(config->irc.listen),
                        value) < 0)
             return -1;
-        config->irc_listen_explicit = true;
+        config->irc.listen_explicit = true;
         return 0;
     }
     if (strcmp(key, "client") == 0) {
-        if (config->irc_client_count >= SNAG_CONFIG_IRC_CLIENT_MAX)
+        if (config->irc.client_count >= SNAG_CONFIG_IRC_CLIENT_MAX)
             goto invalid;
-        for (size_t i = 0; i < config->irc_client_count; ++i)
-            if (strcmp(config->irc_clients[i], value) == 0)
+        for (size_t i = 0; i < config->irc.client_count; ++i)
+            if (strcmp(config->irc.clients[i], value) == 0)
                 goto invalid;
-        if (copy_value(config->irc_clients[config->irc_client_count],
-                       sizeof(config->irc_clients[0]), value) < 0)
+        if (copy_value(config->irc.clients[config->irc.client_count],
+                       sizeof(config->irc.clients[0]), value) < 0)
             return -1;
-        ++config->irc_client_count;
+        ++config->irc.client_count;
         return 0;
     }
     if (strcmp(key, "model_nick") == 0) {
-        if (copy_value(config->irc_model_nick,
-                       sizeof(config->irc_model_nick), value) < 0)
+        if (copy_value(config->irc.model_nick,
+                       sizeof(config->irc.model_nick), value) < 0)
             return -1;
-        config->irc_model_nick_implicit = false;
+        config->irc.model_nick_implicit = false;
         return 0;
     }
     if (strcmp(key, "operator_nick") == 0) {
-        if (copy_value(config->irc_operator_nick,
-                       sizeof(config->irc_operator_nick), value) < 0)
+        if (copy_value(config->irc.operator_nick,
+                       sizeof(config->irc.operator_nick), value) < 0)
             return -1;
-        config->irc_operator_nick_implicit = false;
+        config->irc.operator_nick_implicit = false;
         return 0;
     }
     if (strcmp(key, "room_name") == 0)
-        return copy_value(config->irc_room_name,
-                          sizeof(config->irc_room_name), value);
+        return copy_value(config->irc.room_name,
+                          sizeof(config->irc.room_name), value);
     if (strcmp(key, "history_lines") == 0)
-        return parse_u32(value, 1u, 1000u, &config->irc_history_lines);
+        return parse_u32(value, 1u, 1000u, &config->irc.history_lines);
 invalid:
     errno = EINVAL;
     return -1;

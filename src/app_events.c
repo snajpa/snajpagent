@@ -169,8 +169,13 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason,
         return -1;
     }
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
-    if (snag_irc_snapshot(app->irc, &snapshot, error, error_size) < 0 ||
-        snag_buf_terminate(&snapshot) < 0 || !(data = json_object()) ||
+    rc = strcmp(reason, "join") != 0 && strcmp(reason, "compaction") != 0 ?
+        snag_irc_state(app->irc, &snapshot, error, error_size) :
+        snag_irc_snapshot(app->irc, &snapshot, error, error_size);
+    if (rc < 0)
+        goto out;
+    rc = -1;
+    if (snag_buf_terminate(&snapshot) < 0 || !(data = json_object()) ||
         snag_json_set_new(data, "reason", json_string(reason)) < 0 ||
         snag_json_set_new(data, "text",
                          json_string((const char *)snapshot.data)) < 0 ||
@@ -229,7 +234,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     }
     if (event->historical)
         return 0;
-    urgent = chat && snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
+    urgent = chat && snag_irc_mentions_agent(app->irc,
+        event->local ? "local" : event->endpoint, event->text);
     if (append_irc_projection(urgent ? &app->irc_urgent :
                                       &app->irc_background, event) < 0)
         return -1;
@@ -441,7 +447,12 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
                        char *error, size_t error_size)
 {
     uint64_t anchored_bound = 0u;
-    int rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
+    int rc;
+
+    app->request_networked = snag_irc_enabled(app->config) &&
+                             !app->session.active_read_only;
+    app->request_routing_revision = snag_irc_routing_revision(app->irc);
+    rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
         cycle, steering, app->turn_capacity.max_output_tokens,
         app->turn_capacity.max_output_tokens, app->config,
         &app->turn_instructions, projection, error, error_size);

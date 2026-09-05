@@ -385,6 +385,10 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
     case UI_VIEW:
         term->defer_redraw = true;
         term->chat = message->data.value == SNAG_RENDER_CHAT;
+        if (!term->opened) {
+            render->view = (enum snag_render_view)message->data.value;
+            return 0;
+        }
         return snag_render_set_view(render,
                                   (enum snag_render_view)message->data.value);
     case UI_SUBMITTED:

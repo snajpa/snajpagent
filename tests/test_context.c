@@ -1154,7 +1154,7 @@ test_read_only_and_queue_controllers(void)
     snag_session_init(&session);
     snag_context_projection_init(&projection);
     snag_config_init(&config);
-    config.irc_listen_explicit = true;
+    config.irc.listen_explicit = true;
     config.providers[1] = config.providers[0];
     config.provider_count = 2u;
     (void)snprintf(config.providers[1].name, sizeof(config.providers[1].name), "selected");
@@ -2026,9 +2026,9 @@ main(void)
 
         snag_config_init(&network_config);
         network_config.max_output_tokens = 777u;
-        network_config.irc_listen_explicit = true;
-        memcpy(network_config.irc_model_nick, "builder", 8u);
-        memcpy(network_config.irc_operator_nick, "alice", 6u);
+        network_config.irc.listen_explicit = true;
+        memcpy(network_config.irc.model_nick, "builder", 8u);
+        memcpy(network_config.irc.operator_nick, "alice", 6u);
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
                                  empty_steering, 0u, false, &network_config,
                                  &instructions, &projection,
@@ -2138,9 +2138,9 @@ main(void)
 
         snag_config_init(&network_config);
         network_config.max_timeout_ms = 7654321u;
-        network_config.irc_listen_explicit = true;
-        memcpy(network_config.irc_model_nick, "builder", 8u);
-        memcpy(network_config.irc_operator_nick, "alice", 6u);
+        network_config.irc.listen_explicit = true;
+        memcpy(network_config.irc.model_nick, "builder", 8u);
+        memcpy(network_config.irc.operator_nick, "alice", 6u);
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
                                  empty_steering, 0u, false, &network_config,
                                  &instructions, &projection,

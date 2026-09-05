@@ -320,6 +320,7 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first,
             goto invalid;
     }
     if (cli->list || cli->last || cli->all || cli->irc_listen || cli->irc_client_count ||
+        cli->irc_no_listen || cli->irc_no_client ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
         (cli->device_auth && cli->with_api_key) ||
         (cli->auth_command != SNAG_CLI_LOGIN && (cli->device_auth || cli->with_api_key || cli->model || cli->effort)))
@@ -358,6 +359,18 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
         } else if (strcmp(arg, "--resume") == 0) {
             if (cli->resume) { snag_errorf(error, error_size, "duplicate --resume option"); return -1; }
             cli->resume = true;
+        } else if (strcmp(arg, "--no-listen") == 0) {
+            if (cli->irc_no_listen) {
+                snag_errorf(error, error_size, "duplicate --no-listen option");
+                return -1;
+            }
+            cli->irc_no_listen = true;
+        } else if (strcmp(arg, "--no-client") == 0) {
+            if (cli->irc_no_client) {
+                snag_errorf(error, error_size, "duplicate --no-client option");
+                return -1;
+            }
+            cli->irc_no_client = true;
         } else if (strcmp(arg, "--no-color") == 0) {
             if (set_color(cli, SNAG_CLI_COLOR_NEVER, "--no-color",
                           error, error_size) < 0)
@@ -479,19 +492,24 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
     }
     if (cli->help || cli->version)
         return 0;
+    if ((cli->irc_no_listen && cli->irc_listen) ||
+        (cli->irc_no_client && cli->irc_client_count)) {
+        snag_errorf(error, error_size, "conflicting positive and negative IRC role options");
+        return -1;
+    }
     if (!cli->execute && !cli->resume && !dashdash && positional >= 0 &&
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->workspace ||
                       cli->model || cli->effort || cli->verbosity ||
-                      cli->irc_listen ||
+                      cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
                       cli->irc_client_count || cli->irc_model_nick ||
                       cli->irc_operator_nick || cli->irc_room_name)) {
         snag_errorf(error, error_size,
                   "-l accepts only --config, --dotdir, --all, and color options");
         return -1;
     }
-    if (cli->execute && (cli->irc_listen ||
+    if (cli->execute && (cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
                          cli->irc_client_count || cli->irc_model_nick ||
                          cli->irc_operator_nick || cli->irc_room_name)) {
         snag_errorf(error, error_size,
@@ -591,6 +609,8 @@ snag_cli_usage(int fd)
         "       " SNAJPAGENT_NAME " [OPTIONS] logout [PROVIDER]\n"
         "  -s, --listen[=ENDPOINT]      host the IRC server on ENDPOINT\n"
         "  -c, --client[=ENDPOINT]      connect to IRC; repeatable\n"
+        "      --no-listen              suppress the configured listener\n"
+        "      --no-client              suppress configured outgoing connections\n"
         "  -n, --model-nick NICK        model nick (default agent0)\n"
         "  -o, --operator-nick NICK     local operator nick\n"
         "  -r, --room-name ROOM         hosted room name\n"

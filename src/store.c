@@ -782,6 +782,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!snag_json_exact_keys(data, keys, 3u) || !reason ||
             (strcmp(reason, "join") != 0 &&
              strcmp(reason, "nick") != 0 &&
+             strcmp(reason, "topology") != 0 &&
              strcmp(reason, "compaction") != 0) ||
             !text || !*text || strlen(text) > SNAG_MAX_IRC_SNAPSHOT ||
             !snag_utf8_valid((const unsigned char *)text, strlen(text), true) ||
