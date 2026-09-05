@@ -6,37 +6,43 @@ snajpagent \- fast, lightweight, networked coding agent
 .B snajpagent
 .RI [ options ]
 .RI [ \-\- ]
-.RI [ initial-prompt ...]
+.RI [ initial-prompt " ...]"
 .br
 .B snajpagent \-\-resume
 .RI [ options ]
-.RI [ session-id | \-\-last ]
-.RI [ \-\- follow-up ...]
+.RI [ session-id " | --last]"
+.RI "[-- " follow-up " ...]"
 .br
 .B snajpagent \-e
 .RI [ options ]
-.RI [ \-\- prompt ...]
+.RI "[-- " prompt " ...]"
 .br
 .B snajpagent \-l
 .RI [ options ]
 .SH DESCRIPTION
 .B snajpagent
-is a foreground terminal coding agent for OpenAI-compatible Responses
-providers.  It streams model output, runs a small set of coding tools, keeps
-append-only local sessions, and resumes them without a resident service.
+is a fast, lightweight, networked coding agent for power users.  It runs in
+the foreground, uses Responses-compatible model providers, executes coding
+tools, and keeps resumable local sessions.  There is no resident service.
 .PP
 Networked mode adds a built-in single-room IRC server and up to 16 outgoing
 IRC connections.  Agents and channel operators share the room; the runtime
 owns joining, history, and reconnection.
 .SH GETTING STARTED
+Create a private state directory:
+.PP
+.nf
+install -d -m 700 "$HOME/.snajpagent"
+.fi
+.PP
 Create
-.IR $HOME/.snajpagent/config.ini :
+.IR $HOME/.snajpagent/config.ini ,
+choosing a model supported by your provider:
 .PP
 .nf
 [agent]
 provider = openai
 model = gpt-5.5
-reasoning_effort = medium
 
 [provider openai]
 base_url = https://api.openai.com
@@ -46,7 +52,8 @@ api_key_env = OPENAI_API_KEY
 Export the named credential, change to the project directory, and run:
 .PP
 .nf
-export OPENAI_API_KEY=...
+export OPENAI_API_KEY='your-key'
+cd /path/to/project
 snajpagent
 .fi
 .PP
@@ -108,8 +115,8 @@ cache.  Unlike the default path, an explicit file must exist.
 .BR \-v
 Increase configured verbosity by one, to a maximum of 6.  Repeat as needed.
 Level 1 shows every tool call, arguments, state, configured result display, and
-local model replies in network chat.  Higher levels add commentary, runtime,
-durable event, sanitized protocol, and transport detail.
+reasoning summaries in the rollout.  See
+.BR DISPLAY .
 .TP
 .BR \-\-color [= when ]
 Set color to
@@ -138,6 +145,9 @@ Show model Markdown literally.
 Resume a durable session.  Without an ID or
 .BR \-\-last ,
 interactively select an active session in the current workspace.
+An ID is a unique prefix of 8 through 32 lowercase hexadecimal characters.
+An exact ID may select an archived session; a live session lock prevents
+concurrent resume.
 .TP
 .BR \-\-last
 Resume the most recently used matching active session.  Requires
@@ -234,11 +244,26 @@ Visible output resumes after
 .B typing_pause_ms
 of inactivity.  Bracketed paste inserts pasted newlines without submitting.
 .PP
+Direct prompts accept up to 1 MiB of valid UTF-8; steering and queued turns
+accept up to 256 KiB.  The queue holds up to 128 pending turns within 16 MiB;
+up to 32 steering items may be pending in a turn.  EOF lets active work finish,
+pauses further queued or goal work, and exits.
+.SH DISPLAY
+Ordinary mode shows the local rollout.  Networked mode opens chat; empty Tab,
+.BR /chat ,
+and
+.B /rollout
+switch views.  Hidden-view output is buffered for display on return.
+Both views append to terminal scrollback;
+neither is a full-screen TUI.
+.PP
 The default rollout prompt shows provider, model, effort, a bare context
-percentage, three adjacent status fields, and an idle or active chevron.  The
-percentage is the latest comparable durable token bound divided by the resolved
-hard input budget, rounded up.  It is the last data field before the status
-fields and marker.  A fresh or incomparable state shows
+percentage, three status fields, and an idle or active marker:
+.B ›
+while idle and
+.B »
+while active.  The percentage uses the latest comparable token bound and
+resolved input budget, rounded up.  A fresh or incomparable state shows
 .BR 0% ;
 an unknown budget shows
 .BR ?% .
@@ -246,8 +271,47 @@ an unknown budget shows
 The default chat prompt is
 .IR HH:MM:SS " " OPERATOR_NICK@MACHINE_HOSTNAME "   : " .
 The timestamp is local time captured when the prompt opens.
-The three status fields indicate an active goal, provider work, and a
-synchronous tool call.  There is no separate textual activity row.
+The status fields indicate an active goal, provider work, and a synchronous
+tool call.  Accepted interruption blinks a skull in the foreground status
+field until the turn closes.  The template and spinners are configurable under
+.BR [ui] .
+.SS Verbosity
+Verbosity controls detail within a view, not which view is selected.
+.TP
+.B 0
+Model text in the rollout; timestamped room traffic in chat.  Rollout milestones
+include the colored bullet lines
+.BR "• Compacted" ,
+.BR "• Goal set" ,
+and
+.BR "• Goal cleared" .
+Errors and local-command results appear in either view.
+.TP
+.B 1
+Add reasoning summaries, all tool calls with arguments, and tool results to
+the rollout.  Command headers include the effective timeout before the command.
+Result display is unlimited unless
+.B max_output_bytes
+is set under
+.BR [tool] .
+Chat also shows this process's own model-nick room echoes.
+.TP
+.B 2
+Currently the same detail as level 1.
+.TP
+.B 3
+Add runtime decisions, token accounting, and session identity.
+.TP
+.B 4
+Add synced event sequences and types; include endpoint labels in chat.
+.TP
+.B 5
+Add sanitized provider protocol and IRC commands.  This exposes prompts,
+source, tool output, and model content.
+.TP
+.B 6
+Add transport diagnostics.
+.SS Presentation
 .PP
 Terminal model text uses color and compact Markdown presentation when enabled.
 Headings, lists, quotes, fenced code, pipe tables, inline code, emphasis,
@@ -258,6 +322,11 @@ retains the model's exact bytes.
 Top-level prose paragraphs are bulleted.  Prompts and model blocks have one
 empty row between them; generated prose wraps align below the paragraph text.
 .SH COMMANDS
+Commands occupy a single submitted line.  Prefix text with
+.B //
+to submit a literal leading
+.BR / .
+.SS Session and model
 .TP
 .BR /help , " /?"
 Show commands and essential keys.
@@ -279,13 +348,9 @@ uses
 .BR /models?client_version=0.146.0 ;
 other providers use
 .BR /v1/models .
-There is no automatic refresh or fallback between protocols.  Catalog limits
-apply only while their source URL and protocol still match.  The versioned
-cache also retains exact-count capability, a source-bound byte/token
-observation, and a lower typed-failure input ceiling.  A refresh resets
-count capability to unknown so the next automatic turn probes again, and
-preserves observations only for the identical provider name, source URL,
-protocol, and model ID.  Idle only.
+There is no automatic catalog refresh or protocol fallback.  Failure leaves
+the previous cache intact.  Idle only.  See
+.BR "MODEL SELECTION AND CONTEXT" .
 .TP
 .BR /model " " number ", " /model " #" number
 Select an exact displayed provider/model/effort row.
@@ -303,19 +368,41 @@ or
 writes the selection to the active configuration.  Typed model IDs need not
 exist in the cache.  Use a numbered row for an ID containing
 .BR / .
-Selection is idle only.
+Selection is idle only.  The final save suffix also works with numbered rows.
 .TP
 .B /config
 Open the active configuration with
 .BR EDITOR .
-Changed valid content is reloaded atomically; invalid content remains on disk
-while the prior runtime configuration stays active.  Idle only.
+Valid changes are reloaded; invalid content remains on disk
+while the prior runtime configuration stays active.  Changed IRC settings
+reconnect the affected runtime.  Reload reapplies configured verbosity plus
+startup flags, replacing a live
+.B /verbose
+selection.  Idle only.
 .TP
 .BR /effort " [" level "]"
 Show or set reasoning effort.  Setting is idle only.
 .TP
 .BR /verbose " [0..6]"
 Show or set this process's current verbosity.
+.TP
+.B /archive
+Archive the idle session and exit.  Exact resume can unarchive it.
+.TP
+.B /compact
+Compact idle model context.  The full local event log is retained.
+.TP
+.B /delete
+Confirm with the displayed session prefix, then permanently remove the idle
+session through private trash staging.  Shared prompt history is not erased.
+.TP
+.B /exit
+Preserve the session and exit.  Idle only.
+.SS Goals
+An active goal continues across ordinary turns until complete, paused,
+cancelled, or blocked.  Queued operator turns run before the next automatic
+goal turn.  Failures, refusal, interruption, input closure, and session resume
+pause automatic continuation.
 .TP
 .BR /goal , " /goal status"
 Show the durable goal.
@@ -343,6 +430,7 @@ End the current goal from the operator side.
 .TP
 .B /goal help
 Show the complete goal grammar.
+.SS Queue
 .TP
 .BR /queue , " /q"
 List future FIFO turns.
@@ -363,20 +451,8 @@ Reopen queued item
 in the composer.
 .TP
 .B /next
-Run the oldest queued turn after resume or another paused state.
-.TP
-.B /archive
-Mark the idle session archived and exit.  Exact resume can unarchive it.
-.TP
-.B /compact
-Compact idle model context and retain the full local event log.
-.TP
-.B /delete
-Confirm with the displayed session prefix, move the idle session through trash,
-and remove it.
-.TP
-.B /exit
-Preserve the session and exit.
+Run the oldest queued turn after resume or another paused state.  Idle only.
+.SS Network
 .TP
 .B /chat
 Select the network chat transcript.
@@ -385,37 +461,83 @@ Select the network chat transcript.
 Select local model activity.
 .TP
 .BR /topic " [" text "]"
-Show the IRC snapshot, or change the hosted room topic as the local operator.
+Show the IRC snapshot, or change the topic in each joined room where the local
+operator has op status.  Text is at most 280 bytes, without newlines.
 .TP
 .B /names
 Show endpoints, members, and channel-operator flags.
+.SH MODEL SELECTION AND CONTEXT
+The provider, model, and effort are session preferences.  A typed selector
+without a provider uses the first configured provider, not necessarily the
+current one.  An omitted effort uses configuration.  The value
+.B default
+for the model resolves to the compiled default;
+.B default
+for effort resolves to
+.BR medium .
+Other nonblank bounded values are sent to the provider without checking a
+model catalog.
 .PP
-In networked mode ordinary text goes to the room and the local model.  Prefix
-text with
-.B //
-to send a message beginning with a literal
-.BR / .
+Use
+.B /model cache
+to discover models and advertised capacities.  Listing the cache is offline;
+there is no TTL and no dependency on an installed Codex.  Cached limits and
+learned accounting apply only to their original provider, URL, protocol, and
+model.  An explicit
+.B [model-limit PROVIDER/MODEL]
+overrides advertised capacities.  Missing capacities remain unknown.
+.PP
+Token accounting prefers exact provider preflight when supported, then uses
+completed request usage, source-bound observations, or conservative byte
+bounds.  These methods are not interchangeable exact counts.
+.B /status
+shows the capacity source and accounting method.  Catalog refresh resets the
+count-capability probe and preserves observations only for an identical source.
+.PP
+Automatic compaction uses the provider threshold and resolved input capacity;
+setting the proactive threshold to zero does not disable capacity handling.
+Native compaction is used when enabled.  Set
+.B native_compaction=false
+to summarize through ordinary Responses when a provider lacks that endpoint;
+there is no automatic compaction-protocol fallback.  Manual
+.B /compact
+is idle only.  Compaction changes model context, not the append-only local log.
 .SH CONFIGURATION
-The file is UTF-8 INI syntax with
+The file is UTF-8 INI syntax.  Lines beginning with
 .B #
 or
 .B ;
-comments.  Unknown sections, unknown keys, duplicate scalar keys, invalid
-values, and files over 64 KiB are errors.  Command-line values override file
-values.  Defaults below are built in.
+are comments; there are no inline comments or general shell-style quotes.
+Unknown sections, keys, duplicate scalar keys, invalid values, and files over
+64 KiB are errors.  Booleans are
+.B true
+or
+.BR false .
+The numeric forms 1 and 0 are also accepted for boolean settings.
+Command-line values override file values.  A missing default configuration
+uses built-ins; an explicit file must exist.  Configuration must be a regular
+file, not a symlink.  Section names below go in square brackets.
 .SS agent
 .TP
 .B provider
 Provider for new sessions.  Default: first configured provider.
 .TP
 .B model
-Model for new sessions.  Default: the compiled model.
+Model for new sessions.  Default:
+.BR default ,
+which resolves to
+.BR gpt-5.5-2026-04-23 .
 .TP
 .B reasoning_effort
-Default effort.  The value
+Default:
 .B default
-resolves to
-.BR medium .
+(resolves to
+.BR medium ).
+The value is provider-specific; common choices include
+.BR low ,
+.BR medium ,
+and
+.BR high .
 .TP
 .B max_goal_prompt_bytes
 Goal wording limit, 1 through 1048576.  Default: 262144.
@@ -427,6 +549,8 @@ or
 .B AGENTS.md
 instructions before each turn.  Default:
 .BR true .
+Project instructions are reread before turns; see
+.BR FILES .
 .SS "provider NAME"
 Up to 16 ordered named sections are accepted.  The spelling
 .B [provider]
@@ -466,7 +590,8 @@ disables it.  Default:
 .BR auto .
 .TP
 .B native_compaction
-Use the provider's native compaction endpoint.  Default:
+Use the provider's native compaction endpoint.  When false, use an ordinary
+Responses summarization request instead.  Default:
 .BR true .
 .TP
 .B openrouter_referer
@@ -542,10 +667,16 @@ Backslash escapes literal braces and backslash.  No shell, environment, or
 command expansion occurs.  snajpagent appends one space after the selected
 label.
 .PP
-The default is:
+For a minimal prompt without spinners, use this single-line value:
 .nf
-{chat:{time} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
+prompt = {chat:{operator}:}{rollout-idle:›}{rollout-active:»}
 .fi
+.PP
+Templates must be printable valid UTF-8, at most 1024 bytes.  All three cases
+are required and nonempty; text outside them is shared.  A case may omit fields.
+Spinner fields may each occur at most once per case.  The default appearance
+is described under
+.BR DISPLAY .
 .TP
 .BR prompt_spinner_goal , " prompt_spinner_provider" , " prompt_spinner_tool"
 Quoted inactive-item plus active-frame strings.  The first safe one-column
@@ -553,21 +684,22 @@ Unicode item is the inactive rendering.  Exact leading file characters
 .B \e0
 instead select zero-width inactive rendering; no NUL byte is stored.  A space
 therefore reserves a stable column, while
-.B "\e0"
+.B \(dq\e0\(dq
 removes a present field and
-.B "\e0◆"
+.B \(dq\e0◆\(dq
 appears only while active.  Zero through 16 remaining one-column items are
 active frames.  One active frame is static and schedules no periodic refresh;
-two or more animate.  Defaults are
-.BR " ◆" ,
-.BR " ◴◷◶◵" ,
-and
-.BR " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" .
+two or more animate.  Adjacent active frames must differ.  Defaults:
+.PP
+.nf
+prompt_spinner_goal = " ◆"
+prompt_spinner_provider = " ◴◷◶◵"
+prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+.fi
 .TP
 .B prompt_spinner_per_second
-One shared animation rate from 1 through 60.  Default: 8.  Hidden, suspended,
-search, non-addressable, disabled, and static states schedule no spinner
-refresh.
+Shared animation rate, 1 through 60.  Default: 8.  Hidden and static indicators
+do not animate.
 .SS tool
 .TP
 .B shell
@@ -581,7 +713,9 @@ Default initial yield interval, 0 through 600000.  Default: 10000.
 .TP
 .B default_timeout_ms
 Foreground handoff deadline when the model supplies none, 0 through 4294967295.
-Zero means no deadline.  Default: 0.
+Zero means no deadline.  Must not exceed
+.BR max_timeout_ms .
+Default: 0.  Reaching the deadline does not kill the command.
 .TP
 .B max_timeout_ms
 Maximum positive model deadline, 1 through 4294967295.  Default: 86400000.
@@ -592,7 +726,8 @@ Default command-result context bound when a tool call selects
 1 through 4000000000.  Default: 4000.
 .TP
 .B max_output_bytes
-Maximum result bytes displayed per tool call.  Zero means unlimited.  The
+Maximum result bytes displayed per tool call, 0 through 4294967295.  Zero
+means unlimited.  The
 durable session retains complete redacted output; model context has its own
 tool-call bound.  Default: 0.
 .TP
@@ -608,7 +743,9 @@ uses
 .BR localhost:6667 .
 .TP
 .B client
-Outgoing endpoint.  Repeat up to 16 times.
+Outgoing endpoint.  Repeat up to 16 distinct endpoints.  Command-line
+.B \-c
+occurrences replace this entire list, preserving their order.
 .TP
 .B model_nick
 Preferred model nick.  Default:
@@ -617,11 +754,15 @@ Preferred model nick.  Default:
 .B operator_nick
 Local operator nick.  Default: valid
 .BR USER ,
-then
-.BR operator .
+then a distinct
+.B operator
+or
+.BR localop .
 .TP
 .B room_name
-Hosted room.  Default: hostname.
+Hosted room, requires a listener.  Default: hostname.  Leading
+.B #
+is optional.
 .TP
 .B history_lines
 Server and snapshot history, 1 through 1000.  Default: 200.
@@ -651,7 +792,8 @@ Live session lock.
 .I $HOME/.snajpagent/trash/
 Private deletion staging.
 .TP
-.IR $XDG_CONFIG_HOME/snajpagent/AGENTS.override.md ", "
+.I $XDG_CONFIG_HOME/snajpagent/AGENTS.override.md
+.TQ
 .I $XDG_CONFIG_HOME/snajpagent/AGENTS.md
 Optional global instructions.  If
 .B XDG_CONFIG_HOME
@@ -663,6 +805,14 @@ workspace.  In each directory,
 .B AGENTS.override.md
 takes precedence over
 .BR AGENTS.md .
+Outside a repository, only the workspace directory is searched.  Global
+instructions precede project instructions.  Each file is limited to 32 KiB;
+the combined set is limited to 16 files and 128 KiB.  Files must be regular,
+non-symlink UTF-8 text.  Set
+.B read_agents_md=false
+under
+.B [agent]
+to disable both global and project discovery.
 .SH ENVIRONMENT
 .TP
 .B HOME
@@ -694,14 +844,15 @@ Used to resolve the executable path printed in a resume command.
 .TP
 .I api_key_env
 Each provider names its credential variable.  It must contain a nonempty value
-within the supported bound.
+of 1 through 4096 ASCII bytes without whitespace or controls.
 .TP
 .I secret_env
 Names additional variables hidden from tool children and redacted from output.
 .SH AUTOMATION AND INTEGRATION
 Use
 .B \-e
-for scripts.  A prompt after
+for scripts.  It runs the supplied turn and any explicitly requested goal
+continuations before exiting.  A prompt after
 .B \-\-
 preserves shell argument boundaries as spaces; a prompt from non-terminal stdin
 preserves internal newlines and removes one final LF or CRLF.
@@ -719,6 +870,10 @@ Commands that yield, reach a foreground handoff deadline, or receive urgent
 input continue under a process handle; the model can wait, interact, or
 explicitly terminate them with
 .BR write_stdin .
+.PP
+Process handles belong to the current foreground process, not a detached job
+service.  Turn interruption, closure, or process exit closes managed commands;
+resume does not revive an operating-system process.
 .PP
 Every
 .B exec_command
@@ -738,6 +893,13 @@ Hosted web search is a provider tool.  Networked mode adds
 .BR irc_state ,
 and privilege-checked
 .BR irc_topic .
+.PP
+Explicit goal requests expose
+.B create_goal
+when no unfinished goal exists.  An active goal exposes
+.B update_goal
+for rewriting, completion, or blocking.  A paused or blocked goal exposes
+neither.  Wording locks prevent model rewording, not completion or blocking.
 .PP
 IRC is the network integration.  The event log is durable internal state, not
 a stable external API while snajpagent remains pre-1.0.
@@ -769,16 +931,33 @@ reconnects.
 .PP
 The terminal starts in the timestamped
 .B chat
-view.  It hides local model and tool activity at verbosity 0.  The
+view.  Model text and tools belong to the
 .B rollout
-view shows local model output.  Both append to the scrolling terminal; there is
-no full-screen or windowed interface.  Model response text remains local;
+view regardless of verbosity.  Ordinary input in either networked view goes
+to all attached rooms as the local operator and enters local model context
+once; changing views does not select a different input destination.  Incoming
+room traffic is not automatically bridged between servers.  Model response
+text remains local;
 .B irc_send
 is the only model-authored path to a room message or notice.  If a
 local-operator turn reaches a terminal response without a successful
 .B irc_send
 message, the model receives one reminder.  Notices do not satisfy that reply
 requirement.  Other room traffic never forces a reply.
+.PP
+The accepted per-server nick drives mentions, echo suppression, and model
+instructions.  Live IRC nick changes retain op status and produce room
+notifications.  The local prompt uses the hosted operator nick, or the first
+outgoing server's accepted nick.  There is no local slash command for changing
+nicks; standard IRC clients can use
+.BR NICK .
+.PP
+Nicks are at most 30 bytes and local model/operator preferences must differ
+under IRC case folding.  Room names are at most 50 bytes excluding
+.BR # .
+The server implements registration, join/part, messages/notices, topic,
+names/who, nick and mode changes, liveness, and bounded history, not the entire
+IRC protocol.  snajpagent clients expect its advertised single-room behavior.
 .PP
 The built-in IRC subset has no TLS or authentication.  A non-loopback listener
 is suitable only for a trusted network or a separately secured tunnel.
@@ -863,7 +1042,8 @@ snajpagent -c localhost:6667 -n reviewer -o bob
 .fi
 .SH SECURITY
 The model and its tools act with the user's local authority.  Run in a suitable
-workspace, inspect configuration, and protect the dotdir.  snajpagent requires
+workspace, inspect configuration, and protect the dotdir.  There is no command
+approval sandbox.  snajpagent requires
 its state directories to be mode 0700 and creates state files mode 0600.
 .PP
 Prompt history intentionally retains submitted operator text across sessions,

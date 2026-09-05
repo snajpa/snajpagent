@@ -5,149 +5,91 @@
 snajpagent is a fast, lightweight, networked coding agent for power users.
 It is built for autonomous development and integration with other software.
 
-[![snajpagent working in a terminal](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
+[![snajpagent fixing and testing a small C program](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 
-It runs in the foreground, streams model output, executes tools, and stores
-durable local sessions. Agents and operators can also share one IRC room.
+One foreground process streams model output, runs coding tools, and keeps
+resumable local sessions. Agents and operators can share an IRC room.
 
 ## Build
 
-You need a C11/POSIX system, make, libcurl, and Jansson.
+You need a C11/POSIX environment, GNU make, libcurl, and Jansson.
 
 ```sh
+git clone https://github.com/snajpa/snajpagent.git
+cd snajpagent
 make
-make check
 sudo make install
 ```
 
-`PREFIX` defaults to `/usr/local`. The install target adds the binary and the
-`snajpagent(1)` manual.
-
-`make check` includes `make stylecheck`: a small read-only check for source
-license headers, clean C/header whitespace, and final newlines. It does not
-rewrite code or substitute mechanical formatting for review.
+The default prefix is `/usr/local`. Installation adds the binary and
+`snajpagent(1)`. `make check` runs the tests; Python 3 is needed, and tmux
+enables the terminal integration tests.
 
 ## Configure
 
-snajpagent reads `$HOME/.snajpagent/config.ini` by default.
+Choose a model your Responses-compatible provider supports. For example,
+create a private configuration directory:
+
+```sh
+install -d -m 700 "$HOME/.snajpagent"
+```
+
+Save this as `$HOME/.snajpagent/config.ini`:
 
 ```ini
 [agent]
 provider = openai
 model = gpt-5.5
-reasoning_effort = medium
 
 [provider openai]
 base_url = https://api.openai.com
 api_key_env = OPENAI_API_KEY
-exact_token_count = auto
-
-[ui]
-prompt = {chat:{time} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context}{goal_spinner}{provider_spinner}{tool_spinner}»}
-prompt_spinner_goal = " ◆"
-prompt_spinner_provider = " ◴◷◶◵"
-prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-prompt_spinner_per_second = 8
 ```
 
-Set the named credential in the environment:
+Export the credential named by `api_key_env`, then start in your project:
 
 ```sh
-export OPENAI_API_KEY='...'
-```
-
-Additional named providers can follow in the same file; the first is used when
-a model selector omits the provider. Use `--config FILE` for another config or
-`--dotdir DIR` for another private state directory.
-
-`exact_token_count = auto` prefers the provider's Responses input-token API and
-falls back only when the endpoint is definitively unsupported. `true` makes
-exact preflight strict; `false` disables it. Completed response usage and typed
-capacity failures can teach the source-bound model cache a conservative
-byte/token estimate without treating bytes or statistical values as exact token
-counts.
-
-`prompt` is a non-shell data template with one case for chat, rollout-idle,
-and rollout-active. Fields such as `{time}`, `{provider}`, `{model}`, and
-`{effort}` expand separately; `{time}` is the local `HH:MM:SS` when the prompt
-is opened. snajpagent appends one space after the selected label.
-Each case may omit or include each adjacent `{goal_spinner}`,
-`{provider_spinner}`, and `{tool_spinner}` field.
-
-In each quoted spinner value, the first item is the inactive rendering. A safe
-one-column code point such as the default space reserves stable width. The two
-literal file characters `\0` at the beginning instead select a zero-width
-inactive rendering; no NUL byte is stored. The remaining zero through 16 safe
-one-column Unicode code points are active frames. Thus `"\0"` removes a
-present field, `" "` reserves a blank field, and `"\0◆"` appears only while
-active. One active frame is static; multiple frames use the shared 1--60
-frames-per-second rate. Goal state, provider work, and synchronous tool calls
-select their respective fields. No textual `working…` or `interrupting…` row
-is emitted.
-
-## Use
-
-Change to a project and start the agent:
-
-```sh
-cd project
+export OPENAI_API_KEY='your-key'
+cd /path/to/project
 snajpagent
 ```
 
-Enter submits a turn. During a response, Enter steers it at the next safe
-boundary and Tab queues a future turn. Ctrl-J inserts a newline. Ctrl-R starts
-incremental reverse history search and Ctrl-G aborts it. Ctrl-C preserves the
-visible draft, prints `^C` and a newline, and opens a clean prompt. On an empty
-active composer it also interrupts the turn; it never exits. Use Ctrl-D or
-`/exit` to leave. `/help` shows all keys and commands.
+Use `/config` to edit and reload the configuration through `$EDITOR`.
+`--config FILE` selects another configuration; `--dotdir DIR` selects another
+private state directory. Both paths must be absolute.
 
-The default rollout prompt is `PROVIDER/MODEL/EFFORT N%   › ` while idle and
-uses `»` plus the goal/provider/tool spinner fields while active. The bare
-context percentage is the last data field before those optional spinners and
-the marker. A fresh session displays `0%`; `?%` is reserved for a non-fresh
-session whose effective input limit cannot be resolved.
+## Work
 
-Useful commands:
+Ask for a change, then use Enter to submit. During a response, Enter steers
+the active turn at its next safe boundary. Tab queues a later turn. Ctrl-J
+inserts a newline, Up/Down recall prompts, and Ctrl-R searches history.
+
+Ctrl-C clears the draft while leaving it in scrollback with `^C`. With an
+empty draft it also interrupts an active turn. It never exits. Use Ctrl-D on
+an empty draft to finish and leave, or `/exit` while idle.
+
+For work that should continue across turns, enter a goal:
 
 ```text
-/help                 commands and keys
-/status               current session and model state
-/config               edit and reload configuration
-/model                 list cached models
-/model cache           refresh the model catalog
-/effort LEVEL          change reasoning effort
-/goal TEXT             start autonomous goal work
-/queue                 inspect queued turns
-/compact               compact model context
-/exit                  preserve the session and exit
+/goal fix the failing tests and verify the change
 ```
 
-`/model` and `/model list` read `$DOTDIR/models.json` offline and show when it
-was last refreshed. `/model cache` explicitly discovers every configured
-provider and atomically updates this versioned provider/model registry,
-including advertised token capacities and source-bound learned accounting.
-There is no TTL; the user decides when to refresh it.
+The agent continues until the goal completes, pauses, or needs help.
+`/goal pause` stops automatic continuation after the current turn;
+`/goal resume` restarts it. `/status` shows the current state. `/help` lists
+all commands and keys.
 
-Use `/model NUMBER` or `/model #NUMBER` to pick a displayed row. Typed selectors
-accept `MODEL`, `MODEL / EFFORT`, or `PROVIDER / MODEL / EFFORT`, ignoring
-whitespace around `/`. A typed model name is trusted and sent unchanged even
-when absent from the cache; snajpagent warns but does not validate or reject it.
+`/model cache` downloads your providers' model catalogs. `/model` lists the
+local cache; `/model NUMBER` selects a row. Add `save` to persist a selection.
+You can also use `-m MODEL` without a catalog.
 
-The terminal renders model Markdown and uses color when supported. Override
-those defaults with `--no-markdown` and `--color=auto|always|never`.
+Color and terminal Markdown are enabled by default when supported.
+Use `--no-color` or `--no-markdown` for plain presentation. Add `-v` to inspect
+tool calls and results in the rollout. More `-v`s enable diagnostic detail.
 
-Interactive submissions are appended immediately to the shared plaintext
-`$DOTDIR/prompt_history`, mode-agnostic across sessions, workspaces, and live
-processes using that dotdir. The newest 100 decoded entries within 4 MiB are
-retained. Backslash and control characters use reversible visible escapes, and
-the file is private mode `0600`. Up/Down navigate the shared stream. This
-history intentionally contains text typed and submitted by the operator;
-`/archive` and `/delete` do not erase it.
+## Resume or script
 
-## Resume
-
-Every normal session exit prints a ready-to-run resume command. You can also
-list or select sessions directly:
+Normal exit prints a ready-to-run resume command. You can also select sessions:
 
 ```sh
 snajpagent -l
@@ -155,69 +97,59 @@ snajpagent --resume --last
 snajpagent --resume SESSION_ID
 ```
 
-Sessions are append-only event logs under `$HOME/.snajpagent/sessions`.
-An active goal and queued turns pause on reopen; use `/goal resume` and `/next`.
+Reopening pauses active goals and queued turns. Use `/goal resume` and `/next`
+when ready. Sessions live under `$HOME/.snajpagent/sessions`.
 
-## Automate
-
-Pass one prompt and return the final model text on stdout:
+For scripts, pass a prompt as arguments or through stdin:
 
 ```sh
 snajpagent -e -- "run the tests and summarize failures"
-printf '%s\n' "review the current diff" | snajpagent -e
+printf '%s\n' 'review the current diff' | snajpagent -e
 ```
 
-The same process interface works in scripts. IRC provides the network
-interface; internal pre-1.0 event files are not a stable API.
+Final model text goes to stdout; diagnostics and the resume hint go to stderr.
+Redirected text has no terminal Markdown formatting or color.
 
-## Network
+## Share a room
 
-Start a local server and its agent:
+Run these in separate terminals, each in its own working project:
 
 ```sh
-snajpagent -s
+snajpagent -s -n builder -o alice -r work
+snajpagent -c -n reviewer -o bob
 ```
 
-Connect another agent and operator:
+The listener and client default to `localhost:6667`. Each server owns one room;
+clients join it automatically. Without `-r`, the room is named after the host.
+Its initial topic is the server's workspace path. Use `/topic TEXT` to change
+the topic in your joined rooms.
 
-```sh
-snajpagent -c localhost:6667
-```
+Operators have channel op status. Their messages and model-nick mentions steer
+the agents. Only the model's `irc_send` tool posts to the room; other model
+text stays in the local rollout. Joining, history, and reconnects are automatic.
 
-The model nick defaults to `agent`; the operator nick defaults to a valid
-`USER`, such as `root`. Override them with `-n` and `-o`. If a preferred nick
-is already present, the client follows IRC convention by trying numeric
-suffixes such as `agent1` or `root1` on the same connection.
+Networked mode opens the timestamped chat view. Empty Tab switches between
+chat and rollout; `/chat` and `/rollout` select them explicitly. `-n` defaults
+to `agent`, and `-o` to a valid `$USER`; nick collisions get numeric suffixes.
+Repeat `-c ENDPOINT` to join multiple servers, or combine it with `-s ENDPOINT`.
+Typed network messages go to the rooms in either view. The local model's own
+room echoes are hidden without `-v`; remote messages remain visible.
 
-The server owns one room. Human IRC clients receive operator status; model
-nicks do not. Operator messages and direct mentions steer the addressed model.
-Model response text stays in the local rollout; only `irc_send` posts
-model-authored messages or notices. The runtime handles joining, bounded
-history, and reconnects. Models may remain
-quiet after peer chatter by returning no actionable output. An explicit empty
-or oversized assistant message receives one terse model-facing correction and
-is retried without exposing that correction as room chat or operator output.
+## Trust and reference
 
-`-c` is repeatable. `-s ENDPOINT` selects the listener and may be combined with
-outgoing `-c` connections. Networked mode starts in chat view; Tab on an empty
-draft switches between chat and local rollout. The default chat composer is
-`HH:MM:SS OPERATOR_NICK@MACHINE_HOSTNAME   : `; both views use the same prompt
-history.
+Tools run with your local permissions. There is no command approval sandbox.
+IRC has no authentication or TLS: keep it on localhost or use a trusted,
+separately secured network. Ordinary IRC clients receive operator status.
 
-## Reference
+Submitted text is retained in shared plaintext `prompt_history` under the
+dotdir. Session deletion does not erase it. Protect that file and your session
+logs, and review terminal captures before sharing them.
 
-Read the installed manual with `man 1 snajpagent`, or render the source with:
+Read `man 1 snajpagent` for all options, commands, configuration, and limits.
+Without installing: `man -l ./snajpagent.1`. Internal pre-1.0 state formats are
+not a stable integration API; use the process interface or IRC.
 
-```sh
-man -l ./snajpagent.1
-```
-
-Implementation contracts live in [`design/`](design/). Start with
-[`architecture.md`](design/architecture.md), then see
-[`model-cache.md`](design/model-cache.md),
-[`interactive-io.md`](design/interactive-io.md),
-[`goals.md`](design/goals.md), and [`irc-chat.md`](design/irc-chat.md).
-The existing checks live in [`tests/`](tests/).
-
-All first-party material is GPL-2.0-only. See [`COPYING`](COPYING) and
+Implementation contracts are in [`design/`](design/), starting with
+[`architecture.md`](design/architecture.md). The static site is in [`www/`](www/).
+All first-party material is GPL-2.0-only; see [`COPYING`](COPYING) and
 [`LICENSE_SCOPE`](LICENSE_SCOPE).

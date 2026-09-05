@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Refresh the README, complete command/configuration manual, and minimal static
+  website against the current UI and runtime. Replace the terminal screenshots
+  with current real-provider sessions.
+
 - Prefix the default IRC chat composer with the local `HH:MM:SS` prompt-open
   time and expose that value as the data-only prompt template field `{time}`.
 

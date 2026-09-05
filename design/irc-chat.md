@@ -252,12 +252,11 @@ entering a view does not dump older session history from the rollout log.
 Networked mode keeps IRC debugging behind the more useful agent/tool detail.
 Its additional local-only ladder is:
 
-- verbosity 1: terminal model replies shown once as agent chat lines, plus all
-  tool calls with complete arguments, completion state, and result text up to
-  `[tool] max_output_bytes` (`0` means unlimited display);
-- verbosity 2: intermediate local model commentary and runtime/provider-cycle
-  state;
-- verbosity 3: additional agent runtime detail;
+- verbosity 1: the local model's `irc_send` echoes in chat; reasoning summaries
+  and all tool calls, arguments, completion state, and result text in rollout,
+  up to `[tool] max_output_bytes` (`0` means unlimited display);
+- verbosity 2: currently the same as verbosity 1;
+- verbosity 3: runtime and provider-cycle detail;
 - verbosity 4: durable app events and compact IRC connection/event state;
 - verbosity 5: sanitized prompt/protocol bodies and parsed IRC commands, with
   the existing sensitive-content warning; and

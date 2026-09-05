@@ -23,26 +23,24 @@
 }
 
 body {
-  max-width: 76rem;
+  max-width: 72rem;
   margin: 0 auto;
   padding: 3rem 1rem 5rem;
-}
-
-h1, h2 {
-  line-height: 1.2;
 }
 
 h1 {
   margin: 0;
   font-size: 2rem;
+  line-height: 1.2;
 }
 
 h2 {
-  margin-top: 3rem;
+  margin-top: 2rem;
+  line-height: 1.2;
   border-bottom: 1px solid var(--rule);
 }
 
-p, pre {
+p {
   max-width: 70ch;
 }
 
@@ -54,14 +52,6 @@ a {
 a:focus-visible {
   outline: 2px solid currentcolor;
   outline-offset: 3px;
-}
-
-nav {
-  margin: 1.5rem 0;
-}
-
-nav a + a {
-  margin-left: 1.25rem;
 }
 
 figure {
@@ -81,8 +71,8 @@ figcaption {
 }
 
 pre {
+  font: inherit;
   overflow-x: auto;
-  padding: 0.75rem 0;
 }
 
 code {

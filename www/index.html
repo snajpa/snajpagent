@@ -11,38 +11,40 @@
 <body>
   <header>
     <h1>snajpagent</h1>
-    <p>snajpagent is a fast, lightweight, networked coding agent for power users.
-      It is built for autonomous development and integration with other software.</p>
-    <nav>
+    <p>A fast, lightweight, networked coding agent for power users.
+      Built for autonomous development and integration with other software.</p>
+    <nav aria-label="Project">
       <a href="https://github.com/snajpa/snajpagent">source</a>
       <a href="#install">install</a>
       <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">manual</a>
     </nav>
     <figure>
-      <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1236" height="132"
-        alt="Operators alice and bob exchanging timestamped review messages with the builder agent."></a>
-      <figcaption>Agents and operators share one IRC room.</figcaption>
+      <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1234" height="112"
+        alt="Timestamped IRC conversation between operators and a coding agent."></a>
+      <figcaption>IRC chat, with local replies visible (-v). No windowed TUI.</figcaption>
     </figure>
   </header>
-
   <main>
     <section id="networked">
       <h2>networked</h2>
-      <p>Host one room or connect to another. The agents handle history and reconnects.</p>
-      <pre><code>snajpagent -s
-snajpagent -c localhost:6667</code></pre>
-      <p>The model nick defaults to <code>agent</code>, the operator nick to
-      your login, and IRC nickname collisions gain numeric suffixes.</p>
+      <p>Run a server and a client in separate terminals:</p>
+      <pre><code>snajpagent -s -n builder -o alice -r work
+snajpagent -c -n reviewer -o bob</code></pre>
+      <p>Both default to localhost:6667. Operators and mentions steer the agents.
+        Models choose what to send; other output stays local. History and
+        reconnects are automatic.</p>
+      <p>IRC has no authentication or TLS. Use a trusted network or secure tunnel.</p>
     </section>
-
     <section id="install">
       <h2>install</h2>
-      <p>Build with a C11 compiler, make, libcurl, and Jansson.</p>
+      <p>You need a C11/POSIX environment, GNU make, libcurl, and Jansson.</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
 make
-sudo make install</code></pre>
-      <p>Put one provider in <code>$HOME/.snajpagent/config.ini</code>.</p>
+sudo make install
+install -d -m 700 "$HOME/.snajpagent"</code></pre>
+      <p>Save this as <code>$HOME/.snajpagent/config.ini</code>, choosing a model
+        your Responses-compatible provider supports:</p>
       <pre><code>[agent]
 provider = openai
 model = gpt-5.5
@@ -50,29 +52,28 @@ model = gpt-5.5
 [provider openai]
 base_url = https://api.openai.com
 api_key_env = OPENAI_API_KEY</code></pre>
+      <p>Export <code>OPENAI_API_KEY</code> with your credential, then run
+        <code>snajpagent</code> in your project. Tools use your local permissions.</p>
     </section>
-
     <section id="use">
       <h2>use</h2>
       <figure>
-        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1236" height="210"
-          alt="snajpagent completing a small C fix and reporting its passing test in a terminal."></a>
-        <figcaption>A durable local session against a real provider.</figcaption>
+        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1234" height="290"
+          alt="snajpagent fixing a small C program and reporting its test result."></a>
+        <figcaption>Real provider, local tools, resumable session.</figcaption>
       </figure>
-      <pre><code>snajpagent                         # interactive
-snajpagent -e -- "run the tests"   # one shot
-snajpagent --resume --last         # continue
-/goal finish this change           # autonomous</code></pre>
-      <p>Enter steers the active turn. Tab queues the next one. Tools and sessions
-        remain inspectable.</p>
+      <pre><code>snajpagent -e -- "run the tests"
+snajpagent --resume --last</code></pre>
+      <p>Enter steers active work. Tab queues a later turn. In the agent, use
+        <code>/goal finish this change</code> for autonomous work,
+        <code>/goal pause</code> to pause it, and <code>/help</code> for commands.</p>
     </section>
-
     <section id="about">
       <h2>about</h2>
-      <p>One foreground C process. No resident service. Use stdin and exit status
-        for scripts, OpenAI-compatible providers for models, and IRC for the network.</p>
+      <p>One foreground C process. No resident service. Use stdin, stdout, and
+        exit status for scripts, and IRC for the network. Sessions and shared
+        prompt history stay on disk; protect them like source and shell history.</p>
       <p><a href="https://github.com/snajpa/snajpagent#readme">readme</a>
-        · <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">snajpagent(1)</a>
         · <a href="https://github.com/snajpa/snajpagent/tree/master/design">design</a>
         · <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a></p>
     </section>
