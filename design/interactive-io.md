@@ -156,11 +156,12 @@ does not alter submitted text, model text, events, or provider traffic.
 `{rollout-idle:TEXT}`, and one `{rollout-active:TEXT}` case. It supports
 separate `{provider}`, `{model}`, `{effort}`, `{operator}`, `{host}`,
 `{context}`, `{mode}`, `{hour}`, `{minute}`, and `{second}` fields plus optional `{goal_spinner}`,
-`{provider_spinner}`, and `{tool_spinner}` fields and escaped literal
+and `{activity_spinner}` fields and escaped literal
 braces/backslash; it performs no shell or environment expansion. The default
-rollout prompt is `PROVIDER/MODEL/EFFORT N%   › ` while idle and uses `»` while
-active. The complete percentage occupies four columns by default. The
-default chat prompt is `HH:MM:SS OPERATOR@HOST   : `. Snajpagent appends one
+rollout prompt is `    0% PROVIDER/MODEL/EFFORT › ` while idle and uses `»` while
+active. Two leading indicator slots precede the four-column percentage;
+inactive slots and unused percentage digits remain spaces. The
+default idle chat prompt is `  HH:MM:SS OPERATOR@HOST : `. Snajpagent appends one
 space after the expanded template.
 
 Clock components are natural decimal local-time values from one capture per
@@ -182,8 +183,8 @@ All modes are validated, and a failed `/config` reload keeps the prior config.
 The pre-1.0 combined `{time}` field is removed; explicit templates must use the
 component fields instead. No compatibility alias or automatic rewrite exists.
 
-The context meter is the final rollout data field before the adjacent optional
-spinner fields and state glyph. `N` is the rounded-up percentage of the
+The context meter follows the leading indicator slots and precedes the rollout
+model identity. `N` is the rounded-up percentage of the
 latest durable token-domain input bound against the resolved hard input budget
 for the same provider source, model, effort, and compaction lineage. A fresh
 session or accounting from a different provider source, selection, or lineage
@@ -200,10 +201,16 @@ selected value supplied to the provider remains byte-for-byte unchanged.
 are quoted inactive-state plus active-frame strings. The first item is either a
 safe one-column inactive code point or the leading `\0` zero-width sentinel;
 the remaining zero through 16 safe one-column code points are active frames.
-The defaults are `" ◆"`, `" ◴◷◶◵"`, and `" ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"`, reserving
-three columns so state changes do not move the marker or draft. `"\0"`
-permanently removes a present field, `" "` deliberately reserves a blank one,
-and `"\0◆"` explicitly permits the field to appear only while active. One
+The defaults are `" ⚑"`, `" ◴◷◶◵"`, and `" ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"`, reserving
+two columns: an independent goal flag and one shared activity slot. Tool
+activity takes priority over provider activity in that same cell, even when
+both activity bits are set. Otherwise the provider setting supplies its active
+frames during model work and its inactive item when idle. The tool setting
+supplies the frames (or its inactive item if it has no frames) during tool work.
+`"\0"` disables the selected sequence, `" "` reserves a blank cell, and
+`"\0⚑"` makes the goal flag appear only while active. The old separate
+`{provider_spinner}` and `{tool_spinner}` placeholders are removed pre-1.0;
+explicit templates must replace them with one `{activity_spinner}`. One
 active frame is static and schedules no periodic work or cell rewrite.
 Multiple active frames use the one shared `prompt_spinner_per_second` rate
 (1--60, default 8), monotonic phase, and no catch-up bursts. A tick overwrites
@@ -218,8 +225,8 @@ Literal spaces never disappear implicitly, and numeric padding never adds a
 column to an absent spinner. An active space frame still occupies one column.
 Omitting a spinner placeholder removes it for that mode. Compact provider/tool
 handoffs account for changed slot ownership even when total width is unchanged.
-Queue editing retains its special `edit NUMBER` label with the same four-column
-context value and reserved/absent spinner configuration.
+Queue editing uses the same leading slots and four-column context before
+its special `edit NUMBER › ` label.
 
 The networked prompt identity and its chat/rollout views are specified in
 `irc-chat.md`.

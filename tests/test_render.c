@@ -200,7 +200,7 @@ static void
 test_prompt_spinners(void)
 {
     struct snj_term term;
-    const char prompt[] = {'x', (char)0xfd, (char)0xfe, (char)0xff, '>', '\0'};
+    const char prompt[] = {'x', (char)0xfd, (char)0xfe, '>', '\0'};
     char oversized[SNJ_TERM_LABEL_BYTES];
     const char *spinners[SNJ_TERM_SPINNER_COUNT] = {"\\0◆", " |/-", "\\0"};
     const char *bad[SNJ_TERM_SPINNER_COUNT] = {"\x80", " ", " "};
@@ -233,36 +233,82 @@ test_prompt_spinners(void)
                                         0u) < 0);
     assert(memcmp(saved, term.label, sizeof(saved)) == 0);
     {
-        const char padded[] = "  9%\xfd\xfe\xff> ";
-        const char *stable[] = {" ◆", " P", " T"};
+        const char padded[] = "\xfd\xfe  9%> ";
+        const char *stable[] = {" ⚑", " P", " ⠋"};
         const char *compact[] = {"\\0◆", "\\0P", "\\0T"};
         const char *blank[] = {" ", "\\0 P", "\\0"};
 
         for (unsigned int state = 0u; state < 8u; ++state) {
             assert(snj_term_set_prompt_template(&term, true, padded, stable,
                                                 8u, state) == 0);
-            assert(strncmp(term.label, "  9%", 4u) == 0);
-            assert(strcmp(term.label + strlen(term.label) - 2u, "> ") == 0);
-            assert(snj_term_text_width(term.label, strlen(term.label)) == 9u);
+            char expected[32];
+
+            assert(snprintf(expected, sizeof(expected), "%s%s  9%%> ",
+                state & 1u ? "⚑" : " ",
+                state & 4u ? "⠋" : state & 2u ? "P" : " ") > 0);
+            assert(strcmp(term.label, expected) == 0);
+            assert(snj_term_text_width(term.label, strlen(term.label)) == 8u);
+            assert(snj_term_set_spinner_states(&term, 2u) == 0);
+            assert(strcmp(term.label, " P  9%> ") == 0);
+            assert(snj_term_set_spinner_states(&term, 6u) == 0);
+            assert(strcmp(term.label, " ⠋  9%> ") == 0);
+            assert(snj_term_set_spinner_states(&term, 0u) == 0);
+            assert(strcmp(term.label, "    9%> ") == 0);
         }
         assert(snj_term_set_prompt_template(&term, true, padded, compact,
                                             8u, 0u) == 0);
         assert(strcmp(term.label, "  9%> ") == 0);
         assert(snj_term_set_spinner_states(&term, 2u) == 0);
-        assert(strcmp(term.label, "  9%P> ") == 0);
+        assert(strcmp(term.label, "P  9%> ") == 0);
         assert(snj_term_set_spinner_states(&term, 4u) == 0);
-        assert(strcmp(term.label, "  9%T> ") == 0);
+        assert(strcmp(term.label, "T  9%> ") == 0);
         assert(term.spinner[SNJ_TERM_SPINNER_PROVIDER].current_len == 0u);
         assert(term.spinner[SNJ_TERM_SPINNER_TOOL].current_len == 1u);
         assert(snj_term_set_prompt_template(&term, true, padded, blank,
                                             8u, 2u) == 0);
-        assert(strcmp(term.label, "  9%  > ") == 0);
+        assert(strcmp(term.label, "    9%> ") == 0);
         assert(term.spinner[SNJ_TERM_SPINNER_PROVIDER].current_len == 1u);
         assert(snj_term_set_spinner_states(&term, 0u) == 0);
-        assert(strcmp(term.label, "  9% > ") == 0);
+        assert(strcmp(term.label, "   9%> ") == 0);
         assert(snj_term_set_prompt_template(&term, true, "  9%> ", compact,
                                             8u, 7u) == 0);
         assert(strcmp(term.label, "  9%> ") == 0);
+    }
+    {
+        const char *frames[] = {" ⚑", " P", " ⠋"};
+        int fds[2], saved_fd;
+        char output[512];
+        ssize_t bytes;
+
+        /* The longest activity variant must fit even while the slot is idle. */
+        memset(oversized, 'x', sizeof(oversized));
+        oversized[sizeof(oversized) - 3u] = (char)0xfe;
+        oversized[sizeof(oversized) - 2u] = '\0';
+        assert(snj_term_set_prompt_template(&term, false, oversized, frames, 8u, 0u) < 0);
+        assert(snj_term_set_prompt_template(&term, true, "\xfd\xfe  9%> ",
+                                            frames, 8u, 2u) == 0);
+        assert(snj_buf_append(&term.draft, "draft", 5u) == 0);
+        term.cursor = term.draft.len;
+        term.columns = 80u;
+        term.prompt_visible = term.capable = true;
+        term.rendered_cursor_col = 13u;
+        assert(pipe(fds) == 0);
+        saved_fd = dup(STDERR_FILENO);
+        assert(saved_fd >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
+        close(fds[1]);
+        assert(snj_term_set_spinner_states(&term, 6u) == 0);
+        assert(snj_term_set_spinner_states(&term, 2u) == 0);
+        assert(term.cursor == 5u && term.rendered_cursor_col == 13u);
+        assert(dup2(saved_fd, STDERR_FILENO) >= 0);
+        close(saved_fd);
+        bytes = read(fds[0], output, sizeof(output) - 1u);
+        assert(bytes > 0);
+        output[bytes] = '\0';
+        close(fds[0]);
+        assert(strstr(output, "⠋") && strstr(output, "P"));
+        assert(!strstr(output, "9%") && !strstr(output, "draft"));
+        assert(!strstr(output, "\033[2K") && !strchr(output, '\n'));
+        term.prompt_visible = false;
     }
     snj_term_close(&term);
 }

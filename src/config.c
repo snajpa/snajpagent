@@ -96,6 +96,14 @@ provider_init(struct snj_provider_config *provider, const char *name)
 void
 snj_config_init(struct snj_config *config)
 {
+    static const char prompt[] =
+        "{chat:{goal_spinner}{activity_spinner}{hour:02}:{minute:02}:{second:02} "
+        "{operator}@{host} :}"
+        "{rollout-idle:{goal_spinner}{activity_spinner}{context:4} "
+        "{provider}/{model}/{effort} ›}"
+        "{rollout-active:{goal_spinner}{activity_spinner}{context:4} "
+        "{provider}/{model}/{effort} »}";
+
     memset(config, 0, sizeof(*config));
     memcpy(config->model, "default", 8u);
     memcpy(config->reasoning_effort, "default", 8u);
@@ -108,20 +116,8 @@ snj_config_init(struct snj_config *config)
     config->markdown = true;
     config->resume_history_turns = 2u;
     config->typing_pause_ms = 500u;
-    memcpy(config->prompt,
-        "{chat:{hour:02}:{minute:02}:{second:02} {operator}@{host}"
-        "{goal_spinner}{provider_spinner}{tool_spinner}:}"
-        "{rollout-idle:{provider}/{model}/{effort} {context:4}{goal_spinner}"
-        "{provider_spinner}{tool_spinner}›}"
-        "{rollout-active:{provider}/{model}/{effort} {context:4}{goal_spinner}"
-        "{provider_spinner}{tool_spinner}»}",
-        sizeof("{chat:{hour:02}:{minute:02}:{second:02} {operator}@{host}"
-        "{goal_spinner}{provider_spinner}{tool_spinner}:}"
-        "{rollout-idle:{provider}/{model}/{effort} {context:4}{goal_spinner}"
-        "{provider_spinner}{tool_spinner}›}"
-        "{rollout-active:{provider}/{model}/{effort} {context:4}{goal_spinner}"
-        "{provider_spinner}{tool_spinner}»}"));
-    memcpy(config->prompt_spinner_goal, " ◆", sizeof(" ◆"));
+    memcpy(config->prompt, prompt, sizeof(prompt));
+    memcpy(config->prompt_spinner_goal, " ⚑", sizeof(" ⚑"));
     memcpy(config->prompt_spinner_provider, " ◴◷◶◵", sizeof(" ◴◷◶◵"));
     memcpy(config->prompt_spinner_tool, " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
            sizeof(" ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"));
@@ -304,7 +300,7 @@ prompt_body(const char *text, size_t len,
 {
     static const char *const fields[] = {"provider", "model", "effort",
         "operator", "host", "context", "mode", "hour", "minute", "second",
-        "goal_spinner", "provider_spinner", "tool_spinner"};
+        "goal_spinner", "activity_spinner"};
     unsigned int spinners = 0u;
 
     for (size_t i = 0u; i < len; ++i) {
@@ -464,7 +460,7 @@ snj_config_prompt_expand(const char *text, unsigned int mode,
     int rc = -1;
 
     if (!text || mode >= 3u || !values || !label || label_size < 2u ||
-        marker > 0xfdu) {
+        marker > 0xfeu) {
         errno = EINVAL;
         return -1;
     }

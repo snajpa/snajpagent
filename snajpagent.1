@@ -261,8 +261,9 @@ switch views.  Hidden-view output is buffered for display on return.
 Both views append to terminal scrollback;
 neither is a full-screen TUI.
 .PP
-The default rollout prompt shows provider, model, effort, a bare context
-percentage space-padded to four columns, three status fields, and an idle or active marker:
+The default rollout prompt starts with a goal slot and a shared activity slot,
+then a bare context percentage space-padded to four columns, a space,
+provider/model/effort, and a space before its idle or active marker:
 .B ›
 while idle and
 .B »
@@ -273,11 +274,13 @@ an unknown budget shows
 .BR ?% .
 .PP
 The default chat prompt is
-.IR HH:MM:SS " " OPERATOR_NICK@MACHINE_HOSTNAME "   : " .
+.IR "  HH:MM:SS " OPERATOR_NICK@MACHINE_HOSTNAME " : "
+when idle.  Its two leading spaces reserve the same indicator slots.
 The timestamp is local time captured once per composer.  Editing, view changes,
 and status redraws retain it; submission or Ctrl-C cancellation ends that capture.
-The status fields indicate an active goal, provider work, and a synchronous
-tool call.  Interruption retains the current provider/tool indicator until the
+The goal flag is independent of the activity slot.  Tool calls take priority
+over model/provider work in the same activity column; idle reserves one space.
+Unused context digits also remain spaces.  Interruption retains the current provider/tool indicator until the
 turn closes; there is no separate interruption glyph.  The template and spinners are configurable under
 .BR [ui] .
 .SS Verbosity
@@ -708,10 +711,11 @@ case.  Ordinary fields are
 and
 .BR {second} ;
 optional status fields are
-.BR {goal_spinner} ,
-.BR {provider_spinner} ,
+.BR {goal_spinner}
 and
-.BR {tool_spinner} .
+.BR {activity_spinner} .
+The old separate provider/tool placeholders are removed pre-1.0; explicit
+templates must replace them with one shared activity placeholder.
 Backslash escapes literal braces and backslash.  No shell, environment, or
 command expansion occurs.  snajpagent appends one space after the selected
 label.
@@ -751,16 +755,18 @@ instead select zero-width inactive rendering; no NUL byte is stored.  A space
 therefore reserves a stable column, while
 .B \(dq\e0\(dq
 removes a present field and
-.B \(dq\e0◆\(dq
+.B \(dq\e0⚑\(dq
 appears only while active.  Zero through 16 remaining one-column items are
 active frames.  One active frame is static and schedules no periodic refresh;
 two or more animate.  Adjacent active frames must differ.  A blank active
 frame still occupies one column.  Omit a placeholder to remove it in one mode.
 Literal spaces are never trimmed, and numeric padding never restores an absent
-spinner.  Defaults:
+spinner.  The activity slot uses the tool sequence during a tool call,
+otherwise the provider sequence (its inactive item when idle).  A selected
+sequence with no active frames uses its inactive item.  Defaults:
 .PP
 .nf
-prompt_spinner_goal = " ◆"
+prompt_spinner_goal = " ⚑"
 prompt_spinner_provider = " ◴◷◶◵"
 prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 .fi

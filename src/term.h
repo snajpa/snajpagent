@@ -13,6 +13,7 @@
 #include <time.h>
 
 #define SNJ_TERM_SPINNER_COUNT 3u
+#define SNJ_TERM_SPINNER_SLOTS 2u
 #define SNJ_TERM_SPINNER_MARKER_BASE 0xfdu
 
 enum snj_term_spinner_id {

@@ -804,17 +804,23 @@ compose_prompt(const char *prompt, const struct snj_term_spinner *spinners,
     }
     for (const unsigned char *p = (const unsigned char *)prompt; *p; ++p) {
         if (*p >= SNJ_TERM_SPINNER_MARKER_BASE) {
-            struct snj_term_spinner *cell =
-                &next[*p - SNJ_TERM_SPINNER_MARKER_BASE];
-            size_t offset = 0u, len = cell->inactive_len;
+            unsigned int id = *p - SNJ_TERM_SPINNER_MARKER_BASE;
+            struct snj_term_spinner *cell;
+            size_t offset = 0u, len;
+
+            if (id >= SNJ_TERM_SPINNER_SLOTS)
+                return -1;
+            if (id == SNJ_TERM_SPINNER_PROVIDER &&
+                (states & (1u << SNJ_TERM_SPINNER_TOOL)))
+                id = SNJ_TERM_SPINNER_TOOL;
+            cell = &next[id];
+            len = cell->inactive_len;
 
             if (cell->present)
                 return -1;
             cell->present = true;
             cell->label_offset = used;
-            if ((states & (1u <<
-                    (*p - SNJ_TERM_SPINNER_MARKER_BASE))) &&
-                cell->frame_count) {
+            if ((states & (1u << id)) && cell->frame_count) {
                 unsigned int frame = (unsigned int)(step % cell->frame_count);
                 offset = cell->frame_offset[frame];
                 len = cell->frame_len[frame];
@@ -846,15 +852,22 @@ prompt_fits(const char *prompt,
 
         if (*p >= SNJ_TERM_SPINNER_MARKER_BASE) {
             unsigned int id = *p - SNJ_TERM_SPINNER_MARKER_BASE;
-            const struct snj_term_spinner *cell = &spinners[id];
 
-            if (seen & (1u << id))
+            if (id >= SNJ_TERM_SPINNER_SLOTS || (seen & (1u << id)))
                 return -1;
             seen |= 1u << id;
-            len = cell->inactive_len;
-            for (size_t i = 0u; i < cell->frame_count; ++i)
-                if (cell->frame_len[i] > len)
-                    len = cell->frame_len[i];
+            len = 0u;
+            for (unsigned int source = id; source <=
+                    (id == SNJ_TERM_SPINNER_PROVIDER ? SNJ_TERM_SPINNER_TOOL : id);
+                    ++source) {
+                const struct snj_term_spinner *cell = &spinners[source];
+
+                if (cell->inactive_len > len)
+                    len = cell->inactive_len;
+                for (size_t i = 0u; i < cell->frame_count; ++i)
+                    if (cell->frame_len[i] > len)
+                        len = cell->frame_len[i];
+            }
         }
         if (used > SNJ_TERM_LABEL_BYTES - 1u - len)
             return -1;
@@ -871,23 +884,32 @@ install_prompt(struct snj_term *term, const char *label,
     memcpy(term->spinner, cells, sizeof(term->spinner));
 }
 
+static unsigned int
+spinner_slot_id(const struct snj_term_spinner *cells, unsigned int slot)
+{
+    return slot == SNJ_TERM_SPINNER_PROVIDER && cells[SNJ_TERM_SPINNER_TOOL].present ?
+           SNJ_TERM_SPINNER_TOOL : slot;
+}
+
 static int
 paint_spinners(struct snj_term *term, const char *old_label,
                const struct snj_term_spinner old[SNJ_TERM_SPINNER_COUNT])
 {
     bool painted = false;
 
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i) {
-        const struct snj_term_spinner *cell = &term->spinner[i];
+    for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_SLOTS; ++i) {
+        const struct snj_term_spinner *cell =
+            &term->spinner[spinner_slot_id(term->spinner, i)];
+        const struct snj_term_spinner *previous = &old[spinner_slot_id(old, i)];
         size_t width, row, col;
 
         if (!cell->present || !cell->current_len ||
-            (old[i].current_len == cell->current_len &&
-             memcmp(old_label + old[i].label_offset,
+            (previous->current_len == cell->current_len &&
+             memcmp(old_label + previous->label_offset,
                     term->label + cell->label_offset,
                     cell->current_len) == 0))
             continue;
-        width = snj_term_text_width(old_label, old[i].label_offset);
+        width = snj_term_text_width(old_label, previous->label_offset);
         if (width == SIZE_MAX)
             return -1;
         row = width / term->columns;
@@ -923,8 +945,9 @@ update_spinners(struct snj_term *term, uint64_t step)
     if (compose_prompt(term->prompt_template, term->spinner,
                        term->spinner_states, step, label, next) < 0)
         return -1;
-    for (size_t i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
-        if (!!old[i].current_len != !!next[i].current_len)
+    for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_SLOTS; ++i)
+        if (!!old[spinner_slot_id(old, i)].current_len !=
+            !!next[spinner_slot_id(next, i)].current_len)
             stable = false;
     visible = term->prompt_visible && term->capable && !term->searching &&
               !term->output_depth;

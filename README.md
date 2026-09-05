@@ -186,8 +186,13 @@ space-pads the whole percentage to four columns; widths never truncate.
 Spinner settings starting with a space reserve a column; leading `\0` hides
 it while idle. No whitespace is removed implicitly. See the
 [prompt reference](design/interactive-io.md#prompt-identity-and-tab) for the
-full syntax. Explicit pre-1.0 templates using `{time}` must replace it with
-the clock components.
+full syntax. Defaults start with a goal flag (`⚑` when active) and one activity
+slot shared by model and tool work, with tools taking priority. Rollout then
+shows the padded percentage and model identity; chat keeps its timestamp and
+operator identity. Inactive slots and unused digits remain leading spaces.
+Explicit pre-1.0 templates using `{time}` must replace it with clock components;
+replace separate `{provider_spinner}`/`{tool_spinner}` fields with one
+`{activity_spinner}`.
 
 Tools run with your local permissions. There is no command approval sandbox.
 IRC has no authentication or TLS: keep it on localhost or use a trusted,

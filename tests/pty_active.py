@@ -25,12 +25,12 @@ DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
-DEFAULT_IDLE_PROMPT = f"default/{DEFAULT_MODEL}/medium   0%   › ".encode()
-DEFAULT_ACCOUNTED_IDLE_PROMPT = f"default/{DEFAULT_MODEL}/medium   ?%   › ".encode()
-DEFAULT_ACTIVE_PROMPT = f"default/{DEFAULT_MODEL}/medium   ?% ◴ » ".encode()
-DEFAULT_TOOL_PROMPT = f"default/{DEFAULT_MODEL}/medium   ?%  ⠋» ".encode()
-QUEUE_EDIT_ACTIVE_PROMPT = "edit 1   ?% ◴ › ".encode()
-QUEUE_EDIT_IDLE_PROMPT = "edit 1   ?%   › ".encode()
+DEFAULT_IDLE_PROMPT = f"    0% default/{DEFAULT_MODEL}/medium › ".encode()
+DEFAULT_ACCOUNTED_IDLE_PROMPT = f"    ?% default/{DEFAULT_MODEL}/medium › ".encode()
+DEFAULT_ACTIVE_PROMPT = f" ◴  ?% default/{DEFAULT_MODEL}/medium » ".encode()
+DEFAULT_TOOL_PROMPT = f" ⠋  ?% default/{DEFAULT_MODEL}/medium » ".encode()
+QUEUE_EDIT_ACTIVE_PROMPT = " ◴  ?% edit 1 › ".encode()
+QUEUE_EDIT_IDLE_PROMPT = "    ?% edit 1 › ".encode()
 GOAL_SET = "• Goal set".encode()
 GOAL_CLEARED = "• Goal cleared".encode()
 COMPACTED = "• Compacted".encode()
@@ -39,11 +39,7 @@ RESUME_HEADER = \
 
 
 def chat_prompt(operator):
-    return f"{operator}@{socket.gethostname()}   : ".encode()
-
-
-def chat_active_prompt(operator):
-    return f"{operator}@{socket.gethostname()} ◴ : ".encode()
+    return f"{operator}@{socket.gethostname()} : ".encode()
 
 
 class Child:
@@ -403,8 +399,8 @@ def test_static_zero_width_spinner_has_no_refresh():
         "prompt_spinner_per_second = 60\n",
         encoding="utf-8",
     )
-    idle = f"default/{DEFAULT_MODEL}/medium   0%› ".encode()
-    active = f"default/{DEFAULT_MODEL}/medium   ?%◆» ".encode()
+    idle = f"  0% default/{DEFAULT_MODEL}/medium › ".encode()
+    active = f"◆  ?% default/{DEFAULT_MODEL}/medium » ".encode()
     child = Child(["--config", str(config)])
     try:
         child.wait(idle)
@@ -423,8 +419,8 @@ def test_prompt_clock_lifetime():
     clock = "@{hour:02}:{minute:02}:{second:02}"
     config.write_text(
         "[ui]\nprompt = {chat:" + clock + ":}"
-        "{rollout-idle:" + clock + " {context:4}{provider_spinner}›}"
-        "{rollout-active:" + clock + " {context:4}{provider_spinner}»}\n"
+        "{rollout-idle:" + clock + " {context:4}{activity_spinner}›}"
+        "{rollout-active:" + clock + " {context:4}{activity_spinner}»}\n"
         'prompt_spinner_provider = " P"\n', encoding="utf-8")
     child = Child(["--config", str(config), "-s", f"127.0.0.1:{free_port()}",
                    "-n", "clockagent", "-o", "clockop", "-r", "lab"])
@@ -526,7 +522,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
-    prompt = f"default/{model}/medium   0%   › ".encode()
+    prompt = f"    0% default/{model}/medium › ".encode()
     child = Child(["-m", model])
     try:
         child.wait(prompt)
@@ -1086,7 +1082,7 @@ def test_steering_during_capacity_recovery_compaction():
     mismatched = Child([
         "--config", str(mismatch_config), "--resume", session_id
     ])
-    prompt_end = mismatched.wait(b"   0%   \xe2\x80\xba ")
+    prompt_end = mismatched.wait(DEFAULT_IDLE_PROMPT)
     mismatched.send(b"/status\r")
     status_end = mismatched.wait(b"context: source=unknown", start=prompt_end)
     status_end = mismatched.wait(
@@ -1953,7 +1949,7 @@ def test_compaction_policy_selection():
 
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
-    initial_prompt = b"first/uncached-start/low   0%   \xe2\x80\xba "
+    initial_prompt = b"    0% first/uncached-start/low \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     config.write_text(
@@ -2249,8 +2245,8 @@ def test_config_editor_reload():
         "[provider]\napi_key_env = OPENAI_API_KEY\n"
         "[ui]\nverbosity = 2\ntyping_pause_ms = 25\n"
         "prompt = {chat:{hour:2}:{minute:02}:{second:02}:}"
-        "{rollout-idle:W{context:4}{goal_spinner}{provider_spinner}{tool_spinner}›}"
-        "{rollout-active:W{context:4}{provider_spinner}»}\n"
+        "{rollout-idle:W{context:4}{goal_spinner}{activity_spinner}›}"
+        "{rollout-active:W{context:4}{activity_spinner}»}\n"
         'prompt_spinner_goal = "\\0"\n'
         'prompt_spinner_provider = "\\0P"\n'
         'prompt_spinner_tool = " "\n',
@@ -2317,7 +2313,7 @@ def test_config_editor_reload():
         plan.write_text(str(valid_two), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
-        child.wait("W  0% › ".encode(), start=end)
+        child.wait("W  0%› ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
@@ -2326,7 +2322,7 @@ def test_config_editor_reload():
         plan.write_text(str(invalid), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(b"invalid configuration at line 4", start=status_end)
-        child.wait("W  0% › ".encode(), start=end)
+        child.wait("W  0%› ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
@@ -2364,7 +2360,7 @@ def test_config_editor_reload():
         plan.write_text(str(network), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
-        child.wait(f"reloadop@{socket.gethostname()}   : ".encode(), start=end)
+        child.wait(f"reloadop@{socket.gethostname()} : ".encode(), start=end)
         peer = IRCClient(network_port, "reloadpeer")
         peer.close()
         # Membership notifications start a turn; /config is idle-only.
@@ -2424,12 +2420,12 @@ def test_known_context_meter():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"first/uncached-start/low   0%   \xe2\x80\xba ")
+    child.wait(b"    0% first/uncached-start/low \xe2\x80\xba ")
     child.send(b"/model gpt-5.6-luna / high\r")
     selected = child.wait(
         b"model for next turn: first / gpt-5.6-luna / high"
     )
-    child.wait(b"first/gpt-5.6-luna/high   0%   \xe2\x80\xba ", start=selected)
+    child.wait(b"    0% first/gpt-5.6-luna/high \xe2\x80\xba ", start=selected)
     session_id = new_session(before)
     start = len(child.buf)
     child.send(b"slow\r")
@@ -2449,7 +2445,7 @@ def test_known_context_meter():
     assert isinstance(used, int) and used > 0
     percent = min(100, (used * 100 + hard - 1) // hard)
     assert percent > 0
-    expected = f"first/gpt-5.6-luna/high {str(percent) + '%':>4} ◴ » ".encode()
+    expected = f" ◴{str(percent) + '%':>4} first/gpt-5.6-luna/high » ".encode()
     child.wait(expected, start=start)
     child.send(b"\x03")
     interrupted = child.wait(b"turn interrupted", start=start)
@@ -2464,7 +2460,7 @@ def test_config_and_cli_model_passthrough():
     )
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"default/openai/gpt-5.6/medium   0%   \xe2\x80\xba ")
+    child.wait(b"    0% default/openai/gpt-5.6/medium \xe2\x80\xba ")
 
     child.send(b"/status\r")
     end = child.wait(b"model: openai/gpt-5.6")
@@ -2484,7 +2480,7 @@ def test_config_and_cli_model_passthrough():
         "--config", str(config), "-m", "vendor/future-model",
         "--effort", "custom-effort", "--resume", session_id
     ])
-    resumed.wait(b"default/vendor/future-model/custom-effort   0%   \xe2\x80\xba ")
+    resumed.wait(b"    0% default/vendor/future-model/custom-effort \xe2\x80\xba ")
     start = len(resumed.buf)
     resumed.send(b"/status\r")
     end = resumed.wait(
@@ -2492,11 +2488,11 @@ def test_config_and_cli_model_passthrough():
     )
     resumed.wait(PROMPT, start=end)
     resumed.send(b"ping\r")
-    resumed.wait(b"default/vendor/future-model/custom-effort   ?% \xe2\x97\xb4 \xc2\xbb ",
+    resumed.wait(b" \xe2\x97\xb4  ?% default/vendor/future-model/custom-effort \xc2\xbb ",
                  start=end)
     answer_end = resumed.wait(b"pong", start=end)
     idle_end = resumed.wait(
-        b"default/openai/gpt-5.6/medium   0%   \xe2\x80\xba ", start=answer_end
+        b"    0% default/openai/gpt-5.6/medium \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -2833,7 +2829,11 @@ def test_network_live_nick_prompt():
         start = len(child.buf)
         child.send(b"network_view_stream\r")
         child.wait("@operator8 › network_view_stream".encode(), start=start)
-        child.wait(chat_active_prompt("operator8"), start=start)
+        spinner_end = child.wait(" ◴".encode(), start=start)
+        end = child.wait(chat_prompt("operator8"), start=spinner_end)
+        visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", child.buf[start:end])
+        assert re.search(" ◴[0-9]{2}:[0-9]{2}:[0-9]{2} operator8@".encode(),
+                         visible), visible
         child.send(b"/stats\x1b[D")
         child.drain(0.03)
         for link in links:
@@ -2887,11 +2887,11 @@ def test_prompt_identity_is_terminal_safe():
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(b"default/" + visible + b"   0%   \xe2\x80\xba ")
+    child.wait(b"    0% default/" + visible + " › ".encode())
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send(b"ping\r")
-    child.wait(b"default/" + visible + b"   ?% \xe2\x97\xb4 \xc2\xbb ")
+    child.wait(" ◴  ?% default/".encode() + visible + " » ".encode())
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
 
@@ -2956,8 +2956,8 @@ def test_network_view_routing_and_atomic_catchup():
     human = None
     peer_agent = None
     exited = False
-    network_idle = f"localop@{socket.gethostname()}   : ".encode()
-    rollout_idle = f"default/{DEFAULT_MODEL}/medium   ?%   › ".encode()
+    network_idle = f"localop@{socket.gethostname()} : ".encode()
+    rollout_idle = f"    ?% default/{DEFAULT_MODEL}/medium › ".encode()
 
     def queue_rollout_and_enter(trigger, first, second, switch):
         chat_start = len(child.buf)
@@ -3060,7 +3060,7 @@ def test_network_view_routing_and_atomic_catchup():
         active_output = bytes(child.buf[active_start:])
         frames = ["◴", "◷", "◶", "◵"]
         active_labels = [
-            f"default/{DEFAULT_MODEL}/medium   ?% {frame} » ".encode() +
+            f" {frame}  ?% default/{DEFAULT_MODEL}/medium » ".encode() +
             b"rollout active steer" for frame in frames
         ]
         assert active_output.count(submitted_start) == 1, active_output
@@ -3142,13 +3142,13 @@ def test_network_chat_and_managed_mention():
     human = None
     peer_agent = None
     exited = False
-    network_idle = f"localop@{socket.gethostname()}   : ".encode()
-    network_active = f"localop@{socket.gethostname()} ◴ : ".encode()
+    network_idle = f"localop@{socket.gethostname()} : ".encode()
+    network_active = f"localop@{socket.gethostname()} : ".encode()
     network_rollout_idle = (
-        f"default/{DEFAULT_MODEL}/medium   0%   › ".encode()
+        f"    0% default/{DEFAULT_MODEL}/medium › ".encode()
     )
     network_rollout_accounted_idle = (
-        f"default/{DEFAULT_MODEL}/medium   ?%   › ".encode()
+        f"    ?% default/{DEFAULT_MODEL}/medium › ".encode()
     )
     try:
         child.wait(network_idle)

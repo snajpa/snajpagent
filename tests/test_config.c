@@ -110,7 +110,7 @@ test_prompt_numbers(const char *path)
         "hour:002", "hour:-2", "hour:+2", "minute: 2", "second:2 ",
         "hour:2:2", "context:511", "hour:0511", "context:99999999999999999999",
         "model:2", "provider:2", "mode:2", "goal_spinner:1",
-        "provider_spinner:1", "tool_spinner:1", "host:2", "operator:2",
+        "activity_spinner:1", "provider_spinner", "tool_spinner", "host:2", "operator:2",
         "effort:2"};
     char label[SNJ_TERM_LABEL_BYTES], template[256];
 
@@ -259,7 +259,7 @@ main(void)
         "markdown = false\n"
         "resume_history_turns = 0\n"
         "typing_pause_ms = 750\n"
-        "prompt = pre{chat:{operator}{goal_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{provider_spinner}›}{rollout-active:{mode}{tool_spinner}»}\n"
+        "prompt = pre{chat:{operator}{goal_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context}{activity_spinner}›}{rollout-active:{mode}{activity_spinner}»}\n"
         "prompt_spinner_goal = \"\\0◆\"\n"
         "prompt_spinner_provider = \" \\|/-\"\n"
         "prompt_spinner_tool = \" \"\n"
@@ -305,13 +305,33 @@ main(void)
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
-    assert(strstr(config.prompt, "{chat:{hour:02}:{minute:02}:{second:02} "));
+    assert(strstr(config.prompt, "{chat:{goal_spinner}{activity_spinner}"));
     assert(strstr(config.prompt, "{context:4}"));
     assert(strstr(config.prompt, "{goal_spinner}") != NULL);
-    assert(strcmp(config.prompt_spinner_goal, " ◆") == 0);
+    assert(strcmp(config.prompt_spinner_goal, " ⚑") == 0);
     assert(strcmp(config.prompt_spinner_provider, " ◴◷◶◵") == 0);
     assert(strcmp(config.prompt_spinner_tool, " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") == 0);
     assert(config.prompt_spinner_per_second == 8u);
+    {
+        static const char *const contexts[] = {"0%", "9%", "10%", "99%", "100%", "?%"};
+        const char *values[SNJ_PROMPT_FIELD_COUNT] = {
+            "p", "m", "e", "op", "host", "0%", "chat", "3", "7", "9"};
+        char expanded[128], expected[128];
+
+        assert(snj_config_prompt_expand(config.prompt, 0u, values, 0xfdu,
+                                        expanded, sizeof(expanded)) == 0);
+        assert(strcmp(expanded, "\xfd\xfe" "03:07:09 op@host : ") == 0);
+        for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
+            values[SNJ_PROMPT_CONTEXT] = contexts[i];
+            for (unsigned int mode = 1u; mode <= 2u; ++mode) {
+                assert(snj_config_prompt_expand(config.prompt, mode, values, 0xfdu,
+                                                expanded, sizeof(expanded)) == 0);
+                assert(snprintf(expected, sizeof(expected), "\xfd\xfe%4s p/m/e %s ",
+                                contexts[i], mode == 1u ? "›" : "»") > 0);
+                assert(strcmp(expanded, expected) == 0);
+            }
+        }
+    }
     assert(!config.irc_listen_explicit);
     assert(strcmp(config.irc_listen, "localhost:6667") == 0);
     assert(config.irc_client_count == 0u);
@@ -471,6 +491,9 @@ main(void)
         "{chat:{unknown}}{rollout-idle:y}{rollout-active:z}", false);
     expect_ui(path, "prompt",
         "{chat:{goal_spinner}{goal_spinner}}{rollout-idle:y}"
+        "{rollout-active:z}", false);
+    expect_ui(path, "prompt",
+        "{chat:{activity_spinner}{activity_spinner}}{rollout-idle:y}"
         "{rollout-active:z}", false);
     expect_ui(path, "prompt", "{chat:}{rollout-idle:y}{rollout-active:z}",
               false);

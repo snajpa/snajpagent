@@ -533,12 +533,10 @@ set_input_prompt(struct app_state *app, bool active)
         struct snj_buf out;
 
         snj_buf_init(&out, SNJ_TERM_LABEL_BYTES);
-        if (snj_buf_printf(&out, "edit %zu %4s", app->queue_edit_number, meter) < 0)
-            goto fail;
-        for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_COUNT; ++i)
+        for (unsigned int i = 0u; i < SNJ_TERM_SPINNER_SLOTS; ++i)
             if (snj_buf_putc(&out, SNJ_TERM_SPINNER_MARKER_BASE + i) < 0)
                 goto fail;
-        if (snj_buf_append(&out, "›", strlen("›")) < 0)
+        if (snj_buf_printf(&out, "%4s edit %zu ›", meter, app->queue_edit_number) < 0)
             goto fail;
         if (!out.len || snj_buf_putc(&out, ' ') < 0 ||
             snj_buf_terminate(&out) < 0)

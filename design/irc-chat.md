@@ -90,8 +90,8 @@ history_lines = 200
 
 [ui]
 color = auto
-prompt = {chat:{hour:02}:{minute:02}:{second:02} {operator}@{host}{goal_spinner}{provider_spinner}{tool_spinner}:}{rollout-idle:{provider}/{model}/{effort} {context:4}{goal_spinner}{provider_spinner}{tool_spinner}›}{rollout-active:{provider}/{model}/{effort} {context:4}{goal_spinner}{provider_spinner}{tool_spinner}»}
-prompt_spinner_goal = " ◆"
+prompt = {chat:{goal_spinner}{activity_spinner}{hour:02}:{minute:02}:{second:02} {operator}@{host} :}{rollout-idle:{goal_spinner}{activity_spinner}{context:4} {provider}/{model}/{effort} ›}{rollout-active:{goal_spinner}{activity_spinner}{context:4} {provider}/{model}/{effort} »}
+prompt_spinner_goal = " ⚑"
 prompt_spinner_provider = " ◴◷◶◵"
 prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 prompt_spinner_per_second = 8
@@ -295,9 +295,11 @@ with the same color roles applied to prompts, labels, status, tools, warnings,
 errors, and high-verbosity diagnostics.
 
 The default chat-view composer is
-`HH:MM:SS OPERATOR_NICK@MACHINE_HOSTNAME   : `. The default rollout view uses
-`PROVIDER/MODEL/EFFORT N%   › ` while idle and the
-double-angle `»` plus goal/provider/tool spinner fields while active. The
+`  HH:MM:SS OPERATOR_NICK@MACHINE_HOSTNAME : `. The default rollout view uses
+`    0% PROVIDER/MODEL/EFFORT › ` while idle and the double-angle `»` while
+active. Both start with a goal flag slot and one shared activity slot;
+tool work takes priority over model work in the same column. Reserved slots
+and unused digits in the four-column context field remain spaces. The
 prompt and local chat use the accepted operator nick on the first configured
 server, or the hosted nick when serving a room. Nick changes refresh the prompt
 without losing the draft; configured nicks remain registration preferences.

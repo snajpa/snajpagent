@@ -15,8 +15,8 @@ binary = os.path.abspath(sys.argv[1])
 workspace = os.path.abspath(sys.argv[2])
 dotdir = os.environ["SNAJPAGENT_DOTDIR"]
 state_root = Path(dotdir) / "sessions"
-fresh_prompt = "default/gpt-5.5-2026-04-23/medium   0%   › ".encode()
-accounted_prompt = "default/gpt-5.5-2026-04-23/medium   ?%   › ".encode()
+fresh_prompt = "    0% default/gpt-5.5-2026-04-23/medium › ".encode()
+accounted_prompt = "    ?% default/gpt-5.5-2026-04-23/medium › ".encode()
 
 
 def session_ids():

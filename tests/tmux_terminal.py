@@ -38,10 +38,10 @@ MARKDOWN_TEXT = (
     "second paragraph\n\n"
     "> final quoted boundary"
 )
-DEFAULT_IDLE_PROMPT = "default/gpt-5.5-2026-04-23/medium   0%   ›"
-DEFAULT_ACCOUNTED_IDLE_PROMPT = "default/gpt-5.5-2026-04-23/medium   ?%   ›"
-DEFAULT_ACTIVE_PROMPT = "default/gpt-5.5-2026-04-23/medium   ?% ◴ »"
-DEFAULT_GOAL_ACTIVE_PROMPT = "default/gpt-5.5-2026-04-23/medium   ?%◆◴ »"
+DEFAULT_IDLE_PROMPT = "    0% default/gpt-5.5-2026-04-23/medium ›"
+DEFAULT_ACCOUNTED_IDLE_PROMPT = "    ?% default/gpt-5.5-2026-04-23/medium ›"
+DEFAULT_ACTIVE_PROMPT = " ◴  ?% default/gpt-5.5-2026-04-23/medium »"
+DEFAULT_GOAL_ACTIVE_PROMPT = "⚑◴  ?% default/gpt-5.5-2026-04-23/medium »"
 MACHINE_HOSTNAME = socket.gethostname()
 IRC_SECOND_MESSAGE = "integration two from twoop " + "long chat text " * 80 + "end"
 EMPTY_OUTPUT_CORRECTION = (
@@ -1173,7 +1173,7 @@ def run_queue_case(binary, root):
         terminal.submit("/queue 1 delete")
         wait_event_count(dotdir, "future_turn_cancelled", 3)
         terminal.submit("/q 1e")
-        terminal.wait("edit 1   ?% ◴ › second")
+        terminal.wait(" ◴  ?% edit 1 › second")
         terminal.send_text(" active")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 1)
@@ -1188,7 +1188,7 @@ def run_queue_case(binary, root):
         terminal.wait("turn interrupted")
         terminal.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
         terminal.submit("/queue 1 edit")
-        terminal.wait("edit 1   ?%   › second active")
+        terminal.wait("    ?% edit 1 › second active")
         terminal.send_text(" idle")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 2)
@@ -1204,9 +1204,9 @@ def run_queue_case(binary, root):
                 "next › second",
                 "next › third",
                 "next › fourth",
-                "edit 1   ?% ◴ › second active",
+                " ◴  ?% edit 1 › second active",
                 "next › fifth",
-                "edit 1   ?%   › second active idle",
+                "    ?% edit 1 › second active idle",
                 "future-turn queue is empty",
             ],
         )
@@ -1460,7 +1460,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         100, 24, environment=environment,
     )
     try:
-        terminal.wait("ordinary/uncached-start/low   0%   ›")
+        terminal.wait("    0% ordinary/uncached-start/low ›")
         before = provider.catalog_paths()
         terminal.submit("/model cache")
         screen = terminal.wait("4. codex / codex-late / ultra",
@@ -1533,10 +1533,10 @@ def run_model_catalog_case(binary, root, provider, environment):
 
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
-    expected = (f"{operator}@{MACHINE_HOSTNAME}   :" if operator else
-                "ordinary/uncached-start/low   0%   ›")
+    expected = (f"{operator}@{MACHINE_HOSTNAME} :" if operator else
+                "    0% ordinary/uncached-start/low ›")
     timestamped = re.compile(
-        rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
+        rf"(?m)^  \d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
     ) if operator else None
     screen = ""
     while time.monotonic() < deadline:
@@ -1746,7 +1746,7 @@ def run_irc_case(binary, root):
                 100, 24, args=args, environment=environment,
             )
             terminals[name] = terminal
-            terminal.wait(f"{operator}@{MACHINE_HOSTNAME}   :")
+            terminal.wait(f"{operator}@{MACHINE_HOSTNAME} :")
 
         ordered = [terminals[name] for name in ("host", "one", "two")]
         terminals["host"].wait("@twoop joined")
