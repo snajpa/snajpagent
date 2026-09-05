@@ -795,7 +795,7 @@ def test_compaction_statistical_source():
         "id": DEFAULT_MODEL, "count_capability": "unsupported",
         "default_effort": "medium", "efforts": ["medium"],
         "observed_hard_input_tokens": 0, "observed_input_tokens": 1000,
-        "observed_model_input_bytes": 10000,
+        "observed_input_bytes": 10000,
         "limits": {name: None for name in (
             "auto_compact_input_tokens", "context_window_tokens",
             "effective_context_window_percent", "input_context_window_tokens",
