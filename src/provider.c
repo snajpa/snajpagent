@@ -200,29 +200,6 @@ count_write_cb(char *ptr, size_t size, size_t nmemb, void *opaque)
     return len;
 }
 
-static long
-parse_status(const unsigned char *line, size_t len)
-{
-    long value = 0;
-    size_t i = 0;
-
-    if (len < 12u || memcmp(line, "HTTP/", 5u) != 0)
-        return 0;
-    while (i < len && line[i] != ' ')
-        ++i;
-    if (i >= len || line[i] != ' ')
-        return 0;
-    ++i;
-    if (i + 3u > len)
-        return 0;
-    for (size_t j = 0; j < 3u; ++j) {
-        if (line[i + j] < '0' || line[i + j] > '9')
-            return 0;
-        value = value * 10 + (long)(line[i + j] - '0');
-    }
-    return value;
-}
-
 static size_t
 header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
 {
@@ -231,16 +208,17 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
     size_t len = size * nmemb;
     size_t clean_len;
     struct snj_buf redacted;
-    long status;
+    bool status_line;
 
     if (size && nmemb > SIZE_MAX / size)
         return 0;
     strip_crlf(buffer, len, &line, &clean_len);
     if (clean_len == 0u)
         return len;
-    status = parse_status(line, clean_len);
-    if (status)
-        ctx->http_status = status;
+    status_line = clean_len >= 5u && memcmp(line, "HTTP/", 5u) == 0;
+    if (status_line && curl_easy_getinfo(ctx->curl, CURLINFO_RESPONSE_CODE,
+                                        &ctx->http_status) != CURLE_OK)
+        return 0;
     if (clean_len > 12u && strncasecmp((const char *)line,
                                        "retry-after:", 12u) == 0) {
         uint32_t delay_ms;
@@ -251,7 +229,7 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
         }
     }
     if (ctx->render && ctx->render->verbosity >= 6u) {
-        if (status) {
+        if (status_line) {
             if (!ascii_printable(line, clean_len) ||
                 snj_ui_transport(ctx->render, '<', (const char *)line,
                                      clean_len) < 0) {
@@ -1498,7 +1476,8 @@ snj_provider_responses_count(const json_t *count_request,
                                       error, error_size, cancel_code,
                                       retry_count);
     if (rc != 0 && endpoint_unsupported &&
-        (ctx.http_status == 405 || ctx.http_status == 501))
+        (ctx.http_status == 405 || ctx.http_status == 501 ||
+         (ctx.http_status == 404 && snj_config_provider_is_openrouter(provider))))
         *endpoint_unsupported = true;
     if (rc == 0)
         rc = parse_count_body(&ctx, input_tokens, error, error_size);

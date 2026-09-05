@@ -1386,8 +1386,9 @@ tool_schemas(const char *active_handle, bool goal_active,
              bool read_only)
 {
     json_t *tools = json_array();
-    const char *search_type = snj_config_web_search_type(
-        snj_config_provider(config, provider_name));
+    const char *search_type = snj_config_provider_is_openrouter(
+        snj_config_provider(config, provider_name)) ?
+        "openrouter:web_search" : "web_search";
 
     if (!tools)
         return NULL;

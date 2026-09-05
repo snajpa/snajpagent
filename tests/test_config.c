@@ -178,7 +178,7 @@ test_prompt_numbers(const char *path)
 }
 
 static void
-test_web_search_type(void)
+test_openrouter_provider(void)
 {
     static const struct {
         const char *url;
@@ -212,13 +212,12 @@ test_web_search_type(void)
     };
     struct snj_provider_config provider = {0};
 
-    assert(strcmp(snj_config_web_search_type(NULL), "web_search") == 0);
+    assert(!snj_config_provider_is_openrouter(NULL));
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         (void)snprintf(provider.base_url, sizeof(provider.base_url), "%s", cases[i].url);
         (void)snprintf(provider.name, sizeof(provider.name), "%s",
                        cases[i].openrouter ? "arbitrary" : "openrouter");
-        assert(strcmp(snj_config_web_search_type(&provider), cases[i].openrouter ?
-                      "openrouter:web_search" : "web_search") == 0);
+        assert(snj_config_provider_is_openrouter(&provider) == cases[i].openrouter);
     }
 }
 
@@ -346,7 +345,7 @@ main(void)
            SNJ_CONFIG_COMPACT_AUTO);
     assert(config.providers[0].exact_token_count == SNJ_TOKEN_COUNT_AUTO);
     assert(config.providers[0].native_compaction);
-    test_web_search_type();
+    test_openrouter_provider();
     assert(strcmp(config.providers[0].base_url, "https://api.openai.com") == 0);
     assert(strcmp(config.providers[0].api_key_env, "OPENAI_API_KEY") == 0);
     assert(config.providers[0].openrouter_referer[0] == '\0');

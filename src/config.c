@@ -1603,8 +1603,8 @@ snj_config_provider(const struct snj_config *config, const char *name)
     return NULL;
 }
 
-const char *
-snj_config_web_search_type(const struct snj_provider_config *provider)
+bool
+snj_config_provider_is_openrouter(const struct snj_provider_config *provider)
 {
     static const char host[] = "openrouter.ai";
     const char *url = provider ? provider->base_url : "";
@@ -1615,9 +1615,9 @@ snj_config_web_search_type(const struct snj_provider_config *provider)
     else if (strncmp(url, "http://", 7u) == 0)
         url += 7u;
     else
-        return "web_search";
+        return false;
     if (strncasecmp(url, host, sizeof(host) - 1u) != 0)
-        return "web_search";
+        return false;
     suffix = url + sizeof(host) - 1u;
     if (*suffix == '.')
         ++suffix;
@@ -1626,17 +1626,16 @@ snj_config_web_search_type(const struct snj_provider_config *provider)
 
         ++suffix;
         if (*suffix < '0' || *suffix > '9')
-            return "web_search";
+            return false;
         while (*suffix >= '0' && *suffix <= '9') {
             port = port * 10u + (unsigned int)(*suffix++ - '0');
             if (port > 65535u)
-                return "web_search";
+                return false;
         }
         if (!port)
-            return "web_search";
+            return false;
     }
-    return *suffix == '\0' || *suffix == '/' ?
-           "openrouter:web_search" : "web_search";
+    return *suffix == '\0' || *suffix == '/';
 }
 
 const struct snj_model_limit_config *

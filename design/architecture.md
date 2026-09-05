@@ -243,6 +243,13 @@ lookalike/subdomain hosts do not select OpenRouter. The same selection applies
 to semantic, request, and count projections and to ordinary and `/ro` turns.
 No search configuration or new local function is introduced. Hosted output
 remains provider-owned; local function dispatch stays restricted as before.
+The same hostname identity recognizes OpenRouter's absent optional token-count
+route (404) in automatic counting; strict counting still fails, and generic
+404/authentication failures remain errors. HTTP response status comes from
+libcurl, including HTTP/2 and HTTP/3 status lines without reason phrases.
+An unlabelled SSE `[DONE]` sentinel is accepted only after a valid Responses
+terminal event; it cannot complete an otherwise unfinished response, and
+other post-terminal events remain errors.
 
 When a goal is active, context projection appends the current durable wording
 and controller rules after replay and compaction. It also exposes the strict

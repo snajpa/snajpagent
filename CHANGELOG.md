@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Correct HTTP/2 response-status handling and automatically fall back when
+  OpenRouter's optional token-count endpoint is absent, without weakening
+  strict counting or treating authentication errors as unsupported endpoints.
+  Preserve the conservative input bound when an exact-count probe is skipped.
+  Accept OpenRouter's trailing SSE `[DONE]` only after a valid Responses
+  terminal event.
+
 - Automatically use OpenRouter's hosted web-search tool for its provider URL,
   in normal and `/ro` turns, without extra search configuration.
 

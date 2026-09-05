@@ -56,7 +56,9 @@ enum model_fixture {
     MODEL_OPENROUTER_SEARCH,
     MODEL_COUNT_404,
     MODEL_COUNT_405,
-    MODEL_COUNT_501
+    MODEL_COUNT_501,
+    MODEL_COUNT_401,
+    MODEL_COUNT_403
 };
 
 static void
@@ -289,7 +291,8 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                   "event: response.output_item.done\n"
                   "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"id\":\"fc_after_search\",\"call_id\":\"call_after_search\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\",\\\"start_line\\\":1,\\\"end_line\\\":1}\",\"status\":\"completed\"}}\n\n"
                   "event: response.completed\n"
-                  "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_search\",\"status\":\"completed\",\"output\":[]}}\n\n");
+                  "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_search\",\"status\":\"completed\",\"output\":[]}}\n\n"
+                  "data: [DONE]\n\n");
         serve_one(listen_fd, "POST", "/v1/responses", "function_call_output",
                   "text/event-stream", create_sse);
         _exit(0);
@@ -297,7 +300,9 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
     if (models >= MODEL_COUNT_404) {
         struct http_request request;
         unsigned int status = models == MODEL_COUNT_404 ? 404u :
-                              models == MODEL_COUNT_405 ? 405u : 501u;
+                              models == MODEL_COUNT_405 ? 405u :
+                              models == MODEL_COUNT_401 ? 401u :
+                              models == MODEL_COUNT_403 ? 403u : 501u;
         int fd = accept(listen_fd, NULL, NULL);
         if (fd < 0)
             server_fail("accept failed");
@@ -921,11 +926,17 @@ test_count_modes(void)
         enum snj_token_count_mode mode;
         int result;
         enum snj_count_capability capability;
+        bool openrouter;
     } cases[] = {
         {MODEL_COUNT_405, SNJ_TOKEN_COUNT_AUTO,
-         SNJ_APP_COUNT_SKIPPED, SNJ_COUNT_UNSUPPORTED},
-        {MODEL_COUNT_405, SNJ_TOKEN_COUNT_STRICT, -1, SNJ_COUNT_UNSUPPORTED},
-        {MODEL_COUNT_404, SNJ_TOKEN_COUNT_AUTO, -1, SNJ_COUNT_UNKNOWN}
+         SNJ_APP_COUNT_SKIPPED, SNJ_COUNT_UNSUPPORTED, false},
+        {MODEL_COUNT_405, SNJ_TOKEN_COUNT_STRICT, -1, SNJ_COUNT_UNSUPPORTED, false},
+        {MODEL_COUNT_404, SNJ_TOKEN_COUNT_AUTO, -1, SNJ_COUNT_UNKNOWN, false},
+        {MODEL_COUNT_404, SNJ_TOKEN_COUNT_AUTO,
+         SNJ_APP_COUNT_SKIPPED, SNJ_COUNT_UNSUPPORTED, true},
+        {MODEL_COUNT_404, SNJ_TOKEN_COUNT_STRICT, -1, SNJ_COUNT_UNSUPPORTED, true},
+        {MODEL_COUNT_401, SNJ_TOKEN_COUNT_AUTO, -1, SNJ_COUNT_UNKNOWN, true},
+        {MODEL_COUNT_403, SNJ_TOKEN_COUNT_AUTO, -1, SNJ_COUNT_UNKNOWN, true}
     };
 
     assert(!snj_app_exact_count_enabled(SNJ_TOKEN_COUNT_OFF,
@@ -956,7 +967,9 @@ test_count_modes(void)
                         (unsigned int)server.port) > 0);
         snj_config_init(&config);
         assert(snprintf(config.providers[0].base_url,
-                        sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+                        sizeof(config.providers[0].base_url), "%s",
+                        cases[i].openrouter ? "https://openrouter.ai/api/v1" : endpoint) > 0);
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
         assert(snprintf(config.providers[0].openrouter_referer,
                         sizeof(config.providers[0].openrouter_referer), "%s",
                         "https://github.com/snajpa/snajpagent") > 0);
@@ -980,6 +993,8 @@ test_count_modes(void)
                                     &tokens, &method, error, sizeof(error));
         assert((cases[i].result < 0 && rc < 0) || rc == cases[i].result);
         assert(app.turn_capacity.count_capability == cases[i].capability);
+        assert(tokens == 99u && strcmp(method, "qualified_upper_bound") == 0);
+        assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
         snj_ui_free(&app.ui);
         snj_model_cache_free(&app.model_cache);
         if (unlinkat(app.store.root_fd, "models.lock", 0) < 0)
@@ -1041,8 +1056,7 @@ test_openrouter_search_transport(void)
     request = request_with_marker("search example domains");
     assert(json_object_set_new(request, "tools", json_loadb(
         search_tools, sizeof(search_tools) - 1u, 0, NULL)) == 0);
-    assert(strcmp(snj_json_string(json_array_get(json_object_get(request, "tools"), 0u),
-        "type"), snj_config_web_search_type(&config.providers[0])) == 0);
+    assert(snj_config_provider_is_openrouter(&config.providers[0]));
     snj_buf_init(&emitted.text, 128u);
     snj_response_graph_init(&graph);
     assert(snj_provider_responses_create(request, &config, &config.providers[0],

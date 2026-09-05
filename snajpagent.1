@@ -638,6 +638,9 @@ requires exact preflight; and
 .B false
 disables it.  Default:
 .BR auto .
+OpenRouter's absent count endpoint (HTTP 404) uses the automatic fallback;
+strict counting still fails.  Other providers' ambiguous 404 responses and
+authentication failures do not disable exact counting.
 .TP
 .B native_compaction
 Use the provider's native compaction endpoint.  When false, use an ordinary

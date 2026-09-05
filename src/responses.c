@@ -937,6 +937,10 @@ snj_responses_sse_record(void *opaque, const struct snj_sse_record *record)
     }
     if (record->kind == SNJ_SSE_COMMENT)
         return 0;
+    /* OpenRouter appends an SSE sentinel after the Responses terminal event. */
+    if (stream->terminal && !record->event_len && record->data_len == 6u &&
+        memcmp(record->data, "[DONE]", 6u) == 0)
+        return 0;
     if (stream->terminal)
         return stream_fail(stream, EPROTO,
                            "Responses event follows terminal completion");

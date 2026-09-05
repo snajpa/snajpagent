@@ -239,6 +239,7 @@ snj_app_provider_count(struct app_state *app, const json_t *count_request,
     return 0;
 #else
     bool endpoint_unsupported = false;
+    uint64_t exact_tokens = 0u;
     uint64_t sample_bytes;
     int cancel_code = 0;
     int rc;
@@ -252,10 +253,11 @@ snj_app_provider_count(struct app_state *app, const json_t *count_request,
                                       app->turn_provider, credential,
                                       &app->ui,
                                       snj_app_active_input_pump, app,
-                                      input_tokens, &endpoint_unsupported,
+                                      &exact_tokens, &endpoint_unsupported,
                                       error, error_size,
                                       &cancel_code, NULL);
     if (rc == 0) {
+        *input_tokens = exact_tokens;
         *count_method = "exact";
         sample_bytes = *input_tokens ? model_input_bytes : 0u;
         snj_app_record_model_accounting(app, SNJ_COUNT_SUPPORTED,
@@ -374,7 +376,8 @@ snj_app_provider_run(struct app_state *app, const char *prompt,
         json_t *ts = json_object_get(create_request, "tools");
         json_t *input = json_object_get(create_request, "input");
         bool read_only = app->session.active_read_only;
-        const char *search_type = snj_config_web_search_type(app->turn_provider);
+        const char *search_type = snj_config_provider_is_openrouter(app->turn_provider) ?
+                                  "openrouter:web_search" : "web_search";
 
         if (read_only && json_array_size(ts) != 4u)
             return -1;

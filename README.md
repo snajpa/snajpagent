@@ -91,6 +91,8 @@ tool in normal and `/ro` turns. No search setting, `:online` suffix, plugin,
 or separate search key is needed. OpenRouter selects the search engine and
 bills search usage in addition to model usage. Detection uses the URL hostname,
 not the provider section's name; other backends keep their existing search tool.
+Default automatic token counting also tolerates OpenRouter's absent optional
+count endpoint; explicit strict counting still requires that endpoint.
 
 For work that should continue across turns, enter a goal:
 
