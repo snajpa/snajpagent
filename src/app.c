@@ -2448,6 +2448,7 @@ execute_calls(struct app_state *app, const char *turn_id,
     uint64_t began = snj_monotonic_ms(), deadline = UINT64_MAX;
     const char *handoff = NULL;
     int control = 0;
+    bool first_wave = true;
 
     for (size_t i = 0u; i < graph->count; ++i) {
         const struct snj_response_item *call = &graph->items[i];
@@ -2496,7 +2497,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                 }
                 continue;
             }
-            if (snj_monotonic_ms() >= deadline) {
+            if (!first_wave && snj_monotonic_ms() >= deadline) {
                 handoff = "batch_yield";
                 goto handoff;
             }
@@ -2589,6 +2590,7 @@ execute_calls(struct app_state *app, const char *turn_id,
             if (snj_ui_spinner_states(&app->ui, prompt_spinner_states(app, true)) < 0)
                 return -1;
         }
+        first_wave = false;
         if (finished == count)
             break;
         if (!pending) {

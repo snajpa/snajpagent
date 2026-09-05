@@ -394,7 +394,7 @@ class FakeResponses:
                 "command": command, "workdir": str(self.tool_workspace),
                 "stdin": None, "pty": False,
                 "timeout_ms": None if mode in ("steer", "cancel") else 3000,
-                "yield_ms": 30 if mode in ("yield", "single-request") else 0,
+                "yield_ms": 1 if mode in ("yield", "single-request") else 0,
                 "max_output_tokens": None,
             }) for i, command in enumerate(commands)]
             return self.functions_body(sequence, batch)
