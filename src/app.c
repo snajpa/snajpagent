@@ -210,9 +210,8 @@ static const struct snag_term_command commands[] = {
 };
 
 static size_t
-command_count(const struct app_state *app)
+command_count(void)
 {
-    (void)app;
     return sizeof(commands) / sizeof(commands[0]);
 }
 static const char *
@@ -546,8 +545,7 @@ fail:
 static int
 validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
                        const struct snag_provider_config *provider,
-                       const char *model, const char *effort,
-                       bool networked)
+                       const char *model, const char *effort)
 {
     char hostname[256u];
     const char *values[SNAG_PROMPT_FIELD_COUNT];
@@ -565,7 +563,7 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
-    values[3] = networked ? config->irc.operator_nick : "";
+    values[3] = config->irc.operator_nick;
     values[4] = hostname;
     values[5] = "100%";
     values[SNAG_PROMPT_HOUR] = "23";
@@ -594,8 +592,7 @@ validate_prompt_candidate(struct app_state *app,
         app->session.default_provider : NULL);
 
     return validate_prompt_values(&app->ui, config, provider, next_model(app),
-                                  resolve_effort(next_effort(app)),
-                                  snag_irc_enabled(config));
+                                  resolve_effort(next_effort(app)));
 }
 
 static unsigned int
@@ -1114,7 +1111,7 @@ render_help(struct app_state *app)
     int rc = -1;
 
     snag_buf_init(&text, 64u * 1024u);
-    for (size_t i = 0u; i < command_count(app); ++i)
+    for (size_t i = 0u; i < command_count(); ++i)
         if (snag_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
                            commands[i].description) < 0)
             goto out;
@@ -1816,7 +1813,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     snag_ui_networked(&app->ui, app->networked,
                              app->networked ?
                                  app->config->irc.model_nick : NULL);
-    snag_ui_commands(&app->ui, commands, command_count(app));
+    snag_ui_commands(&app->ui, commands, command_count());
     snag_ui_typing_pause(&app->ui, app->config->typing_pause_ms);
     snag_config_free(&previous);
     rc = 0;
@@ -4280,7 +4277,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     }
     app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
-    snag_ui_commands(&app.ui, commands, command_count(&app));
+    snag_ui_commands(&app.ui, commands, command_count());
     snag_ui_networked(&app.ui, app.networked,
                              app.networked ? config.irc.model_nick : NULL);
     if (app.networked && snag_ui_set_view(&app.ui, SNAG_RENDER_CHAT) < 0)
@@ -4352,8 +4349,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
                 snag_config_provider(&config, app.session.default_provider),
                 cli->model ? new_model : app.session.default_model,
                 resolve_effort(cli->effort ? cli->effort :
-                               app.session.default_effort),
-                app.networked) < 0) {
+                               app.session.default_effort)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                 "configured prompt cannot be rendered with the current selection");
             rc = 2;
@@ -4400,7 +4396,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
                                 config.provider[0] ? config.provider : NULL);
         if (!cli->execute && validate_prompt_values(
                 &app.ui, &config, selected_provider, new_model,
-                resolve_effort(new_effort), app.networked) < 0) {
+                resolve_effort(new_effort)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                 "configured prompt cannot be rendered with the current selection");
             rc = 2;

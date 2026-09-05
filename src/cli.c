@@ -509,7 +509,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
                   "-l accepts only --config, --dotdir, --all, and color options");
         return -1;
     }
-    if (cli->execute && (cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
+    if (cli->execute && (cli->irc_listen ||
                          cli->irc_client_count || cli->irc_model_nick ||
                          cli->irc_operator_nick || cli->irc_room_name)) {
         snag_errorf(error, error_size,

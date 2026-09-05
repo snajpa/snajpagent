@@ -251,7 +251,7 @@ out=$($bin -e -- ping 2>"$root/err")
 [ "$out" = pong ]
 strip_resume "$root/err"
 only_resume "$root/err"
-grep -q "^'$bin' --dotdir '$dotdir' --resume '[0-9a-f]\\{32\\}'$" \
+grep -q "^'$bin' --dotdir '$dotdir' --no-listen --no-client --resume '[0-9a-f]\\{32\\}'$" \
     "$root/err"
 [ -d "$dotdir/sessions" ]
 [ -d "$dotdir/trash" ]

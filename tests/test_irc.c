@@ -860,6 +860,7 @@ test_client_reconnect(void)
     assert(strcmp(server_capture.last_message.nick, "remoteop") == 0);
     assert(server_capture.last_message.op);
 
+    uint64_t revision = snag_irc_routing_revision(client);
     snag_irc_close(server);
     for (unsigned int i = 0u;
          i < 50u && !client_capture.events[SNAG_IRC_DISCONNECTED]; ++i)
@@ -880,6 +881,20 @@ test_client_reconnect(void)
     assert(strstr((const char *)snapshot.data, "joined #lab") != NULL);
     assert(strstr((const char *)snapshot.data, "topic[") != NULL);
     assert(strstr((const char *)snapshot.data, "]: /workspace") != NULL);
+    snag_buf_free(&snapshot);
+    assert(snag_irc_routing_revision(client) == revision);
+
+    /* Same endpoint can advertise a different room on reconnect. */
+    snag_irc_close(next_server);
+    tick(client, 50u);
+    memcpy(server_config.irc.room_name, "#other", sizeof("#other"));
+    next_server = open_server(&server_config, &next_capture);
+    pump_pair(next_server, client, 800u);
+    assert(snag_irc_routing_revision(client) > revision);
+    snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
+    assert(snag_irc_state(client, &snapshot, error, sizeof(error)) == 0);
+    assert(snag_buf_terminate(&snapshot) == 0);
+    assert(strstr((const char *)snapshot.data, "joined #other"));
     snag_buf_free(&snapshot);
 
     snag_irc_close(client);

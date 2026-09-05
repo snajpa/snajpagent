@@ -98,6 +98,7 @@ class FakeResponses:
         self.exit_release = threading.Event()
         self.tool_workspace = None
         self.runtime_handler = None
+        self.runtime_count_handler = None
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -237,7 +238,8 @@ class FakeResponses:
 
     def handle(self, handler):
         try:
-            if handler.path != "/v1/responses":
+            counting = handler.path == "/v1/responses/input_tokens"
+            if handler.path != "/v1/responses" and not counting:
                 raise AssertionError(f"unexpected fake endpoint {handler.path!r}")
             if handler.headers.get("Authorization") != "Bearer irc-ui-secret":
                 raise AssertionError("fake endpoint received the wrong credential")
@@ -245,6 +247,10 @@ class FakeResponses:
             if length < 0 or length > 32 * 1024 * 1024:
                 raise AssertionError("fake endpoint request length is invalid")
             request = json.loads(handler.rfile.read(length))
+            if counting:
+                assert self.runtime_count_handler is not None
+                self.runtime_count_handler(handler, request)
+                return
             model = request.get("model")
             latest = self.latest_user(request)
             corrected = self.has_output_correction(request)
@@ -2215,25 +2221,50 @@ def run_runtime_networking_cases(binary, root, provider, environment):
 
 
 def run_runtime_routing_cases(binary, root, provider, environment):
-    cases = [("irc_send", change) for change in ("noop", "replace", "readd", "off")]
-    cases += [("irc_state", "off"), ("irc_topic", "off")]
-    for tool, change in cases:
-        case = root / f"route-{tool}-{change}"
+    cases = [("irc_send", change, "response") for change in ("noop", "replace", "readd", "off")]
+    cases += [("irc_state", "off", "response"), ("irc_topic", "off", "response"),
+              ("irc_send", "off", "count"), ("irc_send", "off", "retry")]
+    for tool, change, phase in cases:
+        case = root / f"route-{tool}-{change}-{phase}"
         workspace = case / "work"
         workspace.mkdir(mode=0o700, parents=True)
         config = case / "config.ini"
         write_irc_config(config, provider.port, "host-model")
+        if phase == "count":
+            config.write_text(config.read_text().replace("exact_token_count = false", "exact_token_count = true"))
         endpoint = f"127.0.0.1:{free_loopback_port()}"
         destination = endpoint if change == "readd" else f"127.0.0.1:{free_loopback_port()}"
         arrived, release = threading.Event(), threading.Event()
         requests = []
+        counts = []
         marker = "runtime-stale-send-must-not-migrate"
+
+        def count(handler, request):
+            counts.append(request)
+            if len(counts) == 1:
+                arrived.set()
+                assert release.wait(15.0)
+            body = b'{"object":"response.input_tokens","input_tokens":20}'
+            handler.send_response(200)
+            handler.send_header("Content-Type", "application/json")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body)
+            handler.close_connection = True
 
         def respond(handler, request, sequence):
             requests.append(request)
-            if len(requests) == 1:
+            if len(requests) == 1 and phase != "count":
                 arrived.set()
                 assert release.wait(15.0)
+            if phase == "retry" and len(requests) == 1:
+                handler.send_response(503)
+                handler.send_header("Retry-After", "1")
+                handler.send_header("Content-Length", "0")
+                handler.end_headers()
+                handler.close_connection = True
+                return
+            if len(requests) == (2 if phase == "retry" else 1):
                 arguments = {"notice": False, "text": marker} if tool == "irc_send" else \
                     {"topic": marker} if tool == "irc_topic" else {}
                 body = provider.function_body(sequence, "runtime-route", tool, arguments).encode()
@@ -2248,6 +2279,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
             handler.close_connection = True
 
         provider.runtime_handler = respond
+        provider.runtime_count_handler = count
         terminal = TmuxTerminal(case / "terminal", binary, workspace,
             case / "state", config, 120, 24,
             args=["-s", endpoint, "-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"],
@@ -2259,7 +2291,8 @@ def run_runtime_routing_cases(binary, root, provider, environment):
             terminal.wait("host-model/medium ›")
             terminal.submit("runtime-routing")
             assert arrived.wait(5.0)
-            assert tool in {item.get("name") for item in requests[0]["tools"]}
+            frozen = counts[0] if phase == "count" else requests[0]
+            assert tool in {item.get("name") for item in frozen["tools"]}
             if change == "noop":
                 terminal.submit(f"/server start {endpoint}")
                 terminal.wait(f"already hosting {endpoint}")
@@ -2285,9 +2318,15 @@ def run_runtime_routing_cases(binary, root, provider, environment):
             terminal.wait("runtime routing complete")
             wait_irc_idle([terminal])
             assert len(requests) >= 2
-            calls = {item["call_id"] for item in requests[1]["input"]
+            result_request = requests[2] if phase == "retry" else requests[1]
+            if phase == "retry":
+                assert requests[0] == requests[1], "retry rebuilt a frozen request after disconnect"
+            if phase == "count":
+                assert counts[0]["tools"] == requests[0]["tools"]
+                assert counts[0]["input"] == requests[0]["input"]
+            calls = {item["call_id"] for item in result_request["input"]
                      if item.get("type") == "function_call" and item.get("name") == tool}
-            outputs = [item["output"] for item in requests[1]["input"]
+            outputs = [item["output"] for item in result_request["input"]
                        if item.get("type") == "function_call_output" and item.get("call_id") in calls]
             assert len(outputs) == 1
             if tool == "irc_state":
@@ -2316,13 +2355,14 @@ def run_runtime_routing_cases(binary, root, provider, environment):
                     pass
                 assert (marker.encode() in wire) == (change == "noop"), wire
             terminal.exit()
-            print(f"tmux_terminal frozen routing {tool}/{change}: ok", flush=True)
+            print(f"tmux_terminal frozen routing {tool}/{change}/{phase}: ok", flush=True)
         finally:
             release.set()
             if peer is not None:
                 peer.close()
             terminal.close()
             provider.runtime_handler = None
+            provider.runtime_count_handler = None
 
 
 def run_runtime_boundary_cases(binary, root, provider, environment):
@@ -2481,6 +2521,101 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_runtime_history_case(binary, root, provider, environment):
+    case = root / "runtime-history"
+    workspace = case / "work"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_irc_config(config, provider.port, "host-model")
+    arrived, release = threading.Event(), threading.Event()
+    requests = []
+    history = "agent7: historical mention café must stay historical"
+
+    def respond(handler, request, sequence):
+        requests.append(request)
+        if len(requests) == 1:
+            arrived.set()
+            assert release.wait(15.0)
+        body = provider.response_body(sequence, f"history completion {len(requests)}").encode()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+        handler.close_connection = True
+
+    provider.runtime_handler = respond
+    upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(2)
+    upstream.settimeout(4.0)
+    endpoint = f"127.0.0.1:{upstream.getsockname()[1]}"
+    terminal = TmuxTerminal(case / "terminal", binary, workspace, case / "state",
+        config, 120, 24, args=["-n", "agent", "-o", "operator"], environment=environment)
+    links = []
+    try:
+        terminal.wait("host-model/medium ›")
+        terminal.submit("runtime history main")
+        assert arrived.wait(5.0)
+        terminal.submit(f"/connect {endpoint}")
+        for _ in range(2):
+            link, _ = upstream.accept()
+            links.append(link)
+            link.settimeout(3.0)
+            wire = b""
+            while b"USER " not in wire:
+                wire += link.recv(8192)
+            nick = re.search(rb"NICK (\w+)\r\n", wire)[1].decode() + "7"
+            link.sendall((f":fake 001 {nick} :welcome\r\n"
+                          f":fake 005 {nick} SAJROOM=#lab :supported\r\n"
+                          f":fake 376 {nick} :end\r\n").encode())
+            wire = b""
+            while b"JOIN #lab\r\n" not in wire:
+                wire += link.recv(8192)
+            link.sendall((f":{nick}!u@fake JOIN #lab\r\n"
+                          f":fake 353 {nick} = #lab :@operator7 agent7 peer\r\n"
+                          f":fake 366 {nick} #lab :end\r\n"
+                          ":fake BATCH +h chathistory #lab\r\n"
+                          f"@batch=h;time=2026-09-01T12:00:00.000Z :peer!u@fake PRIVMSG #lab :{history}\r\n"
+                          ":fake BATCH -h\r\n").encode())
+        deadline = time.monotonic() + 5.0
+        while True:
+            _, log = read_events(terminal.dotdir)
+            if any(history in event["data"]["text"] for event in event_list(log, "irc_snapshot")):
+                break
+            assert time.monotonic() < deadline, provider.failure
+            time.sleep(0.02)
+        assert len(requests) == 1
+        historical = [event["data"] for event in event_list(log, "irc_event")
+                      if event["data"]["text"] == history]
+        assert len(historical) == 1 and historical[0]["historical"]
+        terminal.submit("/disconnect")
+        terminal.wait("outgoing connections removed; hosting unchanged", join_wrapped=True)
+        release.set()
+        deadline = time.monotonic() + 8.0
+        while len(requests) < 2:
+            assert time.monotonic() < deadline, terminal.capture()
+            time.sleep(0.02)
+        wait_irc_idle([terminal])
+        second = json.dumps(requests[1], ensure_ascii=False)
+        assert history in second and endpoint in second and "agent7" in second
+        assert "no active endpoints" in second
+        _, log = read_events(terminal.dotdir)
+        assert not event_list(log, "steering_added"), "historical mention became urgent input"
+        assert not event_list(log, "irc_reply_reminder")
+        assert not event_list(log, "turn_failed") and provider.failure is None
+        assert len(requests) == 2
+        terminal.exit()
+        print("tmux_terminal runtime historical input: ok", flush=True)
+    finally:
+        release.set()
+        for link in links:
+            link.close()
+        upstream.close()
+        terminal.close()
+        provider.runtime_handler = None
+
+
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
@@ -2503,6 +2638,7 @@ def run_irc_case(binary, root):
         run_runtime_networking_cases(binary, root, provider, environment)
         run_runtime_routing_cases(binary, root, provider, environment)
         run_runtime_boundary_cases(binary, root, provider, environment)
+        run_runtime_history_case(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
 
         run_multi_tool_cases(binary, root, provider, environment)

@@ -101,7 +101,7 @@ class Child:
     def drain(self, duration=0.25):
         end = time.monotonic() + duration
         while time.monotonic() < end:
-            self.read_once(min(0.05, end - time.monotonic()))
+            self.read_once(max(0.0, min(0.05, end - time.monotonic())))
 
     def exit_cleanly(self, after):
         self.wait_idle_prompt(start=after, timeout=8.0)
@@ -339,10 +339,10 @@ def test_incremental_prompt_edit_and_utf8_cursor_column():
         wait_prompt_painted(child, DEFAULT_IDLE_PROMPT)
         empty_tab_start = len(child.buf)
         child.send(b"\t")
+        end = child.wait("── chat ──".encode(), start=empty_tab_start)
+        child.send(b"\t")
+        child.wait("── rollout ──".encode(), start=end)
         child.drain()
-        assert child.buf[empty_tab_start:] == b"", bytes(
-            child.buf[empty_tab_start:]
-        )
         start = len(child.buf)
         child.send(b"a")
         child.drain()
@@ -1829,10 +1829,10 @@ def test_command_name_completion():
     end = child.wait(b"lp", start=start)
     child.send(b"\r")
     help_end = child.wait(b"/compact", start=end)
-    child.wait(b"Empty Tab no-op", start=help_end)
+    child.wait(b"Empty Tab switch view", start=help_end)
     child.wait(b"Tab complete/indent/queue", start=help_end)
     child.drain()
-    assert b"steer" not in child.buf[end:]
+    assert b"Chat Enter broadcast to enabled destinations (mention to steer)" in child.buf[end:]
     child.wait(PROMPT.rstrip(), start=help_end)
 
     start = len(child.buf)
@@ -2558,6 +2558,60 @@ def test_config_editor_reload():
                 break
             assert time.monotonic() < deadline, bytes(child.buf)
             child.drain(0.05)
+        # Unrelated edits cannot resurrect a runtime-stopped configured host,
+        # nor erase a runtime-added outgoing endpoint. Keep its sockets intact.
+        child.send(b"/server stop\r")
+        end = child.wait(b"hosting stopped; outgoing connections unchanged", start=end)
+        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        upstream.bind(("127.0.0.1", 0))
+        upstream.listen(8)
+        outgoing = f"127.0.0.1:{upstream.getsockname()[1]}"
+        child.send(f"/connect {outgoing}\r".encode())
+        end = child.wait(b"outgoing connection added", start=end)
+        links = accept_connections(upstream, 2)
+        edited_network = root / "config" / "editor-network-unrelated.ini"
+        edited_network.write_text(network.read_text() + "[ui]\ntyping_pause_ms = 26\n", encoding="utf-8")
+        try:
+            deadline = time.monotonic() + 8.0
+            while True:
+                log = events(session_id)
+                started = {event["data"]["turn_id"] for event in log if event["type"] == "turn_started"}
+                finished = {event["data"]["turn_id"] for event in log
+                            if event["type"] in ("turn_completed", "turn_completed_silent", "turn_failed")}
+                if started <= finished:
+                    break
+                assert time.monotonic() < deadline
+                child.drain(0.05)
+            plan.write_text(str(edited_network), encoding="utf-8")
+            child.send(b"/config\r")
+            end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                assert probe.connect_ex(("127.0.0.1", network_port)) != 0
+            ready, _, _ = select.select([upstream], [], [], 0.1)
+            assert not ready, "unrelated reload restarted an outgoing owner"
+            for link in links:
+                link.setblocking(False)
+                try:
+                    data = link.recv(65536)
+                    assert data, "unrelated reload closed the outgoing socket"
+                except BlockingIOError:
+                    pass
+            # Deliberately changing the file's listener overrides the runtime
+            # removal; changing client fields is handled independently.
+            replacement_port = free_port()
+            edited_network.write_text(edited_network.read_text().replace(
+                f"listen = 127.0.0.1:{network_port}", f"listen = 127.0.0.1:{replacement_port}"), encoding="utf-8")
+            child.send(b"/config\r")
+            end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                assert probe.connect_ex(("127.0.0.1", replacement_port)) == 0
+            child.send(b"/disconnect\r")
+            end = child.wait(b"outgoing connections removed; hosting unchanged", start=end)
+        finally:
+            for link in links:
+                link.close()
+            upstream.close()
+        child.drain(0.3)
         plan.write_text(str(valid_one), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
