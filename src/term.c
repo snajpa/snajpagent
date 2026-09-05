@@ -2054,6 +2054,8 @@ feed_byte(struct snj_term *term, unsigned char byte,
     }
     case '\t':
         if (!term->draft.len) {
+            if (term->input_backlog)
+                return snj_write_full(STDERR_FILENO, "\a", 1u);
             *action = SNJ_TERM_VIEW;
             return 1;
         }

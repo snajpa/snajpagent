@@ -1945,23 +1945,12 @@ change_verbosity(struct app_state *app, const char *value)
 static int
 select_view(struct app_state *app, enum snj_render_view view, bool active)
 {
-    int rc = 0;
-    int saved_errno = 0;
-
     if (!app->networked)
         return 0;
-    if (snj_ui_text(&app->ui, SNJ_UI_OUTPUT_BEGIN, NULL) < 0)
-        return -1;
     if (snj_ui_set_view(&app->ui, view) < 0 ||
-        set_input_prompt(app, active) < 0) {
-        rc = -1;
-        saved_errno = errno;
-    }
-    if (snj_ui_text(&app->ui, SNJ_UI_OUTPUT_END, NULL) < 0 && rc == 0)
-        rc = -1;
-    if (saved_errno)
-        errno = saved_errno;
-    return rc;
+        set_input_prompt(app, active) < 0)
+        return -1;
+    return 0;
 }
 static int
 toggle_view(struct app_state *app)
@@ -2955,6 +2944,11 @@ run_turn(struct app_state *app, const char *prompt,
                                    create_request, &credential, &graph,
                                    &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
+        if (provider_rc == 0) {
+            int control_rc = snj_app_active_input_pump(app, 0u);
+            if (control_rc != 0)
+                provider_rc = control_rc;
+        }
         json_decref(create_request);
         json_decref(steering);
         if ((provider_rc == 1 && app->steering_requested) ||

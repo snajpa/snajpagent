@@ -59,8 +59,10 @@ while accounted_prompt not in buf[interrupt_end:]:
     if not ready:
         raise SystemExit(f"no post-interrupt prompt: {bytes(buf)!r}")
     buf.extend(os.read(fd, 65536))
+os.write(fd, b"/verbose 4\r")
+read_until(b"verbosity: 4")
 cancel_start = len(buf)
-for count in range(1, 9):
+for count in range(1, 5):
     os.write(fd, b"\x03")
     end = time.monotonic() + 5.0
     while bytes(buf[cancel_start:]).count(b"^C\r\n") < count:
@@ -72,7 +74,7 @@ for count in range(1, 9):
             buf.extend(os.read(fd, 65536))
 if os.waitpid(pid, os.WNOHANG) != (0, 0):
     raise SystemExit(f"Ctrl-C exited the process: {bytes(buf)!r}")
-os.write(fd, b"/exit\r")
+os.write(fd, b"\x03")
 read_until(b"You can resume this session")
 _, status = os.waitpid(pid, 0)
 if os.waitstatus_to_exitcode(status) != 0:

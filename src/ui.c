@@ -216,8 +216,6 @@ apply_text(struct snj_ui_display *display, const struct ui_message *message)
     case SNJ_UI_ERROR: return snj_render_error_ctx(render, message->text);
     case SNJ_UI_WARNING: return snj_render_warning_ctx(render, message->text);
     case SNJ_UI_BEFORE_PROMPT: return snj_render_before_prompt(render);
-    case SNJ_UI_OUTPUT_BEGIN: return snj_term_output_begin(term, true);
-    case SNJ_UI_OUTPUT_END: return snj_term_output_end(term);
     case SNJ_UI_PUBLIC_END: return snj_render_public_end(render);
     case SNJ_UI_PUBLIC_ABORT: return snj_render_public_abort(render);
     case SNJ_UI_ROLLOUT_END: return snj_render_rollout_end(render);
@@ -419,9 +417,13 @@ read_input(struct snj_ui_display *display, int timeout_ms)
         if (queue_push(&runtime->actions, item))
             return 0;
     }
-    free(item->text);
-    free(item);
-    wake_owner(&runtime->actions);
+    {
+        bool notify = item->action != SNJ_TERM_NONE || item->error;
+        free(item->text);
+        free(item);
+        if (notify)
+            wake_owner(&runtime->actions);
+    }
     return 0;
 }
 
@@ -831,8 +833,10 @@ snj_ui_poll(struct snj_ui *ui, int timeout_ms,
             return 1;
         }
         item = queue_pop(&runtime->actions);
-        if (item)
+        if (item) {
+            wake_owner(&runtime->commands);
             break;
+        }
         if (waited)
             return 0;
         (void)poll(&pfd, 1u, timeout_ms);
@@ -884,6 +888,8 @@ int
 snj_ui_submitted(struct snj_ui *ui, const char *label, const char *text, bool input)
 {
     struct ui_message message = {.kind = UI_SUBMITTED, .data.value = input};
+    if (label == ui->label && ui->submitted_label[0])
+        label = ui->submitted_label;
     return request(ui, &message, label, text, strlen(text), NULL, NULL, 0u);
 }
 

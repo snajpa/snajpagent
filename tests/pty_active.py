@@ -2459,14 +2459,15 @@ def test_exit_resume_matrix():
     cancelled.wait(DEFAULT_IDLE_PROMPT)
     cancelled_id = new_session(before)
     start = len(cancelled.buf)
-    cancelled.send(b"\x03" * 8)
+    cancelled.send(b"\x03" * 4)
     deadline = time.monotonic() + 8.0
-    while bytes(cancelled.buf[start:]).count(b"^C\r\n") < 8:
+    while bytes(cancelled.buf[start:]).count(b"^C\r\n") < 4:
         remaining = deadline - time.monotonic()
         if remaining <= 0 or not cancelled.read_once(remaining):
             raise AssertionError(f"missing Ctrl-C cancellations: {cancelled.buf!r}")
     assert os.waitpid(cancelled.pid, os.WNOHANG) == (0, 0)
-    command = cancelled.exit_now()
+    cancelled.send(b"\x03")
+    command = cancelled.finish()
     assert command_arguments(command)[-2:] == ["--resume", cancelled_id]
 
     for signal_number in (signal.SIGHUP, signal.SIGTERM):

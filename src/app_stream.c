@@ -158,6 +158,8 @@ stream_public_core(void *opaque, size_t item_index, enum snj_item_kind kind,
     int fd = STDOUT_FILENO;
     const char *label = NULL;
 
+    if (snj_app_active_input_pump(app, 0u) < 0)
+        return stream_fail(app, errno, "active input failed before public output");
     while (len && !app->steering_requested && !app->interrupt_requested) {
         uint32_t remaining = snj_ui_pause_remaining(&app->ui);
         int input_rc;
