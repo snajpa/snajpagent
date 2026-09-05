@@ -1388,11 +1388,95 @@ test_native_read_tools(void)
     assert(rmdir(temp) == 0);
 }
 
+static void
+test_process_capacity_and_ready_collection(void)
+{
+    struct snj_config config;
+    struct snj_credential credential;
+    struct snj_response_graph graph;
+    char cwd[4096], error[256] = {0}, handles[SNJ_MAX_PROCESSES][SNJ_ID_HEX_LEN + 1u];
+    snj_config_init(&config);
+    config.max_parallel_commands = SNJ_MAX_PROCESSES;
+    snj_credential_clear(&credential);
+    assert(getcwd(cwd, sizeof(cwd)));
+    for (size_t i = 0u; i < SNJ_MAX_PROCESSES; ++i) {
+        uint32_t yield;
+        json_t *result = NULL;
+        make_call(&graph, "printf slot", cwd, 1000, NULL);
+        assert(snj_tools_prepare(&graph.items[0], &config, handles[i], &yield, &result) == 0);
+        assert(snj_tools_start(&graph.items[0], &config, &credential, &result, error, sizeof(error)) == 0);
+        assert(!result);
+        snj_response_graph_free(&graph);
+    }
+    uint64_t deadline = snj_monotonic_ms() + 3000u;
+    while (snj_tools_busy()) {
+        assert(snj_monotonic_ms() < deadline);
+        assert(snj_tools_service(10, -1, error, sizeof(error)) == 0);
+    }
+    /* Exited/uncollected jobs still consume all slots. */
+    char unused[SNJ_ID_HEX_LEN + 1u];
+    uint32_t yield;
+    json_t *result = NULL;
+    make_call(&graph, "printf forbidden", cwd, 1000, NULL);
+    assert(snj_tools_prepare(&graph.items[0], &config, unused, &yield, &result) == 1);
+    assert(!strcmp(snj_json_string(result, "reason"), "process_limit"));
+    json_decref(result);
+    snj_response_graph_free(&graph);
+    for (size_t i = SNJ_MAX_PROCESSES; i > 0u; --i) {
+        result = NULL;
+        assert(snj_tools_collect(handles[i - 1u], NULL, &result, error, sizeof(error)) == 0);
+        assert(snj_tool_result_valid(result) == 0);
+        assert(!strcmp(snj_json_string(result, "status"), "succeeded"));
+        assert(!strcmp(snj_json_string(json_object_get(result, "stdout"), "retained"), "slot"));
+        snj_tools_collected(handles[i - 1u]);
+        json_decref(result);
+    }
+    snj_config_free(&config);
+}
+
+static int
+steer_after_input(void *opaque, unsigned int timeout_ms)
+{
+    unsigned int *calls = opaque;
+    (void)timeout_ms;
+    return ++*calls == 3u ? 1 : 0;
+}
+
+static void
+test_steering_with_blocked_stdin(void)
+{
+    char *input = malloc(1024u * 1024u + 1u);
+    unsigned int calls = 0u;
+    assert(input);
+    memset(input, 'x', 1024u * 1024u);
+    input[1024u * 1024u] = '\0';
+    uint64_t start = snj_monotonic_ms();
+    json_t *result = run_command_full("sleep 5", 5000, NULL, input,
+                                     steer_after_input, &calls, -1, 6000u);
+    free(input);
+    assert(snj_monotonic_ms() - start < 1000u);
+    assert(!strcmp(snj_json_string(result, "status"), "running"));
+    json_t *ref = json_object_get(result, "output_ref");
+    assert(json_int_member(ref, "stdin_accepted") == 1024 * 1024);
+    assert(json_int_member(ref, "stdin_pending") > 0);
+    const char *handle = snj_json_string(result, "handle");
+    json_t *rejected = run_write_stdin_call(handle, "duplicate", false, 0);
+    assert(!strcmp(snj_json_string(rejected, "reason"), "stdin_busy"));
+    json_decref(rejected);
+    json_t *closed = run_terminate_call(handle, "", false);
+    assert(strcmp(snj_json_string(closed, "status"), "running"));
+    assert(json_int_member(json_object_get(closed, "output_ref"), "stdin_pending") == 0);
+    json_decref(closed);
+    json_decref(result);
+}
+
 int
 main(void)
 {
     (void)signal(SIGPIPE, SIG_IGN);
     snj_tools_journal(retain_output, read_output, NULL);
+    test_process_capacity_and_ready_collection();
+    test_steering_with_blocked_stdin();
     test_native_read_tools();
     test_success_and_streams();
     test_command_output_limit_selection();

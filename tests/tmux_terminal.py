@@ -384,9 +384,14 @@ class FakeResponses:
                 "touch peer-ready; printf second"])
             if mode == "failure":
                 commands[1] = "touch peer-ready; printf failed-peer; exit 7"
+            if mode in ("steer", "cancel"):
+                commands = ["echo $$ > a.pid; sleep 10; printf first",
+                            "echo $$ > b.pid; sleep 10; printf second",
+                            "touch must-not-run"]
             batch = [(f"call_multi_{i}", "exec_command", {
                 "command": command, "workdir": str(self.tool_workspace),
-                "stdin": None, "pty": False, "timeout_ms": 3000,
+                "stdin": None, "pty": False,
+                "timeout_ms": None if mode in ("steer", "cancel") else 3000,
                 "yield_ms": 30 if mode in ("yield", "single-request") else 0,
                 "max_output_tokens": None,
             }) for i, command in enumerate(commands)]
@@ -397,8 +402,12 @@ class FakeResponses:
                 {tool.get("name") for tool in request["tools"]})
             return self.functions_body(sequence, [(f"poll_{sequence}_{i}", "write_stdin", {
                 "handle": job["handle"], "data": "", "eof": False,
-                "terminate": False, "yield_ms": 1000, "max_output_tokens": None,
+                "terminate": mode == "steer", "yield_ms": 1000, "max_output_tokens": None,
             }) for i, job in enumerate(jobs)])
+        if mode == "steer":
+            assert len(outputs) == 5
+            assert "superseded_by_steering" in "".join(outputs.values())
+            return self.response_body(sequence, "multi tools confirmed")
         assert "first" in "".join(outputs.values())
         assert ("failed-peer" if mode == "failure" else "second") in "".join(outputs.values())
         return self.response_body(sequence, "multi tools confirmed")
@@ -1902,7 +1911,7 @@ def run_listener_collision_case(binary, root, provider, environment):
             terminal.close()
 
 def run_multi_tool_cases(binary, root, provider, environment):
-    for mode in ("parallel", "serial", "yield", "failure", "single-request"):
+    for mode in ("parallel", "serial", "yield", "failure", "single-request", "steer", "cancel"):
         case = root / ("multi-" + mode)
         workspace = case / "work"
         workspace.mkdir(mode=0o700, parents=True)
@@ -1914,18 +1923,32 @@ def run_multi_tool_cases(binary, root, provider, environment):
             # The runtime must still handle a provider returning several calls.
             text = text.replace("[provider fake]\n", "[provider fake]\nparallel_tool_calls = false\n")
         config.write_text(text + "[tool]\nmax_parallel_commands = " +
-                          ("1" if mode == "serial" else "4") + "\n", encoding="utf-8")
+                          ("1" if mode == "serial" else "2" if mode in ("steer", "cancel") else "4") + "\n", encoding="utf-8")
         terminal = TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
                                 args=("-v",), environment=environment)
         try:
             terminal.wait("host-model/medium ›")
             terminal.submit("multi-tools " + mode)
+            if mode in ("steer", "cancel"):
+                deadline = time.monotonic() + 4.0
+                while not all((workspace / name).exists() for name in ("a.pid", "b.pid")):
+                    assert time.monotonic() < deadline, "commands did not start"
+                    time.sleep(0.02)
+                if mode == "cancel":
+                    terminal.send_key("C-d")
+                    terminal.wait_dead(timeout=1.5)
+                    _, events = read_events(terminal.dotdir)
+                    assert len(event_list(events, "turn_interrupted")) == 1
+                    assert not (workspace / "must-not-run").exists()
+                    print("tmux_terminal multi-tool cancel: ok", flush=True)
+                    continue
+                terminal.submit("multi-tools steer")
             terminal.wait("multi tools confirmed")
             _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
             starts = event_list(events, "tool_started")
             finishes = event_list(events, "tool_finished")
-            assert len(starts) == len(finishes) >= 2
+            assert len(finishes) == len(starts) + (1 if mode == "steer" else 0)
             assert not event_list(events, "turn_failed")
             if mode != "serial":
                 assert starts[1]["seq"] < finishes[0]["seq"]
@@ -1936,8 +1959,12 @@ def run_multi_tool_cases(binary, root, provider, environment):
             if mode in ("yield", "single-request"):
                 assert any(event["data"]["result"]["status"] == "running" for event in finishes)
             chunks = event_list(events, "process_output")
-            assert chunks and all(event["data"]["offset"] == 0 for event in chunks)
-            assert len({event["data"]["handle"] for event in chunks}) == 2
+            if mode == "steer":
+                assert not (workspace / "must-not-run").exists()
+                assert len(event_list(events, "steering_added")) == 1
+            else:
+                assert chunks and all(event["data"]["offset"] == 0 for event in chunks)
+                assert len({event["data"]["handle"] for event in chunks}) == 2
             terminal.exit()
             print(f"tmux_terminal multi-tool {mode}: ok", flush=True)
         finally:

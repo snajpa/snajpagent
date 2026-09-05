@@ -2019,7 +2019,7 @@ main(void)
                       "command output truncated for model context") != NULL);
         assert(strstr(historical_text, "original_bytes=1048576") != NULL);
         assert(strstr(historical_text, large_tool_hash) != NULL);
-        assert(strstr(historical_text, "durable result event") != NULL);
+        assert(strstr(historical_text, "durable session journal") != NULL);
         assert(strstr(historical_text, "full-model-tail") != NULL);
         assert(item_by_kind(semantic, "native_compact_output") != NULL);
     }

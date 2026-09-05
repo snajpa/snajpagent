@@ -992,7 +992,7 @@ apply_event(struct snj_session *session, const char *type, json_t *data,
             !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
             !string_in(actor, actors, sizeof(actors) / sizeof(actors[0])) ||
             (strcmp(actor, "model") == 0 &&
-             session->goal_status != SNJ_GOAL_ACTIVE))
+             (session->goal_status != SNJ_GOAL_ACTIVE || session->process_count)))
             goto invalid;
         free(session->goal_blocker);
         session->goal_blocker = NULL;

@@ -931,7 +931,7 @@ const char *
 snj_tools_handoff(const char *handle)
 {
     struct managed_process *proc = find_process(handle);
-    return proc ? proc->handoff : NULL;
+    return proc && !proc->closing ? proc->handoff : NULL;
 }
 
 void
@@ -1459,6 +1459,8 @@ command_args(const struct snj_response_item *call, const struct snj_config *conf
             !json_bool_member(call->arguments, "terminate", false, &args->terminate) ||
             (args->terminate && (args->input[0] || args->eof)))
             return -1;
+        if (args->terminate)
+            args->yield = 0u;
     }
     return args->handle && snj_hex_is_lower(args->handle, SNJ_ID_HEX_LEN) ? 0 : -1;
 }
@@ -1476,6 +1478,7 @@ snj_tools_prepare(const struct snj_response_item *call, const struct snj_config 
     if (command_args(call, config, &args) < 0) {
         reason = "invalid_arguments";
     } else {
+        *yield_ms = args.yield;
         proc = find_process(args.handle);
         for (size_t i = 0u; i < SNJ_MAX_PROCESSES; ++i)
             used += processes[i] != NULL;

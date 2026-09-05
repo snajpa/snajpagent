@@ -384,7 +384,7 @@ out=$($bin -e --resume "$many_cycles_id" -- ping 2>"$root/many-cycles-resume.err
 strip_resume "$root/many-cycles-resume.err"
 only_resume "$root/many-cycles-resume.err"
 
-for prompt in managed_wrong_handle managed_malformed; do
+for prompt in managed_wrong_handle managed_malformed managed_wrong_tool_violation managed_multiple_violation; do
     out=$($bin -e -- "$prompt" 2>"$root/$prompt.err")
     [ "$out" = "managed process recovered" ]
     strip_resume "$root/$prompt.err"
@@ -404,7 +404,7 @@ assert events[-1]["type"] == "turn_completed"
 running = [event for event in events if event["type"] == "tool_finished"
            and event["data"]["result"]["status"] == "running"]
 assert running
-assert all(event["data"]["result"]["handle"] == "a" * 32
+assert all(event["data"]["result"]["handle"] == running[0]["data"]["call_id"]
            for event in running)
 if prompt == "managed_wrong_handle":
     mismatches = [event for event in events
@@ -417,20 +417,25 @@ if prompt == "managed_wrong_handle":
                if event["type"] == "tool_started"}
     assert all(event["data"]["call_id"] not in started
                for event in mismatches)
-else:
+elif prompt == "managed_malformed":
     assert len(running) == 2
     assert "interaction was rejected" in running[-1]["data"]["result"]["model_text"]
+elif prompt == "managed_multiple_violation":
+    assert any(event["type"] == "tool_finished" and
+               event["data"]["result"]["status"] == "not_run" for event in events)
+else:
+    assert len([event for event in events if event["type"] == "tool_started"]) >= 3
 PY
 done
 
-for prompt in managed_final_violation managed_wrong_tool_violation managed_multiple_violation; do
+for prompt in managed_final_violation; do
     set +e
     $bin -e -- "$prompt" >"$root/$prompt.out" 2>"$root/$prompt.err"
     status=$?
     set -e
     [ "$status" -eq 4 ]
     [ ! -s "$root/$prompt.out" ]
-    grep -q 'provider response violated unresolved managed process ordering' \
+    grep -q 'Unsettled commands remain' \
         "$root/$prompt.err"
     managed_id=$(grep -rl "\"text\":\"$prompt\"" \
         "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
@@ -443,7 +448,9 @@ closed = [event for event in events if event["type"] == "process_closed"]
 failed = [event for event in events if event["type"] == "turn_failed"]
 assert len(closed) == 1
 assert closed[0]["data"]["cause"] == "protocol_failure"
-assert closed[0]["data"]["handle"] == "a" * 32
+running = [event for event in events if event["type"] == "tool_finished"
+           and event["data"]["result"]["status"] == "running"]
+assert closed[0]["data"]["handle"] == running[0]["data"]["call_id"]
 assert len(failed) == 1
 assert failed[0]["data"]["class"] == "protocol"
 PY

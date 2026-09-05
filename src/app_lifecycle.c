@@ -615,6 +615,8 @@ snj_app_goal_tool(struct app_state *app,
         return tool_result(true, "goal wording updated", result);
     }
     if (strcmp(action, "complete") == 0) {
+        if (app->session.process_count)
+            return tool_result(false, "settle command handles before completing the goal", result);
         if (!json_is_null(text_value))
             return tool_result(false,
                                "complete requires text to be null", result);

@@ -97,6 +97,30 @@ test_compact_setting(const char *path)
 }
 
 static void
+test_batch_settings(const char *path)
+{
+    static const char *const values[] = {"0", "1", "4", "32", "33", "-1", "no"};
+    for (size_t i = 0u; i < sizeof(values) / sizeof(values[0]); ++i) {
+        struct snj_config config;
+        char text[128], error[256] = {0};
+        int n = snprintf(text, sizeof(text), "[tool]\nmax_parallel_commands=%s\n"
+                         "[provider]\nparallel_tool_calls=false\n", values[i]);
+        write_bytes(path, text, (size_t)n);
+        snj_config_init(&config);
+        bool valid = i >= 1u && i <= 3u;
+        assert((snj_config_load(&config, path, NULL, error, sizeof(error)) == 0) == valid);
+        if (valid) {
+            assert(config.max_parallel_commands == (uint32_t)strtoul(values[i], NULL, 10));
+            assert(!config.providers[0].parallel_tool_calls);
+        }
+        snj_config_free(&config);
+    }
+    static const char duplicate[] = "[tool]\nmax_parallel_commands=4\nmax_parallel_commands=2\n";
+    write_bytes(path, duplicate, sizeof(duplicate) - 1u);
+    expect_invalid(path);
+}
+
+static void
 test_auth_settings(const char *path)
 {
     struct snj_config config;
@@ -568,6 +592,7 @@ main(void)
     }
 
     test_compact_setting(path);
+    test_batch_settings(path);
     test_auth_settings(path);
     test_prompt_numbers(path);
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
