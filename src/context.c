@@ -886,35 +886,10 @@ string_array(const char *a, const char *b)
 }
 
 static json_t *
-schema_type_value(const char *type, bool nullable)
-{
-    json_t *types;
-
-    if (!nullable)
-        return json_string(type);
-    types = json_array();
-    if (!types ||
-        json_array_append_new(types, json_string(type)) < 0 ||
-        json_array_append_new(types, json_string("null")) < 0) {
-        if (types)
-            json_decref(types);
-        return NULL;
-    }
-    return types;
-}
-
-static json_t *
 primitive_schema(const char *type, bool nullable)
 {
-    json_t *schema = json_object();
-
-    if (!schema || snag_json_set_new(schema, "type",
-                                schema_type_value(type, nullable)) < 0) {
-        if (schema)
-            json_decref(schema);
-        return NULL;
-    }
-    return schema;
+    return nullable ? json_pack("{s:[s,s]}", "type", type, "null") :
+                      json_pack("{s:s}", "type", type);
 }
 
 static json_t *
@@ -926,27 +901,7 @@ string_schema(void)
 static json_t *
 exact_string_schema(const char *value)
 {
-    json_t *schema = string_schema();
-    json_t *allowed = json_array();
-
-    if (!schema || !allowed ||
-        json_array_append_new(allowed, json_string(value)) < 0)
-        goto fail;
-    {
-        int rc = snag_json_set_new(schema, "enum", allowed);
-
-        allowed = NULL;
-        if (rc < 0)
-            goto fail;
-    }
-    return schema;
-
-fail:
-    if (schema)
-        json_decref(schema);
-    if (allowed)
-        json_decref(allowed);
-    return NULL;
+    return json_pack("{s:s,s:[s]}", "type", "string", "enum", value);
 }
 
 static json_t *
@@ -958,28 +913,8 @@ nullable_string_schema(void)
 static json_t *
 goal_action_schema(void)
 {
-    static const char *const actions[] = {"rewrite", "complete", "block"};
-    json_t *schema = string_schema();
-    json_t *allowed = required_array(actions,
-                                     sizeof(actions) / sizeof(actions[0]));
-
-    if (!schema || !allowed)
-        goto fail;
-    {
-        int rc = snag_json_set_new(schema, "enum", allowed);
-
-        allowed = NULL;
-        if (rc < 0)
-            goto fail;
-    }
-    return schema;
-
-fail:
-    if (schema)
-        json_decref(schema);
-    if (allowed)
-        json_decref(allowed);
-    return NULL;
+    return json_pack("{s:s,s:[s,s,s]}", "type", "string",
+                     "enum", "rewrite", "complete", "block");
 }
 
 static json_t *
@@ -991,84 +926,26 @@ nullable_bool_schema(void)
 static json_t *
 integer_schema(json_int_t minimum, json_int_t maximum, bool nullable)
 {
-    json_t *schema = json_object();
-
-    if (!schema || snag_json_set_new(schema, "maximum", json_integer(maximum)) < 0 ||
-        snag_json_set_new(schema, "minimum", json_integer(minimum)) < 0 ||
-        snag_json_set_new(schema, "type", schema_type_value("integer", nullable)) < 0) {
-        if (schema)
-            json_decref(schema);
-        return NULL;
-    }
-    return schema;
-}
-
-static json_t *
-tool_parameters(json_t *properties, json_t *required)
-{
-    json_t *params = json_object();
-
-    if (!params || !properties || !required)
-        goto fail;
-    if (snag_json_set_new(params, "additionalProperties", json_false()) < 0)
-        goto fail;
-    if (snag_json_set_new(params, "properties", properties) < 0)
-        goto fail;
-    properties = NULL;
-    if (snag_json_set_new(params, "required", required) < 0)
-        goto fail;
-    required = NULL;
-    if (snag_json_set_new(params, "type", json_string("object")) < 0)
-        goto fail;
-    return params;
-
-fail:
-    if (params)
-        json_decref(params);
-    if (properties)
-        json_decref(properties);
-    if (required)
-        json_decref(required);
-    return NULL;
+    return nullable ?
+        json_pack("{s:I,s:I,s:[s,s]}", "minimum", minimum, "maximum", maximum,
+                  "type", "integer", "null") :
+        json_pack("{s:I,s:I,s:s}", "minimum", minimum, "maximum", maximum,
+                  "type", "integer");
 }
 
 static json_t *
 tool_schema(const char *name, const char *description,
             json_t *properties, json_t *required)
 {
-    json_t *tool = json_object();
-    json_t *params = NULL;
+    json_t *tool = json_pack(
+        "{s:s,s:s,s:{s:b,s:O,s:O,s:s},s:b,s:s}",
+        "description", description, "name", name,
+        "parameters", "additionalProperties", 0, "properties", properties,
+        "required", required, "type", "object", "strict", 1, "type", "function");
 
-    if (!tool)
-        goto fail;
-    params = tool_parameters(properties, required);
-    properties = NULL;
-    required = NULL;
-    if (!params)
-        goto fail;
-    if (snag_json_set_new(tool, "description", json_string(description)) < 0)
-        goto fail;
-    if (snag_json_set_new(tool, "name", json_string(name)) < 0)
-        goto fail;
-    if (snag_json_set_new(tool, "parameters", params) < 0)
-        goto fail;
-    params = NULL;
-    if (snag_json_set_new(tool, "strict", json_true()) < 0)
-        goto fail;
-    if (snag_json_set_new(tool, "type", json_string("function")) < 0)
-        goto fail;
+    json_decref(properties);
+    json_decref(required);
     return tool;
-
-fail:
-    if (tool)
-        json_decref(tool);
-    if (params)
-        json_decref(params);
-    if (properties)
-        json_decref(properties);
-    if (required)
-        json_decref(required);
-    return NULL;
 }
 
 static json_t *
@@ -1199,14 +1076,7 @@ update_goal_tool_schema(void)
 static json_t *
 web_search_tool_schema(const char *type)
 {
-    json_t *tool = json_object();
-
-    if (!tool || snag_json_set_new(tool, "type", json_string(type)) < 0) {
-        if (tool)
-            json_decref(tool);
-        return NULL;
-    }
-    return tool;
+    return json_pack("{s:s}", "type", type);
 }
 
 static json_t *
@@ -1357,14 +1227,7 @@ tool_schemas(const char *active_handle, bool goal_active,
 json_t *
 snag_context_reasoning_settings(const char *effort)
 {
-    json_t *settings = json_object();
-
-    if (!settings || snag_json_set_new(settings, "effort", json_string(effort)) < 0) {
-        if (settings)
-            json_decref(settings);
-        return NULL;
-    }
-    return settings;
+    return json_pack("{s:s}", "effort", effort);
 }
 
 static bool

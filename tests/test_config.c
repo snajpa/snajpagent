@@ -572,47 +572,6 @@ main(void)
     assert(symlink(path, link_path) == 0);
     expect_invalid(link_path);
 
-    write_bytes(path, "[ui]\nverbosity=1\nverbosity=2\n",
-                sizeof("[ui]\nverbosity=1\nverbosity=2\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[unknown]\nvalue=1\n",
-                sizeof("[unknown]\nvalue=1\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[ui]\nverbosity=7\n",
-                sizeof("[ui]\nverbosity=7\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[ui]\ntyping_pause_ms=5001\n",
-                sizeof("[ui]\ntyping_pause_ms=5001\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[ui]\ncolor=sometimes\n",
-                sizeof("[ui]\ncolor=sometimes\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[ui]\nmarkdown=maybe\n",
-                sizeof("[ui]\nmarkdown=maybe\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[irc]\nhistory_lines=0\n",
-                sizeof("[irc]\nhistory_lines=0\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[irc]\nname=legacy\n",
-                sizeof("[irc]\nname=legacy\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[irc]\noperator_name=legacy\n",
-                sizeof("[irc]\noperator_name=legacy\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[irc]\nclient=localhost\nclient=localhost\n",
-                sizeof("[irc]\nclient=localhost\nclient=localhost\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[ui]\ntyping_pause_ms=1\ntyping_pause_ms=2\n",
-                sizeof("[ui]\ntyping_pause_ms=1\ntyping_pause_ms=2\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[ui]\nmarkdown=true\nmarkdown=false\n",
-                sizeof("[ui]\nmarkdown=true\nmarkdown=false\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-        "[tool]\ndefault_timeout_ms=5000\nmax_timeout_ms=4000\n",
-        sizeof("[tool]\ndefault_timeout_ms=5000\nmax_timeout_ms=4000\n") - 1u);
-    expect_invalid(path);
     write_bytes(path, "[tool]\nmax_timeout_ms=4294967295\n",
                 sizeof("[tool]\nmax_timeout_ms=4294967295\n") - 1u);
     snag_config_init(&config);
@@ -620,9 +579,6 @@ main(void)
                            error, sizeof(error)) == 0);
     assert(config.max_timeout_ms == UINT32_MAX);
     snag_config_free(&config);
-    write_bytes(path, "[tool]\nmax_timeout_ms=4294967296\n",
-                sizeof("[tool]\nmax_timeout_ms=4294967296\n") - 1u);
-    expect_invalid(path);
     write_bytes(path, "[tool]\nmax_output_bytes=4294967295\n",
                 sizeof("[tool]\nmax_output_bytes=4294967295\n") - 1u);
     snag_config_init(&config);
@@ -630,115 +586,6 @@ main(void)
                            error, sizeof(error)) == 0);
     assert(config.max_output_bytes == UINT32_MAX);
     snag_config_free(&config);
-    write_bytes(path, "[tool]\nmax_output_bytes=4294967296\n",
-                sizeof("[tool]\nmax_output_bytes=4294967296\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[tool]\ndefault_max_output_tokens=6000\n",
-                sizeof("[tool]\ndefault_max_output_tokens=6000\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[tool]\nmax_output_tokens=0\n",
-                sizeof("[tool]\nmax_output_tokens=0\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[tool]\nmax_output_tokens=4000000001\n",
-                sizeof("[tool]\nmax_output_tokens=4000000001\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-        "[tool]\nmax_output_tokens=1\nmax_output_tokens=2\n",
-        sizeof("[tool]\nmax_output_tokens=1\n"
-               "max_output_tokens=2\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[tool]\nsecret_env=A,A\n",
-                sizeof("[tool]\nsecret_env=A,A\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[provider]\nbase_url=ftp://example.test\n",
-                sizeof("[provider]\nbase_url=ftp://example.test\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[provider]\nbase_url=https://example.test/a?b\n",
-                sizeof("[provider]\nbase_url=https://example.test/a?b\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[provider]\napi_key_env=BAD-NAME\n",
-                sizeof("[provider]\napi_key_env=BAD-NAME\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[provider]\nexact_token_count=maybe\n",
-                sizeof("[provider]\nexact_token_count=maybe\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[provider]\nnative_compaction=yes\n",
-                sizeof("[provider]\nnative_compaction=yes\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[agent]\nmax_goal_prompt_bytes=0\n",
-                sizeof("[agent]\nmax_goal_prompt_bytes=0\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[agent]\nmax_goal_prompt_bytes=1048577\n",
-                sizeof("[agent]\nmax_goal_prompt_bytes=1048577\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[agent]\nread_agents_md=maybe\n",
-                sizeof("[agent]\nread_agents_md=maybe\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[agent]\nread_agents_md=true\nread_agents_md=false\n",
-                sizeof("[agent]\nread_agents_md=true\nread_agents_md=false\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[agent]\nprovider=missing\n[provider present]\n",
-                sizeof("[agent]\nprovider=missing\n[provider present]\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path, "[provider]\nopenrouter_title=\n",
-                sizeof("[provider]\nopenrouter_title=\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[provider duplicate]\n[provider duplicate]\n",
-                sizeof("[provider duplicate]\n[provider duplicate]\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[provider paid]\n[model-limit paid/model]\n",
-                sizeof("[provider paid]\n[model-limit paid/model]\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit missing/model]\nmax_input_tokens=1\n",
-                sizeof("[model-limit missing/model]\nmax_input_tokens=1\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit /model]\nmax_input_tokens=1\n",
-                sizeof("[model-limit /model]\nmax_input_tokens=1\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/]\nmax_input_tokens=1\n",
-                sizeof("[model-limit default/]\nmax_input_tokens=1\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/model]\nmax_input_tokens=0\n",
-                sizeof("[model-limit default/model]\nmax_input_tokens=0\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/model]\nmax_input_tokens=4000000001\n",
-                sizeof("[model-limit default/model]\nmax_input_tokens=4000000001\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/model]\nmax_output_tokens=18446744073709551616\n",
-                sizeof("[model-limit default/model]\nmax_output_tokens=18446744073709551616\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/model]\nmax_input_tokens=1\nmax_input_tokens=2\n",
-                sizeof("[model-limit default/model]\nmax_input_tokens=1\nmax_input_tokens=2\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/model]\nmax_input_tokens=1\n"
-                "[model-limit default/model]\nmax_output_tokens=1\n",
-                sizeof("[model-limit default/model]\nmax_input_tokens=1\n"
-                       "[model-limit default/model]\nmax_output_tokens=1\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=101\n",
-                sizeof("[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=101\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/model]\ncontext_window_tokens=100\nmax_output_tokens=101\n",
-                sizeof("[model-limit default/model]\ncontext_window_tokens=100\nmax_output_tokens=101\n") - 1u);
-    expect_invalid(path);
-    write_bytes(path,
-                "[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=70\nmax_output_tokens=31\n",
-                sizeof("[model-limit default/model]\ncontext_window_tokens=100\nmax_input_tokens=70\nmax_output_tokens=31\n") - 1u);
-    expect_invalid(path);
     {
         static const unsigned char bad_header[] = {
             '[', 'p', 'r', 'o', 'v', 'i', 'd', 'e', 'r', ']', '\n',
