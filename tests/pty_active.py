@@ -962,7 +962,7 @@ def test_prompt_history_and_reverse_search():
     cancel_end = second.wait(b"^C\r\n", start=cancel)
     prompt_end = second.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=cancel_end)
     cancelled = bytes(second.buf[cancel:prompt_end])
-    assert b"confirmation-cancelled-draft" in cancelled
+    assert_bytes_in_order(cancelled, b"confirmation-cancelled-draft")
     assert b"delete cancelled" not in cancelled
     assert cancelled.count(DEFAULT_ACCOUNTED_IDLE_PROMPT) == 1
 
