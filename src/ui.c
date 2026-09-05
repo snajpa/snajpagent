@@ -58,7 +58,7 @@ struct ui_message {
         struct { int fd; struct snag_render_source source;
                  uint32_t timeout_ms, max_output_bytes; } durable;
         uint64_t seq;
-        struct { struct snag_term_command *items; size_t count; } commands;
+        struct { const struct snag_term_command *items; size_t count; } commands;
         struct { struct snag_history_snapshot entries; bool refresh; } history;
     } data;
 };
@@ -97,7 +97,6 @@ struct snag_ui_display {
     struct snag_term term;
     struct ui_prompt prompt;
     char *prompt_source;
-    struct ui_message commands;
     struct snag_ui_runtime *runtime;
     uint64_t turn_generation;
     bool suspended;
@@ -244,13 +243,6 @@ message_free(struct ui_message *message)
 {
     if (message->kind == UI_HISTORY_SNAPSHOT)
         snag_history_snapshot_free(&message->data.history.entries);
-    if (message->kind == UI_COMMANDS) {
-        for (size_t i = 0u; i < message->data.commands.count; ++i) {
-            free((char *)message->data.commands.items[i].syntax);
-            free((char *)message->data.commands.items[i].description);
-        }
-        free(message->data.commands.items);
-    }
     free(message->text);
     free(message->label);
     if (message->kind == UI_PROMPT)
@@ -341,12 +333,8 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
         message->text = NULL;
         return 0;
     case UI_COMMANDS:
-        message_free(&display->commands);
-        display->commands = *message;
         snag_term_set_commands(term, message->data.commands.items,
                              message->data.commands.count);
-        message->data.commands.items = NULL;
-        message->data.commands.count = 0u;
         return 0;
     case UI_PAUSE:
         snag_term_set_typing_pause(term, message->data.value);
@@ -664,7 +652,6 @@ presentation_main(void *opaque)
         free(display.local);
     }
     snag_term_close(&display.term);
-    message_free(&display.commands);
     free(display.prompt_source);
     for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
         free(display.prompt.values[i]);
@@ -866,22 +853,9 @@ int
 snag_ui_commands(struct snag_ui *ui, const struct snag_term_command *commands,
                 size_t count)
 {
-    struct ui_message message = {.kind = UI_COMMANDS};
-    message.data.commands.items = calloc(count, sizeof(*commands));
-    if (!message.data.commands.items)
-        return -1;
-    message.data.commands.count = count;
-    for (size_t i = 0u; i < count; ++i) {
-        message.data.commands.items[i].syntax =
-            snag_strdup_checked(commands[i].syntax, 4096u);
-        message.data.commands.items[i].description =
-            snag_strdup_checked(commands[i].description, 4096u);
-        if (!message.data.commands.items[i].syntax ||
-            !message.data.commands.items[i].description) {
-            message_free(&message);
-            return -1;
-        }
-    }
+    struct ui_message message = {
+        .kind = UI_COMMANDS, .data.commands = {.items = commands, .count = count}
+    };
     return send_message(ui, &message, NULL);
 }
 

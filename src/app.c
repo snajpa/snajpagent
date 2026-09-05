@@ -2500,15 +2500,7 @@ run_turn(struct app_state *app, const char *prompt,
 {
     char turn_id[SNAG_ID_HEX_LEN + 1u];
     char response_id[SNAG_ID_HEX_LEN + 1u];
-    char input_hash[SNAG_SHA256_HEX_LEN + 1u];
-    char request_hash[SNAG_SHA256_HEX_LEN + 1u];
-    char count_request_hash[SNAG_SHA256_HEX_LEN + 1u];
     char error[256];
-    uint64_t input_tokens_bound = 0;
-    uint64_t model_input_bytes = 0;
-    uint64_t request_input_bytes = 0;
-    uint64_t request_input_count = 0;
-    char request_input_hash[SNAG_SHA256_HEX_LEN + 1u];
     char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
     char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
@@ -2518,8 +2510,7 @@ run_turn(struct app_state *app, const char *prompt,
     struct snag_credential credential;
     struct snag_response_graph graph;
     json_t *steering = NULL;
-    json_t *create_request = NULL;
-    json_t *count_request = NULL;
+    struct snag_context_projection projection = {0};
     struct snag_buf request_body;
     size_t prompt_max = queued ? SNAG_MAX_QUEUED_TEXT : SNAG_MAX_DIRECT_PROMPT;
     int result = 4;
@@ -2605,7 +2596,7 @@ run_turn(struct app_state *app, const char *prompt,
         struct snag_provider_failure provider_failure;
         int provider_rc;
         snag_app_response_cycle_release(app, &graph, &steering,
-                                       &create_request, &count_request,
+                                       &projection,
                                        &request_body);
         memset(&provider_failure, 0, sizeof(provider_failure));
         error[0] = '\0';
@@ -2618,15 +2609,9 @@ run_turn(struct app_state *app, const char *prompt,
         steering = snag_app_steering_snapshot(&app->session);
         error[0] = '\0';
         if (!steering || snag_random_id(response_id) < 0 ||
-            snag_app_request_digests(app, turn_prompt, steering, cycle, &credential,
-                            input_hash, request_hash, count_request_hash,
-                            &input_tokens_bound,
-                            &model_input_bytes, &request_input_bytes,
-                            &request_input_count, request_input_hash,
-                            provider_source_hash,
-                            &count_method,
-                            &request_body, &create_request, &count_request,
-                            error, sizeof(error)) < 0) {
+            snag_app_request_build(app, steering, cycle, &credential,
+                                   provider_source_hash, &projection,
+                                   &count_method, &request_body, error, sizeof(error)) < 0) {
             if (commit_event(app, "turn_failed",
                              snag_app_turn_failed_data(turn_id, "context",
                                  error[0] ? error :
@@ -2641,8 +2626,8 @@ run_turn(struct app_state *app, const char *prompt,
             }
             goto out;
         }
-        provider_rc = snag_app_provider_count(app, count_request, &credential,
-            model_input_bytes, &input_tokens_bound, &count_method,
+        provider_rc = snag_app_provider_count(app, projection.count_request, &credential,
+            projection.model_input_bytes, &projection.input_tokens_bound, &count_method,
             error, sizeof(error));
         if (provider_rc == 1 && app->steering_requested) {
             app->steering_requested = false;
@@ -2684,12 +2669,12 @@ run_turn(struct app_state *app, const char *prompt,
         {
             bool compacted = false;
             bool over_hard = app->turn_capacity.hard_input_known &&
-                input_tokens_bound > app->turn_capacity.hard_input_tokens;
+                projection.input_tokens_bound > app->turn_capacity.hard_input_tokens;
             int compact_rc;
 
             if (over_hard &&
                 (hard_compaction_attempts >= 8u ||
-                 strcmp(over_budget_request_hash, request_hash) == 0)) {
+                 strcmp(over_budget_request_hash, projection.request_sha256) == 0)) {
                 char failure[256];
 
                 (void)snprintf(failure, sizeof(failure),
@@ -2697,7 +2682,7 @@ run_turn(struct app_state *app, const char *prompt,
                     hard_compaction_attempts >= 8u ?
                         "context compaction reached its eight-attempt bound" :
                         "context compaction repeated an over-budget request",
-                    (unsigned long long)input_tokens_bound, count_method,
+                    (unsigned long long)projection.input_tokens_bound, count_method,
                     (unsigned long long)app->turn_capacity.hard_input_tokens);
                 if (commit_event(app, "turn_failed",
                         snag_app_turn_failed_data(turn_id, "context", failure),
@@ -2711,10 +2696,10 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             if (over_hard)
-                memcpy(over_budget_request_hash, request_hash,
+                memcpy(over_budget_request_hash, projection.request_sha256,
                        sizeof(over_budget_request_hash));
             compact_rc = snag_app_compact_before_response(app, &credential,
-                    input_tokens_bound, count_method, &compacted,
+                    projection.input_tokens_bound, count_method, &compacted,
                     error, sizeof(error));
             if (compact_rc == 1 && app->steering_requested) {
                 app->steering_requested = false;
@@ -2761,7 +2746,7 @@ run_turn(struct app_state *app, const char *prompt,
             }
         }
         if (capacity_recovery_used &&
-            strcmp(rejected_request_hash, request_hash) == 0) {
+            strcmp(rejected_request_hash, projection.request_sha256) == 0) {
             static const char failure[] =
                 "capacity recovery produced an identical provider request";
             if (commit_event(app, "turn_failed",
@@ -2776,25 +2761,9 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (commit_event(app, "response_started",
-                         snag_app_response_started_data(turn_id, response_id, cycle,
-                                               app->session.compact_id,
-                                               app->turn_model,
-                                               input_hash, request_hash,
-                                               count_request_hash, count_method,
-                                               input_tokens_bound,
-                                               model_input_bytes,
-                                               request_input_bytes,
-                                               request_input_count,
-                                               request_input_hash,
-                                               strcmp(count_method,
-                                                   "anchored_upper_bound") == 0 ?
-                                                   app->session.usage_anchor_model_input_sha256 :
-                                                   NULL,
-                                               app->turn_provider->name,
-                                               app->turn_effort,
-                                               provider_source_hash,
-                                               &app->turn_capacity,
-                                               steering),
+                         snag_app_response_started_data(app, turn_id, response_id,
+                             cycle, &projection, count_method, provider_source_hash,
+                             steering),
                          error, sizeof(error)) < 0) {
             (void)app_error(app, error[0] ? error :
                                    "response setup could not be persisted");
@@ -2806,8 +2775,8 @@ run_turn(struct app_state *app, const char *prompt,
             result = 6;
             goto out;
         }
-        json_decref(count_request);
-        count_request = NULL;
+        json_decref(projection.count_request);
+        projection.count_request = NULL;
         if (app_runtimef(app,
                 "response › %s started · turn=%s · cycle=%u · model=%s · profile=%s",
                 response_id, turn_id, cycle, app->turn_model,
@@ -2842,7 +2811,7 @@ run_turn(struct app_state *app, const char *prompt,
         response_begin_ms = snag_time_ms();
         error[0] = '\0';
         provider_rc = snag_app_provider_run(app, turn_prompt, steering, cycle,
-                                   create_request, &credential, &graph,
+                                   projection.create_request, &credential, &graph,
                                    &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
         if (provider_rc == 0) {
@@ -2850,8 +2819,8 @@ run_turn(struct app_state *app, const char *prompt,
             if (control_rc != 0)
                 provider_rc = control_rc;
         }
-        json_decref(create_request);
-        create_request = NULL;
+        json_decref(projection.create_request);
+        projection.create_request = NULL;
         json_decref(steering);
         steering = NULL;
         if ((provider_rc == 1 && app->steering_requested) ||
@@ -2959,12 +2928,12 @@ run_turn(struct app_state *app, const char *prompt,
                 provider_capacity_source_sha256(app->turn_provider,
                                                 provider_source_hash);
 
-                if (strcmp(rejected_request_hash, request_hash) == 0) {
+                if (strcmp(rejected_request_hash, projection.request_sha256) == 0) {
                     (void)snprintf(failure, sizeof(failure),
                                    "provider rejected an identical context request twice");
                 } else if (commit_event(app, "response_capacity_rejected",
                         snag_app_response_capacity_rejected_data(
-                            turn_id, response_id, cycle, request_hash,
+                            turn_id, response_id, cycle, projection.request_sha256,
                             &provider_failure, &app->turn_capacity,
                             provider_source_hash), error, sizeof(error)) < 0) {
                     (void)app_error(app, error[0] ? error :
@@ -2975,7 +2944,7 @@ run_turn(struct app_state *app, const char *prompt,
                     int recovery_rc;
                     bool ceiling_matches;
 
-                    memcpy(rejected_request_hash, request_hash,
+                    memcpy(rejected_request_hash, projection.request_sha256,
                            sizeof(rejected_request_hash));
                     ceiling_matches = capacity_ceiling_matches(
                         app, app->turn_provider, app->turn_model);
@@ -2983,7 +2952,7 @@ run_turn(struct app_state *app, const char *prompt,
                         ceiling_matches)
                         snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
                             provider_failure.requested_input_known ?
-                                model_input_bytes : 0u,
+                                projection.model_input_bytes : 0u,
                             provider_failure.requested_input_known ?
                                 provider_failure.requested_input_tokens : 0u,
                             ceiling_matches ?
@@ -2993,7 +2962,7 @@ run_turn(struct app_state *app, const char *prompt,
                                            app->turn_model,
                                            &app->turn_capacity);
                     snag_app_response_cycle_release(app, &graph, &steering,
-                                       &create_request, &count_request,
+                                       &projection,
                                        &request_body);
                     for (;;) {
                         error[0] = '\0';
@@ -3106,7 +3075,7 @@ run_turn(struct app_state *app, const char *prompt,
         if (graph.usage.input_known && graph.usage.input_tokens != 0u &&
             strcmp(count_method, "exact") != 0)
             snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
-                model_input_bytes, graph.usage.input_tokens, 0u);
+                projection.model_input_bytes, graph.usage.input_tokens, 0u);
         error[0] = '\0';
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
             (void)app_error(app, error[0] ? error :
@@ -3256,7 +3225,7 @@ run_turn(struct app_state *app, const char *prompt,
                 result = 6;
                 goto out;
             }
-            if (snag_app_compact_after_turn(app, input_tokens_bound, count_method,
+            if (snag_app_compact_after_turn(app, projection.input_tokens_bound, count_method,
                                            error, sizeof(error)) < 0)
                 (void)app_warning(app, error);
             result = 0;
@@ -3310,7 +3279,7 @@ run_turn(struct app_state *app, const char *prompt,
     }
 out:
     snag_app_response_cycle_release(app, &graph, &steering,
-                                       &create_request, &count_request,
+                                       &projection,
                                        &request_body);
     if (!app->execute && result != 6 &&
         set_input_prompt(app, false) < 0)

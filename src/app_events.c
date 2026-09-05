@@ -35,25 +35,16 @@ snag_app_model_selection_changed_data(
 static json_t *
 turn_config(const struct app_state *app)
 {
-    json_t *config = json_object();
-    if (!config ||
-        snag_json_set_new(config, "capability_version",
-                         json_string(SNAJPAGENT_CAPABILITY_VERSION)) < 0 ||
-        snag_json_set_new(config, "effort", json_string(app->turn_effort)) < 0 ||
+    json_t *config = json_pack("{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i}",
+        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "effort", app->turn_effort, "max_output_tokens", "model", app->turn_model,
+        "provider", app->turn_provider->name, "profile_id", SNAJPAGENT_PROFILE_ID,
+        "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1);
+
+    if (config && app->turn_capacity.max_output_known &&
         snag_json_set_new(config, "max_output_tokens",
-            app->turn_capacity.max_output_known ?
-                json_integer((json_int_t)app->turn_capacity.max_output_tokens) :
-                json_null()) < 0 ||
-        snag_json_set_new(config, "model", json_string(app->turn_model)) < 0 ||
-        snag_json_set_new(config, "provider",
-                         json_string(app->turn_provider->name)) < 0 ||
-        snag_json_set_new(config, "profile_id",
-                         json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
-        snag_json_set_new(config, "prompt_schema", json_integer(1)) < 0 ||
-        snag_json_set_new(config, "replay_schema", json_integer(1)) < 0 ||
-        snag_json_set_new(config, "tool_schema", json_integer(1)) < 0) {
-        if (config)
-            json_decref(config);
+            json_integer((json_int_t)app->turn_capacity.max_output_tokens)) < 0) {
+        json_decref(config);
         return NULL;
     }
     return config;
@@ -64,37 +55,24 @@ snag_app_turn_started_data(const struct app_state *app, const char *prompt,
                   const char *turn_id, const struct snag_queued_turn *queued,
                   bool goal_turn, bool read_only)
 {
-    json_t *data = json_object();
     json_t *instructions = snag_instructions_metadata_json(&app->turn_instructions);
+    json_t *config = turn_config(app);
+    json_t *data = json_pack("{s:O,s:s,s:O,s:b,s:s?,s:n,s:s,s:s,s:I,s:s}",
+        "config", config, "input_kind", goal_turn ? "goal" : queued ? "queued" : "direct",
+        "instructions", instructions, "read_only", read_only,
+        "queue_id", queued ? queued->queue_id : NULL, "queue_seq",
+        "text", prompt, "turn_id", turn_id,
+        "turn_number", (json_int_t)(app->session.turn_count + 1u),
+        "workspace", app->session.workspace);
 
-    if (!data || !instructions ||
-        snag_json_set_new(data, "config", turn_config(app)) < 0 ||
-        snag_json_set_new(data, "input_kind",
-                         json_string(goal_turn ? "goal" :
-                                     queued ? "queued" : "direct")) < 0 ||
-        snag_json_set_new(data, "instructions", instructions) < 0)
-        goto fail;
-    instructions = NULL;
-    if (snag_json_set_new(data, "read_only", json_boolean(read_only)) < 0 ||
-        snag_json_set_new(data, "queue_id",
-                         queued ? json_string(queued->queue_id) : json_null()) < 0 ||
-        snag_json_set_new(data, "queue_seq",
-                         queued ? json_integer((json_int_t)queued->seq) :
-                                  json_null()) < 0 ||
-        snag_json_set_new(data, "text", json_string(prompt)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0 ||
-        snag_json_set_new(data, "turn_number",
-                         json_integer((json_int_t)(app->session.turn_count + 1u))) < 0 ||
-        snag_json_set_new(data, "workspace",
-                         json_string(app->session.workspace)) < 0)
-        goto fail;
-    return data;
-fail:
-    if (instructions)
-        json_decref(instructions);
-    if (data)
+    if (data && queued &&
+        snag_json_set_new(data, "queue_seq", json_integer((json_int_t)queued->seq)) < 0) {
         json_decref(data);
-    return NULL;
+        data = NULL;
+    }
+    json_decref(config);
+    json_decref(instructions);
+    return data;
 }
 
 static const char *
@@ -452,209 +430,120 @@ snag_app_steering_snapshot(const struct snag_session *session)
 }
 
 int
-snag_app_request_digests(struct app_state *app, const char *prompt,
-                const json_t *steering, unsigned int cycle,
-                const struct snag_credential *credential,
-                char input_hash[SNAG_SHA256_HEX_LEN + 1u],
-                char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                char count_request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                uint64_t *input_tokens_bound, uint64_t *model_input_bytes,
-                uint64_t *request_input_bytes, uint64_t *request_input_count,
-                char request_input_hash[SNAG_SHA256_HEX_LEN + 1u],
-                const char *provider_source_sha256,
-                const char **count_method, struct snag_buf *request_body,
-                json_t **create_request, json_t **count_request,
-                char *error, size_t error_size)
+snag_app_request_build(struct app_state *app, const json_t *steering,
+                       unsigned int cycle,
+                       const struct snag_credential *credential,
+                       const char *provider_source_sha256,
+                       struct snag_context_projection *projection,
+                       const char **count_method, struct snag_buf *request_body,
+                       char *error, size_t error_size)
 {
-    struct snag_context_projection projection;
-    int rc;
+    uint64_t anchored_bound = 0u;
+    int rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
+        cycle, steering, app->turn_capacity.max_output_tokens,
+        app->turn_capacity.max_output_known, app->config,
+        &app->turn_instructions, projection, error, error_size);
 
-    (void)prompt;
-    if (!input_tokens_bound || !model_input_bytes || !request_input_bytes ||
-        !request_input_count || !request_input_hash ||
-        !provider_source_sha256 || !count_method) {
-        errno = EINVAL;
+    if (rc < 0)
+        return -1;
+    *count_method = "qualified_upper_bound";
+    rc = snag_context_usage_anchor_bound(&app->session, app->turn_provider->name,
+        app->turn_model, app->turn_effort, provider_source_sha256, projection,
+        &anchored_bound);
+    if (rc < 0) {
+        snag_errorf(error, error_size, "cannot evaluate provider-usage anchor");
         return -1;
     }
-    *count_method = "qualified_upper_bound";
-    if (create_request)
-        *create_request = NULL;
-    if (count_request)
-        *count_request = NULL;
-    snag_context_projection_init(&projection);
-    rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
-                           cycle, steering,
-                           app->turn_capacity.max_output_tokens,
-                           app->turn_capacity.max_output_known,
-                           app->config,
-                           &app->turn_instructions, &projection,
-                           error, error_size);
-    if (rc == 0) {
-        memcpy(input_hash, projection.model_input_sha256,
-               SNAG_SHA256_HEX_LEN + 1u);
-        memcpy(request_hash, projection.request_sha256,
-               SNAG_SHA256_HEX_LEN + 1u);
-        memcpy(count_request_hash, projection.count_request_sha256,
-               SNAG_SHA256_HEX_LEN + 1u);
-        *input_tokens_bound = projection.input_tokens_bound;
-        *model_input_bytes = (uint64_t)projection.model_input_bytes;
-        *request_input_bytes = (uint64_t)projection.request_input_bytes;
-        *request_input_count = (uint64_t)projection.request_input_count;
-        memcpy(request_input_hash, projection.request_input_sha256,
-               SNAG_SHA256_HEX_LEN + 1u);
-        {
-            uint64_t anchored_bound = 0u;
-            int anchor_rc = snag_context_usage_anchor_bound(
-                &app->session, app->turn_provider->name, app->turn_model,
-                app->turn_effort, provider_source_sha256, &projection,
-                &anchored_bound);
-
-            if (anchor_rc < 0) {
-                if (error_size)
-                    (void)snprintf(error, error_size,
-                                   "cannot evaluate provider-usage anchor");
-                rc = -1;
-            } else if (anchor_rc == 1) {
-                *input_tokens_bound = anchored_bound;
-                *count_method = "anchored_upper_bound";
-            } else if (app->turn_capacity.observed_tokens_per_million_bytes) {
-                *input_tokens_bound = snag_context_input_estimate(
-                    *model_input_bytes,
-                    app->turn_capacity.observed_tokens_per_million_bytes);
-                *count_method = "statistical_upper_estimate";
-            }
-        }
-        if (create_request)
-            *create_request = json_incref(projection.create_request);
-        if (count_request)
-            *count_request = json_incref(projection.count_request);
-        if (snag_ui_enabled(&app->ui, SNAG_PRESENT_PROTOCOL) && request_body) {
-            struct snag_buf encoded;
-            struct snag_secret_set secrets;
-
-            snag_buf_init(&encoded, SNAG_WIRE_BODY_MAX);
-            snag_secret_set_build(&secrets, app->config, credential);
-            if (projection.create_request_bytes <= SNAG_WIRE_BODY_MAX &&
-                snag_json_canonical(projection.create_request, &encoded) == 0 &&
-                snag_wire_json_redact(encoded.data, encoded.len, &secrets.wire,
-                                     request_body, error, error_size) == 0) {
-                /* sanitized canonical request captured for durable-fenced rendering */
-            } else {
-                snag_buf_reset(request_body);
-                if (snag_buf_printf(request_body,
-                        "<request body omitted; bytes=%zu; sha256=%s>\n",
-                        projection.create_request_bytes,
-                        projection.request_sha256) < 0)
-                    rc = -1;
-            }
-            snag_buf_free(&encoded);
-        }
+    if (rc == 1) {
+        projection->input_tokens_bound = anchored_bound;
+        *count_method = "anchored_upper_bound";
+    } else if (app->turn_capacity.observed_tokens_per_million_bytes) {
+        projection->input_tokens_bound = snag_context_input_estimate(
+            projection->model_input_bytes,
+            app->turn_capacity.observed_tokens_per_million_bytes);
+        *count_method = "statistical_upper_estimate";
     }
-    if (rc < 0) {
-        if (create_request && *create_request) {
-            json_decref(*create_request);
-            *create_request = NULL;
+    rc = 0;
+    if (snag_ui_enabled(&app->ui, SNAG_PRESENT_PROTOCOL)) {
+        struct snag_buf encoded;
+        struct snag_secret_set secrets;
+
+        snag_buf_init(&encoded, SNAG_WIRE_BODY_MAX);
+        snag_secret_set_build(&secrets, app->config, credential);
+        if (projection->create_request_bytes > SNAG_WIRE_BODY_MAX ||
+            snag_json_canonical(projection->create_request, &encoded) < 0 ||
+            snag_wire_json_redact(encoded.data, encoded.len, &secrets.wire,
+                                 request_body, error, error_size) < 0) {
+            snag_buf_reset(request_body);
+            rc = snag_buf_printf(request_body,
+                "<request body omitted; bytes=%zu; sha256=%s>\n",
+                projection->create_request_bytes, projection->request_sha256);
         }
-        if (count_request && *count_request) {
-            json_decref(*count_request);
-            *count_request = NULL;
-        }
+        snag_buf_free(&encoded);
     }
-    snag_context_projection_free(&projection);
+    /* Only the request views and accounting facts survive into the cycle. */
+    json_decref(projection->model_input);
+    projection->model_input = NULL;
     return rc;
 }
 json_t *
-snag_app_response_started_data(const char *turn_id, const char *response_id,
-                      unsigned int cycle, const char *compact_id,
-                      const char *model,
-                      const char *input_hash,
-                      const char *request_hash, const char *count_request_hash,
-                      const char *count_method, uint64_t input_tokens_bound,
-                      uint64_t model_input_bytes, uint64_t request_input_bytes,
-                      uint64_t request_input_count, const char *request_input_hash,
-                      const char *baseline_hash,
-                      const char *provider, const char *effort,
-                      const char *provider_source_sha256,
-                      const struct snag_model_capacity *capacity,
-                      const json_t *steering)
+snag_app_response_started_data(const struct app_state *app,
+                               const char *turn_id, const char *response_id,
+                               unsigned int cycle,
+                               const struct snag_context_projection *projection,
+                               const char *count_method,
+                               const char *provider_source_sha256,
+                               const json_t *steering)
 {
-    json_t *data = json_object();
+    const struct snag_model_capacity *capacity = &app->turn_capacity;
+    const char *compact_id = app->session.compact_id;
+    const char *baseline = strcmp(count_method, "anchored_upper_bound") == 0 ?
+        app->session.usage_anchor_model_input_sha256 : NULL;
     json_t *ids = json_array();
+    json_t *data = NULL;
 
-    if (!data || !ids || !steering || !provider || !effort ||
-        !provider_source_sha256 ||
-        !snag_hex_is_lower(provider_source_sha256, SNAG_SHA256_HEX_LEN) ||
-        !capacity)
-        goto fail;
+    if (!ids || !json_is_array(steering) ||
+        !snag_hex_is_lower(provider_source_sha256, SNAG_SHA256_HEX_LEN))
+        goto out;
     for (size_t i = 0; i < json_array_size(steering); ++i) {
-        json_t *item = json_array_get(steering, i);
-        const char *id = snag_json_string(item, "id");
+        const char *id = snag_json_string(json_array_get(steering, i), "id");
         if (!id || json_array_append_new(ids, json_string(id)) < 0)
-            goto fail;
+            goto out;
     }
-    if (!model || !count_method || !count_request_hash)
-        goto fail;
-    if (snag_json_set_new(data, "baseline_sha256",
-                         baseline_hash && *baseline_hash ?
-                         json_string(baseline_hash) : json_null()) < 0 ||
-        snag_json_set_new(data, "capability_version",
-                         json_string(SNAJPAGENT_CAPABILITY_VERSION)) < 0 ||
-        snag_json_set_new(data, "compact_id",
-                         compact_id && *compact_id ?
-                         json_string(compact_id) : json_null()) < 0 ||
-        snag_json_set_new(data, "count_method", json_string(count_method)) < 0 ||
-        snag_json_set_new(data, "count_request_sha256",
-                         json_string(count_request_hash)) < 0 ||
-        snag_json_set_new(data, "capacity_source",
-                         json_string(snag_capacity_source_name(
-                             capacity->source))) < 0 ||
-        snag_json_set_new(data, "cycle", json_integer((json_int_t)cycle)) < 0 ||
-        snag_json_set_new(data, "effort", json_string(effort)) < 0 ||
-        snag_json_set_new(data, "hard_input_tokens",
-            capacity->hard_input_known ?
-                json_integer((json_int_t)capacity->hard_input_tokens) :
-                json_null()) < 0 ||
-        snag_json_set_new(data, "input_tokens_bound",
-                         json_integer((json_int_t)input_tokens_bound)) < 0 ||
-        snag_json_set_new(data, "model", json_string(model)) < 0 ||
-        snag_json_set_new(data, "model_input_bytes",
-                         json_integer((json_int_t)model_input_bytes)) < 0 ||
-        snag_json_set_new(data, "model_input_sha256", json_string(input_hash)) < 0 ||
-        snag_json_set_new(data, "profile_id",
-                         json_string(SNAJPAGENT_PROFILE_ID)) < 0 ||
-        snag_json_set_new(data, "provider", json_string(provider)) < 0 ||
-        snag_json_set_new(data, "provider_source_sha256",
-                         json_string(provider_source_sha256)) < 0 ||
-        snag_json_set_new(data, "request_input_bytes",
-                         json_integer((json_int_t)request_input_bytes)) < 0 ||
-        snag_json_set_new(data, "request_input_count",
-                         json_integer((json_int_t)request_input_count)) < 0 ||
-        snag_json_set_new(data, "request_input_sha256",
-                         json_string(request_input_hash)) < 0 ||
-        snag_json_set_new(data, "requested_output_tokens",
-            capacity->max_output_known ?
-                json_integer((json_int_t)capacity->max_output_tokens) :
-                json_null()) < 0 ||
-        snag_json_set_new(data, "request_sha256", json_string(request_hash)) < 0 ||
-        snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
-        snag_json_set_new(data, "source_bound",
-                         json_boolean(capacity->source_bound)) < 0)
-        goto fail;
-    {
-        int rc = snag_json_set_new(data, "steering_ids", ids);
-        ids = NULL;
-        if (rc < 0)
-            goto fail;
-    }
-    if (snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0)
-        goto fail;
-    return data;
-fail:
-    if (ids)
-        json_decref(ids);
-    if (data)
+    data = json_pack(
+        "{s:s?,s:s,s:s?,s:s,s:s,s:s,s:I,s:s,s:n,s:I,s:s,s:I,s:s,"
+        "s:s,s:s,s:s,s:I,s:I,s:s,s:n,s:s,s:s,s:b,s:O,s:s}",
+        "baseline_sha256", baseline,
+        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "compact_id", *compact_id ? compact_id : NULL,
+        "count_method", count_method,
+        "count_request_sha256", projection->count_request_sha256,
+        "capacity_source", snag_capacity_source_name(capacity->source),
+        "cycle", (json_int_t)cycle, "effort", app->turn_effort,
+        "hard_input_tokens", "input_tokens_bound", (json_int_t)projection->input_tokens_bound,
+        "model", app->turn_model, "model_input_bytes", (json_int_t)projection->model_input_bytes,
+        "model_input_sha256", projection->model_input_sha256,
+        "profile_id", SNAJPAGENT_PROFILE_ID, "provider", app->turn_provider->name,
+        "provider_source_sha256", provider_source_sha256,
+        "request_input_bytes", (json_int_t)projection->request_input_bytes,
+        "request_input_count", (json_int_t)projection->request_input_count,
+        "request_input_sha256", projection->request_input_sha256,
+        "requested_output_tokens", "request_sha256", projection->request_sha256,
+        "response_id", response_id, "source_bound", capacity->source_bound,
+        "steering_ids", ids, "turn_id", turn_id);
+    if (data &&
+        ((capacity->hard_input_known &&
+          snag_json_set_new(data, "hard_input_tokens",
+              json_integer((json_int_t)capacity->hard_input_tokens)) < 0) ||
+         (capacity->max_output_known &&
+          snag_json_set_new(data, "requested_output_tokens",
+              json_integer((json_int_t)capacity->max_output_tokens)) < 0))) {
         json_decref(data);
-    return NULL;
+        data = NULL;
+    }
+out:
+    json_decref(ids);
+    return data;
 }
 
 json_t *

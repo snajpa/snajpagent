@@ -6,6 +6,7 @@
 #include "base.h"
 #include "cli.h"
 #include "config.h"
+#include "context.h"
 #include "credential.h"
 #include "auth.h"
 #include "instructions.h"
@@ -139,43 +140,20 @@ json_t *snag_app_turn_started_data(const struct app_state *app,
                                   const struct snag_queued_turn *queued,
                                   bool goal_turn, bool read_only);
 json_t *snag_app_steering_snapshot(const struct snag_session *session);
-int snag_app_request_digests(struct app_state *app, const char *prompt,
-                            const json_t *steering, unsigned int cycle,
-                            const struct snag_credential *credential,
-                            char input_hash[SNAG_SHA256_HEX_LEN + 1u],
-                            char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                            char count_request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                            uint64_t *input_tokens_bound,
-                            uint64_t *model_input_bytes,
-                            uint64_t *request_input_bytes,
-                            uint64_t *request_input_count,
-                            char request_input_hash[SNAG_SHA256_HEX_LEN + 1u],
-                            const char *provider_source_sha256,
-                            const char **count_method,
-                            struct snag_buf *request_body,
-                            json_t **create_request,
-                            json_t **count_request,
-                            char *error, size_t error_size);
-json_t *snag_app_response_started_data(const char *turn_id,
-                                      const char *response_id,
-                                      unsigned int cycle,
-                                      const char *compact_id,
-                                      const char *model,
-                                      const char *input_hash,
-                                      const char *request_hash,
-                                      const char *count_request_hash,
-                                      const char *count_method,
-                                      uint64_t input_tokens_bound,
-                                      uint64_t model_input_bytes,
-                                      uint64_t request_input_bytes,
-                                      uint64_t request_input_count,
-                                      const char *request_input_hash,
-                                      const char *baseline_hash,
-                                      const char *provider,
-                                      const char *effort,
-                                      const char *provider_source_sha256,
-                                      const struct snag_model_capacity *capacity,
-                                      const json_t *steering);
+int snag_app_request_build(struct app_state *app, const json_t *steering,
+                       unsigned int cycle,
+                       const struct snag_credential *credential,
+                       const char *provider_source_sha256,
+                       struct snag_context_projection *projection,
+                       const char **count_method, struct snag_buf *request_body,
+                       char *error, size_t error_size);
+json_t *snag_app_response_started_data(const struct app_state *app,
+                               const char *turn_id, const char *response_id,
+                               unsigned int cycle,
+                               const struct snag_context_projection *projection,
+                               const char *count_method,
+                               const char *provider_source_sha256,
+                               const json_t *steering);
 json_t *snag_app_response_capacity_rejected_data(
                                       const char *turn_id,
                                       const char *response_id,
@@ -255,8 +233,8 @@ int snag_app_compact_after_capacity_rejection(
                                     char *error, size_t error_size);
 void snag_app_response_cycle_release(struct app_state *app,
                                     struct snag_response_graph *graph,
-                                    json_t **steering, json_t **create_request,
-                                    json_t **count_request,
+                                    json_t **steering,
+                                    struct snag_context_projection *projection,
                                     struct snag_buf *request_body);
 enum snag_managed_continuation snag_app_managed_continuation_classify(
     const struct app_state *app, const struct snag_response_graph *graph,
