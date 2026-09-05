@@ -26,6 +26,14 @@ identity around those same items; it does not translate them into a second
 semantic transcript. Create and count requests share the input and tool
 declarations, differing only in their request envelopes. Normal replay and
 compaction use the same event interpreter; compaction selects complete prefixes.
+The engine retains that projection through its response cycle, including hashes,
+byte counts and request views, rather than copying it into unrelated locals.
+Mutable session state is staged once per event and adopted only after durable
+append; a failed append leaves the live session unchanged.
+
+Only current pre-1.0 session format 2 is accepted. Model selection changes use
+`model_selection_changed`; the obsolete single-model event reader is removed.
+No migration or destructive rewrite of existing logs is performed.
 
 Before `response_started`, the runtime builds the exact outgoing model-input
 and request projections and accounts for them in token units. The default

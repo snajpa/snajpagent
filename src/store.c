@@ -1745,8 +1745,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         }
         if (graph.usage.input_known) {
-            memcpy(session->usage_anchor_turn_id, session->active_turn_id,
-                   sizeof(session->usage_anchor_turn_id));
             memcpy(session->usage_anchor_provider,
                    session->active_turn_provider,
                    sizeof(session->usage_anchor_provider));

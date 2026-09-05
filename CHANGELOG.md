@@ -56,6 +56,18 @@
 - Automatically use OpenRouter's hosted web-search tool for its provider URL,
   in normal and `/ro` turns, without extra search configuration.
 
+- Rename internal `snj_`/`SNJ_` symbols to `snag_`/`SNAG_`. Share one context
+  transcript/replay, retain request projections through each response cycle,
+  adopt staged durable state after append, and remove redundant JSON/patch/UI
+  ownership. Keep the engine/UI and independent IRC owner boundaries intact.
+  Consolidate bounded formatting and UTF-8 decoding; move config/catalog
+  acceptance cases from C into the existing CLI and terminal tests.
+- Tighten source-size hard limits to 36,864 production C, 3,072 header and
+  14,336 test-C lines; keep the 32,768 production-C soft target visible.
+  Remove the obsolete pre-1.0 session-format-1 and `model_changed` readers.
+  Old semantic-input accounting samples are invalidated by the current cache
+  shape; use `/model cache` to refresh them. Existing on-disk files are untouched.
+
 - Default `auto_compact_input_tokens` to `auto`, using 90% of each selected
   model's effective hard input budget after output/headroom and learned lower
   ceilings. Unknown capacity falls back to 120,000 tokens. Preserve fixed
