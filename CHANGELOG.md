@@ -38,7 +38,7 @@
   assistant messages and refusals one precise, durable model-facing correction
   without exposing it in ordinary operator output.
 
-- Upgraded `models.json` to an explicit provider/model registry that
+- Upgraded `models.json` to an explicit versioned provider/model registry that
   retains advertised token capacities, exact-count capability, one coherent
   learned canonical-byte/token pair, and lower typed-failure input ceilings.
   Exact Responses input counting now defaults to `auto`, with strict `true`
