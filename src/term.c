@@ -1038,6 +1038,8 @@ snj_term_set_prompt_label(struct snj_term *term, bool active,
     term->spinner_states = 0u;
     memset(term->spinner, 0, sizeof(term->spinner));
     memcpy(term->label, label, len + 1u);
+    if (term->output_depth)
+        term->redraw_after_output = true;
     return redraw(term);
 }
 
@@ -1077,6 +1079,8 @@ snj_term_set_prompt_template(struct snj_term *term, bool active,
         term->typing_active = false;
     term->prompt_wanted = true;
     term->line_submission_echoed = false;
+    if (term->output_depth)
+        term->redraw_after_output = true;
     return redraw(term);
 invalid:
     errno = EINVAL;
@@ -1133,6 +1137,8 @@ snj_term_output_begin(struct snj_term *term, bool persistent)
 int
 snj_term_output_end(struct snj_term *term)
 {
+    bool redraw_requested;
+
     if (!term || !term->opened)
         return 0;
     if (!term->output_depth) {
@@ -1140,7 +1146,11 @@ snj_term_output_end(struct snj_term *term)
         return -1;
     }
     --term->output_depth;
-    return term->output_depth || term->active ? 0 : redraw(term);
+    if (term->output_depth)
+        return 0;
+    redraw_requested = term->redraw_after_output;
+    term->redraw_after_output = false;
+    return term->active && !redraw_requested ? 0 : redraw(term);
 }
 
 static void

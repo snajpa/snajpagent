@@ -170,6 +170,13 @@ Non-networked mode has only the rollout view, so empty Tab is a no-op. A
 nonempty draft never changes views. Queue-edit composers retain their explicit
 save behavior.
 
+In networked mode the selected view owns both presentation and ordinary input
+routing. Chat submissions go through IRC and are admitted through the local
+room event. Rollout submissions remain local: an idle submission starts a turn
+and an active submission steers it. Every accepted rollout submission is
+rendered exactly once with its frozen submitted prompt label and never emits an
+IRC message.
+
 ## Queue Commands
 
 `/queue` and `/q` are equivalent. With no argument, they print queued turns in

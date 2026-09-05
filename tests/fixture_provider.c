@@ -444,6 +444,19 @@ snj_fixture_response(const char *prompt, const json_t *steering,
                            "msg_fixture_model_goal_checkpoint",
                            "model-created checkpoint", 0);
     }
+    if (strstr(prompt, "network_prompt_catchup")) {
+        const char *kind = strstr(prompt, "slash") ? "slash" : "tab";
+        const char *item = strstr(prompt, "_two") ? "two" : "one";
+        char text[64];
+        char item_id[64];
+
+        if (snprintf(text, sizeof(text), "%s-catchup-%s", kind, item) < 0 ||
+            snprintf(item_id, sizeof(item_id),
+                     "msg_fixture_%s_catchup_%s", kind, item) < 0)
+            goto allocation;
+        return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
+                           SNJ_PHASE_FINAL_ANSWER, item_id, text, 0);
+    }
     if (strstr(prompt, "network_zero"))
         return emit_public(graph, emit, opaque, SNJ_ITEM_ASSISTANT,
                            SNJ_PHASE_FINAL_ANSWER, "msg_fixture_network_zero",
@@ -672,7 +685,8 @@ snj_fixture_response(const char *prompt, const json_t *steering,
             emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
                  second_suffix, sizeof(second_suffix) - 1u) < 0)
             goto allocation;
-        for (unsigned int i = 0u; i < 25u; ++i) {
+        /* Leave time for the test to begin its second typing pause. */
+        for (unsigned int i = 0u; i < 100u; ++i) {
             int pump_rc = pump(opaque, 20u);
 
             if (pump_rc != 0)
@@ -681,6 +695,13 @@ snj_fixture_response(const char *prompt, const json_t *steering,
         if (emit(opaque, index, SNJ_ITEM_ASSISTANT, SNJ_PHASE_FINAL_ANSWER,
                  third, sizeof(third) - 1u) < 0)
             goto allocation;
+        /* Keep the turn active until that paused output becomes visible. */
+        for (unsigned int i = 0u; i < 100u; ++i) {
+            int pump_rc = pump(opaque, 20u);
+
+            if (pump_rc != 0)
+                return pump_rc;
+        }
         return 0;
     }
     if (strcmp(prompt, "terminal_status") == 0) {

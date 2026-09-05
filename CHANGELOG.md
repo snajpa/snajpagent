@@ -8,6 +8,12 @@
   website against the current UI and runtime. Replace the terminal screenshots
   with current real-provider sessions.
 
+- Route networked composer input by view: chat submissions go to IRC and the
+  local model, while rollout submissions stay local and remain visibly labeled.
+  Make view boundary, catch-up, and destination-prompt rendering atomic so an
+  idle prompt cannot leak into caught-up model output. Keep Markdown formatting
+  for IRC agent messages without adding synthetic prose bullets.
+
 - Prefix the default IRC chat composer with the local `HH:MM:SS` prompt-open
   time and expose that value as the data-only prompt template field `{time}`.
 

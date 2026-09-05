@@ -240,6 +240,14 @@ idempotent. Empty Tab toggles the two views; a nonempty draft never switches
 views and keeps ordinary completion, indentation, or active-turn queueing
 semantics.
 
+The selected view also selects the destination for ordinary composer input.
+Chat input is sent from the local operator identity to the room and admitted
+once to the model through the resulting local IRC event. Rollout input is
+local-only: while idle it starts a local turn directly, and while a turn is
+active it is added directly at the next safe boundary. Rollout input is never
+sent as IRC `PRIVMSG`, and its submitted line remains visible exactly once
+with the rollout prompt label that was visible when Enter was pressed.
+
 Switching views never clears or repaints terminal history. It appends a short
 view boundary, emits every semantic item accumulated for the entered view
 since that view was last active in the current foreground run, in original
@@ -248,6 +256,9 @@ independent emitted cursor. A switch during a streamed item emits its complete
 unseen prefix once and subsequent deltas continue without gaps, duplication,
 or changes to stored/provider bytes. Catch-up starts with the current process;
 entering a view does not dump older session history from the rollout log.
+The boundary, catch-up, and destination prompt are one terminal-output
+transaction: no old or new prompt may be redrawn between catch-up records or
+appended to model text.
 
 Networked mode keeps IRC debugging behind the more useful agent/tool detail.
 Its additional local-only ladder is:
@@ -275,14 +286,16 @@ server, or the hosted nick when serving a room. Nick changes refresh the prompt
 without losing the draft; configured nicks remain registration preferences.
 The hostname comes from the local machine, not the IRC endpoint, room, or
 remote server. Both views use the one shared dotdir prompt history and Ctrl-R
-search without changing input routing.
+search.
 
-Text entered at the network composer is sent as a room message from the local
-operator identity and also admitted once as local operator input to the model;
-echoes returning from several attached servers are deduplicated locally.
+Text entered in chat view is sent as a room message from the local operator
+identity and also admitted once as local operator input to the model; echoes
+returning from several attached servers are deduplicated locally. Text entered
+in rollout view stays local and is never transmitted to the room.
 Useful local slash commands include `/chat`, `/rollout`, `/topic [TEXT]`,
 `/names`, the existing session/model/goal/queue commands, and `/exit`. `//TEXT`
-sends a chat message whose first byte is `/`.
+sends input whose first byte is `/` to the destination selected by the current
+view.
 
 ## Color Contract
 
@@ -306,6 +319,9 @@ magenta for operator identity, and dim/default text for metadata. Attributes
 are always reset at field boundaries so user/model text cannot inherit them.
 Terse lifecycle milestone lines have their own bold-green role spanning the
 bullet and text, plus any high-verbosity durable suffix.
+Chat timestamps and sender labels already frame messages, so Markdown rendering
+does not add a synthetic bullet to ordinary agent prose there. An actual
+Markdown list item still renders with its structural bullet.
 On a compact tool-start line, color covers only the arrow and tool label; an
 `exec` command payload uses the default foreground, matching the uncolored
 workdir, arguments, and captured command-output lines that follow it.
@@ -502,7 +518,9 @@ pass and focused local smoke checks demonstrate all of the following:
    networked and non-networked modes;
 4. `/chat`, `/rollout`, and empty-Tab switching in idle and active composers,
    exact U+203A/U+00BB prompts, and ordered exact-once catch-up for both views,
-   including a switch during streamed output;
+   including a switch during streamed output; atomic catch-up without an
+   interposed prompt; visible exact-once local rollout submissions; and absence
+   of rollout input from IRC wire output;
 5. earliest-safe, coalesced urgent admission for local operator, current
    channel operator, and model-nick mentions without truncating active
    generation or tools; asynchronous managed-command handoff; coalesced

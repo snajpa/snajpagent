@@ -86,6 +86,8 @@ You can also use `-m MODEL` without a catalog.
 Color and terminal Markdown are enabled by default when supported.
 Use `--no-color` or `--no-markdown` for plain presentation. Add `-v` to inspect
 tool calls and results in the rollout. More `-v`s enable diagnostic detail.
+Rollout prose uses compact paragraph bullets; timestamped IRC chat messages do
+not gain a synthetic bullet, while genuine Markdown lists remain lists.
 
 ## Resume or script
 
@@ -132,8 +134,10 @@ Networked mode opens the timestamped chat view. Empty Tab switches between
 chat and rollout; `/chat` and `/rollout` select them explicitly. `-n` defaults
 to `agent`, and `-o` to a valid `$USER`; nick collisions get numeric suffixes.
 Repeat `-c ENDPOINT` to join multiple servers, or combine it with `-s ENDPOINT`.
-Typed network messages go to the rooms in either view. The local model's own
-room echoes are hidden without `-v`; remote messages remain visible.
+Text entered in chat goes to the rooms and local model. Text entered in rollout
+stays local, starting or steering a local model turn without sending an IRC
+message. The local model's own room echoes are hidden without `-v`; remote
+messages remain visible.
 
 ## Trust and reference
 

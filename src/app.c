@@ -1902,24 +1902,45 @@ change_verbosity(struct app_state *app, const char *value)
     return app_hostf(app, "verbosity: %u", app->render.verbosity);
 }
 static int
-toggle_view(struct app_state *app)
+select_view(struct app_state *app, enum snj_render_view view, bool active)
 {
-    int rc;
+    int rc = 0;
+    int saved_errno = 0;
 
     if (!app->networked)
         return 0;
-    rc = snj_render_set_view(&app->render,
-        snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
-        SNJ_RENDER_ROLLOUT : SNJ_RENDER_CHAT);
-    return rc < 0 ? rc : set_input_prompt(app, app->session.active_turn);
+    if (snj_term_output_begin(&app->term, true) < 0)
+        return -1;
+    if (snj_render_set_view(&app->render, view) < 0 ||
+        set_input_prompt(app, active) < 0) {
+        rc = -1;
+        saved_errno = errno;
+    }
+    if (snj_term_output_end(&app->term) < 0 && rc == 0)
+        rc = -1;
+    if (saved_errno)
+        errno = saved_errno;
+    return rc;
+}
+static int
+toggle_view(struct app_state *app)
+{
+    enum snj_render_view view;
+
+    if (!app->networked)
+        return 0;
+    view = snj_render_view(&app->render) == SNJ_RENDER_CHAT ?
+           SNJ_RENDER_ROLLOUT : SNJ_RENDER_CHAT;
+    return select_view(app, view, app->session.active_turn);
 }
 static int
 handle_common_command(struct app_state *app, const char *line, bool active,
-                      bool *handled)
+                      bool *handled, bool *prompt_ready)
 {
     char error[256] = {0};
 
     *handled = true;
+    *prompt_ready = false;
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0)
         return render_help(app);
     if (strcmp(line, "/status") == 0)
@@ -1927,12 +1948,16 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     if (strcmp(line, "/history") == 0)
         return snj_render_history(&app->render, &app->session);
     if (app->networked && strcmp(line, "/chat") == 0) {
-        int rc = snj_render_set_view(&app->render, SNJ_RENDER_CHAT);
-        return rc < 0 ? rc : set_input_prompt(app, active);
+        int rc = select_view(app, SNJ_RENDER_CHAT, active);
+
+        *prompt_ready = rc == 0;
+        return rc;
     }
     if (app->networked && strcmp(line, "/rollout") == 0) {
-        int rc = snj_render_set_view(&app->render, SNJ_RENDER_ROLLOUT);
-        return rc < 0 ? rc : set_input_prompt(app, active);
+        int rc = select_view(app, SNJ_RENDER_ROLLOUT, active);
+
+        *prompt_ready = rc == 0;
+        return rc;
     }
     if (strcmp(line, "/verbose") == 0)
         return change_verbosity(app, NULL);
@@ -2072,8 +2097,10 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     } else {
         bool single_line = strchr(line, '\n') == NULL;
         bool handled = false;
+        bool prompt_ready = false;
         if (single_line && line[0] == '/' && line[1] != '/') {
-            rc = handle_common_command(app, line, true, &handled);
+            rc = handle_common_command(app, line, true, &handled,
+                                       &prompt_ready);
             if (rc < 0)
                 goto active_done;
         }
@@ -2086,7 +2113,8 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 goto active_done;
         }
         if (handled) {
-            if (!app->queue_edit_id[0] && set_input_prompt(app, true) < 0)
+            if (!app->queue_edit_id[0] && !prompt_ready &&
+                set_input_prompt(app, true) < 0)
                 rc = -1;
         } else if (single_line && line[0] == '/' && line[1] != '/') {
             (void)snj_render_error_ctx(&app->render,
@@ -2100,7 +2128,8 @@ snj_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 (void)snj_render_error_ctx(&app->render,
                     "active-turn input must be nonempty valid UTF-8 within 256 KiB");
                 rc = 0;
-            } else if (app->networked) {
+            } else if (app->networked &&
+                       snj_render_view(&app->render) == SNJ_RENDER_CHAT) {
                 error[0] = '\0';
                 rc = snj_irc_send_operator(app->irc, text,
                                            error, sizeof(error));
@@ -3770,6 +3799,7 @@ interactive_loop(struct app_state *app, const char *initial)
         return 6;
     for (;;) {
         enum snj_term_action action = SNJ_TERM_NONE;
+        bool prompt_ready = false;
         if (capture_shutdown_signal(app))
             return 0;
         if (app->input_closed)
@@ -3884,7 +3914,8 @@ interactive_loop(struct app_state *app, const char *initial)
             bool handled = false;
             int local_rc = 0;
             if (single_line && prompt[0] == '/' && prompt[1] != '/')
-                local_rc = handle_common_command(app, prompt, false, &handled);
+                local_rc = handle_common_command(app, prompt, false, &handled,
+                                                 &prompt_ready);
             if (local_rc < 0) { free(owned); return 3; }
             if (!handled && single_line) {
                 char queue_error[256] = {0};
@@ -3924,7 +3955,8 @@ interactive_loop(struct app_state *app, const char *initial)
                 }
             } else if (single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
-            } else if (app->networked) {
+            } else if (app->networked &&
+                       snj_render_view(&app->render) == SNJ_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
                 char irc_error[256] = {0};
@@ -3937,6 +3969,13 @@ interactive_loop(struct app_state *app, const char *initial)
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
                 int turn_rc;
+
+                if (app->networked &&
+                    snj_render_input_submitted(&app->render,
+                        snj_term_prompt_label(&app->term), actual) < 0) {
+                    free(owned);
+                    return 6;
+                }
                 app->queue_armed = false;
                 turn_rc = run_tracked_turn(app, actual, NULL, false);
                 if (turn_rc == 3 || turn_rc == 6) {
@@ -3958,7 +3997,7 @@ interactive_loop(struct app_state *app, const char *initial)
         free(owned);
         owned = NULL;
         prompt = NULL;
-        if (set_input_prompt(app, false) < 0)
+        if (!prompt_ready && set_input_prompt(app, false) < 0)
             return 6;
     }
 }

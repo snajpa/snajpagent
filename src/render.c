@@ -244,6 +244,7 @@ snj_render_init(struct snj_render *render, unsigned int verbosity)
     memset(render, 0, sizeof(*render));
     render->verbosity = verbosity > 6u ? 6u : verbosity;
     render->markdown = true;
+    render->markdown_prose_bullets = true;
     render->view = SNJ_RENDER_ROLLOUT;
     render->public_fd = -1;
     render->stdout_terminal = isatty(STDOUT_FILENO) == 1;
@@ -431,7 +432,9 @@ render_submitted(struct snj_render *render, const char *label, const char *text,
     }
     if (rc == 0)
         rc = write_role_block(render, STDERR_FILENO,
-                              render->networked ? COLOR_OPERATOR : COLOR_AGENT,
+                              render->networked &&
+                              render->view == SNJ_RENDER_CHAT ?
+                              COLOR_OPERATOR : COLOR_AGENT,
                               (char *)line.data, line.len, strlen(label),
                               render->stderr_terminal, true);
     if (rc == 0 && render->stderr_terminal) {
@@ -756,7 +759,8 @@ flush_wrap_pending(struct snj_render *render)
         render->public_column = 0u;
         text += leading;
         len -= leading;
-        if (render->markdown_rendering && render->markdown_state.prose) {
+        if (render->markdown_rendering && render->markdown_state.prose &&
+            render->markdown_prose_bullets) {
             if (public_write(render, "  ", 2u) < 0)
                 return -1;
             render->public_column = 2u;
@@ -1641,7 +1645,8 @@ markdown_prefix_literal(struct snj_render *render)
     md->line_start = false;
     if (prose && !md->prose) {
         md->prose = true;
-        if (markdown_text(render, "• ", strlen("• ")) < 0)
+        if (render->markdown_prose_bullets &&
+            markdown_text(render, "• ", strlen("• ")) < 0)
             return -1;
     }
     return markdown_inline(render, (const unsigned char *)md->prefix, len);
@@ -2508,6 +2513,7 @@ render_irc_markdown(struct snj_render *render,
     body.stderr_terminal = render->stderr_terminal;
     body.color_stderr = render->color_stderr;
     body.markdown = true;
+    body.markdown_prose_bullets = false;
     body.term = render->term;
     if (snj_render_public_begin(&body, STDERR_FILENO, NULL) < 0)
         return -1;

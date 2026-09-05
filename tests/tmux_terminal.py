@@ -1597,10 +1597,9 @@ def wait_irc_quits(terminal, nicks, timeout=15.0):
 
 def assert_chat_line(screen, nick, text, operator=False):
     marker = "@" if operator else ""
-    bullet = "" if operator else "• "
     pattern = (
         rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {re.escape(marker + nick)} › "
-        rf"{re.escape(bullet + text)}$"
+        rf"{re.escape(text)}$"
     )
     if re.search(pattern, screen) is None:
         raise AssertionError(f"missing timestamped IRC line {nick!r}: {text!r}\n{screen}")

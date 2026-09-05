@@ -85,6 +85,7 @@ struct snj_render {
     bool markdown_rendering;
     bool markdown_measuring;
     bool markdown_preserve_fence;
+    bool markdown_prose_bullets;
     bool networked;
     enum snj_render_view view;
     char model_nick[SNJ_CONFIG_IRC_NICK_MAX + 1u];

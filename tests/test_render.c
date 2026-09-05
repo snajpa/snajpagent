@@ -645,6 +645,8 @@ capture_static_markdown(char *out, size_t out_size)
     memcpy(event.text, "**answer** and `code`", 22u);
     event.local = true;
     assert(snj_render_irc_event(&render, &event) == 0);
+    memcpy(event.text, "- actual list item", 19u);
+    assert(snj_render_irc_event(&render, &event) == 0);
     memcpy(event.nick, "operator", 9u);
     memcpy(event.text, "**literal operator**", 21u);
     event.op = true;
@@ -1191,14 +1193,15 @@ main(void)
     assert(strcmp(output, "• **") == 0);
 
     assert(capture_static_markdown(output, sizeof(output)) > 0u);
-    assert(strstr(output, "00:00:01 agent › • answer and code\n") != NULL);
+    assert(strstr(output, "00:00:01 agent › answer and code\n") != NULL);
+    assert(strstr(output, "00:00:01 agent › • actual list item\n") != NULL);
     assert(strstr(output, "@operator › **literal operator**\n") != NULL);
     assert(strstr(output, "remote › ┌─ c\n") != NULL);
     assert(strstr(output, "remote › │ int value = 1;\n") != NULL);
     assert(strstr(output, "remote › └─\n") != NULL);
     assert(strstr(output,
                   "00:00:01 -remote - **literal notice**\n") != NULL);
-    assert(strstr(output, "remote › • plain after quit\n") != NULL);
+    assert(strstr(output, "remote › plain after quit\n") != NULL);
     assert(strstr(output, "remote › │ plain after quit\n") == NULL);
     assert(strstr(output, "user: **literal user**\n") != NULL);
     assert(strstr(output, "assistant: Saved answer\n") != NULL);

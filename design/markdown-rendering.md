@@ -39,6 +39,11 @@ non-blank source line breaks within one paragraph remain unbulleted. Headings,
 list items, block quotes, and fenced code keep their own structural markers
 instead of gaining a redundant paragraph bullet.
 
+IRC chat is the one presentation exception: its timestamp and sender prefix
+already delimit each independently framed message, so ordinary prose receives
+no synthetic bullet or continuation indent. Genuine Markdown list items retain
+their list bullets, and all other Markdown constructs remain enabled.
+
 Interactive conversation spacing is a renderer boundary rule rather than a
 prose-parser side effect. Submitted input and the first model block have one
 empty terminal row between them. A completed model block and the following
@@ -96,7 +101,8 @@ separate word-break implementation.
 Networked final answers remain local rollout content. Only `irc_send` publishes
 model-authored IRC text. When explicit local sends or remote non-operator
 messages are painted in the scrolling chat UI, the same Markdown presentation
-is applied after the timestamp and sender prefix. Operator chat, topics,
+is applied after the timestamp and sender prefix, without synthesizing a prose
+bullet. Operator chat, topics,
 membership notices, and protocol diagnostics remain literal. Fenced-code state
 may continue across consecutive IRC lines from the same agent; unrelated
 senders cannot inherit it. Resumed non-networked assistant history uses the
@@ -116,7 +122,8 @@ table.
   and duplicate assignment. CLI tests cover both overrides and conflicts.
 - Deterministic tmux coverage checks a genuinely paced Markdown response before
   completion, its byte-exact durable form, static Markdown in the IRC chat UI,
-  prose bullets, two-space continuation lines, discarded wrap-separator spaces,
+  rollout prose bullets, unbulleted IRC prose, genuine IRC list bullets,
+  two-space rollout continuation lines, discarded wrap-separator spaces,
   aligned and narrow tables, exact submitted/model and every-block-type/prompt
   boundaries, the disabled setting, width safety, and absence of raw escape
   leakage.

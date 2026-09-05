@@ -104,6 +104,7 @@ struct snj_term {
     bool output_ended_lf;
     bool color;
     bool networked;
+    bool redraw_after_output;
     bool rendered_end_at_margin;
     bool rendered_cursor_pending_wrap;
     bool searching;

@@ -205,6 +205,22 @@ class IRCClient:
     def message(self, text):
         self.sock.sendall(b"PRIVMSG #lab :" + text.encode() + b"\r\n")
 
+    def drain(self, duration=0.25):
+        end = time.monotonic() + duration
+        while time.monotonic() < end:
+            ready, _, _ = select.select(
+                [self.sock], [], [], min(0.05, end - time.monotonic())
+            )
+            if not ready:
+                continue
+            try:
+                chunk = self.sock.recv(65536)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                return
+            self.buf.extend(chunk)
+
     def close(self):
         self.sock.close()
 
@@ -263,6 +279,29 @@ def one(items, event_type):
     return matches[0]
 
 
+def wait_turn_completed(child, session_id, needle, timeout=8.0):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            log = events(session_id)
+        except (FileNotFoundError, json.JSONDecodeError):
+            log = []
+        turn_ids = [
+            event["data"]["turn_id"] for event in log
+            if event["type"] == "turn_started" and
+            needle in event["data"]["text"]
+        ]
+        if any(event["type"] == "turn_completed" and
+               event["data"]["turn_id"] in turn_ids for event in log):
+            return log
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"turn containing {needle!r} did not complete; "
+                f"terminal={bytes(child.buf)!r}"
+            )
+        child.drain(0.05)
+
+
 def clear_draft_incrementally(child, prompt=DEFAULT_IDLE_PROMPT):
     start = len(child.buf)
     child.send(b"\x15")
@@ -280,14 +319,26 @@ def assert_bytes_in_order(output, expected):
         offset += 1
 
 
+def wait_prompt_painted(child, prompt, start=0, timeout=8.0):
+    prompt_end = child.wait(prompt, start=start, timeout=timeout)
+    columns = len(prompt.decode())
+    return child.wait(
+        f"\x1b[K\r\x1b[{columns}C".encode(),
+        start=prompt_end,
+        timeout=timeout,
+    )
+
+
 def test_incremental_prompt_edit_and_utf8_cursor_column():
     child = Child([])
     try:
-        child.wait(DEFAULT_IDLE_PROMPT)
+        wait_prompt_painted(child, DEFAULT_IDLE_PROMPT)
         empty_tab_start = len(child.buf)
         child.send(b"\t")
         child.drain()
-        assert child.buf[empty_tab_start:] == b""
+        assert child.buf[empty_tab_start:] == b"", bytes(
+            child.buf[empty_tab_start:]
+        )
         start = len(child.buf)
         child.send(b"a")
         child.drain()
@@ -346,7 +397,7 @@ def test_static_zero_width_spinner_has_no_refresh():
     try:
         child.wait(idle)
         child.send(b"terminal_status\r")
-        child.wait(active)
+        wait_prompt_painted(child, active)
         settled = len(child.buf)
         child.drain(0.35)
         assert len(child.buf) == settled, bytes(child.buf[settled:])
@@ -2509,6 +2560,189 @@ def test_model_message_corrections_are_private_and_specific():
                     if event["type"] == "turn_completed"]) == 1
 
 
+def test_network_view_routing_and_atomic_catchup():
+    before = session_ids()
+    port = free_port()
+    endpoint = f"127.0.0.1:{port}"
+    network_workspace = (
+        Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "network-routing-workspace"
+    )
+    network_workspace.mkdir()
+    child = Child([
+        "-s", endpoint, "-n", "agent", "-o", "localop",
+        "-r", "lab", "-C", str(network_workspace), "--no-color",
+    ])
+    human = None
+    peer_agent = None
+    exited = False
+    network_idle = f"localop@{socket.gethostname()}   : ".encode()
+    rollout_idle = f"default/{DEFAULT_MODEL}/medium ?%   › ".encode()
+
+    def queue_rollout_and_enter(trigger, first, second, switch):
+        chat_start = len(child.buf)
+        wire_start = len(human.buf)
+        for item in ("one", "two"):
+            message = f"agent: {trigger}_{item}"
+            peer_agent.message(message)
+            human.wait(
+                f"PRIVMSG #lab :{message}\r\n".encode(),
+                start=wire_start,
+            )
+            wait_turn_completed(child, session_id, f"{trigger}_{item}")
+        child.wait(network_idle, start=chat_start)
+        child.drain()
+        assert first not in child.buf[chat_start:]
+        assert second not in child.buf[chat_start:]
+
+        switch_start = len(child.buf)
+        child.send(switch)
+        boundary_end = child.wait("── rollout ──".encode(), start=switch_start)
+        prompt_end = child.wait(rollout_idle, start=boundary_end)
+        transition = bytes(child.buf[boundary_end:prompt_end])
+        prompt_at = transition.find(rollout_idle)
+        assert prompt_at >= 0, transition
+        catchup = transition[:prompt_at]
+        assert network_idle not in catchup, catchup
+        assert rollout_idle not in catchup, catchup
+        assert catchup.count(first) == 1, catchup
+        assert catchup.count(second) == 1, catchup
+        assert catchup.find(first) < catchup.find(second), catchup
+        assert transition.count(rollout_idle) == 1, transition
+        return prompt_end
+
+    try:
+        child.wait(network_idle)
+        session_id = new_session(before)
+        human = IRCClient(port, "remoteop")
+        peer_agent = IRCClient(port, "peerbot", agent=True)
+
+        tab_first = b"tab-catchup-one"
+        tab_second = b"tab-catchup-two"
+        queue_rollout_and_enter(
+            "network_prompt_catchup_tab", tab_first, tab_second, b"\t"
+        )
+
+        same_start = len(child.buf)
+        child.send(b"/rollout\r")
+        child.wait(rollout_idle, start=same_start)
+        child.drain()
+        same_view = bytes(child.buf[same_start:])
+        assert "── rollout ──".encode() not in same_view, same_view
+        assert tab_first not in same_view, same_view
+        assert tab_second not in same_view, same_view
+        assert same_view.count(rollout_idle) == 1, same_view
+
+        chat_start = len(child.buf)
+        child.send(b"\t")
+        chat_boundary = child.wait("── chat ──".encode(), start=chat_start)
+        child.wait(network_idle, start=chat_boundary)
+
+        slash_first = b"slash-catchup-one"
+        slash_second = b"slash-catchup-two"
+        queue_rollout_and_enter(
+            "network_prompt_catchup_slash",
+            slash_first,
+            slash_second,
+            b"/rollout\r",
+        )
+
+        idle_start = len(child.buf)
+        idle_wire_start = len(human.buf)
+        child.send(b"network_zero\r")
+        submitted_idle = rollout_idle + b"network_zero"
+        child.wait(submitted_idle, start=idle_start)
+        answer_end = child.wait(b"network zero local only", start=idle_start)
+        child.wait(rollout_idle, start=answer_end)
+        idle_output = bytes(child.buf[idle_start:])
+        assert idle_output.count(submitted_idle) == 1, idle_output
+        human.drain()
+        assert (b"PRIVMSG #lab :network_zero\r\n" not in
+                human.buf[idle_wire_start:])
+
+        active_start = len(child.buf)
+        active_wire_start = len(human.buf)
+        child.send(b"slow\r")
+        submitted_start = rollout_idle + b"slow"
+        child.wait(submitted_start, start=active_start)
+        child.wait(b"working slowly", start=active_start)
+        child.wait(DEFAULT_ACTIVE_PROMPT, start=active_start)
+        steer_start = len(child.buf)
+        child.send(b"rollout active steer\r")
+        answer_end = child.wait(b"steered: rollout active steer",
+                                start=steer_start)
+        child.wait(rollout_idle, start=answer_end)
+        active_output = bytes(child.buf[active_start:])
+        frames = ["◴", "◷", "◶", "◵"]
+        active_labels = [
+            f"default/{DEFAULT_MODEL}/medium ?% {frame} » ".encode() +
+            b"rollout active steer" for frame in frames
+        ]
+        assert active_output.count(submitted_start) == 1, active_output
+        assert sum(active_output.count(label) for label in active_labels) == 1
+        human.drain()
+        assert b"PRIVMSG #lab :slow\r\n" not in human.buf[active_wire_start:]
+        assert (b"PRIVMSG #lab :rollout active steer\r\n" not in
+                human.buf[active_wire_start:])
+
+        backlog_start = len(child.buf)
+        backlog_wire_start = len(human.buf)
+        human.message("chat-route-backlog")
+        human.wait(b"PRIVMSG #lab :chat-route-backlog\r\n",
+                   start=backlog_wire_start)
+        child.drain()
+        assert b"chat-route-backlog" not in child.buf[backlog_start:]
+        child.send(b"/chat\r")
+        chat_boundary = child.wait("── chat ──".encode(), start=backlog_start)
+        backlog_end = child.wait(b"chat-route-backlog", start=chat_boundary)
+        child.wait(network_idle, start=backlog_end)
+        assert child.buf[chat_boundary:].count(b"chat-route-backlog") == 1
+
+        chat_wire_start = len(human.buf)
+        child.send(b"network_one\r")
+        human.wait(b"PRIVMSG #lab :network_one\r\n", start=chat_wire_start)
+        human.wait(b"PRIVMSG #lab :network one reply\r\n",
+                   start=chat_wire_start)
+        wait_turn_completed(child, session_id, "network_one")
+        human.drain()
+        assert (human.buf[chat_wire_start:].count(
+                    b"PRIVMSG #lab :network_one\r\n") == 1)
+
+        child.exit_now()
+        exited = True
+    finally:
+        if peer_agent is not None:
+            peer_agent.close()
+        if human is not None:
+            human.close()
+        if not exited:
+            child.kill()
+
+    log = events(session_id)
+    direct = [
+        event for event in log
+        if event["type"] == "turn_started" and
+        event["data"]["text"] in ("network_zero", "slow")
+    ]
+    assert [event["data"]["text"] for event in direct] == [
+        "network_zero", "slow"
+    ]
+    slow_turn = direct[1]["data"]["turn_id"]
+    steering = [
+        event for event in log
+        if event["type"] == "steering_added" and
+        event["data"]["turn_id"] == slow_turn
+    ]
+    assert len(steering) == 1
+    assert steering[0]["data"]["text"] == "rollout active steer"
+    chat_turns = [
+        event for event in log
+        if event["type"] == "turn_started" and
+        "network_one" in event["data"]["text"]
+    ]
+    assert len(chat_turns) == 1
+    assert chat_turns[0]["data"]["text"] != "network_one"
+
+
 def test_network_chat_and_managed_mention():
     before = session_ids()
     port = free_port()
@@ -2928,5 +3162,6 @@ test_network_collision_prompts()
 test_network_live_nick_prompt()
 test_prompt_identity_is_terminal_safe()
 test_model_message_corrections_are_private_and_specific()
+test_network_view_routing_and_atomic_catchup()
 test_network_chat_and_managed_mention()
 print("pty_active: ok")

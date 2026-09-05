@@ -321,6 +321,8 @@ retains the model's exact bytes.
 .PP
 Top-level prose paragraphs are bulleted.  Prompts and model blocks have one
 empty row between them; generated prose wraps align below the paragraph text.
+Timestamped IRC chat messages do not receive the synthetic paragraph bullet;
+genuine Markdown list items retain their structural bullets.
 .SH COMMANDS
 Commands occupy a single submitted line.  Prefix text with
 .B //
@@ -933,11 +935,11 @@ The terminal starts in the timestamped
 .B chat
 view.  Model text and tools belong to the
 .B rollout
-view regardless of verbosity.  Ordinary input in either networked view goes
-to all attached rooms as the local operator and enters local model context
-once; changing views does not select a different input destination.  Incoming
-room traffic is not automatically bridged between servers.  Model response
-text remains local;
+view regardless of verbosity.  Chat input goes to all attached rooms as the
+local operator and enters local model context once.  Rollout input stays local:
+while idle it starts a model turn, and during active work it steers that turn at
+the next safe boundary.  It never emits an IRC message.  Incoming room traffic
+is not automatically bridged between servers.  Model response text remains local;
 .B irc_send
 is the only model-authored path to a room message or notice.  If a
 local-operator turn reaches a terminal response without a successful
