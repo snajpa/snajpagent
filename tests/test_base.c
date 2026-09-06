@@ -658,6 +658,7 @@ test_console_keys(struct snag_term_host *host)
         size_t used = 0;
         while (used < cases[i].size) {
             char bytes[4];
+            assert(snag_term_input_wait(host, SNAG_WAKE_INVALID, 0) & SNAG_TERM_WAIT_INPUT);
             ssize_t n = snag_term_input_read(host, bytes, sizeof(bytes));
             assert(n > 0 && (size_t)n <= cases[i].size - used);
             assert(!memcmp(bytes, cases[i].bytes + used, (size_t)n));
@@ -674,6 +675,7 @@ test_console_keys(struct snag_term_host *host)
     assert(WriteConsoleInputW(input, events, 20u, &written) && written == 20u);
     for (size_t i = 0; i < 5u; ++i) {
         char bytes[4];
+        assert(snag_term_input_wait(host, SNAG_WAKE_INVALID, 0) & SNAG_TERM_WAIT_INPUT);
         assert(snag_term_input_read(host, bytes, sizeof(bytes)) == 4);
         assert(!memcmp(bytes, "aaaa", 4u));
     }
@@ -685,6 +687,7 @@ test_console_keys(struct snag_term_host *host)
     char bytes[4];
     assert(snag_term_input_read(host, bytes, sizeof(bytes)) < 0 && errno == EAGAIN);
     assert(snag_term_input_resized(host) && !snag_term_input_resized(host));
+    assert(snag_term_input_wait(host, SNAG_WAKE_INVALID, 0) == 0);
 }
 #endif
 
@@ -726,6 +729,19 @@ test_input_mode(void)
     assert(tcgetattr(0, &raw) == 0 && !(raw.c_lflag & (ECHO | ICANON | ISIG)));
 #endif
     assert(snag_term_input_flush(&host) == 0);
+    assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, -2) < 0 && errno == EINVAL);
+    snag_wake_fd wake[2];
+    assert(snag_wakeup_create(wake) == 0);
+    snag_wakeup_send(wake[1]);
+    assert(snag_term_input_wait(&host, wake[0], 1000) == SNAG_TERM_WAIT_WAKE);
+    /* Readiness observation must neither consume bytes nor lose registration. */
+    assert(snag_term_input_wait(&host, wake[0], 1000) == SNAG_TERM_WAIT_WAKE);
+    snag_wakeup_drain(wake[0]);
+    assert(snag_term_input_wait(&host, wake[0], 0) == 0);
+    snag_wakeup_send(wake[1]);
+    assert(snag_term_input_wait(&host, wake[0], 1000) == SNAG_TERM_WAIT_WAKE);
+    snag_wakeup_drain(wake[0]);
+    snag_wakeup_close(wake);
 #ifdef _WIN32
     INPUT_RECORD keys[3] = {0};
     const WCHAR characters[] = {0x4e2du, 0xd83du, 0xde00u};

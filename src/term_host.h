@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SNAJPAGENT_TERM_HOST_H
 #define SNAJPAGENT_TERM_HOST_H
+#include "wake.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <sys/types.h>
@@ -47,6 +48,13 @@ int snag_term_input_flush(struct snag_term_host *host);
 /* Buffer capacity is at least four bytes; incomplete UTF-16 returns EAGAIN. */
 ssize_t snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size);
 bool snag_term_input_resized(struct snag_term_host *host);
+enum {
+    SNAG_TERM_WAIT_INPUT = 1,
+    SNAG_TERM_WAIT_WAKE = 2,
+    SNAG_TERM_WAIT_END = 4
+};
+/* Bitmask above, zero timeout, or -1 error; wake-only does not consume input. */
+int snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms);
 int snag_term_output_open(int fd);
 
 #endif

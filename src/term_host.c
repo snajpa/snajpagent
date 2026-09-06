@@ -2,6 +2,7 @@
 #include "term_host.h"
 #include "base.h"
 #include "fs.h"
+#include "net.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
@@ -253,6 +254,48 @@ snag_term_input_resized(struct snag_term_host *host)
     return resized;
 }
 
+int
+snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
+{
+    HANDLE handles[2] = {(HANDLE)_get_osfhandle(0), NULL};
+    DWORD count = 1;
+    int rc, error = 0;
+
+    if (timeout_ms < -1) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (host->input_next < host->input_count ||
+        (host->input_key_len && host->input_repeats))
+        return SNAG_TERM_WAIT_INPUT;
+    if (wake != SNAG_WAKE_INVALID) {
+        handles[1] = WSACreateEvent();
+        if (handles[1] == WSA_INVALID_EVENT)
+            return snag_socket_error(WSAGetLastError());
+        if (WSAEventSelect(wake, handles[1], FD_READ | FD_CLOSE) < 0) {
+            error = WSAGetLastError();
+            (void)WSACloseEvent(handles[1]);
+            return snag_socket_error(error);
+        }
+        count = 2;
+    }
+    DWORD ready = WaitForMultipleObjects(count, handles, FALSE,
+                                         timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms);
+    rc = ready == WAIT_OBJECT_0 ? SNAG_TERM_WAIT_INPUT :
+         ready == WAIT_OBJECT_0 + 1u && count == 2u ? SNAG_TERM_WAIT_WAKE :
+         ready == WAIT_TIMEOUT ? 0 : -1;
+    if (count == 2u) {
+        if (WSAEventSelect(wake, NULL, 0) < 0)
+            error = WSAGetLastError();
+        (void)WSACloseEvent(handles[1]);
+    }
+    if (error)
+        return snag_socket_error(error);
+    if (rc < 0)
+        errno = EIO;
+    return rc;
+}
+
 ssize_t
 snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
 {
@@ -413,6 +456,23 @@ snag_term_input_resized(struct snag_term_host *host)
 {
     (void)host;
     return false;
+}
+
+int
+snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
+{
+    struct pollfd fds[2] = {{STDIN_FILENO, POLLIN, 0}, {wake, POLLIN, 0}};
+    (void)host;
+    if (timeout_ms < -1) {
+        errno = EINVAL;
+        return -1;
+    }
+    int rc = poll(fds, 2u, timeout_ms);
+    if (rc <= 0)
+        return rc;
+    return (fds[0].revents & POLLIN ? SNAG_TERM_WAIT_INPUT : 0) |
+           (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL) ? SNAG_TERM_WAIT_END : 0) |
+           (fds[1].revents ? SNAG_TERM_WAIT_WAKE : 0);
 }
 
 int

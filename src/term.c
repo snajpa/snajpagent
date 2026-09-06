@@ -2582,8 +2582,6 @@ int
 snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
               enum snag_term_action *action, char **text)
 {
-    struct pollfd pfd[2] = {{STDIN_FILENO, POLLIN, 0},
-                           {wake_fd, POLLIN, 0}};
     ssize_t count;
     int rc;
 
@@ -2625,7 +2623,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         int reveal_wait = quiet < 150u ? (int)(150u - quiet) : 0;
         if (reveal && (timeout_ms < 0 || timeout_ms > reveal_wait))
             timeout_ms = reveal_wait;
-        rc = poll(pfd, 2u, timeout_ms);
+        rc = snag_term_input_wait(&term->host, wake_fd, timeout_ms);
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
             return feed_byte(term, 0x03u, action, text);
@@ -2648,8 +2646,8 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             return -1;
         if (rc <= 0)
             return rc;
-        if (!(pfd[0].revents & POLLIN)) {
-            if (pfd[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+        if (!(rc & SNAG_TERM_WAIT_INPUT)) {
+            if (rc & SNAG_TERM_WAIT_END) {
                 *action = SNAG_TERM_EXIT;
                 return 1;
             }
