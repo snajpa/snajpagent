@@ -30,10 +30,7 @@ struct parse_state {
     struct snag_config *config;
     enum section section;
     unsigned int seen_sections;
-    const char *seen_keys[SECTION_COUNT][16];
-    const char *seen_provider_keys[SNAG_CONFIG_PROVIDER_MAX][16];
-    const char *seen_model_limit_keys[SNAG_CONFIG_MODEL_LIMIT_MAX][16];
-    const char *seen_alias_keys[SNAG_CONFIG_MODEL_ALIAS_MAX][16];
+    const char *seen_keys[16];
     size_t provider_index;
     size_t model_limit_index;
     size_t model_alias_index;
@@ -649,297 +646,187 @@ set_section(struct parse_state *state, char *name)
 static int
 claim_key(struct parse_state *state, const char *key)
 {
-    const char **seen = state->section == SECTION_PROVIDER ?
-        state->seen_provider_keys[state->provider_index] :
-        state->section == SECTION_MODEL_LIMIT ?
-        state->seen_model_limit_keys[state->model_limit_index] :
-        state->section == SECTION_MODEL_ALIAS ?
-        state->seen_alias_keys[state->model_alias_index] :
-        state->seen_keys[state->section];
-
     /* Keys borrow the parsed file until parse_file returns. IRC clients repeat. */
     if ((state->section == SECTION_IRC && strcmp(key, "client") == 0) ||
         (state->section == SECTION_TOOL && strcmp(key, "secret") == 0))
         return 0;
-    for (size_t i = 0; i < sizeof(state->seen_keys[0]) /
-                           sizeof(state->seen_keys[0][0]); ++i) {
-        if (!seen[i]) {
-            seen[i] = key;
+    for (size_t i = 0; i < sizeof(state->seen_keys) / sizeof(state->seen_keys[0]); ++i) {
+        if (!state->seen_keys[i]) {
+            state->seen_keys[i] = key;
             return 0;
         }
-        if (strcmp(seen[i], key) == 0)
+        if (strcmp(state->seen_keys[i], key) == 0)
             break;
     }
     errno = EINVAL;
     return -1;
 }
 
-static int
-parse_agent(struct parse_state *state, const char *key, const char *value)
-{
-    struct snag_config *config = state->config;
-    if (strcmp(key, "provider") == 0) {
-        if (strlen(value) > SNAG_CONFIG_PROVIDER_NAME_MAX)
-            goto invalid;
-        return copy_value(config->provider, sizeof(config->provider), value);
-    }
-    if (strcmp(key, "model") == 0) {
-        return copy_value(config->model, sizeof(config->model), value);
-    }
-    if (strcmp(key, "reasoning_effort") == 0) {
-        return copy_value(config->reasoning_effort,
-                          sizeof(config->reasoning_effort), value);
-    }
-    if (strcmp(key, "max_turn_retries") == 0)
-        return parse_u32(value, 0u, UINT32_MAX, &config->max_turn_retries);
-    if (strcmp(key, "max_goal_prompt_bytes") == 0)
-        return parse_u32(value, 1u, 1024u * 1024u,
-                         &config->max_goal_prompt_bytes);
-    if (strcmp(key, "read_agents_md") == 0)
-        return parse_bool(value, &config->read_agents_md);
-invalid:
-    errno = EINVAL;
-    return -1;
-}
+enum setting_kind {
+    SET_TEXT, SET_HEADER, SET_U32, SET_U64, SET_BOOL, SET_SPINNER
+};
 
 static int
-parse_provider(struct parse_state *state, const char *key, const char *value)
+parse_setting(struct parse_state *state, const char *key, const char *value)
 {
-    struct snag_provider_config *provider =
-        &state->config->providers[state->provider_index];
-    if (strcmp(key, "parallel_tool_calls") == 0)
-        return parse_bool(value, &provider->parallel_tool_calls);
-    if (strcmp(key, "connect_timeout_ms") == 0)
-        return parse_u32(value, 1000u, 120000u, &provider->connect_timeout_ms);
-    if (strcmp(key, "idle_timeout_ms") == 0)
-        return parse_u32(value, 1000u, 600000u, &provider->idle_timeout_ms);
-    if (strcmp(key, "request_timeout_ms") == 0)
-        return parse_u32(value, 1000u, 3600000u, &provider->request_timeout_ms);
-    if (strcmp(key, "auth") == 0) {
-        if (strcmp(value, "api_key") == 0)
-            provider->auth = SNAG_AUTH_API_KEY;
-        else if (strcmp(value, "chatgpt") == 0)
-            provider->auth = SNAG_AUTH_CHATGPT;
-        else
-            goto invalid;
-        return 0;
+    struct snag_config *config = state->config;
+    struct snag_provider_config *provider = &config->providers[state->provider_index];
+    struct snag_model_limit_config *limit = &config->model_limits[state->model_limit_index];
+    struct snag_irc_config *irc = &config->irc;
+    const struct {
+        enum section section;
+        const char *key;
+        enum setting_kind kind;
+        void *target;
+        uint64_t min, max;
+    } settings[] = {
+        {SECTION_AGENT, "provider", SET_TEXT, config->provider, 0, sizeof(config->provider)},
+        {SECTION_AGENT, "model", SET_TEXT, config->model, 0, sizeof(config->model)},
+        {SECTION_AGENT, "reasoning_effort", SET_TEXT, config->reasoning_effort, 0, sizeof(config->reasoning_effort)},
+        {SECTION_AGENT, "max_goal_prompt_bytes", SET_U32, &config->max_goal_prompt_bytes, 1, 1024u * 1024u},
+        {SECTION_AGENT, "read_agents_md", SET_BOOL, &config->read_agents_md, 0, 0},
+        {SECTION_AGENT, "max_turn_retries", SET_U32, &config->max_turn_retries, 0, UINT32_MAX},
+        {SECTION_PROVIDER, "parallel_tool_calls", SET_BOOL, &provider->parallel_tool_calls, 0, 0},
+        {SECTION_PROVIDER, "connect_timeout_ms", SET_U32, &provider->connect_timeout_ms, 1000, 120000},
+        {SECTION_PROVIDER, "idle_timeout_ms", SET_U32, &provider->idle_timeout_ms, 1000, 600000},
+        {SECTION_PROVIDER, "request_timeout_ms", SET_U32, &provider->request_timeout_ms, 1000, 3600000},
+        {SECTION_PROVIDER, "native_compaction", SET_BOOL, &provider->native_compaction, 0, 0},
+        {SECTION_PROVIDER, "openrouter_referer", SET_HEADER, provider->openrouter_referer, 0, sizeof(provider->openrouter_referer)},
+        {SECTION_PROVIDER, "openrouter_title", SET_HEADER, provider->openrouter_title, 0, sizeof(provider->openrouter_title)},
+        {SECTION_MODEL_LIMIT, "context_window_tokens", SET_U64, &limit->context_window_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
+        {SECTION_MODEL_LIMIT, "max_input_tokens", SET_U64, &limit->max_input_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
+        {SECTION_MODEL_LIMIT, "max_output_tokens", SET_U64, &limit->max_output_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
+        {SECTION_MODEL_ALIAS, "model", SET_HEADER, state->models[state->model_alias_index].model.upstream, 0, SNAG_CONFIG_MODEL_MAX},
+        {SECTION_UI, "typing_pause_ms", SET_U32, &config->typing_pause_ms, 0, 5000},
+        {SECTION_UI, "markdown", SET_BOOL, &config->markdown, 0, 0},
+        {SECTION_UI, "prompt_spinner_goal", SET_SPINNER, config->prompt_spinner_goal, 0, 0},
+        {SECTION_UI, "prompt_spinner_provider", SET_SPINNER, config->prompt_spinner_provider, 0, 0},
+        {SECTION_UI, "prompt_spinner_tool", SET_SPINNER, config->prompt_spinner_tool, 0, 0},
+        {SECTION_UI, "prompt_tool_spinner_off_delay_ms", SET_U32, &config->prompt_tool_spinner_off_delay_ms, 0, 60000},
+        {SECTION_UI, "prompt_spinner_per_second", SET_U32, &config->prompt_spinner_per_second, 1, 60},
+        {SECTION_IRC, "room_name", SET_TEXT, irc->room_name, 0, sizeof(irc->room_name)},
+        {SECTION_IRC, "history_lines", SET_U32, &irc->history_lines, 1, 1000},
+        {SECTION_TOOL, "default_yield_ms", SET_U32, &config->default_yield_ms, 0, 600000},
+        {SECTION_TOOL, "max_wait_ms", SET_U32, &config->max_wait_ms, 1, UINT32_MAX},
+        {SECTION_TOOL, "max_parallel_commands", SET_U32, &config->max_parallel_commands, 1, 32},
+        {SECTION_TOOL, "default_timeout_ms", SET_U32, &config->default_timeout_ms, 0, UINT32_MAX},
+        {SECTION_TOOL, "max_timeout_ms", SET_U32, &config->max_timeout_ms, 1, UINT32_MAX},
+        {SECTION_TOOL, "max_output_bytes", SET_U32, &config->max_output_bytes, 0, UINT32_MAX},
+        {SECTION_TOOL, "max_output_tokens", SET_U32, &config->max_output_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX}
+    };
+
+    if (state->section == SECTION_NONE || !*key || claim_key(state, key) < 0)
+        goto invalid;
+    for (size_t i = 0; i < sizeof(settings) / sizeof(settings[0]); ++i) {
+        if (settings[i].section != state->section || strcmp(key, settings[i].key))
+            continue;
+        void *target = settings[i].target;
+        uint64_t min = settings[i].min, max = settings[i].max;
+        switch (settings[i].kind) {
+        case SET_TEXT: return copy_value(target, (size_t)max, value);
+        case SET_HEADER: return copy_header_value(target, (size_t)max, value);
+        case SET_U32: return parse_u32(value, (uint32_t)min, (uint32_t)max, target);
+        case SET_U64: return parse_u64(value, min, max, target);
+        case SET_BOOL: return parse_bool(value, target);
+        case SET_SPINNER: return parse_spinner(target, value);
+        }
     }
-    if (strcmp(key, "auto_compact_input_tokens") == 0) {
-        if (strcmp(value, "auto") == 0) {
-            provider->auto_compact_input_tokens = SNAG_CONFIG_COMPACT_AUTO;
+    switch (state->section) {
+    case SECTION_PROVIDER:
+        if (!strcmp(key, "auth")) {
+            if (!strcmp(value, "api_key"))
+                provider->auth = SNAG_AUTH_API_KEY;
+            else if (!strcmp(value, "chatgpt"))
+                provider->auth = SNAG_AUTH_CHATGPT;
+            else
+                goto invalid;
             return 0;
         }
-        return parse_u32(value, 0u, 4000000u,
-                         &provider->auto_compact_input_tokens);
-    }
-    if (strcmp(key, "base_url") == 0)
-        return copy_base_url(provider->base_url,
-                             sizeof(provider->base_url), value);
-    if (strcmp(key, "api_key") == 0)
-        return snag_secret_source_parse(&provider->api_key, value,
-                                          state->config->source_path, NULL, 0u);
-    if (strcmp(key, "exact_token_count") == 0)
-        return parse_token_count(value, &provider->exact_token_count);
-    if (strcmp(key, "native_compaction") == 0)
-        return parse_bool(value, &provider->native_compaction);
-    if (strcmp(key, "openrouter_referer") == 0)
-        return copy_header_value(provider->openrouter_referer,
-                                 sizeof(provider->openrouter_referer),
-                                 value);
-    if (strcmp(key, "openrouter_title") == 0)
-        return copy_header_value(provider->openrouter_title,
-                                 sizeof(provider->openrouter_title),
-                                 value);
-invalid:
-    errno = EINVAL;
-    return -1;
-}
-
-static int
-parse_model_limit(struct parse_state *state, const char *key, const char *value)
-{
-    struct snag_model_limit_config *limit =
-        &state->config->model_limits[state->model_limit_index];
-
-    if (strcmp(key, "context_window_tokens") == 0)
-        return parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                         &limit->context_window_tokens);
-    if (strcmp(key, "max_input_tokens") == 0)
-        return parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                         &limit->max_input_tokens);
-    if (strcmp(key, "max_output_tokens") == 0)
-        return parse_u64(value, 1u, SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                         &limit->max_output_tokens);
-    errno = EINVAL;
-    return -1;
-}
-
-static int
-parse_ui(struct parse_state *state, const char *key, const char *value)
-{
-    struct snag_config *config = state->config;
-    uint32_t parsed;
-    if (strcmp(key, "color") == 0) {
-        if (strcmp(value, "auto") == 0)
-            config->color = SNAG_COLOR_AUTO;
-        else if (strcmp(value, "always") == 0)
-            config->color = SNAG_COLOR_ALWAYS;
-        else if (strcmp(value, "never") == 0)
-            config->color = SNAG_COLOR_NEVER;
-        else {
-            errno = EINVAL;
-            return -1;
+        if (!strcmp(key, "auto_compact_input_tokens")) {
+            if (!strcmp(value, "auto")) {
+                provider->auto_compact_input_tokens = SNAG_CONFIG_COMPACT_AUTO;
+                return 0;
+            }
+            return parse_u32(value, 0, 4000000u, &provider->auto_compact_input_tokens);
         }
-        return 0;
-    }
-    if (strcmp(key, "resume_history_turns") == 0) {
-        if (parse_u32(value, 0u, 100u, &parsed) < 0)
-            return -1;
-        config->resume_history_turns = (unsigned int)parsed;
-        return 0;
-    }
-    if (strcmp(key, "typing_pause_ms") == 0)
-        return parse_u32(value, 0u, 5000u, &config->typing_pause_ms);
-    if (strcmp(key, "markdown") == 0)
-        return parse_bool(value, &config->markdown);
-    if (strcmp(key, "prompt") == 0)
-        return copy_value(config->prompt, sizeof(config->prompt), value) < 0 ?
-               -1 : validate_prompt(config->prompt);
-    if (strcmp(key, "prompt_spinner_goal") == 0)
-        return parse_spinner(config->prompt_spinner_goal, value);
-    if (strcmp(key, "prompt_spinner_provider") == 0)
-        return parse_spinner(config->prompt_spinner_provider, value);
-    if (strcmp(key, "prompt_spinner_tool") == 0)
-        return parse_spinner(config->prompt_spinner_tool, value);
-    if (strcmp(key, "prompt_tool_spinner_off_delay_ms") == 0)
-        return parse_u32(value, 0u, 60000u, &config->prompt_tool_spinner_off_delay_ms);
-    if (strcmp(key, "prompt_spinner_per_second") == 0)
-        return parse_u32(value, 1u, 60u,
-                         &config->prompt_spinner_per_second);
-    errno = EINVAL;
-    return -1;
-}
-
-static int
-parse_irc(struct parse_state *state, const char *key, const char *value)
-{
-    struct snag_config *config = state->config;
-
-    if (strcmp(key, "listen") == 0) {
-        if (copy_value(config->irc.listen, sizeof(config->irc.listen),
-                       value) < 0)
-            return -1;
-        config->irc.listen_explicit = true;
-        return 0;
-    }
-    if (strcmp(key, "client") == 0) {
-        if (config->irc.client_count >= SNAG_CONFIG_IRC_CLIENT_MAX)
-            goto invalid;
-        for (size_t i = 0; i < config->irc.client_count; ++i)
-            if (strcmp(config->irc.clients[i], value) == 0)
+        if (!strcmp(key, "base_url"))
+            return copy_base_url(provider->base_url, sizeof(provider->base_url), value);
+        if (!strcmp(key, "api_key"))
+            return snag_secret_source_parse(&provider->api_key, value, config->source_path, NULL, 0);
+        if (!strcmp(key, "exact_token_count"))
+            return parse_token_count(value, &provider->exact_token_count);
+        break;
+    case SECTION_UI:
+        if (!strcmp(key, "color")) {
+            const char *const names[] = {"auto", "always", "never"};
+            for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+                if (!strcmp(value, names[i])) {
+                    config->color = (enum snag_color_mode)i;
+                    return 0;
+                }
+        }
+        if (!strcmp(key, "resume_history_turns")) {
+            uint32_t parsed;
+            if (parse_u32(value, 0, 100, &parsed) < 0)
+                return -1;
+            config->resume_history_turns = (unsigned int)parsed;
+            return 0;
+        }
+        if (!strcmp(key, "prompt"))
+            return copy_value(config->prompt, sizeof(config->prompt), value) < 0 ?
+                -1 : validate_prompt(config->prompt);
+        break;
+    case SECTION_IRC:
+        if (!strcmp(key, "client")) {
+            if (irc->client_count >= SNAG_CONFIG_IRC_CLIENT_MAX)
                 goto invalid;
-        if (copy_value(config->irc.clients[config->irc.client_count],
-                       sizeof(config->irc.clients[0]), value) < 0)
-            return -1;
-        ++config->irc.client_count;
-        return 0;
-    }
-    if (strcmp(key, "model_nick") == 0) {
-        if (copy_value(config->irc.model_nick,
-                       sizeof(config->irc.model_nick), value) < 0)
-            return -1;
-        config->irc.model_nick_implicit = false;
-        return 0;
-    }
-    if (strcmp(key, "operator_nick") == 0) {
-        if (copy_value(config->irc.operator_nick,
-                       sizeof(config->irc.operator_nick), value) < 0)
-            return -1;
-        config->irc.operator_nick_implicit = false;
-        return 0;
-    }
-    if (strcmp(key, "room_name") == 0)
-        return copy_value(config->irc.room_name,
-                          sizeof(config->irc.room_name), value);
-    if (strcmp(key, "history_lines") == 0)
-        return parse_u32(value, 1u, 1000u, &config->irc.history_lines);
-invalid:
-    errno = EINVAL;
-    return -1;
-}
-
-static int
-parse_tool(struct parse_state *state, const char *key, const char *value)
-{
-    struct snag_config *config = state->config;
-    char *copy;
-    if (strcmp(key, "shell") == 0) {
-        if (!snag_path_root_len(value))
-            goto invalid;
-        copy = snag_strdup_checked(value, SNAG_CONFIG_PATH_MAX);
-        if (!copy)
-            return -1;
-        free(config->shell);
-        config->shell = copy;
-        return 0;
-    }
-    if (strcmp(key, "default_yield_ms") == 0)
-        return parse_u32(value, 0u, 600000u, &config->default_yield_ms);
-    if (strcmp(key, "max_wait_ms") == 0)
-        return parse_u32(value, 1u, UINT32_MAX, &config->max_wait_ms);
-    if (strcmp(key, "max_parallel_commands") == 0)
-        return parse_u32(value, 1u, 32u, &config->max_parallel_commands);
-    if (strcmp(key, "default_timeout_ms") == 0)
-        return parse_u32(value, 0u, UINT32_MAX,
-                         &config->default_timeout_ms);
-    if (strcmp(key, "max_timeout_ms") == 0)
-        return parse_u32(value, 1u, UINT32_MAX, &config->max_timeout_ms);
-    if (strcmp(key, "secret") == 0) {
-        if (config->secret_count >= SNAG_CONFIG_SECRET_MAX ||
-            snag_secret_source_parse(&config->secrets[config->secret_count], value,
-                                       config->source_path, NULL, 0u) < 0)
-            goto invalid;
-        ++config->secret_count;
-        return 0;
-    }
-    if (strcmp(key, "max_output_bytes") == 0)
-        return parse_u32(value, 0u, UINT32_MAX, &config->max_output_bytes);
-    if (strcmp(key, "max_output_tokens") == 0)
-        return parse_u32(value, 1u, (uint32_t)SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                         &config->max_output_tokens);
-invalid:
-    errno = EINVAL;
-    return -1;
-}
-
-static int
-parse_assignment(struct parse_state *state, char *line)
-{
-    char *equal;
-    char *key;
-    char *value;
-    if (state->section == SECTION_NONE || !(equal = strchr(line, '='))) {
-        errno = EINVAL;
-        return -1;
-    }
-    *equal = '\0';
-    key = trim(line);
-    value = trim(equal + 1u);
-    if (!*key || claim_key(state, key) < 0)
-        goto invalid;
-    switch (state->section) {
-    case SECTION_AGENT: return parse_agent(state, key, value);
-    case SECTION_PROVIDER: return parse_provider(state, key, value);
-    case SECTION_MODEL_LIMIT: return parse_model_limit(state, key, value);
-    case SECTION_MODEL_ALIAS:
-        if (strcmp(key, "model") != 0)
-            goto invalid;
-        return copy_header_value(state->models[state->model_alias_index].model.upstream,
-                                  SNAG_CONFIG_MODEL_MAX, value);
-    case SECTION_UI: return parse_ui(state, key, value);
-    case SECTION_IRC: return parse_irc(state, key, value);
-    case SECTION_TOOL: return parse_tool(state, key, value);
-    case SECTION_NONE: case SECTION_COUNT: break;
+            for (size_t i = 0; i < irc->client_count; ++i)
+                if (!strcmp(irc->clients[i], value))
+                    goto invalid;
+            if (copy_value(irc->clients[irc->client_count], sizeof(irc->clients[0]), value) < 0)
+                return -1;
+            ++irc->client_count;
+            return 0;
+        }
+        if (!strcmp(key, "listen")) {
+            if (copy_value(irc->listen, sizeof(irc->listen), value) < 0)
+                return -1;
+            irc->listen_explicit = true;
+            return 0;
+        }
+        if (!strcmp(key, "model_nick") || !strcmp(key, "operator_nick")) {
+            bool model = !strcmp(key, "model_nick");
+            if (copy_value(model ? irc->model_nick : irc->operator_nick,
+                           sizeof(irc->model_nick), value) < 0)
+                return -1;
+            if (model)
+                irc->model_nick_implicit = false;
+            else
+                irc->operator_nick_implicit = false;
+            return 0;
+        }
+        break;
+    case SECTION_TOOL:
+        if (!strcmp(key, "shell")) {
+            if (!snag_path_root_len(value))
+                goto invalid;
+            char *copy = snag_strdup_checked(value, SNAG_CONFIG_PATH_MAX);
+            if (!copy)
+                return -1;
+            free(config->shell);
+            config->shell = copy;
+            return 0;
+        }
+        if (!strcmp(key, "secret")) {
+            if (config->secret_count >= SNAG_CONFIG_SECRET_MAX ||
+                snag_secret_source_parse(&config->secrets[config->secret_count], value,
+                                           config->source_path, NULL, 0) < 0)
+                goto invalid;
+            ++config->secret_count;
+            return 0;
+        }
+        break;
+    default: break;
     }
 invalid:
     errno = EINVAL;
@@ -977,9 +864,17 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
                 else {
                     clean[len - 1u] = '\0';
                     rc = set_section(&state, clean + 1u);
+                    /* Every section is unique; only its current keys can repeat. */
+                    memset(state.seen_keys, 0, sizeof(state.seen_keys));
                 }
             } else {
-                rc = parse_assignment(&state, clean);
+                char *equal = strchr(clean, '=');
+                rc = -1;
+                if (equal) {
+                    *equal = '\0';
+                    rc = parse_setting(&state, trim(clean), trim(equal + 1u));
+                } else
+                    errno = EINVAL;
             }
             if (rc < 0) {
                 snag_errorf(error, error_size,
