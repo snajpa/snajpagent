@@ -522,8 +522,10 @@ Removing a destination clears its outstanding local-operator reply obligation.
 On successful room join/reconnect, the topic and member nicks are admitted as
 a state-only snapshot. Identified live/replayed event payloads are projected
 once from their durable records; scheduling references do not copy their text.
-Ordinary live background chat still waits until the active turn ends; mention
-and historical catch-up timing is unchanged. The received-event watermark of a
+Ordinary live background chat still follows the existing queue/turn boundaries;
+durable `irc_admitted` sequence references record when accepted payloads become
+model context, without storing another copy of their text. Mention and
+historical catch-up timing is unchanged. The received-event watermark of a
 frozen request cannot cross withheld background input, and only successful
 completion advances consumption. Resume schedules durable
 input still awaiting consumption, even if its socket or original batch is gone.

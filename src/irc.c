@@ -2426,7 +2426,11 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
         free(irc);
         return -1;
     }
-    if (snag_random_id(irc->stream) < 0) { free(irc); return -1; }
+    if (snag_random_id(irc->stream) < 0) {
+        snag_network_free();
+        free(irc);
+        return -1;
+    }
     snag_buf_init(&irc->publications, IRC_OUTPUT_MAX);
     irc->listener = SNAG_SOCKET_INVALID;
     irc->hosting = config->irc.listen_explicit;
