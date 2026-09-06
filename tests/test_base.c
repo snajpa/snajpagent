@@ -43,6 +43,100 @@ test_shutdown_signal(int number)
 }
 
 #ifdef _WIN32
+static int
+native_process_child(const char *mode)
+{
+    unsigned char bytes[4096];
+    DWORD got, written;
+    HANDLE input = GetStdHandle(STD_INPUT_HANDLE), output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!strcmp(mode, "wait")) {
+        Sleep(30000u);
+        return 0;
+    }
+    do {
+        if (!ReadFile(input, bytes, sizeof(bytes), &got, NULL)) {
+            assert(GetLastError() == ERROR_BROKEN_PIPE);
+            break;
+        }
+        if (!got)
+            break;
+        assert(WriteFile(output, bytes, got, &written, NULL) && written == got);
+    } while (strcmp(mode, "line"));
+    return 0;
+}
+
+static void
+test_native_process_input(bool pty)
+{
+    WCHAR program[32768];
+    assert(GetModuleFileNameW(NULL, program, 32768u));
+    char *executable = snag_wide_to_utf8(program), *directory = snag_realpath(".");
+    char **env = snag_environment_entries();
+    struct snag_child child;
+    snag_child_init(&child);
+    assert(executable && directory && env);
+    assert(snag_child_spawn(&child, executable, pty ? "line" : "echo", directory, env, pty) == 0);
+    unsigned char payload[131072];
+    size_t size = pty ? 13u : sizeof(payload), written = 0;
+    for (size_t i = 0; i < sizeof(payload); ++i)
+        payload[i] = (unsigned char)(i % 251u);
+    if (pty)
+        memcpy(payload, "native stdin\r", size);
+    struct snag_buf output;
+    snag_buf_init(&output, 2u * sizeof(payload));
+    bool input_open = true, open[2] = {true, !pty};
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    while (open[0] || open[1] || snag_child_exited(&child) == 0) {
+        assert(snag_monotonic_ms() < deadline);
+        struct snag_child_event events[3];
+        size_t count = 0;
+        for (unsigned int i = 0; i < 2u; ++i)
+            if (open[i])
+                events[count++] = (struct snag_child_event){&child, i, SNAG_CHILD_READ, 0};
+        if (input_open)
+            events[count++] = (struct snag_child_event){&child, 2u, SNAG_CHILD_WRITE, 0};
+        assert(snag_child_wait(events, count, SNAG_WAKE_INVALID, 20) >= 0);
+        for (size_t i = 0; i < count; ++i) {
+            unsigned int stream = events[i].stream;
+            if (!events[i].revents)
+                continue;
+            if (stream == 2u) {
+                ssize_t n = snag_child_write(&child, payload + written, size - written);
+                if (n < 0) {
+                    assert(errno == EAGAIN);
+                    continue;
+                }
+                assert(n > 0 && (size_t)n <= size - written);
+                written += (size_t)n;
+                if (written == size) {
+                    input_open = false;
+                    snag_child_close_stream(&child, 2u);
+                }
+            } else {
+                unsigned char bytes[4096];
+                ssize_t n = snag_child_read(&child, stream, bytes, sizeof(bytes));
+                assert(n >= 0);
+                if (!n) {
+                    open[stream] = false;
+                    snag_child_close_stream(&child, stream);
+                } else if (!stream)
+                    assert(snag_buf_append(&output, bytes, (size_t)n) == 0);
+            }
+        }
+    }
+    assert(written == size && snag_child_reap(&child) == 0 && child.exit_code == 0);
+    if (pty) {
+        assert(snag_buf_terminate(&output) == 0);
+        assert(strstr((char *)output.data, "native stdin"));
+    } else
+        assert(output.len == size && !memcmp(output.data, payload, size));
+    snag_child_free(&child);
+    snag_buf_free(&output);
+    snag_environment_entries_free(env);
+    free(executable);
+    free(directory);
+}
+
 static void
 test_native_process(bool pty)
 {
@@ -1206,6 +1300,8 @@ test_platform(void)
 #ifdef _WIN32
     test_native_process(false);
     test_native_process(true);
+    test_native_process_input(false);
+    test_native_process_input(true);
     test_home_environment();
 #endif
     assert(!snag_environment(NULL) && errno == EINVAL);
@@ -1574,6 +1670,8 @@ int
 main(int argc, char **argv)
 {
 #ifdef _WIN32
+    if (argc == 3 && !strcmp(argv[1], "-c"))
+        return native_process_child(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "--editor-test-child"))
         return editor_test_child();
     if (argc == 3 && !strcmp(argv[1], "--editor-test-fail"))
