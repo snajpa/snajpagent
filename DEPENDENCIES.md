@@ -84,6 +84,25 @@ must reproduce each original payload byte-for-byte. The combined dSYM must
 retain both original UUIDs. This coalescing is packaging, not proof of runtime
 compatibility, signing identity or notarization.
 
+## Parallel production matrix
+
+`make -jN prod-matrix` explicitly builds Linux x86-64/AArch64, macOS
+ARM64/Intel/universal, and Windows x86-64. This is the full currently implemented
+set, not the completed legacy/exotic portability roadmap. Windows ARM64 and the
+remaining ports are still in development. SDK availability never silently
+reduces the requested set; a failed target fails the command.
+
+Each target uses its own `build/matrix/OS-ARCH` Nix output link. Universal macOS
+depends on both slices; Nix safely shares immutable dependencies and downloads.
+Each running recipe allows one Nix build job and one core, so outer `-jN`
+controls concurrent work without multiplying it by another per-target `N`.
+Use `make -k -jN prod-matrix` to finish independent targets after a failure;
+successful outputs remain available and reruns reuse the Nix store. Ordinary
+`make` stays host-only, and `make help` starts no builds or network requests.
+The matrix rejects `DEBUG=1`, does not replace the native executable, install
+anything, boot QEMU, or contact a model. Build success is not runtime support;
+the platform sections retain the actual qualification limits.
+
 ## Experimental native Windows x86-64
 
 `nix/windows.nix` builds static x86-64 Windows Jansson, Mbed TLS, compression,

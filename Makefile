@@ -332,6 +332,7 @@ help:
 		'make                  Host-native production build (default DEBUG=0)' \
 		'make DEBUG=1          Debug build: -Og, symbols, frame pointers, no stripping' \
 		'make -jN              Parallel host build; no cross-builds or VMs' \
+		'make -jN prod-matrix   All implemented production targets below; no installs or VMs' \
 		'make prod-linux-x86_64 Self-contained Linux x86-64 via pinned Nix; network/cache on first build' \
 		'make prod-linux-aarch64 Self-contained Linux ARM64 via pinned Nix' \
 		'make prod-windows-x86_64 Native Windows x64 with static libraries and embedded roots via Nix' \
@@ -357,9 +358,15 @@ help:
 		'Live targets (livecheck, terminallivecheck, releaseevidence) use network/' \
 		'credentials and may incur provider charges; never part of make or help.'
 
+PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64
+
+prod-matrix: $(PROD_TARGETS)
+	@printf '%s\n' 'Production matrix built: $(PROD_TARGETS:prod-%=%)' \
+		'Build success is not runtime qualification; legacy and other planned ports remain unfinished.'
+
 prod-macos-universal: prod-macos-arm64 prod-macos-x86_64
 
-prod-linux-x86_64 prod-linux-aarch64 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64:
+$(PROD_TARGETS):
 	@test '$(DEBUG)' = 0 || { printf '%s\n' '$@: production only; use DEBUG=0' >&2; exit 2; }
 	@mkdir -p build/matrix
 	nix-build nix/portable.nix -A $(patsubst prod-%,%,$@) \
@@ -376,6 +383,6 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-linux-x86_64 prod-linux-aarch64 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 FORCE
+.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d

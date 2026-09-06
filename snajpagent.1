@@ -310,6 +310,18 @@ The macOS cross-builds are experimental: cross-built and inspected, not yet
 runtime-qualified on macOS.  No Developer ID signing or notarization is implied.
 Cross-compilation alone does not establish runtime support.
 .TP
+.B make \-jN prod-matrix
+Build all currently implemented standalone production targets: Linux
+x86-64/AArch64, macOS ARM64/Intel/universal, and Windows x86-64.
+Legacy and other planned ports remain unfinished.
+Targets use separate build/matrix outputs and shared immutable Nix inputs;
+each recipe permits one Nix job and core.  SDK availability does not silently
+remove targets.  Use make \-k \-jN prod-matrix to continue independent targets
+after a failure; the command still fails and preserves successful outputs.
+Reruns reuse completed Nix builds.  DEBUG=1 is rejected.
+This does not install, replace the native executable, boot VMs, or contact a
+model.  Cross-build success does not establish runtime qualification.
+.TP
 .B make prod-windows-x86_64
 Build the experimental native Windows x64 executable using pinned Nix
 dependencies.  Copy

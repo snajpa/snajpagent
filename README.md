@@ -262,6 +262,10 @@ needs `strip` and `objcopy` on Linux, or `strip` and `dsymutil` on macOS.
 `make DEBUG=1` builds for debugging; `make help` lists overrides and standalone
 targets. See [dependency notes](DEPENDENCIES.md) for platform scope.
 
+`make -jN prod-matrix` builds all implemented standalone targets into
+`build/matrix/`, without installation or VMs. Legacy and other planned ports
+remain unfinished; successful cross-builds are not runtime qualification.
+
 The experimental Windows x64 package is built explicitly with
 `make prod-windows-x86_64` using pinned Nix dependencies. Copy
 `build/matrix/windows-x86_64/bin/snajpagent.exe` to Windows: application
