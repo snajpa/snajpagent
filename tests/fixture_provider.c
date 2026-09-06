@@ -62,27 +62,56 @@ set_usage(struct snag_response_graph *graph, uint64_t input_tokens,
     graph->usage.total_known = true;
 }
 
+struct fixture_output {
+    struct snag_response_graph *graph;
+    snag_responses_emit_fn emit;
+    snag_provider_pump_fn pump;
+    void *opaque;
+};
+
 static int
-emit_public(struct snag_response_graph *graph, snag_responses_emit_fn emit, void *opaque,
-            enum snag_item_kind kind, enum snag_item_phase phase,
-            const char *provider_id, const char *text, int pattern)
+wait_ticks(struct fixture_output *out, unsigned int count)
 {
-    size_t index = graph->count;
+    for (unsigned int i = 0u; i < count; ++i) {
+        int rc = out->pump(out->opaque, 20u);
+        if (rc != 0)
+            return rc;
+    }
+    return 0;
+}
+
+static int
+emit_fragment(struct fixture_output *out, size_t index, const char *text, size_t len)
+{
+    struct snag_response_item item = snag_response_graph_item(out->graph, index);
+    return out->emit(out->opaque, index, item.kind, item.phase, item.provider_item_id, text, len);
+}
+
+static int
+emit_public(struct fixture_output *out, enum snag_item_kind kind,
+            enum snag_item_phase phase, const char *provider_id, const char *text, int pattern)
+{
+    size_t index = out->graph->count;
     size_t len = strlen(text);
     size_t split = len / 2u;
 
-    if (snag_response_graph_add_public(graph, kind, phase, provider_id, text) < 0)
+    if (snag_response_graph_add_public(out->graph, kind, phase, provider_id, text) < 0)
         return -1;
     if (pattern == 1)
-        return emit(opaque, index, kind, phase, provider_id, "ha", 2u) < 0 ||
-               emit(opaque, index, kind, phase, provider_id, "ha", 2u) < 0 ? -1 : 0;
+        return emit_fragment(out, index, "ha", 2u) < 0 ||
+               emit_fragment(out, index, "ha", 2u) < 0 ? -1 : 0;
     if (pattern == 2)
-        return emit(opaque, index, kind, phase, provider_id, text, 1u) < 0 ||
-               emit(opaque, index, kind, phase, provider_id, text + 1u, len - 1u) < 0 ? -1 : 0;
-    if ((split && emit(opaque, index, kind, phase, provider_id, text, split) < 0) ||
-        emit(opaque, index, kind, phase, provider_id, text + split, len - split) < 0)
+        split = 1u;
+    if ((split && emit_fragment(out, index, text, split) < 0) ||
+        emit_fragment(out, index, text + split, len - split) < 0)
         return -1;
     return 0;
+}
+
+static int
+final_answer(struct fixture_output *out, const char *id, const char *text)
+{
+    return emit_public(out, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, id, text, 0);
 }
 
 static json_t *
@@ -94,100 +123,52 @@ exec_arguments(const char *workspace, const char *command)
 }
 
 static int
-add_call(struct snag_response_graph *graph, const char *workspace,
-         unsigned int cycle, unsigned int index, const char *command)
+indexed_call(struct snag_response_graph *graph, unsigned int cycle, unsigned int index,
+             const char *name, json_t *args)
 {
-    char item_id[128];
-    char call_id[128];
-    json_t *args = exec_arguments(workspace, command);
+    char item_id[128], call_id[128];
     if (!args ||
         snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle, index) < 0 ||
         snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle, index) < 0) {
-        if (args)
-            json_decref(args);
+        json_decref(args);
         return -1;
     }
-    return snag_response_graph_add_call(graph, item_id, call_id,
-                                       "exec_command", args);
+    return snag_response_graph_add_call(graph, item_id, call_id, name, args);
+}
+
+static int
+add_call(struct snag_response_graph *graph, const char *workspace,
+         unsigned int cycle, unsigned int index, const char *command)
+{
+    return indexed_call(graph, cycle, index, "exec_command", exec_arguments(workspace, command));
 }
 
 static int
 add_stdin_call(struct snag_response_graph *graph, unsigned int cycle,
                unsigned int index, const char *handle, bool malformed)
 {
-    char item_id[128];
-    char call_id[128];
-    json_t *args = json_object();
-
-    if (!args ||
-        snag_json_set_new(args, "handle", json_string(handle)) < 0 ||
-        (!malformed &&
-         snag_json_set_new(args, "data", json_string("")) < 0) ||
-        snag_json_set_new(args, "eof", json_null()) < 0 ||
-        snag_json_set_new(args, "terminate", json_false()) < 0 ||
-        snag_json_set_new(args, "yield_ms", json_integer(0)) < 0 ||
-        snag_json_set_new(args, "max_output_tokens", json_null()) < 0 ||
-        snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
-                 index) < 0 ||
-        snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle,
-                 index) < 0) {
-        if (args)
-            json_decref(args);
-        return -1;
-    }
-    return snag_response_graph_add_call(graph, item_id, call_id,
-                                       "write_stdin", args);
+    json_t *args = json_pack("{s:s,s:s,s:n,s:b,s:i,s:n}",
+        "handle", handle, "data", "", "eof", "terminate", 0, "yield_ms", 0, "max_output_tokens");
+    if (args && malformed)
+        json_object_del(args, "data");
+    return indexed_call(graph, cycle, index, "write_stdin", args);
 }
 
 static int
 add_terminate_call(struct snag_response_graph *graph, unsigned int cycle,
                    unsigned int index, const char *handle)
 {
-    char item_id[128];
-    char call_id[128];
-    json_t *args = json_object();
-
-    if (!args ||
-        snag_json_set_new(args, "handle", json_string(handle)) < 0 ||
-        snag_json_set_new(args, "data", json_string("")) < 0 ||
-        snag_json_set_new(args, "eof", json_null()) < 0 ||
-        snag_json_set_new(args, "terminate", json_true()) < 0 ||
-        snag_json_set_new(args, "yield_ms", json_integer(0)) < 0 ||
-        snag_json_set_new(args, "max_output_tokens", json_null()) < 0 ||
-        snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
-                 index) < 0 ||
-        snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle,
-                 index) < 0) {
-        if (args)
-            json_decref(args);
-        return -1;
-    }
-    return snag_response_graph_add_call(graph, item_id, call_id,
-                                       "write_stdin", args);
+    return indexed_call(graph, cycle, index, "write_stdin",
+        json_pack("{s:s,s:s,s:n,s:b,s:i,s:n}",
+            "handle", handle, "data", "", "eof", "terminate", 1, "yield_ms", 0, "max_output_tokens"));
 }
 
 static int
 add_irc_send_call(struct snag_response_graph *graph, unsigned int cycle,
                   unsigned int index, const char *text)
 {
-    char item_id[128];
-    char call_id[128];
-    json_t *args = json_object();
-
-    if (!args ||
-        snag_json_set_new(args, "notice", json_false()) < 0 ||
-        snag_json_set_new(args, "destination", json_null()) < 0 ||
-        snag_json_set_new(args, "text", json_string(text)) < 0 ||
-        snprintf(item_id, sizeof(item_id), "item_fixture_%u_%u", cycle,
-                 index) < 0 ||
-        snprintf(call_id, sizeof(call_id), "call_fixture_%u_%u", cycle,
-                 index) < 0) {
-        if (args)
-            json_decref(args);
-        return -1;
-    }
-    return snag_response_graph_add_call(graph, item_id, call_id,
-                                       "irc_send", args);
+    return indexed_call(graph, cycle, index, "irc_send",
+        json_pack("{s:b,s:n,s:s}", "notice", 0, "destination", "text", text));
 }
 
 static bool
@@ -210,12 +191,9 @@ add_goal_call(struct snag_response_graph *graph, unsigned int cycle,
 {
     char item_id[128];
     char call_id[128];
-    json_t *args = json_object();
+    json_t *args = json_pack("{s:s,s:s?}", "action", action, "text", text);
 
     if (!args ||
-        snag_json_set_new(args, "action", json_string(action)) < 0 ||
-        snag_json_set_new(args, "text",
-                         text ? json_string(text) : json_null()) < 0 ||
         snprintf(item_id, sizeof(item_id),
                  "item_fixture_goal_%u", cycle) < 0 ||
         snprintf(call_id, sizeof(call_id),
@@ -234,10 +212,9 @@ add_create_goal_call(struct snag_response_graph *graph, unsigned int cycle,
 {
     char item_id[128];
     char call_id[128];
-    json_t *args = json_object();
+    json_t *args = json_pack("{s:s}", "objective", objective);
 
     if (!args ||
-        snag_json_set_new(args, "objective", json_string(objective)) < 0 ||
         snprintf(item_id, sizeof(item_id),
                  "item_fixture_create_goal_%u", cycle) < 0 ||
         snprintf(call_id, sizeof(call_id),
@@ -269,6 +246,8 @@ fixture_response(const char *prompt, const json_t *steering,
                      struct snag_provider_failure *failure,
                      char *error, size_t error_size)
 {
+    struct fixture_output out = {graph, emit, pump, opaque};
+    int control;
     if (strcmp(prompt, "crash") == 0 && cycle == 1u)
         _exit(99);
     if (strcmp(prompt, "provider_fail") == 0 && cycle == 1u) {
@@ -301,10 +280,7 @@ fixture_response(const char *prompt, const json_t *steering,
                                "fixture did not receive empty correction");
             return -1;
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_empty_recovered",
-                           "empty message recovered", 0);
+        return final_answer(&out, "msg_fixture_empty_recovered", "empty message recovered");
     }
     if (strcmp(prompt, "oversized_message_recovery") == 0) {
         if (!steering_contains(steering, SNAG_OVERSIZED_OUTPUT_CORRECTION)) {
@@ -313,20 +289,14 @@ fixture_response(const char *prompt, const json_t *steering,
                                "fixture did not receive oversized correction");
             return -1;
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_oversized_recovered",
-                           "oversized message recovered", 0);
+        return final_answer(&out, "msg_fixture_oversized_recovered", "oversized message recovered");
     }
     if (strcmp(prompt, "context_anchor_chain") == 0) {
         set_usage(graph, 8000u + (uint64_t)(cycle - 1u) * 24000u, 100u);
         if (cycle <= 4u)
             return add_call(graph, workspace, cycle, 0u,
                             "fixture context anchor large output");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_context_anchor",
-                           "context anchor complete", 0);
+        return final_answer(&out, "msg_fixture_context_anchor", "context anchor complete");
     }
     if (strcmp(prompt, SNAG_GOAL_CONTINUATION_TEXT) == 0) {
         if (!goal_prompt)
@@ -338,35 +308,22 @@ fixture_response(const char *prompt, const json_t *steering,
             return -1;
         }
         if (strcmp(goal_prompt, "refusing goal") == 0)
-            return emit_public(graph, emit, opaque, SNAG_ITEM_REFUSAL,
-                               SNAG_PHASE_FINAL_ANSWER,
-                               "msg_fixture_goal_refusal",
-                               "I cannot continue this goal.", 0);
+            return emit_public(&out, SNAG_ITEM_REFUSAL,
+                SNAG_PHASE_FINAL_ANSWER, "msg_fixture_goal_refusal", "I cannot continue this goal.", 0);
         if (strcmp(goal_prompt, "slow goal") == 0 &&
             goal_turn_count == 1u) {
             if (cycle == 1u) {
-                if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                                SNAG_PHASE_COMMENTARY,
-                                "msg_fixture_goal_slow_commentary",
-                                "working on goal\n", 0) < 0)
+                if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+                    SNAG_PHASE_COMMENTARY, "msg_fixture_goal_slow_commentary", "working on goal\n", 0) < 0)
                     goto allocation;
-                for (unsigned int i = 0; i < 100u; ++i) {
-                    int pump_rc = pump(opaque, 20u);
-                    if (pump_rc != 0)
-                        return pump_rc;
-                }
+                if ((control = wait_ticks(&out, 100u)) != 0)
+                    return control;
             }
-            return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                               SNAG_PHASE_FINAL_ANSWER,
-                               "msg_fixture_goal_checkpoint",
-                               "goal checkpoint", 0);
+            return final_answer(&out, "msg_fixture_goal_checkpoint", "goal checkpoint");
         }
         if (strcmp(goal_prompt, "automatic goal") == 0 &&
             goal_turn_count == 1u)
-            return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                               SNAG_PHASE_FINAL_ANSWER,
-                               "msg_fixture_goal_checkpoint",
-                               "goal checkpoint", 0);
+            return final_answer(&out, "msg_fixture_goal_checkpoint", "goal checkpoint");
         if (strcmp(goal_prompt, "rewrite goal") == 0 && cycle == 1u)
             return add_goal_call(graph, cycle, "rewrite", "rewritten goal");
         if (strcmp(goal_prompt, "rewritten goal") == 0 && cycle == 2u)
@@ -374,16 +331,11 @@ fixture_response(const char *prompt, const json_t *steering,
         if (strcmp(goal_prompt, "tiny") == 0 && cycle == 1u)
             return add_goal_call(graph, cycle, "rewrite", "too long");
         if (strcmp(goal_prompt, "locked goal") == 0 && cycle == 1u) {
-            if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                            SNAG_PHASE_COMMENTARY,
-                            "msg_fixture_goal_lock_commentary",
-                            "preparing goal rewrite\n", 0) < 0)
+            if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+                SNAG_PHASE_COMMENTARY, "msg_fixture_goal_lock_commentary", "preparing goal rewrite\n", 0) < 0)
                 goto allocation;
-            for (unsigned int i = 0; i < 50u; ++i) {
-                int pump_rc = pump(opaque, 20u);
-                if (pump_rc != 0)
-                    return pump_rc;
-            }
+            if ((control = wait_ticks(&out, 50u)) != 0)
+                return control;
             return add_goal_call(graph, cycle, "rewrite", "forbidden rewrite");
         }
         if (strcmp(goal_prompt, "blocked goal") == 0 && cycle == 1u)
@@ -395,17 +347,12 @@ fixture_response(const char *prompt, const json_t *steering,
             ((strcmp(goal_prompt, "locked goal") == 0 ||
               strcmp(goal_prompt, "tiny") == 0) && cycle == 2u))
             return add_goal_call(graph, cycle, "complete", NULL);
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_goal_done", "goal done", 0);
+        return final_answer(&out, "msg_fixture_goal_done", "goal done");
     }
     if (strcmp(prompt, "please create a persistent goal") == 0) {
         if (cycle == 1u)
             return add_create_goal_call(graph, cycle, "model-created goal");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_model_goal_checkpoint",
-                           "model-created checkpoint", 0);
+        return final_answer(&out, "msg_fixture_model_goal_checkpoint", "model-created checkpoint");
     }
     if (strcmp(prompt, "ro_native") == 0 || strncmp(prompt, "ro_native ", 10u) == 0) {
         static const char *const names[] = {"list_files", "read_file", "grep"};
@@ -428,8 +375,7 @@ fixture_response(const char *prompt, const json_t *steering,
             return snag_response_graph_add_call(graph, "item_native", "call_native",
                                                names[cycle - 1u], args);
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_native", "native complete", 0);
+        return final_answer(&out, "msg_native", "native complete");
     }
     if (strcmp(prompt, "ro_denied") == 0) {
         static const char *const names[] = {"exec_command", "apply_patch", "write_stdin",
@@ -437,8 +383,7 @@ fixture_response(const char *prompt, const json_t *steering,
         if (cycle <= sizeof(names) / sizeof(names[0]))
             return snag_response_graph_add_call(graph, "item_denied", "call_denied",
                                                names[cycle - 1u], json_object());
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_denied", "denied complete", 0);
+        return final_answer(&out, "msg_denied", "denied complete");
     }
     if (strstr(prompt, "network_prompt_catchup")) {
         const char *kind = strstr(prompt, "slash") ? "slash" : "tab";
@@ -450,55 +395,40 @@ fixture_response(const char *prompt, const json_t *steering,
             snprintf(item_id, sizeof(item_id),
                      "msg_fixture_%s_catchup_%s", kind, item) < 0)
             goto allocation;
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, item_id, text, 0);
+        return final_answer(&out, item_id, text);
     }
     if (strstr(prompt, "network_zero"))
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_network_zero",
-                           "network zero local only", 0);
+        return final_answer(&out, "msg_fixture_network_zero", "network zero local only");
     if (strstr(prompt, "network_one")) {
         if (cycle == 1u)
             return add_irc_send_call(graph, cycle, 0u, "network one reply");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_network_one",
-                           "network one local completion", 0);
+        return final_answer(&out, "msg_fixture_network_one", "network one local completion");
     }
     if (strstr(prompt, "network_view_stream") && cycle == 1u)
         return add_irc_send_call(graph, cycle, 0u,
                                  "network stream acknowledged");
     if (strstr(prompt, "network_commentary")) {
         if (cycle == 1u) {
-            if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                            SNAG_PHASE_COMMENTARY,
-                            "msg_fixture_network_commentary_local",
-                            "network local planning", 0) < 0)
+            if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+                SNAG_PHASE_COMMENTARY, "msg_fixture_network_commentary_local", "network local planning", 0) < 0)
                 return -1;
             return add_irc_send_call(graph, cycle, 0u,
                                      "network commentary reply");
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_network_commentary_final",
-                           "network commentary local completion", 0);
+        return final_answer(&out, "msg_fixture_network_commentary_final",
+            "network commentary local completion");
     }
     if (strstr(prompt, "network_operator")) {
         if (cycle == 1u)
             return add_irc_send_call(graph, cycle, 0u,
                                      "network operator reply");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_network_operator",
-                           "network operator local completion", 0);
+        return final_answer(&out, "msg_fixture_network_operator", "network operator local completion");
     }
     if (strstr(prompt, "network_mention")) {
         if (cycle == 1u)
             return add_irc_send_call(graph, cycle, 0u,
                                      "network mention reply");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_network_mention",
-                           "network mention local completion", 0);
+        return final_answer(&out, "msg_fixture_network_mention", "network mention local completion");
     }
     if (strstr(prompt, "network_count_wait")) {
         if (cycle == 1u &&
@@ -511,19 +441,14 @@ fixture_response(const char *prompt, const json_t *steering,
         if (cycle == 1u)
             return add_irc_send_call(graph, cycle, 0u,
                                      "network count mention reply");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_network_count",
-                           "network count local completion", 0);
+        return final_answer(&out, "msg_fixture_network_count", "network count local completion");
     }
     if (strstr(prompt, "network_reminder")) {
         if (cycle == 1u)
             return add_irc_send_call(graph, cycle, 0u, "");
         if (cycle == 2u)
-            return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                               SNAG_PHASE_FINAL_ANSWER,
-                               "msg_fixture_network_reminder_unsent",
-                               "network reminder unsent local reply", 0);
+            return final_answer(&out, "msg_fixture_network_reminder_unsent",
+                "network reminder unsent local reply");
         if (cycle == 3u) {
             if (!steering_contains(steering, "Use irc_send")) {
                 if (error_size)
@@ -534,10 +459,7 @@ fixture_response(const char *prompt, const json_t *steering,
             return add_irc_send_call(graph, cycle, 0u,
                                      "network reminder reply");
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_network_reminder",
-                           "network reminder local completion", 0);
+        return final_answer(&out, "msg_fixture_network_reminder", "network reminder local completion");
     }
     if (strstr(prompt, "network_tool")) {
         if (cycle == 1u)
@@ -545,22 +467,15 @@ fixture_response(const char *prompt, const json_t *steering,
         if (cycle == 2u)
             return add_irc_send_call(graph, cycle, 0u,
                                      "network tool complete");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_network_tool",
-                           "network tool local completion", 0);
+        return final_answer(&out, "msg_fixture_network_tool", "network tool local completion");
     }
     if (strstr(prompt, "network_managed")) {
         if (cycle == 1u)
             return add_call(graph, workspace, cycle, 0u,
                             "fixture managed start");
         if (cycle == 2u) {
-            for (unsigned int i = 0u; i < 100u; ++i) {
-                int pump_rc = pump(opaque, 20u);
-
-                if (pump_rc != 0)
-                    return pump_rc;
-            }
+            if ((control = wait_ticks(&out, 100u)) != 0)
+                return control;
             return add_stdin_call(graph, cycle, 0u, managed_handle, false);
         }
         if (cycle == 3u) {
@@ -577,10 +492,7 @@ fixture_response(const char *prompt, const json_t *steering,
                 goto allocation;
             return 0;
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_network_managed",
-                           "network managed local completion", 0);
+        return final_answer(&out, "msg_fixture_network_managed", "network managed local completion");
     }
     if (strcmp(prompt, "managed_command_steer") == 0) {
         if (cycle == 1u)
@@ -595,19 +507,13 @@ fixture_response(const char *prompt, const json_t *steering,
             }
             return add_terminate_call(graph, cycle, 0u, managed_handle);
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_managed_steered",
-                           "managed command steering complete", 0);
+        return final_answer(&out, "msg_fixture_managed_steered", "managed command steering complete");
     }
     if (strcmp(prompt, "managed_command_queue") == 0) {
         if (cycle == 1u)
             return add_call(graph, workspace, cycle, 0u,
                             "fixture managed queue wait");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_managed_queued",
-                           "managed command queue complete", 0);
+        return final_answer(&out, "msg_fixture_managed_queued", "managed command queue complete");
     }
     if (managed_prompt(prompt)) {
         if (cycle == 1u)
@@ -621,10 +527,7 @@ fixture_response(const char *prompt, const json_t *steering,
                 return add_stdin_call(graph, cycle, 0u,
                                       managed_handle, true);
             if (strcmp(prompt, "managed_final_violation") == 0)
-                return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                                   SNAG_PHASE_FINAL_ANSWER,
-                                   "msg_fixture_managed_early_final",
-                                   "must not complete", 0);
+                return final_answer(&out, "msg_fixture_managed_early_final", "must not complete");
             if (strcmp(prompt, "managed_wrong_tool_violation") == 0)
                 return add_call(graph, workspace, cycle, 0u,
                                 "fixture forbidden tool");
@@ -638,10 +541,7 @@ fixture_response(const char *prompt, const json_t *steering,
                                   wrong_managed_handle, false);
         if (cycle == 3u || cycle == 4u)
             return add_stdin_call(graph, cycle, 0u, managed_handle, false);
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_managed_recovered",
-                           "managed process recovered", 0);
+        return final_answer(&out, "msg_fixture_managed_recovered", "managed process recovered");
     }
     if (strcmp(prompt, "empty") == 0)
         return 0;
@@ -665,39 +565,22 @@ fixture_response(const char *prompt, const json_t *steering,
         if (snag_response_graph_add_public(
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_terminal_render", full) < 0 ||
-emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 first, sizeof(first) - 1u) < 0)
+            emit_fragment(&out, index, first, sizeof(first) - 1u) < 0)
             goto allocation;
-        for (unsigned int i = 0u; i < 50u; ++i) {
-            int pump_rc = pump(opaque, 20u);
-
-            if (pump_rc != 0)
-                return pump_rc;
-        }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 second_prefix, sizeof(second_prefix) - 1u) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 euro_first, sizeof(euro_first) - 1u) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 second_suffix, sizeof(second_suffix) - 1u) < 0)
+        if ((control = wait_ticks(&out, 50u)) != 0)
+            return control;
+        if (emit_fragment(&out, index, second_prefix, sizeof(second_prefix) - 1u) < 0 ||
+            emit_fragment(&out, index, euro_first, sizeof(euro_first) - 1u) < 0 ||
+            emit_fragment(&out, index, second_suffix, sizeof(second_suffix) - 1u) < 0)
             goto allocation;
         /* Leave time for the test to begin its second typing pause. */
-        for (unsigned int i = 0u; i < 100u; ++i) {
-            int pump_rc = pump(opaque, 20u);
-
-            if (pump_rc != 0)
-                return pump_rc;
-        }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 third, sizeof(third) - 1u) < 0)
+        if ((control = wait_ticks(&out, 100u)) != 0)
+            return control;
+        if (emit_fragment(&out, index, third, sizeof(third) - 1u) < 0)
             goto allocation;
         /* Keep the turn active until that paused output becomes visible. */
-        for (unsigned int i = 0u; i < 100u; ++i) {
-            int pump_rc = pump(opaque, 20u);
-
-            if (pump_rc != 0)
-                return pump_rc;
-        }
+        if ((control = wait_ticks(&out, 100u)) != 0)
+            return control;
         return 0;
     }
     if (strcmp(prompt, "render_flood") == 0) {
@@ -711,8 +594,7 @@ emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_
                 goto flood_done;
         if (snag_buf_printf(&text, "\nflood-end\n") == 0 &&
             snag_buf_terminate(&text) == 0)
-            rc = emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                SNAG_PHASE_FINAL_ANSWER, "msg_flood", (char *)text.data, 0);
+            rc = final_answer(&out, "msg_flood", (char *)text.data);
 flood_done:
         snag_buf_free(&text);
         return rc;
@@ -723,13 +605,11 @@ flood_done:
 
         if (snag_response_graph_add_public(graph, SNAG_ITEM_ASSISTANT,
                 SNAG_PHASE_FINAL_ANSWER, "msg_engine_blocked", text) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 text, 19u) < 0)
+            emit_fragment(&out, index, text, 19u) < 0)
             goto allocation;
         /* Intentionally no pump: models a sync/lock/DNS/library stall. */
         (void)snag_sleep_ms(2500u);
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 text + 19u, sizeof(text) - 1u - 19u) < 0)
+        if (emit_fragment(&out, index, text + 19u, sizeof(text) - 1u - 19u) < 0)
             goto allocation;
         return 0;
     }
@@ -744,31 +624,19 @@ flood_done:
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_terminal_status", full) < 0)
             goto allocation;
-        for (unsigned int i = 0u; i < 50u; ++i) {
-            int pump_rc = pump(opaque, 20u);
-
-            if (pump_rc != 0)
-                return pump_rc;
-        }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 first, sizeof(first) - 1u) < 0)
+        if ((control = wait_ticks(&out, 50u)) != 0)
+            return control;
+        if (emit_fragment(&out, index, first, sizeof(first) - 1u) < 0)
             goto allocation;
-        for (unsigned int i = 0u; i < 60u; ++i) {
-            int pump_rc = pump(opaque, 20u);
-
-            if (pump_rc != 0)
-                return pump_rc;
-        }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 second, sizeof(second) - 1u) < 0)
+        if ((control = wait_ticks(&out, 60u)) != 0)
+            return control;
+        if (emit_fragment(&out, index, second, sizeof(second) - 1u) < 0)
             goto allocation;
         return 0;
     }
     if (strcmp(prompt, "public_index_gap") == 0) {
-        if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                        SNAG_PHASE_COMMENTARY,
-                        "msg_fixture_gap_commentary",
-                        "Checking hidden work.\n", 0) < 0)
+        if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+            SNAG_PHASE_COMMENTARY, "msg_fixture_gap_commentary", "Checking hidden work.\n", 0) < 0)
             goto allocation;
         if (snag_response_graph_add_public(graph, SNAG_ITEM_ASSISTANT,
                 SNAG_PHASE_FINAL_ANSWER, "msg_fixture_gap_final",
@@ -785,10 +653,8 @@ flood_done:
             snag_response_graph_add_public(
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_index_one", "index one") < 0 ||
-            emit(opaque, 1u, SNAG_ITEM_ASSISTANT,
-                 SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, 1u).provider_item_id, "index one", 9u) < 0 ||
-            emit(opaque, 0u, SNAG_ITEM_ASSISTANT,
-                 SNAG_PHASE_COMMENTARY, snag_response_graph_item(graph, 0u).provider_item_id, "index zero", 10u) < 0)
+            emit_fragment(&out, 1u, "index one", 9u) < 0 ||
+            emit_fragment(&out, 0u, "index zero", 10u) < 0)
             goto allocation;
         return 0;
     }
@@ -814,32 +680,17 @@ flood_done:
                 add_call(graph, workspace, cycle, 1u, "fixture paced") < 0)
                 goto allocation;
             for (size_t part = 0u; part < fragment_count; ++part) {
-                if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, snag_response_graph_item(graph, index).provider_item_id, fragments[part],
-                         strlen(fragments[part])) < 0)
+                if (emit_fragment(&out, index, fragments[part], strlen(fragments[part])) < 0)
                     goto allocation;
-                for (unsigned int wait = 0u;
-                     wait < (part + 1u == fragment_count ? 60u :
-                             part == 2u ? 20u : 4u);
-                     ++wait) {
-                    int pump_rc = pump(opaque, 20u);
-
-                    if (pump_rc != 0)
-                        return pump_rc;
-                }
+                if ((control = wait_ticks(&out, part + 1u == fragment_count ? 60u :
+                                               part == 2u ? 20u : 4u)) != 0)
+                    return control;
             }
             return 0;
         }
-        for (unsigned int wait = 0u; wait < 60u; ++wait) {
-            int pump_rc = pump(opaque, 20u);
-
-            if (pump_rc != 0)
-                return pump_rc;
-        }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_terminal_paced_final",
-                           "paced complete", 0);
+        if ((control = wait_ticks(&out, 60u)) != 0)
+            return control;
+        return final_answer(&out, "msg_fixture_terminal_paced_final", "paced complete");
     }
     if (strcmp(prompt, "terminal_markdown") == 0) {
         static const char full[] =
@@ -868,21 +719,13 @@ flood_done:
             goto allocation;
         for (size_t part = 0u;
              part < sizeof(fragments) / sizeof(fragments[0]); ++part) {
-            if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                     SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id, fragments[part],
-                     strlen(fragments[part])) < 0)
+            if (emit_fragment(&out, index, fragments[part], strlen(fragments[part])) < 0)
                 goto allocation;
-            for (unsigned int wait = 0u; wait < 4u; ++wait) {
-                int pump_rc = pump(opaque, 20u);
-                if (pump_rc != 0)
-                    return pump_rc;
-            }
+            if ((control = wait_ticks(&out, 4u)) != 0)
+                return control;
         }
-        for (unsigned int wait = 0u; wait < 50u; ++wait) {
-            int pump_rc = pump(opaque, 20u);
-            if (pump_rc != 0)
-                return pump_rc;
-        }
+        if ((control = wait_ticks(&out, 50u)) != 0)
+            return control;
         return 0;
     }
     if (strcmp(prompt, "typing_stream") == 0 ||
@@ -897,30 +740,21 @@ flood_done:
         if (snag_response_graph_add_public(
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_typing_stream", full) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                 first, sizeof(first) - 1u) < 0)
+            emit_fragment(&out, index, first, sizeof(first) - 1u) < 0)
             goto allocation;
         for (unsigned int part = 0u; part < 2u; ++part) {
-            for (unsigned int i = 0u; i < 10u; ++i) {
-                int pump_rc = pump(opaque, 20u);
-
-                if (pump_rc != 0)
-                    return pump_rc;
-            }
-            if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                     SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
-                     part == 0u ? second : third,
-                     part == 0u ? sizeof(second) - 1u :
+            if ((control = wait_ticks(&out, 10u)) != 0)
+                return control;
+            if (emit_fragment(&out, index,
+                part == 0u ? second : third, part == 0u ? sizeof(second) - 1u :
                                   sizeof(third) - 1u) < 0)
                 goto allocation;
         }
         return 0;
     }
     if (strcmp(prompt, "one_shot_signal_wait") == 0) {
-        if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                        SNAG_PHASE_COMMENTARY,
-                        "msg_fixture_one_shot_signal_wait",
-                        "waiting for shutdown\n", 0) < 0)
+        if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+            SNAG_PHASE_COMMENTARY, "msg_fixture_one_shot_signal_wait", "waiting for shutdown\n", 0) < 0)
             goto allocation;
         for (unsigned int i = 0u; i < 100u; ++i) {
             int pump_rc;
@@ -930,10 +764,7 @@ flood_done:
             if (pump_rc != 0)
                 return pump_rc;
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER,
-                           "msg_fixture_one_shot_signal_final",
-                           "shutdown was not requested", 0);
+        return final_answer(&out, "msg_fixture_one_shot_signal_final", "shutdown was not requested");
     }
     if (strcmp(prompt, "slow") == 0 || strcmp(prompt, "slow_utf8") == 0 ||
         strcmp(prompt, "queue_slow") == 0 ||
@@ -945,45 +776,28 @@ flood_done:
                 if (snag_response_graph_add_public(
                         graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
                         "msg_fixture_slow_utf8_commentary", euro) < 0 ||
-                    emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, snag_response_graph_item(graph, index).provider_item_id, euro, 1u) < 0)
+                    emit_fragment(&out, index, euro, 1u) < 0)
                     goto allocation;
-            } else if (emit_public(
-                           graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_COMMENTARY, "msg_fixture_slow_commentary",
-                           "working slowly\n", 0) < 0) {
+            } else if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+                SNAG_PHASE_COMMENTARY, "msg_fixture_slow_commentary", "working slowly\n", 0) < 0) {
                 goto allocation;
             }
             unsigned int waits = strcmp(prompt, "queue_slow") == 0 ? 500u : 100u;
 
-            for (unsigned int i = 0; i < waits; ++i) {
-                int pump_rc = pump(opaque, 20u);
-                if (pump_rc != 0)
-                    return pump_rc;
-            }
+            if ((control = wait_ticks(&out, waits)) != 0)
+                return control;
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";
-                if (emit(opaque, 0u, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, snag_response_graph_item(graph, 0u).provider_item_id, euro + 1u,
-                         sizeof(euro) - 2u) < 0)
+                if (emit_fragment(&out, 0u, euro + 1u, sizeof(euro) - 2u) < 0)
                     goto allocation;
             }
-            return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                               SNAG_PHASE_FINAL_ANSWER, "msg_fixture_slow_final",
-                               "slow complete", 0);
+            return final_answer(&out, "msg_fixture_slow_final", "slow complete");
         }
         if (strcmp(prompt, "slow_resteer") == 0) {
             if (cycle == 2u)
-                for (unsigned int i = 0u; i < 100u; ++i) {
-                    int pump_rc = pump(opaque, 20u);
-
-                    if (pump_rc != 0)
-                        return pump_rc;
-                }
-            return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                               SNAG_PHASE_FINAL_ANSWER,
-                               "msg_fixture_resteered_final",
-                               "repeated steering complete", 0);
+                if ((control = wait_ticks(&out, 100u)) != 0)
+                    return control;
+            return final_answer(&out, "msg_fixture_resteered_final", "repeated steering complete");
         }
         if (json_is_array(steering) && json_array_size(steering) != 0u) {
             json_t *last = json_array_get(steering,
@@ -994,27 +808,21 @@ flood_done:
                                           "steered: %s", text) : -1;
             if (written < 0 || (size_t)written >= sizeof(answer))
                 goto allocation;
-            return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                               SNAG_PHASE_FINAL_ANSWER, "msg_fixture_steered_final",
-                               answer, 0);
+            return final_answer(&out, "msg_fixture_steered_final", answer);
         }
     }
     if (strcmp(prompt, "commentary_only") == 0)
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_COMMENTARY, "msg_fixture_commentary",
-                           "I am still working.", 0);
+        return emit_public(&out, SNAG_ITEM_ASSISTANT,
+            SNAG_PHASE_COMMENTARY, "msg_fixture_commentary", "I am still working.", 0);
     if (strcmp(prompt, "final_plus_call") == 0) {
-        if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                        SNAG_PHASE_FINAL_ANSWER, "msg_fixture_conflict",
-                        "This must not complete.", 0) < 0 ||
+        if (final_answer(&out, "msg_fixture_conflict", "This must not complete.") < 0 ||
             add_call(graph, workspace, cycle, 1u, "fixture ok") < 0)
             goto allocation;
         return 0;
     }
     if (strcmp(prompt, "refusal_plus_call") == 0) {
-        if (emit_public(graph, emit, opaque, SNAG_ITEM_REFUSAL,
-                        SNAG_PHASE_FINAL_ANSWER, "msg_fixture_refusal_conflict",
-                        "I cannot do that.", 0) < 0 ||
+        if (emit_public(&out, SNAG_ITEM_REFUSAL,
+            SNAG_PHASE_FINAL_ANSWER, "msg_fixture_refusal_conflict", "I cannot do that.", 0) < 0 ||
             add_call(graph, workspace, cycle, 1u, "fixture ok") < 0)
             goto allocation;
         return 0;
@@ -1022,29 +830,22 @@ flood_done:
     if (strcmp(prompt, "tool_crash") == 0) {
         if (cycle == 1u)
             return add_call(graph, workspace, cycle, 0u, "fixture crash");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_crash_final",
-                           "unexpected continuation", 0);
+        return final_answer(&out, "msg_fixture_crash_final", "unexpected continuation");
     }
     if (strcmp(prompt, "tool_only") == 0) {
         if (cycle == 1u)
             return add_call(graph, workspace, cycle, 0u, "fixture ok");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_tool_final",
-                           "tool complete", 0);
+        return final_answer(&out, "msg_fixture_tool_final", "tool complete");
     }
     if (strcmp(prompt, "text_tool") == 0) {
         if (cycle == 1u) {
-            if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                            SNAG_PHASE_COMMENTARY, "msg_fixture_tool_commentary",
-                            "Checking first.\n", 0) < 0 ||
+            if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+                SNAG_PHASE_COMMENTARY, "msg_fixture_tool_commentary", "Checking first.\n", 0) < 0 ||
                 add_call(graph, workspace, cycle, 0u, "fixture ok") < 0)
                 goto allocation;
             return 0;
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_text_tool_final",
-                           "done", 0);
+        return final_answer(&out, "msg_fixture_text_tool_final", "done");
     }
     if (strcmp(prompt, "two_tools") == 0) {
         if (cycle == 1u) {
@@ -1053,43 +854,32 @@ flood_done:
                 goto allocation;
             return 0;
         }
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_two_tools_final",
-                           "two tools complete", 0);
+        return final_answer(&out, "msg_fixture_two_tools_final", "two tools complete");
     }
     if (strcmp(prompt, "many_cycles") == 0) {
         if (cycle <= 129u)
             return add_call(graph, workspace, cycle, 0u, "fixture loop");
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_many_final",
-                           "130th cycle complete", 0);
+        return final_answer(&out, "msg_fixture_many_final", "130th cycle complete");
     }
     if (strcmp(prompt, "multi_item") == 0) {
-        if (emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                        SNAG_PHASE_COMMENTARY, "msg_fixture_multi_commentary",
-                        "Working.\n", 0) < 0 ||
-            emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                        SNAG_PHASE_FINAL_ANSWER, "msg_fixture_multi_final",
-                        "Done.", 0) < 0)
+        if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+            SNAG_PHASE_COMMENTARY, "msg_fixture_multi_commentary", "Working.\n", 0) < 0 ||
+            final_answer(&out, "msg_fixture_multi_final", "Done.") < 0)
             goto allocation;
         return 0;
     }
     if (strcmp(prompt, "ping") == 0 || strcmp(prompt, "/ping") == 0)
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_ping", "pong", 0);
+        return final_answer(&out, "msg_fixture_ping", "pong");
     if (strcmp(prompt, "utf8") == 0)
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_utf8", "€", 2);
+        return emit_public(&out, SNAG_ITEM_ASSISTANT,
+            SNAG_PHASE_FINAL_ANSWER, "msg_fixture_utf8", "€", 2);
     if (strcmp(prompt, "repeat") == 0)
-        return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_repeat", "haha", 1);
+        return emit_public(&out, SNAG_ITEM_ASSISTANT,
+            SNAG_PHASE_FINAL_ANSWER, "msg_fixture_repeat", "haha", 1);
     if (strcmp(prompt, "refuse") == 0)
-        return emit_public(graph, emit, opaque, SNAG_ITEM_REFUSAL,
-                           SNAG_PHASE_FINAL_ANSWER, "msg_fixture_refusal",
-                           "I can’t do that.", 0);
-    return emit_public(graph, emit, opaque, SNAG_ITEM_ASSISTANT,
-                       SNAG_PHASE_FINAL_ANSWER, "msg_fixture_default",
-                       "fixture answer", 0);
+        return emit_public(&out, SNAG_ITEM_REFUSAL,
+            SNAG_PHASE_FINAL_ANSWER, "msg_fixture_refusal", "I can’t do that.", 0);
+    return final_answer(&out, "msg_fixture_default", "fixture answer");
 
 allocation:
     if (error_size)
