@@ -159,7 +159,24 @@ test_private_directory(void)
         assert(link(data, alias) == 0);
 #endif
         errno = 0;
-        assert(snag_create_private_at(fd, "data", false) == -1 && errno == EACCES);
+        int rejected = snag_create_private_at(fd, "data", false);
+        if (rejected != -1 || errno != EACCES) {
+            int error = errno;
+            (void)fprintf(stderr, "hardlink rejection: fd=%d errno=%d\n", rejected, error);
+#ifdef _WIN32
+            HANDLE inspect = CreateFileA(data, FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+            BY_HANDLE_FILE_INFORMATION info;
+            if (inspect != INVALID_HANDLE_VALUE) {
+                if (GetFileInformationByHandle(inspect, &info))
+                    (void)fprintf(stderr, "file links=%lu attributes=%lu\n",
+                                  info.nNumberOfLinks, info.dwFileAttributes);
+                (void)CloseHandle(inspect);
+            }
+#endif
+            errno = error;
+        }
+        assert(rejected == -1 && errno == EACCES);
         assert(unlink(alias) == 0);
 #ifdef _WIN32
         assert(SetNamedSecurityInfoA(data, SE_FILE_OBJECT,
