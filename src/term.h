@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SNAJPAGENT_TERM_H
 #define SNAJPAGENT_TERM_H
+#include "wake.h"
 
 #include "base.h"
 #include "history.h"
@@ -166,7 +167,7 @@ int snag_term_set_spinner_states(struct snag_term *term, unsigned int states);
 int snag_term_hide(struct snag_term *term);
 int snag_term_output_begin(struct snag_term *term, bool persistent);
 int snag_term_output_end(struct snag_term *term);
-int snag_term_poll(struct snag_term *term, int timeout_ms, int wake_fd,
+int snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
                   enum snag_term_action *action, char **text);
 int snag_term_history_set(struct snag_term *term,
                          struct snag_history_snapshot *snapshot, bool refresh);

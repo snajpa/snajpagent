@@ -15,7 +15,6 @@
 
 #include <curl/curl.h>
 #include <errno.h>
-#include <poll.h>
 #include "snag_jansson.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -367,8 +366,8 @@ perform_request(CURL *curl, struct provider_ctx *ctx)
                     result = message->data.result;
             break;
         }
-        if (curl_multi_poll(multi, wake.fd < 0 ? NULL : &wake,
-                            wake.fd < 0 ? 0u : 1u, 25, NULL) != CURLM_OK)
+        if (curl_multi_poll(multi, wake.fd == CURL_SOCKET_BAD ? NULL : &wake,
+                            wake.fd == CURL_SOCKET_BAD ? 0u : 1u, 25, NULL) != CURLM_OK)
             break;
     }
     (void)curl_multi_remove_handle(multi, curl);
@@ -659,14 +658,13 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         uint64_t now = snag_monotonic_ms();
         uint64_t remaining = now < deadline ? deadline - now : 0u;
         uint32_t slice = remaining > 25u ? 25u : (uint32_t)remaining;
-        struct pollfd wake = {snag_ui_wake_fd(ctx->render), POLLIN, 0};
         if (process_controls(ctx))
             return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
         if (ctx->new_input)
             return SNAG_PROVIDER_NEW_INPUT;
         if (!remaining)
             break;
-        if (poll(&wake, 1u, (int)slice) < 0 && errno != EINTR) {
+        if (snag_wakeup_wait(snag_ui_wake_fd(ctx->render), (int)slice) < 0 && errno != EINTR) {
             snag_errorf(error, error_size, "provider retry wait failed");
             return -1;
         }

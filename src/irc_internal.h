@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SNAJPAGENT_IRC_INTERNAL_H
 #define SNAJPAGENT_IRC_INTERNAL_H
+#include "wake.h"
 
 #include "irc.h"
 
@@ -24,7 +25,7 @@ void snag_irc_core_close(struct snag_irc_core *irc);
 size_t snag_irc_core_pending(const struct snag_irc_core *irc);
 int snag_irc_core_copy_history(struct snag_irc_core *dst,
                               const struct snag_irc_core *src, bool hosted_only);
-int snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, int wake_fd,
+int snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_fd,
                       char *error, size_t error_size);
 int snag_irc_core_send_operator(struct snag_irc_core *irc, const char *text,
                                char *error, size_t error_size);

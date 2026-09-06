@@ -1,18 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "ui.h"
+#include "wake.h"
 
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 enum ui_kind {
     UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NICKS, UI_DESTINATIONS, UI_SELECT, UI_ROUTE, UI_COMMANDS, UI_PAUSE,
@@ -71,7 +69,7 @@ struct ui_message {
 struct ui_queue {
     _Atomic size_t head, tail;
     void *items[UI_QUEUE_CAPACITY];
-    int wake[2];
+    snag_wake_fd wake[2];
 };
 
 struct ui_action {
@@ -148,21 +146,13 @@ verbosity_command(struct snag_ui_display *display, const char *text)
 static void
 wake_owner(struct ui_queue *queue)
 {
-    int saved = errno;
-    char byte = 0;
-    ssize_t rc;
-    do {
-        rc = write(queue->wake[1], &byte, 1u);
-    } while (rc < 0 && errno == EINTR);
-    errno = saved;
+    snag_wakeup_send(queue->wake[1]);
 }
 
 static void
 drain_wake(struct ui_queue *queue)
 {
-    char bytes[64];
-    while (read(queue->wake[0], bytes, sizeof(bytes)) > 0)
-        ;
+    snag_wakeup_drain(queue->wake[0]);
 }
 
 static int
@@ -170,21 +160,7 @@ queue_open(struct ui_queue *queue)
 {
     atomic_init(&queue->head, 0u);
     atomic_init(&queue->tail, 0u);
-    if (pipe(queue->wake) < 0)
-        return -1;
-    for (size_t i = 0u; i < 2u; ++i) {
-        int flags = fcntl(queue->wake[i], F_GETFL);
-        if (flags < 0 ||
-            fcntl(queue->wake[i], F_SETFL, flags | O_NONBLOCK) < 0 ||
-            fcntl(queue->wake[i], F_SETFD, FD_CLOEXEC) < 0) {
-            int saved = errno;
-            (void)close(queue->wake[0]);
-            (void)close(queue->wake[1]);
-            errno = saved;
-            return -1;
-        }
-    }
-    return 0;
+    return snag_wakeup_create(queue->wake);
 }
 
 static bool
@@ -460,8 +436,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
 
     if (!term->opened || display->suspended ||
         display->input_closed) {
-        struct pollfd pfd = {runtime->commands.wake[0], POLLIN, 0};
-        rc = poll(&pfd, 1u, timeout_ms);
+        rc = snag_wakeup_wait(runtime->commands.wake[0], timeout_ms);
         return rc < 0 && errno != EINTR ? -1 : 0;
     }
     term->input_backlog = queue_full(&runtime->actions);
@@ -717,7 +692,6 @@ request(struct snag_ui *ui, struct ui_message *message, const char *label,
 {
     int rc = -1, saved;
     struct snag_ui_runtime *runtime = ui->runtime;
-    struct pollfd pfd = {runtime->actions.wake[0], POLLIN, 0};
     assert(pthread_equal(pthread_self(), runtime->engine));
     message->len = len;
     atomic_init(&message->done, false);
@@ -738,7 +712,7 @@ request(struct snag_ui *ui, struct ui_message *message, const char *label,
         drain_wake(&runtime->actions);
         if (atomic_load_explicit(&message->done, memory_order_acquire))
             break;
-        (void)poll(&pfd, 1u, -1);
+        (void)snag_wakeup_wait(runtime->actions.wake[0], -1);
     }
     rc = message->result;
     adopt_snapshot(ui, &message->snapshot);
@@ -806,11 +780,9 @@ snag_ui_init(struct snag_ui *ui)
     ui->view = SNAG_RENDER_ROLLOUT;
     return 0;
 actions:
-    (void)close(runtime->actions.wake[0]);
-    (void)close(runtime->actions.wake[1]);
+    snag_wakeup_close(runtime->actions.wake);
 commands:
-    (void)close(runtime->commands.wake[0]);
-    (void)close(runtime->commands.wake[1]);
+    snag_wakeup_close(runtime->commands.wake);
 fail:
     free(runtime);
     return -1;
@@ -830,10 +802,8 @@ snag_ui_free(struct snag_ui *ui)
         free(action->text);
         free(action);
     }
-    (void)close(runtime->actions.wake[0]);
-    (void)close(runtime->actions.wake[1]);
-    (void)close(runtime->commands.wake[0]);
-    (void)close(runtime->commands.wake[1]);
+    snag_wakeup_close(runtime->actions.wake);
+    snag_wakeup_close(runtime->commands.wake);
     (void)pthread_sigmask(SIG_SETMASK, &runtime->saved_mask, NULL);
     free(runtime);
     ui->runtime = NULL;
@@ -1042,7 +1012,6 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
             bool active, enum snag_term_action *action, char **text)
 {
     struct snag_ui_runtime *runtime = ui->runtime;
-    struct pollfd pfd = {runtime->actions.wake[0], POLLIN, 0};
     struct ui_action *item;
     uint64_t deadline = snag_monotonic_ms() + (timeout_ms > 0 ? (uint32_t)timeout_ms : 0u);
 
@@ -1086,7 +1055,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
         if (timeout_ms >= 0 && now >= deadline)
             return 0;
         int remaining = timeout_ms < 0 ? -1 : (int)(deadline - now);
-        if (poll(&pfd, 1u, remaining) < 0) {
+        if (snag_wakeup_wait(runtime->actions.wake[0], remaining) < 0) {
             if (errno == EINTR)
                 return 0;
             return -1;
@@ -1122,10 +1091,10 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
     return *action != SNAG_TERM_NONE;
 }
 
-int
+snag_wake_fd
 snag_ui_wake_fd(const struct snag_ui *ui)
 {
-    return ui && ui->runtime ? ui->runtime->actions.wake[0] : -1;
+    return ui && ui->runtime ? ui->runtime->actions.wake[0] : SNAG_WAKE_INVALID;
 }
 
 void

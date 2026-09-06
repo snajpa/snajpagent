@@ -2310,7 +2310,7 @@ snag_irc_core_copy_history(struct snag_irc_core *dst, const struct snag_irc_core
 }
 
 int
-snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, int wake_fd,
+snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_fd,
              char *error, size_t error_size)
 {
     struct pollfd fds[2u + IRC_SERVER_PEERS + SNAG_CONFIG_IRC_CLIENT_MAX * 2u];

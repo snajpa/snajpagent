@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
 #include "fs.h"
+#include "wake.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -709,6 +710,35 @@ test_platform(void)
 }
 
 static void
+test_wakeup(void)
+{
+    snag_wake_fd pair[2];
+    assert(snag_wakeup_create(pair) == 0);
+    for (size_t i = 0; i < 2u; ++i) {
+#ifdef _WIN32
+        DWORD flags;
+        assert(GetHandleInformation((HANDLE)pair[i], &flags) && !(flags & HANDLE_FLAG_INHERIT));
+#else
+        assert(fcntl(pair[i], F_GETFD) & FD_CLOEXEC);
+#endif
+    }
+    assert(snag_wakeup_wait(pair[0], 0) == 0);
+    snag_wakeup_send(pair[1]);
+    snag_wakeup_send(pair[1]);
+    assert(snag_wakeup_wait(pair[0], 1000) == 1);
+    snag_wakeup_drain(pair[0]);
+    assert(snag_wakeup_wait(pair[0], 1) == 0);
+    snag_wakeup_send(pair[1]);
+    assert(snag_wakeup_wait(pair[0], -1) == 1);
+    snag_wakeup_drain(pair[0]);
+    snag_wakeup_close(pair);
+    assert(pair[0] == SNAG_WAKE_INVALID && pair[1] == SNAG_WAKE_INVALID);
+    snag_wakeup_close(pair);
+    assert(snag_wakeup_wait(SNAG_WAKE_INVALID, 0) == 0);
+    assert(snag_wakeup_wait(SNAG_WAKE_INVALID, -1) == -1 && errno == EINVAL);
+}
+
+static void
 test_regex(void)
 {
     static const struct {
@@ -889,6 +919,7 @@ main(void)
     test_realpath();
     test_private_directory();
     test_regex();
+    test_wakeup();
 #ifdef _WIN32
     test_windows_privacy();
 #endif

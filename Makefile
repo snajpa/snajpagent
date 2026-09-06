@@ -34,9 +34,9 @@ LIVE_CONFIG ?= $(HOME)/.$(NAME)/config.ini
 LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
-COMMON_SRC = src/base.c src/platform.c src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
+COMMON_SRC = src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
-HEADERS = src/snajpagent.h src/base.h src/fs.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/term_host.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h
+HEADERS = src/snajpagent.h src/base.h src/fs.h src/wake.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/term_host.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h
 DEPFLAGS = -MMD -MP
 FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store $(FIXTURE_BIN)
@@ -112,38 +112,38 @@ $(FIXTURE_BIN): $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS)
 	done; \
 	$(CC) $(LDFLAGS) -o $@ $$objs $(LDLIBS) $(CURL_LIBS)
 
-tests/test_base: src/base.c src/platform.c tests/test_base.c src/base.h src/fs.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/platform.c tests/test_base.c
+tests/test_base: src/base.c src/platform.c src/wake.c tests/test_base.c src/base.h src/fs.h src/wake.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/platform.c src/wake.c tests/test_base.c
 
-tests/test_config: src/base.c src/platform.c src/config.c src/secret_source.c tests/test_config.c src/base.h src/fs.h src/config.h src/secret_source.h
-	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/platform.c src/config.c src/secret_source.c tests/test_config.c $(LDLIBS)
+tests/test_config: src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c tests/test_config.c src/base.h src/fs.h src/wake.h src/config.h src/secret_source.h
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c tests/test_config.c $(LDLIBS)
 
-tests/test_irc: src/base.c src/platform.c src/config.c src/secret_source.c src/irc.c src/irc_runtime.c tests/test_irc.c src/base.h src/fs.h src/config.h src/secret_source.h src/cli.h src/irc.h src/irc_internal.h src/snajpagent.h
+tests/test_irc: src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c src/irc.c src/irc_runtime.c tests/test_irc.c src/base.h src/fs.h src/wake.h src/config.h src/secret_source.h src/cli.h src/irc.h src/irc_internal.h src/snajpagent.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ \
-		src/base.c src/platform.c src/config.c src/secret_source.c src/irc.c src/irc_runtime.c tests/test_irc.c $(LDLIBS)
+		src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c src/irc.c src/irc_runtime.c tests/test_irc.c $(LDLIBS)
 
-tests/test_credential: src/base.c src/platform.c src/credential.c src/secret_source.c tests/test_credential.c src/base.h src/fs.h src/credential.h src/secret_source.h
-	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/platform.c src/credential.c src/secret_source.c tests/test_credential.c $(LDLIBS)
+tests/test_credential: src/base.c src/platform.c src/wake.c src/credential.c src/secret_source.c tests/test_credential.c src/base.h src/fs.h src/wake.h src/credential.h src/secret_source.h
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/platform.c src/wake.c src/credential.c src/secret_source.c tests/test_credential.c $(LDLIBS)
 
-tests/test_instructions: src/base.c src/platform.c src/json.c src/instructions.c tests/test_instructions.c src/base.h src/fs.h src/json.h src/instructions.h
+tests/test_instructions: src/base.c src/platform.c src/wake.c src/json.c src/instructions.c tests/test_instructions.c src/base.h src/fs.h src/wake.h src/json.h src/instructions.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c src/instructions.c tests/test_instructions.c $(LDLIBS)
+		-o $@ src/base.c src/platform.c src/wake.c src/json.c src/instructions.c tests/test_instructions.c $(LDLIBS)
 
-tests/test_sse: src/base.c src/platform.c src/sse.c tests/test_sse.c src/base.h src/fs.h src/sse.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/platform.c src/sse.c tests/test_sse.c
+tests/test_sse: src/base.c src/platform.c src/wake.c src/sse.c tests/test_sse.c src/base.h src/fs.h src/wake.h src/sse.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ src/base.c src/platform.c src/wake.c src/sse.c tests/test_sse.c
 
-tests/test_json: src/base.c src/platform.c src/json.c tests/test_json.c src/base.h src/fs.h src/json.h
+tests/test_json: src/base.c src/platform.c src/wake.c src/json.c tests/test_json.c src/base.h src/fs.h src/wake.h src/json.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c tests/test_json.c $(LDLIBS)
+		-o $@ src/base.c src/platform.c src/wake.c src/json.c tests/test_json.c $(LDLIBS)
 
-tests/test_wire: src/base.c src/platform.c src/json.c src/wire.c tests/test_wire.c src/base.h src/fs.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h
+tests/test_wire: src/base.c src/platform.c src/wake.c src/json.c src/wire.c tests/test_wire.c src/base.h src/fs.h src/wake.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c src/wire.c tests/test_wire.c $(LDLIBS)
+		-o $@ src/base.c src/platform.c src/wake.c src/json.c src/wire.c tests/test_wire.c $(LDLIBS)
 
-tests/test_responses: src/base.c src/platform.c src/json.c src/sse.c src/responses.c src/turn.c \
-		tests/test_responses.c src/base.h src/fs.h src/json.h src/sse.h src/responses.h src/turn.h
+tests/test_responses: src/base.c src/platform.c src/wake.c src/json.c src/sse.c src/responses.c src/turn.c \
+		tests/test_responses.c src/base.h src/fs.h src/wake.h src/json.h src/sse.h src/responses.h src/turn.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c src/sse.c src/responses.c src/turn.c \
+		-o $@ src/base.c src/platform.c src/wake.c src/json.c src/sse.c src/responses.c src/turn.c \
 		tests/test_responses.c $(LDLIBS)
 
 tests/test_provider_retry: src/provider_retry.c tests/test_provider_retry.c src/provider_retry.h
@@ -153,34 +153,34 @@ tests/test_provider_transport: $(COMMON_SRC) tests/test_provider_transport.c $(H
 	$(CC) $(CPPFLAGS) -DSNAJPAGENT_TEST_TRANSPORT_ENDPOINTS=1 $(JANSSON_CFLAGS) $(CURL_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(COMMON_SRC) tests/test_provider_transport.c $(LDLIBS) $(CURL_LIBS)
 
-tests/test_context: src/base.c src/platform.c src/config.c src/secret_source.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_context.c $(HEADERS)
+tests/test_context: src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_context.c $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/config.c src/secret_source.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c \
+		-o $@ src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c src/json.c src/instructions.c src/context.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c \
 		tests/test_context.c $(LDLIBS)
 
-tests/test_model_cache: src/base.c src/platform.c src/config.c src/secret_source.c src/json.c src/instructions.c src/turn.c src/store.c src/model_cache.c tests/test_model_cache.c $(HEADERS)
+tests/test_model_cache: src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c src/json.c src/instructions.c src/turn.c src/store.c src/model_cache.c tests/test_model_cache.c $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/config.c src/secret_source.c src/json.c src/instructions.c src/turn.c src/store.c src/model_cache.c \
+		-o $@ src/base.c src/platform.c src/wake.c src/config.c src/secret_source.c src/json.c src/instructions.c src/turn.c src/store.c src/model_cache.c \
 		tests/test_model_cache.c $(LDLIBS)
 
-tests/test_render: src/base.c src/platform.c src/json.c src/history.c src/term.c src/render.c src/render_prepare.c tests/test_render.c \
-		src/base.h src/fs.h src/json.h src/term.h src/term_host.h src/render.h src/snajpagent.h
+tests/test_render: src/base.c src/platform.c src/wake.c src/json.c src/history.c src/term.c src/render.c src/render_prepare.c tests/test_render.c \
+		src/base.h src/fs.h src/wake.h src/json.h src/term.h src/term_host.h src/render.h src/snajpagent.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c src/history.c src/term.c src/render.c src/render_prepare.c tests/test_render.c $(LDLIBS)
+		-o $@ src/base.c src/platform.c src/wake.c src/json.c src/history.c src/term.c src/render.c src/render_prepare.c tests/test_render.c $(LDLIBS)
 
-tests/test_turn: src/base.c src/platform.c src/json.c src/turn.c src/tools_read.c tests/test_turn.c $(HEADERS)
+tests/test_turn: src/base.c src/platform.c src/wake.c src/json.c src/turn.c src/tools_read.c tests/test_turn.c $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c src/turn.c src/tools_read.c tests/test_turn.c $(LDLIBS)
+		-o $@ src/base.c src/platform.c src/wake.c src/json.c src/turn.c src/tools_read.c tests/test_turn.c $(LDLIBS)
 
 
-tests/test_tools: src/base.c src/platform.c src/json.c src/wire.c src/credential.c src/secret.c src/config.c src/secret_source.c src/turn.c src/tools.c src/tools_read.c src/tools_patch.c tests/test_tools.c $(HEADERS)
+tests/test_tools: src/base.c src/platform.c src/wake.c src/json.c src/wire.c src/credential.c src/secret.c src/config.c src/secret_source.c src/turn.c src/tools.c src/tools_read.c src/tools_patch.c tests/test_tools.c $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) -O0 $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c src/wire.c src/credential.c src/secret.c \
+		-o $@ src/base.c src/platform.c src/wake.c src/json.c src/wire.c src/credential.c src/secret.c \
 		src/config.c src/secret_source.c src/turn.c src/tools.c src/tools_read.c src/tools_patch.c tests/test_tools.c $(LDLIBS)
 
-tests/test_store: src/base.c src/platform.c src/json.c src/instructions.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(HEADERS)
+tests/test_store: src/base.c src/platform.c src/wake.c src/json.c src/instructions.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(HEADERS)
 	$(CC) $(CPPFLAGS) -DSNAJPAGENT_TEST_FIXTURE=1 $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c src/instructions.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(LDLIBS)
+		-o $@ src/base.c src/platform.c src/wake.c src/json.c src/instructions.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(LDLIBS)
 
 check: $(TEST_BIN)
 	./tests/test_base

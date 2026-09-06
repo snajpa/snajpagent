@@ -2502,7 +2502,7 @@ consume_resize(struct snag_term *term)
 }
 
 int
-snag_term_poll(struct snag_term *term, int timeout_ms, int wake_fd,
+snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
               enum snag_term_action *action, char **text)
 {
     struct pollfd pfd[2] = {{STDIN_FILENO, POLLIN, 0},

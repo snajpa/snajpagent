@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SNAJPAGENT_UI_H
 #define SNAJPAGENT_UI_H
+#include "wake.h"
 
 #include "render.h"
 
@@ -85,7 +86,7 @@ int snag_ui_raw(struct snag_ui *ui, int fd, const char *text, size_t len);
 int snag_ui_history_open(struct snag_ui *ui, const char *dotdir);
 int snag_ui_history_add(struct snag_ui *ui, const char *text);
 bool snag_ui_history_warning(struct snag_ui *ui);
-int snag_ui_wake_fd(const struct snag_ui *ui);
+snag_wake_fd snag_ui_wake_fd(const struct snag_ui *ui);
 void snag_ui_signal(struct snag_ui *ui);
 
 #endif

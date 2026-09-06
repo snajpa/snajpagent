@@ -958,7 +958,7 @@ process_write(struct managed_process *proc)
 }
 
 int
-snag_tools_service(int timeout_ms, int wake_fd, char *error, size_t error_size)
+snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size)
 {
     struct pollfd fds[SNAG_MAX_PROCESSES * 3u + 1u];
     struct { struct managed_process *proc; unsigned int stream; } map[SNAG_MAX_PROCESSES * 3u + 1u];
@@ -1015,7 +1015,7 @@ snag_tools_service(int timeout_ms, int wake_fd, char *error, size_t error_size)
         }
     }
     nfds_t streams = count;
-    if (wake_fd >= 0)
+    if (wake_fd != SNAG_WAKE_INVALID)
         fds[count++] = (struct pollfd){wake_fd, POLLIN, 0};
     do {
         rc = poll(fds, count, timeout_ms);
@@ -1464,7 +1464,7 @@ snag_tools_attach_output_limit(const struct snag_response_item *call,
 
 static int
 wait_process(const char *handle, uint32_t yield_ms, snag_tool_pump_fn pump,
-              void *opaque, int wake_fd, json_t **result,
+              void *opaque, snag_wake_fd wake_fd, json_t **result,
               char *error, size_t error_size)
 {
     uint64_t end = saturating_deadline(snag_monotonic_ms(), yield_ms);
@@ -1492,7 +1492,7 @@ wait_process(const char *handle, uint32_t yield_ms, snag_tool_pump_fn pump,
 
 int
 snag_tools_close_managed(const char *handle, bool user_interrupt,
-                        snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+                        snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd,
                         json_t **result, char *error, size_t error_size)
 {
     struct managed_process *proc = find_process(handle);
@@ -1510,7 +1510,7 @@ snag_tools_run(const struct snag_response_item *call,
               const struct snag_config *config,
               const struct snag_credential *credential,
               const char *session_workspace,
-              snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+              snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd,
               json_t **result, char *error, size_t error_size)
 {
     char handle[SNAG_ID_HEX_LEN + 1u];

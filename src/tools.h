@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SNAJPAGENT_TOOLS_H
 #define SNAJPAGENT_TOOLS_H
+#include "wake.h"
 
 #include "config.h"
 #include "credential.h"
@@ -29,7 +30,7 @@ int snag_tools_prepare(const struct snag_response_item *, const struct snag_conf
 int snag_tools_start(const struct snag_response_item *, const struct snag_config *,
                      const struct snag_credential *, json_t **result,
                      char *error, size_t error_size);
-int snag_tools_service(int timeout_ms, int wake_fd, char *error, size_t error_size);
+int snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size);
 bool snag_tools_ready(const char *handle);
 bool snag_tools_busy(void);
 const char *snag_tools_handoff(const char *handle);
@@ -48,7 +49,7 @@ int snag_tools_run(const struct snag_response_item *call,
                   const struct snag_config *config,
                   const struct snag_credential *credential,
                   const char *session_workspace,
-                  snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+                  snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd,
                   json_t **result,
                   char *error, size_t error_size);
 
@@ -57,7 +58,7 @@ int snag_tools_attach_output_limit(const struct snag_response_item *call,
                                   json_t *result);
 
 int snag_tools_close_managed(const char *handle, bool user_interrupt,
-                            snag_tool_pump_fn pump, void *pump_opaque, int wake_fd,
+                            snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd,
                             json_t **result,
                             char *error, size_t error_size);
 

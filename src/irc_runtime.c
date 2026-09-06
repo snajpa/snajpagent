@@ -1,13 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "irc_internal.h"
+#include "wake.h"
 
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #define IRC_MAILBOX 64u
 #define IRC_RECORDS (IRC_MAILBOX * (SNAG_CONFIG_IRC_CLIENT_MAX + 1u))
@@ -47,7 +45,7 @@ struct irc_owner {
     char routing_room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     struct snag_irc_target target;
     pthread_t thread;
-    int wake[2];
+    snag_wake_fd wake[2];
     struct irc_request *request; /* Protected by the mailbox mutex. */
     size_t queued;
     bool started, stopping, finished;
@@ -68,32 +66,12 @@ struct snag_irc {
     size_t head, count;
     uint64_t published, admitted;
     uint64_t routing_revision;
-    int wake[2];
+    snag_wake_fd wake[2];
     bool stopping;
     bool identity_changed; /* Mailbox-locked; retained across command drains. */
     bool nicks_changed; /* Engine-owned, retained across command drains. */
     int failure;
 };
-
-static void
-wake_fd(int fd)
-{
-    char byte = 0;
-    while (write(fd, &byte, 1u) < 0 && errno == EINTR)
-        ;
-}
-
-static int
-open_wake(int fds[2])
-{
-    if (pipe(fds) < 0)
-        return -1;
-    for (size_t i = 0u; i < 2u; ++i)
-        if (snag_fd_cloexec(fds[i]) < 0 ||
-            fcntl(fds[i], F_SETFL, O_NONBLOCK) < 0)
-            return -1;
-    return 0;
-}
 
 static int
 publish(struct irc_owner *owner, struct irc_record *record)
@@ -112,7 +90,7 @@ publish(struct irc_owner *owner, struct irc_record *record)
         ++owner->queued;
         ++irc->published;
         irc->records[(irc->head + irc->count++) % IRC_RECORDS] = record;
-        wake_fd(irc->wake[1]);
+        snag_wakeup_send(irc->wake[1]);
     }
     pthread_mutex_unlock(&irc->mutex);
     return rc;
@@ -231,11 +209,9 @@ run_owner(void *opaque)
     for (;;) {
         struct irc_request *request;
         bool stopping;
-        char bytes[64u];
         int rc;
 
-        while (read(owner->wake[0], bytes, sizeof(bytes)) > 0)
-            ;
+        snag_wakeup_drain(owner->wake[0]);
         pthread_mutex_lock(&irc->mutex);
         stopping = owner->stopping || irc->stopping || irc->failure;
         request = owner->request;
@@ -250,7 +226,7 @@ run_owner(void *opaque)
             pthread_mutex_lock(&irc->mutex);
             request->done = true;
             request->through = irc->published;
-            wake_fd(irc->wake[1]);
+            snag_wakeup_send(irc->wake[1]);
             pthread_mutex_unlock(&irc->mutex);
         } else {
             rc = snag_irc_core_tick(owner->core, -1, owner->wake[0],
@@ -263,14 +239,14 @@ run_owner(void *opaque)
             if (!irc->failure)
                 irc->failure = errno ? errno : EIO;
             pthread_cond_broadcast(&irc->changed);
-            wake_fd(irc->wake[1]);
+            snag_wakeup_send(irc->wake[1]);
             pthread_mutex_unlock(&irc->mutex);
             break;
         }
     }
     pthread_mutex_lock(&irc->mutex);
     owner->finished = true;
-    wake_fd(irc->wake[1]);
+    snag_wakeup_send(irc->wake[1]);
     pthread_mutex_unlock(&irc->mutex);
     return NULL;
 }
@@ -307,7 +283,7 @@ stop_owners(struct snag_irc *irc)
     pthread_cond_broadcast(&irc->changed);
     for (size_t i = 0u; i < irc->owner_count; ++i)
         if (irc->owners[i]->started)
-            wake_fd(irc->owners[i]->wake[1]);
+            snag_wakeup_send(irc->owners[i]->wake[1]);
     pthread_mutex_unlock(&irc->mutex);
     for (size_t i = 0u; i < irc->owner_count; ++i)
         if (irc->owners[i]->started) {
@@ -319,18 +295,15 @@ stop_owners(struct snag_irc *irc)
 static int
 drain(struct snag_irc *irc, int timeout_ms)
 {
-    struct pollfd fd = {irc->wake[0], POLLIN, 0};
-    char bytes[64u];
     size_t remaining;
     int rc;
 
     do {
-        rc = poll(&fd, 1u, timeout_ms);
+        rc = snag_wakeup_wait(irc->wake[0], timeout_ms);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0)
         return -1;
-    while (read(irc->wake[0], bytes, sizeof(bytes)) > 0)
-        ;
+    snag_wakeup_drain(irc->wake[0]);
     pthread_mutex_lock(&irc->mutex);
     remaining = irc->count < IRC_MAILBOX ? irc->count : IRC_MAILBOX;
     while (remaining--) {
@@ -379,7 +352,7 @@ drain(struct snag_irc *irc, int timeout_ms)
         }
     }
     if (irc->count)
-        wake_fd(irc->wake[1]);
+        snag_wakeup_send(irc->wake[1]);
     errno = irc->failure;
     pthread_mutex_unlock(&irc->mutex);
     return errno ? -1 : 0;
@@ -396,7 +369,7 @@ request_owner(struct irc_owner *owner, struct irc_request *request)
     request->done = false;
     pthread_mutex_lock(&irc->mutex);
     owner->request = request;
-    wake_fd(owner->wake[1]);
+    snag_wakeup_send(owner->wake[1]);
     pthread_mutex_unlock(&irc->mutex);
     do {
         if (drain(irc, 25) < 0) {
@@ -420,9 +393,7 @@ static void
 free_owner(struct irc_owner *owner)
 {
     snag_irc_core_close(owner->core);
-    for (size_t i = 0u; i < 2u; ++i)
-        if (owner->wake[i] >= 0)
-            close(owner->wake[i]);
+    snag_wakeup_close(owner->wake);
     free(owner);
 }
 
@@ -463,7 +434,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
     owner->settings = config->irc;
     owner->hosting = hosting;
     owner->target = (struct snag_irc_target){++irc->last_destination_id, 1u};
-    owner->wake[0] = owner->wake[1] = -1;
+    owner->wake[0] = owner->wake[1] = SNAG_WAKE_INVALID;
     local.irc.listen_explicit = hosting;
     local.irc.client_count = hosting ? 0u : 1u;
     if (!hosting)
@@ -472,7 +443,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
         !snag_strcpy(hosting ? local.irc.listen : local.irc.clients[0],
                     sizeof(local.irc.listen), endpoint))
         goto fail;
-    if (open_wake(owner->wake) < 0)
+    if (snag_wakeup_create(owner->wake) < 0)
         goto fail;
     if (snag_irc_core_open(&owner->core, &local, workspace, true, receive_event,
                            irc->trace_fn ? receive_trace : NULL, owner,
@@ -518,7 +489,7 @@ snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint,
         return 0;
     pthread_mutex_lock(&irc->mutex);
     owner->stopping = true;
-    wake_fd(owner->wake[1]);
+    snag_wakeup_send(owner->wake[1]);
     pthread_mutex_unlock(&irc->mutex);
     for (;;) {
         bool done;
@@ -775,8 +746,8 @@ snag_irc_open(struct snag_irc **out, const struct snag_config *config,
     irc->trace_fn = trace_fn;
     irc->opaque = opaque;
     irc->nicks_changed = true;
-    irc->wake[0] = irc->wake[1] = -1;
-    if (open_wake(irc->wake) < 0)
+    irc->wake[0] = irc->wake[1] = SNAG_WAKE_INVALID;
+    if (snag_wakeup_create(irc->wake) < 0)
         goto fail;
     if (snag_irc_core_open(&irc->history, config, workspace, false, NULL, NULL,
                            NULL, error, error_size) < 0)
@@ -811,9 +782,7 @@ snag_irc_close(struct snag_irc *irc)
         --irc->count;
     }
     snag_irc_core_close(irc->history);
-    for (size_t i = 0u; i < 2u; ++i)
-        if (irc->wake[i] >= 0)
-            close(irc->wake[i]);
+    snag_wakeup_close(irc->wake);
     pthread_cond_destroy(&irc->changed);
     pthread_mutex_destroy(&irc->mutex);
     free(irc);
