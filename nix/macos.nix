@@ -167,7 +167,9 @@ in {
       dontStrip = true;
       preBuild = ''
         mkdir -p build
-        od -An -v -t u1 ${pkgs.cacert}/etc/ssl/certs/ca-no-trust-rules-bundle.crt |
+        ${pkgs.zstd}/bin/zstd -q -19 \
+          ${pkgs.cacert}/etc/ssl/certs/ca-no-trust-rules-bundle.crt -o build/ca_bundle.zst
+        od -An -v -t u1 build/ca_bundle.zst |
           sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
         makeFlagsArray+=(
           'TARGET_OS=Darwin'

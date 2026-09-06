@@ -24,6 +24,9 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef SNAJPAGENT_CA_BUNDLE
+#include <zstd.h>
+#endif
 
 static CURLcode
 provider_trust(CURL *curl)
@@ -37,16 +40,29 @@ provider_trust(CURL *curl)
             curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO, file);
     }
 #ifdef SNAJPAGENT_CA_BUNDLE
-    static const unsigned char certificates[] = {
+    static const unsigned char compressed[] = {
 #include SNAJPAGENT_CA_BUNDLE
-        0
     };
+    unsigned long long size = ZSTD_getFrameContentSize(compressed, sizeof(compressed));
+    if (size == ZSTD_CONTENTSIZE_ERROR || size == ZSTD_CONTENTSIZE_UNKNOWN || size >= SIZE_MAX)
+        return CURLE_SSL_CACERT_BADFILE;
+    char *certificates = malloc((size_t)size + 1u);
+    if (!certificates)
+        return CURLE_OUT_OF_MEMORY;
+    size_t decoded = ZSTD_decompress(certificates, (size_t)size, compressed, sizeof(compressed));
+    if (ZSTD_isError(decoded) || decoded != size) {
+        free(certificates);
+        return CURLE_SSL_CACERT_BADFILE;
+    }
+    certificates[decoded] = '\0';
     struct curl_blob bundle = {
-        (void *)certificates, sizeof(certificates), CURL_BLOB_NOCOPY
+        certificates, decoded + 1u, CURL_BLOB_COPY
     };
     rc = curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &bundle);
-    return rc != CURLE_OK ? rc :
-        curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO_BLOB, &bundle);
+    if (rc == CURLE_OK)
+        rc = curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO_BLOB, &bundle);
+    free(certificates);
+    return rc;
 #else
     return CURLE_OK;
 #endif

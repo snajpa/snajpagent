@@ -38,6 +38,11 @@ This is distinct from the smaller native executable, which uses system libraries
 The TLS CA input is nixpkgs' pinned Mozilla/NSS standard-PEM export. It is
 embedded at build time, never fetched on startup. `SSL_CERT_FILE` explicitly
 replaces it for provider and login/refresh connections, including HTTPS proxies.
+Portable builds compress these exact PEM bytes with pinned Zstd and decode
+them in memory using the decoder already linked for HTTP content encoding.
+Both origin and proxy trust receive owned copies; malformed embedded data
+fails closed. This adds no runtime library or certificate-file dependency,
+does not change root selection, and leaves the explicit file override intact.
 Certificate-chain and hostname verification remain enabled. The standard-PEM
 export is used because Mbed TLS does not read OpenSSL's auxiliary trusted-PEM
 format; do not blindly convert auxiliary records into additional trusted roots.
