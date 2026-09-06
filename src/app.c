@@ -443,7 +443,7 @@ static unsigned int prompt_spinner_states(const struct app_state *app, bool acti
 static void
 prompt_hostname(char *hostname, size_t size)
 {
-    if (gethostname(hostname, size) < 0)
+    if (snag_hostname(hostname, size) < 0)
         (void)snag_strcpy(hostname, size, "localhost");
     hostname[size - 1u] = '\0';
     if (!snag_utf8_valid((const unsigned char *)hostname, strlen(hostname), true))
@@ -1595,7 +1595,7 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
     int fd;
 
     memset(snapshot, 0, sizeof(*snapshot));
-    fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    fd = snag_open_read(path, false);
     if (fd < 0) {
         if (errno == ENOENT)
             return 0;

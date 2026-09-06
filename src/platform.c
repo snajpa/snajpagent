@@ -182,6 +182,22 @@ snag_default_shell(void)
 }
 
 int
+snag_hostname(char *out, size_t size)
+{
+    wchar_t name[256];
+    DWORD count = 256;
+    if (!out || !size || size > INT_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!GetComputerNameExW(ComputerNameDnsHostname, name, &count))
+        return path_error(GetLastError());
+    if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, name, -1, out, (int)size, NULL, NULL))
+        return path_error(GetLastError());
+    return 0;
+}
+
+int
 snag_file_executable(const char *path)
 {
     wchar_t *wide = wide_path(path);
@@ -1690,6 +1706,12 @@ char *
 snag_default_shell(void)
 {
     return strdup("/bin/sh");
+}
+
+int
+snag_hostname(char *out, size_t size)
+{
+    return gethostname(out, size);
 }
 
 int

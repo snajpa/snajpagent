@@ -1100,6 +1100,9 @@ test_platform(void)
     char *shell = snag_default_shell();
     assert(shell && snag_file_executable(shell) == 0);
     free(shell);
+    char hostname[1024];
+    assert(snag_hostname(hostname, sizeof(hostname)) == 0 && hostname[0]);
+    assert(snag_utf8_valid((unsigned char *)hostname, strlen(hostname), true));
     struct snag_shutdown shutdown;
 #ifndef _WIN32
     struct sigaction before_shutdown, after_shutdown;
