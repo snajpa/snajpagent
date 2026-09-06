@@ -1517,11 +1517,31 @@ snag_sync_dir(int fd)
          error == ERROR_INVALID_HANDLE) &&
         GetFileInformationByHandle((HANDLE)handle, &info) &&
         (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        struct nt_path held = {.parent = (HANDLE)handle};
+        HANDLE writer = nt_open(&held, FILE_GENERIC_WRITE,
+            FILE_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT | FILE_WRITE_THROUGH);
+        if (!writer)
+            return -1;
+        BOOL flushed = FlushFileBuffers(writer);
+        DWORD code = flushed ? ERROR_SUCCESS : GetLastError();
+        if (!CloseHandle(writer) && code == ERROR_SUCCESS)
+            code = GetLastError();
+        if (code == ERROR_SUCCESS)
+            return 0;
+        if (code != ERROR_INVALID_FUNCTION && code != ERROR_INVALID_HANDLE &&
+            code != ERROR_INVALID_PARAMETER)
+            return path_error(code);
         errno = ENOTSUP;
         return 1; /* Valid directory, but this OS cannot flush it this way. */
     }
     errno = error == ERROR_INVALID_HANDLE ? EBADF : EIO;
     return -1;
+}
+
+int
+snag_fsync(int fd)
+{
+    return snag_sync_dir(fd) == 0 ? 0 : -1;
 }
 
 #else
@@ -2034,6 +2054,12 @@ snag_sync_dir(int fd)
     if (errno == EINVAL || errno == ENOTSUP || errno == EROFS)
         return 1;
     return -1;
+}
+
+int
+snag_fsync(int fd)
+{
+    return fsync(fd);
 }
 #endif
 

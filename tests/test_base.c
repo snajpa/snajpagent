@@ -327,6 +327,7 @@ test_private_directory(void)
     assert(snag_stat(root, &path_info) == 0 && root_info.st_dev == path_info.st_dev &&
            root_info.st_ino == path_info.st_ino);
     assert(snag_fd_privacy(fd, &privacy) == 0 && privacy.effective_owner && privacy.private_access);
+    assert(snag_fsync(fd) == 0);
     {
         const char bytes[] = {'a', '\n', '\0', '\x1a', 'z'};
         char received[sizeof(bytes)];
@@ -779,6 +780,7 @@ test_platform(void)
     assert(snag_write_full(fd, NULL, 0u) == 0);
     assert(snag_write_full(fd, "abc", 3u) == 0);
     assert(snag_sync_file(fd) == 0);
+    assert(snag_fsync(fd) == 0);
     struct snag_file_privacy privacy;
 #ifndef _WIN32
     assert(snag_fd_privacy(fd, &privacy) == 0);

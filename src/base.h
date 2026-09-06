@@ -73,6 +73,8 @@ struct tm *snag_gmtime(const time_t *seconds, struct tm *out);
 int snag_write_full(int fd, const void *data, size_t len);
 int snag_sync_file(int fd);
 int snag_sync_dir(int fd);
+/* Full data/metadata synchronization; unlike sync_dir, unsupported is failure. */
+int snag_fsync(int fd);
 struct snag_file_privacy {
     bool real_owner, effective_owner, private_access;
 };
