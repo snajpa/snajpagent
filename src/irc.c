@@ -1088,7 +1088,7 @@ format_time(uint64_t timestamp_ms, char out[32u])
     time_t seconds = (time_t)(timestamp_ms / 1000u);
     struct tm tm;
 
-    if (!gmtime_r(&seconds, &tm) ||
+    if (!snag_gmtime(&seconds, &tm) ||
         strftime(out, 32u, "%Y-%m-%dT%H:%M:%SZ", &tm) == 0)
         (void)snprintf(out, 32u, "1970-01-01T00:00:00Z");
 }

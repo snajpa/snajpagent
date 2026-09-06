@@ -824,7 +824,7 @@ snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds)
     if (clock->captured)
         return;
     clock->captured = true;
-    clock->valid = seconds != (time_t)-1 && localtime_r(&seconds, &local) &&
+    clock->valid = seconds != (time_t)-1 && snag_localtime(&seconds, &local) &&
                    local.tm_hour >= 0 && local.tm_hour <= 23 &&
                    local.tm_min >= 0 && local.tm_min <= 59 &&
                    local.tm_sec >= 0 && local.tm_sec <= 60;

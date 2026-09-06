@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 
 #define SNAG_VERBOSITY_MAX 6u
 
@@ -64,6 +65,8 @@ int snag_random_id(char out[SNAG_ID_HEX_LEN + 1u]);
 int snag_random_bytes(unsigned char *out, size_t len);
 uint64_t snag_time_ms(void);
 uint64_t snag_monotonic_ms(void);
+struct tm *snag_localtime(const time_t *seconds, struct tm *out);
+struct tm *snag_gmtime(const time_t *seconds, struct tm *out);
 int snag_write_full(int fd, const void *data, size_t len);
 int snag_sync_file(int fd);
 int snag_sync_dir(int fd);

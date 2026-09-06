@@ -5,15 +5,10 @@
 #include "snag_jansson.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-#ifndef O_CLOEXEC
-#define O_CLOEXEC 0
-#endif
 
 void
 snag_secret_clear(void *data, size_t len)
@@ -153,8 +148,8 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
         value = snag_strdup_checked(text, SNAG_SECRET_MAX);
     } else if (source->kind == SNAG_SECRET_FILE) {
         snag_file_info st;
-        /* O_NONBLOCK avoids hanging on a FIFO; symlinks are intentional sources. */
-        fd = open(source->path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        /* Reject special files without hanging; symlinks are intentional sources. */
+        fd = snag_open_secret_file(source->path);
         if (fd < 0 || snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) ||
             st.st_size < 0 || (uintmax_t)st.st_size > SNAG_SECRET_MAX + 2u)
             goto done;

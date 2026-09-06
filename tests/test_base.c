@@ -400,6 +400,9 @@ test_private_directory(void)
         assert(snag_open_read_at(fd, "alias", false) == -1);
         assert(snag_open_private_append_at(fd, "alias", false) == -1);
         assert(snag_open_history(alias) == -1);
+        file = snag_open_secret_file(alias);
+        assert(file >= 0 && read(file, received, sizeof(received)) == sizeof(received));
+        assert(!memcmp(bytes, received, sizeof(bytes)) && close(file) == 0);
         assert(snag_stat(alias, &linked) == 0 && S_ISREG(linked.st_mode) &&
                linked.st_dev == info.st_dev && linked.st_ino == info.st_ino);
         assert(snag_unlink_at(fd, "alias", false) == 0);
@@ -646,6 +649,24 @@ test_platform(void)
     assert(file);
     fd = fileno(file);
     assert(snag_fd_cloexec(fd) == 0);
+    int copy = snag_dup_read(fd);
+    assert(copy >= 0);
+#ifdef _WIN32
+    DWORD inherited;
+    assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &inherited) &&
+           !(inherited & HANDLE_FLAG_INHERIT));
+#else
+    assert(fcntl(copy, F_GETFD) & FD_CLOEXEC);
+#endif
+    assert(close(copy) == 0);
+    assert(snag_dup_read(-1) < 0 && errno == EBADF);
+    {
+        time_t seconds = 1709164800; /* 2024-02-29, UTC. */
+        struct tm utc, local;
+        assert(snag_gmtime(&seconds, &utc) == &utc && utc.tm_year == 124 &&
+               utc.tm_mon == 1 && utc.tm_mday == 29 && utc.tm_hour == 0);
+        assert(snag_localtime(&seconds, &local) == &local && mktime(&local) == seconds);
+    }
 #ifdef _WIN32
     DWORD flags;
     assert(GetHandleInformation((HANDLE)_get_osfhandle(fd), &flags));

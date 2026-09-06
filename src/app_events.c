@@ -162,7 +162,7 @@ append_irc_projection(struct snag_buf *pending,
     struct tm tm;
     int rc = -1;
 
-    if (!gmtime_r(&seconds, &tm) ||
+    if (!snag_gmtime(&seconds, &tm) ||
         strftime(when, sizeof(when), "%Y-%m-%dT%H:%M:%SZ", &tm) == 0)
         memcpy(when, "1970-01-01T00:00:00Z", 21u);
     snag_buf_init(&line, SNAG_IRC_TEXT_MAX + SNAG_CONFIG_IRC_ENDPOINT_MAX +

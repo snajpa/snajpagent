@@ -5,7 +5,6 @@
 #include "snajpagent.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2734,7 +2733,7 @@ render_irc_event_now(struct snag_render *render,
             (void)snprintf(source, sizeof(source), "[%s %s] ", event->endpoint, event->room);
     }
     seconds = (time_t)(event->timestamp_ms / 1000u);
-    if (!localtime_r(&seconds, &tm) ||
+    if (!snag_localtime(&seconds, &tm) ||
         strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
         memcpy(when, "--:--:--", 9u);
     colored = render->color_stderr;
@@ -3239,7 +3238,7 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
                     const char *type, uint32_t timeout_ms, uint32_t max_output_bytes)
 {
     if (render->history_fd < 0) {
-        render->history_fd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+        render->history_fd = snag_dup_read(fd);
         if (render->history_fd < 0)
             return -1;
     }

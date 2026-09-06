@@ -1539,7 +1539,7 @@ save_config_settings(const char *path, bool allow_create,
     struct snag_directory_lock directory_lock = {.fd = -1};
     char id[SNAG_ID_HEX_LEN + 1u];
     char temp[64] = {0};
-    char leaf[NAME_MAX + 1u];
+    char leaf[SNAG_NAME_MAX_BYTES + 1u];
     char *path_copy = NULL;
     char *slash;
     int parent_fd = -1;
@@ -1571,7 +1571,7 @@ save_config_settings(const char *path, bool allow_create,
         errno = EINVAL;
         goto out;
     }
-    if (strlen(slash + 1u) > NAME_MAX) {
+    if (strlen(slash + 1u) > SNAG_NAME_MAX_BYTES) {
         snag_errorf(error, error_size, "configuration file name is too long");
         errno = ENAMETOOLONG;
         goto out;

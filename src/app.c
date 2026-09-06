@@ -1346,7 +1346,7 @@ render_model_catalog(struct app_state *app)
         snag_model_each(&app->model_cache, app->config,
                           resolve_effort(app->config->reasoning_effort), append_model_row, &view) < 0)
         goto out;
-    if (gmtime_r(&seconds, &broken) &&
+    if (snag_gmtime(&seconds, &broken) &&
         strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ",
                  &broken) != 0u) {
         if (snag_buf_printf(&text, "\ncache updated: %s", timestamp) < 0)

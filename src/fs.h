@@ -7,6 +7,17 @@
 #include <stddef.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <errno.h>
+#include <limits.h>
+
+#ifdef _WIN32
+#define SNAG_NAME_MAX_BYTES (255u * 4u)
+#else
+#define SNAG_NAME_MAX_BYTES NAME_MAX
+#endif
+#ifndef ESTALE
+#define ESTALE EAGAIN /* Changed file: retry from a fresh snapshot. */
+#endif
 
 #ifdef _WIN32
 typedef struct {
@@ -33,6 +44,8 @@ int snag_link_at(int from_dir, const char *from, int to_dir, const char *to);
 /* Exclusively create an ordinary output file using native default permissions. */
 int snag_create_output_at(int dirfd, const char *path);
 int snag_open_read(const char *path, bool directory);
+int snag_open_secret_file(const char *path);
+int snag_dup_read(int fd);
 int snag_open_read_at(int dirfd, const char *path, bool directory);
 /* Also permit querying native ownership/permissions; callers decide privacy. */
 int snag_open_read_security_at(int dirfd, const char *path, bool directory);

@@ -498,6 +498,55 @@ snag_open_read(const char *path, bool directory)
 }
 
 int
+snag_open_secret_file(const char *path)
+{
+    char *resolved = snag_realpath(path);
+    int fd, saved;
+
+    if (!resolved)
+        return -1;
+    fd = snag_open_read(resolved, false);
+    saved = errno;
+    free(resolved);
+    errno = saved;
+    return fd;
+}
+
+int
+snag_dup_read(int fd)
+{
+    intptr_t original = _get_osfhandle(fd);
+    HANDLE copy;
+
+    if (original == -1) {
+        errno = EBADF;
+        return -1;
+    }
+    if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)original, GetCurrentProcess(),
+                          &copy, 0, FALSE, DUPLICATE_SAME_ACCESS))
+        return path_error(GetLastError());
+    int result = _open_osfhandle((intptr_t)copy, _O_RDONLY | _O_BINARY | _O_NOINHERIT);
+    if (result < 0) {
+        int saved = errno;
+        (void)CloseHandle(copy);
+        errno = saved;
+    }
+    return result;
+}
+
+struct tm *
+snag_localtime(const time_t *seconds, struct tm *out)
+{
+    return localtime_s(out, seconds) == 0 ? out : NULL;
+}
+
+struct tm *
+snag_gmtime(const time_t *seconds, struct tm *out)
+{
+    return gmtime_s(out, seconds) == 0 ? out : NULL;
+}
+
+int
 snag_open_read_at(int dirfd, const char *path, bool directory)
 {
     return open_read(dirfd, path, true, directory, false);
@@ -1542,6 +1591,30 @@ int
 snag_open_read(const char *path, bool directory)
 {
     return open_read(AT_FDCWD, path, directory);
+}
+
+int
+snag_open_secret_file(const char *path)
+{
+    return open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+}
+
+int
+snag_dup_read(int fd)
+{
+    return fcntl(fd, F_DUPFD_CLOEXEC, 0);
+}
+
+struct tm *
+snag_localtime(const time_t *seconds, struct tm *out)
+{
+    return localtime_r(seconds, out);
+}
+
+struct tm *
+snag_gmtime(const time_t *seconds, struct tm *out)
+{
+    return gmtime_r(seconds, out);
 }
 
 int

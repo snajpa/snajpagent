@@ -18,10 +18,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#ifndef NAME_MAX
-#define NAME_MAX 255
-#endif
-
 #define PATCH_TEXT_MAX (2u * 1024u * 1024u)
 #define PATCH_LINE_MAX (1024u * 1024u)
 #define PATCH_PATH_MAX 4096u
@@ -567,10 +563,10 @@ out_free:
 }
 
 static int
-open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
+open_parent_dir(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u],
                 char *error, size_t error_size)
 {
-    int dir_fd = dup(root_fd);
+    int dir_fd = snag_dup_read(root_fd);
     const char *p = path;
     const char *slash;
 
@@ -581,7 +577,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
         slash = strchr(p, '/');
         len = slash ? (size_t)(slash - p) : strlen(p);
         if (!slash) {
-            if (len > NAME_MAX) {
+            if (len > SNAG_NAME_MAX_BYTES) {
                 close(dir_fd);
                 snag_errorf(error, error_size, "patch path component is too long");
                 errno = ENAMETOOLONG;
@@ -591,14 +587,14 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
             leaf[len] = '\0';
             return dir_fd;
         }
-        if (len > NAME_MAX) {
+        if (len > SNAG_NAME_MAX_BYTES) {
             close(dir_fd);
             snag_errorf(error, error_size, "patch path component is too long");
             errno = ENAMETOOLONG;
             return -1;
         }
         {
-            char component[NAME_MAX + 1u];
+            char component[SNAG_NAME_MAX_BYTES + 1u];
             int next_fd;
             memcpy(component, p, len);
             component[len] = '\0';
@@ -620,7 +616,7 @@ static int
 read_target_file(int root_fd, struct patch_op *op,
                  char *error, size_t error_size)
 {
-    char leaf[NAME_MAX + 1u];
+    char leaf[SNAG_NAME_MAX_BYTES + 1u];
     int parent_fd = -1;
     int fd = -1;
     int rc = -1;
@@ -659,7 +655,7 @@ static int
 validate_add_target(int root_fd, struct patch_op *op,
                     char *error, size_t error_size)
 {
-    char leaf[NAME_MAX + 1u];
+    char leaf[SNAG_NAME_MAX_BYTES + 1u];
     snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
@@ -685,7 +681,7 @@ static int
 validate_delete_target(int root_fd, struct patch_op *op,
                        char *error, size_t error_size)
 {
-    char leaf[NAME_MAX + 1u];
+    char leaf[SNAG_NAME_MAX_BYTES + 1u];
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
 
@@ -954,7 +950,7 @@ unchanged_target(int parent_fd, const char *leaf, const struct patch_op *op)
 
 static int
 make_temp_file(int parent_fd, const struct snag_permissions *permissions,
-               char temp[NAME_MAX + 1u])
+               char temp[SNAG_NAME_MAX_BYTES + 1u])
 {
     char id[SNAG_ID_HEX_LEN + 1u];
     int fd;
@@ -962,7 +958,7 @@ make_temp_file(int parent_fd, const struct snag_permissions *permissions,
     for (unsigned int attempt = 0; attempt < 32u; ++attempt) {
         if (snag_random_id(id) < 0)
             return -1;
-        (void)snprintf(temp, NAME_MAX + 1u,
+        (void)snprintf(temp, SNAG_NAME_MAX_BYTES + 1u,
                        "." SNAJPAGENT_NAME "-patch-%s.tmp", id);
         fd = permissions ? snag_create_private_at(parent_fd, temp, true) :
                            snag_create_output_at(parent_fd, temp);
@@ -978,7 +974,7 @@ make_temp_file(int parent_fd, const struct snag_permissions *permissions,
 static int
 write_temp_file(int parent_fd, const struct snag_buf *bytes,
                 const struct snag_permissions *permissions,
-                char temp[NAME_MAX + 1u])
+                char temp[SNAG_NAME_MAX_BYTES + 1u])
 {
     int fd = make_temp_file(parent_fd, permissions, temp);
     int saved;
@@ -1007,8 +1003,8 @@ static int
 install_add(int root_fd, const struct patch_op *op,
             char *error, size_t error_size)
 {
-    char leaf[NAME_MAX + 1u];
-    char temp[NAME_MAX + 1u];
+    char leaf[SNAG_NAME_MAX_BYTES + 1u];
+    char temp[SNAG_NAME_MAX_BYTES + 1u];
     snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
@@ -1048,8 +1044,8 @@ static int
 install_update(int root_fd, const struct patch_op *op,
                char *error, size_t error_size)
 {
-    char leaf[NAME_MAX + 1u];
-    char temp[NAME_MAX + 1u];
+    char leaf[SNAG_NAME_MAX_BYTES + 1u];
+    char temp[SNAG_NAME_MAX_BYTES + 1u];
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
     int saved;
@@ -1093,7 +1089,7 @@ static int
 install_delete(int root_fd, const struct patch_op *op,
                char *error, size_t error_size)
 {
-    char leaf[NAME_MAX + 1u];
+    char leaf[SNAG_NAME_MAX_BYTES + 1u];
     snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
