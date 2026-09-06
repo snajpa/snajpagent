@@ -76,18 +76,22 @@ snag_irc_target_parse(const char *text, size_t len, uint32_t *id, size_t *body)
 char *
 snag_path_join(const char *left, const char *right)
 {
+    size_t a = strlen(left), b = strlen(right);
     size_t need;
     char *path;
 
-    if (!snag_size_add(strlen(left), strlen(right), &need) ||
+    if (!snag_size_add(a, b, &need) ||
         !snag_size_add(need, 2u, &need) || need > SNAG_PATH_MAX_BYTES + 1u) {
         errno = EOVERFLOW;
         return NULL;
     }
     path = malloc(need);
-    if (path)
-        (void)snprintf(path, need, "%s%s%s", left,
-                       strcmp(left, "/") == 0 ? "" : "/", right);
+    if (path) {
+        memcpy(path, left, a);
+        if (a != 1u || left[0] != '/')
+            path[a++] = '/';
+        memcpy(path + a, right, b + 1u);
+    }
     return path;
 }
 

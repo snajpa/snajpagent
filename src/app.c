@@ -4111,7 +4111,8 @@ interactive_loop(struct app_state *app, const char *initial)
                 return 3;
             continue;
         }
-        if ((owned ? app->ui.input_view : app->ui.view) == SNAG_RENDER_ROLLOUT) {
+        enum snag_render_view input_view = owned ? app->ui.input_view : app->ui.view;
+        if (input_view == SNAG_RENDER_ROLLOUT) {
             if (snag_ui_submitted(&app->ui,
                     app->ui.label, prompt, true) < 0) {
                 free(owned);
@@ -4167,8 +4168,7 @@ interactive_loop(struct app_state *app, const char *initial)
                 }
             } else if (!read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
-            } else if (!read_only &&
-                       (owned ? app->ui.input_view : app->ui.view) == SNAG_RENDER_CHAT) {
+            } else if (!read_only && input_view == SNAG_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
                 if (send_operator_routed(app, prompt, actual, SNAG_IRC_MESSAGE) < 0) {
@@ -4189,7 +4189,7 @@ interactive_loop(struct app_state *app, const char *initial)
                     continue;
                 }
 
-                if (app->networked &&
+                if (input_view == SNAG_RENDER_CHAT &&
                     snag_ui_submitted(&app->ui,
                         app->ui.label, actual, true) < 0) {
                     free(owned);
