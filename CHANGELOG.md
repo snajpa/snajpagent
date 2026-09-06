@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Highlight the whole chat entry when a message or notice mentions the local
+  operator's accepted room nickname, using the existing IRC mention matching.
+  Keep highlighting across Markdown and wrapping; honor disabled colors.
+
 - Use the same cyan agent and magenta operator chat colors on servers and
   clients. Remove presentation-only local-agent tracking and nickname updates;
   preserve runtime identity, routing and private rollout boundaries.

@@ -3101,6 +3101,44 @@ def run_irc_case(binary, root):
                 f"{corrected_models!r}"
             )
 
+        with socket.create_connection(("127.0.0.1", irc_port)) as peer:
+            peer.sendall(b"CAP REQ :snajpagent/agent\r\nNICK highlightpeer\r\n"
+                         b"USER highlightpeer 0 * :agent\r\nCAP END\r\nJOIN #lab\r\n")
+            for terminal in ordered:
+                terminal.wait("highlightpeer joined")
+            for target in ("hostop", "oneop"):
+                if target == "oneop":
+                    wait_current_prompt(terminals["one"], "oneop")
+                    terminals["one"].submit("/rollout")
+                    terminals["one"].wait("── rollout ──")
+                ending = f"highlight {target} end"
+                message = f"@{target.upper()} **highlight start** `code` " + "wrapped message " * 12 + ending
+                peer.sendall(f"PRIVMSG #lab :{message}\r\n".encode())
+                terminals["host"].wait(ending)
+                if target == "oneop":
+                    terminals["one"].submit("/chat")
+                for name, terminal in terminals.items():
+                    terminal.wait(ending)
+                    styled = terminal.capture_styled()
+                    # Track tmux's SGR foreground through Markdown and soft wrap.
+                    foreground = None
+                    found = False
+                    for chunk in re.split(r"(\x1b\[[0-9;]*m)", styled):
+                        if chunk.startswith("\x1b["):
+                            for value in chunk[2:-1].split(";"):
+                                code = int(value or "0")
+                                if code in (0, 39):
+                                    foreground = None
+                                elif 30 <= code <= 37:
+                                    foreground = code
+                        if ending in chunk:
+                            assert (foreground == 35) == (name == {"hostop": "host", "oneop": "one"}[target]), styled
+                            found = True
+                            break
+                    assert found, styled
+                wait_irc_idle(ordered)
+        wait_irc_quits(terminals["host"], ("highlightpeer",))
+        wait_irc_idle(ordered)
         terminals["two"].exit()
         wait_irc_quits(terminals["host"], ("twobot", "twoop"))
         wait_irc_quits(terminals["one"], ("twobot", "twoop"))

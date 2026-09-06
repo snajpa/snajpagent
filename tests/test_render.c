@@ -1359,6 +1359,85 @@ capture_color(enum snag_color_mode mode, bool chat_view,
     return used;
 }
 
+static void
+test_operator_highlight(void)
+{
+    static const struct {
+        const char *text, *nick, *room;
+        enum snag_irc_event_kind kind;
+        bool op, highlight;
+    } cases[] = {
+        {"@ALICE **bold** `code` tail", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
+        {"alice: plain tail", "alice", "#room", SNAG_IRC_MESSAGE, true, true},
+        {"@alice notice tail", "alice", "#room", SNAG_IRC_NOTICE, false, true},
+        {"malice alice2 alice-other éalice aliceé", "alice", "#room", SNAG_IRC_MESSAGE, false, false},
+        {"@bob wrong destination", "alice", "#room", SNAG_IRC_MESSAGE, false, false},
+        {"@alice wrong room", "alice", "#other", SNAG_IRC_MESSAGE, false, false},
+        {"@alice old alias", "alice2", "#room", SNAG_IRC_MESSAGE, false, false},
+        {"@alice2 accepted alias", "alice2", "#room", SNAG_IRC_MESSAGE, false, true},
+        {"@alice topic", "alice", "#room", SNAG_IRC_TOPIC, false, false},
+        {"unregistered operator", "", "#room", SNAG_IRC_MESSAGE, false, false},
+    };
+    for (unsigned int flags = 0u; flags < 4u; ++flags) {
+        for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            struct snag_render render;
+            struct snag_term term;
+            struct snag_irc_destinations destinations = {.count = 2u, .items = {
+                {.endpoint = "server", .room = "#room", .target = {.id = 1u}},
+                {.endpoint = "other", .room = "#room", .operator = "bob", .target = {.id = 2u}},
+            }};
+            struct snag_irc_event event = {.endpoint = "server", .nick = "peer"};
+            char output[8192] = {0};
+            int fds[2], saved = dup(STDERR_FILENO);
+            bool color = (flags & 1u) != 0u;
+            assert(saved >= 0 && pipe(fds) == 0);
+            assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
+            assert(dup2(fds[1], STDERR_FILENO) >= 0);
+            close(fds[1]);
+            snag_term_init(&term);
+            term.columns = 40u;
+            strcpy(destinations.items[0].operator, cases[i].nick);
+            assert(snag_term_set_destinations(&term, &destinations) == 0);
+            snag_render_init(&render, 0u);
+            render.stderr_terminal = true;
+            snag_render_attach_term(&render, &term);
+            snag_render_set_color(&render, color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER);
+            if (flags & 2u)
+                assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+            strcpy(event.room, cases[i].room);
+            strcpy(event.text, cases[i].text);
+            event.kind = cases[i].kind;
+            event.op = cases[i].op;
+            event.historical = !(flags & 2u);
+            assert(snag_render_irc_event(&render, &event) == 0);
+            assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+            size_t used = drain_available(fds[0], output, sizeof(output), 0u);
+            event.kind = SNAG_IRC_MESSAGE;
+            event.op = false;
+            strcpy(event.text, "ordinary followup");
+            assert(snag_render_irc_event(&render, &event) == 0);
+            (void)drain_available(fds[0], output, sizeof(output), used);
+            snag_render_free(&render);
+            snag_term_close(&term);
+            assert(dup2(saved, STDERR_FILENO) >= 0);
+            close(saved);
+            close(fds[0]);
+            assert((strstr(output, "\033[1;35m[1] ") != NULL) == (color && cases[i].highlight));
+            assert(strstr(output + used, "ordinary") && strstr(output + used, "followup"));
+            assert(!strstr(output + used, "35m"));
+            if (!color)
+                assert(!strchr(output, '\033'));
+            if (color && i == 0u) {
+                assert(strstr(output, "\033[0;1;1;35m"));
+                assert(strstr(output, "\033[0;33;1;35m"));
+                assert(strstr(output, "code\033[0m"));
+                assert(strstr(output, "\033[0;1;35m"));
+                assert(strstr(output, "tail\033[0m"));
+            }
+        }
+    }
+}
+
 static size_t
 capture_lifecycle(unsigned int verbosity, enum snag_color_mode color,
                   char *out, size_t out_size)
@@ -1779,6 +1858,7 @@ main(void)
     assert(setlocale(LC_ALL, "") != NULL);
     assert(setenv("TZ", "UTC0", 1) == 0);
     tzset();
+    test_operator_highlight();
     assert(capture_orientation(false, output, sizeof(output)) > 0u);
     assert(strcmp(output, SNAJPAGENT_IDENTITY
                   " · /work/tree · session id 01234567\n") == 0);

@@ -774,6 +774,13 @@ test_irc_target_parse(void)
 int
 main(void)
 {
+    assert(snag_irc_nick_mentioned("@ALICE: hi", "alice"));
+    assert(snag_irc_nick_mentioned("{op}: hi", "[OP]"));
+    assert(snag_irc_nick_mentioned("hello alice", "alice"));
+    assert(!snag_irc_nick_mentioned("hello", ""));
+    assert(!snag_irc_nick_mentioned("malice alice2 alice-other", "alice"));
+    assert(!snag_irc_nick_mentioned("éalice aliceé", "alice"));
+    assert(!snag_irc_nick_mentioned("alice", "alice2"));
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     char id[SNAG_ID_HEX_LEN + 1u];
     struct snag_buf buf;

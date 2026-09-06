@@ -2980,25 +2980,3 @@ snag_irc_core_operator_nick(const struct snag_irc_core *irc)
     return !irc ? NULL : !irc->hosting && irc->link_count ?
         irc->links[1].accepted_nick : irc->operator_nick;
 }
-
-bool
-snag_irc_nick_mentioned(const char *text, const char *nick)
-{
-    size_t nick_len = strlen(nick);
-
-    for (size_t i = 0; text[i]; ++i) {
-        size_t j;
-
-        if (i != 0u && ((unsigned char)text[i - 1u] >= 0x80u ||
-                        snag_irc_nick_char((unsigned char)text[i - 1u])))
-            continue;
-        for (j = 0u; j < nick_len && text[i + j]; ++j)
-            if (snag_irc_fold((unsigned char)text[i + j]) !=
-                snag_irc_fold((unsigned char)nick[j]))
-                break;
-        if (j == nick_len && (unsigned char)text[i + nick_len] < 0x80u &&
-            !snag_irc_nick_char((unsigned char)text[i + nick_len]))
-            return true;
-    }
-    return false;
-}

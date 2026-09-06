@@ -16,7 +16,6 @@ struct snag_irc_view {
 };
 
 struct snag_irc_core;
-bool snag_irc_nick_mentioned(const char *text, const char *nick);
 int snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
                       const char *workspace, bool network,
                       snag_irc_event_fn event_fn, snag_irc_trace_fn trace_fn,

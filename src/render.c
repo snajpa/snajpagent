@@ -610,8 +610,8 @@ markdown_has_style(const struct snag_render *render)
 {
     const struct snag_markdown_state *md = &render->markdown_state;
 
-    return md->heading || md->quote || md->strong || md->emphasis ||
-           md->strike || md->inline_code || md->table_header ||
+    return render->markdown_highlight || md->heading || md->quote || md->strong ||
+           md->emphasis || md->strike || md->inline_code || md->table_header ||
            md->fence != '\0' || md->link_url;
 }
 
@@ -639,6 +639,7 @@ markdown_paint_style(struct snag_render *render)
     if (md->strike) ADD_STYLE(";2");
     if (md->inline_code || md->fence) ADD_STYLE(";33");
     if (md->link_url) ADD_STYLE(";4;34");
+    if (render->markdown_highlight) ADD_STYLE(";1;35");
 #undef ADD_STYLE
     sequence[len++] = 'm';
     memcpy(render->public_style, sequence, len);
@@ -2642,7 +2643,8 @@ irc_markdown_lifecycle(struct snag_render *render,
 
 static int
 render_irc_markdown(struct snag_render *render,
-                    const struct snag_irc_event *event, size_t column)
+                    const struct snag_irc_event *event, size_t column,
+                    bool highlight)
 {
     struct snag_irc_markdown_state *saved =
         irc_markdown_state(render, event, false);
@@ -2654,6 +2656,7 @@ render_irc_markdown(struct snag_render *render,
     body.color_stderr = render->color_stderr;
     body.markdown = true;
     body.markdown_prose_bullets = false;
+    body.markdown_highlight = highlight;
     body.term = render->term;
     body.checkpoint = render->checkpoint;
     body.checkpoint_opaque = render->checkpoint_opaque;
@@ -2702,6 +2705,8 @@ render_irc_event_now(struct snag_render *render,
     time_t seconds;
     struct tm tm;
     const char *nick_color;
+    const char *body_color = COLOR_RESET;
+    bool highlight = false;
     bool colored;
     bool markdown_body;
     int n;
@@ -2719,6 +2724,9 @@ render_irc_event_now(struct snag_render *render,
             if (strcmp(destinations->items[i].endpoint, event->endpoint) == 0 &&
                 (!event->room[0] || strcmp(destinations->items[i].room, event->room) == 0))
                 origin = &destinations->items[i];
+        highlight = origin &&
+            (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
+            snag_irc_nick_mentioned(event->text, origin->operator);
         if (origin && destinations->count > 1u)
             (void)snprintf(source, sizeof(source), "[%u] ", origin->target.id);
         else if (!origin && strcmp(event->endpoint, "local") != 0)
@@ -2729,10 +2737,12 @@ render_irc_event_now(struct snag_render *render,
         strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
         memcpy(when, "--:--:--", 9u);
     colored = render->color_stderr;
-    nick_color = event->op ? COLOR_OPERATOR : COLOR_AGENT;
+    nick_color = event->op || highlight ? COLOR_OPERATOR : COLOR_AGENT;
+    if (highlight)
+        body_color = COLOR_OPERATOR;
     if (output_begin(render, true) < 0)
         return -1;
-    if (colored && irc_piece(render, COLOR_META, false) < 0)
+    if (colored && irc_piece(render, highlight ? COLOR_OPERATOR : COLOR_META, false) < 0)
         goto out;
     n = snprintf(prefix, sizeof(prefix), "%s%s%s ", source, when,
                  event->historical ? " history" : "");
@@ -2749,7 +2759,7 @@ render_irc_event_now(struct snag_render *render,
         if (n < 0 || (size_t)n >= sizeof(prefix) ||
             irc_piece(render, prefix, true) < 0)
             goto out;
-        if (colored && irc_piece(render, COLOR_RESET, false) < 0)
+        if (colored && irc_piece(render, body_color, false) < 0)
             goto out;
         if (irc_piece(render,
                 event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0)
@@ -2771,7 +2781,7 @@ render_irc_event_now(struct snag_render *render,
             if (column == SIZE_MAX)
                 goto out;
             if (render_irc_markdown(render, event,
-                    column % snag_term_columns(render->term)) < 0)
+                    column % snag_term_columns(render->term), highlight) < 0)
                 goto out;
             rc = 0;
             goto out;

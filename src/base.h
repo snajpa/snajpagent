@@ -53,6 +53,7 @@ int snag_char_width(uint32_t cp);
 bool snag_text_blank(const char *text);
 unsigned char snag_irc_fold(unsigned char c);
 bool snag_irc_nick_char(unsigned char c);
+bool snag_irc_nick_mentioned(const char *text, const char *nick);
 enum snag_irc_target_command {
     SNAG_IRC_TARGET_INVALID = -1, SNAG_IRC_TARGET_NONE,
     SNAG_IRC_TARGET_SELECT, SNAG_IRC_TARGET_SEND, SNAG_IRC_TARGET_ALL

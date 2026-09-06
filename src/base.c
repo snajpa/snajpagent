@@ -36,6 +36,30 @@ snag_irc_nick_char(unsigned char c)
            c == '|' || c == '-';
 }
 
+bool
+snag_irc_nick_mentioned(const char *text, const char *nick)
+{
+    size_t nick_len = strlen(nick);
+
+    if (!nick_len)
+        return false;
+    for (size_t i = 0; text[i]; ++i) {
+        size_t j;
+
+        if (i != 0u && ((unsigned char)text[i - 1u] >= 0x80u ||
+                        snag_irc_nick_char((unsigned char)text[i - 1u])))
+            continue;
+        for (j = 0u; j < nick_len && text[i + j]; ++j)
+            if (snag_irc_fold((unsigned char)text[i + j]) !=
+                snag_irc_fold((unsigned char)nick[j]))
+                break;
+        if (j == nick_len && (unsigned char)text[i + nick_len] < 0x80u &&
+            !snag_irc_nick_char((unsigned char)text[i + nick_len]))
+            return true;
+    }
+    return false;
+}
+
 enum snag_irc_target_command
 snag_irc_target_parse(const char *text, size_t len, uint32_t *id, size_t *body)
 {
