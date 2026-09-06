@@ -2217,7 +2217,7 @@ complete_action(struct snag_term *term, enum snag_term_action action,
         return -1;
     /* A completion separator is not an argument to a bare slash command.
      * Preserve argument/body whitespace and all ordinary or escaped text. */
-    if (copy[0] == '/' && copy[1] != '/') {
+    if (copy[0] == '/' && copy[1] != '/' && !strchr(copy, '\n') && !strchr(copy, '\r')) {
         size_t token = strcspn(copy, " \t");
         if (copy[token] && strspn(copy + token, " \t") == strlen(copy + token))
             copy[token] = '\0';

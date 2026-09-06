@@ -602,9 +602,13 @@ test_completion_choices(void)
         assert(term.cursor == 6u);
         assert(!term.completion_armed);
     }
-    const char *submissions[] = {"/help ", "/17 ", "/model value ", "ordinary ", "//help "};
-    const char *submitted[] = {"/help", "/17", "/model value ", "ordinary ", "//help "};
-    for (size_t i = 0u; i < 5u; ++i) {
+    const char *submissions[] = {
+        "/help ", "/17 ", "/model value ", "ordinary ", "//help ", "/help\n "
+    };
+    const char *submitted[] = {
+        "/help", "/17", "/model value ", "ordinary ", "//help ", "/help\n "
+    };
+    for (size_t i = 0u; i < sizeof(submissions) / sizeof(submissions[0]); ++i) {
         enum snag_term_action action;
         char *text = NULL;
         assert(snag_term_restore_draft(&term, submissions[i]) == 0);
