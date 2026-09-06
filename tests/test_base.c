@@ -651,7 +651,10 @@ test_input_mode(void)
            restored.c_iflag == host.input_mode.c_iflag);
 #endif
     assert(snag_term_input_raw(&host) == 0 && snag_term_input_restore(&host, true) == 0);
-    assert(snag_term_host_columns() > 0u);
+    if (isatty(2))
+        assert(snag_term_host_columns() > 0u);
+    else
+        assert(snag_term_host_columns() == 0u);
 }
 
 static void
