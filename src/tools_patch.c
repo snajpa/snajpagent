@@ -396,16 +396,30 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
     while (i + 1u < line_count) {
         struct patch_op *op;
         const char *path;
+        enum patch_op_type type;
 
         if (starts_with(lines[i], "*** Add File: ")) {
+            type = OP_ADD;
             path = lines[i] + strlen("*** Add File: ");
-            if (path_valid(path, error, error_size) < 0 ||
-                check_duplicate_path(set, path, error, error_size) < 0 ||
-                patch_set_add(set, &op) < 0)
-                return -1;
-            op->type = OP_ADD;
-            op->path = path;
-            ++i;
+        } else if (starts_with(lines[i], "*** Delete File: ")) {
+            type = OP_DELETE;
+            path = lines[i] + strlen("*** Delete File: ");
+        } else if (starts_with(lines[i], "*** Update File: ")) {
+            type = OP_UPDATE;
+            path = lines[i] + strlen("*** Update File: ");
+        } else {
+            snag_errorf(error, error_size, "expected a file operation header");
+            errno = EINVAL;
+            return -1;
+        }
+        if (path_valid(path, error, error_size) < 0 ||
+            check_duplicate_path(set, path, error, error_size) < 0 ||
+            patch_set_add(set, &op) < 0)
+            return -1;
+        op->type = type;
+        op->path = path;
+        ++i;
+        if (type == OP_ADD) {
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 if (lines[i][0] != '+') {
                     snag_errorf(error, error_size, "add-file body lines must start with +");
@@ -417,29 +431,13 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 ++op->added_lines;
                 ++i;
             }
-        } else if (starts_with(lines[i], "*** Delete File: ")) {
-            path = lines[i] + strlen("*** Delete File: ");
-            if (path_valid(path, error, error_size) < 0 ||
-                check_duplicate_path(set, path, error, error_size) < 0 ||
-                patch_set_add(set, &op) < 0)
-                return -1;
-            op->type = OP_DELETE;
-            op->path = path;
-            ++i;
+        } else if (type == OP_DELETE) {
             if (i + 1u < line_count && !is_file_header(lines[i])) {
                 snag_errorf(error, error_size, "delete-file sections cannot have a body");
                 errno = EINVAL;
                 return -1;
             }
-        } else if (starts_with(lines[i], "*** Update File: ")) {
-            path = lines[i] + strlen("*** Update File: ");
-            if (path_valid(path, error, error_size) < 0 ||
-                check_duplicate_path(set, path, error, error_size) < 0 ||
-                patch_set_add(set, &op) < 0)
-                return -1;
-            op->type = OP_UPDATE;
-            op->path = path;
-            ++i;
+        } else {
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 struct patch_hunk *hunk;
                 if (!is_hunk_header(lines[i]) ||
@@ -503,27 +501,12 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 errno = EINVAL;
                 return -1;
             }
-        } else {
-            snag_errorf(error, error_size, "expected a file operation header");
-            errno = EINVAL;
-            return -1;
         }
     }
     if (set->count == 0u) {
         snag_errorf(error, error_size, "patch contains no file operations");
         errno = EINVAL;
         return -1;
-    }
-    return 0;
-}
-
-static int
-append_joined_lines(struct snag_buf *out, const struct line_vec *lines)
-{
-    for (size_t i = 0; i < lines->n; ++i) {
-        if (snag_buf_append(out, lines->v[i], strlen(lines->v[i])) < 0 ||
-            snag_buf_putc(out, '\n') < 0)
-            return -1;
     }
     return 0;
 }
@@ -576,38 +559,25 @@ open_parent_dir(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1
         size_t len;
         slash = strchr(p, '/');
         len = slash ? (size_t)(slash - p) : strlen(p);
-        if (!slash) {
-            if (len > SNAG_NAME_MAX_BYTES) {
-                close(dir_fd);
-                snag_errorf(error, error_size, "patch path component is too long");
-                errno = ENAMETOOLONG;
-                return -1;
-            }
-            memcpy(leaf, p, len);
-            leaf[len] = '\0';
-            return dir_fd;
-        }
         if (len > SNAG_NAME_MAX_BYTES) {
             close(dir_fd);
             snag_errorf(error, error_size, "patch path component is too long");
             errno = ENAMETOOLONG;
             return -1;
         }
-        {
-            char component[SNAG_NAME_MAX_BYTES + 1u];
-            int next_fd;
-            memcpy(component, p, len);
-            component[len] = '\0';
-            next_fd = snag_open_read_at(dir_fd, component, true);
-            if (next_fd < 0) {
-                close(dir_fd);
-                snag_errorf(error, error_size,
-                          "patch parent directory cannot be opened without following symlinks");
-                return -1;
-            }
+        memcpy(leaf, p, len);
+        leaf[len] = '\0';
+        if (!slash)
+            return dir_fd;
+        int next_fd = snag_open_read_at(dir_fd, leaf, true);
+        if (next_fd < 0) {
             close(dir_fd);
-            dir_fd = next_fd;
+            snag_errorf(error, error_size,
+                      "patch parent directory cannot be opened without following symlinks");
+            return -1;
         }
+        close(dir_fd);
+        dir_fd = next_fd;
         p = slash + 1;
     }
 }
@@ -806,14 +776,12 @@ append_new_lines(struct snag_buf *out, const struct line_vec *lines, bool crlf)
     return append_line_range(out, lines, 0u, lines->n, crlf);
 }
 
-static int
+static void
 remove_final_eol(struct snag_buf *out, bool crlf)
 {
     size_t n = crlf ? 2u : 1u;
-    if (out->len < n)
-        return 0;
-    out->len -= n;
-    return 0;
+    if (out->len >= n)
+        out->len -= n;
 }
 
 static int
@@ -891,7 +859,7 @@ static int
 compute_add_bytes(struct patch_op *op)
 {
     snag_buf_reset(&op->new_bytes);
-    return append_joined_lines(&op->new_bytes, &op->add_lines);
+    return append_new_lines(&op->new_bytes, &op->add_lines, false);
 }
 
 static int

@@ -59,6 +59,13 @@ struct capture_redactor {
     size_t max_secret;
 };
 
+struct process_output {
+    int fd;
+    bool open;
+    struct capture_stream capture;
+    struct capture_redactor redactor;
+};
+
 struct managed_process {
     char handle[SNAG_ID_HEX_LEN + 1u];
     pid_t pid;
@@ -66,11 +73,7 @@ struct managed_process {
     unsigned short pty_rows;
     unsigned short pty_cols;
     int stdin_fd;
-    int stdout_fd;
-    int stderr_fd;
     bool stdin_open;
-    bool stdout_open;
-    bool stderr_open;
     bool child_done;
     bool reaped;
     bool closing;
@@ -80,10 +83,7 @@ struct managed_process {
     uint64_t deadline_ms;
     uint32_t max_output_tokens;
     struct snag_secret_set secrets;
-    struct capture_stream stdout_stream;
-    struct capture_stream stderr_stream;
-    struct capture_redactor stdout_redactor;
-    struct capture_redactor stderr_redactor;
+    struct process_output output[2];
     struct snag_buf input;
     size_t input_written;
     uint64_t input_accepted_total, input_written_total;
@@ -419,10 +419,7 @@ model_text_for(const char *status, const char *reason, int exit_code,
     char *out = NULL;
 
     snag_buf_init(&text, SIZE_MAX);
-    if (strcmp(status, "succeeded") == 0) {
-        if (snag_buf_printf(&text, "Process exited with code %d.\n", exit_code) < 0)
-            goto done;
-    } else if (strcmp(status, "failed") == 0) {
+    if (strcmp(status, "succeeded") == 0 || strcmp(status, "failed") == 0) {
         if (snag_buf_printf(&text, "Process exited with code %d.\n", exit_code) < 0)
             goto done;
     } else if (strcmp(status, "signaled") == 0) {
@@ -580,12 +577,12 @@ kill_child_group(pid_t pid, int signo)
         (void)kill(pid, signo);
 }
 
-static int
-write_stdin_chunk(int *fd, const char *data, size_t len, size_t *written,
-                  bool *open_flag, bool close_on_done)
+static void
+write_stdin_chunk(int fd, const char *data, size_t len, size_t *written,
+                  bool *open_flag)
 {
     while (*written < len) {
-        ssize_t n = write(*fd, data + *written, len - *written);
+        ssize_t n = write(fd, data + *written, len - *written);
         if (n > 0) {
             *written += (size_t)n;
             continue;
@@ -593,22 +590,16 @@ write_stdin_chunk(int *fd, const char *data, size_t len, size_t *written,
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            return 0;
+            return;
         *open_flag = false;
-        return 0;
+        return;
     }
-    if (close_on_done) {
-        *open_flag = false;
-        close_if_open(fd);
-    }
-    return 0;
 }
 
-static int
+static void
 exec_child(const char *shell, const char *command, const char *workdir,
            int stdin_rd, int stdout_wr, int stderr_wr, char **env)
 {
-    (void)setpgid(0, 0);
     if (chdir(workdir) < 0)
         _exit(125);
     if (dup2(stdin_rd, STDIN_FILENO) < 0 ||
@@ -674,23 +665,14 @@ open_pty_pair(int *master_fd, int *slave_fd,
     return openpty(master_fd, slave_fd, NULL, NULL, &ws);
 }
 
-static int
+static void
 exec_pty_child(const char *shell, const char *command, const char *workdir,
                int slave_fd, char **env)
 {
     if (setsid() < 0)
         _exit(125);
     (void)ioctl(slave_fd, TIOCSCTTY, 0);
-    if (chdir(workdir) < 0)
-        _exit(125);
-    if (dup2(slave_fd, STDIN_FILENO) < 0 ||
-        dup2(slave_fd, STDOUT_FILENO) < 0 ||
-        dup2(slave_fd, STDERR_FILENO) < 0)
-        _exit(125);
-    for (int fd = 3; fd < 256; ++fd)
-        (void)close(fd);
-    execle(shell, shell, "-c", command, (char *)NULL, env);
-    _exit(errno == ENOENT ? 127 : 126);
+    exec_child(shell, command, workdir, slave_fd, slave_fd, slave_fd, env);
 }
 #else
 static void
@@ -760,12 +742,11 @@ managed_release(struct managed_process *proc)
     }
     if (!proc->pty)
         close_if_open(&proc->stdin_fd);
-    close_if_open(&proc->stdout_fd);
-    close_if_open(&proc->stderr_fd);
-    redactor_free(&proc->stdout_redactor);
-    redactor_free(&proc->stderr_redactor);
-    capture_free(&proc->stdout_stream);
-    capture_free(&proc->stderr_stream);
+    for (unsigned int s = 0u; s < 2u; ++s) {
+        close_if_open(&proc->output[s].fd);
+        redactor_free(&proc->output[s].redactor);
+        capture_free(&proc->output[s].capture);
+    }
     snag_buf_free(&proc->input);
     for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i)
         if (processes[i] == proc)
@@ -797,7 +778,7 @@ managed_register_cleanup(void)
 static bool
 process_ready(const struct managed_process *proc)
 {
-    return proc->child_done && !proc->stdout_open && !proc->stderr_open;
+    return proc->child_done && !proc->output[0].open && !proc->output[1].open;
 }
 
 bool
@@ -863,11 +844,11 @@ snag_tools_close_all(bool user_interrupt)
 static int
 flush_capture(struct managed_process *proc, unsigned int stream)
 {
-    struct capture_stream *capture = stream ? &proc->stderr_stream : &proc->stdout_stream;
+    struct capture_stream *capture = &proc->output[stream].capture;
     size_t consumed = 0u;
     while (consumed < capture->data.len) {
         size_t n = capture->data.len - consumed;
-        bool open = stream ? proc->stderr_open : proc->stdout_open;
+        bool open = proc->output[stream].open;
         if (n > 16384u)
             n = 16384u;
         /* Keep an incomplete UTF-8 suffix for the next read; binary data is
@@ -903,19 +884,17 @@ flush_capture(struct managed_process *proc, unsigned int stream)
 static int
 process_read(struct managed_process *proc, unsigned int stream)
 {
-    struct capture_redactor *redactor = stream ? &proc->stderr_redactor : &proc->stdout_redactor;
-    int *fd = stream ? &proc->stderr_fd : &proc->stdout_fd;
-    bool *open = stream ? &proc->stderr_open : &proc->stdout_open;
+    struct process_output *output = &proc->output[stream];
     unsigned char bytes[4096];
-    ssize_t n = read(*fd, bytes, sizeof(bytes));
+    ssize_t n = read(output->fd, bytes, sizeof(bytes));
     if (n > 0) {
-        if (redactor_feed(redactor, bytes, (size_t)n) < 0)
+        if (redactor_feed(&output->redactor, bytes, (size_t)n) < 0)
             return -1;
     } else if (n == 0 || (n < 0 && proc->pty && errno == EIO)) {
-        if (redactor_finish(redactor) < 0)
+        if (redactor_finish(&output->redactor) < 0)
             return -1;
-        *open = false;
-        close_if_open(fd);
+        output->open = false;
+        close_if_open(&output->fd);
         if (proc->pty) {
             proc->stdin_open = false;
             proc->stdin_fd = -1;
@@ -926,17 +905,16 @@ process_read(struct managed_process *proc, unsigned int stream)
     return flush_capture(proc, stream);
 }
 
-static int
+static void
 process_write(struct managed_process *proc)
 {
     size_t before = proc->input_written;
     size_t end = proc->input.len;
     if (end - before > 4096u)
         end = before + 4096u;
-    if (before < end &&
-        write_stdin_chunk(&proc->stdin_fd, (const char *)proc->input.data, end,
-                           &proc->input_written, &proc->stdin_open, false) < 0)
-        return -1;
+    if (before < end)
+        write_stdin_chunk(proc->stdin_fd, (const char *)proc->input.data, end,
+                           &proc->input_written, &proc->stdin_open);
     proc->input_written_total += proc->input_written - before;
     if (proc->input_written == proc->input.len) {
         snag_buf_reset(&proc->input);
@@ -944,17 +922,15 @@ process_write(struct managed_process *proc)
         if (proc->input_eof && proc->stdin_open) {
             if (proc->pty && !proc->pty_eof_sent) {
                 size_t written = 0u;
-                if (write_stdin_chunk(&proc->stdin_fd, "\004", 1u, &written,
-                                       &proc->stdin_open, false) < 0)
-                    return -1;
+                write_stdin_chunk(proc->stdin_fd, "\004", 1u, &written,
+                                   &proc->stdin_open);
                 proc->pty_eof_sent = written == 1u;
                 if (!proc->pty_eof_sent)
-                    return 0;
+                    return;
             }
             managed_close_input(proc);
         }
     }
-    return 0;
 }
 
 int
@@ -995,16 +971,15 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         if (proc->deadline_ms > now &&
             proc->deadline_ms - now < (uint64_t)timeout_ms)
             timeout_ms = (int)(proc->deadline_ms - now);
-        if (proc->pty && proc->stdout_open)
-            pty_apply_current_size(proc->stdout_fd, &proc->pty_rows, &proc->pty_cols);
+        if (proc->pty && proc->output[0].open)
+            pty_apply_current_size(proc->output[0].fd, &proc->pty_rows, &proc->pty_cols);
         bool input = proc->stdin_open &&
                      (proc->input.len || (proc->input_eof && !proc->pty_eof_sent));
-        if (input && !proc->input.len && !proc->pty && process_write(proc) < 0)
-            goto fail;
+        if (input && !proc->input.len && !proc->pty)
+            process_write(proc);
         for (unsigned int s = 0u; s < 3u; ++s) {
-            int fd = s == 0u ? proc->stdout_fd : s == 1u ? proc->stderr_fd : proc->stdin_fd;
-            bool open = s == 0u ? proc->stdout_open : s == 1u ? proc->stderr_open :
-                                  input && !proc->pty;
+            int fd = s < 2u ? proc->output[s].fd : proc->stdin_fd;
+            bool open = s < 2u ? proc->output[s].open : input && !proc->pty;
             if (!open || fd < 0)
                 continue;
             fds[count] = (struct pollfd){fd, s == 2u ? POLLOUT : POLLIN, 0};
@@ -1030,8 +1005,7 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         if (!fds[i].revents)
             continue;
         if (fds[i].revents & POLLOUT) {
-            if (process_write(proc) < 0)
-                goto fail;
+            process_write(proc);
             ++serviced;
         }
         if (serviced < 16u && map[i].stream < 2u && (fds[i].revents & (POLLIN | POLLHUP | POLLERR))) {
@@ -1113,24 +1087,16 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result,
     if (!*result ||
         snag_json_set_new(*result, "max_output_tokens", json_integer(proc->max_output_tokens)) < 0)
         goto out;
-    json_t *ref = json_object();
-    static const char *const keys[] = {"stdout_start", "stdout_end", "stderr_start",
-        "stderr_end", "stdin_accepted", "stdin_written", "stdin_pending", "log_start", "log_end"};
-    uint64_t values[] = {proc->collected_offset[0], proc->result_offset[0],
-        proc->collected_offset[1], proc->result_offset[1], proc->input_accepted_total,
-        proc->input_written_total, proc->input.len - proc->input_written, 0u, 0u};
-    if (!ref)
-        goto out;
-    for (size_t i = 0u; i < sizeof(values) / sizeof(values[0]); ++i)
-        if (snag_json_set_new(ref, keys[i], json_integer((json_int_t)values[i])) < 0) {
-            json_decref(ref);
-            goto out;
-        }
-    if (snag_json_set_new(ref, "handle", json_string(handle)) < 0 ||
-        snag_json_set_new(ref, "stdin_open", json_boolean(proc->stdin_open)) < 0) {
-        json_decref(ref);
-        goto out;
-    }
+    json_t *ref = json_pack("{s:I,s:I,s:I,s:I,s:I,s:I,s:I,s:i,s:i,s:s,s:b}",
+        "stdout_start", (json_int_t)proc->collected_offset[0],
+        "stdout_end", (json_int_t)proc->result_offset[0],
+        "stderr_start", (json_int_t)proc->collected_offset[1],
+        "stderr_end", (json_int_t)proc->result_offset[1],
+        "stdin_accepted", (json_int_t)proc->input_accepted_total,
+        "stdin_written", (json_int_t)proc->input_written_total,
+        "stdin_pending", (json_int_t)(proc->input.len - proc->input_written),
+        "log_start", 0, "log_end", 0, "handle", handle,
+        "stdin_open", (int)proc->stdin_open);
     if (snag_json_set_new(*result, "output_ref", ref) < 0)
         goto out;
     rc = 0;
@@ -1185,7 +1151,7 @@ start_command(const char *handle, const char *command, const char *workdir,
         ;
     if (slot == SNAG_MAX_PROCESSES || !(proc = calloc(1u, sizeof(*proc))))
         return -1;
-    proc->stdin_fd = proc->stdout_fd = proc->stderr_fd = -1;
+    proc->stdin_fd = proc->output[0].fd = proc->output[1].fd = -1;
     processes[slot] = proc;
     managed_register_cleanup();
     if (snag_secret_set_build(&proc->secrets, config, credential, error, error_size) < 0)
@@ -1242,6 +1208,7 @@ start_command(const char *handle, const char *command, const char *workdir,
             close_if_open(&in_pipe[1]);
             close_if_open(&out_pipe[0]);
             close_if_open(&err_pipe[0]);
+            (void)setpgid(0, 0);
             exec_child(config->shell, command, workdir,
                        in_pipe[0], out_pipe[1], err_pipe[1], env);
         }
@@ -1256,8 +1223,8 @@ start_command(const char *handle, const char *command, const char *workdir,
     }
 
     proc->stdin_fd = pty ? pty_master : in_pipe[1];
-    proc->stdout_fd = pty ? pty_master : out_pipe[0];
-    proc->stderr_fd = pty ? -1 : err_pipe[0];
+    proc->output[0].fd = pty ? pty_master : out_pipe[0];
+    proc->output[1].fd = pty ? -1 : err_pipe[0];
     if (pty)
         pty_master = -1;
     else {
@@ -1270,8 +1237,8 @@ start_command(const char *handle, const char *command, const char *workdir,
     proc->pty_rows = pty_rows;
     proc->pty_cols = pty_cols;
     proc->stdin_open = true;
-    proc->stdout_open = true;
-    proc->stderr_open = !pty;
+    proc->output[0].open = true;
+    proc->output[1].open = !pty;
     proc->started_ms = snag_monotonic_ms();
     proc->deadline_ms = saturating_deadline(proc->started_ms, timeout_ms);
     proc->max_output_tokens = max_output_tokens;
@@ -1282,14 +1249,13 @@ start_command(const char *handle, const char *command, const char *workdir,
         goto out;
     proc->input_accepted_total = stdin_len;
     proc->input_eof = stdin_text != NULL;
-    capture_init(&proc->stdout_stream);
-    capture_init(&proc->stderr_stream);
-    proc->stdout_stream.owner = proc->stderr_stream.owner = proc;
-    proc->stderr_stream.stream = 1u;
-    redactor_init(&proc->stdout_redactor, &proc->stdout_stream,
-                  &proc->secrets.wire);
-    redactor_init(&proc->stderr_redactor, &proc->stderr_stream,
-                  &proc->secrets.wire);
+    for (unsigned int s = 0u; s < 2u; ++s) {
+        struct process_output *output = &proc->output[s];
+        capture_init(&output->capture);
+        output->capture.owner = proc;
+        output->capture.stream = s;
+        redactor_init(&output->redactor, &output->capture, &proc->secrets.wire);
+    }
     free(env);
     env = NULL;
     return 0;
