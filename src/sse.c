@@ -46,10 +46,24 @@ assign(struct snag_buf *target, const unsigned char *value, size_t len)
 }
 
 static int
+deliver(struct snag_sse_parser *parser, const struct snag_sse_record *record,
+        char *error, size_t error_size)
+{
+    if (!parser->record || parser->record(parser->opaque, record) == 0)
+        return 0;
+    parser->failed = true;
+    if (error_size && !error[0])
+        snag_errorf(error, error_size, "SSE consumer rejected %s",
+                    record->kind == SNAG_SSE_EVENT ? "an event" : "a comment");
+    if (!errno)
+        errno = EPROTO;
+    return -1;
+}
+
+static int
 dispatch(struct snag_sse_parser *parser, char *error, size_t error_size)
 {
     struct snag_sse_record record;
-    int rc;
 
     if (!parser->data_seen) {
         snag_buf_reset(&parser->event);
@@ -68,47 +82,11 @@ dispatch(struct snag_sse_parser *parser, char *error, size_t error_size)
     record.id_len = parser->id.len;
     record.data = parser->data.data;
     record.data_len = parser->data.len;
-    rc = parser->record ? parser->record(parser->opaque, &record) : 0;
-    if (rc != 0) {
-        parser->failed = true;
-        if (error_size && !error[0])
-            snag_errorf(error, error_size, "SSE consumer rejected an event");
-        if (!errno)
-            errno = EPROTO;
+    if (deliver(parser, &record, error, error_size) < 0)
         return -1;
-    }
     snag_buf_reset(&parser->event);
     snag_buf_reset(&parser->data);
     parser->data_seen = false;
-    return 0;
-}
-
-static int
-dispatch_comment(struct snag_sse_parser *parser,
-                 const unsigned char *value, size_t len,
-                 char *error, size_t error_size)
-{
-    struct snag_sse_record record;
-    int rc;
-
-    if (!snag_utf8_valid(value, len, true))
-        return fail(parser, error, error_size,
-                    "SSE comment contains invalid UTF-8 or NUL");
-    if (!parser->record)
-        return 0;
-    memset(&record, 0, sizeof(record));
-    record.kind = SNAG_SSE_COMMENT;
-    record.data = value;
-    record.data_len = len;
-    rc = parser->record(parser->opaque, &record);
-    if (rc != 0) {
-        parser->failed = true;
-        if (error_size && !error[0])
-            snag_errorf(error, error_size, "SSE consumer rejected a comment");
-        if (!errno)
-            errno = EPROTO;
-        return -1;
-    }
     return 0;
 }
 
@@ -127,13 +105,17 @@ process_line(struct snag_sse_parser *parser, char *error, size_t error_size)
         return fail(parser, error, error_size,
                     "SSE line contains invalid UTF-8 or NUL");
     if (line[0] == ':') {
+        struct snag_sse_record record = { .kind = SNAG_SSE_COMMENT };
+
         value = line + 1u;
         value_len = len - 1u;
         if (value_len && value[0] == ' ') {
             ++value;
             --value_len;
         }
-        return dispatch_comment(parser, value, value_len, error, error_size);
+        record.data = value;
+        record.data_len = value_len;
+        return deliver(parser, &record, error, error_size);
     }
     while (colon < len && line[colon] != ':')
         ++colon;

@@ -43,7 +43,6 @@ enum snag_wire_part_kind {
 struct snag_wire_part {
     enum snag_wire_part_kind kind;
     struct snag_buf text;
-    bool present;
     bool value_seen;
     bool complete;
 };
@@ -52,14 +51,12 @@ struct snag_wire_item {
     enum snag_wire_item_kind kind;
     char *id;
     char *phase;
-    bool phase_present;
     char *name;
     char *call_id;
     struct snag_buf arguments;
     struct snag_wire_part *parts;
     size_t part_count;
     size_t part_cap;
-    bool present;
     bool arguments_seen;
     bool arguments_complete;
     bool complete;

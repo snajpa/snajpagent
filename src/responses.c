@@ -236,7 +236,6 @@ new_item(struct snag_responses_stream *stream, size_t output_index,
     memset(item, 0, sizeof(*item));
     snag_buf_init(&item->arguments, SNAG_MAX_TOOL_ARGUMENTS);
     item->kind = kind;
-    item->present = true;
     if (id && copy_once(stream, &item->id, id, SNAG_MAX_PROVIDER_ID,
                         "provider item id") < 0) {
         wire_item_free(item);
@@ -253,8 +252,8 @@ find_item(struct snag_responses_stream *stream, size_t output_index,
     struct snag_wire_item *item;
 
     if (output_index >= stream->item_count ||
-        !(item = &stream->items[output_index])->present ||
-        item->kind != kind || !id || !item->id || strcmp(item->id, id) != 0) {
+        (item = &stream->items[output_index])->kind != kind ||
+        !id || !item->id || strcmp(item->id, id) != 0) {
         (void)stream_fail(stream, EPROTO,
                           "response item identity or order conflict");
         return NULL;
@@ -301,12 +300,11 @@ part_at(struct snag_responses_stream *stream, struct snag_wire_item *item,
         memset(part, 0, sizeof(*part));
         snag_buf_init(&part->text, SNAG_MAX_PUBLIC_ITEM);
         part->kind = kind;
-        part->present = true;
         ++stream->part_count;
         return part;
     }
     part = &item->parts[content_index];
-    if (!part->present || part->kind != kind) {
+    if (part->kind != kind) {
         (void)stream_fail(stream, EPROTO,
                           "message content kind changed");
         return NULL;
@@ -535,12 +533,9 @@ message_snapshot(struct snag_responses_stream *stream, size_t output_index,
            new_item(stream, output_index, SNAG_WIRE_ITEM_MESSAGE, id);
     if (!item)
         return -1;
-    if (phase) {
-        if (copy_once(stream, &item->phase, phase, 32u,
-                      "assistant phase") < 0)
-            return -1;
-        item->phase_present = true;
-    }
+    if (phase && copy_once(stream, &item->phase, phase, 32u,
+                           "assistant phase") < 0)
+        return -1;
     for (size_t i = 0; i < json_array_size(content); ++i)
         if (part_snapshot(stream, output_index, item, i,
                           json_array_get(content, i), complete) < 0)
@@ -591,7 +586,7 @@ inert_snapshot(struct snag_responses_stream *stream, size_t output_index)
 
     if (output_index < stream->item_count) {
         item = &stream->items[output_index];
-        if (!item->present || item->kind != SNAG_WIRE_ITEM_INERT)
+        if (item->kind != SNAG_WIRE_ITEM_INERT)
             return stream_fail(stream, EPROTO,
                                "response item kind or order conflict");
         return 0;
@@ -685,31 +680,11 @@ handle_content_part(struct snag_responses_stream *stream, const json_t *root,
 }
 
 static int
-handle_public_delta(struct snag_responses_stream *stream, const json_t *root,
-                    enum snag_wire_part_kind kind)
+handle_public_text(struct snag_responses_stream *stream, const json_t *root,
+                   enum snag_wire_part_kind kind, bool complete)
 {
     const char *item_id = snag_json_string(root, "item_id");
-    const char *delta = snag_json_string(root, "delta");
-    size_t output_index;
-    size_t content_index;
-    struct snag_wire_item *item;
-
-    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS,
-                   &output_index) < 0 ||
-        json_index(stream, root, "content_index", SNAG_MAX_RESPONSE_PARTS,
-                   &content_index) < 0)
-        return -1;
-    item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_MESSAGE);
-    return item ? append_part_delta(stream, output_index, item, content_index,
-                                    kind, delta) : -1;
-}
-
-static int
-handle_public_done(struct snag_responses_stream *stream, const json_t *root,
-                   enum snag_wire_part_kind kind)
-{
-    const char *item_id = snag_json_string(root, "item_id");
-    const char *text = snag_json_string(root,
+    const char *text = snag_json_string(root, !complete ? "delta" :
         kind == SNAG_WIRE_PART_REFUSAL ? "refusal" : "text");
     size_t output_index;
     size_t content_index;
@@ -721,15 +696,19 @@ handle_public_done(struct snag_responses_stream *stream, const json_t *root,
                    &content_index) < 0)
         return -1;
     item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_MESSAGE);
-    return item ? reconcile_part(stream, output_index, item, content_index,
-                                 kind, text, true) : -1;
+    if (!item)
+        return -1;
+    return complete ?
+        reconcile_part(stream, output_index, item, content_index, kind, text, true) :
+        append_part_delta(stream, output_index, item, content_index, kind, text);
 }
 
 static int
-handle_arguments_delta(struct snag_responses_stream *stream, const json_t *root)
+handle_arguments(struct snag_responses_stream *stream, const json_t *root,
+                 bool complete)
 {
     const char *item_id = snag_json_string(root, "item_id");
-    const char *delta = snag_json_string(root, "delta");
+    const char *arguments = snag_json_string(root, complete ? "arguments" : "delta");
     size_t output_index;
     struct snag_wire_item *item;
 
@@ -738,23 +717,10 @@ handle_arguments_delta(struct snag_responses_stream *stream, const json_t *root)
         return -1;
     item = find_item(stream, output_index, item_id,
                      SNAG_WIRE_ITEM_FUNCTION_CALL);
-    return item ? append_arguments_delta(stream, item, delta) : -1;
-}
-
-static int
-handle_arguments_done(struct snag_responses_stream *stream, const json_t *root)
-{
-    const char *item_id = snag_json_string(root, "item_id");
-    const char *arguments = snag_json_string(root, "arguments");
-    size_t output_index;
-    struct snag_wire_item *item;
-
-    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS,
-                   &output_index) < 0)
+    if (!item)
         return -1;
-    item = find_item(stream, output_index, item_id,
-                     SNAG_WIRE_ITEM_FUNCTION_CALL);
-    return item ? reconcile_arguments(stream, item, arguments, true) : -1;
+    return complete ? reconcile_arguments(stream, item, arguments, true) :
+                      append_arguments_delta(stream, item, arguments);
 }
 
 static int
@@ -893,17 +859,17 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
     if (strcmp(type, "response.content_part.done") == 0)
         return handle_content_part(stream, root, true);
     if (strcmp(type, "response.output_text.delta") == 0)
-        return handle_public_delta(stream, root, SNAG_WIRE_PART_TEXT);
+        return handle_public_text(stream, root, SNAG_WIRE_PART_TEXT, false);
     if (strcmp(type, "response.output_text.done") == 0)
-        return handle_public_done(stream, root, SNAG_WIRE_PART_TEXT);
+        return handle_public_text(stream, root, SNAG_WIRE_PART_TEXT, true);
     if (strcmp(type, "response.refusal.delta") == 0)
-        return handle_public_delta(stream, root, SNAG_WIRE_PART_REFUSAL);
+        return handle_public_text(stream, root, SNAG_WIRE_PART_REFUSAL, false);
     if (strcmp(type, "response.refusal.done") == 0)
-        return handle_public_done(stream, root, SNAG_WIRE_PART_REFUSAL);
+        return handle_public_text(stream, root, SNAG_WIRE_PART_REFUSAL, true);
     if (strcmp(type, "response.function_call_arguments.delta") == 0)
-        return handle_arguments_delta(stream, root);
+        return handle_arguments(stream, root, false);
     if (strcmp(type, "response.function_call_arguments.done") == 0)
-        return handle_arguments_done(stream, root);
+        return handle_arguments(stream, root, true);
     if (strcmp(type, "response.completed") == 0)
         return handle_response_completed(stream, root);
     if (strcmp(type, "response.failed") == 0 ||
@@ -1134,23 +1100,18 @@ snag_responses_stream_finish(struct snag_responses_stream *stream,
     }
     for (size_t i = 0; i < stream->item_count; ++i) {
         struct snag_wire_item *item = &stream->items[i];
-        if (!item->present) {
-            (void)stream_fail(stream, EPROTO,
-                              "response output contains a gap");
-            goto staged_out;
-        }
         if (item->kind == SNAG_WIRE_ITEM_MESSAGE) {
             rc = build_message(stream, &staged, item);
-            if (rc != 0)
-                goto staged_out;
         } else if (item->kind == SNAG_WIRE_ITEM_FUNCTION_CALL) {
-            if (build_call(stream, &staged, item) < 0)
-                goto staged_out;
+            rc = build_call(stream, &staged, item);
         } else if (item->kind != SNAG_WIRE_ITEM_INERT) {
-            (void)stream_fail(stream, EPROTO,
-                              "response output item has no recognized kind");
-            goto staged_out;
+            rc = stream_fail(stream, EPROTO,
+                             "response output item has no recognized kind");
+        } else {
+            continue;
         }
+        if (rc != 0)
+            goto staged_out;
     }
     normalize_implicit_message_terminal(&staged);
     snag_response_graph_free(graph);

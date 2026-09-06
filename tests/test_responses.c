@@ -656,6 +656,46 @@ test_refusal(void)
 }
 
 static void
+test_invalid_call_after_public_item(void)
+{
+    static const char *const calls[] = {
+        "\"name\":\"unknown\",\"arguments\":\"{}\"",
+        "\"name\":\"exec_command\",\"arguments\":\"[]\""
+    };
+
+    for (size_t i = 0; i < sizeof(calls) / sizeof(calls[0]); ++i) {
+        struct snag_response_graph graph;
+        struct emitted emitted = {0};
+        struct snag_buf wire;
+        char error[256] = {0};
+
+        snag_response_graph_init(&graph);
+        assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT,
+            SNAG_PHASE_FINAL_ANSWER, "retained", "previous graph") == 0);
+        snag_buf_init(&emitted.text, 1024u);
+        snag_buf_init(&wire, 4096u);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":["
+            "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"visible\"}]},"
+            "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"c\",%s}]}}\n\n",
+            calls[i]) == 0);
+        assert(snag_buf_terminate(&wire) == 0);
+        /* Finalization must reject the whole staged graph, even after a
+         * successful public item. Already emitted text cannot be withdrawn. */
+        assert(parse_stream((char *)wire.data, 7u, &graph, &emitted,
+                            error, sizeof(error)) < 0);
+        assert(strstr(error, "function"));
+        assert(emitted.text.len == 7u);
+        assert(graph.count == 1u);
+        assert(strcmp(graph.items[0].text, "previous graph") == 0);
+        snag_buf_free(&wire);
+        snag_buf_free(&emitted.text);
+        snag_response_graph_free(&graph);
+    }
+}
+
+static void
 test_protocol_conflicts_fail_closed(void)
 {
     static const char *const bad[] = {
@@ -792,6 +832,7 @@ main(void)
     test_inert_only_response_has_empty_graph();
     test_function_call_arguments();
     test_refusal();
+    test_invalid_call_after_public_item();
     test_protocol_conflicts_fail_closed();
     test_structured_capacity_failure();
     puts("test_responses: ok");
