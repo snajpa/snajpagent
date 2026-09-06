@@ -740,24 +740,21 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
     const char *queued_text = snag_prompt_parse(text, &read_only);
     size_t len;
     if (!app->session.active_turn && !app->recovery_wait) {
-        snag_errorf(error, error_size, "/queue TEXT is valid only while a turn is active");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "/queue TEXT is valid only while a turn is active");
         return 1;
     }
     if (text[0] == '/' && !read_only) {
         if (text[1] != '/') {
-            snag_errorf(error, error_size,
-                      "queued text starting with / must use // for a literal slash");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL,
+                "queued text starting with / must use // for a literal slash");
             return 1;
         }
     }
     len = strlen(queued_text);
     if (!len || len > SNAG_MAX_QUEUED_TEXT ||
         !snag_utf8_valid((const unsigned char *)queued_text, len, true)) {
-        snag_errorf(error, error_size,
-                  "queued text must be nonempty valid UTF-8 within 256 KiB");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "queued text must be nonempty valid UTF-8 within 256 KiB");
         return 1;
     }
     if (snag_random_id(queue_id) < 0) {
@@ -1153,15 +1150,13 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
         entry = json_object();
         if (!entry) {
             json_decref(models);
-            snag_errorf(error, error_size, "cannot assemble model cache");
-            errno = ENOMEM;
+            (void)snag_fail(error, error_size, ENOMEM, "cannot assemble model cache");
             goto out;
         }
         if (snag_json_set_new(entry, "models", models) < 0) {
             models = NULL;
             json_decref(entry);
-            snag_errorf(error, error_size, "cannot assemble model cache");
-            errno = ENOMEM;
+            (void)snag_fail(error, error_size, ENOMEM, "cannot assemble model cache");
             goto out;
         }
         models = NULL;
@@ -1171,14 +1166,12 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
             snag_json_set_new(entry, "protocol",
                 json_string(snag_provider_catalog_protocol(provider))) < 0) {
             json_decref(entry);
-            snag_errorf(error, error_size, "cannot assemble model cache");
-            errno = ENOMEM;
+            (void)snag_fail(error, error_size, ENOMEM, "cannot assemble model cache");
             goto out;
         }
         if (json_array_append_new(providers, entry) < 0) {
             entry = NULL;
-            snag_errorf(error, error_size, "cannot assemble model cache");
-            errno = ENOMEM;
+            (void)snag_fail(error, error_size, ENOMEM, "cannot assemble model cache");
             goto out;
         }
         entry = NULL;
@@ -1617,9 +1610,8 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
     }
     if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
-        snag_errorf(error, error_size,
-                  "configuration must be a regular file no larger than 64 KiB");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "configuration must be a regular file no larger than 64 KiB");
         (void)close(fd);
         return -1;
     }
@@ -1772,15 +1764,13 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     if (snag_irc_normalize(&candidate, error, error_size) < 0)
         goto out;
     if (!snag_config_provider(&candidate, selected_provider)) {
-        snag_errorf(error, error_size,
-                  "reloaded configuration does not define the selected provider");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "reloaded configuration does not define the selected provider");
         goto out;
     }
     if (validate_prompt_candidate(app, &candidate) < 0) {
-        snag_errorf(error, error_size,
-                  "reloaded prompt cannot be rendered with the current selection");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "reloaded prompt cannot be rendered with the current selection");
         goto out;
     }
     rc = apply_network(app, &candidate, error, error_size);
@@ -1811,8 +1801,7 @@ run_config_editor(struct app_state *app, bool *success,
     const char *editor = getenv("EDITOR");
 
     if (!editor || !*editor) {
-        snag_errorf(error, error_size, "$EDITOR is not set");
-        errno = ENOENT;
+        (void)snag_fail(error, error_size, ENOENT, "$EDITOR is not set");
         return 1;
     }
     if (snag_ui_external(&app->ui, true, error, error_size) < 0)
@@ -3853,9 +3842,8 @@ snag_app_dotdir(const char *override, char *error, size_t error_size)
     }
     else {
         free(home);
-        snag_errorf(error, error_size,
-                  "HOME is unavailable for the default dotdir; use --dotdir DIR");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "HOME is unavailable for the default dotdir; use --dotdir DIR");
         return NULL;
     }
     free(home);

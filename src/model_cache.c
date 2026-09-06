@@ -293,9 +293,8 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
     if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || snag_fd_privacy(fd, &privacy) < 0 ||
         !privacy.real_owner || !privacy.private_access || st.st_size <= 0 ||
         (uintmax_t)st.st_size > SNAG_MODEL_CACHE_FILE_MAX) {
-        snag_errorf(error, error_size,
-                  "model cache must be a private user-owned regular file no larger than 8 MiB");
-        errno = EACCES;
+        (void)snag_fail(error, error_size, EACCES,
+            "model cache must be a private user-owned regular file no larger than 8 MiB");
         goto out;
     }
     int read_rc = snag_buf_read(&data, fd);
@@ -475,8 +474,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
         goto out;
     prepared = json_deep_copy(providers);
     if (!prepared) {
-        snag_errorf(error, error_size, "cannot copy model catalog");
-        errno = ENOMEM;
+        (void)snag_fail(error, error_size, ENOMEM, "cannot copy model catalog");
         goto out;
     }
     for (size_t i = 0; i < json_array_size(prepared); ++i) {
@@ -497,9 +495,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
                                      snag_json_string(model, "id")) : NULL;
 
             if (prepare_accounting(model, old_model) < 0) {
-                snag_errorf(error, error_size,
-                          "cannot preserve model accounting");
-                errno = ENOMEM;
+                (void)snag_fail(error, error_size, ENOMEM, "cannot preserve model accounting");
                 goto out;
             }
         }
@@ -583,8 +579,7 @@ adopt:
     snag_model_cache_init(&staged);
     goto out;
 write_error:
-    snag_errorf(error, error_size, "cannot update model cache observation");
-    errno = ENOMEM;
+    (void)snag_fail(error, error_size, ENOMEM, "cannot update model cache observation");
     rc = -1;
 out:
     snag_model_cache_free(&staged);

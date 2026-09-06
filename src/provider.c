@@ -872,9 +872,7 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
     if (!snag_json_exact_keys(root, "input_tokens object") ||
         !object || strcmp(object, "response.input_tokens") != 0 ||
         snag_json_integer_u64(root, "input_tokens", input_tokens) < 0) {
-        snag_errorf(error, error_size,
-                  "input-token count response has an invalid shape");
-        errno = EPROTO;
+        (void)snag_fail(error, error_size, EPROTO, "input-token count response has an invalid shape");
         goto out;
     }
     rc = 0;
@@ -1212,9 +1210,7 @@ decode_models(const unsigned char *data, size_t len, bool codex,
     source = json_object_get(root, codex ? "models" : "data");
     if (!json_is_array(source) ||
         json_array_size(source) > SNAG_PROVIDER_MODELS_MAX) {
-        snag_errorf(error, error_size,
-                  "model-list response has no bounded models array");
-        errno = EPROTO;
+        (void)snag_fail(error, error_size, EPROTO, "model-list response has no bounded models array");
         goto out;
     }
     out = json_array();
@@ -1234,9 +1230,8 @@ decode_models(const unsigned char *data, size_t len, bool codex,
             json_t *priority;
 
             if (!json_is_object(model)) {
-                snag_errorf(error, error_size,
-                          "model-list response contains an invalid model entry");
-                errno = EPROTO;
+                (void)snag_fail(error, error_size, EPROTO,
+                    "model-list response contains an invalid model entry");
                 goto out;
             }
             visibility = snag_json_string(model, "visibility");
@@ -1244,9 +1239,8 @@ decode_models(const unsigned char *data, size_t len, bool codex,
                 continue;
             priority = json_object_get(model, "priority");
             if (!json_is_integer(priority)) {
-                snag_errorf(error, error_size,
-                          "model-list response contains an invalid model entry");
-                errno = EPROTO;
+                (void)snag_fail(error, error_size, EPROTO,
+                    "model-list response contains an invalid model entry");
                 goto out;
             }
             refs[ref_count].model = model;
@@ -1259,9 +1253,8 @@ decode_models(const unsigned char *data, size_t len, bool codex,
     for (size_t i = 0; i < (codex ? ref_count : json_array_size(source)); ++i)
         if (append_model(out, codex ? refs[i].model : json_array_get(source, i),
                          codex) < 0) {
-            snag_errorf(error, error_size,
-                      "model-list response contains an invalid model entry");
-            errno = EPROTO;
+            (void)snag_fail(error, error_size, EPROTO,
+                "model-list response contains an invalid model entry");
             goto out;
         }
     *models = out;

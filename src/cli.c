@@ -85,8 +85,7 @@ option_argument(int argc, char **argv, int *index, const char *attached,
     if (attached && *attached)
         return attached;
     if (*index + 1 >= argc) {
-        snag_errorf(error, error_size, "%s requires an argument", name);
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "%s requires an argument", name);
         return NULL;
     }
     ++*index;

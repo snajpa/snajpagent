@@ -548,9 +548,8 @@ snag_partial_public_validate(const json_t *items,
         goto out;
     for (size_t i = 0; i < graph.count; ++i) {
         if (!public_kind(snag_response_graph_item(&graph, i).kind)) {
-            snag_errorf(error, error_size,
-                      "partial public array contains a non-public item");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL,
+                "partial public array contains a non-public item");
             goto out;
         }
     }

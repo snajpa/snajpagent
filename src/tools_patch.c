@@ -260,8 +260,7 @@ normalize_patch_text(const char *patch, size_t len, char **out,
 
         if (c == '\r') {
             if (i + 1u >= len || patch[++i] != '\n') {
-                snag_errorf(error, error_size, "patch contains a bare carriage return");
-                errno = EINVAL;
+                (void)snag_fail(error, error_size, EINVAL, "patch contains a bare carriage return");
                 free(text);
                 return -1;
             }
@@ -269,8 +268,7 @@ normalize_patch_text(const char *patch, size_t len, char **out,
         }
         line_len = c == '\n' ? 0u : line_len + 1u;
         if (line_len > PATCH_LINE_MAX) {
-            snag_errorf(error, error_size, "patch line exceeds 1 MiB");
-            errno = EOVERFLOW;
+            (void)snag_fail(error, error_size, EOVERFLOW, "patch line exceeds 1 MiB");
             free(text);
             return -1;
         }
@@ -303,8 +301,7 @@ split_lines(char *text, char ***out_lines, size_t *out_count,
         start = p + 1;
     }
     if (lines.n < 2u) {
-        snag_errorf(error, error_size, "patch is missing required frame");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "patch is missing required frame");
         goto fail;
     }
     *out_lines = lines.v;
@@ -523,9 +520,8 @@ read_target_file(int root_fd, struct patch_op *op,
     if (snag_fstat(fd, &op->st) < 0)
         goto out;
     if (!S_ISREG(op->st.st_mode) || op->st.st_size > (int64_t)PATCH_FILE_MAX) {
-        snag_errorf(error, error_size,
-                  "patch target %s is not a regular file within 16 MiB", op->path);
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "patch target %s is not a regular file within 16 MiB", op->path);
         goto out;
     }
     if (snag_permissions_capture(fd, &op->permissions) < 0)
@@ -554,8 +550,7 @@ validate_add_target(int root_fd, struct patch_op *op,
     if (parent_fd < 0)
         return -1;
     if (snag_lstat_at(parent_fd, leaf, &st) == 0) {
-        snag_errorf(error, error_size, "add target %s already exists", op->path);
-        errno = EEXIST;
+        (void)snag_fail(error, error_size, EEXIST, "add target %s already exists", op->path);
         goto out;
     }
     if (errno != ENOENT) {
@@ -583,8 +578,7 @@ validate_delete_target(int root_fd, struct patch_op *op,
         goto out;
     }
     if (!S_ISREG(op->st.st_mode)) {
-        snag_errorf(error, error_size, "delete target %s is not a regular file", op->path);
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "delete target %s is not a regular file", op->path);
         goto out;
     }
     rc = 0;
@@ -719,14 +713,12 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
     for (size_t i = 0; i < op->hunk_count; ++i) {
         struct patch_hunk *hunk = &op->hunks[i];
         if (end_seen) {
-            snag_errorf(error, error_size, "hunks cannot follow an @end insertion");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL, "hunks cannot follow an @end insertion");
             goto out;
         }
         if (hunk->type == HUNK_START) {
             if (start_seen || cursor != 0u || (lines.n == 0u && end_seen)) {
-                snag_errorf(error, error_size, "conflicting @start insertion");
-                errno = EINVAL;
+                (void)snag_fail(error, error_size, EINVAL, "conflicting @start insertion");
                 goto out;
             }
             start_seen = true;
@@ -737,8 +729,7 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
         }
         if (hunk->type == HUNK_END) {
             if (end_seen || (lines.n == 0u && start_seen)) {
-                snag_errorf(error, error_size, "conflicting @end insertion");
-                errno = EINVAL;
+                (void)snag_fail(error, error_size, EINVAL, "conflicting @end insertion");
                 goto out;
             }
             if (append_line_range(&op->new_bytes, &lines, cursor, lines.n,

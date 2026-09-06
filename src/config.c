@@ -899,9 +899,8 @@ snag_config_path(const char *explicit_path, const char *dotdir,
     if (explicit_path) {
         if (!snag_path_root_len(explicit_path) ||
             strlen(explicit_path) > SNAG_CONFIG_PATH_MAX) {
-            snag_errorf(error, error_size,
-                      "--config requires an absolute path within the supported limit");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL,
+                "--config requires an absolute path within the supported limit");
             return NULL;
         }
         result = snag_strdup_checked(explicit_path, SNAG_CONFIG_PATH_MAX);
@@ -923,9 +922,7 @@ snag_config_path(const char *explicit_path, const char *dotdir,
     snag_buf_free(&path);
     return result;
 invalid:
-    snag_errorf(error, error_size,
-              "configuration requires an absolute dotdir");
-    errno = EINVAL;
+    (void)snag_fail(error, error_size, EINVAL, "configuration requires an absolute dotdir");
     snag_buf_free(&path);
     return NULL;
 unavailable:
@@ -955,9 +952,8 @@ read_config(const char *path, bool require_file, struct snag_buf *text,
     }
     if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
-        snag_errorf(error, error_size,
-                  "configuration must be a regular file no larger than 64 KiB");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "configuration must be a regular file no larger than 64 KiB");
         goto out;
     }
     if (file_stat)
@@ -980,9 +976,8 @@ read_config(const char *path, bool require_file, struct snag_buf *text,
         goto out;
     }
     if (!snag_utf8_valid(text->data, text->len, true)) {
-        snag_errorf(error, error_size,
-                  "configuration must be valid UTF-8 without NUL bytes");
-        errno = EILSEQ;
+        (void)snag_fail(error, error_size, EILSEQ,
+            "configuration must be valid UTF-8 without NUL bytes");
         goto out;
     }
     if (snag_buf_terminate(text) < 0) {
@@ -1432,8 +1427,7 @@ save_config_settings(const char *path, bool allow_create,
         strchr(provider, '\n') || strchr(provider, '\r') ||
         strchr(model, '\n') || strchr(model, '\r') ||
         strchr(effort, '\n') || strchr(effort, '\r')) {
-        snag_errorf(error, error_size, "refusing to save invalid model settings");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "refusing to save invalid model settings");
         goto out;
     }
     path_copy = snag_strdup_checked(path, SNAG_CONFIG_PATH_MAX);
@@ -1441,13 +1435,11 @@ save_config_settings(const char *path, bool allow_create,
         goto out;
     slash = strrchr(path_copy, '/');
     if (!slash || !slash[1]) {
-        snag_errorf(error, error_size, "configuration path has no file name");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "configuration path has no file name");
         goto out;
     }
     if (strlen(slash + 1u) > SNAG_NAME_MAX_BYTES) {
-        snag_errorf(error, error_size, "configuration file name is too long");
-        errno = ENAMETOOLONG;
+        (void)snag_fail(error, error_size, ENAMETOOLONG, "configuration file name is too long");
         goto out;
     }
     memcpy(leaf, slash + 1u, strlen(slash + 1u) + 1u);
@@ -1519,16 +1511,12 @@ save_config_settings(const char *path, bool allow_create,
         if (original >= 0)
             (void)close(original);
         if (!unchanged) {
-            snag_errorf(error, error_size,
-                      "configuration changed while it was being saved");
-            errno = EAGAIN;
+            (void)snag_fail(error, error_size, EAGAIN, "configuration changed while it was being saved");
             goto out;
         }
     } else if (snag_lstat_at(parent_fd, leaf, &current) == 0 ||
                errno != ENOENT) {
-        snag_errorf(error, error_size,
-                  "configuration appeared while it was being saved");
-        errno = EAGAIN;
+        (void)snag_fail(error, error_size, EAGAIN, "configuration appeared while it was being saved");
         goto out;
     }
     if (snag_rename_at(parent_fd, temp, parent_fd, leaf) < 0 ||

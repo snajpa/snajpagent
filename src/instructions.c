@@ -113,16 +113,14 @@ snag_instructions_add_directory(struct snag_instruction_set *set, const char *di
     if (!canonical || strlen(canonical) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)canonical, strlen(canonical), true) ||
         snag_stat(canonical, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        snag_errorf(error, error_size, "-d requires an existing UTF-8 directory: %s",
-                    dir ? dir : "");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "-d requires an existing UTF-8 directory: %s", dir ? dir : "");
         goto out;
     }
     rc = try_instruction_dir(set, canonical, error, error_size);
     if (rc == 0) {
-        snag_errorf(error, error_size, "-d directory has no AGENTS.md or AGENTS.override.md: %s",
-                    canonical);
-        errno = ENOENT;
+        (void)snag_fail(error, error_size, ENOENT,
+            "-d directory has no AGENTS.md or AGENTS.override.md: %s", canonical);
         rc = -1;
     } else if (rc > 0) {
         rc = 0;
@@ -144,8 +142,7 @@ config_instruction_root(char *error, size_t error_size)
     if (xdg && *xdg) {
         if (!snag_path_root_len(xdg)) {
             free(xdg);
-            snag_errorf(error, error_size, "XDG_CONFIG_HOME must be absolute");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL, "XDG_CONFIG_HOME must be absolute");
             return NULL;
         }
         base = snag_strdup_checked(xdg, SNAG_PATH_MAX_BYTES);
@@ -154,9 +151,7 @@ config_instruction_root(char *error, size_t error_size)
         if (!snag_path_root_len(home)) {
             free(home);
             free(xdg);
-            snag_errorf(error, error_size,
-                      "HOME is unavailable for instruction discovery");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL, "HOME is unavailable for instruction discovery");
             return NULL;
         }
         base = snag_path_join(home, ".config");
@@ -235,9 +230,7 @@ walk_project_chain(struct snag_instruction_set *set,
         return -1;
     if (strncmp(root, workspace, end) != 0 ||
         (strcmp(root, "/") && workspace[end] && workspace[end] != '/')) {
-        snag_errorf(error, error_size,
-                    "project root is not an ancestor of workspace");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "project root is not an ancestor of workspace");
         goto out;
     }
     for (;;) {
@@ -277,9 +270,8 @@ snag_instructions_discover(struct snag_instruction_set *set,
         goto out;
     if (snag_lstat(global, &st) == 0) {
         if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-            snag_errorf(error, error_size,
-                      "instruction config root must be a real directory");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL,
+                "instruction config root must be a real directory");
             goto out;
         }
         if (try_instruction_dir(set, global, error, error_size) < 0)
@@ -294,9 +286,8 @@ snag_instructions_discover(struct snag_instruction_set *set,
         !snag_utf8_valid((const unsigned char *)canonical_workspace,
                         strlen(canonical_workspace), true) ||
         snag_stat(canonical_workspace, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        snag_errorf(error, error_size,
-                  "workspace must be an existing UTF-8 directory for instruction discovery");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "workspace must be an existing UTF-8 directory for instruction discovery");
         goto out;
     }
     if (find_project_root(canonical_workspace, &project_root,

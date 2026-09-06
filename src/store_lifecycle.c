@@ -161,8 +161,7 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
                            error, error_size) < 0)
         goto out;
     if (!session.delete_requested || strcmp(session.trash_name, trash_name) != 0) {
-        snag_errorf(error, error_size, "deleted-session trash intent mismatch");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "deleted-session trash intent mismatch");
         goto out;
     }
     rc = remove_deleted_session(store, &session, error, error_size);

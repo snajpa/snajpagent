@@ -2386,8 +2386,7 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
     }
     if (strlen(workspace) > IRC_TOPIC_MAX ||
         sanitize_text(irc->topic, sizeof(irc->topic), workspace) < 0) {
-        snag_errorf(error, error_size, "IRC launch path is too long for a topic");
-        errno = ENAMETOOLONG;
+        (void)snag_fail(error, error_size, ENAMETOOLONG, "IRC launch path is too long for a topic");
         goto fail;
     }
     if (network && irc->hosting) {

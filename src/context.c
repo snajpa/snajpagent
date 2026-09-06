@@ -1331,10 +1331,10 @@ snag_context_compact_request_build(struct snag_session *session,
         (!active_prefix && session->process_count) ||
         session->active_compact_id[0] != '\0' ||
         (active_prefix ? !session->active_turn : session->active_turn)) {
-        snag_errorf(error, error_size, active_prefix ?
+        (void)snag_fail(error, error_size, EINVAL,
+            active_prefix ?
                   "automatic compaction requires an active turn before response" :
                   "compaction requires an idle session");
-        errno = EINVAL;
         goto out;
     }
     if (session->compact_id[0] &&
@@ -1356,14 +1356,12 @@ snag_context_compact_request_build(struct snag_session *session,
         builder.compact_source_seq = builder.compact_best_seq;
     }
     if (active_prefix && !builder.compact_stopped && !builder.compact_current) {
-        snag_errorf(error, error_size,
-                  "automatic compact source did not stop before the active turn");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+            "automatic compact source did not stop before the active turn");
         goto out;
     }
     if (!active_prefix && builder.active_turn && !builder.compact_stopped) {
-        snag_errorf(error, error_size, "compaction source ends inside a turn");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "compaction source ends inside a turn");
         goto out;
     }
     if (builder.compact_new_items == 0u ||
@@ -1519,8 +1517,7 @@ snag_context_build(struct snag_session *session, const char *model,
         goto out;
     if (!builder.active_turn || builder.steering_seen != json_array_size(steering) ||
         builder.steering_seen != session->pending_steering_count) {
-        snag_errorf(error, error_size, "response projection does not end at an active turn");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "response projection does not end at an active turn");
         goto out;
     }
     if (append_deferred_steering(&builder) < 0) {
@@ -1577,8 +1574,7 @@ snag_context_build(struct snag_session *session, const char *model,
     projection->request_controller_count =
         projection->request_input_count - controller_start;
     if (projection->model_input.bytes > (size_t)LLONG_MAX) {
-        snag_errorf(error, error_size, "response request projection is too large");
-        errno = EOVERFLOW;
+        (void)snag_fail(error, error_size, EOVERFLOW, "response request projection is too large");
         goto out;
     }
     projection->input_tokens_bound = 0u; /* Unknown until counted by the provider. */

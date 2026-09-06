@@ -274,8 +274,7 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     snag_buf_init(&line, SNAG_MAX_EVENT_LINE);
     if (!data || seq > SNAG_EVENT_LIMIT - SNAG_EVENT_RESERVE ||
         session->log_end > SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE) {
-        snag_errorf(error, error_size, "session log has no admission reserve");
-        errno = ENOSPC;
+        (void)snag_fail(error, error_size, ENOSPC, "session log has no admission reserve");
         goto out;
     }
     event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}",
@@ -288,8 +287,7 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
         snag_json_canonical(event, &line) < 0 || snag_buf_putc(&line, '\n') < 0)
         goto memory_error;
     if ((int64_t)line.len > SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE - session->log_end) {
-        snag_errorf(error, error_size, "event would consume session closure reserve");
-        errno = ENOSPC;
+        (void)snag_fail(error, error_size, ENOSPC, "event would consume session closure reserve");
         goto out;
     }
     if (session->pending_log) {
@@ -298,8 +296,7 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     } else {
         actual_end = snag_seek(session->log_fd, 0, SEEK_END);
         if (actual_end < 0 || actual_end != session->log_end) {
-            snag_errorf(error, error_size, "event log end changed unexpectedly");
-            errno = EIO;
+            (void)snag_fail(error, error_size, EIO, "event log end changed unexpectedly");
             goto out;
         }
         if (snag_write_full(session->log_fd, line.data, line.len) < 0 ||
@@ -2040,10 +2037,8 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
                 continue;
             }
             if (!line.len) {
-                snag_errorf(error, error_size,
-                           "blank event line at sequence %llu",
-                           (unsigned long long)seq);
-                errno = EINVAL;
+                (void)snag_fail(error, error_size, EINVAL,
+                    "blank event line at sequence %llu", (unsigned long long)seq);
                 goto out;
             }
             event = snag_json_load_canonical(line.data, line.len,
@@ -2076,9 +2071,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
         }
     }
     if (line.len && (boundary >= 0 || tail_policy == SNAG_TAIL_REJECT)) {
-        snag_errorf(error, error_size,
-                   "event log has an incomplete final suffix");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL, "event log has an incomplete final suffix");
         goto out;
     }
     if (line.len && tail_policy == SNAG_TAIL_TRUNCATE &&
@@ -2097,9 +2090,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
     goto out;
 
 boundary_error:
-    snag_errorf(error, error_size,
-               "event log ended before recorded boundary");
-    errno = EIO;
+    (void)snag_fail(error, error_size, EIO, "event log ended before recorded boundary");
 out:
     snag_buf_free(&line);
     return rc;
@@ -2201,8 +2192,7 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
         session->append_rollback_pending = false;
     }
     if (!data || clone_session_state(session, &staged) < 0) {
-        snag_errorf(error, error_size, "cannot stage %s event", type);
-        errno = ENOMEM;
+        (void)snag_fail(error, error_size, ENOMEM, "cannot stage %s event", type);
     } else if ((staged.last_time_ms = snag_time_ms(),
                 apply_event(&staged, type, data, session->next_seq,
                           error, error_size)) == 0) {
