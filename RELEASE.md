@@ -24,6 +24,7 @@ The current required outputs are:
 | `macos-arm64` | `snajpagent` | Apple Silicon, static application libraries; experimental |
 | `macos-universal` | `snajpagent` | Both macOS slices in one native executable; experimental |
 | `windows-x86_64` | `snajpagent.exe` | Static application libraries, Windows system DLLs only; experimental |
+| `windows-arm64` | `snajpagent.exe` | Native ARM64, static application libraries and OS UCRT; experimental |
 
 Both macOS standalone slices and the universal executable ship. Experimental
 does not mean optional: publish implemented builds with their actual testing

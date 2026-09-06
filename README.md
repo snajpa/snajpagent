@@ -305,8 +305,9 @@ for platform scope.
 `build/matrix/`, without installation or VMs. Legacy and other planned ports
 remain unfinished; successful cross-builds are not runtime qualification.
 
-For experimental Windows x64, `make prod-windows-x86_64` builds using pinned
-Nix dependencies. Copy `build/matrix/windows-x86_64/bin/snajpagent.exe` to Windows;
+For experimental Windows x64 or ARM64, use `make prod-windows-x86_64` or
+`make prod-windows-arm64` with pinned Nix dependencies. Copy the resulting
+`build/matrix/windows-ARCH/bin/snajpagent.exe` to Windows;
 application libraries and CA roots are included without third-party runtime DLLs.
 Qualification is incremental on Windows 11; legacy Windows remains in progress.
 Plain `make` builds only the host platform.

@@ -41,6 +41,7 @@
             <tr><th scope="row">macOS Apple Silicon</th><td><code>macos-arm64</code> — experimental</td><td>Awaiting first release</td></tr>
             <tr><th scope="row">macOS universal</th><td><code>macos-universal</code> — both architectures, experimental</td><td>Awaiting first release</td></tr>
             <tr><th scope="row">Windows x64</th><td><code>windows-x86_64</code> — experimental</td><td>Awaiting first release</td></tr>
+            <tr><th scope="row">Windows ARM64</th><td><code>windows-arm64</code> — experimental</td><td>Awaiting first release</td></tr>
           </tbody>
         </table>
       </div>
@@ -64,11 +65,12 @@
           is still required. The build deployment target is macOS 11; actual
           macOS runtime qualification is pending. Builds are ad-hoc signed, not
           Developer ID signed or notarized.</li>
-        <li><strong>Windows:</strong> the x64 executable includes application
-          libraries and uses only Windows system DLLs. Runtime checks have run
-          in modern Windows PE; a Windows 7 compile target is not a Windows 7
-          compatibility claim. ARM64 and older Windows qualification remain
-          in progress, outside the current production matrix.</li>
+        <li><strong>Windows:</strong> choose x64 or native ARM64. Both include
+          application libraries and use only Windows system DLLs; ARM64 uses
+          the OS UCRT. Runtime checks have run in Windows PE build 26100 (x64)
+          and 28000 (ARM64). Full desktop and older Windows qualification remain
+          in progress; a Windows 7 compile target is not a Windows 7
+          compatibility claim.</li>
       </ul>
       <p>The portable builds include TLS and CA roots; there is no first-run
         library or certificate download. Build success and runtime qualification

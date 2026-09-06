@@ -53,4 +53,8 @@ in assert buildRevision == null || buildRevision == revision; rec {
   windows-x86_64 = (import ./windows.nix { inherit pkgs; }).application {
     inherit source packageName version revision;
   };
+  windows-arm64 = (import ./windows.nix {
+    inherit pkgs;
+    windows = pkgs.pkgsCross.ucrtAarch64;
+  }).application { inherit source packageName version revision; };
 }

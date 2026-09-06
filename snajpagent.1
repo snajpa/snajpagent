@@ -365,7 +365,7 @@ Cross-compilation alone does not establish runtime support.
 .TP
 .B make \-jN prod-matrix
 Build all currently implemented standalone production targets: Linux
-x86-64/AArch64, macOS ARM64/Intel/universal, and Windows x86-64.
+x86-64/AArch64, macOS ARM64/Intel/universal, and Windows x86-64/ARM64.
 Legacy and other planned ports remain unfinished.
 Targets use separate build/matrix outputs and shared immutable Nix inputs;
 each recipe permits one Nix job and core.  SDK availability does not silently
@@ -375,14 +375,15 @@ Reruns reuse completed Nix builds.  DEBUG=1 is rejected.
 This does not install, replace the native executable, boot VMs, or contact a
 model.  Cross-build success does not establish runtime qualification.
 .TP
-.B make prod-windows-x86_64
-Build the experimental native Windows x64 executable using pinned Nix
+.BR "make prod-windows-x86_64" , " make prod-windows-arm64"
+Build the experimental native Windows x64 or ARM64 executable using pinned Nix
 dependencies.  Copy
-.I build/matrix/windows-x86_64/bin/snajpagent.exe
+.I build/matrix/windows-ARCH/bin/snajpagent.exe
 to Windows.  Application libraries and CA roots are included; Nix and
 third-party runtime DLLs are not needed there.  Optional matching symbols
 are in the adjacent .debug directory.  Runtime qualification is limited
-to tested modern Windows guests; older Windows and other architectures
+to tested modern Windows PE guests (x64 build 26100, ARM64 build 28000);
+full desktop and older Windows
 remain in progress.  Plain make still builds only the host platform.
 .PP
 See the repository's DEPENDENCIES.md for static dependency licenses, embedded

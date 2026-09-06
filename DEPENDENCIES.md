@@ -87,9 +87,9 @@ compatibility, signing identity or notarization.
 ## Parallel production matrix
 
 `make -jN prod-matrix` explicitly builds Linux x86-64/AArch64, macOS
-ARM64/Intel/universal, and Windows x86-64. This is the full currently implemented
-set, not the completed legacy/exotic portability roadmap. Windows ARM64 and the
-remaining ports are still in development. SDK availability never silently
+ARM64/Intel/universal, and Windows x86-64/ARM64. This is the full implemented
+set, not the completed legacy/exotic portability roadmap. The remaining ports
+are still in development. SDK availability never silently
 reduces the requested set; a failed target fails the command.
 
 Each target uses its own `build/matrix/OS-ARCH` Nix output link. Universal macOS
@@ -103,7 +103,7 @@ The matrix rejects `DEBUG=1`, does not replace the native executable, install
 anything, boot QEMU, or contact a model. Build success is not runtime support;
 the platform sections retain the actual qualification limits.
 
-## Experimental native Windows x86-64
+## Experimental native Windows x86-64 and ARM64
 
 `nix/windows.nix` builds static x86-64 Windows Jansson, Mbed TLS, compression,
 c-ares, HTTP/2 and GNU Unicode/IDN libraries using the same pinned nixpkgs
@@ -116,8 +116,23 @@ at `build/matrix/windows-x86_64/bin/snajpagent.exe`; `.debug/` contains optional
 matching symbols. Nix and third-party runtime DLLs are not needed on Windows.
 Filesystem/ACL, native Unicode console, process jobs/overlapped pipes, ConPTY,
 IRC and provider integration are implemented. Runtime qualification is scoped
-to the actual tested modern guest; old Windows and other architectures remain
+to the actual tested modern guests; old Windows and other architectures remain
 in progress.
+
+`make prod-windows-arm64` uses the same recipes with pinned nixpkgs
+`ucrtAarch64`, LLVM 21.1.7 and statically linked winpthreads. Its native PE32+
+executable is at `build/matrix/windows-arm64/bin/snajpagent.exe`; optional
+symbols use the same adjacent `.debug/` layout. The OS UCRT is already part of
+Windows ARM64, not an extra application DLL to install. The x64 GCC/msvcrt
+closure is unchanged. LLVM resource tools receive explicit Windows headers;
+autotools and Gnulib probes use their actual pthread link flags.
+
+The ARM64 production build has run in official Windows PE 10.0.28000.1 under
+QEMU TCG, with native base/console/file/process checks and real provider
+round trips for internal RO, parallel commands and ConPTY. The executable is
+approximately 4.2 MB. This is not full desktop or earliest Windows 10 ARM64
+qualification. VM NIC drivers belong to the guest hardware setup, not the
+agent's executable dependencies.
 
 The existing base/SSE/JSON/wire/Responses/retry tests and upstream Mbed TLS
 self-tests run there without third-party runtime DLLs. An upstream curl CLI
