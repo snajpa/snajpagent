@@ -1515,8 +1515,12 @@ test_local_mention_highlight(void)
                               "\033[2m[1] " : "\033[2m[server #other] "));
                 if (cases[i].kind == SNAG_IRC_MESSAGE || cases[i].kind == SNAG_IRC_NOTICE) {
                     const char *body = strstr(output, "peer ");
-                    assert(body && strncmp(body + 5u, "\033[0m", 4u) == 0);
-                    assert(!strstr(body + 5u, "35m"));
+                    assert(body);
+                    const char *separator = strstr(body, cases[i].kind == SNAG_IRC_NOTICE ? "- " : "› ");
+                    assert(separator);
+                    const char *message = separator + (cases[i].kind == SNAG_IRC_NOTICE ? 2u : 4u);
+                    assert(!strncmp(message, "\033[0m", 4u));
+                    assert(!strstr(message, "35m"));
                     assert((strstr(output, "\033[1;35mpeer ") != NULL) ==
                            (!cases[i].op && cases[i].highlight &&
                             cases[i].kind == SNAG_IRC_MESSAGE));
@@ -1870,6 +1874,7 @@ test_append_only_views(unsigned int verbosity)
     memcpy(event.text, "retained-own-message", 21u);
     assert(snag_render_irc_event(&render, &event) == 0);
     event.kind = SNAG_IRC_HISTORY_READY;
+    strcpy(event.text, "replayed");
     event.historical = false;
     assert(snag_render_irc_event(&render, &event) == 0);
     event.historical = false;
@@ -2103,17 +2108,17 @@ main(void)
     assert(strstr(output,
                   "\033[33m→ exec_command\033[0m  {\"command\":\"printf plain\"") != NULL);
     assert(strstr(output, "  timeout: 2500ms\n") != NULL);
-    assert(count_text(output, "\033[1;36magent \033[0m› answer") == 4u);
-    assert(count_text(output, "\033[1;35m@agent \033[0m› answer") == 4u);
-    assert(count_text(output, "\033[1;36m-agent \033[0m- answer") == 4u);
-    assert(count_text(output, "\033[1;35m-@agent \033[0m- answer") == 4u);
+    assert(count_text(output, "\033[1;34magent \033[0m› \033[0manswer") == 4u);
+    assert(count_text(output, "\033[1;36m@agent \033[0m› \033[0manswer") == 4u);
+    assert(count_text(output, "\033[1;34m-agent \033[0m- \033[0manswer") == 4u);
+    assert(count_text(output, "\033[1;36m-@agent \033[0m- \033[0manswer") == 4u);
     assert(capture_color(SNAG_COLOR_ALWAYS, true, 6u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[1;36m› \033[0mplain\n") != NULL);
-    assert(count_text(output, "\033[1;36magent \033[0m› answer") == 4u);
-    assert(count_text(output, "\033[1;35m@agent \033[0m› answer") == 4u);
-    assert(count_text(output, "\033[1;36m-agent \033[0m- answer") == 4u);
-    assert(count_text(output, "\033[1;35m-@agent \033[0m- answer") == 4u);
+    assert(count_text(output, "\033[1;34magent \033[0m› \033[0manswer") == 4u);
+    assert(count_text(output, "\033[1;36m@agent \033[0m› \033[0manswer") == 4u);
+    assert(count_text(output, "\033[1;34m-agent \033[0m- \033[0manswer") == 4u);
+    assert(count_text(output, "\033[1;36m-@agent \033[0m- \033[0manswer") == 4u);
     assert(capture_color(SNAG_COLOR_NEVER, true, 6u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strchr(output, '\033') == NULL);

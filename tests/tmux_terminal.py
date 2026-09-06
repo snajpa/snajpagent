@@ -1940,8 +1940,8 @@ def validate_irc_styles(terminal, own):
     expected = [
         (nick, color, role)
         for color, role, nicks in (
-            (35, "operator magenta", ("@oneop", "@twoop")),
-            (36, "agent cyan", ("hostbot", "onebot", "twobot")),
+            (36, "operator cyan", ("@oneop", "@twoop")),
+            (34, "agent blue", ("hostbot", "onebot", "twobot")),
         )
         for nick in nicks
     ]
@@ -1957,7 +1957,7 @@ def validate_irc_styles(terminal, own):
             pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} › ({nick}) heard"
             assert foreground_at(styled, pattern) is None
             pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} (›) {nick} heard"
-            assert foreground_at(styled, pattern) is None
+            assert foreground_at(styled, pattern) == (35 if nick == own else None)
 
 
 def run_destination_case(binary, root, provider, environment):
@@ -3273,7 +3273,7 @@ def run_irc_chat_case(binary, root):
                 assert len(matches) == 1, (kind, nick, text, matches)
                 assert matches[0]["op"] is op and matches[0]["room"] == "#lab"
                 pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} ({re.escape(label)})"
-                assert foreground_at(terminal.capture_styled(), pattern) == (35 if op else 36)
+                assert foreground_at(terminal.capture_styled(), pattern) == (36 if op else 34)
 
         # Exercise real wire events after all viewers have joined; lifecycle
         # fields must agree before the shared renderer can produce equal colors.
@@ -3317,7 +3317,7 @@ def run_irc_chat_case(binary, root):
             for terminal in ordered:
                 terminal.wait("ordinary palette baseline")
                 pattern = r"(?m)^\d{2}:\d{2}:\d{2} (highlightpeer) › ordinary palette baseline"
-                assert foreground_at(terminal.capture_styled(), pattern) == 36
+                assert foreground_at(terminal.capture_styled(), pattern) == 34
             for target, viewer in (("hostop", "host"), ("oneop", "one"),
                                    ("hostbot", "host"), ("onebot", "one")):
                 if viewer == "one":
@@ -3343,7 +3343,7 @@ def run_irc_chat_case(binary, root):
                     assert foreground_at(styled, r"(highlight start)") is None, styled
                     assert foreground_at(styled, r"(code)") == 33, styled
                     prefix = r"(?m)^\d{2}:\d{2}:\d{2} (highlightpeer) › @" + target.upper()
-                    assert foreground_at(styled, prefix) == (35 if name == viewer else 36), styled
+                    assert foreground_at(styled, prefix) == (35 if name == viewer else 34), styled
                     prefix = r"(?m)^(\d{2}:\d{2}:\d{2}) highlightpeer › @" + target.upper()
                     assert foreground_at(styled, prefix) == (35 if name == viewer else None), styled
                     assert foreground_at(styled, f"({ending})") is None, styled

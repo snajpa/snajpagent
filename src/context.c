@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "context.h"
+#include "irc.h"
 #include "base.h"
 #include "json.h"
 #include "snajpagent.h"
@@ -717,6 +718,22 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     }
     if (strcmp(type, "compaction_completed") == 0)
         return 0;
+    if (strcmp(type, "irc_event") == 0) {
+        struct snag_irc_event event;
+        struct snag_buf text;
+        if (snag_irc_event_read(data, &event) < 0)
+            return -1;
+        if (!event.input)
+            return 0;
+        snag_buf_init(&text, SNAG_IRC_TEXT_MAX + 2048u);
+        int rc = snag_irc_event_projection(&text, &event);
+        if (rc == 0 && snag_buf_terminate(&text) == 0)
+            rc = append_message(builder, "user", (const char *)text.data);
+        else
+            rc = -1;
+        snag_buf_free(&text);
+        return rc;
+    }
     if (strcmp(type, "irc_snapshot") == 0) {
         const char *text = snag_json_string(data, "text");
         if (!text) {
@@ -1656,6 +1673,7 @@ snag_context_build(struct snag_session *session, const char *model,
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
     builder.cycle = cycle;
+    projection->irc_seq = session ? session->irc_received_seq : 0u;
     builder.steering = steering;
     builder.request_input = json_array();
     builder.deferred_steering = json_array();

@@ -133,6 +133,14 @@ append_irc_projection(struct snag_buf *pending,
         memcpy(when, "1970-01-01T00:00:00Z", 21u);
     snag_buf_init(&line, SNAG_IRC_TEXT_MAX + SNAG_CONFIG_IRC_ENDPOINT_MAX +
                          SNAG_CONFIG_IRC_ROOM_MAX + SNAG_CONFIG_IRC_NICK_MAX + 256u);
+    if (event->stream[0] || event->historical) {
+        rc = snag_buf_printf(&line, "[IRC update id=%s:%llu endpoint=%s room=%s; received content is in the preceding room event]\n",
+            event->stream, (unsigned long long)event->sequence, event->endpoint, event->room);
+        if (rc == 0)
+            rc = append_pending(pending, (const char *)line.data, line.len);
+        snag_buf_free(&line);
+        return rc;
+    }
     if (snag_buf_printf(&line,
             "[IRC endpoint=%s room=%s time=%s event=%s sender=%s operator=%s]\n%s\n",
             event->endpoint, event->room, when, snag_irc_kind_name(event->kind),
@@ -210,7 +218,7 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason,
     if (snag_app_sync_destinations(app) < 0)
         return -1;
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
-    rc = strcmp(reason, "join") != 0 && strcmp(reason, "compaction") != 0 ?
+    rc = strcmp(reason, "compaction") != 0 ?
         snag_irc_state(app->irc, &snapshot, error, error_size) :
         snag_irc_snapshot(app->irc, &snapshot, error, error_size);
     if (rc < 0)
@@ -255,7 +263,10 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         return -1;
     if (snag_app_sync_destinations(app) < 0)
         return -1;
-    if (snag_app_commit_event(app, "irc_event", snag_irc_event_data(event),
+    struct snag_irc_event accepted = *event;
+    accepted.input = !snag_irc_local_identity(app->irc, event, true) &&
+        event->kind != SNAG_IRC_HISTORY_READY && (event->stream[0] || event->historical);
+    if (snag_app_commit_event(app, "irc_event", snag_irc_event_data(&accepted),
                              error, sizeof(error)) < 0)
         return -1;
     if (snag_ui_irc_event(&app->ui, event) < 0)
@@ -277,11 +288,10 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         if (snag_app_irc_snapshot(app, "join", error, sizeof(error)) < 0)
             return -1;
     }
-    if (event->historical)
-        return 0;
+
     if (chat)
         ++app->input_generation;
-    urgent = chat && snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
+    urgent = chat && !event->historical && snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     reply_offset = app->irc_urgent.len;
     if (append_irc_projection(urgent ? &app->irc_urgent :
                                       &app->irc_background, event) < 0)
@@ -452,8 +462,14 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
         errno = EINVAL;
         return -1;
     }
-    return snag_session_each_event(&app->session, restore_irc_event, app,
-                                  error, error_size);
+    int rc = snag_session_each_event(&app->session, restore_irc_event, app,
+                                     error, error_size);
+    if (rc == 0 && app->session.irc_received_seq > app->session.irc_consumed_seq) {
+        const char *pending = "[Previously received IRC room input remains unconsumed; inspect the preceding durable room events.]\n";
+        rc = append_pending(&app->irc_background, pending, strlen(pending));
+        app->irc_background_since_ms = snag_time_ms();
+    }
+    return rc;
 }
 
 json_t *
@@ -592,6 +608,10 @@ snag_app_response_started_data(const struct app_state *app,
          (capacity->max_output_tokens &&
           snag_json_set_new(data, "requested_output_tokens",
               json_integer((json_int_t)capacity->max_output_tokens)) < 0))) {
+        json_decref(data);
+        data = NULL;
+    }
+    if (data && json_object_set_new(data, "irc_seq", json_integer((json_int_t)projection->irc_seq)) < 0) {
         json_decref(data);
         data = NULL;
     }

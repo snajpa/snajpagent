@@ -401,6 +401,10 @@ test_runtime_roles(void)
     tick(runtime, 3u);
     drain_ready(runtime, human, wire, sizeof(wire));
     assert(strstr(wire, "shared-before-stop"));
+    for (size_t i = 0u; i < 40u && capture.events[SNAG_IRC_MESSAGE] < 2u; ++i) {
+        tick(upstream, 1u);
+        tick(runtime, 1u);
+    }
     assert(capture.events[SNAG_IRC_MESSAGE] == 2u);
     snag_irc_destinations(runtime, &destinations);
     assert(destinations.count == 2u);

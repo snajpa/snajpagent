@@ -58,6 +58,9 @@ enum snag_irc_event_kind {
 struct snag_irc_event {
     enum snag_irc_event_kind kind;
     uint64_t timestamp_ms;
+    char stream[SNAG_ID_HEX_LEN + 1u];
+    uint64_t sequence;
+    bool input; /* Engine-classified durable model input. */
     char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
@@ -70,6 +73,7 @@ struct snag_irc_event {
 const char *snag_irc_kind_name(enum snag_irc_event_kind kind);
 json_t *snag_irc_event_data(const struct snag_irc_event *event);
 /* Durable field validation only; live/replay membership rules remain separate. */
+int snag_irc_event_projection(struct snag_buf *out, const struct snag_irc_event *event);
 int snag_irc_event_read(const json_t *data, struct snag_irc_event *event);
 
 typedef int (*snag_irc_event_fn)(void *opaque,

@@ -312,6 +312,9 @@ main(void)
         assert(snag_json_set_new(event, "room", json_string("#lab")) == 0);
         assert(snag_json_set_new(event, "text", json_string(text)) == 0);
         assert(snag_json_set_new(event, "timestamp_ms", json_integer(1000)) == 0);
+        assert(snag_json_set_new(event, "stream", json_string("")) == 0);
+        assert(snag_json_set_new(event, "sequence", json_integer(0)) == 0);
+        assert(snag_json_set_new(event, "input", json_false()) == 0);
         oversized = json_deep_copy(event);
         assert(oversized);
         durable_seq = session.next_seq;

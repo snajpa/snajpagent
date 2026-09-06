@@ -29,6 +29,7 @@ struct snag_context_projection {
     size_t create_request_bytes;
     size_t count_request_bytes;
     uint64_t input_tokens_bound;
+    uint64_t irc_seq;
     char model_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char request_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char request_sha256[SNAG_SHA256_HEX_LEN + 1u];

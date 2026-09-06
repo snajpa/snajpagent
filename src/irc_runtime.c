@@ -72,7 +72,7 @@ struct snag_irc {
 };
 
 static int
-publish(struct irc_owner *owner, struct irc_record *record)
+publish(struct irc_owner *owner, struct irc_record *record, uint64_t *through)
 {
     struct snag_irc *irc = owner->runtime;
     int rc = 0;
@@ -87,6 +87,7 @@ publish(struct irc_owner *owner, struct irc_record *record)
     } else {
         ++owner->queued;
         ++irc->published;
+        if (through) *through = irc->published;
         irc->records[(irc->head + irc->count++) % IRC_RECORDS] = record;
         snag_wakeup_send(irc->wake[1]);
     }
@@ -121,7 +122,18 @@ receive_event(void *opaque, const struct snag_irc_event *event)
         free(record);
         return -1;
     }
-    return publish(owner, record);
+    uint64_t through = 0u;
+    if (publish(owner, record, &through) < 0)
+        return -1;
+    /* Cursor and hosted wire publication may advance only after durable
+     * engine acceptance, not merely after placing bytes in the mailbox. */
+    struct snag_irc *irc = owner->runtime;
+    pthread_mutex_lock(&irc->mutex);
+    while (irc->admitted < through && !irc->failure && !irc->stopping && !owner->stopping)
+        pthread_cond_wait(&irc->changed, &irc->mutex);
+    int rc = irc->admitted >= through && !irc->failure ? 0 : -1;
+    pthread_mutex_unlock(&irc->mutex);
+    return rc;
 }
 
 static int
@@ -144,7 +156,7 @@ receive_trace(void *opaque, unsigned int level, char direction,
         return -1;
     }
     memcpy(record->trace, text, len);
-    return publish(owner, record);
+    return publish(owner, record, NULL);
 }
 
 static int
@@ -164,7 +176,7 @@ refresh_view(struct irc_owner *owner)
     }
     owner->sent = record->view;
     record->kind = IRC_VIEW;
-    return publish(owner, record);
+    return publish(owner, record, NULL);
 }
 
 static int
@@ -321,6 +333,8 @@ drain(struct snag_irc *irc, int timeout_ms)
             snag_irc_core_remember(irc->history, &record->event);
             if (irc->event_fn)
                 rc = irc->event_fn(irc->opaque, &record->event);
+            if (rc == 0)
+                rc = snag_irc_core_accept(irc->history, &record->event);
         } else if (record->kind == IRC_TRACE && irc->trace_fn) {
             rc = irc->trace_fn(irc->opaque, record->level, record->direction,
                               record->event.endpoint, record->trace,
@@ -329,6 +343,7 @@ drain(struct snag_irc *irc, int timeout_ms)
         free(record);
         pthread_mutex_lock(&irc->mutex);
         ++irc->admitted;
+        pthread_cond_broadcast(&irc->changed);
         if (rc < 0) {
             irc->failure = errno ? errno : EIO;
             pthread_cond_broadcast(&irc->changed);
@@ -432,7 +447,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
     if (snag_irc_core_open(&owner->core, &local, workspace, true, receive_event,
                            irc->trace_fn ? receive_trace : NULL, owner,
                            error, error_size) < 0 ||
-        (hosting && snag_irc_core_copy_history(owner->core, irc->history, true) < 0) ||
+        snag_irc_core_copy_history(owner->core, irc->history, hosting) < 0 ||
         snag_irc_core_view(owner->core, &owner->view) < 0)
         goto fail;
     owner->sent = owner->view;
@@ -473,6 +488,7 @@ snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint,
         return 0;
     pthread_mutex_lock(&irc->mutex);
     owner->stopping = true;
+    pthread_cond_broadcast(&irc->changed);
     snag_wakeup_send(owner->wake[1]);
     pthread_mutex_unlock(&irc->mutex);
     for (;;) {
@@ -884,7 +900,11 @@ snag_irc_restore_event(struct snag_irc *irc, const struct snag_irc_event *event)
 
     if (!irc || snag_irc_core_restore_event(irc->history, event) < 0)
         return -1;
-    return host_owner(irc) ? request_owner(host_owner(irc), &request) : 0;
+    for (size_t i = 0u; i < irc->owner_count; ++i)
+        if ((irc->owners[i]->hosting || snag_irc_endpoint_equal(irc->owners[i]->endpoint, event->endpoint)) &&
+            request_owner(irc->owners[i], &request) < 0)
+            return -1;
+    return 0;
 }
 
 int

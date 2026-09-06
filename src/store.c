@@ -690,6 +690,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         struct snag_irc_event event;
         if (snag_irc_event_read(data, &event) < 0)
             goto invalid;
+        if (event.input)
+            session->irc_received_seq = seq;
     } else if (strcmp(type, "irc_snapshot") == 0) {
         static const char *const keys[] = {"reason", "text", "timestamp_ms"};
         const char *reason = snag_json_string(data, "reason");
@@ -1299,7 +1301,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             "provider_source_sha256", "request_input_bytes",
             "request_input_count", "request_input_sha256", "request_sha256",
             "requested_output_tokens", "response_id", "source_bound",
-            "steering_ids", "turn_id"
+            "steering_ids", "turn_id", "irc_seq"
         };
         const char *response_id = snag_json_string(data, "response_id");
         const char *turn_id = snag_json_string(data, "turn_id");
@@ -1338,7 +1340,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
              (session->pending_steering_count != 0u &&
               all_pending_finished(session) &&
               session->response_outcome != SNAG_GRAPH_CONFLICT));
-        if (!snag_json_exact_keys(data, keys, 25u) || !session->active_turn ||
+        if (!snag_json_exact_keys(data, keys, 26u) ||
+            snag_json_integer_u64(data, "irc_seq", &session->response_irc_seq) < 0 ||
+            session->response_irc_seq > session->irc_received_seq || !session->active_turn ||
             !state_allows_start || !response_id ||
             !snag_hex_is_lower(response_id, SNAG_ID_HEX_LEN) || !turn_id ||
             strcmp(turn_id, session->active_turn_id) != 0 || !method ||
@@ -1623,6 +1627,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->response_complete = false;
         session->response_terminal = SNAG_RESPONSE_TERMINAL_FAILED;
     } else if (strcmp(type, "response_completed") == 0) {
+        if (session->response_irc_seq > session->irc_consumed_seq)
+            session->irc_consumed_seq = session->response_irc_seq;
         static const char *const keys[] = {
             "cycle", "items", "provider_response_id", "response_id", "status",
             "turn_id", "usage"

@@ -16,6 +16,8 @@
 #define COLOR_META "\033[2m"
 #define COLOR_AGENT "\033[1;36m"
 #define COLOR_OPERATOR "\033[1;35m"
+#define COLOR_CHAT_AGENT "\033[1;34m"
+#define COLOR_CHAT_OPERATOR "\033[1;36m"
 #define COLOR_ACTIVITY "\033[33m"
 #define COLOR_SUCCESS "\033[32m"
 #define COLOR_WARNING "\033[1;33m"
@@ -2653,7 +2655,9 @@ render_irc_event_now(struct snag_render *render,
         return -1;
     }
     if (event->kind == SNAG_IRC_HISTORY_READY)
-        return render_banner(render, "── history replayed ──\n");
+        return !event->text[0] ? 0 : render_banner(render,
+            !strncmp(event->text, "history gap", 11u) ? "── history gap; available history replayed ──\n" :
+            "── history replayed ──\n");
     irc_markdown_lifecycle(render, event);
     if (render->term && render->term->destinations) {
         const struct snag_irc_destinations *destinations = render->term->destinations;
@@ -2676,7 +2680,7 @@ render_irc_event_now(struct snag_render *render,
         strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
         memcpy(when, "--:--:--", 9u);
     colored = render->color_stderr;
-    nick_color = event->op || highlight ? COLOR_OPERATOR : COLOR_AGENT;
+    nick_color = highlight ? COLOR_OPERATOR : event->op ? COLOR_CHAT_OPERATOR : COLOR_CHAT_AGENT;
     if (output_begin(render) < 0)
         return -1;
     if (source[0] &&
@@ -2699,10 +2703,11 @@ render_irc_event_now(struct snag_render *render,
         if (n < 0 || (size_t)n >= sizeof(prefix) ||
             irc_piece(render, prefix, true) < 0)
             goto out;
-        if (colored && irc_piece(render, COLOR_RESET, false) < 0)
+        if (colored && irc_piece(render, highlight ? COLOR_OPERATOR : COLOR_RESET, false) < 0)
             goto out;
         if (irc_piece(render,
-                event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0)
+                event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0 ||
+            (colored && irc_piece(render, COLOR_RESET, false) < 0))
             goto out;
         markdown_body = event->kind == SNAG_IRC_MESSAGE && render->markdown &&
                         render->stderr_terminal && !event->op;

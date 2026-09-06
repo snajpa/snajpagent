@@ -110,6 +110,7 @@ response_started(const char *turn_id, const char *response_id,
     json_t *data = json_object();
     json_t *steering = json_array();
     assert(data && steering);
+    assert(snag_json_set_new(data, "irc_seq", json_integer(0)) == 0);
     assert(snag_json_set_new(data, "baseline_sha256", json_null()) == 0);
     assert(snag_json_set_new(data, "capability_version",
                             json_string(SNAJPAGENT_CAPABILITY_VERSION)) == 0);

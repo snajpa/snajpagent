@@ -121,7 +121,7 @@ tests/test_base: $(PLATFORM_SRC) src/process_host.c tests/test_base.c src/base.h
 
 tests/test_config: $(PLATFORM_SRC) src/config.c src/secret_source.c tests/test_config.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h
 
-tests/test_irc: $(PLATFORM_SRC) src/config.c src/secret_source.c src/irc.c src/irc_runtime.c tests/test_irc.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/cli.h src/irc.h src/irc_internal.h src/snajpagent.h
+tests/test_irc: $(PLATFORM_SRC) src/json.c src/irc_event.c src/config.c src/secret_source.c src/irc.c src/irc_runtime.c tests/test_irc.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/cli.h src/irc.h src/irc_internal.h src/snajpagent.h
 
 tests/test_credential: $(PLATFORM_SRC) src/credential.c src/secret_source.c tests/test_credential.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/credential.h src/secret_source.h
 

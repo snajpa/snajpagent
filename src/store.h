@@ -80,6 +80,7 @@ struct snag_session {
     char final_response_id[SNAG_ID_HEX_LEN + 1u];
     struct snag_process_state processes[SNAG_MAX_PROCESSES];
     size_t process_count;
+    uint64_t irc_received_seq, irc_consumed_seq, response_irc_seq;
     uint32_t max_parallel_commands;
     bool parallel_tool_calls;
     char compact_id[SNAG_ID_HEX_LEN + 1u];
