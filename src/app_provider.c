@@ -30,24 +30,12 @@ static bool fixture_capacity_rejected_once;
 static json_t *
 fixture_model_limits(size_t index)
 {
-    json_t *limits = json_object();
-
-    if (!limits ||
-        snag_json_set_new(limits, "auto_compact_input_tokens", json_null()) < 0 ||
-        snag_json_set_new(limits, "context_window_tokens",
-                         index < 2u ? json_integer(272000) : json_null()) < 0 ||
-        snag_json_set_new(limits, "effective_context_window_percent",
-                         json_null()) < 0 ||
-        snag_json_set_new(limits, "input_context_window_tokens", json_null()) < 0 ||
-        snag_json_set_new(limits, "max_context_window_tokens",
-                         index < 2u ? json_integer(872000) : json_null()) < 0 ||
-        snag_json_set_new(limits, "max_input_tokens", json_null()) < 0 ||
-        snag_json_set_new(limits, "max_output_tokens", json_null()) < 0) {
-        if (limits)
-            json_decref(limits);
-        return NULL;
-    }
-    return limits;
+    return json_pack("{s:n,s:o,s:n,s:n,s:o,s:n,s:n}",
+        "auto_compact_input_tokens", "context_window_tokens",
+        index < 2u ? json_integer(272000) : json_null(),
+        "effective_context_window_percent", "input_context_window_tokens",
+        "max_context_window_tokens", index < 2u ? json_integer(872000) : json_null(),
+        "max_input_tokens", "max_output_tokens");
 }
 
 int snag_fixture_response(const char *prompt, const json_t *steering,
@@ -71,9 +59,6 @@ snag_app_provider_models(struct app_state *app,
     static const char *const ids[] = {
         "gpt-5.6-luna", "gpt-5.6-terra", "vendor/future-model"
     };
-    static const char *const efforts[] = {
-        "low", "medium", "high", "xhigh", "max", "ultra"
-    };
     const char *failure = getenv("SNAJPAGENT_FIXTURE_MODEL_FAILURE");
     json_t *out = NULL;
 
@@ -91,43 +76,14 @@ snag_app_provider_models(struct app_state *app,
     if (!models || !out)
         goto fail;
     for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); ++i) {
-        json_t *entry = json_object();
-        json_t *variants = json_array();
-        if (!entry || !variants)
-            goto fail_entry;
-        if (i == 0u) {
-            if (json_array_append_new(variants, json_string("high")) < 0)
-                goto fail_entry;
-        } else if (i == 1u) {
-            for (size_t j = 0; j < sizeof(efforts) / sizeof(efforts[0]); ++j)
-                if (json_array_append_new(variants,
-                                          json_string(efforts[j])) < 0)
-                    goto fail_entry;
-        }
-        if (snag_json_set_new(entry, "default_effort",
-                             i == 0u ? json_string("high") :
-                             i == 1u ? json_string("medium") : json_null()) < 0)
-            goto fail_entry;
-        if (snag_json_set_new(entry, "efforts", variants) < 0) {
-            variants = NULL;
-            goto fail_entry;
-        }
-        variants = NULL;
-        if (snag_json_set_new(entry, "id", json_string(ids[i])) < 0 ||
-            snag_json_set_new(entry, "limits", fixture_model_limits(i)) < 0)
-            goto fail_entry;
-        if (json_array_append_new(out, entry) < 0) {
-            entry = NULL;
-            goto fail_entry;
-        }
-        entry = NULL;
-        continue;
-fail_entry:
-        if (variants)
-            json_decref(variants);
-        if (entry)
-            json_decref(entry);
-        goto fail;
+        json_t *variants = i == 0u ? json_pack("[s]", "high") :
+            i == 1u ? json_pack("[s,s,s,s,s,s]", "low", "medium", "high",
+                                "xhigh", "max", "ultra") : json_array();
+        json_t *entry = json_pack("{s:s?,s:o,s:s,s:o}", "default_effort",
+            i == 0u ? "high" : i == 1u ? "medium" : NULL,
+            "efforts", variants, "id", ids[i], "limits", fixture_model_limits(i));
+        if (!entry || json_array_append_new(out, entry) < 0)
+            goto fail;
     }
     *models = out;
     return 0;
@@ -255,8 +211,8 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
                          char *error, size_t error_size)
 {
 #ifdef SNAJPAGENT_TEST_FIXTURE
-    json_t *fixture_output = json_array();
-    json_t *item = json_object();
+    json_t *fixture_output = json_pack("[{s:s,s:s}]",
+        "encrypted_content", "fixture-native-compact", "type", "compaction");
     char hash[SNAG_SHA256_HEX_LEN + 1u];
     size_t bytes = 0u;
 
@@ -264,7 +220,6 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
     (void)credential;
     if (app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
         app->session.last_user && strcmp(app->session.last_user, "native_compact_unavailable") == 0) {
-        json_decref(item);
         json_decref(fixture_output);
         return SNAG_PROVIDER_UNSUPPORTED;
     }
@@ -275,7 +230,6 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
             int pump_rc = snag_app_active_input_pump(app, 20u);
 
             if (pump_rc != 0) {
-                json_decref(item);
                 json_decref(fixture_output);
                 return pump_rc;
             }
@@ -284,20 +238,12 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
         *output = NULL;
     if (output_tokens_bound)
         *output_tokens_bound = 0u;
-    if (!output || !output_tokens_bound || !fixture_output || !item ||
-        snag_json_set_new(item, "encrypted_content",
-                         json_string("fixture-native-compact")) < 0 ||
-        snag_json_set_new(item, "type", json_string("compaction")) < 0 ||
-        json_array_append_new(fixture_output, item) < 0 ||
+    if (!output || !output_tokens_bound || !fixture_output ||
         snag_context_compact_output_valid(fixture_output, hash, &bytes,
                                          error, error_size) < 0) {
-        if (item)
-            json_decref(item);
-        if (fixture_output)
-            json_decref(fixture_output);
+        json_decref(fixture_output);
         return -1;
     }
-    item = NULL;
     *output = fixture_output;
     *output_tokens_bound = (uint64_t)bytes;
     return 0;
@@ -309,8 +255,6 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
                                             snag_app_provider_input_pump, app,
                                             output, output_tokens_bound,
                                             error, error_size, &cancel_code, NULL);
-    if (rc == 1 || rc == 2)
-        return rc;
     return rc;
 #endif
 }
@@ -404,8 +348,6 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
                                            snag_app_provider_input_pump, app, graph,
                                            failure, error, error_size, &cancel_code,
                                            retry_count);
-    if (rc == 1 || rc == 2)
-        return rc;
     return rc;
 #endif
 }

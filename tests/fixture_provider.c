@@ -21,42 +21,18 @@ static const char wrong_managed_handle[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 static json_t *
 empty_excerpt(void)
 {
-    json_t *out = json_object();
-
-    if (!out ||
-        snag_json_set_new(out, "discarded_bytes", json_integer(0)) < 0 ||
-        snag_json_set_new(out, "encoding", json_string("utf8")) < 0 ||
-        snag_json_set_new(out, "original_bytes", json_integer(0)) < 0 ||
-        snag_json_set_new(out, "retained", json_string("")) < 0 ||
-        snag_json_set_new(out, "retained_bytes", json_integer(0)) < 0) {
-        if (out)
-            json_decref(out);
-        return NULL;
-    }
-    return out;
+    return json_pack("{s:i,s:s,s:i,s:s,s:i}",
+        "discarded_bytes", 0, "encoding", "utf8", "original_bytes", 0,
+        "retained", "", "retained_bytes", 0);
 }
 
 static json_t *
 running_result_reason(const char *text, const char *reason)
 {
-    json_t *result = json_object();
-
-    if (!result ||
-        snag_json_set_new(result, "duration_ms", json_integer(0)) < 0 ||
-        snag_json_set_new(result, "exit_code", json_null()) < 0 ||
-        snag_json_set_new(result, "handle", json_string(managed_handle)) < 0 ||
-        snag_json_set_new(result, "model_text", json_string(text)) < 0 ||
-        snag_json_set_new(result, "reason",
-                         reason ? json_string(reason) : json_null()) < 0 ||
-        snag_json_set_new(result, "signal", json_null()) < 0 ||
-        snag_json_set_new(result, "status", json_string("running")) < 0 ||
-        snag_json_set_new(result, "stderr", empty_excerpt()) < 0 ||
-        snag_json_set_new(result, "stdout", empty_excerpt()) < 0) {
-        if (result)
-            json_decref(result);
-        return NULL;
-    }
-    return result;
+    return json_pack("{s:i,s:n,s:s,s:s,s:s?,s:n,s:s,s:o,s:o}",
+        "duration_ms", 0, "exit_code", "handle", managed_handle,
+        "model_text", text, "reason", reason, "signal", "status", "running",
+        "stderr", empty_excerpt(), "stdout", empty_excerpt());
 }
 
 static json_t *
@@ -113,20 +89,9 @@ emit_public(struct snag_response_graph *graph, snag_responses_emit_fn emit, void
 static json_t *
 exec_arguments(const char *workspace, const char *command)
 {
-    json_t *args = json_object();
-    if (!args ||
-        snag_json_set_new(args, "command", json_string(command)) < 0 ||
-        snag_json_set_new(args, "pty", json_false()) < 0 ||
-        snag_json_set_new(args, "stdin", json_null()) < 0 ||
-        snag_json_set_new(args, "timeout_ms", json_integer(1000)) < 0 ||
-        snag_json_set_new(args, "workdir", json_string(workspace)) < 0 ||
-        snag_json_set_new(args, "yield_ms", json_integer(1000)) < 0 ||
-        snag_json_set_new(args, "max_output_tokens", json_null()) < 0) {
-        if (args)
-            json_decref(args);
-        return NULL;
-    }
-    return args;
+    return json_pack("{s:s,s:b,s:n,s:i,s:s,s:i,s:n}",
+        "command", command, "pty", 0, "stdin", "timeout_ms", 1000,
+        "workdir", workspace, "yield_ms", 1000, "max_output_tokens");
 }
 
 static int
