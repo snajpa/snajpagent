@@ -332,21 +332,17 @@ test_private_directory(void)
         assert(read(file, received, sizeof(received)) == sizeof(received));
         assert(memcmp(bytes, received, sizeof(bytes)) == 0);
 #ifdef _WIN32
-        LARGE_INTEGER offset;
         DWORD returned;
-        offset.QuadPart = INT64_C(5368709120);
         assert(DeviceIoControl((HANDLE)_get_osfhandle(file), FSCTL_SET_SPARSE,
                                NULL, 0, NULL, 0, &returned, NULL));
-        assert(snag_seek(file, offset.QuadPart, SEEK_SET) == offset.QuadPart);
-        assert(snag_truncate(file, offset.QuadPart) == 0);
-        assert(snag_fstat(file, &linked) == 0 && linked.st_size == offset.QuadPart);
-        offset.QuadPart = sizeof(bytes);
-        assert(snag_truncate(file, offset.QuadPart) == 0);
-#else
+#endif
         assert(snag_truncate(file, INT64_C(5368709120)) == 0);
         assert(snag_fstat(file, &linked) == 0 && linked.st_size == INT64_C(5368709120));
+        assert(snag_seek(file, INT64_C(5368709119), SEEK_SET) == INT64_C(5368709119));
+        assert(snag_write_full(file, "z", 1u) == 0);
+        assert(snag_pread(file, received, 1u, INT64_C(5368709119)) == 1 && received[0] == 'z');
+        assert(snag_seek(file, 0, SEEK_CUR) == INT64_C(5368709120));
         assert(snag_truncate(file, sizeof(bytes)) == 0);
-#endif
         assert(snag_seek(file, 2, SEEK_SET) == 2);
         assert(snag_pread(file, received, sizeof(received), 0) == sizeof(received));
         assert(!memcmp(bytes, received, sizeof(bytes)) && snag_seek(file, 0, SEEK_CUR) == 2);
