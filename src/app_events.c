@@ -292,9 +292,6 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (snag_app_commit_event(app, "irc_event", irc_event_data(event),
                              error, sizeof(error)) < 0)
         return -1;
-    if (snag_ui_model_nick(&app->ui,
-                         snag_irc_model_nick(app->irc)) < 0)
-        return -1;
     if (snag_ui_irc_event(&app->ui, event) < 0)
         return -1;
     if (event->kind == SNAG_IRC_DISCONNECTED &&

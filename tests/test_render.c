@@ -1038,7 +1038,6 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     snag_render_init(&render, verbosity);
     render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    snag_render_set_model_nick(&render, "agent");
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     memset(&event, 0, sizeof(event));
     event.kind = SNAG_IRC_MESSAGE;
@@ -1270,7 +1269,7 @@ test_markdown_tables(void)
 }
 
 static size_t
-capture_color(enum snag_color_mode mode, bool networked,
+capture_color(enum snag_color_mode mode, bool chat_view,
               unsigned int verbosity, int timeout_ms,
               uint32_t default_timeout_ms, uint32_t max_output_bytes,
               char *out, size_t out_size)
@@ -1290,8 +1289,7 @@ capture_color(enum snag_color_mode mode, bool networked,
     assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
     close(fds[1]);
     snag_render_init(&render, verbosity);
-    snag_render_set_model_nick(&render, "agent");
-    if (networked)
+    if (chat_view)
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     snag_render_set_color(&render, mode);
     assert(snag_render_submitted(&render, "› ", "plain") == 0);
@@ -1338,10 +1336,17 @@ capture_color(enum snag_color_mode mode, bool networked,
     event.timestamp_ms = 1000u;
     memcpy(event.nick, "agent", 6u);
     memcpy(event.text, "answer", 7u);
-    event.local = true;
+    /* Immediate and queued chat use the same role colors, independent of
+     * locality and history. Notices retain the same sender palette. */
+    for (unsigned int flags = 0u; flags < 16u; ++flags) {
+        event.local = (flags & 1u) != 0u;
+        event.op = (flags & 2u) != 0u;
+        event.historical = (flags & 4u) != 0u;
+        event.kind = flags & 8u ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE;
+        assert(snag_render_irc_event(&render, &event) == 0);
+    }
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-    assert(snag_render_irc_event(&render, &event) == 0);
-    if (networked)
+    if (chat_view)
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
     snag_render_free(&render);
     assert(dup2(saved, STDERR_FILENO) >= 0);
@@ -1516,7 +1521,6 @@ test_semantic_history(void)
         assert(snag_buf_terminate(&finish) == 0);
         snag_render_init(&render, 6u);
         snag_render_set_color(&render, SNAG_COLOR_NEVER);
-        snag_render_set_model_nick(&render, "agent");
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
         struct snag_render_source source = append_event(file, (char *)response.data);
         assert(snag_render_durable(&render, fileno(file), source, "response_completed", 0u, 0u) == 0);
@@ -1625,7 +1629,6 @@ test_append_only_views(unsigned int verbosity)
     close(fds[1]);
     snag_render_init(&render, verbosity);
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    snag_render_set_model_nick(&render, "agent");
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     render.verbosity = 1u;
     event.kind = SNAG_IRC_MESSAGE;
@@ -1684,7 +1687,6 @@ test_append_only_views(unsigned int verbosity)
     memcpy(event.nick, "agent", 6u);
     memcpy(event.text, "public-before-rename", 21u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    memcpy(render.model_nick, "agent2", 7u);
     memcpy(event.nick, "agent2", 7u);
     memcpy(event.text, "public-after-rename", 20u);
     assert(snag_render_irc_event(&render, &event) == 0);
@@ -1719,7 +1721,6 @@ test_append_only_views(unsigned int verbosity)
     assert(count_text(output, "-agent2 - own-public-notice") == 1u);
     assert(strstr(output, "· topic · /workspace\n") != NULL);
     assert(strstr(output, "· history synchronized\n") != NULL);
-    snag_render_set_model_nick(&render, "agent2");
     assert(snag_render_view(&render) == SNAG_RENDER_CHAT);
     assert(snag_render_rollout_begin(&render, STDERR_FILENO, NULL,
                                      SNAG_PRESENT_CONVERSATION) == 0);
@@ -1736,7 +1737,6 @@ test_append_only_views(unsigned int verbosity)
     assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
     used = drain_available(fds[0], output, sizeof(output), used);
     assert(count_text(output, "offline-private") == 1u);
-    snag_render_set_model_nick(&render, "agent2");
     assert(snag_render_view(&render) == SNAG_RENDER_ROLLOUT);
     assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     errno = 0;
@@ -1926,10 +1926,17 @@ main(void)
     assert(strstr(output,
                   "\033[33m→ exec_command\033[0m  {\"command\":\"printf plain\"") != NULL);
     assert(strstr(output, "  timeout: 2500ms\n") != NULL);
-    assert(strstr(output, "\033[1;36magent \033[0m› answer") != NULL);
+    assert(count_text(output, "\033[1;36magent \033[0m› answer") == 4u);
+    assert(count_text(output, "\033[1;35m@agent \033[0m› answer") == 4u);
+    assert(count_text(output, "\033[1;36m-agent \033[0m- answer") == 4u);
+    assert(count_text(output, "\033[1;35m-@agent \033[0m- answer") == 4u);
     assert(capture_color(SNAG_COLOR_ALWAYS, true, 6u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[1;36m› \033[0mplain\n") != NULL);
+    assert(count_text(output, "\033[1;36magent \033[0m› answer") == 4u);
+    assert(count_text(output, "\033[1;35m@agent \033[0m› answer") == 4u);
+    assert(count_text(output, "\033[1;36m-agent \033[0m- answer") == 4u);
+    assert(count_text(output, "\033[1;35m-@agent \033[0m- answer") == 4u);
     assert(capture_color(SNAG_COLOR_NEVER, true, 6u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strchr(output, '\033') == NULL);

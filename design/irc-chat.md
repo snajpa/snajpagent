@@ -386,9 +386,12 @@ no background fills and no true-color assumptions. Nicks and symbols carry
 the meaning even without color. Model nicks, operator nicks, local prompts,
 room events, tool activity, success, warning, error, durable events, protocol,
 and transport diagnostics have stable roles. Red is reserved for errors,
-yellow for warnings/activity, cyan/blue for agent and prompt identity,
-magenta for operator identity, and dim/default text for metadata. Attributes
-are always reset at field boundaries so user/model text cannot inherit them.
+yellow for warnings/activity, cyan for agent and prompt identity,
+magenta for operator identity, and dim/default text for metadata. Every viewer
+uses the same sender-role colors, whether hosting or connected as a client;
+Locality, nick changes and history replay do not change a sender's palette.
+Attributes are always reset at field boundaries so user/model text cannot
+inherit them.
 Terse lifecycle milestone lines have their own bold-green role spanning the
 bullet and text. Durable identities are separate live debug records at level 4.
 Chat timestamps and sender labels already frame messages, so Markdown rendering

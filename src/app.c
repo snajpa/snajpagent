@@ -1738,9 +1738,7 @@ apply_network(struct app_state *app, struct snag_config *candidate,
     snag_irc_roles(app->irc, app->config);
     candidate->irc = app->config->irc;
     app->networked = snag_irc_enabled(app->config);
-    if (snag_ui_model_nick(&app->ui,
-                          snag_irc_model_nick(app->irc)) < 0 ||
-        snag_app_irc_snapshot(app, "topology", NULL, 0u) < 0 ||
+    if (snag_app_irc_snapshot(app, "topology", NULL, 0u) < 0 ||
         tick_irc(app, NULL, 0u) < 0)
         return -1;
     return rc;
@@ -1824,9 +1822,6 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     app->staged_provider = NULL;
     snag_ui_color(&app->ui, snag_cli_color(app->cli, app->config->color));
     snag_ui_markdown(&app->ui, snag_cli_markdown(app->cli, app->config->markdown));
-    snag_ui_model_nick(&app->ui,
-                             app->networked ?
-                                 app->config->irc.model_nick : NULL);
     snag_ui_commands(&app->ui, commands, command_count());
     snag_ui_typing_pause(&app->ui, app->config->typing_pause_ms);
     snag_config_free(&previous);
@@ -4359,8 +4354,6 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     }
     app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
     snag_ui_commands(&app.ui, commands, command_count());
-    snag_ui_model_nick(&app.ui,
-                             app.networked ? config.irc.model_nick : NULL);
     if (app.networked && snag_ui_set_view(&app.ui, SNAG_RENDER_CHAT) < 0)
         goto out;
     snag_ui_typing_pause(&app.ui, config.typing_pause_ms);

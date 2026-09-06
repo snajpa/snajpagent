@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Use the same cyan agent and magenta operator chat colors on servers and
+  clients. Remove presentation-only local-agent tracking and nickname updates;
+  preserve runtime identity, routing and private rollout boundaries.
+
 - Retry transient structured provider failures and safely truncated streams in
   the existing bounded request loop. Access/quota failures, unknown codes,
   partial output and tool activity are not replayed. A pre-output cyber-policy

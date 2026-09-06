@@ -67,7 +67,6 @@ struct snag_render_record {
     bool aborted;
     bool physical_open;
     bool label_displayed;
-    bool own_agent;
     struct snag_render_source source, response;
     uint32_t timeout_ms, max_output_bytes;
     bool tool_start;
@@ -75,8 +74,7 @@ struct snag_render_record {
 };
 
 static int render_irc_event_now(struct snag_render *render,
-                                const struct snag_irc_event *event,
-                                bool own_agent);
+                                const struct snag_irc_event *event);
 static int flush_view(struct snag_render *render, enum snag_render_view view);
 static int close_public_output(struct snag_render *render);
 static int render_tool_record(struct snag_render *render, const struct snag_render_record *record);
@@ -412,15 +410,6 @@ snag_render_set_color(struct snag_render *render, enum snag_color_mode mode)
         (mode == SNAG_COLOR_ALWAYS || render->stderr_terminal);
     if (render->term)
         snag_term_set_color(render->term, render->color_stderr);
-}
-
-void
-snag_render_set_model_nick(struct snag_render *render, const char *model_nick)
-{
-    render->model_nick[0] = '\0';
-    if (model_nick)
-        (void)snprintf(render->model_nick, sizeof(render->model_nick), "%s",
-                       model_nick);
 }
 
 void
@@ -2705,7 +2694,7 @@ out:
 
 static int
 render_irc_event_now(struct snag_render *render,
-                     const struct snag_irc_event *event, bool own_agent)
+                     const struct snag_irc_event *event)
 {
     char when[16u];
     char prefix[768u];
@@ -2730,8 +2719,6 @@ render_irc_event_now(struct snag_render *render,
             if (strcmp(destinations->items[i].endpoint, event->endpoint) == 0 &&
                 (!event->room[0] || strcmp(destinations->items[i].room, event->room) == 0))
                 origin = &destinations->items[i];
-        if (origin && event->local)
-            own_agent = strcmp(origin->model, event->nick) == 0;
         if (origin && destinations->count > 1u)
             (void)snprintf(source, sizeof(source), "[%u] ", origin->target.id);
         else if (!origin && strcmp(event->endpoint, "local") != 0)
@@ -2742,19 +2729,17 @@ render_irc_event_now(struct snag_render *render,
         strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
         memcpy(when, "--:--:--", 9u);
     colored = render->color_stderr;
-    nick_color = event->op ? "\033[1;35m" :
-                 own_agent ?
-                 "\033[1;36m" : "\033[1;34m";
+    nick_color = event->op ? COLOR_OPERATOR : COLOR_AGENT;
     if (output_begin(render, true) < 0)
         return -1;
-    if (colored && irc_piece(render, "\033[2m", false) < 0)
+    if (colored && irc_piece(render, COLOR_META, false) < 0)
         goto out;
     n = snprintf(prefix, sizeof(prefix), "%s%s%s ", source, when,
                  event->historical ? " history" : "");
     if (n < 0 || (size_t)n >= sizeof(prefix) ||
         irc_piece(render, prefix, true) < 0)
         goto out;
-    if (colored && (irc_piece(render, "\033[0m", false) < 0 ||
+    if (colored && (irc_piece(render, COLOR_RESET, false) < 0 ||
                     irc_piece(render, nick_color, false) < 0))
         goto out;
     if (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) {
@@ -2764,7 +2749,7 @@ render_irc_event_now(struct snag_render *render,
         if (n < 0 || (size_t)n >= sizeof(prefix) ||
             irc_piece(render, prefix, true) < 0)
             goto out;
-        if (colored && irc_piece(render, "\033[0m", false) < 0)
+        if (colored && irc_piece(render, COLOR_RESET, false) < 0)
             goto out;
         if (irc_piece(render,
                 event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0)
@@ -2803,21 +2788,21 @@ render_irc_event_now(struct snag_render *render,
         if (n < 0 || (size_t)n >= sizeof(prefix) ||
             irc_piece(render, prefix, true) < 0)
             goto out;
-        if (colored && irc_piece(render, "\033[0m", false) < 0)
+        if (colored && irc_piece(render, COLOR_RESET, false) < 0)
             goto out;
         if (event->text[0] &&
             (irc_piece(render, " · ", true) < 0 ||
              irc_piece(render, event->text, true) < 0))
             goto out;
     }
-    if (colored && irc_piece(render, "\033[0m", false) < 0)
+    if (colored && irc_piece(render, COLOR_RESET, false) < 0)
         goto out;
     if (irc_piece(render, "\n", false) < 0)
         goto out;
     rc = 0;
 out:
     if (colored)
-        (void)irc_piece(render, "\033[0m", false);
+        (void)irc_piece(render, COLOR_RESET, false);
     if (output_end(render) < 0 && rc == 0)
         rc = -1;
     return rc;
@@ -2828,18 +2813,15 @@ snag_render_irc_event(struct snag_render *render,
                      const struct snag_irc_event *event)
 {
     struct snag_render_record *record;
-    bool own_agent;
 
     if (!render || !event) {
         errno = EINVAL;
         return -1;
     }
-    own_agent = event->local && render->model_nick[0] &&
-                strcmp(event->nick, render->model_nick) == 0;
     struct snag_render_source source = render->irc_source;
     render->irc_source = (struct snag_render_source){0};
     if (render->view == SNAG_RENDER_CHAT)
-        return render_irc_event_now(render, event, own_agent);
+        return render_irc_event_now(render, event);
     record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
@@ -2854,7 +2836,6 @@ snag_render_irc_event(struct snag_render *render,
         }
         *record->irc = *event;
     }
-    record->own_agent = own_agent;
     queue_record(render, SNAG_RENDER_CHAT, record);
     return 0;
 }
@@ -2863,7 +2844,7 @@ static int
 render_irc_record(struct snag_render *render, const struct snag_render_record *record)
 {
     if (record->irc)
-        return render_irc_event_now(render, record->irc, record->own_agent);
+        return render_irc_event_now(render, record->irc);
     json_t *event = source_event(render, record->source);
     json_t *data = json_object_get(event, "data");
     struct snag_irc_event irc = {.kind = record->irc_kind};
@@ -2882,9 +2863,8 @@ render_irc_record(struct snag_render *render, const struct snag_render_record *r
     IRC_FIELD(text);
 #undef IRC_FIELD
     irc.historical = json_is_true(json_object_get(data, "historical"));
-    irc.local = json_is_true(json_object_get(data, "local"));
     irc.op = json_is_true(json_object_get(data, "op"));
-    rc = render_irc_event_now(render, &irc, record->own_agent);
+    rc = render_irc_event_now(render, &irc);
 out:
     if (event)
         json_decref(event);

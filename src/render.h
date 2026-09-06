@@ -110,7 +110,6 @@ struct snag_render {
     bool markdown_preserve_fence;
     bool markdown_prose_bullets;
     enum snag_render_view view;
-    char model_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     struct snag_term *term;
     struct snag_render_record *view_head[SNAG_RENDER_VIEW_COUNT];
     struct snag_render_record *view_tail[SNAG_RENDER_VIEW_COUNT];
@@ -134,7 +133,6 @@ bool snag_render_enabled(const struct snag_render *render,
 void snag_render_free(struct snag_render *render);
 void snag_render_set_color(struct snag_render *render, enum snag_color_mode mode);
 void snag_render_set_markdown(struct snag_render *render, bool enabled);
-void snag_render_set_model_nick(struct snag_render *render, const char *model_nick);
 void snag_render_attach_term(struct snag_render *render, struct snag_term *term);
 enum snag_render_view snag_render_view(const struct snag_render *render);
 int snag_render_set_view(struct snag_render *render, enum snag_render_view view);

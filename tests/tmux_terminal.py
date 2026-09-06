@@ -1910,16 +1910,16 @@ def validate_irc_events(dotdir):
             )
 
 
-def validate_irc_styles(terminal, remote_agent, local_agent=None):
+def validate_irc_styles(terminal):
     styled = terminal.capture_styled()
     expected = [
-        (r"\x1b\[[0-9;]*35m@twoop", "operator magenta"),
-        (rf"\x1b\[[0-9;]*34m{remote_agent}", "remote-agent blue"),
-    ]
-    if local_agent:
-        expected.append(
-            (rf"\x1b\[[0-9;]*36m{local_agent}", "local-agent cyan")
+        (rf"\x1b\[[0-9;]*{color}m{nick}", f"{nick} {role}")
+        for color, role, nicks in (
+            (35, "operator magenta", ("@oneop", "@twoop")),
+            (36, "agent cyan", ("hostbot", "onebot", "twobot")),
         )
+        for nick in nicks
+    ]
     for pattern, role in expected:
         if re.search(pattern, styled) is None:
             raise AssertionError(f"network UI is missing {role} styling")
@@ -3081,9 +3081,8 @@ def run_irc_case(binary, root):
             if screen.count("@twoop set topic · shared integration topic") != 1:
                 raise AssertionError(f"{name} did not render the topic change once")
             validate_irc_events(terminal.dotdir)
-        validate_irc_styles(terminals["host"], "onebot")
-        validate_irc_styles(terminals["one"], "hostbot")
-        validate_irc_styles(terminals["two"], "hostbot", "twobot")
+        for terminal in ordered:
+            validate_irc_styles(terminal)
 
         for marker in (first, second):
             requests = provider.matching_requests(marker)
