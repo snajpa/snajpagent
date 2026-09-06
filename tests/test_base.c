@@ -964,7 +964,16 @@ test_input_mode(void)
     assert(WriteConsoleInputW(input, keys, 3u, &written) && written == 3u);
     size_t used = 0;
     while (used < sizeof(received)) {
-        assert(WaitForSingleObject(input, 1000u) == WAIT_OBJECT_0);
+        int ready = snag_term_input_wait(&host, SNAG_WAKE_INVALID, 1000);
+        if (ready < 0 || !(ready & SNAG_TERM_WAIT_INPUT)) {
+            DWORD available = 0;
+            (void)GetNumberOfConsoleInputEvents(input, &available);
+            (void)fprintf(stderr, "console ready=%d used=%zu queued=%lu cache=%u/%u key=%u/%u repeat=%u\n",
+                           ready, used, (unsigned long)available, host.input_next, host.input_count,
+                           host.input_key_at, host.input_key_len, host.input_repeats);
+            (void)snag_term_input_restore(&host, true);
+            abort();
+        }
         ssize_t got = snag_term_input_read(&host, received + used, sizeof(received) - used);
         if (got < 0 && errno == EAGAIN)
             continue;
