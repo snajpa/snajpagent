@@ -137,8 +137,8 @@ approximately 4.2 MB. This is not full desktop or earliest Windows 10 ARM64
 qualification. VM NIC drivers belong to the guest hardware setup, not the
 agent's executable dependencies.
 
-The existing base/SSE/JSON/wire/Responses/retry tests and upstream Mbed TLS
-self-tests run there without third-party runtime DLLs. An upstream curl CLI
+The x64 guest also ran existing base/SSE/JSON/wire/Responses/retry tests and
+upstream Mbed TLS self-tests without third-party runtime DLLs. An upstream curl CLI
 was built only to check the static dependency closure and reported HTTP/2,
 IDN, asynchronous DNS, TLS and gzip/Brotli/Zstd. It is not a shipped helper,
 an external `/ro` tool. The production agent separately completed native `/ro`,
