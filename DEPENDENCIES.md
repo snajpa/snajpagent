@@ -27,6 +27,11 @@ The linked/runtime dependencies for a normal provider-capable build are:
 
 ## Self-contained Linux x86-64 build
 
+Native POSIX builds and Linux release recipes select `_FILE_OFFSET_BITS=64`,
+so 32-bit libc builds retain large-file seek/stat/truncate support. Keep that
+feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
+space or claim that every old kernel supports modern time/thread APIs.
+
 `make prod-linux-x86_64` explicitly uses the pinned nixpkgs revision in
 `nix/portable.nix`. Its independent Nix build does not replace the ordinary
 host binary or objects. The executable statically links musl, Jansson and

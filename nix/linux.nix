@@ -42,7 +42,7 @@ in {
         'TARGET_OS=Linux'
         "CC=$CC" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         "GIT_HEAD=${revision}" "BUILD_VERSION=${version}"
-        'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
+        'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
         'CFLAGS=-std=c11 -Os -g -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=-static-pie -flto -Wl,--gc-sections'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"

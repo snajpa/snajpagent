@@ -334,6 +334,10 @@ on ELF or
 on macOS.  They are not installed or needed to run the program.  Keep them
 for diagnosing that exact binary; a later debug rebuild is not a substitute.
 .SS Standalone builds
+Native POSIX defaults select 64-bit file offsets, including on 32-bit libc
+builds.  Preserve _FILE_OFFSET_BITS=64 when replacing CPPFLAGS; it does not
+enlarge the process address space or establish old-kernel compatibility.
+.PP
 These explicit targets use the pinned Nix recipes and can download/build
 dependencies.  They do not replace the normal host executable or start VMs.
 Independent targets can run together with
