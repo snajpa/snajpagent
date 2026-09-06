@@ -2017,11 +2017,13 @@ def run_destination_case(binary, root, provider, environment):
         client.submit("/names")
         client.wait(f"destination[3]: {endpoints[1]}")
         client.submit("/2 removed-target")
-        client.wait("unavailable")
+        client.wait("destination 2 is unavailable; use /names")
+        client.wait(": /2 removed-target")
         deliveries("removed-target", {})
-        client.send_key("C-u")
         for terminal in reversed(list(terminals.values())):
-            terminal.exit()
+            terminal.send_key("C-u")
+            terminal.send_key("C-d")
+            terminal.wait_dead()
         print("tmux_terminal destinations: ok", flush=True)
     finally:
         for terminal in reversed(list(terminals.values())):
