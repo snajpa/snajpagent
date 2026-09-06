@@ -2145,14 +2145,16 @@ dependencies.  They do not replace the normal host executable or start VMs.
 Independent targets can run together with
 .BR "make -jN" .
 .TP
-.BR "make prod-linux-x86_64" , " make prod-linux-aarch64"
+.BR "make prod-linux-x86_64" , " make prod-linux-aarch64" , " make prod-linux-i686"
 Build a static-PIE Linux executable with embedded CA data.  Copy
 .I build/matrix/linux-ARCH/bin/snajpagent
 to the destination; Nix and third-party runtime libraries are not required
 there.  Optional matching symbols are in the adjacent
 .I .debug/
-directory.  These target modern Linux with x86-64 or ARMv8-A baselines;
+directory.  These target modern Linux with x86-64, ARMv8-A or i686 baselines;
 older-kernel compatibility requires separate qualification.
+The i686 executable is 32-bit with 64-bit file offsets and musl time_t;
+Pentium II/III CPU probes do not establish Linux 2.4 kernel support.
 .TP
 .BR "make prod-macos-arm64" , " make prod-macos-x86_64"
 Cross-build a macOS 11+ executable with static application libraries and CA
@@ -2172,7 +2174,7 @@ Cross-compilation alone does not establish runtime support.
 .TP
 .B make \-jN prod-matrix
 Build all currently implemented standalone production targets: Linux
-x86-64/AArch64, macOS ARM64/Intel/universal, and Windows x86-64/ARM64.
+x86-64/AArch64/i686, macOS ARM64/Intel/universal, and Windows x86-64/ARM64.
 Legacy and other planned ports remain unfinished.
 Targets use separate build/matrix outputs and shared immutable Nix inputs;
 each recipe permits one Nix job and core.  SDK availability does not silently

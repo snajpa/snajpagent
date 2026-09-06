@@ -47,6 +47,9 @@ in assert buildRevision == null || buildRevision == revision; rec {
     ln -s "$debug/${packageName}.dSYM" "$out/bin/${packageName}.dSYM"
   '';
   linux-x86_64 = x86.application { inherit source packageName version revision; };
+  linux-i686 = (linux pkgs.pkgsCross.musl32).application {
+    inherit source packageName version revision;
+  };
   linux-aarch64 = (linux pkgs.pkgsCross.aarch64-multiplatform-musl).application {
     inherit source packageName version revision;
   };

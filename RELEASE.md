@@ -20,6 +20,7 @@ The current required outputs are:
 | --- | --- | --- |
 | `linux-x86_64` | `snajpagent` | Self-contained static PIE |
 | `linux-aarch64` | `snajpagent` | Self-contained static PIE |
+| `linux-i686` | `snajpagent` | 32-bit self-contained static PIE; not Linux 2.4 qualification |
 | `macos-x86_64` | `snajpagent` | Intel, static application libraries; experimental |
 | `macos-arm64` | `snajpagent` | Apple Silicon, static application libraries; experimental |
 | `macos-universal` | `snajpagent` | Both macOS slices in one native executable; experimental |

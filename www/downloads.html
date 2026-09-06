@@ -37,6 +37,7 @@
           <tbody>
             <tr><th scope="row">Linux x64</th><td><code>linux-x86_64</code> — static PIE</td><td>Awaiting first release</td></tr>
             <tr><th scope="row">Linux ARM64</th><td><code>linux-aarch64</code> — static PIE</td><td>Awaiting first release</td></tr>
+            <tr><th scope="row">Linux 32-bit x86</th><td><code>linux-i686</code> — static PIE</td><td>Awaiting first release</td></tr>
             <tr><th scope="row">macOS Intel</th><td><code>macos-x86_64</code> — experimental</td><td>Awaiting first release</td></tr>
             <tr><th scope="row">macOS Apple Silicon</th><td><code>macos-arm64</code> — experimental</td><td>Awaiting first release</td></tr>
             <tr><th scope="row">macOS universal</th><td><code>macos-universal</code> — both architectures, experimental</td><td>Awaiting first release</td></tr>
@@ -56,10 +57,11 @@
       <h2 id="compatibility-heading">Choose the right build</h2>
       <ul>
         <li><strong>Linux:</strong> choose x64 for Intel/AMD 64-bit PCs or ARM64
-          for AArch64 machines. Both builds statically link musl and application
+          for AArch64 machines, or i686 for 32-bit x86. These builds statically link musl and application
           libraries. They do not require Nix, system libcurl, or a matching glibc.
           Earlier builds were exercised on Alpine 3.22.5 / Linux 6.12; that is
-          not a promise of compatibility with every older kernel.</li>
+          not a promise of compatibility with every older kernel. The i686
+          CPU baseline does not imply Linux 2.4 support.</li>
         <li><strong>macOS:</strong> universal contains both Intel and Apple Silicon
           slices. Application libraries are included, but Apple's system library
           is still required. The build deployment target is macOS 11; actual

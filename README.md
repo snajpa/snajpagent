@@ -218,6 +218,8 @@ for platform scope.
 `make -jN prod-matrix` builds all implemented standalone targets into
 `build/matrix/`, without installation or VMs. Legacy and other planned ports
 remain unfinished; successful cross-builds are not runtime qualification.
+`make prod-linux-i686` adds a standalone 32-bit Linux build; Linux 2.4 support
+is still separate work, not implied by an i686 executable.
 
 For experimental Windows x64 or ARM64, use `make prod-windows-x86_64` or
 `make prod-windows-arm64` with pinned Nix dependencies. Copy the resulting

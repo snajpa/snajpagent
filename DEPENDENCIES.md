@@ -25,12 +25,23 @@ The linked/runtime dependencies for a normal provider-capable build are:
 | libcurl backend closure | not vendored | TLS, resolver, compression, HTTP, and other backends selected by the system libcurl build |
 | tmux | not vendored; test-only | optional rendered-screen regression in `make check`; required by `make tmuxcheck` and `make terminallivecheck` |
 
-## Self-contained Linux x86-64 build
+## Self-contained Linux builds
 
 Native POSIX builds and Linux release recipes select `_FILE_OFFSET_BITS=64`,
 so 32-bit libc builds retain large-file seek/stat/truncate support. Keep that
 feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
 space or claim that every old kernel supports modern time/thread APIs.
+
+`make prod-linux-i686` builds the full 32-bit static-PIE agent with the same
+application libraries and compressed embedded roots. It uses an i686 baseline,
+64-bit musl file offsets/time_t, and no required extra runtime libraries.
+Existing static units and TLS work under Pentium II/III CPU emulation, without
+SSE/SSE2; actual guest tests run on Alpine 3.22.5 x86 / Linux 6.12.94 with its
+own SSE2-capable CPU requirement. Guest RO, parallel commands and POSIX PTY
+provider round trips pass. This is not Linux 2.4 or every earlier kernel
+qualification; the old threading/syscall runtime remains separate work.
+Output is `build/matrix/linux-i686/bin/snajpagent`, with optional matching
+symbols in `.debug/`. A 32-bit process still has a 32-bit address space.
 
 `make prod-linux-x86_64` explicitly uses the pinned nixpkgs revision in
 `nix/portable.nix`. Its independent Nix build does not replace the ordinary
@@ -101,7 +112,7 @@ compatibility, signing identity or notarization.
 
 ## Parallel production matrix
 
-`make -jN prod-matrix` explicitly builds Linux x86-64/AArch64, macOS
+`make -jN prod-matrix` explicitly builds Linux x86-64/AArch64/i686, macOS
 ARM64/Intel/universal, and Windows x86-64/ARM64. This is the full implemented
 set, not the completed legacy/exotic portability roadmap. The remaining ports
 are still in development. SDK availability never silently
