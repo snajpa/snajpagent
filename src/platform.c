@@ -190,8 +190,11 @@ snag_hostname(char *out, size_t size)
         errno = EINVAL;
         return -1;
     }
-    if (!GetComputerNameExW(ComputerNameDnsHostname, name, &count))
-        return path_error(GetLastError());
+    if (!GetComputerNameExW(ComputerNameDnsHostname, name, &count) || !count || !name[0]) {
+        count = 256;
+        if (!GetComputerNameW(name, &count))
+            return path_error(GetLastError());
+    }
     if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, name, -1, out, (int)size, NULL, NULL))
         return path_error(GetLastError());
     return 0;
