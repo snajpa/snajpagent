@@ -143,17 +143,12 @@ static json_t *
 call_args_yield(const char *command, const char *workdir, int timeout_ms,
                 int yield_ms, const char *stdin_text)
 {
-    json_t *args = json_object();
+    json_t *args = json_pack("{s:s,s:s,s:o,s:I,s:n,s:o}",
+        "command", command, "workdir", workdir,
+        "timeout_ms", timeout_ms < 0 ? json_null() : json_integer(timeout_ms),
+        "yield_ms", (json_int_t)(yield_ms), "max_output_tokens",
+        "stdin", stdin_text ? json_string(stdin_text) : json_null());
     assert(args);
-    assert(snag_json_set_new(args, "command", json_string(command)) == 0);
-    assert(snag_json_set_new(args, "workdir", json_string(workdir)) == 0);
-    assert(snag_json_set_new(args, "timeout_ms",
-                            timeout_ms < 0 ? json_null() :
-                                             json_integer(timeout_ms)) == 0);
-    assert(snag_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
-    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
-    assert(snag_json_set_new(args, "stdin",
-                            stdin_text ? json_string(stdin_text) : json_null()) == 0);
     return args;
 }
 
@@ -354,16 +349,11 @@ static json_t *
 run_write_stdin_call_limit(const char *handle, const char *data, bool eof,
                            int yield_ms, int max_output_tokens)
 {
-    json_t *args = json_object();
-    assert(args != NULL);
-    assert(snag_json_set_new(args, "handle", json_string(handle)) == 0);
-    assert(snag_json_set_new(args, "data", json_string(data)) == 0);
-    assert(snag_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
-    assert(snag_json_set_new(args, "terminate", json_false()) == 0);
-    assert(snag_json_set_new(args, "yield_ms", json_integer(yield_ms)) == 0);
-    assert(snag_json_set_new(args, "max_output_tokens",
-        max_output_tokens < 0 ? json_null() :
-                                json_integer(max_output_tokens)) == 0);
+    json_t *args = json_pack("{s:s,s:s,s:o,s:b,s:I,s:o}",
+        "handle", handle, "data", data, "eof", eof ? json_true() : json_false(), "terminate", 0,
+        "yield_ms", (json_int_t)(yield_ms),
+        "max_output_tokens", max_output_tokens < 0 ? json_null() : json_integer(max_output_tokens));
+    assert(args);
     return run_tool_with_args("write_stdin", args);
 }
 
@@ -377,28 +367,19 @@ run_write_stdin_call(const char *handle, const char *data, bool eof,
 static json_t *
 run_terminate_call(const char *handle, const char *data, bool eof)
 {
-    json_t *args = json_object();
-    assert(args != NULL);
-    assert(snag_json_set_new(args, "handle", json_string(handle)) == 0);
-    assert(snag_json_set_new(args, "data", json_string(data)) == 0);
-    assert(snag_json_set_new(args, "eof", eof ? json_true() : json_false()) == 0);
-    assert(snag_json_set_new(args, "terminate", json_true()) == 0);
-    assert(snag_json_set_new(args, "yield_ms", json_integer(0)) == 0);
-    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
+    json_t *args = json_pack("{s:s,s:s,s:o,s:b,s:I,s:n}",
+        "handle", handle, "data", data, "eof", eof ? json_true() : json_false(), "terminate", 1,
+        "yield_ms", (json_int_t)(0), "max_output_tokens");
+    assert(args);
     return run_tool_with_args("write_stdin", args);
 }
 
 static json_t *
 run_malformed_write_stdin_call(const char *handle)
 {
-    json_t *args = json_object();
-
-    assert(args != NULL);
-    assert(snag_json_set_new(args, "handle", json_string(handle)) == 0);
-    assert(snag_json_set_new(args, "data", json_string("")) == 0);
-    assert(snag_json_set_new(args, "eof", json_false()) == 0);
-    assert(snag_json_set_new(args, "terminate", json_false()) == 0);
-    assert(snag_json_set_new(args, "yield_ms", json_integer(0)) == 0);
+    json_t *args = json_pack("{s:s,s:s,s:b,s:b,s:I}",
+        "handle", handle, "data", "", "eof", 0, "terminate", 0, "yield_ms", (json_int_t)(0));
+    assert(args);
     return run_tool_with_args("write_stdin", args);
 }
 

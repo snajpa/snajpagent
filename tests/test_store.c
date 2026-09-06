@@ -178,26 +178,13 @@ compaction_started_data(const struct snag_session *session,
 {
     static const char hash[] =
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    json_t *data = json_object();
-
+    json_t *data = json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:n,s:s,s:s,s:s,s:I,s:s}",
+        "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "compact_id", compact_id,
+        "count_method", "qualified_upper_bound", "count_request_sha256", hash,
+        "input_tokens_bound", (json_int_t)(1), "model", session->default_model,
+        "predecessor_compact_id", "profile_id", SNAJPAGENT_PROFILE_ID, "reason", "manual",
+        "request_sha256", hash, "source_seq", (json_int_t)(1), "source_sha256", hash);
     assert(data);
-    assert(snag_json_set_new(data, "capability_version",
-                            json_string(SNAJPAGENT_CAPABILITY_VERSION)) == 0);
-    assert(snag_json_set_new(data, "compact_id", json_string(compact_id)) == 0);
-    assert(snag_json_set_new(data, "count_method",
-                            json_string("qualified_upper_bound")) == 0);
-    assert(snag_json_set_new(data, "count_request_sha256",
-                            json_string(hash)) == 0);
-    assert(snag_json_set_new(data, "input_tokens_bound", json_integer(1)) == 0);
-    assert(snag_json_set_new(data, "model",
-                            json_string(session->default_model)) == 0);
-    assert(snag_json_set_new(data, "predecessor_compact_id", json_null()) == 0);
-    assert(snag_json_set_new(data, "profile_id",
-                            json_string(SNAJPAGENT_PROFILE_ID)) == 0);
-    assert(snag_json_set_new(data, "reason", json_string("manual")) == 0);
-    assert(snag_json_set_new(data, "request_sha256", json_string(hash)) == 0);
-    assert(snag_json_set_new(data, "source_seq", json_integer(1)) == 0);
-    assert(snag_json_set_new(data, "source_sha256", json_string(hash)) == 0);
     return data;
 }
 

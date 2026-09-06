@@ -38,19 +38,12 @@ static json_t *
 turn_started(const char *turn_id, unsigned int number, const char *text,
              const char *workspace, json_t *instructions)
 {
-    json_t *data = json_object();
+    json_t *data = json_pack("{s:o,s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+        "config", turn_config(), "input_kind", "direct", "read_only", 0,
+        "instructions", instructions ? instructions : json_array(), "queue_id", "queue_seq",
+        "text", text, "turn_id", turn_id, "turn_number", (json_int_t)number,
+        "workspace", workspace);
     assert(data);
-    assert(snag_json_set_new(data, "config", turn_config()) == 0);
-    assert(snag_json_set_new(data, "input_kind", json_string("direct")) == 0);
-    assert(snag_json_set_new(data, "read_only", json_false()) == 0);
-    assert(snag_json_set_new(data, "instructions",
-                            instructions ? instructions : json_array()) == 0);
-    assert(snag_json_set_new(data, "queue_id", json_null()) == 0);
-    assert(snag_json_set_new(data, "queue_seq", json_null()) == 0);
-    assert(snag_json_set_new(data, "text", json_string(text)) == 0);
-    assert(snag_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
-    assert(snag_json_set_new(data, "turn_number", json_integer(number)) == 0);
-    assert(snag_json_set_new(data, "workspace", json_string(workspace)) == 0);
     return data;
 }
 
@@ -183,17 +176,10 @@ static json_t *
 response_completed(const char *turn_id, const char *response_id,
                    const char *text)
 {
-    json_t *data = json_object();
-    json_t *items = json_array();
-    assert(data && items);
-    assert(json_array_append_new(items, assistant_item(text)) == 0);
-    assert(snag_json_set_new(data, "cycle", json_integer(1)) == 0);
-    assert(snag_json_set_new(data, "items", items) == 0);
-    assert(snag_json_set_new(data, "provider_response_id", json_string("resp_1")) == 0);
-    assert(snag_json_set_new(data, "response_id", json_string(response_id)) == 0);
-    assert(snag_json_set_new(data, "status", json_string("completed")) == 0);
-    assert(snag_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
-    assert(snag_json_set_new(data, "usage", usage()) == 0);
+    json_t *data = json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
+        "cycle", 1, "items", assistant_item(text), "provider_response_id", "resp_1",
+        "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage());
+    assert(data);
     return data;
 }
 
@@ -235,30 +221,19 @@ static json_t *
 response_interrupted(const char *turn_id, const char *response_id,
                      const char *prefix)
 {
-    json_t *data = json_object();
-    json_t *partial = json_array();
-    assert(data && partial);
-    assert(json_array_append_new(partial, assistant_item(prefix)) == 0);
-    assert(snag_json_set_new(data, "cycle", json_integer(1)) == 0);
-    assert(snag_json_set_new(data, "origin", json_string("steering")) == 0);
-    assert(snag_json_set_new(data, "partial_public", partial) == 0);
-    assert(snag_json_set_new(data, "reason", json_string("steered")) == 0);
-    assert(snag_json_set_new(data, "response_id",
-                            json_string(response_id)) == 0);
-    assert(snag_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
+    json_t *data = json_pack("{s:i,s:s,s:[o],s:s,s:s,s:s}",
+        "cycle", 1, "origin", "steering", "partial_public", assistant_item(prefix),
+        "reason", "steered", "response_id", response_id, "turn_id", turn_id);
+    assert(data);
     return data;
 }
 
 static json_t *
 compact_output_fixture(void)
 {
-    json_t *output = json_array();
-    json_t *item = json_object();
-    assert(output && item);
-    assert(snag_json_set_new(item, "encrypted_content",
-                            json_string("test-native-compact")) == 0);
-    assert(snag_json_set_new(item, "type", json_string("compaction")) == 0);
-    assert(json_array_append_new(output, item) == 0);
+    json_t *output = json_pack("[{s:s,s:s}]",
+        "encrypted_content", "test-native-compact", "type", "compaction");
+    assert(output);
     return output;
 }
 
@@ -269,33 +244,16 @@ compaction_started_data(const struct snag_session *session,
                         const char *request_hash,
                         uint64_t input_tokens_bound)
 {
-    json_t *data = json_object();
+    json_t *data = json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:o,s:s,s:s,s:s,s:I,s:s}",
+        "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "compact_id", compact_id,
+        "count_method", "qualified_upper_bound", "count_request_sha256", request_hash,
+        "input_tokens_bound", (json_int_t)input_tokens_bound,
+        "model", session->active_turn ? session->active_turn_model : session->default_model,
+        "predecessor_compact_id", session->compact_id[0] ? json_string(session->compact_id) : json_null(),
+        "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason ? reason : "manual",
+        "request_sha256", request_hash, "source_seq", (json_int_t)source_seq,
+        "source_sha256", source_hash);
     assert(data);
-    assert(snag_json_set_new(data, "capability_version",
-                            json_string(SNAJPAGENT_CAPABILITY_VERSION)) == 0);
-    assert(snag_json_set_new(data, "compact_id", json_string(compact_id)) == 0);
-    assert(snag_json_set_new(data, "count_method",
-                            json_string("qualified_upper_bound")) == 0);
-    assert(snag_json_set_new(data, "count_request_sha256",
-                            json_string(request_hash)) == 0);
-    assert(snag_json_set_new(data, "input_tokens_bound",
-                            json_integer((json_int_t)input_tokens_bound)) == 0);
-    assert(snag_json_set_new(data, "model", json_string(
-        session->active_turn ? session->active_turn_model :
-                               session->default_model)) == 0);
-    assert(snag_json_set_new(data, "predecessor_compact_id",
-                            session->compact_id[0] ?
-                            json_string(session->compact_id) : json_null()) == 0);
-    assert(snag_json_set_new(data, "profile_id",
-                            json_string(SNAJPAGENT_PROFILE_ID)) == 0);
-    assert(snag_json_set_new(data, "reason",
-                            json_string(reason ? reason : "manual")) == 0);
-    assert(snag_json_set_new(data, "request_sha256",
-                            json_string(request_hash)) == 0);
-    assert(snag_json_set_new(data, "source_seq",
-                            json_integer((json_int_t)source_seq)) == 0);
-    assert(snag_json_set_new(data, "source_sha256",
-                            json_string(source_hash)) == 0);
     return data;
 }
 
@@ -308,22 +266,14 @@ compaction_completed_data(const char *compact_id,
                           uint64_t output_tokens_bound,
                           const json_t *output)
 {
-    json_t *data = json_object();
+    json_t *data = json_pack("{s:s,s:s,s:I,s:o,s:s,s:s,s:s,s:I,s:s}",
+        "compact_id", compact_id, "count_method", "qualified_upper_bound",
+        "input_tokens_bound", (json_int_t)input_tokens_bound,
+        "output", json_deep_copy(output), "output_count_method", "qualified_upper_bound",
+        "output_count_request_sha256", output_count_hash, "output_sha256", output_hash,
+        "output_tokens_bound", (json_int_t)output_tokens_bound,
+        "source_sha256", source_hash);
     assert(data);
-    assert(snag_json_set_new(data, "compact_id", json_string(compact_id)) == 0);
-    assert(snag_json_set_new(data, "count_method",
-                            json_string("qualified_upper_bound")) == 0);
-    assert(snag_json_set_new(data, "input_tokens_bound",
-                            json_integer((json_int_t)input_tokens_bound)) == 0);
-    assert(snag_json_set_new(data, "output", json_deep_copy(output)) == 0);
-    assert(snag_json_set_new(data, "output_count_method",
-                            json_string("qualified_upper_bound")) == 0);
-    assert(snag_json_set_new(data, "output_count_request_sha256",
-                            json_string(output_count_hash)) == 0);
-    assert(snag_json_set_new(data, "output_sha256", json_string(output_hash)) == 0);
-    assert(snag_json_set_new(data, "output_tokens_bound",
-                            json_integer((json_int_t)output_tokens_bound)) == 0);
-    assert(snag_json_set_new(data, "source_sha256", json_string(source_hash)) == 0);
     return data;
 }
 
@@ -341,18 +291,11 @@ static json_t *
 running_result_limit(const char *handle, const char *model_text,
                      const char *reason, int max_output_tokens)
 {
-    json_t *result = json_object();
+    json_t *result = json_pack("{s:I,s:n,s:s,s:s,s:o,s:n,s:s,s:o,s:o}",
+        "duration_ms", (json_int_t)(50), "exit_code", "handle", handle, "model_text", model_text,
+        "reason", reason ? json_string(reason) : json_null(), "signal", "status", "running",
+        "stderr", empty_excerpt(), "stdout", empty_excerpt());
     assert(result);
-    assert(snag_json_set_new(result, "duration_ms", json_integer(50)) == 0);
-    assert(snag_json_set_new(result, "exit_code", json_null()) == 0);
-    assert(snag_json_set_new(result, "handle", json_string(handle)) == 0);
-    assert(snag_json_set_new(result, "model_text", json_string(model_text)) == 0);
-    assert(snag_json_set_new(result, "reason",
-                            reason ? json_string(reason) : json_null()) == 0);
-    assert(snag_json_set_new(result, "signal", json_null()) == 0);
-    assert(snag_json_set_new(result, "status", json_string("running")) == 0);
-    assert(snag_json_set_new(result, "stderr", empty_excerpt()) == 0);
-    assert(snag_json_set_new(result, "stdout", empty_excerpt()) == 0);
     if (max_output_tokens >= 0)
         assert(snag_json_set_new(result, "max_output_tokens",
                                 json_integer(max_output_tokens)) == 0);
@@ -363,22 +306,12 @@ running_result_limit(const char *handle, const char *model_text,
 static json_t *
 tool_call_item(const char *call_id, const char *workspace)
 {
-    json_t *item = json_object();
-    json_t *args = json_object();
-    assert(item && args);
-    assert(snag_json_set_new(args, "command", json_string("cat")) == 0);
-    assert(snag_json_set_new(args, "pty", json_false()) == 0);
-    assert(snag_json_set_new(args, "stdin", json_null()) == 0);
-    assert(snag_json_set_new(args, "timeout_ms", json_integer(3000)) == 0);
-    assert(snag_json_set_new(args, "workdir", json_string(workspace)) == 0);
-    assert(snag_json_set_new(args, "yield_ms", json_integer(100)) == 0);
-    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
-    assert(snag_json_set_new(item, "arguments", args) == 0);
-    assert(snag_json_set_new(item, "call_id", json_string(call_id)) == 0);
-    assert(snag_json_set_new(item, "kind", json_string("tool_call")) == 0);
-    assert(snag_json_set_new(item, "name", json_string("exec_command")) == 0);
-    assert(snag_json_set_new(item, "provider_call_id", json_string("call_exec")) == 0);
-    assert(snag_json_set_new(item, "provider_item_id", json_string("item_exec")) == 0);
+    json_t *item = json_pack("{s:{s:s,s:b,s:n,s:i,s:s,s:i,s:n},s:s,s:s,s:s,s:s,s:s}",
+        "arguments", "command", "cat", "pty", 0, "stdin", "timeout_ms", 3000,
+        "workdir", workspace, "yield_ms", 100, "max_output_tokens", "call_id", call_id,
+        "kind", "tool_call", "name", "exec_command", "provider_call_id", "call_exec",
+        "provider_item_id", "item_exec");
+    assert(item);
     return item;
 }
 
@@ -386,17 +319,10 @@ static json_t *
 response_completed_call(const char *turn_id, const char *response_id,
                         const char *call_id, const char *workspace)
 {
-    json_t *data = json_object();
-    json_t *items = json_array();
-    assert(data && items);
-    assert(json_array_append_new(items, tool_call_item(call_id, workspace)) == 0);
-    assert(snag_json_set_new(data, "cycle", json_integer(1)) == 0);
-    assert(snag_json_set_new(data, "items", items) == 0);
-    assert(snag_json_set_new(data, "provider_response_id", json_string("resp_call")) == 0);
-    assert(snag_json_set_new(data, "response_id", json_string(response_id)) == 0);
-    assert(snag_json_set_new(data, "status", json_string("completed")) == 0);
-    assert(snag_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
-    assert(snag_json_set_new(data, "usage", usage()) == 0);
+    json_t *data = json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
+        "cycle", 1, "items", tool_call_item(call_id, workspace), "provider_response_id", "resp_call",
+        "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage());
+    assert(data);
     return data;
 }
 
