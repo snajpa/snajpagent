@@ -127,7 +127,7 @@ int snag_irc_snapshot(const struct snag_irc *irc, struct snag_buf *out,
                      char *error, size_t error_size);
 int snag_irc_restore_event(struct snag_irc *irc,
                           const struct snag_irc_event *event);
-/* Render-only replay; does not emit, re-record, or send retained events. */
+/* Render-only replay; no re-recording or sends. Nonempty replay ends with HISTORY_READY. */
 int snag_irc_replay_hosted_history(const struct snag_irc *irc,
                                   snag_irc_event_fn render, void *opaque);
 /* Hosted identity, or the first configured server's last accepted identity. */

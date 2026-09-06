@@ -2585,8 +2585,7 @@ irc_event_word(enum snag_irc_event_kind kind)
     case SNAG_IRC_NICK: return "is now known as";
     case SNAG_IRC_TOPIC: return "set topic";
     case SNAG_IRC_MODE: return "set mode";
-    case SNAG_IRC_HISTORY_READY: return "history synchronized";
-    case SNAG_IRC_MESSAGE: case SNAG_IRC_NOTICE: break;
+    case SNAG_IRC_HISTORY_READY: case SNAG_IRC_MESSAGE: case SNAG_IRC_NOTICE: break;
     }
     return "event";
 }

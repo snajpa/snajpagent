@@ -2069,6 +2069,7 @@ main(void)
     assert(strcmp(output, "• **") == 0);
 
     assert(capture_static_markdown(0u, output, sizeof(output)) > 0u);
+    assert(count_text(output, "── history replayed ──") == 2u);
     for (unsigned int verbosity = 1u; verbosity <= 6u; ++verbosity) {
         char other[8192u];
 
