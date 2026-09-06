@@ -6,6 +6,7 @@
 #include "json.h"
 #include "tools.h"
 #include "tools_patch.h"
+#include "process_host.h"
 #include "turn.h"
 
 #include <assert.h>
@@ -21,6 +22,35 @@
 #include <unistd.h>
 
 #define PATCH_MODEL_MAX_FOR_TEST (512u * 1024u)
+
+static void
+test_child_interrupt_mask(void)
+{
+    sigset_t blocked, saved, current;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGINT);
+    assert(sigprocmask(SIG_BLOCK, &blocked, &saved) == 0);
+    for (unsigned int pty = 0; pty < 2u; ++pty) {
+        struct snag_child child;
+        char *environment[] = {"PATH=/usr/bin:/bin", NULL};
+        snag_child_init(&child);
+        assert(snag_child_spawn(&child, "/bin/sh", "printf ready; exec sleep 30", "/",
+                                environment, pty != 0) == 0);
+        struct snag_child_event event = {&child, 0u, SNAG_CHILD_READ, 0};
+        assert(snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 1000) > 0);
+        char bytes[32];
+        assert(snag_child_read(&child, 0u, bytes, sizeof(bytes)) > 0);
+        uint64_t start = snag_monotonic_ms();
+        snag_child_signal(&child, SNAG_CHILD_INTERRUPT);
+        while (snag_child_exited(&child) == 0 && snag_monotonic_ms() - start < 1000u)
+            assert(snag_sleep_ms(1u) == 0);
+        assert(snag_child_exited(&child) == 1 && snag_child_reap(&child) == 0);
+        assert(child.signal_number == SIGINT);
+        snag_child_free(&child);
+    }
+    assert(sigprocmask(SIG_SETMASK, NULL, &current) == 0 && sigismember(&current, SIGINT));
+    assert(sigprocmask(SIG_SETMASK, &saved, NULL) == 0);
+}
 
 static struct {
     char handle[SNAG_ID_HEX_LEN + 1u];
@@ -1595,6 +1625,7 @@ test_journal_failure_closes_owned_commands(void)
 int
 main(void)
 {
+    test_child_interrupt_mask();
     (void)signal(SIGPIPE, SIG_IGN);
     snag_tools_journal(retain_output, read_output, NULL);
     test_process_capacity_and_ready_collection();

@@ -210,6 +210,10 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
     if (child->pid < 0)
         goto fail;
     if (child->pid == 0) {
+        sigset_t unblocked;
+        sigemptyset(&unblocked);
+        if (sigprocmask(SIG_SETMASK, &unblocked, NULL) < 0)
+            _exit(125);
         if (pty) {
             close_if_open(&master);
 #if defined(SNAJPAGENT_HAVE_PTY)
