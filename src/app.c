@@ -483,13 +483,13 @@ format_context_meter(struct app_state *app, bool active,
 static unsigned int prompt_spinner_states(const struct app_state *app, bool active);
 
 static void
-prompt_hostname(char hostname[256u])
+prompt_hostname(char *hostname, size_t size)
 {
-    if (gethostname(hostname, 256u) < 0)
-        memcpy(hostname, "localhost", sizeof("localhost"));
-    hostname[255u] = '\0';
+    if (gethostname(hostname, size) < 0)
+        (void)snag_strcpy(hostname, size, "localhost");
+    hostname[size - 1u] = '\0';
     if (!snag_utf8_valid((const unsigned char *)hostname, strlen(hostname), true))
-        memcpy(hostname, "localhost", sizeof("localhost"));
+        (void)snag_strcpy(hostname, size, "localhost");
     for (size_t i = 0u; hostname[i]; ++i)
         if ((unsigned char)hostname[i] <= 0x20u || hostname[i] == 0x7f)
             hostname[i] = '_';
@@ -517,7 +517,7 @@ set_input_prompt(struct app_state *app, bool active)
     if (!provider || !model || !effort ||
         format_context_meter(app, active, meter) < 0)
         return -1;
-    prompt_hostname(hostname);
+    prompt_hostname(hostname, sizeof(hostname));
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
@@ -568,7 +568,7 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
 
     if (!provider || !model || !effort)
         return -1;
-    prompt_hostname(hostname);
+    prompt_hostname(hostname, sizeof(hostname));
     values[0] = provider->name;
     values[1] = model;
     values[2] = effort;
