@@ -31,7 +31,11 @@ check_native_read(const char *workspace, const char *name, const char *arguments
     assert(call.arguments);
     assert(snag_tools_read_only(&call, workspace, pump, NULL, &result) == (pump ? 2 : 0));
     assert(snag_tool_result_valid(result) == 0);
-    assert(!strcmp(snag_json_string(result, "status"), success ? "succeeded" : "failed"));
+    if (strcmp(snag_json_string(result, "status"), success ? "succeeded" : "failed")) {
+        (void)fprintf(stderr, "%s status=%s output=%s\n", name,
+                       snag_json_string(result, "status"), snag_json_string(result, "model_text"));
+        abort();
+    }
     if (!strstr(snag_json_string(result, "model_text"), expected)) {
         (void)fprintf(stderr, "%s unexpected output: %s\n", name, snag_json_string(result, "model_text"));
         abort();

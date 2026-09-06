@@ -109,6 +109,20 @@ GCC runtime exception. Older Windows still needs genuine thread/crypto/API
 fallbacks and qualification; a DLL import archive renamed to `.a` is never
 a self-contained static dependency.
 
+The Windows-only `regex` library attribute imports Gnulib's POSIX ERE module
+at pinned revision `58df1afe785d3067cfa474ab57ccf283665dfa38` through
+`nix/windows-regex.nix`. Only its LGPLv2-compatible module closure is compiled;
+no third-party implementation is vendored and no external grep executable is
+used. The small first-party charset adapter is GPL-2.0-only. Preserve both
+sets of notices and the corresponding source/build recipe when redistributing.
+
+The static engine handles UTF-8 internally, independently of msvcrt's locale
+support: its charset, multibyte width, DFA fast path and Unicode character
+classes consistently use UTF-8/Unicode. It does not change the process-global
+CRT locale or require UCRT or a separately installed regex DLL. POSIX builds
+continue using libc regex. This dependency is part of the Windows port in
+progress; it does not establish complete Windows agent support.
+
 `src/snag_jansson.h` is the only Jansson include surface in first-party C code. It
 prefers a system `<jansson.h>` when one is available. Some minimal qualification
 roots carry `libjansson.so.4` without the development header; for those roots the
