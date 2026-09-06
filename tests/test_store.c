@@ -15,6 +15,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static void
+commit_event(struct snag_session *session, const char *type, json_t *data)
+{
+    char error[256] = {0};
+    int rc = snag_session_commit(session, type, data, NULL, error, sizeof(error));
+    if (rc != 0)
+        fprintf(stderr, "%s: %s\n", type, error);
+    assert(rc == 0);
+}
+
 static int
 list_to_fd(void *opaque, const char *text, size_t len)
 {
@@ -342,21 +352,18 @@ main(void)
     memcpy(id, session.id, sizeof(id));
     memcpy(id_prefix, session.id, 8u);
     id_prefix[8] = '\0';
-    assert(snag_session_commit(&session, "model_selection_changed",
-        json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
-            "old_model", "gpt-5.5-2026-04-23", "new_model", "gpt-5.5-2026-04-23-alt",
-            "old_provider", "default", "new_provider", "default",
-            "old_effort", "default", "new_effort", "default"),
-        NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "effort_changed",
-        change_data("old_effort", "default", "new_effort", "high"),
-        NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "model_selection_changed",
+                 json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+                     "old_model", "gpt-5.5-2026-04-23", "new_model", "gpt-5.5-2026-04-23-alt",
+                     "old_provider", "default", "new_provider", "default",
+                     "old_effort", "default", "new_effort", "default"));
+    commit_event(&session, "effort_changed",
+                 change_data("old_effort", "default", "new_effort", "high"));
     assert(strcmp(session.default_model, "gpt-5.5-2026-04-23-alt") == 0);
     assert(strcmp(session.default_effort, "high") == 0);
-    assert(snag_session_commit(&session, "workspace_changed",
-        change_data("old_workspace", workspace,
-                    "new_workspace", workspace2),
-        NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "workspace_changed",
+                 change_data("old_workspace", workspace,
+                     "new_workspace", workspace2));
     assert(strcmp(session.workspace, workspace2) == 0);
     {
         int writable = session.log_fd;
@@ -469,8 +476,7 @@ main(void)
             json_decref(bad);
         }
         assert(snag_json_set_new(event, "kind", json_string("message")) == 0);
-        assert(snag_session_commit(&session, "irc_event", event, NULL,
-                                  error, sizeof(error)) == 0);
+        commit_event(&session, "irc_event", event);
         snag_session_close(&session);
         snag_session_init(&session);
         assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
@@ -481,15 +487,12 @@ main(void)
         const char *goal1 = "11111111111111111111111111111111";
         const char *goal2 = "22222222222222222222222222222222";
 
-        assert(snag_session_commit(&session, "goal_started",
-            goal_started_data(goal1, "finish the release"), NULL,
-            error, sizeof(error)) == 0);
+        commit_event(&session, "goal_started", goal_started_data(goal1, "finish the release"));
         assert(session.goal_status == SNAG_GOAL_ACTIVE);
         assert(strcmp(session.goal_prompt, "finish the release") == 0);
         assert(session.goal_revision == 1u);
         assert(!session.goal_locked);
-        assert(snag_session_commit(&session, "goal_lock_changed",
-            goal_lock_data(goal1, true), NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "goal_lock_changed", goal_lock_data(goal1, true));
         durable_end = session.log_end;
         durable_seq = session.next_seq;
         assert(snag_session_commit(&session, "goal_reworded",
@@ -498,18 +501,13 @@ main(void)
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
         assert(strcmp(session.goal_prompt, "finish the release") == 0);
-        assert(snag_session_commit(&session, "goal_reworded",
-            goal_reworded_data(goal1, "user", "finish and publish the release"),
-            NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "goal_reworded",
+                     goal_reworded_data(goal1, "user", "finish and publish the release"));
         assert(session.goal_revision == 2u);
-        assert(snag_session_commit(&session, "goal_lock_changed",
-            goal_lock_data(goal1, false), NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "goal_lock_changed", goal_lock_data(goal1, false));
         assert(!session.goal_locked);
-        assert(snag_session_commit(&session, "goal_lock_changed",
-            goal_lock_data(goal1, true), NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&session, "goal_paused",
-            goal_reason_data(goal1, NULL, "reason", "user"), NULL,
-            error, sizeof(error)) == 0);
+        commit_event(&session, "goal_lock_changed", goal_lock_data(goal1, true));
+        commit_event(&session, "goal_paused", goal_reason_data(goal1, NULL, "reason", "user"));
         assert(session.goal_status == SNAG_GOAL_PAUSED);
         assert(snag_session_commit(&session, "goal_completed",
             goal_actor_data(goal1, "model"), NULL,
@@ -522,13 +520,11 @@ main(void)
             assert(resume);
             assert(snag_json_set_new(resume, "goal_id",
                                     json_string(goal1)) == 0);
-            assert(snag_session_commit(&session, "goal_resumed", resume, NULL,
-                                      error, sizeof(error)) == 0);
+            commit_event(&session, "goal_resumed", resume);
         }
-        assert(snag_session_commit(&session, "goal_blocked",
-            goal_reason_data(goal1, "model", "reason",
-                             "dependency unavailable"), NULL,
-            error, sizeof(error)) == 0);
+        commit_event(&session, "goal_blocked",
+                     goal_reason_data(goal1, "model", "reason",
+                         "dependency unavailable"));
         assert(session.goal_status == SNAG_GOAL_BLOCKED);
         assert(strcmp(session.goal_blocker, "dependency unavailable") == 0);
         {
@@ -536,27 +532,21 @@ main(void)
             assert(resume);
             assert(snag_json_set_new(resume, "goal_id",
                                     json_string(goal1)) == 0);
-            assert(snag_session_commit(&session, "goal_resumed", resume, NULL,
-                                      error, sizeof(error)) == 0);
+            commit_event(&session, "goal_resumed", resume);
         }
         assert(session.goal_blocker == NULL);
-        assert(snag_session_commit(&session, "goal_completed",
-            goal_actor_data(goal1, "model"), NULL,
-            error, sizeof(error)) == 0);
+        commit_event(&session, "goal_completed", goal_actor_data(goal1, "model"));
         assert(session.goal_status == SNAG_GOAL_COMPLETED);
         assert(snag_session_commit(&session, "goal_started",
             goal_started_data(goal1, "duplicate id"), NULL,
             error, sizeof(error)) < 0);
-        assert(snag_session_commit(&session, "goal_started",
-            goal_started_data(goal2, "next goal"), NULL,
-            error, sizeof(error)) == 0);
+        commit_event(&session, "goal_started", goal_started_data(goal2, "next goal"));
         {
             json_t *cancel = json_object();
             assert(cancel);
             assert(snag_json_set_new(cancel, "goal_id",
                                     json_string(goal2)) == 0);
-            assert(snag_session_commit(&session, "goal_cancelled", cancel, NULL,
-                                      error, sizeof(error)) == 0);
+            commit_event(&session, "goal_cancelled", cancel);
         }
         snag_session_close(&session);
         snag_session_init(&session);
@@ -606,9 +596,7 @@ main(void)
                                   "default", "gpt-5.5-2026-04-23", "default",
                                   error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
-        assert(snag_session_commit(&session, "compaction_started",
-                                  compaction_started_data(&session, compact_id),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "compaction_started", compaction_started_data(&session, compact_id));
         assert(strcmp(session.active_compact_id, compact_id) == 0);
         durable_end = session.log_end;
         durable_seq = session.next_seq;
@@ -619,10 +607,9 @@ main(void)
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
         assert(strcmp(session.active_compact_id, compact_id) == 0);
-        assert(snag_session_commit(&session, "compaction_interrupted",
-                                  compaction_interrupted_data(compact_id,
-                                                              "steering"),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "compaction_interrupted",
+                     compaction_interrupted_data(compact_id,
+                         "steering"));
         assert(session.active_compact_id[0] == '\0');
         assert(session.active_compact_source_sha256[0] == '\0');
         assert(session.active_compact_source_seq == 0u);
@@ -646,9 +633,7 @@ main(void)
     id_prefix[8] = '\0';
     assert(snprintf(trash_name, sizeof(trash_name), "%s.%032x",
                     session.id, 1u) == (int)(sizeof(trash_name) - 1u));
-    assert(snag_session_commit(&session, "session_delete_requested",
-                              delete_data(id_prefix, trash_name), NULL,
-                              error, sizeof(error)) == 0);
+    commit_event(&session, "session_delete_requested", delete_data(id_prefix, trash_name));
     assert(renameat(store.sessions_fd, id, store.trash_fd, trash_name) == 0);
     snag_session_close(&session);
     snag_session_init(&session);
@@ -671,15 +656,9 @@ main(void)
                                   "default", "gpt-5.5-2026-04-23", "default",
                                   error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
-        assert(snag_session_commit(&session, "turn_started",
-                                  turn_started_data(&session, turn_id), NULL,
-                                  error, sizeof(error)) == 0);
-        assert(snag_session_commit(&session, "future_turn_queued",
-                                  queued_data(turn_id, first_id, "first"), NULL,
-                                  error, sizeof(error)) == 0);
-        assert(snag_session_commit(&session, "future_turn_queued",
-                                  queued_data(turn_id, second_id, "second"), NULL,
-                                  error, sizeof(error)) == 0);
+        commit_event(&session, "turn_started", turn_started_data(&session, turn_id));
+        commit_event(&session, "future_turn_queued", queued_data(turn_id, first_id, "first"));
+        commit_event(&session, "future_turn_queued", queued_data(turn_id, second_id, "second"));
         first_seq = session.pending_queue[0].seq;
         second_seq = session.pending_queue[1].seq;
         durable_end = session.log_end;
@@ -694,9 +673,7 @@ main(void)
                                   error, sizeof(error)) < 0);
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
-        assert(snag_session_commit(&session, "future_turn_edited",
-                                  edited_data(second_id, "second edited"), NULL,
-                                  error, sizeof(error)) == 0);
+        commit_event(&session, "future_turn_edited", edited_data(second_id, "second edited"));
         assert(session.pending_queue_count == 2u);
         assert(strcmp(session.pending_queue[0].text, "first") == 0);
         assert(strcmp(session.pending_queue[1].text, "second edited") == 0);

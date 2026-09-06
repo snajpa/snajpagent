@@ -13,6 +13,16 @@
 #include <unistd.h>
 
 static void
+commit_event(struct snag_session *session, const char *type, json_t *data)
+{
+    char error[256] = {0};
+    int rc = snag_session_commit(session, type, data, NULL, error, sizeof(error));
+    if (rc != 0)
+        fprintf(stderr, "%s: %s\n", type, error);
+    assert(rc == 0);
+}
+
+static void
 write_file(const char *path, const char *text)
 {
     FILE *f = fopen(path, "wb");
@@ -369,9 +379,8 @@ test_compact_groups(struct snag_store *store, const char *workspace)
     assert(snag_session_create(store, &session, workspace, "default",
                               SNAJPAGENT_MODEL, "medium", error, sizeof(error)) == 0);
     memcpy(session_id, session.id, sizeof(session_id));
-    assert(snag_session_commit(&session, "turn_started",
-        turn_started(turn, 1u, "old user must not repeat", workspace, NULL),
-        NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started",
+                 turn_started(turn, 1u, "old user must not repeat", workspace, NULL));
     for (unsigned int cycle = 1u; cycle <= 4u; ++cycle) {
         char response[SNAG_ID_HEX_LEN + 1u], call[SNAG_ID_HEX_LEN + 1u];
         json_t *data, *result;
@@ -382,8 +391,7 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         if (cycle == 3u)
             assert(json_array_append_new(json_object_get(data, "steering_ids"),
                 json_string("a4000000000000000000000000000000")) == 0);
-        assert(snag_session_commit(&session, "response_started", data,
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "response_started", data);
         data = response_completed_call(turn, response, call, workspace);
         assert(json_object_set_new(data, "cycle", json_integer(cycle)) == 0);
         if (cycle == 3u) {
@@ -398,15 +406,12 @@ test_compact_groups(struct snag_store *store, const char *workspace)
             assert(json_object_set_new(args, "max_output_tokens", json_integer(60000)) == 0);
             assert(json_object_set_new(item, "arguments", args) == 0);
         }
-        assert(snag_session_commit(&session, "response_completed", data,
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&session, "tool_started",
-            tool_started_data(turn, call, session.pending_calls[0].action_sha256, workspace),
-            NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "response_completed", data);
+        commit_event(&session, "tool_started",
+                     tool_started_data(turn, call, session.pending_calls[0].action_sha256, workspace));
         if (cycle == 2u)
-            assert(snag_session_commit(&session, "steering_added",
-                steering_added(turn, "a4000000000000000000000000000000", "keep the pairing"),
-                NULL, error, sizeof(error)) == 0);
+            commit_event(&session, "steering_added",
+                         steering_added(turn, "a4000000000000000000000000000000", "keep the pairing"));
         result = running_result_limit(handle, text, NULL, 60000);
         if (cycle != 2u) {
             assert(json_object_set_new(result, "status", json_string("succeeded")) == 0);
@@ -419,12 +424,11 @@ test_compact_groups(struct snag_store *store, const char *workspace)
     snprintf(last_response, sizeof(last_response), "%032x", 0xb005u);
     json_t *data = response_started(turn, last_response, NULL);
     assert(json_object_set_new(data, "cycle", json_integer(5)) == 0);
-    assert(snag_session_commit(&session, "response_started", data, NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "response_started", data);
     data = response_completed(turn, last_response, "old final suffix");
     assert(json_object_set_new(data, "cycle", json_integer(5)) == 0);
-    assert(snag_session_commit(&session, "response_completed", data, NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "turn_completed", turn_completed(turn, last_response),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "response_completed", data);
+    commit_event(&session, "turn_completed", turn_completed(turn, last_response));
     data = turn_started(next_turn, 2u, "active user stays verbatim", workspace, NULL);
     assert(json_object_set_new(data, "received_at_ms", json_integer(1788739200000LL)) == 0);
     assert(snag_session_commit(&session, "turn_started", data, NULL, error, sizeof(error)) == 0);
@@ -448,11 +452,11 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         data = compaction_started_data(&session, compact, "hard_budget", prefix.source_seq,
                                         prefix.model_input.sha256, prefix.create_request.sha256, prefix.model_input.bytes);
         assert(json_object_set_new(data, "count_method", json_string("statistical_upper_estimate")) == 0);
-        assert(snag_session_commit(&session, "compaction_started", data, NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "compaction_started", data);
         data = compaction_completed_data(compact, prefix.model_input.sha256, output_hash, prefix.create_request.sha256,
                                           prefix.model_input.bytes, output_bytes, output);
         assert(json_object_set_new(data, "count_method", json_string("statistical_upper_estimate")) == 0);
-        assert(snag_session_commit(&session, "compaction_completed", data, NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "compaction_completed", data);
         snag_context_projection_init(&projection);
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
             0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
@@ -517,20 +521,17 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     assert(snag_session_create(store, &session, workspace, "default", SNAJPAGENT_MODEL,
                               "medium", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
-    assert(snag_session_commit(&session, "turn_started", turn_started(turn, 1, "batch", workspace, NULL),
-                              NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "response_started", response_started(turn, response, NULL),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started", turn_started(turn, 1, "batch", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
     json_t *data = response_completed_call(turn, response, a, workspace);
     json_t *second = tool_call_item(b, workspace);
     assert(json_object_set_new(second, "provider_call_id", json_string("call_second")) == 0);
     assert(json_object_set_new(second, "provider_item_id", json_string("item_second")) == 0);
     assert(json_array_append_new(json_object_get(data, "items"), second) == 0);
-    assert(snag_session_commit(&session, "response_completed", data, NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "response_completed", data);
     for (size_t i = 0u; i < 2u; ++i)
-        assert(snag_session_commit(&session, "tool_started",
-            tool_started_data(turn, i ? b : a, session.pending_calls[i].action_sha256, workspace),
-            NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "tool_started",
+                     tool_started_data(turn, i ? b : a, session.pending_calls[i].action_sha256, workspace));
     assert(session.process_count == 2u);
     data = json_object();
     assert(snag_json_set_new(data, "turn_id", json_string(turn)) == 0);
@@ -539,15 +540,17 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     assert(snag_json_set_new(data, "offset", json_integer(0)) == 0);
     assert(snag_json_set_new(data, "encoding", json_string("utf8")) == 0);
     assert(snag_json_set_new(data, "data", json_string("B\n")) == 0);
-    assert(snag_session_commit(&session, "process_output", json_deep_copy(data), NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "process_output", json_deep_copy(data));
     off_t end = session.log_end;
     assert(snag_session_commit(&session, "process_output", data, NULL, error, sizeof(error)) < 0);
     assert(session.log_end == end && snag_session_process(&session, b)->output_bytes[0] == 2u);
     /* Resolve B first without claiming its lost owner completed successfully. */
-    assert(snag_session_commit(&session, "tool_finished", tool_finished_data(turn, b,
-        snag_tool_result_outcome_unknown("owner_lost")), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "tool_finished", tool_finished_data(turn, a,
-        running_result_limit(a, "alive", NULL, 6000)), NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "tool_finished",
+                 tool_finished_data(turn, b,
+                     snag_tool_result_outcome_unknown("owner_lost")));
+    commit_event(&session, "tool_finished",
+                 tool_finished_data(turn, a,
+                     running_result_limit(a, "alive", NULL, 6000)));
     assert(!session.pending_call_count && session.process_count == 2u);
     snag_session_close(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
@@ -555,8 +558,7 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     assert(snag_session_process(&session, b)->output_bytes[0] == 2u);
     const char *steer = "c5000000000000000000000000000000";
     const char *compact = "c6000000000000000000000000000000";
-    assert(snag_session_commit(&session, "steering_added", steering_added(turn, steer, "fresh steer"),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "steering_added", steering_added(turn, steer, "fresh steer"));
     struct snag_context_projection prefix = {0};
     json_t *output = compact_output_fixture();
     char output_hash[65];
@@ -565,12 +567,10 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
         "medium", true, 0u, false, &prefix, error, sizeof(error)) == 0);
     assert(prefix.source_seq < session.next_seq - 1u); /* Unconsumed steering is not summarized. */
     assert(snag_context_compact_output_valid(output, output_hash, &output_bytes, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "compaction_started",
-        compaction_started_data(&session, compact, "hard_budget", prefix.source_seq, prefix.model_input.sha256, prefix.create_request.sha256, prefix.model_input.bytes),
-        NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "compaction_completed",
-        compaction_completed_data(compact, prefix.model_input.sha256, output_hash, prefix.create_request.sha256, prefix.model_input.bytes, output_bytes, output),
-        NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "compaction_started",
+                 compaction_started_data(&session, compact, "hard_budget", prefix.source_seq, prefix.model_input.sha256, prefix.create_request.sha256, prefix.model_input.bytes));
+    commit_event(&session, "compaction_completed",
+                 compaction_completed_data(compact, prefix.model_input.sha256, output_hash, prefix.create_request.sha256, prefix.model_input.bytes, output_bytes, output));
     struct snag_context_projection projection;
     struct snag_instruction_set instructions;
     snag_context_projection_init(&projection);
@@ -598,12 +598,13 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     json_decref(snapshot);
     snag_context_projection_free(&prefix);
     json_decref(output);
-    assert(snag_session_commit(&session, "process_closed", process_closed_data(turn, b,
-        snag_tool_result_outcome_unknown("owner_lost")), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "process_closed", process_closed_data(turn, a,
-        snag_tool_result_outcome_unknown("owner_lost")), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "turn_interrupted", turn_interrupted_data(turn),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "process_closed",
+                 process_closed_data(turn, b,
+                     snag_tool_result_outcome_unknown("owner_lost")));
+    commit_event(&session, "process_closed",
+                 process_closed_data(turn, a,
+                     snag_tool_result_outcome_unknown("owner_lost")));
+    commit_event(&session, "turn_interrupted", turn_interrupted_data(turn));
     snag_session_close(&session);
 }
 
@@ -621,18 +622,13 @@ test_accounting_lineage(struct snag_store *store, const char *workspace)
     snag_session_init(&session);
     assert(snag_session_create(store, &session, workspace, "default",
         SNAJPAGENT_MODEL, "default", error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "compaction_started",
-        compaction_started_data(&session, compact, "manual", 1u, source, source, 1u),
-        NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "turn_started",
-        turn_started(turn, 1u, "lineage", workspace, NULL), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "response_started",
-        response_started(turn, response, NULL), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "compaction_completed",
-        compaction_completed_data(compact, source, output_hash, source, 1u, 1u, output),
-        NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "response_completed",
-        response_completed(turn, response, "done"), NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "compaction_started",
+                 compaction_started_data(&session, compact, "manual", 1u, source, source, 1u));
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "lineage", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "compaction_completed",
+                 compaction_completed_data(compact, source, output_hash, source, 1u, 1u, output));
+    commit_event(&session, "response_completed", response_completed(turn, response, "done"));
     assert(!session.context_meter.compact_id[0] && !session.active_accounting.compact_id[0]);
     assert(!strcmp(session.usage_anchor.compact_id, compact));
     assert(session.context_meter.input_tokens == 1000u);
@@ -938,15 +934,14 @@ test_read_only_and_queue_controllers(void)
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     assert(snag_session_create(&store, &session, temp, "default",
                               SNAJPAGENT_MODEL, "default", error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "goal_started", goal_started_data(
-        "02020202020202020202020202020202", "distinct goal wording"),
-        NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "goal_started",
+                 goal_started_data(
+                     "02020202020202020202020202020202", "distinct goal wording"));
     started = turn_started(turn, 1u, "inspect", temp, NULL);
     assert(json_object_set_new(started, "read_only", json_true()) == 0);
     assert(json_object_set_new(json_object_get(started, "config"),
                                "provider", json_string("selected")) == 0);
-    assert(snag_session_commit(&session, "turn_started", started,
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started", started);
     assert(session.active_read_only && !session.active_queued);
     for (unsigned int variant = 0; variant < 15u; ++variant) {
         json_t *requests[3];
@@ -1020,8 +1015,7 @@ test_read_only_and_queue_controllers(void)
     assert(snag_json_set_new(started, "turn_id", json_string(turn)) == 0);
     assert(snag_json_set_new(started, "origin", json_string("user")) == 0);
     assert(snag_json_set_new(started, "reason", json_string("cancelled")) == 0);
-    assert(snag_session_commit(&session, "turn_interrupted", started,
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_interrupted", started);
     assert(!session.active_read_only && !session.active_queued);
     snag_context_projection_free(&projection);
     snag_session_close(&session);
@@ -1057,7 +1051,7 @@ test_provider_model_projection(void)
     assert(snag_session_create(&store, &session, temp, "codex-lb", "small", "high", error, sizeof(error)) == 0);
     started = turn_started_model("01010101010101010101010101010101", 1u, "hello", temp, "small");
     assert(json_object_set_new(json_object_get(started, "config"), "provider", json_string("codex-lb")) == 0);
-    assert(snag_session_commit(&session, "turn_started", started, NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started", started);
     assert(snag_context_build(&session, "small", "high", 1u, empty, 16000u, true,
                               &config, NULL, &projection, error, sizeof(error)) == 0);
     assert(strcmp(session.default_model, "small") == 0 && strcmp(session.active_turn_model, "small") == 0);
@@ -1326,9 +1320,7 @@ main(void)
     assert(snag_session_create(&store, &session, workspace, "default",
                               SNAJPAGENT_MODEL, "default",
                               error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "turn_started",
-                              turn_started(turn1, 1, "ping", workspace, NULL),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started", turn_started(turn1, 1, "ping", workspace, NULL));
     {
         json_t *old_shape = response_started(turn1, resp1, NULL);
         assert(json_object_del(old_shape, "request_input_bytes") == 0);
@@ -1338,9 +1330,7 @@ main(void)
                                   NULL, error, sizeof(error)) < 0);
         assert(!session.response_open);
     }
-    assert(snag_session_commit(&session, "response_started",
-                              response_started(turn1, resp1, NULL),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "response_started", response_started(turn1, resp1, NULL));
     assert(session.active_accounting.model_input_bytes == 4000u);
     assert(session.active_accounting.request_input_bytes == 3000u);
     assert(session.active_accounting.request_input_count == 1u);
@@ -1352,15 +1342,11 @@ main(void)
     assert(session.context_meter.compact_id[0] == '\0');
     assert(strcmp(session.context_meter.provider_source_sha256,
                   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff") == 0);
-    assert(snag_session_commit(&session, "response_completed",
-                              response_completed(turn1, resp1, "pong"),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "response_completed", response_completed(turn1, resp1, "pong"));
     assert(session.usage_anchor.model_input_bytes == 4000u);
     assert(session.usage_anchor.request_input_bytes == 3000u);
     assert(session.usage_anchor.request_input_count == 1u);
-    assert(snag_session_commit(&session, "turn_completed",
-                              turn_completed(turn1, resp1),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_completed", turn_completed(turn1, resp1));
     {
         struct snag_context_projection compact = {0};
         json_t *compact_output = compact_output_fixture();
@@ -1384,17 +1370,15 @@ main(void)
                    session.default_model, &output_count,
                    error, sizeof(error)) == 0);
         assert(output_count.value != NULL && output_count.bytes > 0u);
-        assert(snag_session_commit(&session, "compaction_started",
-                                  compaction_started_data(&session, compact1,
-                                      "manual", compact.source_seq, compact.model_input.sha256,
-                                      compact.create_request.sha256, (uint64_t)compact.model_input.bytes),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&session, "compaction_completed",
-                                  compaction_completed_data(compact1,
-                                      compact.model_input.sha256, output_hash, output_count.sha256,
-                                      (uint64_t)compact.model_input.bytes,
-                                      (uint64_t)output_bytes, compact_output),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "compaction_started",
+                     compaction_started_data(&session, compact1,
+                         "manual", compact.source_seq, compact.model_input.sha256,
+                         compact.create_request.sha256, (uint64_t)compact.model_input.bytes));
+        commit_event(&session, "compaction_completed",
+                     compaction_completed_data(compact1,
+                         compact.model_input.sha256, output_hash, output_count.sha256,
+                         (uint64_t)compact.model_input.bytes,
+                         (uint64_t)output_bytes, compact_output));
         assert(strcmp(session.compact_id, compact1) == 0);
         snag_context_projection_free(&compact);
         snag_json_document_free(&output_count);
@@ -1425,33 +1409,25 @@ main(void)
         assert(snag_session_create(&store, &active, workspace, "default",
                                   SNAJPAGENT_MODEL, "default",
                                   error, sizeof(error)) == 0);
-        assert(snag_session_commit(&active, "turn_started",
-                                  turn_started(active_turn1, 1, "old",
-                                               workspace, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&active, "response_started",
-                                  response_started(active_turn1, active_resp1, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&active, "response_completed",
-                                  response_completed(active_turn1, active_resp1,
-                                                     "old answer"),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&active, "turn_completed",
-                                  turn_completed(active_turn1, active_resp1),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&active, "turn_started",
+                     turn_started(active_turn1, 1, "old",
+                         workspace, NULL));
+        commit_event(&active, "response_started",
+                     response_started(active_turn1, active_resp1, NULL));
+        commit_event(&active, "response_completed",
+                     response_completed(active_turn1, active_resp1,
+                         "old answer"));
+        commit_event(&active, "turn_completed", turn_completed(active_turn1, active_resp1));
         active_prefix_seq = active.next_seq - 1u;
-        assert(snag_session_commit(&active, "turn_started",
-                                  turn_started_model(active_turn2, 2, "new",
-                                                     workspace, active_model),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&active, "response_started",
-                                  response_started_model(active_turn2,
-                                      active_resp1, NULL, active_model),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&active, "response_capacity_rejected",
-                                  response_capacity_rejected(active_turn2,
-                                                             active_resp1),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&active, "turn_started",
+                     turn_started_model(active_turn2, 2, "new",
+                         workspace, active_model));
+        commit_event(&active, "response_started",
+                     response_started_model(active_turn2,
+                         active_resp1, NULL, active_model));
+        commit_event(&active, "response_capacity_rejected",
+                     response_capacity_rejected(active_turn2,
+                         active_resp1));
         assert(!active.response_open);
         assert(active.capacity_ceiling_valid);
         assert(active.capacity_ceiling_input_tokens == 272000u);
@@ -1484,18 +1460,16 @@ main(void)
         assert(snag_context_compact_output_count_request_build(compact_output,
                    active_model, &output_count,
                    error, sizeof(error)) == 0);
-        assert(snag_session_commit(&active, "compaction_started",
-                                  compaction_started_data(&active,
-                                      active_compact, "hard_budget", compact.source_seq,
-                                      compact.model_input.sha256, compact.create_request.sha256,
-                                      (uint64_t)compact.model_input.bytes),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&active, "compaction_completed",
-                                  compaction_completed_data(active_compact,
-                                      compact.model_input.sha256, output_hash, output_count.sha256,
-                                      (uint64_t)compact.model_input.bytes,
-                                      (uint64_t)output_bytes, compact_output),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&active, "compaction_started",
+                     compaction_started_data(&active,
+                         active_compact, "hard_budget", compact.source_seq,
+                         compact.model_input.sha256, compact.create_request.sha256,
+                         (uint64_t)compact.model_input.bytes));
+        commit_event(&active, "compaction_completed",
+                     compaction_completed_data(active_compact,
+                         compact.model_input.sha256, output_hash, output_count.sha256,
+                         (uint64_t)compact.model_input.bytes,
+                         (uint64_t)output_bytes, compact_output));
         assert(active.active_turn);
         assert(strcmp(active.compact_id, active_compact) == 0);
         assert(snag_context_build(&active, SNAJPAGENT_MODEL, "medium", 1,
@@ -1559,27 +1533,22 @@ main(void)
         assert(snag_session_create(&store, &steered, workspace, "default",
                                   SNAJPAGENT_MODEL, "default",
                                   error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "turn_started",
-                                  turn_started(steer_turn, 1, "start",
-                                               workspace, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "response_started",
-                                  response_started(steer_turn, steer_response,
-                                                   NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "steering_added",
-                                  steering_added(steer_turn, steer_id,
-                                                 "change direction"),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "response_interrupted",
-                                  response_interrupted(steer_turn,
-                                                       steer_response,
-                                                       "visible prefix"),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "steering_added",
-                                  steering_added(steer_turn, steer_id2,
-                                                 "and preserve order"),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&steered, "turn_started",
+                     turn_started(steer_turn, 1, "start",
+                         workspace, NULL));
+        commit_event(&steered, "response_started",
+                     response_started(steer_turn, steer_response,
+                         NULL));
+        commit_event(&steered, "steering_added",
+                     steering_added(steer_turn, steer_id,
+                         "change direction"));
+        commit_event(&steered, "response_interrupted",
+                     response_interrupted(steer_turn,
+                         steer_response,
+                         "visible prefix"));
+        commit_event(&steered, "steering_added",
+                     steering_added(steer_turn, steer_id2,
+                         "and preserve order"));
         assert(snag_context_build(&steered, SNAJPAGENT_MODEL, "medium", 2,
                                  snapshot, 0u, false, NULL, &no_instructions,
                                  &steered_projection,
@@ -1636,37 +1605,31 @@ main(void)
         assert(snag_session_create(&store, &steered, workspace, "default",
                                   SNAJPAGENT_MODEL, "default",
                                   error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "turn_started",
-                                  turn_started(command_turn, 1, "run",
-                                               workspace, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "response_started",
-                                  response_started(command_turn,
-                                                   command_response, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "response_completed",
-                                  response_completed_call(command_turn,
-                                      command_response, command_call,
-                                      workspace),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "tool_started",
-                                  tool_started_data(command_turn, command_call,
-                                      steered.pending_calls[0].action_sha256,
-                                      workspace),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "steering_added",
-                                  steering_added(command_turn, command_steer,
-                                                 "stop or wait"),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&steered, "tool_finished",
-                                  tool_finished_data(command_turn, command_call,
-                                      running_result_limit(command_handle,
-                                          "still running after steer",
-                                          "steering_handoff",
-                                          (int)(sizeof(
-                                              "still running after steer") -
-                                                1u))),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&steered, "turn_started",
+                     turn_started(command_turn, 1, "run",
+                         workspace, NULL));
+        commit_event(&steered, "response_started",
+                     response_started(command_turn,
+                         command_response, NULL));
+        commit_event(&steered, "response_completed",
+                     response_completed_call(command_turn,
+                         command_response, command_call,
+                         workspace));
+        commit_event(&steered, "tool_started",
+                     tool_started_data(command_turn, command_call,
+                         steered.pending_calls[0].action_sha256,
+                         workspace));
+        commit_event(&steered, "steering_added",
+                     steering_added(command_turn, command_steer,
+                         "stop or wait"));
+        commit_event(&steered, "tool_finished",
+                     tool_finished_data(command_turn, command_call,
+                         running_result_limit(command_handle,
+                         "still running after steer",
+                         "steering_handoff",
+                         (int)(sizeof(
+                         "still running after steer") -
+                         1u))));
         assert(snag_context_build(&steered, SNAJPAGENT_MODEL, "medium", 2,
                                  snapshot, 0u, false, NULL, &no_instructions,
                                  &steered_projection,
@@ -1718,23 +1681,19 @@ main(void)
         assert(snag_session_create(&store, &bounded, workspace, "default",
                                   SNAJPAGENT_MODEL, "default",
                                   error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "turn_started",
-                                  turn_started(bounded_turn1, 1, "first",
-                                               workspace, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "response_started",
-                                  response_started(bounded_turn1,
-                                                   bounded_resp1, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "response_completed",
-                                  response_completed(bounded_turn1,
-                                                     bounded_resp1,
-                                                     "first answer"),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "turn_completed",
-                                  turn_completed(bounded_turn1,
-                                                 bounded_resp1),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&bounded, "turn_started",
+                     turn_started(bounded_turn1, 1, "first",
+                         workspace, NULL));
+        commit_event(&bounded, "response_started",
+                     response_started(bounded_turn1,
+                         bounded_resp1, NULL));
+        commit_event(&bounded, "response_completed",
+                     response_completed(bounded_turn1,
+                         bounded_resp1,
+                         "first answer"));
+        commit_event(&bounded, "turn_completed",
+                     turn_completed(bounded_turn1,
+                         bounded_resp1));
         first_turn_end = bounded.next_seq - 1u;
         assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort, false, 0u, false,
@@ -1742,27 +1701,22 @@ main(void)
         first_bytes = compact.model_input.bytes;
         assert(compact.source_seq == first_turn_end && first_bytes > 0u);
         snag_context_projection_free(&compact);
-        assert(snag_session_commit(&bounded, "turn_started",
-                                  turn_started(bounded_turn2, 2, "second",
-                                               workspace, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "response_started",
-                                  response_started(bounded_turn2,
-                                                   bounded_resp2, NULL),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "response_completed",
-                                  response_completed(bounded_turn2,
-                                                     bounded_resp2,
-                                                     "second answer"),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "turn_completed",
-                                  turn_completed(bounded_turn2,
-                                                 bounded_resp2),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "turn_started",
-                                  turn_started(bounded_turn3, 3, "current",
-                                               workspace, NULL),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&bounded, "turn_started",
+                     turn_started(bounded_turn2, 2, "second",
+                         workspace, NULL));
+        commit_event(&bounded, "response_started",
+                     response_started(bounded_turn2,
+                         bounded_resp2, NULL));
+        commit_event(&bounded, "response_completed",
+                     response_completed(bounded_turn2,
+                         bounded_resp2,
+                         "second answer"));
+        commit_event(&bounded, "turn_completed",
+                     turn_completed(bounded_turn2,
+                         bounded_resp2));
+        commit_event(&bounded, "turn_started",
+                     turn_started(bounded_turn3, 3, "current",
+                         workspace, NULL));
         assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort,
                    true, (uint64_t)first_bytes, false, &compact,
@@ -1783,18 +1737,16 @@ main(void)
         assert(snag_context_compact_output_count_request_build(compact_output,
                    bounded.default_model, &output_count,
                    error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "compaction_started",
-                                  compaction_started_data(&bounded,
-                                      bounded_compact, "hard_budget", compact.source_seq,
-                                      compact.model_input.sha256, compact.create_request.sha256,
-                                      (uint64_t)compact.model_input.bytes),
-                                  NULL, error, sizeof(error)) == 0);
-        assert(snag_session_commit(&bounded, "compaction_completed",
-                                  compaction_completed_data(bounded_compact,
-                                      compact.model_input.sha256, output_hash, output_count.sha256,
-                                      (uint64_t)compact.model_input.bytes,
-                                      (uint64_t)output_bytes, compact_output),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&bounded, "compaction_started",
+                     compaction_started_data(&bounded,
+                         bounded_compact, "hard_budget", compact.source_seq,
+                         compact.model_input.sha256, compact.create_request.sha256,
+                         (uint64_t)compact.model_input.bytes));
+        commit_event(&bounded, "compaction_completed",
+                     compaction_completed_data(bounded_compact,
+                         compact.model_input.sha256, output_hash, output_count.sha256,
+                         (uint64_t)compact.model_input.bytes,
+                         (uint64_t)output_bytes, compact_output));
         assert(bounded.compact_seq == first_turn_end);
         snag_context_projection_init(&bounded_projection);
         bounded_steering = json_array();
@@ -1834,9 +1786,8 @@ main(void)
     assert(snag_instructions_discover(&instructions, workspace,
                                      error, sizeof(error)) == 0);
     assert(instructions.count == 1u);
-    assert(snag_session_commit(&session, "turn_started",
-                              turn_started(turn2, 2, "again", workspace, snag_instructions_metadata_json(&instructions)),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started",
+                 turn_started(turn2, 2, "again", workspace, snag_instructions_metadata_json(&instructions)));
 
     empty_steering = json_array();
     assert(empty_steering);
@@ -1917,22 +1868,18 @@ main(void)
     }
     snag_context_projection_free(&projection);
 
-    assert(snag_session_commit(&session, "response_started",
-                              response_started(turn2, resp2, compact1),
-                              NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "response_completed",
-                              response_completed_call(turn2, resp2, call2, workspace),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "response_started", response_started(turn2, resp2, compact1));
+    commit_event(&session, "response_completed",
+                 response_completed_call(turn2, resp2, call2, workspace));
     assert(session.pending_call_count == 1u);
     assert(snag_session_commit(&session, "turn_recovery",
         json_pack("{s:s,s:s,s:s}", "class", "protocol", "message", "unsettled",
                   "turn_id", turn2), NULL, error, sizeof(error)) < 0);
     assert(session.pending_call_count == 1u);
-    assert(snag_session_commit(&session, "tool_started",
-                              tool_started_data(turn2, call2,
-                                                session.pending_calls[0].action_sha256,
-                                                workspace),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "tool_started",
+                 tool_started_data(turn2, call2,
+                     session.pending_calls[0].action_sha256,
+                     workspace));
     large_tool_output = malloc(1024u * 1024u + 1u);
     assert(large_tool_output != NULL);
     for (size_t i = 0u; i < 1024u * 1024u - 16u; i += 2u) {
@@ -1943,11 +1890,10 @@ main(void)
            "xfull-model-tail", 16u);
     large_tool_output[1024u * 1024u] = '\0';
     snag_sha256_hex(large_tool_output, 1024u * 1024u, large_tool_hash);
-    assert(snag_session_commit(&session, "tool_finished",
-                              tool_finished_data(turn2, call2,
-                                  running_result_limit(handle,
-                                      large_tool_output, NULL, 4000)),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "tool_finished",
+                 tool_finished_data(turn2, call2,
+                     running_result_limit(handle,
+                     large_tool_output, NULL, 4000)));
     {
         char durable_tail[8193];
         off_t start = session.log_end > 8192 ? session.log_end - 8192 : 0;
@@ -1959,9 +1905,7 @@ main(void)
     }
     free(large_tool_output);
     assert(snag_session_process(&session, handle));
-    assert(snag_session_commit(&session, "goal_started",
-                              goal_started_data(goal, "finish compacted work"),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "goal_started", goal_started_data(goal, "finish compacted work"));
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
                              empty_steering, 0u, false, NULL,
                              &instructions, &projection,
@@ -2045,22 +1989,16 @@ main(void)
         assert(closure_result);
         assert(snag_json_set_new(closure_result, "max_output_tokens",
                                 json_integer(1)) == 0);
-        assert(snag_session_commit(&session, "process_closed",
-                                  process_closed_data(turn2, handle,
-                                                      closure_result),
-                                  NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "process_closed",
+                     process_closed_data(turn2, handle,
+                         closure_result));
     }
     assert(session.process_count == 0u);
-    assert(snag_session_commit(&session, "turn_interrupted",
-                              turn_interrupted_data(turn2),
-                              NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "goal_lock_changed",
-                              goal_lock_data(goal, true), NULL,
-                              error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "turn_started",
-                              goal_turn_started(goal_turn, 3, workspace,
-                                  snag_instructions_metadata_json(&instructions)),
-                              NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_interrupted", turn_interrupted_data(turn2));
+    commit_event(&session, "goal_lock_changed", goal_lock_data(goal, true));
+    commit_event(&session, "turn_started",
+                 goal_turn_started(goal_turn, 3, workspace,
+                     snag_instructions_metadata_json(&instructions)));
     assert(session.goal_turn_count == 1u);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
                              empty_steering, 0u, false, NULL,
@@ -2150,9 +2088,7 @@ main(void)
         snag_config_free(&network_config);
     }
 
-    assert(snag_session_commit(&session, "goal_paused",
-                              goal_paused_data(goal), NULL,
-                              error, sizeof(error)) == 0);
+    commit_event(&session, "goal_paused", goal_paused_data(goal));
     char resumed_id[SNAG_ID_HEX_LEN + 1u];
     memcpy(resumed_id, session.id, sizeof(resumed_id));
     snag_session_close(&session);
@@ -2191,11 +2127,12 @@ main(void)
         }
     }
 
-    assert(snag_session_commit(&session, "goal_resumed", json_pack("{s:s}",
-        "goal_id", goal), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "goal_blocked", json_pack("{s:s,s:s,s:s}",
-        "goal_id", goal, "actor", "model", "reason", "retained dependency"),
-        NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "goal_resumed",
+                 json_pack("{s:s}",
+                     "goal_id", goal));
+    commit_event(&session, "goal_blocked",
+                 json_pack("{s:s,s:s,s:s}",
+                     "goal_id", goal, "actor", "model", "reason", "retained dependency"));
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(&store, &session, resumed_id, error, sizeof(error)) == 0);
