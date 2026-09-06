@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Share the default prompt's activity/goal indicators and timestamp across chat
+  and rollout, putting the busy indicator before the goal flag in both views.
+  Move rollout context usage after the model, expose plain context/queue numbers,
+  and let templates own `%`, queue parentheses and optional `{queued:TEXT}` badges.
 - Negotiate incremental IRC catch-up with durable stream/event IDs and client
   cursors. Reconnect admits only missing events; interrupted delivery is recovered
   from the session, retention gaps are explicit, and current room state refreshes

@@ -4,6 +4,7 @@ import errno
 import json
 import os
 import pty
+import re
 import select
 import struct
 import sys
@@ -15,8 +16,8 @@ binary = os.path.abspath(sys.argv[1])
 workspace = os.path.abspath(sys.argv[2])
 dotdir = os.environ["SNAJPAGENT_DOTDIR"]
 state_root = Path(dotdir) / "sessions"
-fresh_prompt = "    ?% openai/gpt-5.5-2026-04-23/medium › ".encode()
-accounted_prompt = "    ?% openai/gpt-5.5-2026-04-23/medium › ".encode()
+fresh_prompt = " openai/gpt-5.5-2026-04-23/medium   ?% › ".encode()
+accounted_prompt = " openai/gpt-5.5-2026-04-23/medium   ?% › ".encode()
 
 
 def session_ids():
@@ -73,16 +74,15 @@ def run_case(term, cols, expect_ansi, expected_text):
 
     def wait_idle_prompt(start=0, timeout=8.0):
         end = time.monotonic() + timeout
-        needles = (b"\r" + accounted_prompt, b"\n" + accounted_prompt)
-        while not any(needle in buf[start:] for needle in needles):
+        pattern = re.compile(rb"[\r\n]   [0-9]{2}:[0-9]{2}:[0-9]{2}" +
+                             re.escape(accounted_prompt))
+        while (match := pattern.search(buf, start)) is None:
             remaining = end - time.monotonic()
             if remaining <= 0 or not read_once(remaining):
                 raise AssertionError(
                     f"{term}/{cols}: timeout waiting for idle prompt; got {bytes(buf)!r}"
                 )
-        positions = [buf.find(needle, start) + len(needle)
-                     for needle in needles if needle in buf[start:]]
-        return min(positions)
+        return match.end()
 
     def wait_child(timeout=8.0):
         end = time.monotonic() + timeout

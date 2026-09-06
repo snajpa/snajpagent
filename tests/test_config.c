@@ -267,9 +267,9 @@ static void
 test_prompt_numbers(const char *path)
 {
     const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-        "p", "m", "e", "op", "host", "0%", "chat", "", "3", "7", "9"};
-    static const char *const contexts[] = {"0%", "9%", "10%", "99%",
-                                           "100%", "?%"};
+        "p", "m", "e", "op", "host", "0", "chat", "0", "3", "7", "9"};
+    static const char *const contexts[] = {"0", "9", "10", "99",
+                                           "100", "?"};
     static const char *const padded[] = {"  0% ", "  9% ", " 10% ", " 99% ",
                                          "100% ", "  ?% "};
     static const char *const invalid[] = {
@@ -278,13 +278,13 @@ test_prompt_numbers(const char *path)
         "hour:2:2", "context:511", "hour:0511", "context:99999999999999999999",
         "model:2", "provider:2", "mode:2", "goal_spinner:1",
         "activity_spinner:1", "provider_spinner", "tool_spinner", "host:2", "operator:2",
-        "effort:2", "queue:2"};
+        "effort:2", "queue:02"};
     char label[SNAG_TERM_LABEL_BYTES], template[256];
 
     for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
         values[SNAG_PROMPT_CONTEXT] = contexts[i];
         assert(snag_config_prompt_expand(
-            "{chat:{context:4}}{rollout-idle:x}{rollout-active:y}", 0u,
+            "{chat:{context:3}%}{rollout-idle:x}{rollout-active:y}", 0u,
             values, 0xfdu, label, sizeof(label)) == 0);
         assert(strcmp(label, padded[i]) == 0);
     }
@@ -305,12 +305,12 @@ test_prompt_numbers(const char *path)
             label, sizeof(label)) == 0);
         assert(strcmp(label, expected) == 0);
     }
-    values[SNAG_PROMPT_CONTEXT] = "100%";
+    values[SNAG_PROMPT_CONTEXT] = "100";
     values[SNAG_PROMPT_HOUR] = "23";
     values[SNAG_PROMPT_MINUTE] = "59";
     values[SNAG_PROMPT_SECOND] = "60";
     assert(snag_config_prompt_expand(
-        "{chat:{context:2}/{hour:1}:{minute:1}:{second:01}}"
+        "{chat:{context:2}%/{hour:1}:{minute:1}:{second:01}}"
         "{rollout-idle:x}{rollout-active:y}", 0u, values, 0xfdu,
         label, sizeof(label)) == 0);
     assert(strcmp(label, "100%/23:59:60 ") == 0);
@@ -334,7 +334,7 @@ test_prompt_numbers(const char *path)
         "{chat:{context:510}}{rollout-idle:x}{rollout-active:y}", 0u,
         values, 0xfdu, label, sizeof(label)) == 0);
     assert(strlen(label) == sizeof(label) - 1u);
-    assert(strcmp(label + 506u, "100% ") == 0);
+    assert(strcmp(label + 507u, "100 ") == 0);
     assert(snag_config_prompt_expand(
         "{chat:{context:510}x}{rollout-idle:x}{rollout-active:y}", 0u,
         values, 0xfdu, label, sizeof(label)) < 0);
@@ -342,6 +342,24 @@ test_prompt_numbers(const char *path)
         "{chat:\\{{hour:02}\\}\\\\}{rollout-idle:x}{rollout-active:y}", 0u,
         values, 0xfdu, label, sizeof(label)) == 0);
     assert(strcmp(label, "{--}\\ ") == 0);
+    for (unsigned int queued = 0u; queued < 2u; ++queued) {
+        values[SNAG_PROMPT_QUEUE] = queued ? "12" : "0";
+        for (unsigned int mode = 0u; mode < 3u; ++mode) {
+            assert(snag_config_prompt_expand(
+                "{queued:[{queue:3}] }{chat:{queue}}{rollout-idle:{queue}}"
+                "{rollout-active:{queue}}{queued:!}", mode,
+                values, 0xfdu, label, sizeof(label)) == 0);
+            assert(strcmp(label, queued ? "[ 12] 12! " : "0 ") == 0);
+        }
+    }
+    for (unsigned int mode = 0u; mode < 3u; ++mode) {
+        assert(snag_config_prompt_expand(
+            "{activity_spinner}{chat:C}{hour:02}{rollout-idle:I}"
+            "{rollout-active:A}{goal_spinner}", mode,
+            values, 0xfdu, label, sizeof(label)) == 0);
+        assert(strcmp(label, mode == 0u ? "\xfe" "C--\xfd " :
+                             mode == 1u ? "\xfe--I\xfd " : "\xfe--A\xfd ") == 0);
+    }
 }
 
 static void
@@ -469,32 +487,38 @@ main(void)
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);
-    assert(strstr(config.prompt, "{chat:{goal_spinner}{activity_spinner} "));
-    assert(strstr(config.prompt, "{context:4}"));
+    assert(strstr(config.prompt,
+                  "{activity_spinner}{goal_spinner} {hour:02}:{minute:02}:{second:02} ") ==
+           config.prompt);
+    assert(strstr(config.prompt, "{context:3}%"));
     assert(strstr(config.prompt, "{goal_spinner}") != NULL);
     assert(strcmp(config.prompt_spinner_goal, " ⚑") == 0);
     assert(strcmp(config.prompt_spinner_provider, " ◴◷◶◵") == 0);
     assert(strcmp(config.prompt_spinner_tool, " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") == 0);
     assert(config.prompt_spinner_per_second == 8u);
     {
-        static const char *const contexts[] = {"0%", "9%", "10%", "99%", "100%", "?%"};
-        static const char *const queues[] = {"", "(1) ", "(9) ", "(10) ", "(128) "};
+        static const char *const contexts[] = {"0", "9", "10", "99", "100", "?"};
+        static const char *const queues[] = {"0", "1", "9", "10", "128"};
         const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-            "p", "m", "e", "op", "host", "0%", "chat", "", "3", "7", "9"};
-        char expanded[128], expected[128];
+            "p", "m", "e", "op", "host", "0", "chat", "0", "3", "7", "9"};
+        char expanded[128], expected[128], badge[32];
 
         for (size_t q = 0u; q < sizeof(queues) / sizeof(queues[0]); ++q) {
             values[SNAG_PROMPT_QUEUE] = queues[q];
+            badge[0] = '\0';
+            if (q)
+                assert(snprintf(badge, sizeof(badge), "(%s) ", queues[q]) > 0);
             assert(snag_config_prompt_expand(config.prompt, 0u, values, 0xfdu,
                                             expanded, sizeof(expanded)) == 0);
-            assert(strcmp(expanded, "\xfd\xfe 03:07:09 op@host : ") == 0);
+            assert(strcmp(expanded, "\xfe\xfd 03:07:09 op@host : ") == 0);
             for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
                 values[SNAG_PROMPT_CONTEXT] = contexts[i];
                 for (unsigned int mode = 1u; mode <= 2u; ++mode) {
                     assert(snag_config_prompt_expand(config.prompt, mode, values, 0xfdu,
                                                     expanded, sizeof(expanded)) == 0);
-                    assert(snprintf(expected, sizeof(expected), "\xfd\xfe%4s p/m/e %s%s ",
-                                    contexts[i], queues[q], mode == 1u ? "›" : "»") > 0);
+                    assert(snprintf(expected, sizeof(expected),
+                                    "\xfe\xfd 03:07:09 p/m/e %3s%% %s%s ",
+                                    contexts[i], badge, mode == 1u ? "›" : "»") > 0);
                     assert(strcmp(expanded, expected) == 0);
                 }
             }
@@ -656,6 +680,23 @@ main(void)
         "{chat:x}{chat:y}{rollout-idle:y}{rollout-active:z}", false);
     expect_ui(path, "prompt", "{chat:x}{rollout-idle:y}", false);
     expect_ui(path, "prompt",
+        "{hour:02}{activity_spinner}{chat:x}{rollout-idle:y}"
+        "{rollout-active:z}{goal_spinner}", true);
+    expect_ui(path, "prompt",
+        "{activity_spinner}{chat:x}{rollout-idle:y}"
+        "{rollout-active:z}{activity_spinner}", false);
+    expect_ui(path, "prompt",
+        "{goal_spinner}{chat:x}{rollout-idle:{goal_spinner}}{rollout-active:z}", false);
+    expect_ui(path, "prompt",
+        "{chat:{goal_spinner}}{rollout-idle:y}{rollout-active:z}{goal_spinner}", false);
+    expect_ui(path, "prompt", "{unknown}{chat:x}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{hour:0}{chat:x}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{queued:{unknown}}{chat:x}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{queued:}{chat:x}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{queued:x{chat:y}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{queued:{goal_spinner}}{chat:{goal_spinner}}"
+              "{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt",
         "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false);
     expect_ui(path, "prompt",
         "{chat:{unknown}}{rollout-idle:y}{rollout-active:z}", false);
@@ -669,12 +710,12 @@ main(void)
               false);
     {
         const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-            "prov", "model", "high", "", "host", "0%", "rollout-idle",
-            "", "12", "34", "56"};
+            "prov", "model", "high", "", "host", "0", "rollout-idle",
+            "0", "12", "34", "56"};
         const char template[] =
             "pre{chat:{hour:02}:{minute:02}:{second:02} {operator}:}"
             "{rollout-idle:{provider}/{model}/{effort} "
-            "{context}{goal_spinner}›}{rollout-active:A}";
+            "{context}%{goal_spinner}›}{rollout-active:A}";
         const unsigned char expected[] = {
             'p','r','e','p','r','o','v','/','m','o','d','e','l','/','h','i','g','h',
             ' ','0','%',0xfd,0xe2,0x80,0xba,' ','\0'

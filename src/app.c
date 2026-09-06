@@ -416,11 +416,11 @@ format_context_meter(struct app_state *app, bool active,
                provider_source_hash) != 0 ||
         strcmp(app->session.context_meter_compact_id,
                app->session.compact_id) != 0) {
-        memcpy(meter, "?%", sizeof("?%"));
+        memcpy(meter, "?", sizeof("?"));
         return 0;
     }
     if (!capacity->hard_input_known) {
-        memcpy(meter, "?%", sizeof("?%"));
+        memcpy(meter, "?", sizeof("?"));
         return 0;
     }
     used = app->session.context_meter_input_tokens;
@@ -430,7 +430,7 @@ format_context_meter(struct app_state *app, bool active,
     } else {
         percent = (unsigned int)((used * 100u + hard - 1u) / hard);
     }
-    n = snprintf(meter, 32u, "%u%%", percent);
+    n = snprintf(meter, 32u, "%u", percent);
     if (n < 0 || n >= 32) {
         errno = EOVERFLOW;
         return -1;
@@ -486,8 +486,7 @@ set_input_prompt(struct app_state *app, bool active)
     values[5] = meter;
     values[6] = selected == 0u ? "chat" :
                 selected == 1u ? "rollout-idle" : "rollout-active";
-    if (app->session.pending_queue_count)
-        (void)snprintf(queue, sizeof(queue), "(%zu) ", app->session.pending_queue_count);
+    (void)snprintf(queue, sizeof(queue), "%zu", app->session.pending_queue_count);
     values[SNAG_PROMPT_QUEUE] = queue;
     if (app->queue_edit_id[0]) {
         struct snag_buf out;
@@ -496,7 +495,7 @@ set_input_prompt(struct app_state *app, bool active)
         for (unsigned int i = 0u; i < SNAG_TERM_SPINNER_SLOTS; ++i)
             if (snag_buf_putc(&out, SNAG_TERM_SPINNER_MARKER_BASE + i) < 0)
                 goto fail;
-        if (snag_buf_printf(&out, "%4s edit %zu ›", meter, app->queue_edit_number) < 0)
+        if (snag_buf_printf(&out, "%3s%% edit %zu ›", meter, app->queue_edit_number) < 0)
             goto fail;
         if (!out.len || snag_buf_putc(&out, ' ') < 0 ||
             snag_buf_terminate(&out) < 0)
@@ -536,13 +535,13 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
     values[2] = effort;
     values[3] = config->irc.operator_nick;
     values[4] = hostname;
-    values[5] = "100%";
-    (void)snprintf(queue, sizeof(queue), "(%u) ", SNAG_MAX_PENDING_TURNS);
+    values[5] = "100";
+    (void)snprintf(queue, sizeof(queue), "%u", SNAG_MAX_PENDING_TURNS);
     values[SNAG_PROMPT_HOUR] = "23";
     values[SNAG_PROMPT_MINUTE] = "59";
     values[SNAG_PROMPT_SECOND] = "60";
     for (unsigned int full = 0u; full < 2u; ++full) {
-        values[SNAG_PROMPT_QUEUE] = full ? queue : "";
+        values[SNAG_PROMPT_QUEUE] = full ? queue : "0";
         for (unsigned int mode = 0u; mode < 3u; ++mode) {
             values[6] = mode == 0u ? "chat" : mode == 1u ?
                         "rollout-idle" : "rollout-active";

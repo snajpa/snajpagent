@@ -652,9 +652,11 @@ starting a private turn. Hidden-view output is buffered for display on return.
 Both views append to terminal scrollback;
 neither is a full-screen TUI.
 .PP
-The default rollout prompt starts with a goal slot and a shared activity slot,
-then a bare context percentage space-padded to four columns, a space,
-provider/model/effort, an optional pending-queue count (N), and its idle or
+All default prompts share an activity slot, a goal slot, a space, the local
+HH:MM:SS timestamp, and another space, in that order.
+The rollout prompt continues with provider/model/effort, a space, the context
+percentage space-padded to four columns including its percent sign, an optional
+pending-queue count (N), and its idle or
 active marker:
 .B ›
 while idle and
@@ -1309,24 +1311,43 @@ command expansion occurs.  snajpagent appends one space after the selected
 label.
 .PP
 .B {queue}
-expands to the number of pending future prompts in parentheses followed by one
-space, such as "(1) ", or nothing when the queue is empty.  Default rollout
-prompts place it immediately before the idle/active marker; default chat and
-queue-edit prompts are unchanged.  It includes paused prompts, excludes the
-running turn, and updates as prompts are queued, started or removed.
+expands to the plain number of pending future prompts, including 0 when empty.
+It includes paused prompts, excludes the running turn, and updates as prompts
+are queued, started or removed.
+.B {context}
+expands to the plain percentage number, or ? when unknown; it includes no percent
+sign.  Punctuation and spacing belong to the template.
+The optional
+.B {queued:TEXT}
+section renders TEXT only when the queue count is nonzero.  It accepts ordinary
+fields and may appear inside a mode case or in shared text.  Its contents are
+validated even when hidden.  Default rollout prompts use
+.B {context:3}% {queued:({queue}) }
+after provider/model/effort, before the idle/active marker.  Default chat and
+queue-edit prompts are unchanged.
+Explicit pre-1.0 templates must replace the old decorated fields: use
+.B {context:3}%
+instead of
+.B {context:4}
+and
+.B {queued:({queue}) }
+instead of a bare
+.BR {queue} .
 .PP
 Numeric fields accept a minimum space-padded width, for example
-.B {context:4}
-renders the complete percentage as "  0%", "  9%", " 10%", "100%", or "  ?%".
+.B {context:3}%
+renders "  0%", "  9%", " 10%", "100%", or "  ?%".
+Queue counts also accept a minimum width, such as
+.BR {queue:3} .
 Clock components are natural decimal digits and additionally accept zero-fill:
 .B {hour:02}:{minute:02}:{second:02}
 is the default local clock.  Bare fields are unpadded.  Failed time capture
 renders each component as "--", padded with spaces even for a zero-fill format.
-Widths never truncate, include the percent sign, and must be positive decimal
+Widths never truncate, exclude literal punctuation, and must be positive decimal
 integers at most 510.  The complete label, input space, and largest spinner
 frames must still fit 512 bytes including NUL.  Signs, whitespace, extra leading
 zeros, empty widths, and formats on text/spinner fields are rejected in every
-mode.  Context zero-fill is invalid.  Invalid reloads retain the previous config.
+mode.  Context and queue zero-fill are invalid.  Invalid reloads retain the previous config.
 The pre-1.0 combined
 .B {time}
 field is removed: manually replace it in explicit templates with clock components.
@@ -1337,8 +1358,9 @@ prompt = {chat:{operator}:}{rollout-idle:›}{rollout-active:»}
 .fi
 .PP
 Templates must be printable valid UTF-8, at most 1024 bytes.  All three cases
-are required and nonempty; text outside them is shared.  A case may omit fields.
-Spinner fields may each occur at most once per case.  The default appearance
+are required and nonempty; text and fields outside them are shared.
+A case may omit fields.  Each spinner may occur at most once in each mode
+after combining shared fields with its selected case.  The default appearance
 is described under
 .BR DISPLAY .
 .TP

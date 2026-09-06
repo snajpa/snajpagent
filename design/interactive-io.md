@@ -177,14 +177,15 @@ does not alter submitted text, model text, events, or provider traffic.
 `[ui] prompt` is one data-only template with exactly one `{chat:TEXT}`, one
 `{rollout-idle:TEXT}`, and one `{rollout-active:TEXT}` case. It supports
 separate `{provider}`, `{model}`, `{effort}`, `{operator}`, `{host}`,
-`{context}`, `{mode}`, `{hour}`, `{minute}`, and `{second}` fields plus optional `{goal_spinner}`,
+`{context}`, `{queue}`, `{mode}`, `{hour}`, `{minute}`, and `{second}` fields plus optional `{goal_spinner}`,
 and `{activity_spinner}` fields and escaped literal
 braces/backslash; it performs no shell or environment expansion. The default
-rollout prompt is `    0% PROVIDER/MODEL/EFFORT › ` while idle and uses `»` while
-active. Two leading indicator slots precede the four-column percentage;
-inactive slots and unused percentage digits remain spaces. The
-default idle chat prompt is `   HH:MM:SS OPERATOR@HOST : `: two indicator slots
-and one literal space before the clock. Snajpagent appends one
+rollout prompt is `   HH:MM:SS PROVIDER/MODEL/EFFORT   0% › ` while idle and uses
+`»` while active. All modes share one prefix outside the cases: activity slot,
+goal slot, a space, the clock, and a space. Shared fields use the same formatting
+as case fields; each spinner may occur only once in any expanded mode. Inactive
+slots and unused digits in the four-column percentage remain spaces. The default idle chat prompt is
+`   HH:MM:SS OPERATOR@HOST : `. Snajpagent appends one
 space after the expanded template.
 
 Clock components are natural decimal local-time values from one capture per
@@ -194,8 +195,14 @@ editing, search, resize, view/nick changes, asynchronous output, and status
 transitions preserve it. The clock has no timer. Failed capture produces `--`
 for all three components. Submitted/cancelled labels keep their displayed time.
 
-`{context:4}` right-aligns the complete percentage including `%` with spaces:
-`  0%`, `  9%`, ` 10%`, `100%`, or `  ?%`. Clock components also support space
+`{context}` supplies plain digits or `?` when unknown, without `%`. The template
+`{context:3}%` produces `  0%`, `  9%`, ` 10%`, `100%`, or `  ?%`.
+`{queue}` supplies plain digits including `0`; `{queue:3}` accepts a width too.
+The optional `{queued:TEXT}` section expands only when the count is nonzero,
+inside a case or shared text, and is validated even when hidden. The default
+`{queued:({queue}) }` owns the parentheses and spacing. Explicit pre-1.0 templates
+must add their own `%` and queue decoration; neither field injects punctuation.
+Clock components also support space
 widths (`{hour:2}`), and only clocks support zero-fill (`{hour:02}`). Bare fields
 remain unpadded; widths never truncate. Unknown clock components always use
 space padding. Widths are positive decimal integers up to 510; reject empty,
@@ -206,12 +213,12 @@ All modes are validated, and a failed `/config` reload keeps the prior config.
 The pre-1.0 combined `{time}` field is removed; explicit templates must use the
 component fields instead. No compatibility alias or automatic rewrite exists.
 
-The context meter follows the leading indicator slots and precedes the rollout
-model identity. `N` is the rounded-up percentage of the
+The context meter follows the rollout model identity and precedes the optional
+queue count. `N` is the rounded-up percentage of the
 latest durable token-domain input bound against the resolved hard input budget
 for the same provider source, model, effort, and compaction lineage. A fresh
 session or accounting from a different provider source, selection, or lineage
-renders `0%`; compatible accounting with an unknown hard budget renders `?%`.
+renders `?%`, as does compatible accounting with an unknown hard budget.
 Serialized byte counts are never substituted as measured tokens. The idle
 identity is the effective next-turn selection. The active identity is the
 model and effort frozen for that turn, even if a command stages different

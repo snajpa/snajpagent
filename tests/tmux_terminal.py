@@ -38,10 +38,9 @@ MARKDOWN_TEXT = (
     "second paragraph\n\n"
     "> final quoted boundary"
 )
-DEFAULT_IDLE_PROMPT = "    ?% openai/gpt-5.5-2026-04-23/medium ›"
-DEFAULT_ACCOUNTED_IDLE_PROMPT = "    ?% openai/gpt-5.5-2026-04-23/medium ›"
-DEFAULT_ACTIVE_PROMPT = " ◴  ?% openai/gpt-5.5-2026-04-23/medium »"
-DEFAULT_GOAL_ACTIVE_PROMPT = "⚑◴  ?% openai/gpt-5.5-2026-04-23/medium »"
+DEFAULT_IDLE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   ?% ›"
+DEFAULT_ACCOUNTED_IDLE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   ?% ›"
+DEFAULT_ACTIVE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   ?% »"
 MACHINE_HOSTNAME = socket.gethostname()
 IRC_SECOND_MESSAGE = "integration two from twoop " + "long chat text " * 80 + "end"
 EMPTY_OUTPUT_CORRECTION = (
@@ -811,10 +810,14 @@ def run_status_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 40, 14
     )
     try:
-        terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
+        idle = terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
+        assert re.search(r"(?m)^   [0-9]{2}:[0-9]{2}:[0-9]{2}" +
+                         re.escape(DEFAULT_IDLE_PROMPT), idle), idle
         terminal.submit("terminal_status")
-        terminal.wait(DEFAULT_ACTIVE_PROMPT, timeout=3.0,
-                      join_wrapped=True)
+        active = terminal.wait(DEFAULT_ACTIVE_PROMPT, timeout=3.0,
+                               join_wrapped=True)
+        assert re.search(r"(?m)^◴  [0-9]{2}:[0-9]{2}:[0-9]{2}" +
+                         re.escape(DEFAULT_ACTIVE_PROMPT), active), active
         terminal.wait("status-first-fragment", timeout=3.0)
         time.sleep(0.85)
         middle = terminal.capture(join_wrapped=True)
@@ -1038,8 +1041,8 @@ def run_markdown_case(binary, root):
                     f"model block and next visible block have an extra empty row:\n{screen}"
                 )
             if not (after_model.startswith("\n\nworking\u2026") or
-                    after_model.startswith(
-                        f"\n\n{DEFAULT_ACCOUNTED_IDLE_PROMPT}")):
+                    re.match(r"\n\n   [0-9]{2}:[0-9]{2}:[0-9]{2}" +
+                             re.escape(DEFAULT_ACCOUNTED_IDLE_PROMPT), after_model)):
                 raise AssertionError(
                     f"model block and next visible block lack one empty row:\n{screen}"
                 )
@@ -1156,7 +1159,7 @@ def run_render_case(binary, root):
         exact_margin = (
             f"{DEFAULT_ACTIVE_PROMPT} draft plus again with long resize text"
         )
-        terminal.resize(len(exact_margin), 18)
+        terminal.resize(len("   HH:MM:SS") + len(exact_margin), 18)
         resized = terminal.wait(exact_margin, join_wrapped=True)
         if resized.count(exact_margin) != 1:
             raise AssertionError(f"resized composer was duplicated:\n{resized}")
@@ -1290,14 +1293,14 @@ def run_queue_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 48, 20
     )
     try:
-        terminal.wait(DEFAULT_IDLE_PROMPT)
+        terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit("queue_slow")
         terminal.wait("working slowly")
         for count, text in enumerate(("first", "second", "third", "fourth"), 1):
             terminal.send_text(text)
             terminal.send_key("Tab")
             terminal.wait(f"next › {text}")
-            wait_idle_prompt_at_bottom(terminal, f"/medium ({count}) »")
+            wait_idle_prompt_at_bottom(terminal, f"/medium   ?% ({count}) »")
 
         terminal.submit("/q")
         wait_queue_listing(terminal, ("first", "second", "third", "fourth"))
@@ -1305,19 +1308,19 @@ def run_queue_case(binary, root):
         terminal.submit("/q p")
         wait_event_count(dotdir, "future_turn_cancelled", 1)
         terminal.wait("1 future turn cancelled")
-        wait_idle_prompt_at_bottom(terminal, "/medium (3) »")
+        wait_idle_prompt_at_bottom(terminal, "/medium   ?% (3) »")
         terminal.submit("/queue pop")
         wait_event_count(dotdir, "future_turn_cancelled", 2)
-        wait_idle_prompt_at_bottom(terminal, "/medium (2) »")
+        wait_idle_prompt_at_bottom(terminal, "/medium   ?% (2) »")
         terminal.submit("/queue 1 delete")
         wait_event_count(dotdir, "future_turn_cancelled", 3)
-        wait_idle_prompt_at_bottom(terminal, "/medium (1) »")
+        wait_idle_prompt_at_bottom(terminal, "/medium   ?% (1) »")
         terminal.submit("/q 1e")
         terminal.wait(" ◴  ?% edit 1 › second")
         terminal.send_text(" active")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 1)
-        wait_idle_prompt_at_bottom(terminal, "/medium (1) »")
+        wait_idle_prompt_at_bottom(terminal, "/medium   ?% (1) »")
 
         terminal.send_text("fifth")
         terminal.send_key("Tab")
@@ -1327,7 +1330,7 @@ def run_queue_case(binary, root):
 
         terminal.send_key("C-c")
         terminal.wait("turn interrupted")
-        wait_idle_prompt_at_bottom(terminal, "/medium (2) ›")
+        wait_idle_prompt_at_bottom(terminal, "/medium   ?% (2) ›")
         terminal.submit("/queue 1 edit")
         terminal.wait("    ?% edit 1 › second active")
         terminal.send_text(" idle")
@@ -1445,7 +1448,7 @@ def wait_idle_prompt_at_bottom(terminal, prompt, timeout=5.0):
     deadline = time.monotonic() + timeout
     screen = ""
     while time.monotonic() < deadline:
-        screen = terminal.capture()
+        screen = terminal.capture(join_wrapped=True)
         if screen.rstrip().endswith(prompt.rstrip()):
             return screen
         if terminal.dead():
@@ -1542,7 +1545,11 @@ def run_lifecycle_case(binary, root):
         terminal.wait("• Goal set")
         terminal.wait("working on goal")
         terminal.send_text("/goal cancel")
-        terminal.wait(f"{DEFAULT_GOAL_ACTIVE_PROMPT} /goal cancel")
+        active = terminal.wait(f"{DEFAULT_ACTIVE_PROMPT} /goal cancel",
+                               join_wrapped=True)
+        assert re.search(r"(?m)^◴⚑ [0-9]{2}:[0-9]{2}:[0-9]{2}" +
+                         re.escape(f"{DEFAULT_ACTIVE_PROMPT} /goal cancel"),
+                         active), active
         terminal.send_key("Enter")
         terminal.wait("• Goal cleared")
         terminal.wait("goal checkpoint")
@@ -1672,7 +1679,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         100, 24, environment=environment,
     )
     try:
-        terminal.wait("    ?% ordinary/uncached-start/low ›")
+        terminal.wait(" ordinary/uncached-start/low   ?% ›")
         terminal.submit("/verbose 6")
         terminal.wait("verbosity: 6")
         before = provider.catalog_paths()
@@ -1760,7 +1767,7 @@ def run_model_catalog_case(binary, root, provider, environment):
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
     expected = (f"{operator}@{MACHINE_HOSTNAME} :" if operator else
-                "    ?% ordinary/uncached-start/low ›")
+                " ordinary/uncached-start/low   ?% ›")
     timestamped = re.compile(
         rf"(?m)^   \d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
     ) if operator else None
@@ -2028,7 +2035,7 @@ def run_destination_case(binary, root, provider, environment):
         client.wait(f"destination[2]: {endpoints[1]}")
 
         client.submit("/rollout")
-        client.wait("fake/two-model/medium ›")
+        client.wait("fake/two-model/medium   ?% ›")
         client.submit("destination-model 1 model-to-one")
         deliveries("model-to-one", {"a": 1, "c": 1})
         client.wait("destination model done")
@@ -2123,7 +2130,7 @@ def run_multi_tool_cases(binary, root, provider, environment):
                                 case / "state", config, 120, 24,
                                 args=("-vvv" if mode == "full-output" else "-v",), environment=environment)
         try:
-            terminal.wait("host-model/medium ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit("multi-tools " + mode)
             if mode in ("steer", "cancel"):
                 deadline = time.monotonic() + 4.0
@@ -2189,7 +2196,7 @@ def run_output_cap_cases(binary, root, provider, environment):
                                 case / "state", config, 120, 24,
                                 args=("-v",), environment=environment)
         try:
-            terminal.wait("host-model/medium ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit(f"tool-cap {ceiling} {json.dumps(selected)}")
             terminal.wait("tool cap confirmed")
             _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
@@ -2218,7 +2225,7 @@ def run_ctrl_d_cases(binary, root, provider, environment):
                                 case / "state", config, 120, 24,
                                 environment=environment)
         try:
-            terminal.wait("host-model/medium ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit("exit-" + mode)
             if mode in ("tool", "managed"):
                 deadline = time.monotonic() + 5.0
@@ -2300,7 +2307,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 environment=environment)
             peer = None
             try:
-                terminal.wait("host-model/medium ›")
+                terminal.wait("host-model/medium   ?% ›")
                 terminal.submit("runtime-main")
                 assert arrived.wait(5.0), "provider did not receive the initial request"
                 initial = json.dumps(requests[0], sort_keys=True)
@@ -2455,7 +2462,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
         try:
             terminal.wait(f"runtimeop@{MACHINE_HOSTNAME} :")
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit("runtime-routing")
             assert arrived.wait(5.0)
             frozen = counts[0] if phase == "count" else requests[0]
@@ -2603,7 +2610,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
         try:
             terminal.wait(f"runtimeop@{MACHINE_HOSTNAME} :")
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit("/goal set runtime-goal" if boundary == "goal" else "runtime-boundary")
             if boundary == "tool":
                 deadline = time.monotonic() + 5.0
@@ -2721,7 +2728,7 @@ def run_runtime_history_case(binary, root, provider, environment):
         config, 120, 24, args=["-n", "agent", "-o", "operator"], environment=environment)
     links = []
     try:
-        terminal.wait("host-model/medium ›")
+        terminal.wait("host-model/medium   ?% ›")
         terminal.submit("runtime history main")
         assert arrived.wait(5.0)
         terminal.submit(f"/connect {endpoint}")
@@ -2839,7 +2846,7 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
             terminal.wait("retrypeer joined")
             wait_irc_idle([terminal])
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit("retry-original")
             assert arrived.wait(5.0)
             if mode not in ("before", "zero", "healthy"):
@@ -2956,7 +2963,7 @@ def run_provider_clarification_cases(binary, root, provider, environment):
             terminal.wait("clarifypeer joined")
             wait_irc_idle([terminal])
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit(original)
             if mode in ("steer", "chat", "queue"):
                 assert arrived.wait(5.0)
@@ -3071,7 +3078,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
         terminal = TmuxTerminal(case / "term", binary, workspace, case / "state", config,
             140, 28, environment=environment)
         try:
-            terminal.wait("host-model/medium ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit("/retry")
             terminal.wait("no failed turn to retry")
             assert not requests
@@ -3093,7 +3100,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
                 terminal.close()
                 terminal = TmuxTerminal(case / "resume", binary, workspace, case / "state", config,
                     140, 28, args=["--resume", log_path.parent.name], environment=environment)
-                terminal.wait("host-model/medium ›")
+                terminal.wait("host-model/medium   ?% ›")
             if mode == "chat":
                 terminal.submit("/chat")
                 terminal.wait("chat is offline")
@@ -3560,6 +3567,7 @@ def run_token_accounting_cases(binary, root):
 
 
 def run_irc_case(binary, root):
+    binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}

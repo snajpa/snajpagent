@@ -112,7 +112,7 @@ history_lines = 200
 
 [ui]
 color = auto
-prompt = {chat:{goal_spinner}{activity_spinner} {hour:02}:{minute:02}:{second:02} {operator}@{host} :}{rollout-idle:{goal_spinner}{activity_spinner}{context:4} {provider}/{model}/{effort} ›}{rollout-active:{goal_spinner}{activity_spinner}{context:4} {provider}/{model}/{effort} »}
+prompt = {activity_spinner}{goal_spinner} {hour:02}:{minute:02}:{second:02} {chat:{operator}@{host} :}{rollout-idle:{provider}/{model}/{effort} {context:3}% {queued:({queue}) }›}{rollout-active:{provider}/{model}/{effort} {context:3}% {queued:({queue}) }»}
 prompt_spinner_goal = " ⚑"
 prompt_spinner_provider = " ◴◷◶◵"
 prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -296,14 +296,15 @@ summaries, runtime state, protocol, and transport detail through the existing
 single verbosity ladder. Actionable errors and direct local-command results
 remain immediately visible in either view.
 
-The rollout composer includes `N%`, space-padded to four columns by default,
-as its last data field immediately
-before the optional goal/provider/tool spinner fields and `›` or `»`, using the
+Both default composers share activity and goal slots followed by local
+`HH:MM:SS`. The rollout composer then includes provider/model/effort, `N%`
+space-padded to four columns, the optional queue count and `›` or `»`, using the
 latest comparable durable token bound and resolved hard input budget. A fresh
 session or accounting from a different provider source, selection, or
-compaction lineage renders `0%`; compatible accounting with an unknown hard
-budget renders `?%`.
-The default chat prompt uses local `HH:MM:SS` followed by
+compaction lineage renders `?%`, as does compatible accounting with an unknown
+hard budget. The fields supply plain numbers; the template owns `%` and the
+conditional queue badge `{queued:({queue}) }`.
+The default chat prompt follows the shared prefix with
 `OPERATOR_NICK@MACHINE_HOSTNAME` without a meter, so switching presentation
 views does not imply a token fact there. The timestamp is captured when the
 prompt opens and is preserved across view, nickname, status, and editor redraws.

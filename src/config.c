@@ -93,12 +93,10 @@ void
 snag_config_init(struct snag_config *config)
 {
     static const char prompt[] =
-        "{chat:{goal_spinner}{activity_spinner} {hour:02}:{minute:02}:{second:02} "
-        "{operator}@{host} :}"
-        "{rollout-idle:{goal_spinner}{activity_spinner}{context:4} "
-        "{provider}/{model}/{effort} {queue}›}"
-        "{rollout-active:{goal_spinner}{activity_spinner}{context:4} "
-        "{provider}/{model}/{effort} {queue}»}";
+        "{activity_spinner}{goal_spinner} {hour:02}:{minute:02}:{second:02} "
+        "{chat:{operator}@{host} :}"
+        "{rollout-idle:{provider}/{model}/{effort} {context:3}% {queued:({queue}) }›}"
+        "{rollout-active:{provider}/{model}/{effort} {context:3}% {queued:({queue}) }»}";
 
     memset(config, 0, sizeof(*config));
     memcpy(config->model, "default", 8u);
@@ -272,15 +270,27 @@ invalid:
     return -1;
 }
 
+static size_t
+prompt_end(const char *text, size_t len, size_t start)
+{
+    size_t depth = 1u;
+
+    for (size_t i = start; i < len; ++i) {
+        if (text[i] == '\\') ++i;
+        else if (text[i] == '{') ++depth;
+        else if (text[i] == '}' && !--depth) return i + 1u;
+    }
+    return 0u;
+}
+
 static int
 prompt_body(const char *text, size_t len,
             const char *const values[SNAG_PROMPT_FIELD_COUNT],
-            unsigned char marker, struct snag_buf *out)
+            unsigned char marker, unsigned int *spinners, struct snag_buf *out)
 {
     static const char *const fields[] = {"provider", "model", "effort",
         "operator", "host", "context", "mode", "queue", "hour", "minute", "second",
         "goal_spinner", "activity_spinner"};
-    unsigned int spinners = 0u;
 
     for (size_t i = 0u; i < len; ++i) {
         unsigned char c = (unsigned char)text[i];
@@ -294,6 +304,16 @@ prompt_body(const char *text, size_t len,
                 goto invalid;
             if (out && snag_buf_putc(out, (unsigned char)text[i]) < 0)
                 return -1;
+        } else if (c == '{' && len - i >= 8u &&
+                   memcmp(text + i, "{queued:", 8u) == 0) {
+            size_t end = prompt_end(text, len, i + 8u);
+            bool queued = out && strcmp(values[SNAG_PROMPT_QUEUE], "0") != 0;
+
+            if (!end || end == i + 9u ||
+                prompt_body(text + i + 8u, end - i - 9u, values, marker,
+                            spinners, queued ? out : NULL) < 0)
+                goto invalid;
+            i = end - 1u;
         } else if (c == '{') {
             const char *end = memchr(text + i + 1u, '}', len - i - 1u);
             size_t field_len = end ? (size_t)(end - text - i - 1u) : 0u;
@@ -310,13 +330,13 @@ prompt_body(const char *text, size_t len,
                 ++field;
             if (!end || field == sizeof(fields) / sizeof(fields[0]) ||
                 (field >= SNAG_PROMPT_FIELD_COUNT &&
-                 (spinners & (1u << (field - SNAG_PROMPT_FIELD_COUNT)))))
+                 (*spinners & (1u << (field - SNAG_PROMPT_FIELD_COUNT)))))
                 goto invalid;
             if (format) {
                 bool clock = field >= SNAG_PROMPT_HOUR &&
                              field <= SNAG_PROMPT_SECOND;
 
-                if (field != SNAG_PROMPT_CONTEXT && !clock)
+                if (field != SNAG_PROMPT_CONTEXT && field != SNAG_PROMPT_QUEUE && !clock)
                     goto invalid;
                 ++format;
                 if (format < end && *format == '0') {
@@ -336,7 +356,7 @@ prompt_body(const char *text, size_t len,
                 }
             }
             if (field >= SNAG_PROMPT_FIELD_COUNT) {
-                spinners |= 1u << (field - SNAG_PROMPT_FIELD_COUNT);
+                *spinners |= 1u << (field - SNAG_PROMPT_FIELD_COUNT);
                 if (out && snag_buf_putc(out,
                         marker + field - SNAG_PROMPT_FIELD_COUNT) < 0)
                     return -1;
@@ -372,13 +392,13 @@ parse_prompt(const char *text, unsigned int selected,
 {
     static const char *const names[] = {"chat:", "rollout-idle:",
                                         "rollout-active:"};
-    unsigned int seen = 0u;
+    unsigned int seen = 0u, spinners[3] = {0u};
     size_t len = strlen(text);
 
     for (size_t i = 0u; i < len; ++i) {
         unsigned char c = (unsigned char)text[i];
         const char *body = NULL;
-        size_t name = 0u, depth = 1u, end;
+        size_t name = 0u, end;
 
         if (c < 0x20u || c == 0x7fu)
             goto invalid;
@@ -402,16 +422,22 @@ parse_prompt(const char *text, unsigned int selected,
                 body = text + i + 1u + strlen(names[name]);
                 break;
             }
-        if (!body || (seen & (1u << name)))
+        end = prompt_end(text, len, body ? (size_t)(body - text) : i + 1u);
+        if (!end)
             goto invalid;
-        for (end = (size_t)(body - text); end < len && depth; ++end) {
-            if (text[end] == '\\') ++end;
-            else if (text[end] == '{') ++depth;
-            else if (text[end] == '}') --depth;
+        if (!body) {
+            for (unsigned int mode = 0u; mode < 3u; ++mode)
+                if (prompt_body(text + i, end - i, values, marker,
+                                &spinners[mode], out && mode == selected ? out : NULL) < 0)
+                    goto invalid;
+            i = end - 1u;
+            continue;
         }
-        if (depth || end - 1u == (size_t)(body - text) ||
+        if (seen & (1u << name))
+            goto invalid;
+        if (end - 1u == (size_t)(body - text) ||
             prompt_body(body, end - 1u - (size_t)(body - text), values, marker,
-                        out && name == selected ? out : NULL) < 0)
+                        &spinners[name], out && name == selected ? out : NULL) < 0)
             goto invalid;
         seen |= 1u << name;
         i = end - 1u;
