@@ -83,8 +83,7 @@ commit_rendered(struct app_state *app, const char *type, json_t *data,
                            error, error_size) < 0)
         return -1;
     if (snag_ui_event(&app->ui, seq, type) < 0) {
-        snprintf(error, error_size, "durable compaction event output failed");
-        return -1;
+        return snag_errorf(error, error_size, "durable compaction event output failed");
     }
     return 0;
 }

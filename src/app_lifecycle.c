@@ -95,16 +95,14 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
     if (snag_ui_text(&app->ui, SNAG_UI_HOST,
             "delete is irreversible; type the displayed 8-character id prefix to confirm") < 0 ||
         snag_ui_simple_prompt(&app->ui, false) < 0) {
-        snprintf(error, error_size, "delete confirmation prompt could not be displayed");
-        return -1;
+        return snag_errorf(error, error_size, "delete confirmation prompt could not be displayed");
     }
     do {
         rc = snag_ui_poll(&app->ui, -1, false, &action, &line);
     } while (rc == 0);
     if (rc < 0) {
         free(line);
-        snprintf(error, error_size, "delete confirmation input could not be read");
-        return -1;
+        return snag_errorf(error, error_size, "delete confirmation input could not be read");
     }
     if (action == SNAG_TERM_CANCEL || action == SNAG_TERM_INTERRUPT) {
         free(line);
@@ -237,8 +235,7 @@ commit_goal_event(struct app_state *app, const char *type, json_t *data,
                   char *error, size_t error_size)
 {
     if (!data) {
-        (void)snprintf(error, error_size, "cannot allocate %s event", type);
-        return -1;
+        return snag_errorf(error, error_size, "cannot allocate %s event", type);
     }
     return snag_app_commit_event(app, type, data, error, error_size);
 }
@@ -344,9 +341,8 @@ start_goal(struct app_state *app, const char *prompt,
         return snag_errno(EINVAL);
     }
     if (snag_random_id(goal_id) < 0) {
-        (void)snprintf(error, error_size,
+        return snag_errorf(error, error_size,
                        "cryptographic goal id generation failed");
-        return -1;
     }
     if (commit_goal_event(app, "goal_started",
                           goal_started_data(goal_id, prompt),
@@ -404,8 +400,7 @@ snag_app_goal_pause(struct app_state *app, const char *reason,
     if (!data || snag_json_set_new(data, "reason", json_string(reason)) < 0) {
         if (data)
             json_decref(data);
-        (void)snprintf(error, error_size, "cannot allocate goal pause event");
-        return -1;
+        return snag_errorf(error, error_size, "cannot allocate goal pause event");
     }
     if (commit_goal_event(app, "goal_paused", data,
                           error, error_size) < 0)
@@ -613,8 +608,7 @@ snag_app_goal_tool(struct app_state *app,
         if (!data || snag_json_set_new(data, "reason", json_string(text)) < 0) {
             if (data)
                 json_decref(data);
-            (void)snprintf(error, error_size, "cannot allocate goal block event");
-            return -1;
+            return snag_errorf(error, error_size, "cannot allocate goal block event");
         }
         if (commit_goal_event(app, "goal_blocked", data,
                               error, error_size) < 0)
