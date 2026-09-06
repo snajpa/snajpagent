@@ -3050,7 +3050,7 @@ def run_irc_chat_case(binary, root):
             terminal.wait(f"{operator}@{MACHINE_HOSTNAME} :")
 
         ordered = [terminals[name] for name in ("host", "one", "two")]
-        terminals["host"].wait("@twoop joined")
+        terminals["host"].wait("twoop joined")
         terminals["one"].wait("twoop joined")
         terminals["one"].wait("set mode · +o twoop")
         terminals["two"].wait("history synchronized")
@@ -3138,6 +3138,53 @@ def run_irc_chat_case(binary, root):
                 "output correction did not reach every model as developer input: "
                 f"{corrected_models!r}"
             )
+
+        def check_event(kind, nick, text, op, label):
+            for terminal in ordered:
+                terminal.wait(label)
+                matches = [event["data"] for event in
+                           event_list(read_events(terminal.dotdir)[1], "irc_event")
+                           if event["data"]["kind"] == kind and
+                           event["data"]["nick"] == nick and
+                           event["data"]["text"] == text and
+                           not event["data"]["historical"]]
+                assert len(matches) == 1, (kind, nick, text, matches)
+                assert matches[0]["op"] is op and matches[0]["room"] == "#lab"
+                pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} ({re.escape(label)})"
+                assert foreground_at(terminal.capture_styled(), pattern) == (35 if op else 36)
+
+        # Exercise real wire events after all viewers have joined; lifecycle
+        # fields must agree before the shared renderer can produce equal colors.
+        with socket.create_connection(("127.0.0.1", irc_port)) as peer:
+            peer.sendall(b"NICK parityop\r\nUSER parityop 0 * :human\r\nJOIN #lab\r\n")
+            check_event("join", "parityop", "", False, "· parityop joined")
+            terminals["host"].wait("set mode · +o parityop")
+            server_name = next(event["data"]["nick"] for event in
+                               event_list(read_events(terminals["host"].dotdir)[1], "irc_event")
+                               if event["data"]["kind"] == "mode" and
+                               event["data"]["text"] == "+o parityop")
+            assert server_name != "parityop"
+            check_event("mode", server_name, "+o parityop", False,
+                        f"· {server_name} set mode · +o parityop")
+            peer.sendall(b"PRIVMSG #lab :parity speech\r\nNOTICE #lab :parity notice\r\n"
+                         b"TOPIC #lab :parity topic\r\nNICK paritynick\r\n")
+            check_event("message", "parityop", "parity speech", True, "@parityop › parity speech")
+            check_event("notice", "parityop", "parity notice", True, "-@parityop - parity notice")
+            check_event("topic", "parityop", "parity topic", True, "· @parityop set topic")
+            check_event("nick", "parityop", "paritynick", True, "· @parityop is now known as")
+            peer.sendall(b"MODE #lab -o paritynick\r\nPART #lab :parity parted\r\nJOIN #lab\r\n")
+            check_event("mode", "paritynick", "-o paritynick", False,
+                        "· paritynick set mode · -o paritynick")
+            check_event("part", "paritynick", "parity parted", False, "· paritynick left")
+            check_event("join", "paritynick", "", False, "· paritynick joined")
+            check_event("mode", server_name, "+o paritynick", False,
+                        f"· {server_name} set mode · +o paritynick")
+        wait_irc_quits(terminals["host"], ("paritynick",))
+        quit_text = next(event["data"]["text"] for event in
+                         event_list(read_events(terminals["host"].dotdir)[1], "irc_event")
+                         if event["data"]["kind"] == "quit" and event["data"]["nick"] == "paritynick")
+        check_event("quit", "paritynick", quit_text, True, "· @paritynick quit")
+        wait_irc_idle(ordered)
 
         with socket.create_connection(("127.0.0.1", irc_port)) as peer:
             peer.sendall(b"CAP REQ :snajpagent/agent\r\nNICK highlightpeer\r\n"

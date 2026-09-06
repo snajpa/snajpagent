@@ -991,15 +991,34 @@ static void server_drop_peer(struct snag_irc_core *irc, struct irc_conn *peer,
                              const char *reason);
 
 static int
-server_broadcast(struct snag_irc_core *irc, const char *fmt, ...)
+server_broadcast(struct snag_irc_core *irc, const struct snag_irc_event *event,
+                 const char *user)
 {
+    static const char *const commands[] = {
+        [SNAG_IRC_JOIN] = "JOIN", [SNAG_IRC_PART] = "PART",
+        [SNAG_IRC_QUIT] = "QUIT", [SNAG_IRC_NICK] = "NICK",
+        [SNAG_IRC_MESSAGE] = "PRIVMSG", [SNAG_IRC_NOTICE] = "NOTICE",
+        [SNAG_IRC_TOPIC] = "TOPIC", [SNAG_IRC_MODE] = "MODE"
+    };
+    char prefix[3u * SNAG_CONFIG_IRC_NICK_MAX + 3u];
     char line[IRC_LINE_MAX + 1u];
-    va_list ap;
+    bool channel = event->kind != SNAG_IRC_NICK && event->kind != SNAG_IRC_QUIT;
     int n;
 
-    va_start(ap, fmt);
-    n = vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
+    if ((size_t)event->kind >= sizeof(commands) / sizeof(commands[0]) ||
+        !commands[event->kind]) {
+        errno = EINVAL;
+        return -1;
+    }
+    n = snprintf(prefix, sizeof(prefix), user ? "%s!%s@%s" : "%s",
+                 event->nick, user, irc->server_name);
+    if (n < 0 || (size_t)n >= sizeof(prefix))
+        return -1;
+    n = snprintf(line, sizeof(line), ":%s %s%s%s%s%s", prefix,
+                 commands[event->kind], channel ? " " : "",
+                 channel ? event->room : "",
+                 event->kind == SNAG_IRC_JOIN ? "" :
+                 event->kind == SNAG_IRC_MODE ? " " : " :", event->text);
     if (n < 0 || (size_t)n > IRC_LINE_MAX) {
         errno = EMSGSIZE;
         return -1;
@@ -1015,13 +1034,16 @@ server_broadcast(struct snag_irc_core *irc, const char *fmt, ...)
 }
 
 static int
-server_emit(struct snag_irc_core *irc, enum snag_irc_event_kind kind,
-            const char *nick, const char *text, bool op, bool local)
+server_publish(struct snag_irc_core *irc, enum snag_irc_event_kind kind,
+               const char *nick, const char *user, const char *text,
+               bool op, bool local)
 {
     struct snag_irc_event event;
 
     event_init(irc, &event, kind, irc->listen, irc->room, nick, text,
                op, false, local);
+    if (server_broadcast(irc, &event, user) < 0)
+        return -1;
     return emit_event(irc, &event, true);
 }
 
@@ -1195,6 +1217,8 @@ server_peer_by_nick(struct snag_irc_core *irc, const char *nick)
 static int
 server_join(struct snag_irc_core *irc, struct irc_conn *peer, const char *room)
 {
+    char mode_text[SNAG_CONFIG_IRC_NICK_MAX + 4u];
+
     if (!peer->registered)
         return queue_line(peer, ":%s 451 * :You have not registered",
                           irc->server_name);
@@ -1204,16 +1228,16 @@ server_join(struct snag_irc_core *irc, struct irc_conn *peer, const char *room)
     if (peer->joined)
         return 0;
     peer->joined = true;
-    peer->op = !peer->agent_role;
+    peer->op = false;
     (void)snag_strcpy(peer->room, sizeof(peer->room), irc->room);
-    if (server_broadcast(irc, ":%s!%s@%s JOIN %s", peer->nick,
-                         peer->user, irc->server_name, irc->room) < 0 ||
-        server_emit(irc, SNAG_IRC_JOIN, peer->nick, "", peer->op, false) < 0)
+    if (server_publish(irc, SNAG_IRC_JOIN, peer->nick, peer->user,
+                       "", false, false) < 0)
         return -1;
+    peer->op = !peer->agent_role;
+    (void)snprintf(mode_text, sizeof(mode_text), "+o %s", peer->nick);
     if (peer->op &&
-        (server_broadcast(irc, ":%s MODE %s +o %s", irc->server_name,
-                          irc->room, peer->nick) < 0 ||
-         server_emit(irc, SNAG_IRC_MODE, peer->nick, "+o", true, false) < 0))
+        server_publish(irc, SNAG_IRC_MODE, irc->server_name, NULL,
+                       mode_text, false, false) < 0)
         return -1;
     if (queue_line(peer, ":%s 332 %s %s :%s", irc->server_name,
                    peer->nick, irc->room, irc->topic) < 0 ||
@@ -1227,7 +1251,6 @@ server_chat(struct snag_irc_core *irc, struct irc_conn *peer,
             enum snag_irc_event_kind kind, const char *target,
             const char *text)
 {
-    const char *command = kind == SNAG_IRC_NOTICE ? "NOTICE" : "PRIVMSG";
     char clean[IRC_LINE_MAX + 1u];
 
     if (!peer->joined || irc_casecmp(target, irc->room) != 0) {
@@ -1253,11 +1276,8 @@ server_chat(struct snag_irc_core *irc, struct irc_conn *peer,
             return -1;
         memcpy(chunk, clean + offset, take);
         chunk[take] = '\0';
-        if (server_broadcast(irc, ":%s!%s@%s %s %s :%s", peer->nick,
-                             peer->user, irc->server_name, command, irc->room,
-                             chunk) < 0 ||
-            server_emit(irc, kind, peer->nick, chunk,
-                        peer->op, false) < 0)
+        if (server_publish(irc, kind, peer->nick, peer->user, chunk,
+                           peer->op, false) < 0)
             return -1;
         offset += take;
     }
@@ -1291,13 +1311,8 @@ server_topic(struct snag_irc_core *irc, struct irc_conn *peer,
         return queue_line(peer, ":%s 417 %s :Topic is too long",
                           irc->server_name, peer->nick);
     memcpy(irc->topic, clean, strlen(clean) + 1u);
-    if (server_broadcast(irc, ":%s!%s@%s TOPIC %s :%s", peer->nick,
-                         peer->user, irc->server_name, irc->room,
-                         irc->topic) < 0 ||
-        server_emit(irc, SNAG_IRC_TOPIC, peer->nick, irc->topic,
-                    peer->op, false) < 0)
-        return -1;
-    return 0;
+    return server_publish(irc, SNAG_IRC_TOPIC, peer->nick, peer->user,
+                          irc->topic, peer->op, false);
 }
 
 static int
@@ -1340,13 +1355,8 @@ server_mode(struct snag_irc_core *irc, struct irc_conn *peer,
         target->op = add;
     (void)snprintf(mode_text, sizeof(mode_text), "%s %s",
                    message->params[1], message->params[2]);
-    if (server_broadcast(irc, ":%s!%s@%s MODE %s %s %s", peer->nick,
-                         peer->user, irc->server_name, irc->room,
-                         message->params[1], message->params[2]) < 0 ||
-        server_emit(irc, SNAG_IRC_MODE, peer->nick, mode_text,
-                    peer->op, false) < 0)
-        return -1;
-    return 0;
+    return server_publish(irc, SNAG_IRC_MODE, peer->nick, peer->user,
+                          mode_text, peer->op, false);
 }
 
 static int
@@ -1431,10 +1441,8 @@ server_dispatch(struct snag_irc_core *irc, struct irc_conn *peer, char *line)
         memcpy(old, peer->nick, sizeof(old));
         (void)snag_strcpy(peer->nick, sizeof(peer->nick), next);
         if (old[0] && peer->joined) {
-            if (server_broadcast(irc, ":%s!%s@%s NICK :%s", old,
-                                 peer->user, irc->server_name, peer->nick) < 0 ||
-                server_emit(irc, SNAG_IRC_NICK, old, peer->nick,
-                            peer->op, false) < 0)
+            if (server_publish(irc, SNAG_IRC_NICK, old, peer->user,
+                               peer->nick, peer->op, false) < 0)
                 return -1;
         } else if (peer->registered &&
                    queue_line(peer, ":%s!%s@%s NICK :%s", old,
@@ -1473,11 +1481,8 @@ server_dispatch(struct snag_irc_core *irc, struct irc_conn *peer, char *line)
             char clean[SNAG_IRC_TEXT_MAX + 1u];
             if (sanitize_text(clean, sizeof(clean), reason) < 0)
                 clean[0] = '\0';
-            if (server_broadcast(irc, ":%s!%s@%s PART %s :%s", peer->nick,
-                                 peer->user, irc->server_name, irc->room,
-                                 clean) < 0 ||
-                server_emit(irc, SNAG_IRC_PART, peer->nick, clean,
-                            peer->op, false) < 0)
+            if (server_publish(irc, SNAG_IRC_PART, peer->nick, peer->user,
+                               clean, peer->op, false) < 0)
                 return -1;
             peer->joined = false;
         }
@@ -1522,11 +1527,8 @@ server_drop_peer(struct snag_irc_core *irc, struct irc_conn *peer,
     (void)snprintf(nick, sizeof(nick), "%s", peer->nick);
     (void)snprintf(user, sizeof(user), "%s", peer->user);
     conn_release(peer);
-    if (announced) {
-        (void)server_broadcast(irc, ":%s!%s@%s QUIT :%s", nick,
-                               user, irc->server_name, reason);
-        (void)server_emit(irc, SNAG_IRC_QUIT, nick, reason, op, false);
-    }
+    if (announced)
+        (void)server_publish(irc, SNAG_IRC_QUIT, nick, user, reason, op, false);
 }
 
 static int
@@ -2450,26 +2452,23 @@ send_chat_line(struct snag_irc_core *irc, const char *nick, enum link_role role,
     }
     if (!clean[0])
         return 0;
+    event_init(irc, &event, kind, irc->hosting ? irc->listen :
+               irc->links[0].endpoint, room,
+               nick, clean, role_is_op(irc, role), false, true);
     if (irc->listener != SNAG_SOCKET_INVALID &&
-        server_broadcast(irc, ":%s!local@%s %s %s :%s", nick,
-                         irc->server_name,
-                         kind == SNAG_IRC_NOTICE ? "NOTICE" : "PRIVMSG",
-                         irc->room, clean) < 0)
+        server_broadcast(irc, &event, "local") < 0)
         return -1;
     for (size_t i = 0; i < irc->link_count; ++i) {
         struct irc_conn *link = &irc->links[i];
         if (link->role != role)
             continue;
-        if (!room[0] && link->room[0])
-            room = link->room;
+        if (!event.room[0] && link->room[0])
+            (void)snag_strcpy(event.room, sizeof(event.room), link->room);
         if (link_queue_pending(link, kind, clean) < 0 ||
             (link->joined && link_flush_pending(link) < 0)) {
             return -1;
         }
     }
-    event_init(irc, &event, kind, irc->hosting ? irc->listen :
-               irc->links[0].endpoint, room,
-               nick, clean, role_is_op(irc, role), false, true);
     return emit_event(irc, &event, true);
 }
 
@@ -2559,15 +2558,10 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
     if (irc->listener != SNAG_SOCKET_INVALID &&
         (role == LINK_AGENT ? irc->agent_op : irc->operator_op)) {
         memcpy(irc->topic, clean, strlen(clean) + 1u);
-        if (server_broadcast(irc, ":%s!local@%s TOPIC %s :%s",
-                             role == LINK_AGENT ? irc->model_nick :
-                                                  irc->operator_nick,
-                             irc->server_name,
-                             irc->room, clean) < 0 ||
-            server_emit(irc, SNAG_IRC_TOPIC,
-                        role == LINK_AGENT ? irc->model_nick :
-                                             irc->operator_nick, clean,
-                        true, true) < 0)
+        if (server_publish(irc, SNAG_IRC_TOPIC,
+                           role == LINK_AGENT ? irc->model_nick :
+                                                irc->operator_nick,
+                           "local", clean, true, true) < 0)
             goto fail;
         ++destinations;
     }

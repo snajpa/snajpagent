@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Publish hosted IRC wire traffic and local events from the same fields.
+  JOIN precedes operator promotion everywhere; automatic MODE events name the
+  server actor and target consistently, so lifecycle colors match clients.
+
 - Highlight the whole chat entry when a message or notice mentions the local
   operator's or model's accepted room nickname, using the existing IRC mention
   matching. Keep highlighting across Markdown and wrapping; honor disabled colors.
