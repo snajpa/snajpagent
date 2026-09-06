@@ -3,6 +3,7 @@
 #include "base.h"
 #include "fs.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
@@ -340,7 +341,6 @@ snag_term_signals_unblock(void)
 #include <pthread.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
-#include <fcntl.h>
 
 int
 snag_term_output_open(int fd)
