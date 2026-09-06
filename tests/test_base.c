@@ -44,7 +44,7 @@ test_shutdown_signal(int number)
 
 #ifdef _WIN32
 static void
-test_native_process(void)
+test_native_process(bool pty)
 {
     char *shell = snag_default_shell();
     char **env = snag_environment_entries();
@@ -53,15 +53,19 @@ test_native_process(void)
     snag_child_init(&child);
     assert(shell && env && directory);
     assert(snag_child_spawn(&child, shell, "echo native-out&echo native-err 1>&2&exit /b 7",
-                            directory, env, false) == 0);
+                            directory, env, pty) == 0);
     snag_child_close_stream(&child, 2u);
-    bool open[2] = {true, true};
+    bool open[2] = {true, !pty};
     struct snag_buf output[2];
     snag_buf_init(&output[0], 4096u);
     snag_buf_init(&output[1], 4096u);
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     while (open[0] || open[1] || snag_child_exited(&child) == 0) {
-        assert(snag_monotonic_ms() < deadline);
+        if (snag_monotonic_ms() >= deadline) {
+            (void)fprintf(stderr, "native process timeout pty=%d exited=%d open=%d/%d bytes=%zu/%zu\n",
+                           pty, snag_child_exited(&child), open[0], open[1], output[0].len, output[1].len);
+            abort();
+        }
         struct snag_child_event events[2];
         size_t count = 0;
         for (unsigned int i = 0; i < 2u; ++i)
@@ -84,7 +88,8 @@ test_native_process(void)
     assert(snag_child_reap(&child) == 0 && child.exit_code == 7);
     for (size_t i = 0; i < 2u; ++i)
         assert(snag_buf_terminate(&output[i]) == 0);
-    assert(strstr((char *)output[0].data, "native-out") && strstr((char *)output[1].data, "native-err"));
+    assert(strstr((char *)output[0].data, "native-out") &&
+           strstr((char *)output[pty ? 0u : 1u].data, "native-err"));
     snag_child_free(&child);
     snag_buf_free(&output[0]);
     snag_buf_free(&output[1]);
@@ -1199,7 +1204,8 @@ static void
 test_platform(void)
 {
 #ifdef _WIN32
-    test_native_process();
+    test_native_process(false);
+    test_native_process(true);
     test_home_environment();
 #endif
     assert(!snag_environment(NULL) && errno == EINVAL);

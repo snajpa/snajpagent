@@ -27,6 +27,7 @@ struct snag_child_windows {
     DWORD pid;
     struct child_pipe pipe[3];
     void (WINAPI *console_close)(HANDLE);
+    HRESULT (WINAPI *console_release)(HANDLE);
     HRESULT (WINAPI *console_resize)(HANDLE, COORD);
     COORD dimensions;
 };
@@ -280,6 +281,8 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
         memcpy(&native->console_close, &function, sizeof(native->console_close));
         function = GetProcAddress(kernel, "ResizePseudoConsole");
         memcpy(&native->console_resize, &function, sizeof(native->console_resize));
+        function = GetProcAddress(kernel, "ReleasePseudoConsole");
+        memcpy(&native->console_release, &function, sizeof(native->console_release));
         native->dimensions = console_dimensions();
         if (!create || !native->console_close || !native->console_resize) {
             errno = ENOTSUP;
@@ -319,6 +322,8 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
         goto out;
     }
     if (ResumeThread(process.hThread) == (DWORD)-1)
+        goto native_error;
+    if (native->console && native->console_release && FAILED(native->console_release(native->console)))
         goto native_error;
     rc = 0;
     goto out;
