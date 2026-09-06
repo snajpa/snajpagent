@@ -660,7 +660,14 @@ test_input_mode(void)
         assert(ReadFile(input, received + used, (DWORD)(sizeof(received) - used), &got, NULL) && got);
         used += got;
     }
-    assert(!memcmp(received, expected, sizeof(received)));
+    if (memcmp(received, expected, sizeof(received))) {
+        (void)fprintf(stderr, "console input bytes:");
+        for (size_t i = 0; i < sizeof(received); ++i)
+            (void)fprintf(stderr, " %02x", (unsigned char)received[i]);
+        (void)fprintf(stderr, "\n");
+        assert(snag_term_input_restore(&host, false) == 0);
+        abort();
+    }
 #endif
     assert(snag_term_input_restore(&host, false) == 0);
 #ifdef _WIN32
