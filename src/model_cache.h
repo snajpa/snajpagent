@@ -49,6 +49,7 @@ struct snag_model_capacity {
 
 void snag_model_cache_init(struct snag_model_cache *cache);
 void snag_model_cache_free(struct snag_model_cache *cache);
+bool snag_model_limits_valid(const json_t *limits);
 
 /* Returns 1 when models.json does not exist, 0 on success, and -1 on error. */
 int snag_model_cache_load(struct snag_store *store,

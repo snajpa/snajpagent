@@ -34,19 +34,21 @@ secrets_valid(const struct snag_wire_secrets *secrets)
     return 0;
 }
 
-static size_t
-secret_at(const unsigned char *data, size_t len, size_t offset,
-          const struct snag_wire_secrets *secrets)
+size_t
+snag_wire_secret_match(const unsigned char *data, size_t len,
+                       const struct snag_wire_secrets *secrets)
 {
     size_t best = 0u;
 
     if (!secrets)
         return 0u;
     for (size_t i = 0; i < secrets->count; ++i) {
+        if (!secrets->values[i])
+            continue;
         size_t n = strlen(secrets->values[i]);
-        if (n > best && n <= len - offset &&
-            (unsigned char)secrets->values[i][0] == data[offset] &&
-            memcmp(data + offset, secrets->values[i], n) == 0)
+        if (n > best && n <= len &&
+            (unsigned char)secrets->values[i][0] == data[0] &&
+            memcmp(data, secrets->values[i], n) == 0)
             best = n;
     }
     return best;
@@ -57,7 +59,7 @@ contains_secret(const unsigned char *data, size_t len,
                 const struct snag_wire_secrets *secrets)
 {
     for (size_t i = 0; i < len; ++i)
-        if (secret_at(data, len, i, secrets))
+        if (snag_wire_secret_match(data + i, len - i, secrets))
             return true;
     return false;
 }
@@ -69,7 +71,7 @@ append_redacted(struct snag_buf *out, const unsigned char *data, size_t len,
     static const char marker[] = "<redacted:secret>";
 
     for (size_t i = 0; i < len;) {
-        size_t matched = secret_at(data, len, i, secrets);
+        size_t matched = snag_wire_secret_match(data + i, len - i, secrets);
         if (matched) {
             if (snag_buf_append(out, marker, sizeof(marker) - 1u) < 0)
                 return -1;

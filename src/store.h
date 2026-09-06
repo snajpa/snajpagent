@@ -169,7 +169,6 @@ struct snag_session {
     bool usage_anchor_valid;
     bool context_meter_valid;
     bool capacity_ceiling_valid;
-    bool active_response_requested_output_known;
 };
 
 const char *snag_goal_status_name(enum snag_goal_status status);

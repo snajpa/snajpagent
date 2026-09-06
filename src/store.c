@@ -418,7 +418,6 @@ clear_response_state(struct snag_session *session)
     session->active_response_request_input_bytes = 0u;
     session->active_response_request_input_count = 0u;
     session->active_response_requested_output_tokens = 0u;
-    session->active_response_requested_output_known = false;
     session->final_item_id[0] = '\0';
     session->final_response_id[0] = '\0';
     session->pending_call_count = 0;
@@ -1444,8 +1443,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->active_response_request_input_count = request_input_count;
         session->active_response_requested_output_tokens =
             requested_output_tokens;
-        session->active_response_requested_output_known =
-            requested_output_known;
         memcpy(session->context_meter_provider,
                session->active_turn_provider,
                sizeof(session->context_meter_provider));
@@ -1517,8 +1514,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         expected_ceiling = snag_capacity_safety_ceiling(
             context_limit_tokens, requested_input_tokens,
-            session->active_response_requested_output_known ?
-                session->active_response_requested_output_tokens : 0u);
+            session->active_response_requested_output_tokens);
         expected_ceiling_known = expected_ceiling != 0u;
         if (expected_ceiling_known != !json_is_null(observed_ceiling) ||
             (expected_ceiling_known && expected_ceiling != recorded_ceiling))

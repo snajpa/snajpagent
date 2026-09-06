@@ -239,27 +239,6 @@ capture_append(struct capture_stream *stream, const unsigned char *data,
     return 0;
 }
 
-static size_t
-secret_at(const unsigned char *data, size_t len, size_t offset,
-          const struct snag_wire_secrets *secrets)
-{
-    size_t best = 0;
-
-    if (!secrets)
-        return 0;
-    for (size_t i = 0; i < secrets->count; ++i) {
-        size_t n;
-        if (!secrets->values[i])
-            continue;
-        n = strlen(secrets->values[i]);
-        if (n > best && n <= len - offset &&
-            (unsigned char)secrets->values[i][0] == data[offset] &&
-            memcmp(data + offset, secrets->values[i], n) == 0)
-            best = n;
-    }
-    return best;
-}
-
 static int
 redactor_emit(struct capture_redactor *redactor,
               const unsigned char *data, size_t len)
@@ -291,9 +270,8 @@ redactor_drain(struct capture_redactor *redactor, bool final)
         off = limit;
     } else {
         while (off < limit) {
-            size_t matched = secret_at(redactor->pending.data,
-                                      redactor->pending.len, off,
-                                      redactor->secrets);
+            size_t matched = snag_wire_secret_match(redactor->pending.data + off,
+                                redactor->pending.len - off, redactor->secrets);
             if (matched) {
                 if (redactor_emit(redactor, marker, sizeof(marker) - 1u) < 0)
                     return -1;

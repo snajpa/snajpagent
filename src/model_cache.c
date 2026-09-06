@@ -105,8 +105,8 @@ read_limits(const json_t *limits, struct snag_model_capacity *c)
     return capacity_limits_valid(c);
 }
 
-static bool
-limits_valid(const json_t *limits)
+bool
+snag_model_limits_valid(const json_t *limits)
 {
     struct snag_model_capacity capacity = {0};
     return read_limits(limits, &capacity);
@@ -150,7 +150,7 @@ model_valid(const json_t *model, bool cached)
     if (!json_is_object(model) || !snag_json_exact_keys((json_t *)model,
             cached ? cache_keys : catalog_keys, cached ? 8u : 4u) ||
         !cache_string(json_object_get(model, "id"), SNAG_CONFIG_MODEL_MAX - 1u) ||
-        !limits_valid(json_object_get(model, "limits")))
+        !snag_model_limits_valid(json_object_get(model, "limits")))
         return false;
     if (cached && !accounting_valid(model))
         return false;

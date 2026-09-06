@@ -6,6 +6,7 @@
 #include "provider_retry.h"
 #include "context.h"
 #include "json.h"
+#include "model_cache.h"
 #include "responses.h"
 #include "secret.h"
 #include "sse.h"
@@ -959,11 +960,6 @@ struct codex_model_ref {
     size_t order;
 };
 
-struct optional_limit {
-    uint64_t value;
-    bool known;
-};
-
 enum limit_field {
     LIMIT_CONTEXT, LIMIT_MAX_CONTEXT, LIMIT_INPUT_CONTEXT, LIMIT_MAX_INPUT,
     LIMIT_MAX_OUTPUT, LIMIT_AUTO_COMPACT, LIMIT_EFFECTIVE, LIMIT_COUNT
@@ -976,7 +972,7 @@ struct limit_key {
 
 static int
 merge_limit(const json_t *object, const char *key, uint64_t max,
-            struct optional_limit *out)
+            uint64_t *out)
 {
     json_t *value;
     json_int_t integer;
@@ -986,17 +982,16 @@ merge_limit(const json_t *object, const char *key, uint64_t max,
         return 0;
     if (!json_is_integer(value) || (integer = json_integer_value(value)) <= 0 ||
         (uint64_t)integer > max ||
-        (out->known && out->value != (uint64_t)integer))
+        (*out && *out != (uint64_t)integer))
         return -1;
-    out->known = true;
-    out->value = (uint64_t)integer;
+    *out = (uint64_t)integer;
     return 0;
 }
 
 static int
 collect_limits(const json_t *const *objects, size_t object_count,
                const struct limit_key *keys, size_t key_count,
-               struct optional_limit limits[LIMIT_COUNT])
+               uint64_t limits[LIMIT_COUNT])
 {
     for (size_t i = 0; i < object_count; ++i)
         for (size_t j = 0; j < key_count; ++j)
@@ -1005,14 +1000,6 @@ collect_limits(const json_t *const *objects, size_t object_count,
                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &limits[keys[j].field]) < 0)
                 return -1;
     return 0;
-}
-
-static int
-set_optional_limit(json_t *limits, const char *key,
-                   const struct optional_limit *value)
-{
-    return snag_json_set_new(limits, key,
-        value->known ? json_integer((json_int_t)value->value) : json_null());
 }
 
 static int
@@ -1057,7 +1044,7 @@ build_model_limits(const json_t *source, bool codex, json_t **out)
     };
     const json_t *objects[3] = {source, NULL, NULL};
     size_t object_count = 1u;
-    struct optional_limit limit[LIMIT_COUNT] = {{0}};
+    uint64_t limit[LIMIT_COUNT] = {0};
     json_t *limits = NULL;
 
     if (!codex) {
@@ -1075,26 +1062,15 @@ build_model_limits(const json_t *source, bool codex, json_t **out)
             codex ? sizeof(native) / sizeof(native[0]) :
                     sizeof(generic) / sizeof(generic[0]), limit) < 0)
         goto invalid;
-    if ((limit[LIMIT_CONTEXT].known && limit[LIMIT_MAX_CONTEXT].known &&
-         limit[LIMIT_CONTEXT].value > limit[LIMIT_MAX_CONTEXT].value) ||
-        (limit[LIMIT_CONTEXT].known && limit[LIMIT_INPUT_CONTEXT].known &&
-         limit[LIMIT_INPUT_CONTEXT].value > limit[LIMIT_CONTEXT].value) ||
-        (limit[LIMIT_CONTEXT].known && limit[LIMIT_MAX_INPUT].known &&
-         limit[LIMIT_MAX_INPUT].value > limit[LIMIT_CONTEXT].value) ||
-        (limit[LIMIT_CONTEXT].known && limit[LIMIT_MAX_OUTPUT].known &&
-         limit[LIMIT_MAX_OUTPUT].value > limit[LIMIT_CONTEXT].value) ||
-        (limit[LIMIT_CONTEXT].known && limit[LIMIT_MAX_INPUT].known &&
-         limit[LIMIT_MAX_OUTPUT].known && limit[LIMIT_MAX_INPUT].value >
-         limit[LIMIT_CONTEXT].value - limit[LIMIT_MAX_OUTPUT].value) ||
-        (limit[LIMIT_CONTEXT].known && limit[LIMIT_AUTO_COMPACT].known &&
-         limit[LIMIT_AUTO_COMPACT].value > limit[LIMIT_CONTEXT].value))
-        goto invalid;
     limits = json_object();
     if (!limits)
         goto fail;
     for (size_t i = 0u; i < LIMIT_COUNT; ++i)
-        if (set_optional_limit(limits, output_keys[i], &limit[i]) < 0)
+        if (snag_json_set_new(limits, output_keys[i],
+                limit[i] ? json_integer((json_int_t)limit[i]) : json_null()) < 0)
             goto fail;
+    if (!snag_model_limits_valid(limits))
+        goto invalid;
     *out = limits;
     return 0;
 invalid:
