@@ -175,7 +175,7 @@ absolute_dir_arg_valid(const char *path)
     struct stat st;
     size_t len;
 
-    if (!path || path == (const char *)-1 || path[0] != '/')
+    if (!path || path == (const char *)-1 || !snag_path_root_len(path))
         return false;
     len = strlen(path);
     return len <= SNAG_PATH_MAX_BYTES &&

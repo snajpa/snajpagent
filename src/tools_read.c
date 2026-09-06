@@ -77,10 +77,11 @@ open_path(const char *workspace, const char *path)
     char *copy, *part, *save = NULL;
     struct snag_buf full;
     int fd = -1;
+    bool absolute = snag_path_root_len(path) != 0u;
 
     snag_buf_init(&full, 8192u);
-    if (snag_buf_printf(&full, "%s%s%s", path[0] == '/' ? "" : workspace,
-                       path[0] == '/' ? "" : "/", path) < 0 ||
+    if (snag_buf_printf(&full, "%s%s%s", absolute ? "" : workspace,
+                       absolute ? "" : "/", path) < 0 ||
         snag_buf_terminate(&full) < 0)
         goto out;
     copy = (char *)full.data;

@@ -3663,7 +3663,7 @@ snag_app_dotdir(const char *override, char *error, size_t error_size)
 
     if (override)
         path = snag_strdup_checked(override, SNAG_PATH_MAX_BYTES);
-    else if (home && home[0] == '/') {
+    else if (snag_path_root_len(home)) {
         size_t home_len = strlen(home);
         bool slash = home_len != 0u && home[home_len - 1u] == '/';
         const char *suffix = slash ? "." SNAJPAGENT_NAME :
@@ -3689,9 +3689,10 @@ snag_app_dotdir(const char *override, char *error, size_t error_size)
     if (!path)
         return NULL;
     len = strlen(path);
-    while (len > 1u && path[len - 1u] == '/')
+    size_t root_len = snag_path_root_len(path);
+    while (len > (root_len ? root_len : 1u) && path[len - 1u] == '/')
         path[--len] = '\0';
-    if (path[0] != '/' ||
+    if (!root_len ||
         !snag_utf8_valid((const unsigned char *)path, len, true)) {
         snag_errorf(error, error_size,
                   "dotdir must be an absolute UTF-8 path within the supported limit");

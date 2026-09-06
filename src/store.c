@@ -142,7 +142,7 @@ snag_store_open(struct snag_store *store, const char *dotdir,
     char *sessions = NULL;
     char *trash = NULL;
     int rc = -1;
-    if (!dotdir || dotdir[0] != '/' || strlen(dotdir) > SNAG_PATH_MAX_BYTES ||
+    if (!snag_path_root_len(dotdir) || strlen(dotdir) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)dotdir, strlen(dotdir), true)) {
         snag_errorf(error, error_size,
                   "dotdir must be an absolute UTF-8 path within the supported limit");
@@ -712,7 +712,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !provider || !*provider ||
             strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
             !snag_utf8_valid((const unsigned char *)provider, strlen(provider), true) ||
-            !workspace || workspace[0] != '/' ||
+            !snag_path_root_len(workspace) ||
             strlen(workspace) > SNAG_PATH_MAX_BYTES ||
             !snag_utf8_valid((const unsigned char *)workspace,
                             strlen(workspace), true))
@@ -780,7 +780,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !old_workspace || !new_workspace ||
             strcmp(old_workspace, session->workspace) != 0 ||
             strcmp(old_workspace, new_workspace) == 0 ||
-            new_workspace[0] != '/' || strlen(new_workspace) > SNAG_PATH_MAX_BYTES ||
+            !snag_path_root_len(new_workspace) || strlen(new_workspace) > SNAG_PATH_MAX_BYTES ||
             !snag_utf8_valid((const unsigned char *)new_workspace,
                             strlen(new_workspace), true) ||
             replace_text(&session->workspace, new_workspace,

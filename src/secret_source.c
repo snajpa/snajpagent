@@ -92,17 +92,17 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
         source.value = snag_strdup_checked(expression, SNAG_SECRET_MAX);
         if (!source.value)
             goto invalid;
-        if (expression[0] == '/') {
+        if (snag_path_root_len(expression)) {
             if (snag_buf_printf(&path, "%s", expression) < 0)
                 goto invalid;
         } else if (strncmp(expression, "~/", 2u) == 0) {
             base = getenv("HOME");
-            if (!base || base[0] != '/' ||
+            if (!snag_path_root_len(base) ||
                 snag_buf_printf(&path, "%s/%s", base, expression + 2u) < 0)
                 goto invalid;
         } else {
             const char *slash = config_path ? strrchr(config_path, '/') : NULL;
-            if (!slash || config_path[0] != '/' ||
+            if (!slash || !snag_path_root_len(config_path) ||
                 snag_buf_append(&path, config_path, (size_t)(slash - config_path)) < 0 ||
                 snag_buf_printf(&path, "/%s", expression) < 0)
                 goto invalid;

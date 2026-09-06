@@ -11,6 +11,41 @@
 #include <io.h>
 #include <uniwidth.h>
 
+static bool
+path_separator(unsigned char c)
+{
+    return c == '/' || c == '\\';
+}
+
+size_t
+snag_path_root_len(const char *path)
+{
+    const char *p;
+
+    if (!path || !*path)
+        return 0u;
+    if (((path[0] >= 'A' && path[0] <= 'Z') ||
+         (path[0] >= 'a' && path[0] <= 'z')) &&
+        path[1] == ':' && path_separator((unsigned char)path[2]))
+        return 3u;
+    if (!path_separator((unsigned char)path[0]) ||
+        !path_separator((unsigned char)path[1]) || !path[2] ||
+        path_separator((unsigned char)path[2]))
+        return 0u;
+    /* Device namespaces are not ordinary UNC server/share roots. */
+    if ((path[2] == '.' || path[2] == '?') &&
+        path_separator((unsigned char)path[3]))
+        return 0u;
+    p = path + 2u;
+    while (*p && !path_separator((unsigned char)*p))
+        ++p;
+    if (!*p || !*++p || path_separator((unsigned char)*p))
+        return 0u;
+    while (*p && !path_separator((unsigned char)*p))
+        ++p;
+    return (size_t)(p - path) + (*p != '\0');
+}
+
 int
 snag_char_width(uint32_t cp)
 {
@@ -129,6 +164,12 @@ snag_sync_dir(int fd)
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
+
+size_t
+snag_path_root_len(const char *path)
+{
+    return path && path[0] == '/' ? 1u : 0u;
+}
 
 int
 snag_char_width(uint32_t cp)

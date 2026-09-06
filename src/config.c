@@ -867,7 +867,7 @@ parse_tool(struct parse_state *state, const char *key, const char *value)
     struct snag_config *config = state->config;
     char *copy;
     if (strcmp(key, "shell") == 0) {
-        if (value[0] != '/')
+        if (!snag_path_root_len(value))
             goto invalid;
         copy = snag_strdup_checked(value, SNAG_CONFIG_PATH_MAX);
         if (!copy)
@@ -1011,7 +1011,7 @@ snag_config_path(const char *explicit_path, const char *dotdir,
     char *result = NULL;
 
     if (explicit_path) {
-        if (explicit_path[0] != '/' ||
+        if (!snag_path_root_len(explicit_path) ||
             strlen(explicit_path) > SNAG_CONFIG_PATH_MAX) {
             snag_errorf(error, error_size,
                       "--config requires an absolute path within the supported limit");
@@ -1024,7 +1024,7 @@ snag_config_path(const char *explicit_path, const char *dotdir,
         return result;
     }
     snag_buf_init(&path, SNAG_CONFIG_PATH_MAX);
-    if (!dotdir || dotdir[0] != '/')
+    if (!snag_path_root_len(dotdir))
         goto invalid;
     if (snag_buf_printf(&path, "%s/config.ini", dotdir) < 0)
         goto unavailable;
@@ -1113,7 +1113,7 @@ validate_shell(struct snag_config *config, char *error, size_t error_size)
 {
     char *resolved;
     struct stat st;
-    if (!config->shell || config->shell[0] != '/')
+    if (!snag_path_root_len(config->shell))
         goto invalid;
     resolved = realpath(config->shell, NULL);
     if (!resolved)
@@ -1546,7 +1546,7 @@ save_config_settings(const char *path, bool allow_create,
     memset(&before, 0, sizeof(before));
     snag_buf_init(&input, SNAG_CONFIG_FILE_MAX + 1u);
     snag_buf_init(&output, SNAG_CONFIG_FILE_MAX);
-    if (!path || path[0] != '/' || strlen(path) > SNAG_CONFIG_PATH_MAX ||
+    if (!snag_path_root_len(path) || strlen(path) > SNAG_CONFIG_PATH_MAX ||
         !provider || !*provider || strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
         !model || (!provider_config && !*model) || strlen(model) >= SNAG_CONFIG_MODEL_MAX ||
         !effort || !*effort || strlen(effort) >= SNAG_CONFIG_EFFORT_MAX ||

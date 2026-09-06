@@ -197,14 +197,14 @@ config_instruction_root(char *error, size_t error_size)
     char *root;
 
     if (xdg && *xdg) {
-        if (xdg[0] != '/') {
+        if (!snag_path_root_len(xdg)) {
             snag_errorf(error, error_size, "XDG_CONFIG_HOME must be absolute");
             errno = EINVAL;
             return NULL;
         }
         base = snag_strdup_checked(xdg, SNAG_PATH_MAX_BYTES);
     } else {
-        if (!home || home[0] != '/') {
+        if (!snag_path_root_len(home)) {
             snag_errorf(error, error_size,
                       "HOME is unavailable for instruction discovery");
             errno = EINVAL;
@@ -420,7 +420,7 @@ snag_instructions_metadata_valid(const json_t *array,
         const char *sha = snag_json_string(item, "sha256");
         uint64_t bytes;
 
-        if (!snag_json_exact_keys(item, keys, 3u) || !path || path[0] != '/' ||
+        if (!snag_json_exact_keys(item, keys, 3u) || !snag_path_root_len(path) ||
             strlen(path) > SNAG_PATH_MAX_BYTES ||
             !snag_utf8_valid((const unsigned char *)path, strlen(path), true) ||
             !sha || !snag_hex_is_lower(sha, SNAG_SHA256_HEX_LEN) ||

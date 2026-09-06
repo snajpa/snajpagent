@@ -68,6 +68,7 @@ int snag_sync_file(int fd);
 int snag_sync_dir(int fd);
 char *snag_strdup_checked(const char *s, size_t max);
 char *snag_path_join(const char *left, const char *right);
+size_t snag_path_root_len(const char *path);
 bool snag_strcpy(char *dst, size_t size, const char *src);
 char *snag_join_words(char *const *words, size_t count, size_t max);
 

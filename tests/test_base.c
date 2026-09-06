@@ -74,6 +74,31 @@ test_platform(void)
 static void
 test_path_join(void)
 {
+    assert(snag_path_root_len(NULL) == 0u);
+    assert(snag_path_root_len("") == 0u);
+    assert(snag_path_root_len("relative/file") == 0u);
+#ifdef _WIN32
+    assert(snag_path_root_len("C:/") == 3u);
+    assert(snag_path_root_len("z:\\directory\\file") == 3u);
+    assert(snag_path_root_len("C:") == 0u);
+    assert(snag_path_root_len("C:relative") == 0u);
+    assert(snag_path_root_len("\\rooted") == 0u);
+    assert(snag_path_root_len("/rooted") == 0u);
+    assert(snag_path_root_len("//server/share") == 14u);
+    assert(snag_path_root_len("//server/share/file") == 15u);
+    assert(snag_path_root_len("\\\\server\\share\\file") == 15u);
+    assert(snag_path_root_len("//server") == 0u);
+    assert(snag_path_root_len("//server/") == 0u);
+    assert(snag_path_root_len("//server//share") == 0u);
+    assert(snag_path_root_len("///server/share") == 0u);
+    assert(snag_path_root_len("\\\\?\\C:\\file") == 0u);
+    assert(snag_path_root_len("\\\\.\\pipe\\name") == 0u);
+#else
+    assert(snag_path_root_len("/") == 1u);
+    assert(snag_path_root_len("/directory/file") == 1u);
+    assert(snag_path_root_len("//directory/file") == 1u);
+    assert(snag_path_root_len("C:/file") == 0u);
+#endif
     const char *left[] = {"/", "/work", "/work/", ""};
     const char *expected[] = {"/file", "/work/file", "/work//file", "/file"};
     for (size_t i = 0u; i < sizeof(left) / sizeof(left[0]); ++i) {
