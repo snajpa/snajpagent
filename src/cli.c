@@ -198,8 +198,7 @@ read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
         snag_errorf(error, error_size,
                   "stdin prompt is empty, invalid, or exceeds 1 MiB");
         snag_buf_free(&prompt);
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     cli->prompt = (char *)prompt.data;
     return 0;

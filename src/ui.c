@@ -112,10 +112,8 @@ struct snag_ui_display {
 static int
 set_level(struct snag_ui_display *display, unsigned int level)
 {
-    if (!snag_verbosity_name(level)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!snag_verbosity_name(level))
+        return snag_errno(EINVAL);
     display->render.verbosity = level;
     atomic_store(&display->runtime->level, level);
     return 0;
@@ -284,8 +282,7 @@ apply_text(struct snag_ui_display *display, const struct ui_message *message)
         snag_term_close(term);
         return 0;
     }
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -409,8 +406,7 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
     case UI_STOP: return 0;
     case UI_PUBLIC: case UI_RAW: break; /* Sliced by apply_display. */
     }
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -799,10 +795,8 @@ int
 snag_ui_set_verbosity(struct snag_ui *ui, unsigned int level)
 {
     struct ui_message message = {.kind = UI_LEVEL, .data.value = level};
-    if (!snag_verbosity_name(level)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!snag_verbosity_name(level))
+        return snag_errno(EINVAL);
     return send_message(ui, &message, NULL);
 }
 
@@ -913,10 +907,8 @@ send_prompt(struct snag_ui *ui, enum ui_kind kind, bool active, const char *labe
                         .mode = mode}
     };
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
-        if (strlen(spinners[i]) >= sizeof(message.data.prompt.frames[i])) {
-            errno = EOVERFLOW;
-            return -1;
-        }
+        if (strlen(spinners[i]) >= sizeof(message.data.prompt.frames[i]))
+            return snag_errno(EOVERFLOW);
         memcpy(message.data.prompt.frames[i], spinners[i],
                strlen(spinners[i]) + 1u);
     }

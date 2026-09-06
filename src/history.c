@@ -281,10 +281,8 @@ snag_history_open(struct snag_history *term, const char *dotdir)
 {
     struct snag_buf path;
 
-    if (!term || !snag_path_root_len(dotdir)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!term || !snag_path_root_len(dotdir))
+        return snag_errno(EINVAL);
     snag_buf_init(&path, SNAG_PATH_MAX_BYTES);
     if (snag_buf_printf(&path, "%s/prompt_history", dotdir) < 0 ||
         snag_buf_terminate(&path) < 0) {

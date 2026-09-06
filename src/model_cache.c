@@ -271,8 +271,7 @@ decode_cache(const unsigned char *data, size_t len,
                   "model cache is unusable; use /model cache while idle");
         if (root)
             json_decref(root);
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     copy = json_incref(providers);
     json_decref(root);
@@ -291,10 +290,8 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
     int fd;
     int rc = -1;
 
-    if (!store || store->root_fd < 0 || !cache) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!store || store->root_fd < 0 || !cache)
+        return snag_errno(EINVAL);
     fd = snag_open_read_security_at(store->root_fd, "models.json", false);
     if (fd < 0) {
         if (errno == ENOENT)
@@ -552,8 +549,7 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
         capability > SNAG_COUNT_UNSUPPORTED ||
         hard_input_tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
         (capability == SNAG_COUNT_UNKNOWN && !hard_input_tokens)) {
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     model = snag_config_model_upstream(provider, model);
     lock_fd = lock_cache(store, error, error_size);

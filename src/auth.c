@@ -76,10 +76,8 @@ private_fd(int fd, bool directory)
     if (snag_fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0 ||
         !privacy.effective_owner || !privacy.private_access ||
         (directory ? !S_ISDIR(st.st_mode) :
-                     (!S_ISREG(st.st_mode) || st.st_nlink != 1u))) {
-        errno = EACCES;
-        return -1;
-    }
+                     (!S_ISREG(st.st_mode) || st.st_nlink != 1u)))
+        return snag_errno(EACCES);
     return 0;
 }
 

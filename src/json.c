@@ -43,17 +43,13 @@ encode_string(struct snag_buf *out, const char *s, size_t len)
         return -1;
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)s[i];
-        if (!c) {
-            errno = EILSEQ;
-            return -1;
-        }
+        if (!c)
+            return snag_errno(EILSEQ);
         if (c >= 0x80u) {
             size_t n = snag_utf8_size(c);
             if (!n || n > len - i ||
-                !snag_utf8_valid((const unsigned char *)s + i, n, true)) {
-                errno = EILSEQ;
-                return -1;
-            }
+                !snag_utf8_valid((const unsigned char *)s + i, n, true))
+                return snag_errno(EILSEQ);
             if (snag_buf_append(out, s + i, n) < 0)
                 return -1;
             i += n - 1u;
@@ -88,10 +84,8 @@ encode_object(const json_t *value, struct snag_buf *out, unsigned int depth, boo
     int rc = -1;
 
     if (count) {
-        if (count > SIZE_MAX / sizeof(*keys)) {
-            errno = EOVERFLOW;
-            return -1;
-        }
+        if (count > SIZE_MAX / sizeof(*keys))
+            return snag_errno(EOVERFLOW);
         keys = calloc(count, sizeof(*keys));
         if (!keys)
             return -1;
@@ -153,10 +147,8 @@ encode_value(const json_t *value, struct snag_buf *out, unsigned int depth, bool
     char number[64];
     int n;
 
-    if (!value || depth > 48u) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (!value || depth > 48u)
+        return snag_errno(EOVERFLOW);
     switch (json_typeof(value)) {
     case JSON_OBJECT:
         return encode_object(value, out, depth, allow_real);
@@ -183,13 +175,10 @@ encode_value(const json_t *value, struct snag_buf *out, unsigned int depth, bool
         /* Durable canonical values must never contain floating point. */
         /* fall through */
     default:
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
-    if (n <= 0 || (size_t)n >= sizeof(number)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (n <= 0 || (size_t)n >= sizeof(number))
+        return snag_errno(EOVERFLOW);
     return snag_buf_append(out, number, (size_t)n);
 }
 
@@ -213,10 +202,8 @@ validate_loaded(const json_t *value, unsigned int depth)
     void *iter;
     size_t count;
 
-    if (!value || depth > 48u) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (!value || depth > 48u)
+        return snag_errno(EOVERFLOW);
     switch (json_typeof(value)) {
     case JSON_OBJECT:
         count = 0u;
@@ -227,20 +214,16 @@ validate_loaded(const json_t *value, unsigned int depth)
             json_t *member;
 
             if (!key || !snag_utf8_valid((const unsigned char *)key,
-                                         key_len, true)) {
-                errno = EINVAL;
-                return -1;
-            }
+                                         key_len, true))
+                return snag_errno(EINVAL);
             member = json_object_getn(value, key, key_len);
             if (!member || validate_loaded(member, depth + 1u) < 0)
                 return -1;
             ++count;
             iter = json_object_iter_next((json_t *)value, iter);
         }
-        if (count != json_object_size(value)) {
-            errno = EINVAL;
-            return -1;
-        }
+        if (count != json_object_size(value))
+            return snag_errno(EINVAL);
         return 0;
     case JSON_ARRAY:
         count = json_array_size(value);
@@ -250,10 +233,8 @@ validate_loaded(const json_t *value, unsigned int depth)
         return 0;
     case JSON_STRING:
         if (!snag_utf8_valid((const unsigned char *)json_string_value(value),
-                            json_string_length(value), true)) {
-            errno = EINVAL;
-            return -1;
-        }
+                            json_string_length(value), true))
+            return snag_errno(EINVAL);
         return 0;
     case JSON_INTEGER:
     case JSON_REAL:
@@ -262,8 +243,7 @@ validate_loaded(const json_t *value, unsigned int depth)
     case JSON_NULL:
         return 0;
     default:
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
 }
 
@@ -388,13 +368,9 @@ snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out)
 int
 snag_json_set_new(json_t *object, const char *key, json_t *value)
 {
-    if (!value) {
-        errno = ENOMEM;
-        return -1;
-    }
-    if (json_object_set_new(object, key, value) < 0) {
-        errno = ENOMEM;
-        return -1;
-    }
+    if (!value)
+        return snag_errno(ENOMEM);
+    if (json_object_set_new(object, key, value) < 0)
+        return snag_errno(ENOMEM);
     return 0;
 }

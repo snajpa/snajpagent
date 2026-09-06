@@ -97,10 +97,8 @@ line_vec_push(struct line_vec *vec, char *line)
 
     if (vec->n == vec->cap) {
         newcap = vec->cap ? vec->cap * 2u : 8u;
-        if (newcap < vec->cap || newcap > PATCH_LINE_MAX) {
-            errno = EOVERFLOW;
-            return -1;
-        }
+        if (newcap < vec->cap || newcap > PATCH_LINE_MAX)
+            return snag_errno(EOVERFLOW);
         newv = realloc(vec->v, newcap * sizeof(*newv));
         if (!newv)
             return -1;
@@ -140,10 +138,8 @@ patch_set_add(struct patch_set *set, struct patch_op **out)
     struct patch_op *newops;
     size_t newcap;
 
-    if (set->count >= PATCH_OP_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (set->count >= PATCH_OP_MAX)
+        return snag_errno(EOVERFLOW);
     if (set->count == set->cap) {
         newcap = set->cap ? set->cap * 2u : 8u;
         if (newcap > PATCH_OP_MAX)
@@ -167,10 +163,8 @@ op_add_hunk(struct patch_set *set, struct patch_op *op,
     struct patch_hunk *newhunks;
     size_t newcap;
 
-    if (set->hunk_total >= PATCH_HUNK_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (set->hunk_total >= PATCH_HUNK_MAX)
+        return snag_errno(EOVERFLOW);
     if (op->hunk_count == op->hunk_cap) {
         newcap = op->hunk_cap ? op->hunk_cap * 2u : 4u;
         newhunks = realloc(op->hunks, newcap * sizeof(*newhunks));
@@ -858,8 +852,7 @@ make_temp_file(int parent_fd, const struct snag_permissions *permissions,
         if (errno != EEXIST)
             return -1;
     }
-    errno = EEXIST;
-    return -1;
+    return snag_errno(EEXIST);
 }
 
 static int

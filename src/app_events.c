@@ -226,10 +226,8 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason,
     json_t *data = NULL;
     int rc = -1;
 
-    if (!app || !app->irc || !reason) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!app || !app->irc || !reason)
+        return snag_errno(EINVAL);
     if (snag_app_sync_destinations(app) < 0)
         return -1;
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
@@ -344,10 +342,8 @@ snag_app_irc_trace(void *opaque, unsigned int level, char direction,
     int rc = -1;
 
     if (!app || !endpoint || !text || (level != 5u && level != 6u) ||
-        (direction != '<' && direction != '>')) {
-        errno = EINVAL;
-        return -1;
-    }
+        (direction != '<' && direction != '>'))
+        return snag_errno(EINVAL);
     if (!snag_ui_enabled(&app->ui, level == 6u ? SNAG_PRESENT_WIRE : SNAG_PRESENT_PROTOCOL))
         return 0;
     snag_buf_init(&safe, 4u * SNAG_IRC_LINE_MAX);
@@ -515,8 +511,7 @@ int
 snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
 {
     if (!app || !app->irc) {
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     int rc = snag_session_each_event(&app->session, restore_irc_event, app,
                                      error, error_size);

@@ -2,6 +2,7 @@
 #ifndef SNAJPAGENT_BASE_H
 #define SNAJPAGENT_BASE_H
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -54,6 +55,14 @@ int snag_buf_read(struct snag_buf *buf, int fd);
 
 void snag_errorf(char *error, size_t size, const char *fmt, ...);
 int snag_fail(char *error, size_t size, int code, const char *fmt, ...);
+
+/* Return a system-style failure with the specified errno. */
+static inline int
+snag_errno(int code)
+{
+    errno = code;
+    return -1;
+}
 
 bool snag_size_add(size_t a, size_t b, size_t *out);
 size_t snag_utf8_size(unsigned char first);

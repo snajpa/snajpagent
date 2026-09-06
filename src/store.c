@@ -338,10 +338,8 @@ static int
 replace_text(struct snag_session *session, const char **slot, const char *key,
              const char *text, size_t max)
 {
-    if (strlen(text) > max) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (strlen(text) > max)
+        return snag_errno(EOVERFLOW);
     if (!session->strings && !(session->strings = json_object()))
         return -1;
     /* Never retain the caller's mutable JSON string. Stages share only our copies. */
@@ -532,16 +530,12 @@ compact_output_digest(const json_t *output,
                       char out[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes)
 {
     if (!json_is_array(output) || json_array_size(output) == 0u ||
-        json_array_size(output) > 128u) {
-        errno = EINVAL;
-        return -1;
-    }
+        json_array_size(output) > 128u)
+        return snag_errno(EINVAL);
     for (size_t i = 0; i < json_array_size(output); ++i) {
         json_t *item = json_array_get(output, i);
-        if (!json_is_object(item) || !snag_json_string(item, "type")) {
-            errno = EINVAL;
-            return -1;
-        }
+        if (!json_is_object(item) || !snag_json_string(item, "type"))
+            return snag_errno(EINVAL);
     }
     return snag_json_digest_bounded(output, 12u * 1024u * 1024u,
                                    out, bytes);
@@ -597,10 +591,8 @@ consume_oldest_queue(struct snag_session *session)
 {
     size_t len;
     if (session->pending_queue_count == 0u ||
-        !session->pending_queue[0].text) {
-        errno = EINVAL;
-        return -1;
-    }
+        !session->pending_queue[0].text)
+        return snag_errno(EINVAL);
     len = strlen(session->pending_queue[0].text);
     json_object_del(session->strings, session->pending_queue[0].queue_id);
     if (session->pending_queue_count > 1u)

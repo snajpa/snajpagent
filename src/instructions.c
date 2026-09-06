@@ -193,8 +193,7 @@ find_project_root(const char *workspace, char **root,
                           ".git at %s must be a non-symlink file or directory", git);
                 free(git);
                 free(current);
-                errno = EINVAL;
-                return -1;
+                return snag_errno(EINVAL);
             }
             free(git);
             *root = current;
@@ -271,10 +270,8 @@ snag_instructions_discover(struct snag_instruction_set *set,
     int rc = -1;
 
     snag_instructions_free(set);
-    if (!workspace) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!workspace)
+        return snag_errno(EINVAL);
     global = config_instruction_root(error, error_size);
     if (!global)
         goto out;

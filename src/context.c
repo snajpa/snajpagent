@@ -127,10 +127,8 @@ bounded_command_output(struct snag_buf *out, const char *text, size_t len,
         "max_output_tokens=%u is a UTF-8 byte limit, not a token count; original_bytes=%zu; sha256=%s; complete output remains in "
         "the durable session journal]\n",
         max_output_tokens, len, digest);
-    if (n < 0 || (size_t)n >= sizeof(notice)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (n < 0 || (size_t)n >= sizeof(notice))
+        return snag_errno(EOVERFLOW);
     marker_len = (size_t)n;
     if (marker_len >= max_output_tokens) {
         marker = short_notice;
@@ -426,10 +424,8 @@ append_rollout_log_location(struct context_builder *builder)
 
     if (!builder->session)
         return 0;
-    if (!builder->session->dir_path) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!builder->session->dir_path)
+        return snag_errno(EINVAL);
     snag_buf_init(&path, SNAG_PATH_MAX_BYTES + sizeof("/events.jsonl"));
     snag_buf_init(&text, quoted_path_max + 256u);
     if (snag_buf_printf(&path, "%s/events.jsonl",
@@ -651,8 +647,7 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
                   (unsigned long long)seq,
                   source_bytes,
                   (unsigned long long)builder->compact_budget);
-        errno = EOVERFLOW;
-        return -1;
+        return snag_errno(EOVERFLOW);
     }
 trim:
     if (truncate_array(builder->request_input, builder->compact_best_request_count) < 0)
@@ -1314,10 +1309,8 @@ snag_context_compact_request_build(struct snag_session *session,
     struct context_builder builder;
     int rc = -1;
 
-    if (!projection) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!projection)
+        return snag_errno(EINVAL);
     snag_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
     builder.session = session;

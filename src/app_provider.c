@@ -69,8 +69,7 @@ snag_app_provider_models(struct app_state *app,
         if (error_size)
             (void)snprintf(error, error_size,
                            "fixture model discovery failed");
-        errno = EIO;
-        return -1;
+        return snag_errno(EIO);
     }
     out = json_array();
     if (!models || !out)
@@ -90,8 +89,7 @@ snag_app_provider_models(struct app_state *app,
 fail:
     if (out)
         json_decref(out);
-    errno = ENOMEM;
-    return -1;
+    return snag_errno(ENOMEM);
 #else
     struct snag_credential credential;
     int rc;
@@ -264,8 +262,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
         if (error_size)
             (void)snprintf(error, error_size,
                            "fixture context rejected");
-        errno = EOVERFLOW;
-        return -1;
+        return snag_errno(EOVERFLOW);
     }
     {
         json_t *ts = json_object_get(create_request, "tools");

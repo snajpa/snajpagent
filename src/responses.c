@@ -930,10 +930,8 @@ snag_responses_sse_record(void *opaque, const struct snag_sse_record *record)
     char json_error[192] = {0};
     int rc;
 
-    if (stream->failed) {
-        errno = EPROTO;
-        return -1;
-    }
+    if (stream->failed)
+        return snag_errno(EPROTO);
     if (record->kind == SNAG_SSE_COMMENT)
         return 0;
     /* OpenRouter appends an SSE sentinel after the Responses terminal event. */

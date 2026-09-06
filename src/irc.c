@@ -150,10 +150,8 @@ sanitize_text(char *dst, size_t size, const char *src)
 {
     size_t used = 0u;
 
-    if (!dst || !size || !src) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!dst || !size || !src)
+        return snag_errno(EINVAL);
     for (size_t i = 0; src[i];) {
         unsigned char c = (unsigned char)src[i];
 
@@ -187,10 +185,8 @@ sanitize_text(char *dst, size_t size, const char *src)
                 bytes = 3u;
             else if (c >= 0xf0u && c <= 0xf4u)
                 bytes = 4u;
-            if (used > size - 1u || bytes > size - 1u - used) {
-                errno = EOVERFLOW;
-                return -1;
-            }
+            if (used > size - 1u || bytes > size - 1u - used)
+                return snag_errno(EOVERFLOW);
             memcpy(dst + used, src + i, bytes);
             used += bytes;
             i += bytes;
@@ -267,18 +263,14 @@ numbered_nick(char out[SNAG_CONFIG_IRC_NICK_MAX + 1u],
     int n;
 
     if (replace_zero) {
-        if (!len || preferred[len - 1u] != '0') {
-            errno = EINVAL;
-            return -1;
-        }
+        if (!len || preferred[len - 1u] != '0')
+            return snag_errno(EINVAL);
         --len;
     }
     n = snprintf(suffix, sizeof(suffix), "%zu", number);
     if (n < 0 || (size_t)n >= sizeof(suffix) ||
-        (size_t)n > SNAG_CONFIG_IRC_NICK_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+        (size_t)n > SNAG_CONFIG_IRC_NICK_MAX)
+        return snag_errno(EOVERFLOW);
     if (len + (size_t)n > SNAG_CONFIG_IRC_NICK_MAX) {
         len = SNAG_CONFIG_IRC_NICK_MAX - (size_t)n;
         while (len && ((unsigned char)preferred[len] & 0xc0u) == 0x80u)
@@ -314,16 +306,12 @@ room_valid(const char *room)
 static int
 normalize_room(char *dst, size_t size, const char *room)
 {
-    if (!room_valid(room)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!room_valid(room))
+        return snag_errno(EINVAL);
     if (room[0] == '#')
         return snag_strcpy(dst, size, room) ? 0 : -1;
-    if (strlen(room) + 2u > size) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (strlen(room) + 2u > size)
+        return snag_errno(EINVAL);
     dst[0] = '#';
     memcpy(dst + 1u, room, strlen(room) + 1u);
     return 0;
@@ -388,8 +376,7 @@ split_endpoint(const char *endpoint, char *host, size_t host_size,
     memcpy(port, port_begin, strlen(port_begin) + 1u);
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static bool
@@ -436,10 +423,8 @@ int
 snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
                   char *error, size_t error_size)
 {
-    if (!config || !cli) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!config || !cli)
+        return snag_errno(EINVAL);
     if ((cli->irc_no_listen && cli->irc_listen) ||
         (cli->irc_no_client && cli->irc_client_count)) {
         return snag_fail(error, error_size, EINVAL, "conflicting positive and negative IRC role options");
@@ -641,10 +626,8 @@ queue_line(struct irc_conn *conn, const char *fmt, ...)
     va_start(ap, fmt);
     n = vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
-    if (n < 0 || (size_t)n > IRC_LINE_MAX) {
-        errno = EMSGSIZE;
-        return -1;
-    }
+    if (n < 0 || (size_t)n > IRC_LINE_MAX)
+        return snag_errno(EMSGSIZE);
     if (conn->owner && conn->owner->trace_fn &&
         conn->owner->trace_fn(conn->owner->event_opaque, 6u, '>',
             conn->outgoing ? conn->endpoint : conn->owner->listen,
@@ -659,10 +642,8 @@ queue_line(struct irc_conn *conn, const char *fmt, ...)
         conn->output.len -= conn->output_offset;
         conn->output_offset = 0u;
     }
-    if ((size_t)n + 2u > conn->output.max - conn->output.len) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if ((size_t)n + 2u > conn->output.max - conn->output.len)
+        return snag_errno(EOVERFLOW);
     if (snag_buf_append(&conn->output, line, (size_t)n) < 0 ||
         snag_buf_append(&conn->output, "\r\n", 2u) < 0)
         return -1;
@@ -688,10 +669,8 @@ flush_conn(struct irc_conn *conn)
         return -1;
     }
     if (conn->pending_inflight) {
-        if (conn->pending_inflight > conn->pending.len) {
-            errno = EPROTO;
-            return -1;
-        }
+        if (conn->pending_inflight > conn->pending.len)
+            return snag_errno(EPROTO);
         memmove(conn->pending.data,
                 conn->pending.data + conn->pending_inflight,
                 conn->pending.len - conn->pending_inflight);
@@ -1072,10 +1051,8 @@ server_event_line(struct snag_irc_core *irc, struct irc_conn *peer,
     int n;
 
     if ((size_t)event->kind >= sizeof(commands) / sizeof(commands[0]) ||
-        !commands[event->kind]) {
-        errno = EINVAL;
-        return -1;
-    }
+        !commands[event->kind])
+        return snag_errno(EINVAL);
     n = snprintf(prefix, sizeof(prefix), user ? "%s!%s@%s" : "%s",
                  event->nick, user, irc->server_name);
     if (n < 0 || (size_t)n >= sizeof(prefix))
@@ -1086,8 +1063,7 @@ server_event_line(struct snag_irc_core *irc, struct irc_conn *peer,
                  event->kind == SNAG_IRC_JOIN ? "" :
                  event->kind == SNAG_IRC_MODE ? " " : " :", event->text);
     if (n < 0 || (size_t)n > IRC_LINE_MAX) {
-        errno = EMSGSIZE;
-        return -1;
+        return snag_errno(EMSGSIZE);
     }
     char tags[256u] = "", when[32u];
     if (peer->cap_catchup) {
@@ -1195,10 +1171,8 @@ snag_irc_core_replay_hosted_history(const struct snag_irc_core *irc,
                               snag_irc_event_fn render, void *opaque)
 {
     bool replayed = false;
-    if (!irc || !render) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!irc || !render)
+        return snag_errno(EINVAL);
     if (!irc->hosting)
         return 0;
     for (size_t i = 0u; i < irc->history_count; ++i) {
@@ -1763,10 +1737,8 @@ link_emit_enabled(const struct irc_conn *link)
 static int
 link_retry_nick(struct irc_conn *link)
 {
-    if (link->nick_suffix == SIZE_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (link->nick_suffix == SIZE_MAX)
+        return snag_errno(EOVERFLOW);
     if (numbered_nick(link->nick, link->preferred_nick, ++link->nick_suffix,
                       link->nick_implicit) < 0)
         return -1;
@@ -1803,17 +1775,13 @@ link_flush_pending(struct irc_conn *link)
         const char *command;
         char text[SNAG_IRC_TEXT_MAX + 1u];
 
-        if (!lf) {
-            errno = EPROTO;
-            return -1;
-        }
+        if (!lf)
+            return snag_errno(EPROTO);
         len = (size_t)(lf - (link->pending.data + offset));
         if (len < 2u || len > SNAG_IRC_TEXT_MAX + 1u ||
             (link->pending.data[offset] != 'M' &&
-             link->pending.data[offset] != 'N')) {
-            errno = EPROTO;
-            return -1;
-        }
+             link->pending.data[offset] != 'N'))
+            return snag_errno(EPROTO);
         command = link->pending.data[offset] == 'N' ? "NOTICE" : "PRIVMSG";
         memcpy(text, link->pending.data + offset + 1u, len - 1u);
         text[len - 1u] = '\0';
@@ -2516,10 +2484,8 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
     size_t count = 1u;
     int polled;
 
-    if (!irc) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!irc)
+        return snag_errno(EINVAL);
     if (start_due_links(irc) < 0)
         goto fail;
     for (size_t i = 0u; i < irc->conn_count; ++i) {
@@ -3028,10 +2994,8 @@ replay_transition(struct snag_irc_core *irc, const struct snag_irc_event *event)
         if (!member && event->op)
             member = replay_member_set(irc, event, event->nick, true);
         if (member && (!member->op ||
-            (self && !add ? event->op : !event->op))) {
-            errno = EINVAL;
-            return -1;
-        }
+            (self && !add ? event->op : !event->op)))
+            return snag_errno(EINVAL);
         (void)replay_member_set(irc, event, target, add);
         return 0;
     }
@@ -3039,10 +3003,8 @@ replay_transition(struct snag_irc_core *irc, const struct snag_irc_event *event)
         (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE ||
          event->kind == SNAG_IRC_TOPIC) && event->nick[0])
         member = replay_member_set(irc, event, event->nick, event->op);
-    if (member && member->op != event->op) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (member && member->op != event->op)
+        return snag_errno(EINVAL);
     if (event->kind == SNAG_IRC_PART || event->kind == SNAG_IRC_QUIT) {
         if (member)
             replay_member_remove(irc, member);
@@ -3050,10 +3012,8 @@ replay_transition(struct snag_irc_core *irc, const struct snag_irc_event *event)
         struct irc_replay_member *collision = replay_member_find(
             irc, event->endpoint, event->room, event->text);
 
-        if (collision && collision != member) {
-            errno = EINVAL;
-            return -1;
-        }
+        if (collision && collision != member)
+            return snag_errno(EINVAL);
         if (member)
             memcpy(member->nick, event->text, strlen(event->text) + 1u);
         else
@@ -3069,8 +3029,7 @@ snag_irc_core_restore_event(struct snag_irc_core *irc,
     if (!irc || !event || event->timestamp_ms == 0u ||
         !restored_event_shape_valid(event) ||
         replay_transition(irc, event) < 0) {
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     if (snag_irc_core_accept(irc, event) < 0) return -1;
     snag_irc_core_remember(irc, event);

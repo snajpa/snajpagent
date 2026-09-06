@@ -214,10 +214,8 @@ snag_term_write(int fd, const void *text, size_t len)
     if (term && term->input_only)
         return 0;
 
-    if (fd < 0) {
-        errno = EBADF;
-        return -1;
-    }
+    if (fd < 0)
+        return snag_errno(EBADF);
     return snag_term_output_write(term ? &term->host : NULL, target >= 0 ? target : fd,
         text, len, term && term->raw,
         term && term->input_checkpoint ? output_checkpoint : NULL, term);
@@ -230,10 +228,8 @@ snag_term_write_safe(int fd, const char *text, size_t len)
     size_t max;
     int rc;
 
-    if (len > (SIZE_MAX - 32u) / 8u) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (len > (SIZE_MAX - 32u) / 8u)
+        return snag_errno(EOVERFLOW);
     max = len * 8u + 32u;
     snag_buf_init(&out, max);
     rc = append_safe(&out, (const unsigned char *)text, len, false, 0u, 0u,
@@ -281,10 +277,8 @@ int
 snag_term_set_destinations(struct snag_term *term,
                           const struct snag_irc_destinations *destinations)
 {
-    if (!destinations || destinations->count > SNAG_IRC_DESTINATIONS_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!destinations || destinations->count > SNAG_IRC_DESTINATIONS_MAX)
+        return snag_errno(EINVAL);
     if (!term->destinations) {
         term->destinations = malloc(sizeof(*destinations));
         if (!term->destinations)
@@ -304,8 +298,7 @@ snag_term_select_destination(struct snag_term *term, uint32_t id)
             term->destination = term->destinations->items[i].target;
             return redraw(term);
         }
-    errno = ENOENT;
-    return -1;
+    return snag_errno(ENOENT);
 }
 
 void
@@ -644,10 +637,8 @@ snag_term_hide(struct snag_term *term)
         return snag_term_write(STDERR_FILENO, "\n", 1u);
     }
     if (term->rendered_rows > (SIZE_MAX - 256u) / 16u ||
-        !snag_size_add(term->rendered_rows * 16u + 256u, term->output_cell.len, &max)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+        !snag_size_add(term->rendered_rows * 16u + 256u, term->output_cell.len, &max))
+        return snag_errno(EOVERFLOW);
     snag_buf_init(&out, max);
     if ((term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0) ||
         (term->rendered_cursor_row + 1u < term->rendered_rows &&
@@ -704,15 +695,11 @@ prompt_render_max(const unsigned char *text, size_t len, size_t indent,
     for (size_t i = 0u; i < len; ++i)
         if (text[i] == '\n')
             ++newlines;
-    if (len > (SIZE_MAX - extra) / 4u) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (len > (SIZE_MAX - extra) / 4u)
+        return snag_errno(EOVERFLOW);
     total = len * 4u + extra;
-    if (newlines && indent > (SIZE_MAX - total) / newlines) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (newlines && indent > (SIZE_MAX - total) / newlines)
+        return snag_errno(EOVERFLOW);
     *max = total + newlines * indent;
     return 0;
 }
@@ -1031,10 +1018,8 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
     size_t indent;
 
     snag_buf_init(out, 0u);
-    if (label_len > (SIZE_MAX - 32u) / 4u) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (label_len > (SIZE_MAX - 32u) / 4u)
+        return snag_errno(EOVERFLOW);
     out->max = label_len * 4u + 32u;
     /* Search labels can contain a multiline draft; keep labels on their
      * logical line instead of letting a bare LF desynchronize row layout. */
@@ -1219,10 +1204,8 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
     int rc = -1;
 
     if (frame->max > (SIZE_MAX - 256u) / 16u || old_rows > SIZE_MAX / 32u ||
-        !snag_size_add(frame->max * 16u + 256u, old_rows * 32u, &max)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+        !snag_size_add(frame->max * 16u + 256u, old_rows * 32u, &max))
+        return snag_errno(EOVERFLOW);
     snag_buf_init(&out, max);
     if (term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0)
         goto out;
@@ -1433,10 +1416,8 @@ snag_term_set_prompt_template(struct snag_term *term, bool active,
     if (!term || !label || !(len = strlen(label)) ||
         len >= sizeof(term->prompt_template) || !spinners ||
         per_second < 1u || per_second > 60u ||
-        states >= (1u << SNAG_TERM_SPINNER_COUNT)) {
-        errno = EINVAL;
-        return -1;
-    }
+        states >= (1u << SNAG_TERM_SPINNER_COUNT))
+        return snag_errno(EINVAL);
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
         if (!spinners[i] || prepare_spinner(&configured[i], spinners[i]) < 0)
             goto invalid;
@@ -1468,17 +1449,14 @@ snag_term_set_prompt_template(struct snag_term *term, bool active,
     term->line_submission_echoed = false;
     return term->defer_redraw ? 0 : redraw(term);
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 int
 snag_term_set_spinner_states(struct snag_term *term, unsigned int states)
 {
-    if (!term || states >= (1u << SNAG_TERM_SPINNER_COUNT)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!term || states >= (1u << SNAG_TERM_SPINNER_COUNT))
+        return snag_errno(EINVAL);
     if (!term->prompt_template[0] || term->spinner_states == states)
         return 0;
     set_spinner_states(term, states);
@@ -1491,10 +1469,8 @@ snag_term_output_begin(struct snag_term *term)
 {
     if (!term || !term->opened)
         return 0;
-    if (term->output_depth == UINT_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (term->output_depth == UINT_MAX)
+        return snag_errno(EOVERFLOW);
     if (term->output_depth++ == 0u) {
         int rc;
 
@@ -1513,10 +1489,8 @@ snag_term_output_end(struct snag_term *term)
 {
     if (!term || !term->opened)
         return 0;
-    if (!term->output_depth) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!term->output_depth)
+        return snag_errno(EINVAL);
     --term->output_depth;
     if (term->output_depth)
         return 0;
@@ -1544,10 +1518,8 @@ replace_draft(struct snag_term *term, const char *text)
 {
     size_t len = strlen(text);
 
-    if (len > SNAG_MAX_DIRECT_PROMPT) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (len > SNAG_MAX_DIRECT_PROMPT)
+        return snag_errno(EOVERFLOW);
     snag_buf_reset(&term->draft);
     if (snag_buf_append(&term->draft, text, len) < 0)
         return -1;
@@ -1757,10 +1729,8 @@ search_insert(struct snag_term *term, const unsigned char *data, size_t len)
 {
     size_t before = term->search_failed ? 0u : term->search_pos + 1u;
 
-    if (len > SNAG_MAX_DIRECT_PROMPT - term->search_query.len) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (len > SNAG_MAX_DIRECT_PROMPT - term->search_query.len)
+        return snag_errno(EOVERFLOW);
     if (snag_buf_append(&term->search_query, data, len) < 0)
         return -1;
     mark_input_activity(term);
@@ -1802,10 +1772,8 @@ next_cp(const unsigned char *s, size_t len, size_t pos)
 static int
 insert_bytes(struct snag_term *term, const unsigned char *data, size_t len)
 {
-    if (len > SNAG_MAX_DIRECT_PROMPT - term->draft.len) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (len > SNAG_MAX_DIRECT_PROMPT - term->draft.len)
+        return snag_errno(EOVERFLOW);
     if (snag_buf_reserve(&term->draft, len) < 0)
         return -1;
     memmove(term->draft.data + term->cursor + len,
@@ -1822,10 +1790,8 @@ insert_bytes(struct snag_term *term, const unsigned char *data, size_t len)
 static int
 delete_range(struct snag_term *term, size_t start, size_t end)
 {
-    if (start > end || end > term->draft.len) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (start > end || end > term->draft.len)
+        return snag_errno(EINVAL);
     memmove(term->draft.data + start, term->draft.data + end,
             term->draft.len - end);
     term->draft.len -= end - start;
@@ -1863,10 +1829,8 @@ replace_completion(struct snag_term *term, const char *name, size_t name_len,
 
     if (!snag_size_add(name_len, tail_len, &next_len) ||
         !snag_size_add(next_len, token_start + (size_t)space, &next_len) ||
-        next_len > SNAG_MAX_DIRECT_PROMPT) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+        next_len > SNAG_MAX_DIRECT_PROMPT)
+        return snag_errno(EOVERFLOW);
     if (next_len > term->draft.len &&
         snag_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
         return -1;
@@ -2149,10 +2113,8 @@ complete_action(struct snag_term *term, enum snag_term_action action,
         term->prompt_visible = false;
         term->line_submission_echoed = true;
     }
-    if (!snag_utf8_valid(term->draft.data, term->draft.len, true)) {
-        errno = EILSEQ;
-        return -1;
-    }
+    if (!snag_utf8_valid(term->draft.data, term->draft.len, true))
+        return snag_errno(EILSEQ);
     if (snag_buf_terminate(&term->draft) < 0)
         return -1;
     copy = snag_strdup_checked((char *)term->draft.data, SNAG_MAX_DIRECT_PROMPT);
@@ -2182,31 +2144,26 @@ feed_text_byte(struct snag_term *term, unsigned char byte)
     size_t expected;
 
     if (!term->utf8_pending_len && byte < 0x80u) {
-        if (byte == 0u) {
-            errno = EILSEQ;
-            return -1;
-        }
+        if (byte == 0u)
+            return snag_errno(EILSEQ);
         return term->searching ? search_insert(term, &byte, 1u) :
                                  insert_bytes(term, &byte, 1u);
     }
     if (term->utf8_pending_len >= sizeof(term->utf8_pending)) {
         term->utf8_pending_len = 0u;
-        errno = EILSEQ;
-        return -1;
+        return snag_errno(EILSEQ);
     }
     term->utf8_pending[term->utf8_pending_len++] = byte;
     expected = snag_utf8_size(term->utf8_pending[0]);
     if (!expected || term->utf8_pending_len > expected) {
         term->utf8_pending_len = 0u;
-        errno = EILSEQ;
-        return -1;
+        return snag_errno(EILSEQ);
     }
     if (term->utf8_pending_len < expected)
         return 0;
     if (!snag_utf8_valid(term->utf8_pending, expected, true)) {
         term->utf8_pending_len = 0u;
-        errno = EILSEQ;
-        return -1;
+        return snag_errno(EILSEQ);
     }
     if ((term->searching ? search_insert(term, term->utf8_pending, expected) :
                            insert_bytes(term, term->utf8_pending, expected)) < 0)

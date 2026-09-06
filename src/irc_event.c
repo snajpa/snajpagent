@@ -80,8 +80,7 @@ snag_irc_event_read(const json_t *data, struct snag_irc_event *event)
         return 0;
     }
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 int

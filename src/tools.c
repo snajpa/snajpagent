@@ -188,10 +188,8 @@ static int
 capture_append(struct capture_stream *stream, const unsigned char *data,
                size_t len)
 {
-    if (len && !data) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (len && !data)
+        return snag_errno(EINVAL);
     if (len > stream->data.max - stream->data.len && stream->owner &&
         flush_capture(stream->owner, stream->stream) < 0)
         return -1;
@@ -294,10 +292,8 @@ redactor_finish(struct capture_redactor *redactor)
 {
     if (redactor_drain(redactor, true) < 0)
         return -1;
-    if (redactor->pending.len) {
-        errno = EIO;
-        return -1;
-    }
+    if (redactor->pending.len)
+        return snag_errno(EIO);
     return 0;
 }
 
@@ -1120,10 +1116,8 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
         *rejected = snag_tool_result_not_run(reason);
         return *rejected && snag_tools_attach_output_limit(call, config, *rejected) == 0 ? 1 : -1;
     }
-    if (!journal_write || !journal_read) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!journal_write || !journal_read)
+        return snag_errno(EINVAL);
     memcpy(handle, args.handle, SNAG_ID_HEX_LEN + 1u);
     *yield_ms = args.yield;
     return 0;

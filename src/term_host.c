@@ -253,15 +253,11 @@ snag_shutdown_install(struct snag_shutdown *saved, void (*handler)(int), bool ha
 {
     (void)hangup;
     memset(saved, 0, sizeof(*saved));
-    if (!handler) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!handler)
+        return snag_errno(EINVAL);
     saved->done = CreateEventW(NULL, TRUE, FALSE, NULL);
-    if (!saved->done) {
-        errno = EIO;
-        return -1;
-    }
+    if (!saved->done)
+        return snag_errno(EIO);
     control_lock(&shutdown_lock);
     bool busy = shutdown_owner != NULL;
     if (!busy) {
@@ -271,8 +267,7 @@ snag_shutdown_install(struct snag_shutdown *saved, void (*handler)(int), bool ha
     control_unlock(&shutdown_lock);
     if (busy) {
         snag_shutdown_finish(saved);
-        errno = EBUSY;
-        return -1;
+        return snag_errno(EBUSY);
     }
     const int numbers[] = {SIGINT, SIGTERM};
     for (size_t i = 0; i < 2u; ++i) {
@@ -287,8 +282,7 @@ snag_shutdown_install(struct snag_shutdown *saved, void (*handler)(int), bool ha
     return 0;
 fail:
     snag_shutdown_finish(saved);
-    errno = EIO;
-    return -1;
+    return snag_errno(EIO);
 }
 
 bool
@@ -300,8 +294,7 @@ snag_term_can_suspend(void)
 int
 snag_term_suspend(void)
 {
-    errno = ENOTSUP;
-    return -1;
+    return snag_errno(ENOTSUP);
 }
 
 struct snag_console_writer {
@@ -455,8 +448,7 @@ output_plain(struct snag_term_host *host, int fd,
             host->writer->thread = (HANDLE)_beginthreadex(NULL, 0, console_writer, host->writer, 0, NULL);
         if (!host->writer->thread) {
             snag_term_host_close(host);
-            errno = EIO;
-            return -1;
+            return snag_errno(EIO);
         }
     }
     struct snag_console_writer *writer = host->writer;
@@ -813,10 +805,8 @@ snag_term_controls_install(struct snag_term_host *host,
 {
     (void)resize;
     HANDLE event = CreateEventW(NULL, FALSE, FALSE, NULL);
-    if (!event) {
-        errno = EIO;
-        return -1;
-    }
+    if (!event)
+        return snag_errno(EIO);
     control_lock(&console_control_lock);
     void (*absent)(int) = NULL;
     if (!interrupt || !atomic_compare_exchange_strong(&console_interrupt, &absent, interrupt)) {
@@ -832,8 +822,7 @@ snag_term_controls_install(struct snag_term_host *host,
         console_control_event = host->control_event = NULL;
         control_unlock(&console_control_lock);
         (void)CloseHandle(event);
-        errno = EIO;
-        return -1;
+        return snag_errno(EIO);
     }
     control_unlock(&console_control_lock);
     return 0;
@@ -875,17 +864,13 @@ int
 snag_term_output_open(struct snag_term_host *host, int fd)
 {
     HANDLE copy;
-    if (fd < 1 || fd > 2) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (fd < 1 || fd > 2)
+        return snag_errno(EINVAL);
     if (!snag_isatty(fd))
         return -1;
     if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)_get_osfhandle(fd),
-                          GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
-        errno = EIO;
-        return -1;
-    }
+                          GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS))
+        return snag_errno(EIO);
     int result = _open_osfhandle((intptr_t)copy, _O_WRONLY | _O_BINARY | _O_NOINHERIT);
     if (result < 0) {
         int saved = errno;
@@ -905,8 +890,7 @@ snag_term_output_open(struct snag_term_host *host, int fd)
     if (legacy && !SetConsoleMode(copy, (mode | ENABLE_PROCESSED_OUTPUT) &
                                   ~(ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING))) {
         (void)_close(result);
-        errno = ENOTSUP;
-        return -1;
+        return snag_errno(ENOTSUP);
     }
     host->output_mode[fd - 1] = mode;
     host->output_console[fd - 1] = copy;
@@ -942,10 +926,8 @@ snag_term_output_mode(struct snag_term_host *host, bool active)
                 mode |= ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT |
                         ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
         }
-        if (host->output_console[i] && !SetConsoleMode(host->output_console[i], mode)) {
-            errno = EIO;
-            return -1;
-        }
+        if (host->output_console[i] && !SetConsoleMode(host->output_console[i], mode))
+            return snag_errno(EIO);
     }
     return 0;
 }
@@ -969,10 +951,8 @@ snag_term_host_rows(void)
 int
 snag_term_input_capture(struct snag_term_host *host)
 {
-    if (!GetConsoleMode((HANDLE)_get_osfhandle(0), &host->input_mode)) {
-        errno = ENOTTY;
-        return -1;
-    }
+    if (!GetConsoleMode((HANDLE)_get_osfhandle(0), &host->input_mode))
+        return snag_errno(ENOTTY);
     host->raw_input = false;
     reset_input(host);
     return 0;
@@ -987,10 +967,8 @@ snag_term_input_raw(struct snag_term_host *host)
     mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT |
               ENABLE_QUICK_EDIT_MODE | ENABLE_VIRTUAL_TERMINAL_INPUT);
     mode |= ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT;
-    if (!SetConsoleMode((HANDLE)_get_osfhandle(0), mode)) {
-        errno = ENOTSUP;
-        return -1;
-    }
+    if (!SetConsoleMode((HANDLE)_get_osfhandle(0), mode))
+        return snag_errno(ENOTSUP);
     host->raw_input = true;
     return 0;
 }
@@ -998,10 +976,8 @@ snag_term_input_raw(struct snag_term_host *host)
 int
 snag_term_input_hidden(struct snag_term_host *host)
 {
-    if (!SetConsoleMode((HANDLE)_get_osfhandle(0), host->input_mode & ~ENABLE_ECHO_INPUT)) {
-        errno = EIO;
-        return -1;
-    }
+    if (!SetConsoleMode((HANDLE)_get_osfhandle(0), host->input_mode & ~ENABLE_ECHO_INPUT))
+        return snag_errno(EIO);
     return 0;
 }
 
@@ -1011,8 +987,7 @@ snag_term_input_flush(struct snag_term_host *host)
     reset_input(host);
     if (FlushConsoleInputBuffer((HANDLE)_get_osfhandle(0)))
         return 0;
-    errno = EIO;
-    return -1;
+    return snag_errno(EIO);
 }
 
 int
@@ -1096,9 +1071,8 @@ encode_key(struct snag_term_host *host, const KEY_EVENT_RECORD *key)
         host->input_key[0] = '\033';
     n = (int)snag_utf16_to_utf8(scalar, (size_t)units, host->input_key + prefix,
                                 sizeof(host->input_key) - prefix);
-    if (n < 0) {
+    if (n < 0)
         return -1;
-    }
     host->input_key_len = (unsigned int)n + (unsigned int)prefix;
     return 0;
 }
@@ -1126,18 +1100,14 @@ read_keys(struct snag_term_host *host, HANDLE input, unsigned char *buffer, size
             break;
         if (host->input_next == host->input_count) {
             DWORD available, got;
-            if (!GetNumberOfConsoleInputEvents(input, &available)) {
-                errno = EIO;
-                return -1;
-            }
+            if (!GetNumberOfConsoleInputEvents(input, &available))
+                return snag_errno(EIO);
             if (!available)
                 break;
             if (available > 16u)
                 available = 16u;
-            if (!ReadConsoleInputW(input, host->input_events, available, &got)) {
-                errno = EIO;
-                return -1;
-            }
+            if (!ReadConsoleInputW(input, host->input_events, available, &got))
+                return snag_errno(EIO);
             host->input_next = 0;
             host->input_count = got;
             if (!got)
@@ -1153,8 +1123,7 @@ read_keys(struct snag_term_host *host, HANDLE input, unsigned char *buffer, size
     }
     if (used)
         return (ssize_t)used;
-    errno = EAGAIN;
-    return -1;
+    return snag_errno(EAGAIN);
 }
 
 bool
@@ -1173,10 +1142,8 @@ snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout
     DWORD wake_index = MAXDWORD;
     int rc, error = 0;
 
-    if (timeout_ms < -1) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (timeout_ms < -1)
+        return snag_errno(EINVAL);
     if (host->input_cooked_pending || host->input_next < host->input_count ||
         (host->input_key_len && host->input_repeats))
         return SNAG_TERM_WAIT_INPUT;
@@ -1219,10 +1186,8 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
     WCHAR wide[257];
     size_t prefix = host->input_high ? 1u : 0u;
 
-    if (!buffer || !size || size > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!buffer || !size || size > INT_MAX)
+        return snag_errno(EINVAL);
     if (!GetConsoleMode(input, &mode)) {
         if (ReadFile(input, buffer, (DWORD)size, &got, NULL))
             return (ssize_t)got;
@@ -1232,10 +1197,8 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
         errno = error == ERROR_NO_DATA ? EAGAIN : error == ERROR_INVALID_HANDLE ? EBADF : EIO;
         return -1;
     }
-    if (size < 4u) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (size < 4u)
+        return snag_errno(EINVAL);
     if (!(mode & ENABLE_LINE_INPUT))
         return read_keys(host, input, buffer, size);
     size_t capacity = (size - prefix) / 3u;
@@ -1248,8 +1211,7 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
         if (host->line_input == INVALID_HANDLE_VALUE) {
             host->line_input = NULL;
-            errno = EIO;
-            return -1;
+            return snag_errno(EIO);
         }
     }
     if (!read_console(host, host->line_input, wide + prefix, (DWORD)capacity, &got)) {
@@ -1292,10 +1254,8 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
             continue;
         wide[used++] = c;
     }
-    if (!used) {
-        errno = EAGAIN;
-        return -1;
-    }
+    if (!used)
+        return snag_errno(EAGAIN);
     return snag_utf16_to_utf8(wide, used, (char *)buffer, size);
 }
 
@@ -1399,10 +1359,8 @@ snag_term_output_write(struct snag_term_host *host, int fd,
             continue;
         if (rc < 0)
             return -1;
-        if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            errno = EIO;
-            return -1;
-        }
+        if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL))
+            return snag_errno(EIO);
         if (!(fds[0].revents & POLLOUT))
             continue;
         size_t amount = len < 1024u ? len : 1024u;
@@ -1560,10 +1518,8 @@ snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout
 {
     struct pollfd fds[2] = {{STDIN_FILENO, POLLIN, 0}, {wake, POLLIN, 0}};
     (void)host;
-    if (timeout_ms < -1) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (timeout_ms < -1)
+        return snag_errno(EINVAL);
     int rc = poll(fds, 2u, timeout_ms);
     if (rc <= 0)
         return rc;

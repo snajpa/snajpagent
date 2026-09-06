@@ -54,10 +54,8 @@ open_entry(int parent, const char *name)
 
     if (snag_lstat_at(parent, name, &before) < 0)
         return -1;
-    if (!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode))
+        return snag_errno(EINVAL);
     fd = snag_open_read_at(parent, name, false);
     if (fd < 0)
         return -1;
@@ -65,8 +63,7 @@ open_entry(int parent, const char *name)
         before.st_ino != after.st_ino ||
         (!S_ISREG(after.st_mode) && !S_ISDIR(after.st_mode))) {
         close(fd);
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     return fd;
 }
@@ -403,10 +400,8 @@ snag_tools_read_only(const struct snag_response_item *call, const char *workspac
     char failure[256];
     int fd, rc = -1;
 
-    if (!call || !call->name || !result || !workspace) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!call || !call->name || !result || !workspace)
+        return snag_errno(EINVAL);
     *result = NULL;
     args = call->arguments;
     path = snag_json_string(args, "path");

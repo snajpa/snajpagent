@@ -2819,6 +2819,8 @@ run_base(int argc, char **argv)
     (void)argv;
 #endif
     char failure[8];
+    assert(snag_errno(ENOENT) == -1 && errno == ENOENT);
+    assert(snag_errno(EIO) == -1 && errno == EIO);
     assert(snag_fail(failure, sizeof(failure), EINVAL, "%s %u", "bad", 3u) == -1);
     assert(errno == EINVAL && strcmp(failure, "bad 3") == 0);
     assert(snag_fail(failure, sizeof(failure), EIO, "%s", "too long a message") == -1);

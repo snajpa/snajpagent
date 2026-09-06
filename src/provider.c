@@ -144,8 +144,7 @@ append_host_header(struct snag_buf *out, const char *base_url)
     else if (strncmp(base_url, "http://", 7u) == 0)
         host = base_url + 7u;
     else {
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     end = strchr(host, '/');
     if (!end)
@@ -845,8 +844,7 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
         (void)snprintf(error, error_size, "provider HTTP %ld", ctx->http_status);
     }
     snag_buf_free(&redacted);
-    errno = EIO;
-    return -1;
+    return snag_errno(EIO);
 }
 
 static int
@@ -869,8 +867,7 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
     if (!root) {
         (void)snprintf(error, error_size,
                        "invalid input-token count response: %s", json_error);
-        errno = EPROTO;
-        return -1;
+        return snag_errno(EPROTO);
     }
     object = snag_json_string(root, "object");
     if (!snag_json_exact_keys(root, keys, sizeof(keys) / sizeof(keys[0])) ||
@@ -907,8 +904,7 @@ parse_compact_body(struct provider_ctx *ctx, struct snag_json_document *output,
     if (!root) {
         (void)snprintf(error, error_size,
                        "invalid compact response: %s", json_error);
-        errno = EPROTO;
-        return -1;
+        return snag_errno(EPROTO);
     }
     object = snag_json_string(root, "object");
     body_output = json_object_get(root, "output");
@@ -1172,8 +1168,7 @@ append_model(json_t *out, const json_t *source, bool codex)
 fail:
     json_decref(limits);
     json_decref(efforts);
-    errno = EPROTO;
-    return -1;
+    return snag_errno(EPROTO);
 }
 
 static int
@@ -1548,8 +1543,7 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
                    ctx->error[0] ? "" : curl_easy_strerror(code));
         append_retry_suffix(error, error_size, *retry_out,
                             ctx->request_may_have_been_sent);
-        errno = EIO;
-        return -1;
+        return snag_errno(EIO);
     }
     if (ctx->http_status < 200 || ctx->http_status >= 300) {
         (void)classify_non2xx(ctx, error, error_size);

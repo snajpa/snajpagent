@@ -15,21 +15,15 @@ secrets_valid(const struct snag_wire_secrets *secrets)
     if (!secrets)
         return 0;
     if (secrets->count > SNAG_WIRE_SECRET_COUNT_MAX ||
-        (secrets->count && !secrets->values)) {
-        errno = EINVAL;
-        return -1;
-    }
+        (secrets->count && !secrets->values))
+        return snag_errno(EINVAL);
     for (size_t i = 0; i < secrets->count; ++i) {
         size_t len;
-        if (!secrets->values[i]) {
-            errno = EINVAL;
-            return -1;
-        }
+        if (!secrets->values[i])
+            return snag_errno(EINVAL);
         len = strlen(secrets->values[i]);
-        if (!len || len > SNAG_WIRE_SECRET_MAX) {
-            errno = EINVAL;
-            return -1;
-        }
+        if (!len || len > SNAG_WIRE_SECRET_MAX)
+            return snag_errno(EINVAL);
     }
     return 0;
 }
@@ -208,20 +202,14 @@ snag_wire_header_redact(const unsigned char *line, size_t len,
     const char *replacement;
 
     if (!line || !out || !len || len > SNAG_WIRE_HEADER_MAX ||
-        secrets_valid(secrets) < 0) {
-        errno = EINVAL;
-        return -1;
-    }
+        secrets_valid(secrets) < 0)
+        return snag_errno(EINVAL);
     colon = memchr(line, ':', len);
-    if (!colon) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!colon)
+        return snag_errno(EINVAL);
     name_len = (size_t)(colon - line);
-    if (!header_name_valid(line, name_len)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!header_name_valid(line, name_len))
+        return snag_errno(EINVAL);
     value_start = name_len + 1u;
     while (value_start < len && (line[value_start] == ' ' || line[value_start] == '\t'))
         ++value_start;

@@ -216,10 +216,8 @@ snag_buf_reserve(struct snag_buf *buf, size_t extra)
     size_t cap;
     unsigned char *next;
 
-    if (!snag_size_add(buf->len, extra, &need) || need > buf->max) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (!snag_size_add(buf->len, extra, &need) || need > buf->max)
+        return snag_errno(EOVERFLOW);
     if (need <= buf->cap)
         return 0;
     cap = buf->cap ? buf->cap : 256u;
@@ -230,10 +228,8 @@ snag_buf_reserve(struct snag_buf *buf, size_t extra)
         }
         cap *= 2u;
     }
-    if (cap < need) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (cap < need)
+        return snag_errno(EOVERFLOW);
     next = realloc(buf->data, cap);
     if (!next)
         return -1;
@@ -248,10 +244,8 @@ snag_buf_append(struct snag_buf *buf, const void *data, size_t len)
     if ((len && !data) || snag_buf_reserve(buf, len) < 0)
         return -1;
     if (len) {
-        if (!buf->data) {
-            errno = EFAULT;
-            return -1;
-        }
+        if (!buf->data)
+            return snag_errno(EFAULT);
         memcpy(buf->data + buf->len, data, len);
     }
     buf->len += len;
@@ -273,16 +267,12 @@ snag_buf_vprintf(struct snag_buf *buf, const char *fmt, va_list ap)
     va_copy(copy, ap);
     n = vsnprintf(NULL, 0, fmt, copy);
     va_end(copy);
-    if (n < 0 || (size_t)n > buf->max - buf->len) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (n < 0 || (size_t)n > buf->max - buf->len)
+        return snag_errno(EOVERFLOW);
     if (snag_buf_reserve(buf, (size_t)n + 1u) < 0)
         return -1;
-    if (vsnprintf((char *)buf->data + buf->len, (size_t)n + 1u, fmt, ap) != n) {
-        errno = EIO;
-        return -1;
-    }
+    if (vsnprintf((char *)buf->data + buf->len, (size_t)n + 1u, fmt, ap) != n)
+        return snag_errno(EIO);
     buf->len += (size_t)n;
     return 0;
 }

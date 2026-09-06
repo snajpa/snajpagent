@@ -1647,8 +1647,7 @@ open_pty_pair(int *master_fd, int *slave_fd,
     (void)slave_fd;
     (void)rows;
     (void)cols;
-    errno = ENOTSUP;
-    return -1;
+    return snag_errno(ENOTSUP);
 }
 #endif
 
@@ -1916,10 +1915,8 @@ int
 snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake, int timeout_ms)
 {
     struct pollfd fds[97];
-    if (count > 96u) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (count > 96u)
+        return snag_errno(EINVAL);
     for (size_t i = 0; i < count; ++i) {
         fds[i] = (struct pollfd){events[i].child->fd[events[i].stream], 0, 0};
         if (events[i].events & SNAG_CHILD_READ)

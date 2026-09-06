@@ -143,8 +143,7 @@ receive_trace(void *opaque, unsigned int level, char direction,
         !snag_strcpy(record->event.endpoint, sizeof(record->event.endpoint),
                     endpoint)) {
         free(record);
-        errno = EOVERFLOW;
-        return -1;
+        return snag_errno(EOVERFLOW);
     }
     memcpy(record->trace, text, len);
     return publish(owner, record, NULL);
@@ -179,8 +178,7 @@ execute(struct irc_owner *owner, struct irc_request *request)
 
     if (request->revision && request->revision != owner->sent.revision) {
         snag_errorf(error, size, "destination room changed; not performed");
-        errno = ESTALE;
-        return -1;
+        return snag_errno(ESTALE);
     }
     if (request->event)
         return snag_irc_core_restore_event(core, request->event);
@@ -434,10 +432,8 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
         SNAG_CONFIG_IRC_CLIENT_MAX + (host_owner(irc) || hosting ? 1u : 0u)) {
         return snag_fail(error, error_size, E2BIG, "IRC role limit reached");
     }
-    if (irc->last_destination_id == UINT32_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (irc->last_destination_id == UINT32_MAX)
+        return snag_errno(EOVERFLOW);
     owner = calloc(1u, sizeof(*owner));
     if (!owner)
         return -1;
@@ -620,10 +616,8 @@ snag_irc_configure(struct snag_irc *irc, const struct snag_config *config,
     char owned_workspace[SNAG_PATH_MAX_BYTES + 1u];
 
     /* Removal callbacks commit session state and replace its borrowed strings. */
-    if (!snag_strcpy(owned_workspace, sizeof(owned_workspace), workspace)) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
+    if (!snag_strcpy(owned_workspace, sizeof(owned_workspace), workspace))
+        return snag_errno(ENAMETOOLONG);
     workspace = owned_workspace;
 
     for (size_t i = 0u; i < irc->owner_count; ) {
@@ -735,10 +729,8 @@ snag_irc_open(struct snag_irc **out, const struct snag_config *config,
     struct snag_irc *irc;
     int rc;
 
-    if (!out || !config || !workspace) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!out || !config || !workspace)
+        return snag_errno(EINVAL);
     *out = NULL;
     irc = calloc(1u, sizeof(*irc));
     if (!irc)
@@ -827,10 +819,8 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
     frozen = *route;
     route = &frozen;
     if (kind != SNAG_IRC_TOPIC && kind != SNAG_IRC_MESSAGE &&
-        (kind != SNAG_IRC_NOTICE || !model)) {
-        errno = EINVAL;
-        return -1;
-    }
+        (kind != SNAG_IRC_NOTICE || !model))
+        return snag_errno(EINVAL);
     for (size_t i = 0u; i < route->count; ++i)
         for (size_t j = 0u; j < i; ++j)
             if (route->targets[i].id == route->targets[j].id) {
@@ -874,10 +864,8 @@ int
 snag_irc_state(const struct snag_irc *irc, struct snag_buf *out,
                  char *error, size_t error_size)
 {
-    if (!irc || !out) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!irc || !out)
+        return snag_errno(EINVAL);
     if (snag_buf_printf(out,
             "[IRC room snapshot; @ marks a channel operator]\n"
             "model nick: %s\noperator nick: %s\nhosted: %s\n",

@@ -156,32 +156,22 @@ snag_response_usage_valid(const struct snag_response_usage *usage)
 {
     uint64_t sum;
 
-    if (!usage) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!usage)
+        return snag_errno(EINVAL);
     if ((usage->input_known && usage->input_tokens > (uint64_t)LLONG_MAX) ||
         (usage->output_known && usage->output_tokens > (uint64_t)LLONG_MAX) ||
         (usage->reasoning_known && usage->reasoning_tokens > (uint64_t)LLONG_MAX) ||
-        (usage->total_known && usage->total_tokens > (uint64_t)LLONG_MAX)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+        (usage->total_known && usage->total_tokens > (uint64_t)LLONG_MAX))
+        return snag_errno(EOVERFLOW);
     if (usage->reasoning_known && usage->output_known &&
-        usage->reasoning_tokens > usage->output_tokens) {
-        errno = EINVAL;
-        return -1;
-    }
+        usage->reasoning_tokens > usage->output_tokens)
+        return snag_errno(EINVAL);
     if (usage->input_known && usage->output_known && usage->total_known) {
-        if (usage->input_tokens > UINT64_MAX - usage->output_tokens) {
-            errno = EOVERFLOW;
-            return -1;
-        }
+        if (usage->input_tokens > UINT64_MAX - usage->output_tokens)
+            return snag_errno(EOVERFLOW);
         sum = usage->input_tokens + usage->output_tokens;
-        if (usage->total_tokens != sum) {
-            errno = EINVAL;
-            return -1;
-        }
+        if (usage->total_tokens != sum)
+            return snag_errno(EINVAL);
     }
     return 0;
 }
@@ -221,10 +211,8 @@ snag_response_usage_from_json(const json_t *value,
                               &parsed.reasoning_known) < 0 ||
         nullable_usage_member(value, "total_tokens", &parsed.total_tokens,
                               &parsed.total_known) < 0 ||
-        snag_response_usage_valid(&parsed) < 0) {
-        errno = EINVAL;
-        return -1;
-    }
+        snag_response_usage_valid(&parsed) < 0)
+        return snag_errno(EINVAL);
     *usage = parsed;
     return 0;
 }
@@ -248,10 +236,8 @@ snag_response_graph_set_provider_id(struct snag_response_graph *graph,
                                    const char *provider_response_id)
 {
     char *copy;
-    if (!provider_id_valid(provider_response_id)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!provider_id_valid(provider_response_id))
+        return snag_errno(EINVAL);
     copy = snag_strdup_checked(provider_response_id, SNAG_MAX_PROVIDER_ID);
     if (!copy)
         return -1;
@@ -359,10 +345,8 @@ snag_response_graph_add_public(struct snag_response_graph *graph,
     if (!public_kind(kind) ||
         (phase != SNAG_PHASE_FINAL_ANSWER &&
          (kind != SNAG_ITEM_ASSISTANT || phase != SNAG_PHASE_COMMENTARY)) ||
-        !provider_id_valid(provider_item_id) || !text_valid(text, SNAG_MAX_PUBLIC_ITEM)) {
-        errno = EINVAL;
-        return -1;
-    }
+        !provider_id_valid(provider_item_id) || !text_valid(text, SNAG_MAX_PUBLIC_ITEM))
+        return snag_errno(EINVAL);
     if (snag_random_id(id) < 0)
         return -1;
     return append_item(graph, json_pack("{s:s,s:s,s:s,s:s,s:s}",
@@ -381,8 +365,7 @@ snag_response_graph_add_call(struct snag_response_graph *graph,
     if (!provider_id_valid(provider_item_id) || !provider_id_valid(provider_call_id) ||
         !tool_name_valid(name) || !arguments_bounded(arguments)) {
         json_decref(arguments);
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     if (snag_random_id(id) < 0) {
         json_decref(arguments);

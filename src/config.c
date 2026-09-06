@@ -45,10 +45,8 @@ static int
 copy_value(char *dst, size_t size, const char *value)
 {
     size_t len = strlen(value);
-    if (!len || len >= size) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!len || len >= size)
+        return snag_errno(EINVAL);
     memcpy(dst, value, len + 1u);
     return 0;
 }
@@ -67,8 +65,7 @@ copy_header_value(char *dst, size_t size, const char *value)
     memcpy(dst, value, len + 1u);
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 void
@@ -177,8 +174,7 @@ parse_u64(const char *text, uint64_t min, uint64_t max, uint64_t *out)
     *out = value;
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -202,8 +198,7 @@ parse_bool(const char *text, bool *out)
         *out = false;
         return 0;
     }
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -266,8 +261,7 @@ parse_spinner(char dst[SNAG_CONFIG_SPINNER_MAX], const char *value)
     dst[len - 1u] = '\0';
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static size_t
@@ -380,8 +374,7 @@ prompt_body(const char *text, size_t len,
     }
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -445,8 +438,7 @@ parse_prompt(const char *text, unsigned int selected,
     if (seen == 7u)
         return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -465,10 +457,8 @@ snag_config_prompt_expand(const char *text, unsigned int mode,
     int rc = -1;
 
     if (!text || mode >= 3u || !values || !label || label_size < 2u ||
-        marker > 0xfeu) {
-        errno = EINVAL;
-        return -1;
-    }
+        marker > 0xfeu)
+        return snag_errno(EINVAL);
     snag_buf_init(&out, label_size);
     if (parse_prompt(text, mode, values, marker, &out) < 0 || !out.len ||
         snag_buf_putc(&out, ' ') < 0 || snag_buf_terminate(&out) < 0)
@@ -513,8 +503,7 @@ copy_base_url(char *dst, size_t size, const char *value)
     dst[len] = '\0';
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -534,8 +523,7 @@ set_provider_section(struct parse_state *state, const char *name)
     state->section = SECTION_PROVIDER;
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 bool
@@ -583,8 +571,7 @@ set_model_limit_section(struct parse_state *state, char *name)
     state->section = SECTION_MODEL_LIMIT;
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -608,8 +595,7 @@ set_model_alias_section(struct parse_state *state, char *name)
     state->section = SECTION_MODEL_ALIAS;
     return 0;
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int
@@ -631,13 +617,10 @@ set_section(struct parse_state *state, char *name)
     else if (strcmp(name, "tool") == 0)
         section = SECTION_TOOL;
     else {
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
-    if (state->seen_sections & (1u << section)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (state->seen_sections & (1u << section))
+        return snag_errno(EINVAL);
     state->seen_sections |= 1u << section;
     state->section = section;
     return 0;
@@ -658,8 +641,7 @@ claim_key(struct parse_state *state, const char *key)
         if (strcmp(state->seen_keys[i], key) == 0)
             break;
     }
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 enum setting_kind {
@@ -829,8 +811,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
     default: break;
     }
 invalid:
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 
 static int

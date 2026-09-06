@@ -342,8 +342,7 @@ start_goal(struct app_state *app, const char *prompt,
 
     if (snag_goal_unfinished(app->session.goal_status)) {
         (void)snprintf(error, error_size, "an unfinished goal already exists");
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     if (snag_random_id(goal_id) < 0) {
         (void)snprintf(error, error_size,

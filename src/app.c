@@ -426,8 +426,7 @@ format_context_meter(struct app_state *app, bool active,
         return 0;
     }
     if (!provider || !model || !effort) {
-        errno = EINVAL;
-        return -1;
+        return snag_errno(EINVAL);
     }
     if (!active) {
         char error[256] = {0};
@@ -456,8 +455,7 @@ format_context_meter(struct app_state *app, bool active,
     }
     n = snprintf(meter, 32u, "%u", percent);
     if (n < 0 || n >= 32) {
-        errno = EOVERFLOW;
-        return -1;
+        return snag_errno(EOVERFLOW);
     }
     return 0;
 }
@@ -868,8 +866,7 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
             app->session.pending_queue_count - 1u, false,
             error, error_size);
     }
-    errno = EINVAL;
-    return -1;
+    return snag_errno(EINVAL);
 }
 static const char *
 next_model(const struct app_state *app)
@@ -1139,10 +1136,8 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
     json_t *providers = json_array();
     int rc = -1;
 
-    if (!providers) {
-        errno = ENOMEM;
-        return -1;
-    }
+    if (!providers)
+        return snag_errno(ENOMEM);
     for (size_t i = 0; i < app->config->provider_count; ++i) {
         const struct snag_provider_config *provider = &app->config->providers[i];
         json_t *models = NULL;
@@ -1211,8 +1206,7 @@ load_model_cache(struct app_state *app, bool refresh,
                 return 0; /* Configured models do not require discovery. */
         snag_errorf(error, error_size,
                   "model cache is empty; use /model cache while idle");
-        errno = ENOENT;
-        return -1;
+        return snag_errno(ENOENT);
     }
     return rc;
 }

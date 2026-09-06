@@ -57,10 +57,8 @@ snag_isatty(int fd)
 int
 snag_sleep_ms(unsigned int milliseconds)
 {
-    if (milliseconds > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (milliseconds > INT_MAX)
+        return snag_errno(EINVAL);
     Sleep(milliseconds);
     return 0;
 }
@@ -508,10 +506,8 @@ snag_hostname(char *out, size_t size)
 {
     wchar_t name[256];
     DWORD count = 256;
-    if (!out || !size || size > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!out || !size || size > INT_MAX)
+        return snag_errno(EINVAL);
     if (!GetComputerNameExW(ComputerNameDnsHostname, name, &count) || !count || !name[0]) {
         count = 256;
         if (!GetComputerNameW(name, &count))
@@ -547,8 +543,7 @@ snag_editor_run(const char *path, bool *success)
         return -1;
     if (!editor_len) {
         free(file);
-        errno = ENOENT;
-        return -1;
+        return snag_errno(ENOENT);
     }
     size_t capacity = (size_t)editor_len + 2u * wcslen(file) + 5u;
     if (capacity > 32768u) {
@@ -629,27 +624,19 @@ nt_path_init(struct nt_path *out, int dirfd, const char *path, bool relative)
     out->wide = wide_path(path);
     if (!out->wide)
         return -1;
-    if (!*out->wide) {
-        errno = ENOENT;
-        return -1;
-    }
+    if (!*out->wide)
+        return snag_errno(ENOENT);
     if (relative && !snag_path_root_len(path)) {
         BY_HANDLE_FILE_INFORMATION info;
         intptr_t parent = _get_osfhandle(dirfd);
-        if (parent == -1) {
-            errno = EBADF;
-            return -1;
-        }
+        if (parent == -1)
+            return snag_errno(EBADF);
         if (!GetFileInformationByHandle((HANDLE)parent, &info))
             return path_error(GetLastError());
-        if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            errno = ENOTDIR;
-            return -1;
-        }
-        if (*out->wide == L'/' || *out->wide == L'\\') {
-            errno = EINVAL;
-            return -1;
-        }
+        if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            return snag_errno(ENOTDIR);
+        if (*out->wide == L'/' || *out->wide == L'\\')
+            return snag_errno(EINVAL);
         for (wchar_t *p = out->wide; *p; ++p)
             if (*p == L'/')
                 *p = L'\\';
@@ -658,10 +645,8 @@ nt_path_init(struct nt_path *out, int dirfd, const char *path, bool relative)
         out->name.MaximumLength = out->name.Length + sizeof(*out->wide);
         out->parent = (HANDLE)parent;
     } else {
-        if (!(BOOLEAN)RtlDosPathNameToNtPathName_U(out->wide, &out->name, NULL, NULL)) {
-            errno = EINVAL;
-            return -1;
-        }
+        if (!(BOOLEAN)RtlDosPathNameToNtPathName_U(out->wide, &out->name, NULL, NULL))
+            return snag_errno(EINVAL);
         out->allocated_name = true;
     }
     return 0;
@@ -695,10 +680,8 @@ file_info(HANDLE handle, snag_file_info *out)
     snag_file_info st = {0};
     DWORD type;
 
-    if (!out) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!out)
+        return snag_errno(EINVAL);
     SetLastError(ERROR_SUCCESS);
     type = GetFileType(handle);
     if (type == FILE_TYPE_UNKNOWN) {
@@ -744,10 +727,8 @@ snag_fstat(int fd, snag_file_info *out)
 {
     intptr_t handle = _get_osfhandle(fd);
 
-    if (handle == -1) {
-        errno = EBADF;
-        return -1;
-    }
+    if (handle == -1)
+        return snag_errno(EBADF);
     return file_info((HANDLE)handle, out);
 }
 
@@ -903,10 +884,8 @@ open_read(int dirfd, const char *path, bool relative, bool directory, bool secur
     size_t root = snag_path_root_len(path);
 
     if (!path || ((!root && (path[0] == '/' || path[0] == '\\')) ||
-                  strchr(path + root, ':'))) {
-        errno = EINVAL;
-        return -1;
-    }
+                  strchr(path + root, ':')))
+        return snag_errno(EINVAL);
     if (nt_path_init(&name, dirfd, path, relative) < 0)
         goto out;
     /* DOS aliases such as C:\\NUL can translate outside a filesystem root. */
@@ -1010,10 +989,8 @@ snag_dup_read(int fd)
     intptr_t original = _get_osfhandle(fd);
     HANDLE copy;
 
-    if (original == -1) {
-        errno = EBADF;
-        return -1;
-    }
+    if (original == -1)
+        return snag_errno(EBADF);
     if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)original, GetCurrentProcess(),
                           &copy, 0, FALSE, DUPLICATE_SAME_ACCESS))
         return path_error(GetLastError());
@@ -1056,18 +1033,14 @@ snag_lock_file(int fd, bool wait)
     intptr_t handle = _get_osfhandle(fd);
     OVERLAPPED offset = {0};
 
-    if (handle == -1) {
-        errno = EBADF;
-        return -1;
-    }
+    if (handle == -1)
+        return snag_errno(EBADF);
     if (LockFileEx((HANDLE)handle, LOCKFILE_EXCLUSIVE_LOCK |
                    (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY), 0, MAXDWORD, MAXDWORD, &offset))
         return 0;
     DWORD error = GetLastError();
-    if (error == ERROR_LOCK_VIOLATION) {
-        errno = EAGAIN;
-        return -1;
-    }
+    if (error == ERROR_LOCK_VIOLATION)
+        return snag_errno(EAGAIN);
     return path_error(error);
 }
 
@@ -1122,10 +1095,8 @@ snag_pread(int fd, void *buffer, size_t size, int64_t offset)
     status = NtQueryInformationFile((HANDLE)original, &io, &access, sizeof(access), FileAccessInformation);
     if (status < 0)
         return path_error(RtlNtStatusToDosError(status));
-    if (!(access.AccessFlags & FILE_READ_DATA)) {
-        errno = EBADF;
-        return -1;
-    }
+    if (!(access.AccessFlags & FILE_READ_DATA))
+        return snag_errno(EBADF);
     attributes.Length = sizeof(attributes);
     attributes.RootDirectory = (HANDLE)original;
     attributes.ObjectName = &empty;
@@ -1152,16 +1123,12 @@ snag_directory_lock_acquire(int fd, struct snag_directory_lock *lock)
     HANDLE mutex;
     DWORD result, error;
 
-    if (!lock || lock->fd >= 0) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!lock || lock->fd >= 0)
+        return snag_errno(EINVAL);
     if (snag_fstat(fd, &info) < 0)
         return -1;
-    if (!S_ISDIR(info.st_mode)) {
-        errno = ENOTDIR;
-        return -1;
-    }
+    if (!S_ISDIR(info.st_mode))
+        return snag_errno(ENOTDIR);
     (void)snprintf(name, sizeof(name), "Global\\snajpagent-config-%016llx-%016llx",
                    (unsigned long long)info.st_dev, (unsigned long long)info.st_ino);
     mutex = CreateMutexA(NULL, FALSE, name);
@@ -1175,10 +1142,8 @@ snag_directory_lock_acquire(int fd, struct snag_directory_lock *lock)
     }
     error = GetLastError();
     (void)CloseHandle(mutex);
-    if (result == WAIT_TIMEOUT) {
-        errno = EAGAIN;
-        return -1;
-    }
+    if (result == WAIT_TIMEOUT)
+        return snag_errno(EAGAIN);
     return path_error(error);
 }
 
@@ -1282,10 +1247,8 @@ snag_directory_close(struct snag_directory *dir)
 {
     int rc;
 
-    if (!dir) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!dir)
+        return snag_errno(EINVAL);
     rc = _close(dir->fd);
     free(dir);
     return rc;
@@ -1537,10 +1500,8 @@ permission_parts(const struct snag_permissions *permissions, PSID *owner,
     DWORD revision;
     PSECURITY_DESCRIPTOR descriptor = permissions->native;
 
-    if (!descriptor || !IsValidSecurityDescriptor(descriptor)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!descriptor || !IsValidSecurityDescriptor(descriptor))
+        return snag_errno(EINVAL);
     if (!GetSecurityDescriptorOwner(descriptor, owner, &defaulted) ||
         !GetSecurityDescriptorGroup(descriptor, group, &defaulted) ||
         !GetSecurityDescriptorDacl(descriptor, &present, acl, &defaulted) ||
@@ -1559,10 +1520,8 @@ snag_permissions_match(int fd, const struct snag_permissions *permissions)
     const unsigned int flags = SE_DACL_PRESENT | SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED;
     int rc = -1;
 
-    if (!permissions) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!permissions)
+        return snag_errno(EINVAL);
     if (permission_parts(permissions, &old_owner, &old_group, &old_acl, &old_control) < 0 ||
         snag_permissions_capture(fd, &current) < 0)
         return -1;
@@ -1694,15 +1653,11 @@ snag_fd_privacy(int fd, struct snag_file_privacy *out)
     DWORD code, close_error = 0;
     int rc = -1, error;
 
-    if (!out) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!out)
+        return snag_errno(EINVAL);
     handle = _get_osfhandle(fd);
-    if (handle == -1) {
-        errno = EBADF;
-        return -1;
-    }
+    if (handle == -1)
+        return snag_errno(EBADF);
     code = GetSecurityInfo((HANDLE)handle, SE_FILE_OBJECT,
                            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
                            &owner, NULL, &dacl, NULL, &descriptor);
@@ -1995,10 +1950,8 @@ snag_fd_cloexec(int fd)
 {
     intptr_t handle = _get_osfhandle(fd);
 
-    if (handle == -1) {
-        errno = EBADF;
-        return -1;
-    }
+    if (handle == -1)
+        return snag_errno(EBADF);
     if (SetHandleInformation((HANDLE)handle, HANDLE_FLAG_INHERIT, 0))
         return 0;
     errno = GetLastError() == ERROR_INVALID_HANDLE ? EBADF : EIO;
@@ -2014,10 +1967,8 @@ snag_random_bytes(unsigned char *out, size_t len)
     if (!len)
         return 0;
     if (!CryptAcquireContextW(&provider, NULL, NULL, PROV_RSA_FULL,
-                             CRYPT_VERIFYCONTEXT | CRYPT_SILENT)) {
-        errno = EIO;
-        return -1;
-    }
+                             CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
+        return snag_errno(EIO);
     while (len) {
         DWORD take = len > UINT32_MAX ? UINT32_MAX : (DWORD)len;
         if (!CryptGenRandom(provider, take, out)) {
@@ -2077,10 +2028,8 @@ snag_sync_dir(int fd)
     BY_HANDLE_FILE_INFORMATION info;
     DWORD error;
 
-    if (handle == -1) {
-        errno = EBADF;
-        return -1;
-    }
+    if (handle == -1)
+        return snag_errno(EBADF);
     if (FlushFileBuffers((HANDLE)handle))
         return 0;
     error = GetLastError();
@@ -2330,10 +2279,8 @@ snag_editor_run(const char *path, bool *success)
 {
     const char *editor = getenv("EDITOR");
     *success = false;
-    if (!editor || !*editor) {
-        errno = ENOENT;
-        return -1;
-    }
+    if (!editor || !*editor)
+        return snag_errno(ENOENT);
     pid_t child = fork(), got;
     int status;
     if (child == 0) {
@@ -2363,10 +2310,8 @@ snag_isatty(int fd)
 int
 snag_sleep_ms(unsigned int milliseconds)
 {
-    if (milliseconds > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (milliseconds > INT_MAX)
+        return snag_errno(EINVAL);
     return poll(NULL, 0, (int)milliseconds);
 }
 
@@ -2388,30 +2333,24 @@ snag_text_locale_init(void)
 int64_t
 snag_seek(int fd, int64_t offset, int whence)
 {
-    if ((int64_t)(off_t)offset != offset) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if ((int64_t)(off_t)offset != offset)
+        return snag_errno(EOVERFLOW);
     return lseek(fd, (off_t)offset, whence);
 }
 
 int
 snag_truncate(int fd, int64_t size)
 {
-    if ((int64_t)(off_t)size != size) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if ((int64_t)(off_t)size != size)
+        return snag_errno(EOVERFLOW);
     return ftruncate(fd, (off_t)size);
 }
 
 ssize_t
 snag_pread(int fd, void *buffer, size_t size, int64_t offset)
 {
-    if ((int64_t)(off_t)offset != offset) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if ((int64_t)(off_t)offset != offset)
+        return snag_errno(EOVERFLOW);
     return pread(fd, buffer, size, (off_t)offset);
 }
 
@@ -2420,16 +2359,12 @@ snag_directory_lock_acquire(int fd, struct snag_directory_lock *lock)
 {
     struct stat st;
 
-    if (!lock || lock->fd >= 0) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!lock || lock->fd >= 0)
+        return snag_errno(EINVAL);
     if (fstat(fd, &st) < 0)
         return -1;
-    if (!S_ISDIR(st.st_mode)) {
-        errno = ENOTDIR;
-        return -1;
-    }
+    if (!S_ISDIR(st.st_mode))
+        return snag_errno(ENOTDIR);
     if (flock(fd, LOCK_EX | LOCK_NB) < 0)
         return -1;
     lock->fd = fd;
@@ -2874,10 +2809,8 @@ snag_directory_close(struct snag_directory *dir)
 {
     int rc;
 
-    if (!dir) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!dir)
+        return snag_errno(EINVAL);
     rc = closedir(dir->native);
     int error = errno;
     if (dir->held_fd >= 0 && close(dir->held_fd) < 0 && rc == 0) {
@@ -3063,8 +2996,7 @@ open_private(int dirfd, const char *path, int flags, bool tighten)
         !S_ISREG(st.st_mode) || st.st_nlink != 1u ||
         !privacy.effective_owner || (!tighten && !privacy.private_access)) {
         (void)close(fd);
-        errno = EACCES;
-        return -1;
+        return snag_errno(EACCES);
     }
     if (tighten && fchmod(fd, 0600) < 0) {
         int saved = errno;
@@ -3098,10 +3030,8 @@ snag_fd_privacy(int fd, struct snag_file_privacy *out)
 {
     struct stat st;
 
-    if (!out) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!out)
+        return snag_errno(EINVAL);
     if (fstat(fd, &st) < 0)
         return -1;
     out->real_owner = st.st_uid == getuid();
@@ -3121,10 +3051,8 @@ snag_permissions_capture(int fd, struct snag_permissions *out)
 {
     struct stat st;
 
-    if (!out) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!out)
+        return snag_errno(EINVAL);
     if (fstat(fd, &st) < 0)
         return -1;
     out->mode = st.st_mode & 07777u;
@@ -3136,10 +3064,8 @@ snag_permissions_match(int fd, const struct snag_permissions *permissions)
 {
     struct snag_permissions current = {0};
 
-    if (!permissions) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!permissions)
+        return snag_errno(EINVAL);
     if (snag_permissions_capture(fd, &current) < 0)
         return -1;
     return current.mode == permissions->mode;
@@ -3148,10 +3074,8 @@ snag_permissions_match(int fd, const struct snag_permissions *permissions)
 int
 snag_permissions_apply(int fd, const struct snag_permissions *permissions)
 {
-    if (!permissions) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!permissions)
+        return snag_errno(EINVAL);
     if (fchmod(fd, permissions->mode) < 0)
         return -1;
     int match = snag_permissions_match(fd, permissions);

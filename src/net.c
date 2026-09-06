@@ -291,10 +291,8 @@ snag_socket_nodelay(snag_socket fd)
 int
 snag_socket_bind(snag_socket fd, const struct sockaddr *address, size_t size)
 {
-    if (size > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (size > INT_MAX)
+        return snag_errno(EINVAL);
     return bind(fd, address, (int)size) < 0 ? failed() : 0;
 }
 
@@ -307,17 +305,13 @@ snag_socket_listen(snag_socket fd, int backlog)
 int
 snag_socket_connect(snag_socket fd, const struct sockaddr *address, size_t size)
 {
-    if (size > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (size > INT_MAX)
+        return snag_errno(EINVAL);
     if (connect(fd, address, (int)size) == 0)
         return 0;
 #ifdef _WIN32
-    if (WSAGetLastError() == WSAEWOULDBLOCK) {
-        errno = EINPROGRESS;
-        return -1;
-    }
+    if (WSAGetLastError() == WSAEWOULDBLOCK)
+        return snag_errno(EINPROGRESS);
 #endif
     return failed();
 }
@@ -340,10 +334,8 @@ snag_socket_connected(snag_socket fd)
 ssize_t
 snag_socket_send(snag_socket fd, const void *data, size_t size)
 {
-    if (size > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (size > INT_MAX)
+        return snag_errno(EINVAL);
     ssize_t n = send(fd, data, (int)size, 0);
     return n < 0 ? failed() : n;
 }
@@ -351,10 +343,8 @@ snag_socket_send(snag_socket fd, const void *data, size_t size)
 ssize_t
 snag_socket_recv(snag_socket fd, void *data, size_t size)
 {
-    if (size > INT_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (size > INT_MAX)
+        return snag_errno(EINVAL);
     ssize_t n = recv(fd, data, (int)size, 0);
     return n < 0 ? failed() : n;
 }
@@ -367,10 +357,8 @@ snag_socket_poll(snag_socket_event *events, size_t count, int timeout_ms)
     struct timeval timeout;
     size_t live = 0;
 
-    if (count > FD_SETSIZE || timeout_ms < -1) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (count > FD_SETSIZE || timeout_ms < -1)
+        return snag_errno(EINVAL);
     FD_ZERO(&reads);
     FD_ZERO(&writes);
     FD_ZERO(&errors);

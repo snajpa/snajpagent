@@ -108,10 +108,8 @@ snag_wakeup_wait(snag_wake_fd reader, int timeout_ms)
     fd_set ready;
     struct timeval timeout;
 
-    if (timeout_ms < -1 || (reader == SNAG_WAKE_INVALID && timeout_ms < 0)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (timeout_ms < -1 || (reader == SNAG_WAKE_INVALID && timeout_ms < 0))
+        return snag_errno(EINVAL);
     if (reader == SNAG_WAKE_INVALID)
         return snag_sleep_ms((unsigned int)timeout_ms);
     FD_ZERO(&ready);
@@ -183,15 +181,11 @@ snag_wakeup_wait(snag_wake_fd reader, int timeout_ms)
 {
     struct pollfd ready = {reader, POLLIN, 0};
 
-    if (timeout_ms < -1 || (reader == SNAG_WAKE_INVALID && timeout_ms < 0)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (timeout_ms < -1 || (reader == SNAG_WAKE_INVALID && timeout_ms < 0))
+        return snag_errno(EINVAL);
     int rc = poll(&ready, 1u, timeout_ms);
-    if (rc > 0 && (ready.revents & POLLNVAL)) {
-        errno = EBADF;
-        return -1;
-    }
+    if (rc > 0 && (ready.revents & POLLNVAL))
+        return snag_errno(EBADF);
     return rc;
 }
 #endif
