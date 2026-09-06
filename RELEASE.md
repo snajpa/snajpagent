@@ -64,6 +64,17 @@ requires an explicit scope decision, recorded in the release notes.
 
 ## Website and publication checklist
 
+The next website deployment is reserved for the **0.99.1 release**. Until then,
+ship reviewed source changes to origin/master without changing the live site.
+The Pages workflow is manual-only: ordinary branch pushes, tags and releases
+do not deploy it automatically. Do not dispatch it just to preview or verify
+a source change; render and inspect locally.
+
+For 0.99.1, finish the full implemented binary matrix and download entries
+below, then explicitly run the Pages workflow from the authorized release
+revision. Verify the published pages and assets before announcing the release.
+This source-copy shipment does not create or publish 0.99.1.
+
 `www/downloads.html` is the public download entry point. Keep it static and
 usable without JavaScript. Link it from the home page, README, and manual.
 
@@ -81,7 +92,7 @@ For each new version:
    links, release notes, and honest compatibility/testing notes. Preserve a
    link to older releases and distinguish stable releases from prereleases.
    For the first binary release, also remove the pending-release wording from
-   the README and manual.
+   the homepage, README and manual.
 4. With publication authority, publish the complete release and deploy the
    updated page through the existing Pages workflow. Check the public page
    and fetch its actual linked assets to verify availability and checksums

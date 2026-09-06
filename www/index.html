@@ -1,152 +1,105 @@
-<!-- SPDX-License-Identifier: GPL-2.0-only -->
 <!doctype html>
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A fast, lightweight, networked coding agent. Start a task, steer it or queue the next one, then work with people and agents through native IRC chat.">
-  <title>snajpagent — rollout and native networking</title>
+  <meta name="description" content="A coding agent for your terminal, with a built-in IRC server and client. Work on a project, steer the model, and bring people and agents into the same room.">
+  <title>snajpagent — a coding agent for your terminal</title>
   <link rel="canonical" href="https://agent.snajpa.net/">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <h1>snajpagent</h1>
-    <p class="intro">A fast, lightweight, networked coding agent for your terminal.</p>
-    <p>Ask an AI model to work on a project. It can inspect files, make changes,
-      and run commands. Correct it while it works or line up the next task.
-      Native IRC chat lets people and agents work together, each with their own
-      workspace and local conversation.</p>
-    <p>Everything runs in a normal scrolling terminal. There is no background
-      service: exit to stop work, then reopen the saved conversation when you return.</p>
-    <nav aria-label="Start here">
-      <a href="#install">Install</a> · <a href="#rollout">1. Rollout</a> ·
-      <a href="#network">2. Network</a> · <a href="downloads.html">Downloads</a> ·
-      <a href="manual.html">User manual</a> ·
+    <p class="intro">A coding agent for your terminal, with a built-in IRC server and client.</p>
+    <nav aria-label="Project">
+      <a href="downloads.html">Downloads</a> ·
+      <a href="https://github.com/snajpa/snajpagent#readme">README</a> ·
+      <a href="manual.html">Manual</a> ·
       <a href="https://github.com/snajpa/snajpagent">Source</a>
     </nav>
   </header>
   <main>
     <section id="rollout" aria-labelledby="rollout-heading">
-      <h2 id="rollout-heading">1. Start a task in rollout</h2>
-      <p>After <a href="#install">installation and provider setup</a>, start in
-        the project directory you want to change. This is your <strong>workspace</strong>.</p>
-      <pre><code>cd /path/to/your/project
-snajpagent</code></pre>
-      <p>Describe a task and press Enter: “Fix the empty-input bug, keep the public
-        API unchanged, and run the tests.” The prompt and the work it starts make
-        up a <strong>turn</strong>. The model may use several tools before giving a final answer.</p>
-      <p><strong>Rollout</strong> is the local view of that conversation and work.
-        It opens first when no networking is configured. Text beginning with
-        <code>/</code> is a command to snajpagent rather than a request to the model.
-        Type <code>/help</code> and press Enter to see the controls.</p>
+      <h2 id="rollout-heading">Work on a project</h2>
+      <p>Start <code>snajpagent</code> in your project directory and ask for a change.
+        The model can read and edit files and run commands. Read its replies and
+        scroll back normally. Tool details are hidden by default; show them when
+        you need them.</p>
       <figure>
-        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1122" height="221"
-          alt="A real rollout fixing count_words to handle tabs and newlines, then passing all four checks."></a>
-        <figcaption>A real model fixes whitespace handling and runs four checks.
-          <code>›</code> means idle; <code>»</code> means work is active.</figcaption>
+        <a href="screenshots/ordinary.png">
+          <img src="screenshots/ordinary.png" width="1122" height="221"
+            alt="A local session: the model reports fixing whitespace handling and passing four checks.">
+        </a>
+        <figcaption>A real run: the change and its checks, without the tool output.
+          Open the image at full size to read it.</figcaption>
       </figure>
-      <p>By default you see model text. <code>/verbose 1</code> adds compact tool
-        activity; <code>/verbose 2</code> adds previews of tool inputs and results.
-        You can change this while the model works.</p>
-      <h3>Correct this task or queue the next one</h3>
-      <p>You can type while work is active. Your unsent text is a <strong>draft</strong>;
-        typing alone does not interrupt anything.</p>
-      <p><strong>Enter steers the current turn.</strong> “Use the existing parser;
-        don't add a dependency” interrupts the model's response and continues with
-        your correction. Commands that have already started keep running.</p>
-      <p><strong>Tab at the end of an ordinary message queues a later turn.</strong>
-        “Then add regression coverage” waits until current work finishes. Waiting
-        prompts run oldest first, one at a time—not as parallel agents.</p>
-      <p><code>(N)</code> in the prompt counts waiting turns. <code>/queue</code>
-        lists them. <code>/queue 2 edit</code> opens item 2 for editing; Enter saves
-        it and Ctrl-C abandons the edit. <code>/queue 2 delete</code> removes it.
-        After a pause or session resume, <code>/next</code> restarts the queue while idle.</p>
-      <h3>Tab completes only when you ask it to</h3>
-      <p>Start the draft with <code>/</code>: type <code>/sta</code>, then Tab,
-        to complete <code>/status</code>. A unique match adds a space; press Enter
-        to run the command. Ordinary words do not trigger command completion.
-        With several matches, a second Tab lists choices; no match leaves the draft unchanged.</p>
-      <p>In chat, Tab also completes nickname words beginning with <code>@</code>,
-        as shown below. Completion never sends or queues text. Outside a
-        completion, Tab queues while work is active and inserts spaces while idle.
-        <strong>Empty Tab switches views.</strong></p>
-      <h3>Stop, resume, or keep going with a goal</h3>
-      <p>Ctrl-J inserts a newline. Up/Down recall prompts and Ctrl-R searches
-        history. Ctrl-C clears a nonempty draft; with an empty draft, it interrupts
-        the turn. Ctrl-D on an empty draft exits.</p>
-      <p>A <strong>session</strong> saves the conversation, settings, tool results,
-        queue, and goal. Normal exit prints the command to reopen it.
-        <code>snajpagent --resume --last</code> also reopens the newest session for your workspace.</p>
-      <p>A normal final answer ends the turn. To keep working across turns, set
-        a <strong>goal</strong>: <code>/goal fix the bug and validate the change</code>.
-        It continues until complete, paused, cancelled, or blocked. Queued prompts come first.</p>
-      <p><code>/goal pause</code> pauses automatic continuation at a turn boundary.
-        Exiting stops the program but preserves an active goal: it continues on
-        resume. Pause it first if you want it to stay paused.</p>
+      <p>You can type while work continues. Send a correction to change the current
+        task, or queue a follow-up to run afterward. Correcting the task does not
+        kill a command already running; the model can let it finish or stop it.</p>
+      <p>Set a goal when you want work to continue beyond the next reply. Exit to
+        stop the program and resume the saved session later. An active goal
+        continues on resume; pause it before exiting if you want it to stay paused.</p>
+      <p>For longer work, have the model keep findings, decisions and corrections
+        in project files, with pointers in <code>AGENTS.md</code>. These are working
+        notes for later tasks, not just user documentation. Tests check the code;
+        notes explain what was learned and what still needs doing.</p>
     </section>
     <section id="network" aria-labelledby="network-heading">
-      <h2 id="network-heading">2. Work together over the network</h2>
-      <p>IRC is a chat protocol built into snajpagent. One instance hosts a room;
-        another joins it. Each session has two chat names, or <strong>nicks</strong>:
-        one for the operator (you) and one for its model.</p>
-      <pre><code>snajpagent -s -n builder -o alice -r work
-snajpagent -c -n reviewer -o bob</code></pre>
-      <p>Run these in separate terminals. The first hosts <code>#work</code> at
-        <code>localhost:6667</code>; the second joins on the same machine.
-        <code>-n</code> names the model and <code>-o</code> names its operator.</p>
-      <h3>Shared chat, local rollout</h3>
-      <p>Networked startup opens <strong>chat</strong>, the shared room conversation.
-        Enter sends as your operator nick. Mention <code>@builder</code> to ask
-        that model to work or steer it at a safe boundary. Unaddressed conversation
-        is background context, not a new task.</p>
-      <p>Models use <code>irc_send</code> to publish chosen replies. Their other
-        text and tool activity stay in rollout. Empty Tab switches between the
-        views without stopping work; <code>/chat</code> and <code>/rollout</code>
-        select one directly.</p>
-      <h3>Complete a name, then choose where to send</h3>
-      <p>Type <code>@bu</code> and press Tab. If the match is unique, it becomes
-        <code>@builder </code> with a space. Keep typing:
-        <code>@builder check the empty-input case</code>.</p>
-      <p><strong>Enter sends the finished message to the room.</strong>
-        <strong>Tab at its end, while your local model is active, queues a local
-        follow-up instead.</strong> An <code>@</code> name can appear later in a
-        sentence too. With the cursor still in that name, Tab completes it first.</p>
+      <h2 id="network-heading">Work together</h2>
+      <p>People and agents share an IRC room. Chat is the room conversation;
+        rollout is your conversation with your local agent and a view of its work.
+        Switch to rollout to direct that agent without sending your instructions
+        to the room. Models publish chosen replies rather than broadcasting their
+        entire working transcript.</p>
+      <p>Give the agents a task and say who should lead. Coordination happens
+        through ordinary messages, not a predefined team workflow.</p>
+      <p>For example, Pavel started a four-agent TideFS session with:</p>
+      <blockquote>
+        <p>yooooo how is everyone :) pls agent0 is going to lead y'all to continue
+          in the suckless direction for TideFS, y'all keep setting and updating
+          goals as you need</p>
+      </blockquote>
       <figure>
-        <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1122" height="131"
-          alt="Alice, Bob, builder and reviewer discuss a whitespace-only regression test in a real room." loading="lazy"></a>
-        <figcaption>Operators are cyan and models blue. Mentions highlight the
-          timestamp, sender, and separator in magenta—not the message body.</figcaption>
+        <a href="screenshots/tidefs.png">
+          <img src="screenshots/tidefs.png" width="1278" height="330" loading="lazy"
+            alt="TideFS room: agent0 reports an integration and plans a combined check; agent3 acknowledges it, agent1 confirms its changes match, and agent2 reports a running test build.">
+        </a>
+        <figcaption>From that session, September 6, 2026. The lead reviews and
+          integrates; the others keep their work available and report progress.
+          A crop of one room view, not a prescribed workflow. Open at full size.</figcaption>
       </figure>
-      <p><code>/names</code> lists rooms and accepted nicks. <code>/connect ENDPOINT</code>
-        adds a connection; <code>/server start</code> hosts a room. The program handles
-        reconnects and missing history. With multiple rooms, <code>/2</code> selects
-        one; <code>/2 TEXT</code> sends there once.</p>
-      <p>Conversation is shared, not files or credentials. <strong>IRC has no
-        authentication or TLS</strong>: use localhost, a trusted network, or a secure
-        tunnel. Tools run with your permissions, without a command-approval sandbox.</p>
+      <p>Agents can use project files and Git for code and handoff notes;
+        connecting to a room does not share their files automatically. IRC has
+        no authentication or TLS. Use localhost, a trusted network, or a secure
+        tunnel. Tools run with your local permissions, without a command-approval
+        sandbox.</p>
     </section>
     <section id="install" aria-labelledby="install-heading">
-      <h2 id="install-heading">Install and choose a provider</h2>
-      <p>The normal build needs C11/POSIX, pthreads, GNU make, libcurl, and Jansson.
-        See the <a href="https://github.com/snajpa/snajpagent#install-and-choose-a-provider">README</a>
-        for platform details.</p>
+      <h2 id="install-heading">Run it where the work is</h2>
+      <p>snajpagent is written in C to run on more of the systems where development
+        happens. The aim is to have the agent on the machine you are working on,
+        including systems you are still learning.</p>
+      <p>Build from source for now; binary downloads are not yet published.
+        The <a href="downloads.html">downloads page</a> lists implemented targets
+        and their qualifications. Planned ports are not downloadable builds.</p>
+      <p>A normal build needs C11/POSIX with pthreads, GNU make, libcurl and Jansson:</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
 make
 sudo make install</code></pre>
-      <p>A <strong>provider</strong> is the service running your model. Without
-        configuration or existing credentials, first launch offers ChatGPT/Codex,
-        OpenRouter, OpenAI, or custom-provider setup. Authenticate and choose a supported model.</p>
-      <p>The <a href="manual.html">manual</a> covers model selection, context limits,
-        read-only work, project guidance, scripts, and the complete command reference.
-        The same maintained source is installed as <code>man snajpagent</code>.</p>
+      <p>On a fresh launch without configuration or credentials, interactive setup
+        helps you choose a provider and model. The
+        <a href="https://github.com/snajpa/snajpagent#install-and-choose-a-provider">README</a>
+        covers setup and platform-specific builds; the
+        <a href="manual.html">manual</a> covers the complete controls and configuration.</p>
     </section>
   </main>
   <footer>
-    <a href="manual.html">User manual</a> ·
-    <a href="https://github.com/snajpa/snajpagent#readme">README</a> ·
-    <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a>
+    <a href="https://github.com/snajpa/snajpagent">Source and issues</a> ·
+    <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a> ·
+    <a href="https://github.com/snajpa">Pavel Šnajdr</a>
   </footer>
 </body>
 </html>

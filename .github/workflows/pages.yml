@@ -2,12 +2,7 @@
 name: Deploy website
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'www/**'
-      - 'snajpagent.1'
-      - '.github/workflows/pages.yml'
+  # Source pushes do not deploy. Next publication: the 0.99.1 release.
   workflow_dispatch:
 
 permissions:
