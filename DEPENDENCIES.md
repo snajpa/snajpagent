@@ -59,6 +59,24 @@ Mozilla certificate-data license, and corresponding source/build instructions
 when redistributing a linked executable. Pinned dependencies live in the Nix
 store; external non-Nix media/SDK inputs belong in the ignored `.assets-cache/`.
 
+## macOS ARM64 cross-build
+
+`make prod-macos-arm64` uses the same pinned upstream dependency sources via
+`nix/macos.nix`, Linux-hosted LLVM 21.1.7 and the fixed-output Apple SDK 15.5
+recipe from nixpkgs. The deployment target is macOS 11. The entire application
+dependency stack, including GNU iconv/libunistring/libidn2, is static; the
+linked artifact uses only `/usr/lib/libSystem.B.dylib`. macOS 14/15's system
+iconv has known libunistring incompatibilities, so it is not substituted for
+the static GNU implementation. SDK declarations do not prove old-OS symbol
+availability: compile with availability warnings as errors and select genuine
+upstream missing-symbol fallbacks where necessary.
+
+LLVM's Mach-O linker creates an ad-hoc signature and llvm-strip regenerates
+its hashes. Matching optional symbols are retained as a dSYM with the same
+UUID. This is not Developer ID signing, notarization, or runtime qualification:
+the initial ARM64 target is explicitly experimental until actual macOS tests
+pass. No separately installed third-party shared libraries are introduced.
+
 `src/snag_jansson.h` is the only Jansson include surface in first-party C code. It
 prefers a system `<jansson.h>` when one is available. Some minimal qualification
 roots carry `libjansson.so.4` without the development header; for those roots the

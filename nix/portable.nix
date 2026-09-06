@@ -38,6 +38,11 @@ let
     "${metaValue "VERSION"}-${source.dirtyShortRev or source.shortRev}";
 in assert buildRevision == null || buildRevision == revision; {
   inherit pkgs static tls curl;
+  macos-arm64 = (import ./macos.nix {
+    inherit pkgs;
+    sourcePkgs = static;
+    arch = "arm64";
+  }).application { inherit source packageName version revision; };
   linux-x86_64 = musl.stdenv.mkDerivation {
     pname = packageName;
     inherit version;
@@ -52,6 +57,7 @@ in assert buildRevision == null || buildRevision == revision; {
       od -An -v -t u1 ${pkgs.cacert}/etc/ssl/certs/ca-no-trust-rules-bundle.crt |
         sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
       makeFlagsArray+=(
+        'TARGET_OS=Linux'
         "CC=$CC" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         "GIT_HEAD=${revision}" "BUILD_VERSION=${version}"
         'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'

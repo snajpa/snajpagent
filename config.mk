@@ -2,7 +2,7 @@
 PREFIX = /usr/local
 MANPREFIX = $(PREFIX)/share/man
 CC = cc
-CPPFLAGS = -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700
+CPPFLAGS = -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_DARWIN_C_SOURCE
 DEBUG ?= 0
 ifeq ($(DEBUG),0)
 CFLAGS = -std=c11 -Os -g -Wall -Wextra -Wpedantic -Werror

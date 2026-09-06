@@ -21,8 +21,8 @@ override CFLAGS += -pthread
 override LDFLAGS += -pthread
 
 BIN = $(NAME)
-HOST_OS := $(shell uname -s)
-ifeq ($(HOST_OS),Darwin)
+TARGET_OS := $(shell uname -s)
+ifeq ($(TARGET_OS),Darwin)
 DEBUG_SYMBOLS = $(BIN).dSYM
 else
 DEBUG_SYMBOLS = $(BIN).debug
@@ -52,7 +52,7 @@ $(BIN): $(COMMON_OBJ) src/main.o
 	trap 'rm -rf "$$stage"' 0 1 2 3 15; \
 	$(CC) $(LDFLAGS) -o "$$stage/$(BIN)" $(COMMON_OBJ) src/main.o $(LDLIBS) $(CURL_LIBS); \
 	if test '$(DEBUG)' = 0; then \
-		if test '$(HOST_OS)' = Darwin; then \
+		if test '$(TARGET_OS)' = Darwin; then \
 			$(DSYMUTIL) "$$stage/$(BIN)" -o "$$stage/$(DEBUG_SYMBOLS)"; \
 			$(STRIP) -S -x "$$stage/$(BIN)"; \
 		else \
@@ -74,7 +74,7 @@ $(BUILD_INPUTS): FORCE
 	{ \
 		printf '%s\n' 'CC=$(CC)'; \
 		printf '%s\n' 'DEBUG=$(DEBUG)'; \
-		printf '%s\n' 'HOST_OS=$(HOST_OS)'; \
+		printf '%s\n' 'TARGET_OS=$(TARGET_OS)'; \
 		printf '%s\n' 'STRIP=$(STRIP)'; \
 		printf '%s\n' 'OBJCOPY=$(OBJCOPY)'; \
 		printf '%s\n' 'DSYMUTIL=$(DSYMUTIL)'; \
@@ -340,6 +340,7 @@ help:
 		'make DEBUG=1          Debug build: -Og, symbols, frame pointers, no stripping' \
 		'make -jN              Parallel host build; no cross-builds or VMs' \
 		'make prod-linux-x86_64 Self-contained Linux x86-64 via pinned Nix; network/cache on first build' \
+		'make prod-macos-arm64  macOS ARM64 with static application libraries via pinned Nix' \
 		'make install          Build/install production by default' \
 		'make DEBUG=1 install  Deliberately build/install debug instead' \
 		'make check            Unit, CLI, terminal (if tmux exists), source/dependency checks' \
@@ -359,12 +360,12 @@ help:
 		'Live targets (livecheck, terminallivecheck, releaseevidence) use network/' \
 		'credentials and may incur provider charges; never part of make or help.'
 
-prod-linux-x86_64:
+prod-linux-x86_64 prod-macos-arm64:
 	@test '$(DEBUG)' = 0 || { printf '%s\n' '$@: production only; use DEBUG=0' >&2; exit 2; }
 	@mkdir -p build/matrix
-	nix-build nix/portable.nix -A linux-x86_64 \
+	nix-build nix/portable.nix -A $(patsubst prod-%,%,$@) \
 		--argstr buildVersion '$(BUILD_VERSION)' --argstr buildRevision '$(GIT_HEAD)' \
-		--max-jobs 1 --cores 1 --out-link build/matrix/linux-x86_64
+		--max-jobs 1 --cores 1 --out-link build/matrix/$(patsubst prod-%,%,$@)
 
 install: $(BIN) $(BIN).1
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
@@ -376,6 +377,6 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-linux-x86_64 FORCE
+.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-linux-x86_64 prod-macos-arm64 FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d
