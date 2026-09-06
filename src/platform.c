@@ -2581,6 +2581,8 @@ snag_path_root_len(const char *path)
 int
 snag_char_width(uint32_t cp)
 {
+    if (cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu))
+        return -1;
     return cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;
 }
 
