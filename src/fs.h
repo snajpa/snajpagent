@@ -35,12 +35,21 @@ int snag_open_read_security_at(int dirfd, const char *path, bool directory);
 int snag_open_private_append_at(int dirfd, const char *path, bool create);
 /* Exclusive whole-file lock, released by close. Busy nonblocking locks use EAGAIN. */
 int snag_lock_file(int fd, bool wait);
+struct snag_directory_lock {
+    int fd; /* Initialize to -1; the caller retains descriptor ownership. */
+#ifdef _WIN32
+    void *mutex;
+#endif
+};
+int snag_directory_lock_acquire(int fd, struct snag_directory_lock *lock);
+int snag_directory_lock_release(struct snag_directory_lock *lock);
 void snag_path_slashes(char *path);
 
 /* Initialize to zero before capture; release after the replacement finishes. */
 struct snag_permissions {
 #ifdef _WIN32
     void *native;
+    bool readonly;
 #else
     mode_t mode;
 #endif

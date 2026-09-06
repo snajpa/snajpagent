@@ -58,7 +58,10 @@ check_windows_permission_copy(int fd, const wchar_t *source)
         abort();
     }
     assert(snag_permissions_match(copy, &permissions) == 1);
+    assert((GetFileAttributesW(path) & FILE_ATTRIBUTE_READONLY) ==
+           (GetFileAttributesW(source) & FILE_ATTRIBUTE_READONLY));
     snag_permissions_free(&permissions);
+    assert(SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL));
     assert(close(copy) == 0 && DeleteFileW(path));
 }
 
@@ -165,7 +168,61 @@ wait_for_lock(void *opaque)
     assert(close(waiter->fd) == 0);
     return 0u;
 }
+
+struct directory_waiter {
+    int fd;
+    bool abandon;
+    struct snag_directory_lock lock;
+};
+
+static unsigned int __stdcall
+try_directory_lock(void *opaque)
+{
+    struct directory_waiter *waiter = opaque;
+    int rc = snag_directory_lock_acquire(waiter->fd, &waiter->lock);
+
+    if (waiter->abandon)
+        assert(rc == 0); /* Leave it owned to test abandoned-writer recovery. */
+    else
+        assert(rc < 0 && errno == EAGAIN && waiter->lock.fd == -1);
+    return 0u;
+}
 #endif
+
+static void
+test_directory_lock(const char *path, int fd)
+{
+    struct snag_directory_lock lock = {.fd = -1}, other = {.fd = -1};
+    snag_file_info info;
+    int second = snag_open_read(path, true);
+
+    assert(second >= 0 && snag_directory_lock_acquire(fd, &lock) == 0);
+#ifdef _WIN32
+    struct directory_waiter waiter = {.fd = second, .lock = {.fd = -1}};
+    HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, try_directory_lock, &waiter, 0, NULL);
+    DWORD status;
+    assert(thread && WaitForSingleObject(thread, 5000u) == WAIT_OBJECT_0);
+    assert(GetExitCodeThread(thread, &status) && status == 0 && CloseHandle(thread));
+#else
+    assert(snag_directory_lock_acquire(second, &other) < 0 &&
+           (errno == EAGAIN || errno == EWOULDBLOCK) && other.fd == -1);
+#endif
+    assert(snag_directory_lock_release(&lock) == 0);
+    assert(snag_fstat(fd, &info) == 0 && S_ISDIR(info.st_mode));
+    assert(snag_directory_lock_acquire(second, &other) == 0);
+    assert(snag_directory_lock_release(&other) == 0);
+#ifdef _WIN32
+    waiter.abandon = true;
+    thread = (HANDLE)_beginthreadex(NULL, 0, try_directory_lock, &waiter, 0, NULL);
+    assert(thread && WaitForSingleObject(thread, 5000u) == WAIT_OBJECT_0);
+    assert(GetExitCodeThread(thread, &status) && status == 0 && CloseHandle(thread));
+    assert(snag_directory_lock_acquire(fd, &lock) == 0);
+    assert(CloseHandle(waiter.lock.mutex));
+    assert(snag_directory_lock_release(&lock) == 0);
+#endif
+    assert(close(second) == 0 && snag_directory_lock_release(&lock) == 0);
+    assert(snag_directory_lock_acquire(-1, &lock) < 0 && errno == EBADF);
+}
 
 static void
 test_file_lock(int dirfd)
@@ -403,6 +460,7 @@ test_private_directory(void)
         assert(snag_unlink_at(fd, "journal", false) == 0);
     }
     test_file_lock(fd);
+    test_directory_lock(root, fd);
 #ifndef _WIN32
     {
         struct snag_permissions permissions = {0};

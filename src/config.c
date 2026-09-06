@@ -11,7 +11,6 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
-#include <sys/file.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -1537,6 +1536,7 @@ save_config_settings(const char *path, bool allow_create,
     snag_file_info before;
     snag_file_info current;
     struct snag_permissions permissions = {0};
+    struct snag_directory_lock directory_lock = {.fd = -1};
     char id[SNAG_ID_HEX_LEN + 1u];
     char temp[64] = {0};
     char leaf[NAME_MAX + 1u];
@@ -1588,7 +1588,7 @@ save_config_settings(const char *path, bool allow_create,
         goto out;
     }
     /* Serialize cooperating writers without a second persistent state file. */
-    if (flock(parent_fd, LOCK_EX | LOCK_NB) < 0) {
+    if (snag_directory_lock_acquire(parent_fd, &directory_lock) < 0) {
         snag_errorf(error, error_size, "configuration directory is being updated; try again");
         goto out;
     }
@@ -1674,6 +1674,11 @@ out:
     if (parent_fd >= 0) {
         if (temp[0])
             (void)snag_unlink_at(parent_fd, temp, false);
+        if (snag_directory_lock_release(&directory_lock) < 0 && rc == 0) {
+            saved = errno;
+            snag_errorf(error, error_size, "cannot unlock configuration directory: %s", strerror(saved));
+            rc = -1;
+        }
         (void)close(parent_fd);
     }
     free(path_copy);

@@ -474,6 +474,60 @@ snag_path_slashes(char *path)
             *path = '/';
 }
 
+int
+snag_directory_lock_acquire(int fd, struct snag_directory_lock *lock)
+{
+    snag_file_info info;
+    char name[96];
+    HANDLE mutex;
+    DWORD result, error;
+
+    if (!lock || lock->fd >= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (snag_fstat(fd, &info) < 0)
+        return -1;
+    if (!S_ISDIR(info.st_mode)) {
+        errno = ENOTDIR;
+        return -1;
+    }
+    (void)snprintf(name, sizeof(name), "Global\\snajpagent-config-%016llx-%016llx",
+                   (unsigned long long)info.st_dev, (unsigned long long)info.st_ino);
+    mutex = CreateMutexA(NULL, FALSE, name);
+    if (!mutex)
+        return path_error(GetLastError());
+    result = WaitForSingleObject(mutex, 0);
+    if (result == WAIT_OBJECT_0 || result == WAIT_ABANDONED) {
+        lock->fd = fd;
+        lock->mutex = mutex;
+        return 0;
+    }
+    error = GetLastError();
+    (void)CloseHandle(mutex);
+    if (result == WAIT_TIMEOUT) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return path_error(error);
+}
+
+int
+snag_directory_lock_release(struct snag_directory_lock *lock)
+{
+    DWORD error = ERROR_SUCCESS;
+
+    if (lock->fd < 0)
+        return 0;
+    if (!ReleaseMutex(lock->mutex))
+        error = GetLastError();
+    if (!CloseHandle(lock->mutex) && error == ERROR_SUCCESS)
+        error = GetLastError();
+    lock->fd = -1;
+    lock->mutex = NULL;
+    return error == ERROR_SUCCESS ? 0 : path_error(error);
+}
+
 /* This native ABI predates the convenience Win32 directory-handle API. */
 NTSYSAPI NTSTATUS NTAPI NtQueryDirectoryFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID,
     PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS, BOOLEAN, PUNICODE_STRING, BOOLEAN);
@@ -742,6 +796,7 @@ snag_permissions_free(struct snag_permissions *permissions)
     if (permissions->native)
         LocalFree(permissions->native);
     permissions->native = NULL;
+    permissions->readonly = false;
 }
 
 int
@@ -749,11 +804,14 @@ snag_permissions_capture(int fd, struct snag_permissions *out)
 {
     intptr_t handle = _get_osfhandle(fd);
     PSECURITY_DESCRIPTOR descriptor = NULL;
+    BY_HANDLE_FILE_INFORMATION info;
 
     if (handle == -1 || !out) {
         errno = out ? EBADF : EINVAL;
         return -1;
     }
+    if (!GetFileInformationByHandle((HANDLE)handle, &info))
+        return path_error(GetLastError());
     DWORD error = GetSecurityInfo((HANDLE)handle, SE_FILE_OBJECT,
         OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
         NULL, NULL, NULL, NULL, &descriptor);
@@ -761,6 +819,7 @@ snag_permissions_capture(int fd, struct snag_permissions *out)
         return path_error(error);
     snag_permissions_free(out);
     out->native = descriptor;
+    out->readonly = (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
     return 0;
 }
 
@@ -821,7 +880,8 @@ snag_permissions_match(int fd, const struct snag_permissions *permissions)
     if (permission_parts(&current, &owner, &group, &acl, &control) == 0)
         rc = (owner && old_owner ? EqualSid(owner, old_owner) : owner == old_owner) &&
              (group && old_group ? EqualSid(group, old_group) : group == old_group) &&
-             (control & flags) == (old_control & flags) && same_acl(acl, old_acl);
+             (control & flags) == (old_control & flags) && same_acl(acl, old_acl) &&
+             current.readonly == permissions->readonly;
     int saved = errno;
     snag_permissions_free(&current);
     errno = saved;
@@ -838,6 +898,7 @@ snag_permissions_apply(int fd, const struct snag_permissions *permissions)
     PACL acl;
     SECURITY_DESCRIPTOR_CONTROL control;
     NTSTATUS status;
+    PSECURITY_DESCRIPTOR descriptor;
 
     if (handle == -1 || !permissions) {
         errno = permissions ? EBADF : EINVAL;
@@ -845,10 +906,35 @@ snag_permissions_apply(int fd, const struct snag_permissions *permissions)
     }
     if (permission_parts(permissions, &owner, &group, &acl, &control) < 0)
         return -1;
+    DWORD length = GetSecurityDescriptorLength(permissions->native);
+    descriptor = malloc(length);
+    if (!descriptor)
+        return -1;
+    memcpy(descriptor, permissions->native, length);
+    if (!SetSecurityDescriptorControl(descriptor, SE_DACL_AUTO_INHERIT_REQ,
+        (control & SE_DACL_AUTO_INHERITED) ? SE_DACL_AUTO_INHERIT_REQ : 0)) {
+        DWORD error = GetLastError();
+        free(descriptor);
+        return path_error(error);
+    }
     /* SetSecurityInfo re-inherits ACLs; retain this snapshot on the held file. */
     status = NtSetSecurityObject((HANDLE)handle,
         OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-        permissions->native);
+        descriptor);
+    free(descriptor);
+    if (status < 0)
+        return path_error(RtlNtStatusToDosError(status));
+    BY_HANDLE_FILE_INFORMATION info;
+    FILE_BASIC_INFORMATION basic = {0};
+    IO_STATUS_BLOCK io;
+    if (!GetFileInformationByHandle((HANDLE)handle, &info))
+        return path_error(GetLastError());
+    basic.FileAttributes = info.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY;
+    if (permissions->readonly)
+        basic.FileAttributes |= FILE_ATTRIBUTE_READONLY;
+    if (!basic.FileAttributes)
+        basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+    status = NtSetInformationFile((HANDLE)handle, &io, &basic, sizeof(basic), FileBasicInformation);
     if (status < 0)
         return path_error(RtlNtStatusToDosError(status));
     int match = snag_permissions_match(fd, permissions);
@@ -1220,6 +1306,37 @@ snag_sync_dir(int fd)
 #include <wchar.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <sys/file.h>
+
+int
+snag_directory_lock_acquire(int fd, struct snag_directory_lock *lock)
+{
+    struct stat st;
+
+    if (!lock || lock->fd >= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fstat(fd, &st) < 0)
+        return -1;
+    if (!S_ISDIR(st.st_mode)) {
+        errno = ENOTDIR;
+        return -1;
+    }
+    if (flock(fd, LOCK_EX | LOCK_NB) < 0)
+        return -1;
+    lock->fd = fd;
+    return 0;
+}
+
+int
+snag_directory_lock_release(struct snag_directory_lock *lock)
+{
+    int rc = lock->fd < 0 ? 0 : flock(lock->fd, LOCK_UN);
+
+    lock->fd = -1;
+    return rc;
+}
 
 static int
 open_read(int dirfd, const char *path, bool directory)
