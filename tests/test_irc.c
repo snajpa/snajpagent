@@ -707,6 +707,11 @@ test_server(void)
     assert(capture.last_message.op);
     assert(strstr(wire, " 366 human #lab") != NULL);
     assert(strstr(wire, " 315 human #lab") != NULL);
+    assert(strstr(wire, " 352 human #lab agent ") != NULL);
+    assert(strstr(wire, " agent H@ :0 " SNAJPAGENT_NAME "\r\n") != NULL);
+    assert(strstr(wire, " 352 human #lab operator ") != NULL);
+    assert(strstr(wire, " operator H@ :0 operator\r\n") != NULL);
+    assert(strstr(wire, " human H@ :0 IRC user\r\n") != NULL);
     assert(capture.protocol_traces != 0u && capture.transport_traces != 0u);
 
     send_text(human, "NICK renamed\r\nNICK renamed\r\nNICK RENAMED\r\n"
@@ -819,6 +824,19 @@ test_server(void)
     assert(errno == EACCES);
     ping_without_engine(human);
     assert(snag_socket_close(human) == 0);
+    tick(server, 5u);
+    /* Local identities must not consume any of the 64 remote peer slots. */
+    snag_socket capacity[64u];
+    for (size_t i = 0; i < 64u; ++i) {
+        capacity[i] = connect_local(port, false);
+        send_text(capacity[i], "PING :capacity\r\n");
+        tick(server, 1u);
+    }
+    for (size_t i = 0; i < 64u; ++i) {
+        drain_ready(server, capacity[i], wire, sizeof(wire));
+        assert(strstr(wire, "PONG") && strstr(wire, "capacity"));
+        assert(snag_socket_close(capacity[i]) == 0);
+    }
     snag_irc_close(server);
     snag_config_free(&config);
 }
