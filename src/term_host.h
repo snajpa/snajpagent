@@ -2,6 +2,8 @@
 #ifndef SNAJPAGENT_TERM_HOST_H
 #define SNAJPAGENT_TERM_HOST_H
 #include <stdbool.h>
+#include <stddef.h>
+#include <sys/types.h>
 
 #ifdef _WIN32
 struct snag_signal_mask { unsigned char unused; };
@@ -10,6 +12,8 @@ struct snag_term_host {
     unsigned int input_codepage;
     int input_crt_mode;
     bool binary_input;
+    unsigned short input_high;
+    bool input_skip_lf;
     unsigned long output_mode[2];
 };
 #else
@@ -33,6 +37,8 @@ unsigned int snag_term_host_columns(void);
 int snag_term_input_capture(struct snag_term_host *host);
 int snag_term_input_raw(struct snag_term_host *host);
 int snag_term_input_restore(struct snag_term_host *host, bool flush);
-int snag_term_input_flush(void);
+int snag_term_input_flush(struct snag_term_host *host);
+/* Buffer capacity is at least four bytes; incomplete UTF-16 returns EAGAIN. */
+ssize_t snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size);
 
 #endif

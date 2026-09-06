@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -36,6 +37,8 @@ snag_term_input_capture(struct snag_term_host *host)
     }
     host->input_codepage = GetConsoleCP();
     host->binary_input = false;
+    host->input_high = 0;
+    host->input_skip_lf = false;
     if (!host->input_codepage) {
         errno = EIO;
         return -1;
@@ -66,8 +69,10 @@ snag_term_input_raw(struct snag_term_host *host)
 }
 
 int
-snag_term_input_flush(void)
+snag_term_input_flush(struct snag_term_host *host)
 {
+    host->input_high = 0;
+    host->input_skip_lf = false;
     if (FlushConsoleInputBuffer((HANDLE)_get_osfhandle(0)))
         return 0;
     errno = EIO;
@@ -77,7 +82,9 @@ snag_term_input_flush(void)
 int
 snag_term_input_restore(struct snag_term_host *host, bool flush)
 {
-    int rc = flush ? snag_term_input_flush() : 0;
+    int rc = flush ? snag_term_input_flush(host) : 0;
+    host->input_high = 0;
+    host->input_skip_lf = false;
     if (!SetConsoleMode((HANDLE)_get_osfhandle(0), host->input_mode))
         rc = -1;
     if (host->binary_input) {
@@ -91,6 +98,62 @@ snag_term_input_restore(struct snag_term_host *host, bool flush)
     if (rc < 0)
         errno = EIO;
     return rc;
+}
+
+ssize_t
+snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
+{
+    HANDLE input = (HANDLE)_get_osfhandle(0);
+    DWORD mode, got;
+    WCHAR wide[257];
+    size_t prefix = host->input_high ? 1u : 0u;
+
+    if (!buffer || size < 4u || size > INT_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!GetConsoleMode(input, &mode))
+        return _read(0, buffer, (unsigned int)size);
+    size_t capacity = (size - prefix) / 3u;
+    if (capacity > 256u)
+        capacity = 256u;
+    if (prefix)
+        wide[0] = host->input_high;
+    if (!ReadConsoleW(input, wide + prefix, (DWORD)capacity, &got, NULL)) {
+        errno = EIO;
+        return -1;
+    }
+    if (!got)
+        return 0;
+    size_t count = got + prefix;
+    host->input_high = 0;
+    if (wide[count - 1u] >= 0xd800u && wide[count - 1u] <= 0xdbffu)
+        host->input_high = wide[--count];
+    size_t used = 0;
+    for (size_t i = 0; i < count; ++i) {
+        WCHAR c = wide[i];
+        if (mode & ENABLE_LINE_INPUT) {
+            if (c == L'\n' && host->input_skip_lf) {
+                host->input_skip_lf = false;
+                continue;
+            }
+            host->input_skip_lf = c == L'\r';
+            if (c == L'\r')
+                c = L'\n';
+        }
+        wide[used++] = c;
+    }
+    if (!used) {
+        errno = EAGAIN;
+        return -1;
+    }
+    int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, (int)used,
+                                    buffer, (int)size, NULL, NULL);
+    if (!bytes) {
+        errno = EILSEQ;
+        return -1;
+    }
+    return bytes;
 }
 
 int
@@ -149,9 +212,17 @@ snag_term_input_raw(struct snag_term_host *host)
 }
 
 int
-snag_term_input_flush(void)
+snag_term_input_flush(struct snag_term_host *host)
 {
+    (void)host;
     return tcflush(STDIN_FILENO, TCIFLUSH);
+}
+
+ssize_t
+snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
+{
+    (void)host;
+    return read(STDIN_FILENO, buffer, size);
 }
 
 int

@@ -302,6 +302,17 @@ test_private_directory(void)
         FILE_FLAG_BACKUP_SEMANTICS, NULL);
     assert(handle != INVALID_HANDLE_VALUE);
     fd = _open_osfhandle((intptr_t)handle, _O_RDONLY | _O_BINARY);
+    HANDLE flush_handle = CreateFileW(wide, GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_WRITE_THROUGH, NULL);
+    if (flush_handle == INVALID_HANDLE_VALUE) {
+        (void)fprintf(stderr, "directory write-open error=%lu\n", GetLastError());
+    } else {
+        BOOL flushed = FlushFileBuffers(flush_handle);
+        (void)fprintf(stderr, "directory write-flush ok=%d error=%lu\n",
+                       flushed != 0, flushed ? 0ul : GetLastError());
+        assert(CloseHandle(flush_handle));
+    }
 #else
     const char *temp = getenv("TMPDIR");
     char *pattern = snag_path_join(temp ? temp : "/tmp", "snag-private-dir-XXXXXX");
@@ -638,7 +649,7 @@ test_input_mode(void)
     struct termios raw;
     assert(tcgetattr(0, &raw) == 0 && !(raw.c_lflag & (ECHO | ICANON | ISIG)));
 #endif
-    assert(snag_term_input_flush() == 0);
+    assert(snag_term_input_flush(&host) == 0);
 #ifdef _WIN32
     INPUT_RECORD keys[3] = {0};
     const WCHAR characters[] = {0x4e2du, 0xd83du, 0xde00u};
@@ -655,17 +666,19 @@ test_input_mode(void)
     assert(WriteConsoleInputW(input, keys, 3u, &written) && written == 3u);
     size_t used = 0;
     while (used < sizeof(received)) {
-        DWORD got;
         assert(WaitForSingleObject(input, 1000u) == WAIT_OBJECT_0);
-        assert(ReadFile(input, received + used, (DWORD)(sizeof(received) - used), &got, NULL) && got);
-        used += got;
+        ssize_t got = snag_term_input_read(&host, received + used, sizeof(received) - used);
+        if (got < 0 && errno == EAGAIN)
+            continue;
+        assert(got > 0);
+        used += (size_t)got;
     }
     if (memcmp(received, expected, sizeof(received))) {
         (void)fprintf(stderr, "console input bytes:");
         for (size_t i = 0; i < sizeof(received); ++i)
             (void)fprintf(stderr, " %02x", (unsigned char)received[i]);
         (void)fprintf(stderr, "\n");
-        assert(snag_term_input_restore(&host, false) == 0);
+        assert(snag_term_input_restore(&host, true) == 0);
         abort();
     }
 #endif

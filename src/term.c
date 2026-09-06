@@ -2153,7 +2153,7 @@ suspend_terminal(struct snag_term *term)
         snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
         return -1;
     term->bracketed_paste = false;
-    if (snag_term_input_flush() < 0 ||
+    if (snag_term_input_flush(&term->host) < 0 ||
         snag_term_input_restore(&term->host, false) < 0)
         return -1;
     term->raw = false;
@@ -2663,7 +2663,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             }
             return 0;
         }
-        count = read(STDIN_FILENO, term->input, sizeof(term->input));
+        count = snag_term_input_read(&term->host, term->input, sizeof(term->input));
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
             return feed_byte(term, 0x03u, action, text);
@@ -2674,6 +2674,8 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             if (count < 0 && errno == EINTR)
                 return 0;
         }
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return 0;
         if (count < 0)
             return -1;
         if (count == 0) {
