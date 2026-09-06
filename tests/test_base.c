@@ -12,6 +12,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <winioctl.h>
 #include <aclapi.h>
 #include <fcntl.h>
 #include <io.h>
@@ -165,7 +166,7 @@ test_private_directory(void)
         LARGE_INTEGER offset;
         DWORD returned;
         offset.QuadPart = INT64_C(5368709120);
-        assert(DeviceIoControl((HANDLE)_get_osfhandle(file), 0x900c4u,
+        assert(DeviceIoControl((HANDLE)_get_osfhandle(file), FSCTL_SET_SPARSE,
                                NULL, 0, NULL, 0, &returned, NULL));
         assert(SetFilePointerEx((HANDLE)_get_osfhandle(file), offset, NULL, FILE_BEGIN));
         assert(SetEndOfFile((HANDLE)_get_osfhandle(file)));
@@ -178,6 +179,10 @@ test_private_directory(void)
         assert(snag_fstat(file, &linked) == 0 && linked.st_size == INT64_C(5368709120));
         assert(ftruncate(file, sizeof(bytes)) == 0);
 #endif
+        assert(close(file) == 0);
+        file = snag_open_read_at(fd, "data", false);
+        assert(file >= 0 && read(file, received, sizeof(received)) == sizeof(received));
+        assert(memcmp(bytes, received, sizeof(bytes)) == 0);
         assert(close(file) == 0);
 #ifdef _WIN32
         assert(CreateHardLinkA(alias, data, NULL));
@@ -212,6 +217,7 @@ test_private_directory(void)
         assert(symlink(data, alias) == 0);
 #endif
         assert(snag_lstat(alias, &linked) == 0 && S_ISLNK(linked.st_mode));
+        assert(snag_open_read_at(fd, "alias", false) == -1);
         assert(snag_stat(alias, &linked) == 0 && S_ISREG(linked.st_mode) &&
                linked.st_dev == info.st_dev && linked.st_ino == info.st_ino);
         assert(snag_unlink_at(fd, "alias", false) == 0);
@@ -265,6 +271,42 @@ test_private_directory(void)
     (void)sprintf(renamed, "%s-renamed", root);
     assert(rename(root, renamed) == 0);
     assert(snag_fstat(fd, &path_info) == 0 && path_info.st_ino == root_info.st_ino);
+    {
+        char long_name[512] = "unicode-";
+#ifdef _WIN32
+        size_t repetitions = 130u;
+#else
+        size_t repetitions = 20u;
+#endif
+        for (size_t i = 0u; i < repetitions; ++i)
+            strcat(long_name, "\xe4\xb8\xad");
+        strcat(long_name, "-\xf0\x9f\x98\x80");
+        int file = snag_create_private_at(fd, long_name, true);
+        assert(file >= 0 && close(file) == 0);
+        int read_fd = snag_open_read(renamed, true);
+        struct snag_directory *dir = snag_directory_open(read_fd);
+        const char *entry;
+        size_t found = 0u;
+        assert(read_fd >= 0 && dir);
+        errno = 0;
+        while ((entry = snag_directory_next(dir)))
+            if (strcmp(entry, ".") && strcmp(entry, "..")) {
+                assert(strcmp(entry, long_name) == 0);
+                ++found;
+            }
+        assert(errno == 0 && found == 1u);
+        assert(snag_directory_close(dir) == 0);
+        errno = 0;
+        assert(snag_fstat(read_fd, &path_info) == -1 && errno == EBADF);
+        assert(snag_unlink_at(fd, long_name, false) == 0);
+        read_fd = snag_open_private_dir_at(-1, renamed);
+        assert(read_fd >= 0 && snag_fd_privacy(read_fd, &privacy) == 0 && privacy.private_access);
+        dir = snag_directory_open(read_fd);
+        assert(dir);
+        while ((entry = snag_directory_next(dir)))
+            assert(!strcmp(entry, ".") || !strcmp(entry, ".."));
+        assert(errno == 0 && snag_directory_close(dir) == 0);
+    }
     assert(snag_mkdir_private_at(fd, "after-rename") == 0);
     nested = snag_path_join(renamed, "after-rename");
     assert(nested && rmdir(nested) == 0);
