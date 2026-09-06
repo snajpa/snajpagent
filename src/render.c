@@ -446,6 +446,13 @@ snag_render_orientation(struct snag_render *render,
     return rc;
 }
 
+static int
+render_banner(struct snag_render *render, const char *text)
+{
+    return write_role_block(render, STDERR_FILENO, COLOR_HOST, text,
+                            strlen(text), strlen(text), render->stderr_terminal, true);
+}
+
 int
 snag_render_history(struct snag_render *render,
                     const char *user, const char *assistant)
@@ -456,7 +463,7 @@ snag_render_history(struct snag_render *render,
     if (!user && !assistant)
         return 0;
     snag_buf_init(&line, 4u * 1024u * 1024u);
-    if (snag_buf_append(&line, "--- recent history ---\n", 23u) < 0 ||
+    if (render_banner(render, "── history ──\n") < 0 ||
         (user &&
          (snag_buf_append(&line, "user: ", 6u) < 0 ||
           snag_buf_append(&line, user, strlen(user)) < 0 ||
@@ -479,8 +486,7 @@ snag_render_history(struct snag_render *render,
         }
     }
     if (rc == 0)
-        rc = write_block(render, STDERR_FILENO, "--- end history ---\n", 20u,
-                         false, true);
+        rc = render_banner(render, "── history replayed ──\n");
     snag_buf_free(&line);
     return rc;
 }
@@ -2715,6 +2721,8 @@ render_irc_event_now(struct snag_render *render,
         errno = EINVAL;
         return -1;
     }
+    if (event->kind == SNAG_IRC_HISTORY_READY)
+        return render_banner(render, "── history replayed ──\n");
     irc_markdown_lifecycle(render, event);
     if (render->term && render->term->destinations) {
         const struct snag_irc_destinations *destinations = render->term->destinations;
@@ -2744,8 +2752,7 @@ render_irc_event_now(struct snag_render *render,
         return -1;
     if (colored && irc_piece(render, highlight ? COLOR_OPERATOR : COLOR_META, false) < 0)
         goto out;
-    n = snprintf(prefix, sizeof(prefix), "%s%s%s ", source, when,
-                 event->historical ? " history" : "");
+    n = snprintf(prefix, sizeof(prefix), "%s%s ", source, when);
     if (n < 0 || (size_t)n >= sizeof(prefix) ||
         irc_piece(render, prefix, true) < 0)
         goto out;
@@ -2770,8 +2777,8 @@ render_irc_event_now(struct snag_render *render,
             char visible[1024u];
             size_t column;
 
-            n = snprintf(visible, sizeof(visible), "%s%s%s %s%s%s %s ",
-                         source, when, event->historical ? " history" : "",
+            n = snprintf(visible, sizeof(visible), "%s%s %s%s%s %s ",
+                         source, when,
                          event->kind == SNAG_IRC_NOTICE ? "-" : "",
                          event->op ? "@" : "", event->nick,
                          event->kind == SNAG_IRC_NOTICE ? "-" : "›");
@@ -2969,9 +2976,7 @@ snag_render_set_view(struct snag_render *render, enum snag_render_view view)
         open->physical_open = false;
     }
     render->view = view;
-    if (write_role_block(render, STDERR_FILENO, COLOR_HOST, boundaries[view],
-                         strlen(boundaries[view]), strlen(boundaries[view]),
-                         render->stderr_terminal, true) < 0 ||
+    if (render_banner(render, boundaries[view]) < 0 ||
         flush_view(render, view) < 0)
         return -1;
     return 0;

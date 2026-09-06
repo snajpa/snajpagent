@@ -1726,7 +1726,7 @@ def test_goal_user_terminal_commands_and_unlock():
     ]
 
 
-def test_goal_refusal_failure_block_and_restart_pause():
+def test_goal_refusal_failure_block_and_restart_state():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
@@ -1771,18 +1771,15 @@ def test_goal_refusal_failure_block_and_restart_pause():
     session_id = new_session(before)
     child.kill()
     resumed = Child(["--resume", session_id])
-    paused_end = resumed.wait(
-        b"active goal was paused on resume; use /goal resume to continue"
-    )
-    assert b": paused" in resumed.buf[:paused_end]
-    assert b"slow goal" in resumed.buf[:paused_end]
-    resumed.send(b"/goal\r")
-    status_end = resumed.wait(b": paused", start=paused_end)
-    resumed.wait(PROMPT.rstrip(), start=status_end)
-    resumed.exit_now()
+    status_end = resumed.wait(b": active")
+    restored = resumed.wait(b"slow goal", start=status_end)
+    answer = resumed.wait(b"goal done", start=restored)
+    resumed.exit_cleanly(answer)
     log = events(session_id)
-    pauses = [item for item in log if item["type"] == "goal_paused"]
-    assert pauses[-1]["data"]["reason"] == "session_resumed"
+    goal_id = one(log, "goal_started")["data"]["goal_id"]
+    assert one(log, "goal_completed")["data"]["goal_id"] == goal_id
+    assert not [item for item in log if item["type"] in ("goal_paused", "goal_resumed")]
+    assert [item["data"]["input_kind"] for item in log if item["type"] == "turn_started"] == ["goal", "goal"]
 
 
 def test_saved_goal_restored_without_lookup():
@@ -1832,6 +1829,72 @@ def test_saved_goal_restored_without_lookup():
         assert [e for e in current if e["type"].startswith("goal_")] == [
             e for e in original if e["type"].startswith("goal_")]
         original = current
+
+
+def test_resume_preserves_inactive_and_queued_goal_states():
+    for state in ("blocked", "completed", "cancelled"):
+        before = session_ids()
+        child = Child([])
+        try:
+            child.wait_idle_prompt()
+            child.send(b"/goal blocked goal\r")
+            answer = child.wait(b"goal done")
+            child.wait_idle_prompt(start=answer)
+            if state != "blocked":
+                start = len(child.buf)
+                child.send(b"/goal " + (b"complete" if state == "completed" else b"cancel") + b"\r")
+                cleared = child.wait(GOAL_CLEARED, start=start)
+                child.wait_idle_prompt(start=cleared)
+            child.exit_now()
+        finally:
+            child.kill()
+        session_id = new_session(before)
+        original = events(session_id)
+        goal_id = one(original, "goal_started")["data"]["goal_id"]
+        resumed = Child(["--resume", session_id])
+        try:
+            restored = resumed.wait(f"goal {goal_id[:8]}: {state}".encode())
+            if state == "blocked":
+                restored = resumed.wait(b"blocker: fixture dependency is unavailable", start=restored)
+            resumed.wait_idle_prompt(start=restored)
+            resumed.drain(0.1)
+            resumed.exit_now()
+        finally:
+            resumed.kill()
+        assert events(session_id) == original
+
+    before = session_ids()
+    child = Child([])
+    try:
+        child.wait_idle_prompt()
+        child.send(b"/goal slow goal\r")
+        child.wait(b"working on goal")
+        child.send(b"ping\t")
+        child.wait(b"next " + PROMPT + b"ping")
+        session_id = new_session(before)
+    finally:
+        child.kill()
+    original = events(session_id)
+    resumed = Child(["--resume", session_id])
+    try:
+        restored = resumed.wait(b": active")
+        paused_queue = resumed.wait(b"queued future turns are paused", start=restored)
+        resumed.wait_idle_prompt(start=paused_queue)
+        resumed.drain(0.1)
+        current = events(session_id)
+        assert len([e for e in current if e["type"] == "turn_started"]) == 1
+        assert [e for e in current if e["type"].startswith("goal_")] == [
+            e for e in original if e["type"].startswith("goal_")]
+        resumed.send(b"/next\r")
+        answer = resumed.wait(b"pong", start=paused_queue)
+        done = resumed.wait(b"goal done", start=answer)
+        resumed.exit_cleanly(done)
+    finally:
+        resumed.kill()
+    current = events(session_id)
+    assert [e["data"]["input_kind"] for e in current if e["type"] == "turn_started"] == [
+        "goal", "queued", "goal"]
+    assert not [e for e in current if e["type"] in ("goal_paused", "goal_resumed")]
 
 
 def test_queue_mutation_commands():
@@ -3275,7 +3338,10 @@ def test_network_resume_roles():
         "#lab"
     resumed_server = Child.from_command(server_command)
     resumed_server.wait(b"session id " + server_id[:8].encode())
-    resumed_server.wait("history @firstpeer › retained room message".encode())
+    restored = resumed_server.wait("@firstpeer › retained room message".encode())
+    replayed = resumed_server.wait("── history replayed ──".encode(), start=restored)
+    assert b" history @firstpeer" not in resumed_server.buf
+    assert resumed_server.buf[:replayed].count("── history replayed ──".encode()) == 1
     assert resumed_server.buf.count(b"retained room message") == 1
     resumed_server.wait(chat_prompt("serverop"))
     peer = IRCClient(server_port, "secondpeer")
@@ -4518,8 +4584,9 @@ if __name__ == "__main__":
     test_goal_model_rewrite_and_lock()
     test_goal_pause_resume_and_queue_priority()
     test_goal_user_terminal_commands_and_unlock()
-    test_goal_refusal_failure_block_and_restart_pause()
+    test_goal_refusal_failure_block_and_restart_state()
     test_saved_goal_restored_without_lookup()
+    test_resume_preserves_inactive_and_queued_goal_states()
     test_queue_mutation_commands()
     test_preferences_and_verbosity()
     test_runtime_verbosity_resume()

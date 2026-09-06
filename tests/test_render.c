@@ -1915,9 +1915,13 @@ test_append_only_views(unsigned int verbosity)
     assert(count_text(output, "agent › public-before-rename") == 1u);
     assert(count_text(output, "agent2 › public-after-rename") == 1u);
     assert(count_text(output, "peer-with-old-nick") == 1u);
+    assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
     event.historical = true;
     memcpy(event.nick, "agent2", 7u);
     memcpy(event.text, "retained-own-message", 21u);
+    assert(snag_render_irc_event(&render, &event) == 0);
+    event.kind = SNAG_IRC_HISTORY_READY;
+    event.historical = false;
     assert(snag_render_irc_event(&render, &event) == 0);
     event.historical = false;
     event.local = true;
@@ -1929,14 +1933,19 @@ test_append_only_views(unsigned int verbosity)
     event.kind = SNAG_IRC_TOPIC;
     memcpy(event.text, "/workspace", 11u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    event.kind = SNAG_IRC_HISTORY_READY;
-    event.text[0] = '\0';
-    assert(snag_render_irc_event(&render, &event) == 0);
     used = drain_available(fds[0], output, sizeof(output), used);
-    assert(count_text(output, "history agent2 › retained-own-message") == 1u);
+    assert(!strstr(output, "retained-own-message"));
+    assert(!strstr(output, "── history replayed ──"));
+    assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+    used = drain_available(fds[0], output, sizeof(output), used);
+    assert(count_text(output, "agent2 › retained-own-message") == 1u);
+    assert(!strstr(output, " history agent2"));
     assert(count_text(output, "-agent2 - own-public-notice") == 1u);
     assert(strstr(output, "· topic · /workspace\n") != NULL);
-    assert(strstr(output, "· history synchronized\n") != NULL);
+    assert(count_text(output, "── history replayed ──\n") == 1u);
+    assert(!strstr(output, "history synchronized"));
+    assert(strstr(output, "retained-own-message") < strstr(output, "── history replayed ──"));
+    assert(strstr(output, "── history replayed ──") < strstr(output, "own-public-notice"));
     assert(snag_render_view(&render) == SNAG_RENDER_CHAT);
     assert(snag_render_rollout_begin(&render, STDERR_FILENO, NULL,
                                      SNAG_PRESENT_CONVERSATION) == 0);

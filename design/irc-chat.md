@@ -222,6 +222,11 @@ hosted-room history in its own chat view, without re-sending it or appending
 duplicate durable events. Outgoing connections receive their server's history
 through the ordinary join path.
 
+Replayed chat uses the same `HH:MM:SS` sender/message prefix as live chat;
+there is no per-message `history` suffix. Each completed received or hosted
+history replay ends with one `── history replayed ──` mode-style banner.
+This is display-only; durable historical flags and model-input routing remain.
+
 Outgoing clients reconnect with bounded fixed backoff while the foreground
 process remains alive. Disconnection is a visible room notification and does
 not stop the local session, hosted server, or other connections. Registration,

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Preserve the session's saved goal state on resume instead of forcing an
+  active goal to pause. Continue active goals with existing queue priority;
+  leave inactive goals unchanged. Replace per-message chat history labels
+  with one mode-style history-replayed banner per completed replay.
+
 - Restore saved goal visibility on session resume: show its wording and state
   automatically, and retain paused/blocked goal context in ordinary model
   requests after replay and compaction without restarting automatic work.

@@ -2735,6 +2735,12 @@ def run_runtime_history_case(binary, root, provider, environment):
         historical = [event["data"] for event in event_list(log, "irc_event")
                       if event["data"]["text"] == history]
         assert len(historical) == 1 and historical[0]["historical"]
+        terminal.submit("/chat")
+        screen = terminal.wait("── history replayed ──", join_wrapped=True)
+        assert screen.count("── history replayed ──") == 1, screen
+        assert re.search(r"\d{2}:\d{2}:\d{2} peer › " + re.escape(history), screen), screen
+        assert not re.search(r"\d{2}:\d{2}:\d{2} history ", screen), screen
+        assert screen.index(history) < screen.index("── history replayed ──"), screen
         terminal.submit("/disconnect")
         terminal.wait("outgoing connections removed; hosting unchanged", join_wrapped=True)
         release.set()
@@ -3166,7 +3172,7 @@ def run_irc_chat_case(binary, root):
         terminals["host"].wait("twoop joined")
         terminals["one"].wait("twoop joined")
         terminals["one"].wait("set mode · +o twoop")
-        terminals["two"].wait("history synchronized")
+        terminals["two"].wait("── history replayed ──")
         wait_irc_idle(ordered)
         for terminal, operator in zip(ordered, ("hostop", "oneop", "twoop")):
             wait_current_prompt(terminal, operator)

@@ -849,6 +849,7 @@ test_client_reconnect(void)
 
         assert(snag_irc_replay_hosted_history(server, capture_event, &replay) == 0);
         assert(replay.events[SNAG_IRC_MESSAGE] == 1000u);
+        assert(replay.events[SNAG_IRC_HISTORY_READY] == 1u);
         assert(replay.last_message.historical);
         assert(strcmp(replay.last_message.text, payload) == 0);
         assert(!server_capture.last_message.historical);

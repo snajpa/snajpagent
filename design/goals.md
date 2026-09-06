@@ -144,9 +144,11 @@ When a model turn ends:
    the current turn pauses the goal. An ordinary terminal tool result remains
    available to the model to handle within that turn. Ctrl-C interruption and
    terminal input closure also pause the goal.
-6. Opening a session that still has an active goal durably pauses it after any
-   interrupted-turn recovery. The user must issue `/goal resume`; merely
-   opening a session never starts work unexpectedly.
+6. Opening a session restores the saved goal state unchanged after any
+   interrupted-turn recovery. An active goal continues; paused, blocked,
+   completed and cancelled goals keep their recorded states. Resume creates
+   no goal pause/resume event. An explicit initial prompt runs first, and
+   retained unarmed queued work still prevents automatic goal continuation.
 
 Goal state, wording changes, locks, blockers, and status transitions are
 append-only session events. Resume reconstructs them from the same validated

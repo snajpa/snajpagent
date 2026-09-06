@@ -610,8 +610,8 @@ Turn failures display a hint to try this command.
 .SS Goals
 An active goal continues across ordinary turns until complete, paused,
 cancelled, or blocked.  Queued operator turns run before the next automatic
-goal turn.  Failures, refusal, interruption, input closure, and session resume
-pause automatic continuation.
+goal turn.  Failures, refusal, interruption and input closure pause automatic
+continuation.  Session resume preserves the saved goal state unchanged.
 .TP
 .BR /goal , " /goal status"
 Show the durable goal.  Queued prompts run before automatic goal continuation,
@@ -1515,16 +1515,21 @@ and
 for absent roles, so reused config defaults cannot resurrect removed endpoints.
 Temporary connection outages do not remove desired roles from the command.
 .PP
-Resuming an active goal pauses it; use
-.B /goal resume
-to continue.  Resume automatically displays the saved goal and wording,
+Resume preserves the saved goal state: active goals continue, while paused,
+blocked, completed and cancelled goals keep their recorded states.  No goal
+pause or resume transition is added merely by reopening the session.
+Resume automatically displays the saved goal and wording,
 including its status, revision, lock and blocker, even with history disabled.
 Paused and blocked goal wording remains in ordinary model context after resume
-and compaction; it need not be re-entered.  Restoration does not restart work.
+and compaction; it need not be re-entered.  Inactive goals do not restart work.
 Queued turns are also paused; use
 .B /next
 to restart FIFO execution.  Interrupted active turns are recovered from their
 durable prefix.
+.PP
+History replay ends with a mode-style "history replayed" banner.  Replayed
+chat timestamps have no per-message "history" label; stored historical flags
+and model-input handling are unchanged.
 .PP
 SIGKILL, power loss, and fatal process corruption cannot guarantee cleanup or a
 printed resume command.  Already synced events remain available.

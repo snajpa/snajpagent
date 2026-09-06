@@ -1111,6 +1111,7 @@ int
 snag_irc_core_replay_hosted_history(const struct snag_irc_core *irc,
                               snag_irc_event_fn render, void *opaque)
 {
+    bool replayed = false;
     if (!irc || !render) {
         errno = EINVAL;
         return -1;
@@ -1126,8 +1127,11 @@ snag_irc_core_replay_hosted_history(const struct snag_irc_core *irc,
         event.historical = true;
         if (render(opaque, &event) < 0)
             return -1;
+        replayed = true;
     }
-    return 0;
+    /* This callback is display-only: do not append or broadcast the boundary. */
+    struct snag_irc_event ready = {.kind = SNAG_IRC_HISTORY_READY};
+    return replayed ? render(opaque, &ready) : 0;
 }
 
 static int

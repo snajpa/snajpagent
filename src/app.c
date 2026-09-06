@@ -3987,6 +3987,11 @@ interactive_loop(struct app_state *app, const char *initial)
     if (initial && (snag_app_sync_destinations(app) < 0 ||
                     snag_ui_capture_route(&app->ui, initial) < 0))
         return 6;
+    if (!initial && app->goal_armed) {
+        int rc = run_ready_chains(app);
+        if (rc == 3 || rc == 6)
+            return rc;
+    }
     for (;;) {
         enum snag_term_action action = SNAG_TERM_NONE;
         bool prompt_ready = false;
@@ -4228,7 +4233,6 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     char *relocated_workspace = NULL;
     const char *new_model = NULL;
     const char *new_effort;
-    bool goal_paused_on_resume = false;
     bool signal_handlers_installed = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
@@ -4396,15 +4400,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             rc = 3;
             goto out;
         }
-        if (app.session.goal_status == SNAG_GOAL_ACTIVE) {
-            if (snag_app_goal_pause(&app, "session_resumed",
-                                   error, sizeof(error)) < 0) {
-                (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-                rc = 3;
-                goto out;
-            }
-            goal_paused_on_resume = true;
-        }
+        app.goal_armed = app.session.goal_status == SNAG_GOAL_ACTIVE;
         if (relocated_workspace &&
             strcmp(relocated_workspace, app.session.workspace) != 0 &&
             commit_event(&app, "workspace_changed",
@@ -4490,10 +4486,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
          snag_app_goal_command(&app, "/goal", false) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u &&
          app_warning(&app,
-             "queued future turns are paused; use /next to continue FIFO") < 0) ||
-        (goal_paused_on_resume &&
-         app_warning(&app,
-             "active goal was paused on resume; use /goal resume to continue") < 0)) {
+             "queued future turns are paused; use /next to continue FIFO") < 0)) {
         rc = 6;
         goto out;
     }

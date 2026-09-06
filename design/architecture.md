@@ -138,8 +138,9 @@ after the last item is dequeued) and whenever pending queue entries exist.
 An unarmed queue blocks goal continuation until `/next`, explicit goal
 start/resume, or queue removal. An open queue editor always prevents draining.
 Goal turns carry a distinct `input_kind` and a developer continuation marker,
-so they do not appear as new user messages. Refusal, failure, input closure,
-and session reopening pause the goal; resumption is explicit.
+so they do not appear as new user messages. Refusal, failure and input closure
+pause the goal. Session reopening preserves the recorded state: active goals
+continue, and inactive goals remain inactive without extra goal transitions.
 
 Tool calls are handled one at a time. Before a tool runs, snajpagent records a
 durable start event. After the tool finishes, snajpagent records the bounded

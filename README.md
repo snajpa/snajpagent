@@ -134,7 +134,10 @@ snajpagent -l
 snajpagent --resume --last
 ```
 
-Resume pauses goals and queued turns. Use `/goal resume` or `/next` when ready.
+Resume preserves each goal's saved state: active goals continue, and paused,
+blocked or finished goals stay that way. Retained queued turns still wait for
+`/next`. Replayed history ends with `── history replayed ──`; chat timestamps
+have no per-message `history` label.
 After a turn fails, use `/retry` to continue it from retained context and tool
 results. Read-only mode is preserved; starting another turn clears the retry.
 
