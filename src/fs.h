@@ -27,6 +27,9 @@ int snag_lstat(const char *path, snag_file_info *out);
 int snag_lstat_at(int dirfd, const char *path, snag_file_info *out);
 int snag_unlink_at(int dirfd, const char *path, bool directory);
 int snag_rename_at(int from_dir, const char *from, int to_dir, const char *to);
+int snag_link_at(int from_dir, const char *from, int to_dir, const char *to);
+/* Exclusively create an ordinary output file using native default permissions. */
+int snag_create_output_at(int dirfd, const char *path);
 int snag_open_read(const char *path, bool directory);
 int snag_open_read_at(int dirfd, const char *path, bool directory);
 /* Also permit querying native ownership/permissions; callers decide privacy. */

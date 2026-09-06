@@ -1151,9 +1151,12 @@ test_apply_patch_add_update_delete(void)
 
     join_path(path, sizeof(path), dir, "a.txt");
     write_text_file(path, "one\ntwo\n");
+    assert(chmod(path, 0751) == 0);
     join_path(path, sizeof(path), dir, "old.txt");
     write_text_file(path, "bye\n");
+    mode_t mask = umask(0027);
     result = run_apply_patch(dir, patch);
+    (void)umask(mask);
     assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
     {
         const char *model_text = snag_json_string(result, "model_text");
@@ -1165,10 +1168,13 @@ test_apply_patch_add_update_delete(void)
     }
     json_decref(result);
     join_path(path, sizeof(path), dir, "a.txt");
+    struct stat permissions;
+    assert(stat(path, &permissions) == 0 && (permissions.st_mode & 0777u) == 0751u);
     text = read_text_file(path);
     assert(strcmp(text, "one\nTWO\n") == 0);
     free(text);
     join_path(path, sizeof(path), dir, "new.txt");
+    assert(stat(path, &permissions) == 0 && (permissions.st_mode & 0777u) == 0640u);
     text = read_text_file(path);
     assert(strcmp(text, "alpha\nbeta\n") == 0);
     free(text);

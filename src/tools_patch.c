@@ -7,7 +7,6 @@
 #include "snajpagent.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include "snag_jansson.h"
 #include <limits.h>
 #include <stdbool.h>
@@ -19,18 +18,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#ifndef O_CLOEXEC
-#define O_CLOEXEC 0
-#endif
-#ifndef O_DIRECTORY
-#define O_DIRECTORY 0
-#endif
-#ifndef O_NOFOLLOW
-#define O_NOFOLLOW 0
-#endif
-#ifndef AT_SYMLINK_NOFOLLOW
-#define AT_SYMLINK_NOFOLLOW 0
-#endif
 #ifndef NAME_MAX
 #define NAME_MAX 255
 #endif
@@ -84,7 +71,7 @@ struct patch_op {
     struct snag_buf new_bytes;
     bool eol_crlf;
     bool final_nl;
-    mode_t mode;
+    struct snag_permissions permissions;
     snag_file_info st;
     size_t added_lines;
     size_t removed_lines;
@@ -148,6 +135,7 @@ op_free(struct patch_op *op)
         hunk_free(&op->hunks[i]);
     free(op->hunks);
     free(op->old_bytes);
+    snag_permissions_free(&op->permissions);
     snag_buf_free(&op->new_bytes);
     memset(op, 0, sizeof(*op));
 }
@@ -614,8 +602,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[NAME_MAX + 1u],
             int next_fd;
             memcpy(component, p, len);
             component[len] = '\0';
-            next_fd = openat(dir_fd, component,
-                             O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
+            next_fd = snag_open_read_at(dir_fd, component, true);
             if (next_fd < 0) {
                 close(dir_fd);
                 snag_errorf(error, error_size,
@@ -641,7 +628,7 @@ read_target_file(int root_fd, struct patch_op *op,
     parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     if (parent_fd < 0)
         return -1;
-    fd = openat(parent_fd, leaf, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    fd = snag_open_read_security_at(parent_fd, leaf, false);
     if (fd < 0) {
         snag_errorf(error, error_size, "patch target %s cannot be opened", op->path);
         goto out;
@@ -654,7 +641,8 @@ read_target_file(int root_fd, struct patch_op *op,
         errno = EINVAL;
         goto out;
     }
-    op->mode = op->st.st_mode & 07777u;
+    if (snag_permissions_capture(fd, &op->permissions) < 0)
+        goto out;
     if (read_fd_all(fd, &op->old_bytes, &op->old_len) < 0) {
         snag_errorf(error, error_size, "patch target %s cannot be read", op->path);
         goto out;
@@ -948,8 +936,25 @@ same_identity(const snag_file_info *a, const snag_file_info *b)
            a->st_mode == b->st_mode;
 }
 
+static bool
+unchanged_target(int parent_fd, const char *leaf, const struct patch_op *op)
+{
+    int fd = snag_open_read_security_at(parent_fd, leaf, false);
+    snag_file_info current;
+
+    if (fd < 0)
+        return false;
+    bool same = snag_fstat(fd, &current) == 0 && same_identity(&op->st, &current) &&
+                snag_permissions_match(fd, &op->permissions) == 1;
+    int saved = errno;
+    (void)close(fd);
+    errno = saved;
+    return same;
+}
+
 static int
-make_temp_file(int parent_fd, char temp[NAME_MAX + 1u])
+make_temp_file(int parent_fd, const struct snag_permissions *permissions,
+               char temp[NAME_MAX + 1u])
 {
     char id[SNAG_ID_HEX_LEN + 1u];
     int fd;
@@ -959,9 +964,8 @@ make_temp_file(int parent_fd, char temp[NAME_MAX + 1u])
             return -1;
         (void)snprintf(temp, NAME_MAX + 1u,
                        "." SNAJPAGENT_NAME "-patch-%s.tmp", id);
-        fd = openat(parent_fd, temp,
-                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-                    0600);
+        fd = permissions ? snag_create_private_at(parent_fd, temp, true) :
+                           snag_create_output_at(parent_fd, temp);
         if (fd >= 0)
             return fd;
         if (errno != EEXIST)
@@ -972,15 +976,17 @@ make_temp_file(int parent_fd, char temp[NAME_MAX + 1u])
 }
 
 static int
-write_temp_file(int parent_fd, const struct snag_buf *bytes, mode_t mode,
+write_temp_file(int parent_fd, const struct snag_buf *bytes,
+                const struct snag_permissions *permissions,
                 char temp[NAME_MAX + 1u])
 {
-    int fd = make_temp_file(parent_fd, temp);
+    int fd = make_temp_file(parent_fd, permissions, temp);
     int saved;
 
     if (fd < 0)
         return -1;
-    if (fchmod(fd, mode) < 0 || snag_write_full(fd, bytes->data, bytes->len) < 0 ||
+    if (snag_write_full(fd, bytes->data, bytes->len) < 0 ||
+        (permissions && snag_permissions_apply(fd, permissions) < 0) ||
         snag_sync_file(fd) < 0) {
         saved = errno;
         close(fd);
@@ -995,14 +1001,6 @@ write_temp_file(int parent_fd, const struct snag_buf *bytes, mode_t mode,
         return -1;
     }
     return 0;
-}
-
-static mode_t
-add_mode_from_umask(void)
-{
-    mode_t old = umask(0);
-    (void)umask(old);
-    return 0666u & ~old;
 }
 
 static int
@@ -1025,11 +1023,11 @@ install_add(int root_fd, const struct patch_op *op,
     }
     if (errno != ENOENT)
         goto out;
-    if (write_temp_file(parent_fd, &op->new_bytes, add_mode_from_umask(), temp) < 0) {
+    if (write_temp_file(parent_fd, &op->new_bytes, NULL, temp) < 0) {
         snag_errorf(error, error_size, "add target %s could not be staged", op->path);
         goto out;
     }
-    if (linkat(parent_fd, temp, parent_fd, leaf, 0) < 0) {
+    if (snag_link_at(parent_fd, temp, parent_fd, leaf) < 0) {
         saved = errno;
         (void)snag_unlink_at(parent_fd, temp, false);
         errno = saved;
@@ -1052,25 +1050,22 @@ install_update(int root_fd, const struct patch_op *op,
 {
     char leaf[NAME_MAX + 1u];
     char temp[NAME_MAX + 1u];
-    snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
     int saved;
 
     if (parent_fd < 0)
         return -1;
-    if (snag_lstat_at(parent_fd, leaf, &st) < 0 ||
-        !same_identity(&op->st, &st)) {
+    if (!unchanged_target(parent_fd, leaf, op)) {
         snag_errorf(error, error_size, "update target %s changed before install", op->path);
         errno = ESTALE;
         goto out;
     }
-    if (write_temp_file(parent_fd, &op->new_bytes, op->mode, temp) < 0) {
+    if (write_temp_file(parent_fd, &op->new_bytes, &op->permissions, temp) < 0) {
         snag_errorf(error, error_size, "update target %s could not be staged", op->path);
         goto out;
     }
-    if (snag_lstat_at(parent_fd, leaf, &st) < 0 ||
-        !same_identity(&op->st, &st)) {
+    if (!unchanged_target(parent_fd, leaf, op)) {
         saved = errno;
         (void)snag_unlink_at(parent_fd, temp, false);
         errno = saved ? saved : ESTALE;
@@ -1385,7 +1380,7 @@ snag_tools_apply_patch(const struct snag_response_item *call,
             goto out;
         goto result;
     }
-    root_fd = open(workdir, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
+    root_fd = snag_open_read(workdir, true);
     if (root_fd < 0) {
         snag_errorf(error, error_size, "patch workdir cannot be opened safely");
         if (snag_buf_printf(&summary, "Patch failed during I/O: %s.\n", error) < 0)

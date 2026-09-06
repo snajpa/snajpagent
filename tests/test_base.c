@@ -357,11 +357,8 @@ test_private_directory(void)
         assert(file >= 0 && snag_fd_privacy(file, &privacy) == 0 && privacy.private_access);
         assert(read(file, received, sizeof(received)) == sizeof(received));
         assert(memcmp(bytes, received, sizeof(bytes)) == 0 && close(file) == 0);
-#ifdef _WIN32
-        assert(CreateHardLinkA(alias, data, NULL));
-#else
-        assert(link(data, alias) == 0);
-#endif
+        assert(snag_link_at(fd, "data", fd, "alias") == 0);
+        assert(snag_link_at(fd, "data", fd, "alias") == -1 && errno == EEXIST);
         assert(snag_stat(data, &info) == 0 && snag_stat(alias, &linked) == 0);
         assert(info.st_ino == linked.st_ino && info.st_dev == linked.st_dev && info.st_nlink == 2u);
         assert(snag_open_private_append_at(fd, "data", false) == -1 && errno == EACCES);
@@ -460,6 +457,25 @@ test_private_directory(void)
         assert(snag_unlink_at(fd, "journal", false) == 0);
     }
     test_file_lock(fd);
+    {
+        unsigned char bytes[] = {'x', '\r', '\n', 0x1au};
+        unsigned char received[sizeof(bytes)];
+#ifndef _WIN32
+        mode_t mask = umask(0027);
+#endif
+        int file = snag_create_output_at(fd, "output");
+        assert(file >= 0 && snag_write_full(file, bytes, sizeof(bytes)) == 0);
+        assert(snag_fstat(file, &path_info) == 0 && close(file) == 0);
+#ifndef _WIN32
+        assert((path_info.st_mode & 0777u) == 0640u);
+        (void)umask(mask);
+#endif
+        assert(snag_create_output_at(fd, "output") < 0 && errno == EEXIST);
+        file = snag_open_read_at(fd, "output", false);
+        assert(file >= 0 && read(file, received, sizeof(received)) == sizeof(received));
+        assert(!memcmp(bytes, received, sizeof(bytes)) && close(file) == 0);
+        assert(snag_unlink_at(fd, "output", false) == 0);
+    }
     test_directory_lock(root, fd);
 #ifndef _WIN32
     {

@@ -336,8 +336,8 @@ out:
     return rc;
 }
 
-int
-snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
+static int
+set_file_name(int from_dir, const char *from, int to_dir, const char *to, bool link)
 {
     struct nt_path source, target = {0};
     HANDLE handle = NULL;
@@ -357,11 +357,13 @@ snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
     rename = calloc(1u, bytes);
     if (!rename)
         goto out;
-    rename->ReplaceIfExists = TRUE;
+    /* FileLinkInformation has the same native name-record layout. */
+    rename->ReplaceIfExists = !link;
     rename->RootDirectory = target.parent;
     rename->FileNameLength = target.name.Length;
     memcpy(rename->FileName, target.name.Buffer, target.name.Length);
-    status = NtSetInformationFile(handle, &io, rename, (ULONG)bytes, FileRenameInformation);
+    status = NtSetInformationFile(handle, &io, rename, (ULONG)bytes,
+                                  link ? FileLinkInformation : FileRenameInformation);
     rc = status < 0 ? path_error(RtlNtStatusToDosError(status)) : 0;
 out:
     error = errno;
@@ -375,6 +377,28 @@ out:
     nt_path_free(&target);
     errno = error;
     return rc;
+}
+
+int
+snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
+{
+    return set_file_name(from_dir, from, to_dir, to, false);
+}
+
+int
+snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
+{
+    return set_file_name(from_dir, from, to_dir, to, true);
+}
+
+static bool
+filesystem_path(const struct nt_path *name)
+{
+    return name->parent || (name->name.Length >= 7u * sizeof(WCHAR) &&
+        !wcsncmp(name->name.Buffer, L"\\??\\", 4u) &&
+        ((name->name.Buffer[5] == L':' && name->name.Buffer[6] == L'\\') ||
+         (name->name.Length >= 8u * sizeof(WCHAR) &&
+          !wcsncmp(name->name.Buffer + 4u, L"UNC\\", 4u))));
 }
 
 static int
@@ -394,11 +418,7 @@ open_read(int dirfd, const char *path, bool relative, bool directory, bool secur
     if (nt_path_init(&name, dirfd, path, relative) < 0)
         goto out;
     /* DOS aliases such as C:\\NUL can translate outside a filesystem root. */
-    if (!name.parent && (name.name.Length < 7u * sizeof(WCHAR) ||
-        wcsncmp(name.name.Buffer, L"\\??\\", 4u) ||
-        !((name.name.Buffer[5] == L':' && name.name.Buffer[6] == L'\\') ||
-          (name.name.Length >= 8u * sizeof(WCHAR) &&
-           !wcsncmp(name.name.Buffer + 4u, L"UNC\\", 4u))))) {
+    if (!filesystem_path(&name)) {
         errno = EACCES;
         goto out;
     }
@@ -422,6 +442,50 @@ out:
     error = errno;
     if (handle)
         (void)CloseHandle(handle);
+    nt_path_free(&name);
+    errno = error;
+    return fd;
+}
+
+int
+snag_create_output_at(int dirfd, const char *path)
+{
+    struct nt_path name;
+    OBJECT_ATTRIBUTES attributes = {0};
+    IO_STATUS_BLOCK io;
+    HANDLE handle = NULL;
+    NTSTATUS status;
+    int fd = -1, error;
+
+    if (nt_path_init(&name, dirfd, path, true) < 0)
+        goto out;
+    if (!filesystem_path(&name)) {
+        errno = EACCES;
+        goto out;
+    }
+    attributes.Length = sizeof(attributes);
+    attributes.RootDirectory = name.parent;
+    attributes.ObjectName = &name.name;
+    attributes.Attributes = OBJ_CASE_INSENSITIVE;
+    status = NtCreateFile(&handle, FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
+        &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_CREATE,
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT, NULL, 0);
+    if (status < 0) {
+        handle = NULL;
+        path_error(RtlNtStatusToDosError(status));
+        goto out;
+    }
+    fd = _open_osfhandle((intptr_t)handle, _O_BINARY | _O_RDWR | _O_NOINHERIT);
+    if (fd >= 0)
+        handle = NULL;
+out:
+    error = errno;
+    if (handle) {
+        FILE_DISPOSITION_INFORMATION dispose = {TRUE};
+        (void)NtSetInformationFile(handle, &io, &dispose, sizeof(dispose), FileDispositionInformation);
+        (void)CloseHandle(handle);
+    }
     nt_path_free(&name);
     errno = error;
     return fd;
@@ -1472,6 +1536,18 @@ int
 snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 {
     return renameat(from_dir, from, to_dir, to);
+}
+
+int
+snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
+{
+    return linkat(from_dir, from, to_dir, to, 0);
+}
+
+int
+snag_create_output_at(int dirfd, const char *path)
+{
+    return openat(dirfd, path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0666);
 }
 
 int
