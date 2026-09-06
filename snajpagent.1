@@ -89,134 +89,170 @@ Enter submits a turn.  Type
 .B /help
 for commands and keys.
 .SH USING SNAJPAGENT
-.SS A session, a turn, and the rollout
-Start in the directory containing the project you want to change.  A session
-keeps its workspace, conversation, tool results, model selection, queue and
-goal on disk.  A turn is one admitted prompt and the model/tool work it causes;
-a response is one provider generation within that turn.  A turn may require
-several responses and tool calls before the model finishes.
+.SS Start a task
+After installation and provider setup, start snajpagent in the project directory
+you want to change.  This directory is the workspace.  The model is the AI
+carrying out your request; its tools let it inspect files, edit them and run
+commands with your local permissions.
 .PP
-Without network roles, startup opens rollout: the local view of the model's
-work.  Describe the result and constraints, for example:
+Without network roles, startup opens rollout: the local view of your
+conversation and the model's work.  Describe a task and press Enter:
 .PP
 .nf
 Fix the empty-input bug. Keep the public API unchanged.
 Run the tests and summarize the change.
 .fi
 .PP
-Press Enter to submit.  Model text is visible at the default verbosity.
-Use
-.B /verbose 1
-for compact tool activity or
-.B /verbose 2
-for argument and result previews.  You can type while the model works;
-the draft is not input to the model until you submit or queue it.
-.SS Correct now, schedule later
-In rollout, Enter during work supplies immediate steering.  For example,
-"Use the existing parser; do not add a dependency" changes the current turn.
-The provider response is interrupted and continued from its delivered prefix.
-An already-started command is handed back alive, not restarted or killed.
+This prompt and the work it starts make up a turn.  The model may need several
+responses and tool calls before it gives a final answer.  The prompt marker is
+.B ›
+while idle and
+.B »
+while active.
 .PP
-To schedule a separate turn, type "Then add regression coverage" and press
-Tab while work is active.  Except when completing text, Tab puts the draft
-in the durable first-in, first-out queue.  It does not expose the draft to the
-current model cycle.  Queued turns run sequentially after current work,
-not as parallel agents.  The default rollout prompt's
+Text starting with
+.B /
+is a command to snajpagent rather than a request to the model.  Type
+.B /help
+and press Enter to see the controls.
+.B /verbose 1
+shows compact tool activity alongside model text;
+.B /verbose 2
+adds previews of tool inputs and results.  These controls also work during a turn.
+.SS Correct this task or queue the next one
+Typing during work opens an unsent draft; it does not interrupt the model.
+In rollout, Enter supplies immediate steering.  For example,
+"Use the existing parser; do not add a dependency" changes the current task.
+The model's response is interrupted and continued from its delivered text.
+An already-started command stays alive; it is not restarted or killed.
+.PP
+For a separate follow-up, type "Then add regression coverage" and press Tab
+at the end while work is active.  That message joins the queue instead of
+changing the current model cycle.  Queued prompts run oldest first, one turn
+at a time in the same session, not as parallel agents.  The rollout prompt's
 .B (N)
-counts pending prompts, excluding the running turn.
+counts waiting turns, excluding current work.
 .PP
 Use
 .B /queue
-to inspect the queue,
+to inspect waiting prompts,
 .B /queue 2 edit
-to revise the second item, or
+to revise the second one, or
 .B /queue 2 delete
-to remove it.  The editor preserves its place in the queue and holds automatic
-draining while open.  Enter or active-turn Tab saves the replacement; Ctrl-C
-abandons the edit.  An empty replacement is rejected.
+to remove it.  Editing keeps its place and holds queue draining while the
+editor is open.  Enter saves the replacement; Ctrl-C abandons the edit.
 .B /queue pop
 removes the newest item;
 .B /queue clear
-removes all pending items, not current work.
+removes all waiting items, not current work.
 .PP
-A paused queue needs
+After interruption, failure or session resume, the queue can be paused.
+Use
 .B /next
-while idle.  It starts the oldest item and allows the remaining queue to drain;
-it is not a one-item-only step.  Session resume retains queued prompts but
-does not run them automatically.  They take precedence over automatic goal
-continuation.  See PROVIDER FAILURES for the new-input/retry handoff case.
-.SS Tab, editing, interruption, and exit
-An empty draft makes Tab switch chat and rollout, including offline or during
-work.  With text, Tab first tries completion: slash commands, numeric room
-destinations, and chat mentions.  Otherwise it queues during an active turn
-or inserts spaces while idle.  Completion never submits input.  Explicit
-.B /chat
-and
-.B /rollout
-select the named view without starting or cancelling work.
+while idle to restart it.  This starts the oldest item and allows the rest
+to drain.  Queued prompts take precedence over automatic goal continuation.
+See PROVIDER FAILURES for the new-input/retry handoff case.
+.SS Complete names with Tab
+Command completion starts with a slash at the beginning of the draft.
+Type
+.B /sta
+and press Tab to get
+.B /status
+followed by a space.  Press Enter to run the command.  Completion applies
+while the cursor is in or at the end of that first command word, not in its
+arguments.  Ordinary words do not trigger command completion.
 .PP
-Ctrl-J inserts a newline.  Bracketed paste preserves pasted newlines instead
-of sending them.  Up/Down recall prompts and Ctrl-R searches history.  Ctrl-C
-clears a nonempty draft without interrupting the turn; on an empty draft it
-interrupts active work.  Ctrl-D on an empty draft exits the foreground process.
-The complete editing and exit key reference follows under INTERACTIVE INPUT.
-.SS Continue with a goal
-An ordinary final answer returns control to you.  A goal explicitly asks for
-work to continue across turn boundaries:
+In chat, begin a nickname word with
+.B @
+and press Tab while the cursor is in or at the end of that name.  If builder
+is the only match,
+.B @bu
+becomes
+.B @builder
+followed by a space.  The nickname need not start the whole message:
+"please ask @bu" also completes.  A unique completion adds or reuses a space
+and leaves the cursor after it, ready for you to finish writing.
+.PP
+At the end of a finished message, outside a command or nickname being completed,
+Tab queues a local follow-up while your model is active.  In chat this still
+does not send to the room; Enter does that.  While idle, Tab inserts spaces
+instead.  With an empty draft, Tab switches chat and rollout views.
+.PP
+Completion itself never submits, sends or queues.  Multiple matches expand
+their common beginning; another consecutive Tab lists the choices.  No match
+leaves the draft unchanged, not queued.  Full cursor and command exceptions
+are listed under INTERACTIVE INPUT.
+.SS Edit or stop
+Ctrl-J inserts a newline.  Bracketed paste keeps pasted newlines in the draft
+instead of submitting each line.  Up/Down recall prompts; Ctrl-R searches their
+history.  Ctrl-C clears a nonempty draft without interrupting the turn.  On an
+empty draft it interrupts active work.  Ctrl-D on an empty draft exits.
+.SS Continue toward a goal
+A normal final answer ends the turn and returns control to you.  A goal asks
+snajpagent to keep taking turns toward an explicit result:
 .PP
 .nf
 /goal fix the parser, add tests, and validate the change
-/goal status
-/goal pause
-/goal resume
 .fi
 .PP
-An active goal continues until complete, paused, cancelled, or blocked.
-Queued operator turns run before automatic goal continuation.  Goal pause
-takes effect at a turn boundary; it is not a request to kill a running command.
-Failures, refusal and turn-only interruption pause automatic goal work.
-.PP
-Quitting the foreground process is different from pausing the goal.  No work
-runs after exit, but an active goal stays active in the saved session and
-continues on resume.  Use
+It continues until complete, paused, cancelled or blocked.  Waiting operator
+prompts run before the next automatic goal turn.
+.B /goal status
+shows its state and any blocker.
 .B /goal pause
-before exiting when you want it to stay paused.  Normal exit prints a resume
-command; keep it for the exact session and configuration.  You can also list
-sessions with
+pauses automatic continuation at a turn boundary;
+.B /goal resume
+starts it again.  Pausing does not kill a command already running.
+Failures, refusal and turn-only interruption also pause automatic goal work.
+.SS Leave and resume a session
+A session saves the workspace, conversation, tool results, model selection,
+queue and goal on disk.  Normal exit prints a command to reopen that exact
+session.  You can also list sessions with
 .B snajpagent -l
-and reopen the newest for the workspace with
+or reopen the newest for the current workspace with
 .BR "snajpagent --resume --last" .
-.SS Native networked work
-Networking uses the same session and tools, with a second view for shared IRC
-conversation.  In separate terminals, start a host and a client:
+.PP
+Exit is not goal pause.  No work runs after exit, but a saved active goal
+continues when resumed.  Use
+.B /goal pause
+first if you want it to remain paused.  Other goal states remain unchanged.
+Waiting prompts still need
+.B /next
+and cannot be bypassed by automatic goal work.  Resume restores recorded
+context, not commands that ended when the old process exited.
+.SS Work together through native IRC
+IRC is the built-in chat protocol.  Each session has an operator nickname
+(yours) and a model nickname.  In separate terminals, start a host and client:
 .PP
 .nf
 snajpagent -s -n builder -o alice -r work
 snajpagent -c -n reviewer -o bob
 .fi
 .PP
-The first hosts one room on localhost:6667; the second joins it automatically.
-Each session has an operator nick and model nick, its own workspace and its
-own local rollout.  A room does not share files, credentials, or command
-processes.  Use separate worktrees when agents should edit independently.
+The first hosts room #work at localhost:6667; the second joins it on the same
+machine.  The -n option names the model and -o names the operator.  This shares
+conversation, not files, credentials or command processes.  Use separate Git
+worktrees when agents should have independent checked-out files to edit.
 .PP
-Networked startup opens chat.  Enter sends as the local operator to the selected
-room.  Address a model with its accepted nick, for example
-"@builder check the failing test".  A mention starts work when idle or steers
-at a safe response/tool boundary during work.  Ordinary conversation remains
-background context, not an instruction to start a turn.  Model replies reach
-the room only through explicit
+Networked startup opens chat, the shared room conversation.  Enter sends as
+your operator nick.  Address a model, for example "@builder check the failing
+test", to start work or steer it at a safe boundary.  Ordinary conversation
+is background context, not a new task.  Models publish chosen replies through
 .B irc_send
-calls; their other text and tool activity remain in rollout.
+while their other text and tool activity remain in rollout.
 .PP
-Empty Tab switches views without pausing the model or disconnecting.  Buffered
-output from the hidden view is displayed on return.  In chat, non-completing
-Tab during work still queues a local future turn; it is not a public send.
-Use Enter for the room.  Runtime
+Empty Tab switches the views without stopping work.  Returning displays output
+that arrived while the view was hidden.  To complete a nickname, type @bu and
+Tab, then finish your message after the added space.  Enter sends it to the
+room; Tab at the end queues it locally while your own model is active.
+.B /chat
+and
+.B /rollout
+select either view directly.  Runtime
 .B /server start
 and
 .B /connect
-change network roles without restarting the session or changing its current view.
+change network roles without restarting or switching the current view.
 .SS Read this reference
 Use
 .B man snajpagent
@@ -224,8 +260,8 @@ for the installed reference.  From a checkout,
 .B man -l ./snajpagent.1
 opens the same source.  The hosted edition is
 .IR https://agent.snajpa.net/manual.html .
-The website and README introduce workflows; this manual defines options,
-commands, configuration, tools, files, limits, failures and security.
+The website and README introduce workflows; the sections below define all
+options, commands, configuration, tools, files, limits, failures and security.
 .SH BUILDING AND INSTALLING
 Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
 libcurl and Jansson development files.  These instructions describe the
@@ -499,18 +535,38 @@ it is not killed.  In chat, send to the selected room.  A model-nick mention
 steers at the next safe response/tool boundary without truncating generation.
 .TP
 .B Tab
-Complete a slash command or numeric IRC destination when possible.  In chat, complete an
-.B @nick
-at the cursor from current room members.  Ambiguous matches expand their common
-prefix; a second consecutive Tab lists the matching choices and restores the
-draft and cursor.  Unique matches include a trailing space, reusing an existing
-space before retained text.  These rules apply to every completion type.
-No match leaves the draft unchanged.  Completion never queues or sends text.
-While idle, otherwise insert spaces.
-During a turn, queue the draft for a later FIFO turn, except that
-.B /verbose
-applies locally immediately.  Empty Tab always switches
-chat and rollout views, including offline.
+With an empty draft, switch chat and rollout views, including offline.
+Otherwise, completion requires one of these prefixes and cursor positions:
+.RS
+.IP \(bu 2
+A draft beginning with
+.B /
+(not
+.BR // ),
+with the cursor in or at the end of its first word: complete a command name or
+numeric room destination.  For example, /sta becomes /status followed by a space.
+.IP \(bu 2
+In chat, a nickname word beginning with
+.B @
+at the cursor: complete a current room member.  The word can occur later in a
+sentence.  This also works in the text of explicit /N TEXT and /all TEXT sends,
+including from rollout.  The cursor may be inside the nickname or immediately
+after it, but not past its following space.
+.RE
+.IP
+A unique completion adds a trailing space (or reuses an existing one) and moves
+the cursor after it.  Multiple matches expand their common prefix; a second
+consecutive Tab lists choices while preserving the draft and cursor.  No match
+leaves the draft unchanged.  Completion never submits, sends or queues text.
+.IP
+Outside a completion, Tab queues a later local turn while active, or inserts
+spaces while idle.  Thus Tab at the end of a finished ordinary message queues
+it; Tab at the end of /sta or @bu still completes that word first.
+Queueing remains local even in chat.  Use Enter to send to the room or run a
+slash command.  Commands are not generally queueable: /ro QUERY is a read-only
+future turn and /verbose applies immediately.  In the queue editor, a queue
+action saves the replacement instead of adding a new item; completion still
+applies and empty text is rejected.
 .TP
 .B Ctrl-J
 Insert a newline without submitting.
@@ -1967,12 +2023,16 @@ window.  The percentage is rounded up against the effective input budget,
 which can be smaller than the configured total after safety/output reserves.
 .TP
 .B Tab did not queue my text.
-An empty draft switches views.  Command/destination/mention completion takes
-precedence with matching text.  Otherwise queueing requires an active turn;
-while idle Tab indents.  Use
+Queueing requires an active turn; while idle Tab inserts spaces.  An empty
+draft switches views.  A leading /command word or a chat @nickname at the
+cursor invokes completion instead, even when the cursor is at the word's end.
+A unique match adds a space.  Continue writing, then press Tab at the end of
+the finished message to queue it locally.  If there is no match, correct the
+name or move past the word; it is not silently queued.
+Use Enter for slash controls and room messages.  During active work,
 .B /queue TEXT
-during active work when you want explicit queue admission.  An open queue
-editor updates the selected item instead of appending a new one.
+explicitly queues a future prompt.  An open queue editor updates the selected
+item rather than appending a new one.
 .TP
 .B There are queued prompts but nothing is running.
 Retained queues are deliberately paused after session resume.  Interruptions
