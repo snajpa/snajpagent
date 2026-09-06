@@ -428,7 +428,7 @@ write_cache(struct snag_store *store, const json_t *providers,
         goto out;
     }
     fd = -1;
-    if (renameat(store->root_fd, tmp_name, store->root_fd, "models.json") < 0) {
+    if (snag_rename_at(store->root_fd, tmp_name, store->root_fd, "models.json") < 0) {
         snag_errorf(error, error_size, "cannot install model cache: %s",
                   strerror(errno));
         goto out;
@@ -450,7 +450,7 @@ out:
     if (fd >= 0)
         (void)close(fd);
     if (rc < 0 && tmp_name[0])
-        (void)unlinkat(store->root_fd, tmp_name, 0);
+        (void)snag_unlink_at(store->root_fd, tmp_name, false);
     if (root)
         json_decref(root);
     snag_buf_free(&data);

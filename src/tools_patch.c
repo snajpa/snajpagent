@@ -984,13 +984,13 @@ write_temp_file(int parent_fd, const struct snag_buf *bytes, mode_t mode,
         snag_sync_file(fd) < 0) {
         saved = errno;
         close(fd);
-        (void)unlinkat(parent_fd, temp, 0);
+        (void)snag_unlink_at(parent_fd, temp, false);
         errno = saved;
         return -1;
     }
     if (close(fd) < 0) {
         saved = errno;
-        (void)unlinkat(parent_fd, temp, 0);
+        (void)snag_unlink_at(parent_fd, temp, false);
         errno = saved;
         return -1;
     }
@@ -1031,12 +1031,12 @@ install_add(int root_fd, const struct patch_op *op,
     }
     if (linkat(parent_fd, temp, parent_fd, leaf, 0) < 0) {
         saved = errno;
-        (void)unlinkat(parent_fd, temp, 0);
+        (void)snag_unlink_at(parent_fd, temp, false);
         errno = saved;
         snag_errorf(error, error_size, "add target %s could not be installed", op->path);
         goto out;
     }
-    if (unlinkat(parent_fd, temp, 0) < 0 || snag_sync_dir(parent_fd) < 0) {
+    if (snag_unlink_at(parent_fd, temp, false) < 0 || snag_sync_dir(parent_fd) < 0) {
         snag_errorf(error, error_size, "add target %s directory sync failed", op->path);
         goto out;
     }
@@ -1072,14 +1072,14 @@ install_update(int root_fd, const struct patch_op *op,
     if (snag_lstat_at(parent_fd, leaf, &st) < 0 ||
         !same_identity(&op->st, &st)) {
         saved = errno;
-        (void)unlinkat(parent_fd, temp, 0);
+        (void)snag_unlink_at(parent_fd, temp, false);
         errno = saved ? saved : ESTALE;
         snag_errorf(error, error_size, "update target %s changed before rename", op->path);
         goto out;
     }
-    if (renameat(parent_fd, temp, parent_fd, leaf) < 0) {
+    if (snag_rename_at(parent_fd, temp, parent_fd, leaf) < 0) {
         saved = errno;
-        (void)unlinkat(parent_fd, temp, 0);
+        (void)snag_unlink_at(parent_fd, temp, false);
         errno = saved;
         snag_errorf(error, error_size, "update target %s could not be installed", op->path);
         goto out;
@@ -1111,7 +1111,7 @@ install_delete(int root_fd, const struct patch_op *op,
         errno = ESTALE;
         goto out;
     }
-    if (unlinkat(parent_fd, leaf, 0) < 0 || snag_sync_dir(parent_fd) < 0) {
+    if (snag_unlink_at(parent_fd, leaf, false) < 0 || snag_sync_dir(parent_fd) < 0) {
         snag_errorf(error, error_size, "delete target %s could not be removed", op->path);
         goto out;
     }

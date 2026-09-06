@@ -2485,11 +2485,11 @@ out:
         char failed_id[SNAG_ID_HEX_LEN + 1u];
         memcpy(failed_id, session->id, sizeof(failed_id));
         if (session->dir_fd >= 0) {
-            (void)unlinkat(session->dir_fd, "events.jsonl", 0);
-            (void)unlinkat(session->dir_fd, "lock", 0);
+            (void)snag_unlink_at(session->dir_fd, "events.jsonl", false);
+            (void)snag_unlink_at(session->dir_fd, "lock", false);
         }
         snag_session_close(session);
-        (void)unlinkat(store->sessions_fd, failed_id, AT_REMOVEDIR);
+        (void)snag_unlink_at(store->sessions_fd, failed_id, true);
     }
     return rc;
 }

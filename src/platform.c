@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,6 +27,12 @@ path_error(DWORD error)
         errno = ENOENT; break;
     case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS:
         errno = EEXIST; break;
+    case ERROR_DIR_NOT_EMPTY:
+        errno = ENOTEMPTY; break;
+    case ERROR_NOT_SAME_DEVICE:
+        errno = EXDEV; break;
+    case ERROR_SHARING_VIOLATION: case ERROR_LOCK_VIOLATION:
+        errno = EBUSY; break;
     case ERROR_ACCESS_DENIED: case ERROR_PRIVILEGE_NOT_HELD:
         errno = EACCES; break;
     case ERROR_INVALID_HANDLE:
@@ -293,6 +300,81 @@ int
 snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 {
     return path_stat(dirfd, path, true, true, out);
+}
+
+int
+snag_unlink_at(int dirfd, const char *path, bool directory)
+{
+    struct nt_path name;
+    HANDLE handle = NULL;
+    snag_file_info info;
+    FILE_DISPOSITION_INFORMATION dispose = {TRUE};
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+    int rc = -1, error;
+
+    if (nt_path_init(&name, dirfd, path, true) < 0)
+        goto out;
+    handle = nt_open(&name, DELETE | FILE_READ_ATTRIBUTES, FILE_OPEN_REPARSE_POINT);
+    if (!handle || file_info(handle, &info) < 0)
+        goto out;
+    if (directory != (S_ISDIR(info.st_mode) != 0)) {
+        errno = directory ? ENOTDIR : EISDIR;
+        goto out;
+    }
+    status = NtSetInformationFile(handle, &io, &dispose, sizeof(dispose), FileDispositionInformation);
+    rc = status < 0 ? path_error(RtlNtStatusToDosError(status)) : 0;
+out:
+    error = errno;
+    if (handle && !CloseHandle(handle) && rc == 0) {
+        path_error(GetLastError());
+        error = errno;
+        rc = -1;
+    }
+    nt_path_free(&name);
+    errno = error;
+    return rc;
+}
+
+int
+snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
+{
+    struct nt_path source, target = {0};
+    HANDLE handle = NULL;
+    FILE_RENAME_INFORMATION *rename = NULL;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+    size_t bytes;
+    int rc = -1, error;
+
+    if (nt_path_init(&source, from_dir, from, true) < 0 ||
+        nt_path_init(&target, to_dir, to, true) < 0)
+        goto out;
+    handle = nt_open(&source, DELETE, FILE_OPEN_REPARSE_POINT);
+    if (!handle)
+        goto out;
+    bytes = offsetof(FILE_RENAME_INFORMATION, FileName) + target.name.Length;
+    rename = calloc(1u, bytes);
+    if (!rename)
+        goto out;
+    rename->ReplaceIfExists = TRUE;
+    rename->RootDirectory = target.parent;
+    rename->FileNameLength = target.name.Length;
+    memcpy(rename->FileName, target.name.Buffer, target.name.Length);
+    status = NtSetInformationFile(handle, &io, rename, (ULONG)bytes, FileRenameInformation);
+    rc = status < 0 ? path_error(RtlNtStatusToDosError(status)) : 0;
+out:
+    error = errno;
+    if (handle && !CloseHandle(handle) && rc == 0) {
+        path_error(GetLastError());
+        error = errno;
+        rc = -1;
+    }
+    free(rename);
+    nt_path_free(&source);
+    nt_path_free(&target);
+    errno = error;
+    return rc;
 }
 
 static int
@@ -832,6 +914,18 @@ int
 snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 {
     return fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
+}
+
+int
+snag_unlink_at(int dirfd, const char *path, bool directory)
+{
+    return unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
+}
+
+int
+snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
+{
+    return renameat(from_dir, from, to_dir, to);
 }
 
 int

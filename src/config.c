@@ -1656,7 +1656,7 @@ save_config_settings(const char *path, bool allow_create,
         errno = EAGAIN;
         goto out;
     }
-    if (renameat(parent_fd, temp, parent_fd, leaf) < 0 ||
+    if (snag_rename_at(parent_fd, temp, parent_fd, leaf) < 0 ||
         snag_sync_dir(parent_fd) < 0) {
         saved = errno;
         snag_errorf(error, error_size, "cannot install configuration: %s",
@@ -1672,7 +1672,7 @@ out:
         (void)close(fd);
     if (parent_fd >= 0) {
         if (temp[0])
-            (void)unlinkat(parent_fd, temp, 0);
+            (void)snag_unlink_at(parent_fd, temp, false);
         (void)close(parent_fd);
     }
     free(path_copy);

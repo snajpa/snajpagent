@@ -25,5 +25,7 @@ int snag_fstat(int fd, snag_file_info *out);
 int snag_stat(const char *path, snag_file_info *out);
 int snag_lstat(const char *path, snag_file_info *out);
 int snag_lstat_at(int dirfd, const char *path, snag_file_info *out);
+int snag_unlink_at(int dirfd, const char *path, bool directory);
+int snag_rename_at(int from_dir, const char *from, int to_dir, const char *to);
 
 #endif

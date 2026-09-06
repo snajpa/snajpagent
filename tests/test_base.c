@@ -205,7 +205,7 @@ test_private_directory(void)
             errno = error;
         }
         assert(rejected == -1 && errno == EACCES);
-        assert(unlink(alias) == 0);
+        assert(snag_unlink_at(fd, "alias", false) == 0);
 #ifdef _WIN32
         assert(CreateSymbolicLinkA(alias, data, 0));
 #else
@@ -214,7 +214,8 @@ test_private_directory(void)
         assert(snag_lstat(alias, &linked) == 0 && S_ISLNK(linked.st_mode));
         assert(snag_stat(alias, &linked) == 0 && S_ISREG(linked.st_mode) &&
                linked.st_dev == info.st_dev && linked.st_ino == info.st_ino);
-        assert(unlink(alias) == 0);
+        assert(snag_unlink_at(fd, "alias", false) == 0);
+        assert(snag_stat(data, &linked) == 0 && S_ISREG(linked.st_mode));
 #ifdef _WIN32
         assert(SetNamedSecurityInfoA(data, SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
@@ -224,7 +225,7 @@ test_private_directory(void)
 #endif
         errno = 0;
         assert(snag_create_private_at(fd, "data", false) == -1 && errno == EACCES);
-        assert(unlink(data) == 0);
+        assert(snag_unlink_at(fd, "data", false) == 0);
         free(data);
         free(alias);
     }
@@ -238,9 +239,24 @@ test_private_directory(void)
     errno = 0;
     assert(snag_mkdir_private_at(-1, "relative") == -1 && errno == EBADF);
     assert(snag_mkdir_private_at(-1, absolute) == 0);
-    assert(rename(child, renamed) == 0);
-    assert(rmdir(renamed) == 0);
-    assert(rmdir(absolute) == 0);
+    errno = 0;
+    assert(snag_unlink_at(fd, "child", false) == -1 && errno == EISDIR);
+    assert(snag_rename_at(fd, "child", fd, "renamed") == 0);
+    assert(snag_unlink_at(fd, "renamed", true) == 0);
+    assert(snag_unlink_at(-1, absolute, true) == 0);
+    {
+        int source = snag_create_private_at(fd, "source", true);
+        int target = snag_create_private_at(fd, "target", true);
+        assert(source >= 0 && target >= 0);
+        assert(snag_write_full(source, "original", 8u) == 0);
+        assert(close(source) == 0 && close(target) == 0);
+        assert(snag_rename_at(fd, "source", fd, "target") == 0);
+        assert(snag_lstat_at(fd, "target", &path_info) == 0 && path_info.st_size == 8);
+        errno = 0;
+        assert(snag_rename_at(fd, "missing", fd, "target") == -1 && errno == ENOENT);
+        assert(snag_lstat_at(fd, "target", &path_info) == 0 && path_info.st_size == 8);
+        assert(snag_unlink_at(fd, "target", false) == 0);
+    }
     free(child);
     free(renamed);
     free(absolute);

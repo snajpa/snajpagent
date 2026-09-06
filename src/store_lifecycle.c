@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
+#include "fs.h"
 #include "base.h"
 #include "json.h"
 
@@ -66,7 +67,7 @@ static int
 unlink_expected_file(int dir_fd, const char *name, bool optional,
                      char *error, size_t error_size)
 {
-    if (unlinkat(dir_fd, name, 0) == 0)
+    if (snag_unlink_at(dir_fd, name, false) == 0)
         return 0;
     if (optional && errno == ENOENT)
         return 0;
@@ -85,7 +86,7 @@ snag_session_complete_delete(struct snag_store *store, struct snag_session *sess
         errno = EINVAL;
         return -1;
     }
-    if (renameat(store->sessions_fd, session->id,
+    if (snag_rename_at(store->sessions_fd, session->id,
                  store->trash_fd, session->trash_name) < 0) {
         snag_errorf(error, error_size, "cannot move session to trash: %s",
                   strerror(errno));
@@ -114,7 +115,7 @@ snag_session_complete_delete(struct snag_store *store, struct snag_session *sess
                   strerror(errno));
         return -1;
     }
-    if (unlinkat(store->trash_fd, session->trash_name, AT_REMOVEDIR) < 0) {
+    if (snag_unlink_at(store->trash_fd, session->trash_name, true) < 0) {
         snag_errorf(error, error_size, "cannot remove deleted-session directory: %s",
                   strerror(errno));
         return -1;
@@ -187,7 +188,7 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
                   strerror(errno));
         goto out;
     }
-    if (unlinkat(store->trash_fd, trash_name, AT_REMOVEDIR) < 0) {
+    if (snag_unlink_at(store->trash_fd, trash_name, true) < 0) {
         snag_errorf(error, error_size, "cannot remove deleted-session directory: %s",
                   strerror(errno));
         goto out;

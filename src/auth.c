@@ -254,7 +254,7 @@ write_tokens(int dir, const struct snag_provider_config *provider,
     (void)snprintf(temp, sizeof(temp), "%s.tmp", id);
     fd = snag_create_private_at(dir, temp, true);
     if (fd < 0 || snag_write_full(fd, text.data, text.len) < 0 || fsync(fd) < 0 ||
-        renameat(dir, temp, dir, path) < 0)
+        snag_rename_at(dir, temp, dir, path) < 0)
         goto out;
     temp[0] = '\0';
     if (fsync(dir) < 0)
@@ -264,7 +264,7 @@ out:
     if (fd >= 0)
         (void)close(fd);
     if (temp[0])
-        (void)unlinkat(dir, temp, 0);
+        (void)snag_unlink_at(dir, temp, false);
     snag_auth_json_free(value);
     if (text.data)
         memset(text.data, 0, text.len);
@@ -348,7 +348,7 @@ snag_auth_restore(int root_fd, const struct snag_provider_config *provider,
         rc = write_tokens(dir, provider, previous);
     } else {
         (void)snprintf(path, sizeof(path), "%s.json", provider->name);
-        if (unlinkat(dir, path, 0) == 0)
+        if (snag_unlink_at(dir, path, false) == 0)
             rc = fsync(dir);
     }
 out:
@@ -381,7 +381,7 @@ snag_auth_logout(int root_fd, const struct snag_provider_config *provider,
     if (lock < 0 || read_tokens(dir, provider, &tokens) < 0)
         goto out;
     (void)snprintf(path, sizeof(path), "%s.json", provider->name);
-    if (unlinkat(dir, path, 0) < 0 && errno != ENOENT)
+    if (snag_unlink_at(dir, path, false) < 0 && errno != ENOENT)
         goto out;
     rc = fsync(dir);
 out:
