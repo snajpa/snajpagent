@@ -1105,7 +1105,6 @@ test_secret_snapshot_rotation(void)
 {
     struct snag_config config;
     struct snag_secret_set secrets = {0};
-    struct snag_buf result;
     char error[256] = {0};
     static const char body[] = "{\"text\":\"old-protected new-protected literal-protected\"}";
 
@@ -1119,7 +1118,7 @@ test_secret_snapshot_rotation(void)
     assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) == 0);
     snag_config_free(&config);
     assert(unsetenv("SNAG_ROTATING_SECRET") == 0);
-    snag_buf_init(&result, 4096u);
+    struct snag_buf result = {.max = 4096u};
     assert(snag_wire_json_redact((const unsigned char *)body, strlen(body), &secrets.wire,
                                 &result, error, sizeof(error)) == 0);
     assert(snag_buf_terminate(&result) == 0);

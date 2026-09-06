@@ -180,10 +180,9 @@ history_encode(struct snag_buf *out, const char *text)
 static int
 history_rewrite(struct snag_history *term, int fd)
 {
-    struct snag_buf encoded;
     int rc = -1;
 
-    snag_buf_init(&encoded, HISTORY_FILE_BYTES);
+    struct snag_buf encoded = {.max = HISTORY_FILE_BYTES};
     if (snag_truncate(fd, 0) < 0 || snag_seek(fd, 0, SEEK_SET) < 0)
         goto out;
     for (size_t i = 0u; i < term->snapshot.count; ++i)
@@ -201,7 +200,6 @@ static int
 history_load_locked(struct snag_history *term, int fd, bool *damaged)
 {
     snag_file_info st;
-    struct snag_buf file, decoded;
     size_t pos = 0u;
     bool dirty = false;
     int rc = -1;
@@ -209,8 +207,8 @@ history_load_locked(struct snag_history *term, int fd, bool *damaged)
     if (snag_fstat(fd, &st) < 0 || st.st_size < 0 ||
         (uintmax_t)st.st_size > HISTORY_FILE_BYTES)
         return -1;
-    snag_buf_init(&file, HISTORY_FILE_BYTES + 1u);
-    snag_buf_init(&decoded, SNAG_HISTORY_BYTES + 1u);
+    struct snag_buf file = {.max = HISTORY_FILE_BYTES + 1u};
+    struct snag_buf decoded = {.max = SNAG_HISTORY_BYTES + 1u};
     if (snag_seek(fd, 0, SEEK_SET) < 0)
         goto out;
     while (file.len < (size_t)st.st_size) {
@@ -279,11 +277,10 @@ fail:
 int
 snag_history_open(struct snag_history *term, const char *dotdir)
 {
-    struct snag_buf path;
 
     if (!term || !snag_path_root_len(dotdir))
         return snag_errno(EINVAL);
-    snag_buf_init(&path, SNAG_PATH_MAX_BYTES);
+    struct snag_buf path = {.max = SNAG_PATH_MAX_BYTES};
     if (snag_buf_printf(&path, "%s/prompt_history", dotdir) < 0 ||
         snag_buf_terminate(&path) < 0) {
         snag_buf_free(&path);
@@ -300,7 +297,6 @@ snag_history_open(struct snag_history *term, const char *dotdir)
 int
 snag_history_add(struct snag_history *term, const char *text)
 {
-    struct snag_buf encoded;
     bool damaged = false, dropped = false, retained = false;
     int fd, rc = -1, saved;
 
@@ -313,7 +309,7 @@ snag_history_add(struct snag_history *term, const char *text)
         goto memory;
     if (history_load_locked(term, fd, &damaged) < 0)
         goto close_memory;
-    snag_buf_init(&encoded, HISTORY_FILE_BYTES);
+    struct snag_buf encoded = {.max = HISTORY_FILE_BYTES};
     if (history_encode(&encoded, text) < 0 ||
         snag_write_full(fd, encoded.data, encoded.len) < 0 ||
         snag_write_full(fd, "\n", 1u) < 0 ||

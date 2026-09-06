@@ -448,12 +448,11 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
 static int
 read_fd_all(int fd, char **out, size_t *out_len)
 {
-    struct snag_buf buf;
     int rc = -1;
 
     *out = NULL;
     *out_len = 0;
-    snag_buf_init(&buf, PATCH_FILE_MAX + 1u);
+    struct snag_buf buf = {.max = PATCH_FILE_MAX + 1u};
     if (snag_buf_read(&buf, fd) < 0 || snag_buf_terminate(&buf) < 0)
         goto out_free;
     *out = (char *)buf.data;
@@ -1015,13 +1014,12 @@ static int
 preview_printf(struct snag_buf *out, size_t *used, bool *truncated,
                const char *fmt, ...)
 {
-    struct snag_buf text;
     va_list ap;
     int rc;
 
     if (*truncated)
         return 0;
-    snag_buf_init(&text, SIZE_MAX);
+    struct snag_buf text = {.max = SIZE_MAX};
     va_start(ap, fmt);
     rc = snag_buf_vprintf(&text, fmt, ap);
     va_end(ap);
@@ -1165,7 +1163,6 @@ snag_tools_apply_patch(const struct snag_response_item *call,
     char **lines = NULL;
     size_t line_count = 0;
     struct patch_set set = {0};
-    struct snag_buf summary;
     const char *status = "patch_rejected";
     uint64_t started = snag_time_ms();
     int root_fd = -1;
@@ -1175,7 +1172,7 @@ snag_tools_apply_patch(const struct snag_response_item *call,
         return snag_fail(error, error_size, EINVAL, "invalid apply_patch result destination");
     }
     *result = NULL;
-    snag_buf_init(&summary, PATCH_MODEL_MAX);
+    struct snag_buf summary = {.max = PATCH_MODEL_MAX};
     if (!call || !session_workspace ||
         !json_bounded_string(call->arguments, "patch", PATCH_TEXT_MAX,
                              &patch, &patch_len) ||

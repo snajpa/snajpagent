@@ -138,10 +138,9 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
         *count_method = "exact";
     }
     {
-        struct snag_buf encoded;
         bool wait_for_mention;
 
-        snag_buf_init(&encoded, SNAG_WIRE_BODY_MAX);
+        struct snag_buf encoded = {.max = SNAG_WIRE_BODY_MAX};
         if (snag_json_canonical(count_request, &encoded) < 0 ||
             snag_buf_terminate(&encoded) < 0) {
             if (error_size)
@@ -402,7 +401,6 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         }
     }
     if (call && call->name && strcmp(call->name, "irc_state") == 0) {
-        struct snag_buf state;
         int rc;
 
         *result = NULL;
@@ -411,7 +409,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                                                 "irc_state arguments are invalid");
             return *result ? 0 : -1;
         }
-        snag_buf_init(&state, SNAG_MAX_IRC_SNAPSHOT);
+        struct snag_buf state = {.max = SNAG_MAX_IRC_SNAPSHOT};
         rc = app->irc ? snag_irc_state(app->irc, &state, error, error_size) :
             snag_buf_printf(&state, "no active endpoints\n");
         if (rc == 0)
@@ -428,7 +426,6 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         const char *text = snag_json_string(call->arguments, topic ? "topic" : "text");
         json_t *notice_value = json_object_get(call->arguments, "notice");
         struct snag_irc_route route;
-        struct snag_buf report;
         int rc;
 
         *result = NULL;
@@ -448,7 +445,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                 "Null is valid only for a sole destination. No message was sent.");
             return *result ? 0 : -1;
         }
-        snag_buf_init(&report, 8192u);
+        struct snag_buf report = {.max = 8192u};
         rc = snag_irc_send_route(app->irc, &route, true,
             topic ? SNAG_IRC_TOPIC : json_is_true(notice_value) ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE,
             text, &report, error, error_size);

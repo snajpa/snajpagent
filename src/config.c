@@ -453,13 +453,12 @@ snag_config_prompt_expand(const char *text, unsigned int mode,
                          unsigned char marker,
                          char *label, size_t label_size)
 {
-    struct snag_buf out;
     int rc = -1;
 
     if (!text || mode >= 3u || !values || !label || label_size < 2u ||
         marker > 0xfeu)
         return snag_errno(EINVAL);
-    snag_buf_init(&out, label_size);
+    struct snag_buf out = {.max = label_size};
     if (parse_prompt(text, mode, values, marker, &out) < 0 || !out.len ||
         snag_buf_putc(&out, ' ') < 0 || snag_buf_terminate(&out) < 0)
         goto out;
@@ -1071,7 +1070,6 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
                 const char *dotdir,
                 char *error, size_t error_size)
 {
-    struct snag_buf text;
     char *owned_path = NULL;
     const char *path = explicit_path;
     snag_file_info file_stat;
@@ -1086,7 +1084,7 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
         return -1;
     path = owned_path;
     (void)snag_strcpy(config->source_path, sizeof(config->source_path), path);
-    snag_buf_init(&text, SNAG_CONFIG_FILE_MAX + 1u);
+    struct snag_buf text = {.max = SNAG_CONFIG_FILE_MAX + 1u};
     bool private_file = false;
     read_rc = read_config(path, explicit_path != NULL, &text, &file_stat, &private_file, NULL,
                           error, error_size);
@@ -1373,13 +1371,12 @@ int
 snag_config_validate_provider(const struct snag_provider_config *provider,
                              char *error, size_t error_size)
 {
-    struct snag_buf text;
     int rc = -1;
     if (!provider || !snag_config_name_valid(provider->name) ||
         (provider->auth == SNAG_AUTH_CHATGPT &&
          (strcmp(provider->base_url, SNAG_CHATGPT_BASE) || provider->api_key.kind != SNAG_SECRET_NONE)))
         return snag_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
-    snag_buf_init(&text, SNAG_CONFIG_FILE_MAX);
+    struct snag_buf text = {.max = SNAG_CONFIG_FILE_MAX};
     if (snag_buf_printf(&text, "[provider %s]\n", provider->name) == 0 &&
         provider_settings(&text, provider) == 0)
         rc = validate_config_text(&text, "/config.ini", true, error, error_size);
@@ -1395,8 +1392,6 @@ save_config_settings(const char *path, bool allow_create,
                       const struct snag_provider_config *provider_config,
                       char *error, size_t error_size)
 {
-    struct snag_buf input;
-    struct snag_buf output;
     snag_file_info before;
     snag_file_info current;
     struct snag_permissions permissions = {0};
@@ -1413,8 +1408,8 @@ save_config_settings(const char *path, bool allow_create,
     int saved;
 
     memset(&before, 0, sizeof(before));
-    snag_buf_init(&input, SNAG_CONFIG_FILE_MAX + 1u);
-    snag_buf_init(&output, SNAG_CONFIG_FILE_MAX);
+    struct snag_buf input = {.max = SNAG_CONFIG_FILE_MAX + 1u};
+    struct snag_buf output = {.max = SNAG_CONFIG_FILE_MAX};
     if (!snag_path_root_len(path) || strlen(path) > SNAG_CONFIG_PATH_MAX ||
         !provider || !*provider || strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
         !model || (!provider_config && !*model) || strlen(model) >= SNAG_CONFIG_MODEL_MAX ||
@@ -1465,8 +1460,7 @@ save_config_settings(const char *path, bool allow_create,
         goto out;
     }
     if (provider_config && *model) {
-        struct snag_buf selected;
-        snag_buf_init(&selected, SNAG_CONFIG_FILE_MAX);
+        struct snag_buf selected = {.max = SNAG_CONFIG_FILE_MAX};
         if (replace_model_settings(&output, &selected, provider, model, effort) < 0) {
             snag_buf_free(&selected);
             goto out;

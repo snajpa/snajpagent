@@ -45,9 +45,8 @@ static int
 post_json(const char *path, json_t *request, json_t **response, long *status,
            snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
 {
-    struct snag_buf body;
     int rc = -1;
-    snag_buf_init(&body, AUTH_BODY_MAX);
+    struct snag_buf body = {.max = AUTH_BODY_MAX};
     if (snag_json_canonical(request, &body) == 0)
         rc = auth_post(path, "application/json", body.data, body.len,
                        response, status, pump, opaque, error, error_size);
@@ -63,14 +62,13 @@ token_claims(const char *token)
     static const char alphabet[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     const char *p = token ? strchr(token, '.') : NULL;
-    struct snag_buf decoded;
     unsigned int value = 0u, bits = 0u;
     char error[128];
     json_t *claims = NULL;
 
     if (!p)
         return NULL;
-    snag_buf_init(&decoded, AUTH_BODY_MAX);
+    struct snag_buf decoded = {.max = AUTH_BODY_MAX};
     for (++p; *p && *p != '.'; ++p) {
         const char *digit = strchr(alphabet, *p);
         if (!digit)
@@ -207,14 +205,13 @@ snag_auth_device(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
                 void *opaque, char *error, size_t error_size)
 {
     json_t *request = NULL, *response = NULL, *code = NULL;
-    struct snag_buf body;
     char callback[4096];
     uint64_t interval = 5u, deadline;
     long status = 0;
     int rc = -1;
 
     snag_auth_clear(tokens);
-    snag_buf_init(&body, AUTH_BODY_MAX);
+    struct snag_buf body = {.max = AUTH_BODY_MAX};
     request = json_object();
     if (!request || snag_json_set_new(request, "client_id", json_string(AUTH_CLIENT)) < 0 ||
         post_json("/api/accounts/deviceauth/usercode", request, &response,

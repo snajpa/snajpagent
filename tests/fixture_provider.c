@@ -584,9 +584,8 @@ fixture_response(const char *prompt, const json_t *steering,
         return 0;
     }
     if (strcmp(prompt, "render_flood") == 0) {
-        struct snag_buf text;
         int rc = -1;
-        snag_buf_init(&text, 128u * 1024u);
+        struct snag_buf text = {.max = 128u * 1024u};
         if (snag_buf_printf(&text, "| row | text |\n| --- | --- |\n") < 0)
             goto flood_done;
         for (unsigned int i = 0u; i < 2048u; ++i)

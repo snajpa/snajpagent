@@ -99,13 +99,12 @@ remember_input(struct app_state *app, const char *text)
 static int
 app_textf(struct app_state *app, enum snag_ui_operation operation, const char *fmt, ...)
 {
-    struct snag_buf text;
     va_list ap;
     int rc;
 
     if (operation == SNAG_UI_RUNTIME && !snag_ui_enabled(&app->ui, SNAG_PRESENT_DEBUG))
         return 0;
-    snag_buf_init(&text, 4u * 1024u * 1024u);
+    struct snag_buf text = {.max = 4u * 1024u * 1024u};
     va_start(ap, fmt);
     rc = snag_buf_vprintf(&text, fmt, ap);
     va_end(ap);
@@ -510,9 +509,7 @@ set_input_prompt(struct app_state *app, bool active)
     (void)snprintf(queue, sizeof(queue), "%zu", app->session.pending_queue_count);
     values[SNAG_PROMPT_QUEUE] = queue;
     if (app->queue_edit_id[0]) {
-        struct snag_buf out;
-
-        snag_buf_init(&out, SNAG_TERM_LABEL_BYTES);
+        struct snag_buf out = {.max = SNAG_TERM_LABEL_BYTES};
         for (unsigned int i = 0u; i < SNAG_TERM_SPINNER_SLOTS; ++i)
             if (snag_buf_putc(&out, SNAG_TERM_SPINNER_MARKER_BASE + i) < 0)
                 goto fail;
@@ -640,7 +637,6 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
                  char *error, size_t error_size)
 {
     struct snag_queued_turn *queued;
-    struct snag_buf draft;
     int draft_rc;
 
     if (number == 0u || number > app->session.pending_queue_count) {
@@ -652,7 +648,7 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
     app->queue_edit_number = number;
     app->queue_edit_was_armed = app->queue_armed;
     app->queue_armed = false;
-    snag_buf_init(&draft, SNAG_MAX_QUEUED_TEXT + 8u);
+    struct snag_buf draft = {.max = SNAG_MAX_QUEUED_TEXT + 8u};
     draft_rc = snag_buf_printf(&draft, "%s%s", queued->read_only ? "/ro " :
                               queued->text[0] == '/' ? "/" : "", queued->text);
     if (draft_rc == 0)
@@ -935,7 +931,6 @@ render_status(struct app_state *app)
     const struct snag_model_limit_config *rule_sources[3];
     const json_t *advertised = NULL;
     struct snag_model_capacity capacity;
-    struct snag_buf text;
     bool ceiling_selection_matches;
     bool ceiling_source_matches;
     char error[256] = {0};
@@ -958,7 +953,7 @@ render_status(struct app_state *app)
         capacity_ceiling_matches(app, provider, next_model(app));
     if (capacity.source_bound)
         advertised = snag_model_metadata(&app->model_cache, provider, next_model(app));
-    snag_buf_init(&text, 64u * 1024u);
+    struct snag_buf text = {.max = 64u * 1024u};
     if (snag_buf_printf(&text,
         "session: %s\n"
         "state: %s\n"
@@ -1089,10 +1084,9 @@ render_help(struct app_state *app)
         "Rollout Enter private submit/add to active turn · "
         "Empty Tab switch view · Tab complete/indent/queue (chat: @nick) · "
         "Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
-    struct snag_buf text;
     int rc = -1;
 
-    snag_buf_init(&text, 64u * 1024u);
+    struct snag_buf text = {.max = 64u * 1024u};
     for (size_t i = 0u; i < command_count(); ++i)
         if (snag_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
                            commands[i].description) < 0)
@@ -1970,12 +1964,11 @@ static int
 send_operator_routed(struct app_state *app, const char *line, const char *text,
                      enum snag_irc_event_kind kind)
 {
-    struct snag_buf report;
     char error[256] = {0};
     int rc;
     bool show = app->ui.input_route.count > 1u;
 
-    snag_buf_init(&report, 8192u);
+    struct snag_buf report = {.max = 8192u};
     rc = snag_irc_send_route(app->irc, &app->ui.input_route, false, kind,
                               text, &report, error, sizeof(error));
     if ((rc == 0 || rc == 2) &&
@@ -2081,10 +2074,9 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     if (strcmp(line, "/goal") == 0 || strncmp(line, "/goal ", 6u) == 0)
         return snag_app_goal_command(app, line, active);
     if (strcmp(line, "/names") == 0 || strcmp(line, "/topic") == 0) {
-        struct snag_buf state;
         int rc;
 
-        snag_buf_init(&state, SNAG_MAX_IRC_SNAPSHOT);
+        struct snag_buf state = {.max = SNAG_MAX_IRC_SNAPSHOT};
         rc = snag_buf_printf(&state, "selected destination: %u\n", app->ui.selection.id);
         if (rc == 0)
             rc = snag_irc_state(app->irc, &state, error, sizeof(error));
@@ -3939,11 +3931,10 @@ static void
 write_resume_command(struct app_state *app, const char *program,
                      const char *dotdir)
 {
-    struct snag_buf command;
 
     if (!dotdir || app->session.log_fd < 0 || app->session.delete_requested)
         return;
-    snag_buf_init(&command, RESUME_COMMAND_MAX);
+    struct snag_buf command = {.max = RESUME_COMMAND_MAX};
     if (build_resume_command(app, program, dotdir, &command) == 0 &&
         snag_command_finish(&command) == 0 && snag_buf_terminate(&command) == 0)
         (void)snag_ui_resume_hint(&app->ui, (char *)command.data,

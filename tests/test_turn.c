@@ -85,8 +85,7 @@ test_native_read_results(void)
     char *above = snag_path_join(root_path, "../..");
     json_t *listing = json_pack("{s:s,s:b,s:n,s:i}", "path", above,
                                 "recursive", 0, "offset", "limit", 1);
-    struct snag_buf listing_text;
-    snag_buf_init(&listing_text, 8192u);
+    struct snag_buf listing_text = {.max = 8192u};
     assert(above && listing && snag_json_canonical(listing, &listing_text) == 0 &&
            snag_buf_terminate(&listing_text) == 0);
     check_native_read(root, "list_files", (char *)listing_text.data, true, "next_offset=", NULL);
@@ -191,11 +190,9 @@ main(void)
     assert(decision.outcome == SNAG_GRAPH_CALLS);
     {
         json_t *roundtrip = snag_response_graph_json(&copy);
-        struct snag_buf a;
-        struct snag_buf b;
         assert(roundtrip);
-        snag_buf_init(&a, SNAG_MAX_RESPONSE_GRAPH);
-        snag_buf_init(&b, SNAG_MAX_RESPONSE_GRAPH);
+        struct snag_buf a = {.max = SNAG_MAX_RESPONSE_GRAPH};
+        struct snag_buf b = {.max = SNAG_MAX_RESPONSE_GRAPH};
         assert(snag_json_canonical(encoded, &a) == 0);
         assert(snag_json_canonical(roundtrip, &b) == 0);
         assert(a.len == b.len && memcmp(a.data, b.data, a.len) == 0);

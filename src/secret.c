@@ -72,13 +72,12 @@ snag_secret_result(const struct snag_secret_set *set, json_t *result,
 {
     json_t *text = json_object_get(result, "model_text");
     json_t *wrapper = NULL, *redacted = NULL;
-    struct snag_buf encoded, clean;
     int rc = -1;
 
     if (!json_is_string(text))
         return 0;
-    snag_buf_init(&encoded, SNAG_WIRE_BODY_MAX);
-    snag_buf_init(&clean, SNAG_WIRE_BODY_MAX);
+    struct snag_buf encoded = {.max = SNAG_WIRE_BODY_MAX};
+    struct snag_buf clean = {.max = SNAG_WIRE_BODY_MAX};
     wrapper = json_object();
     if (wrapper && json_object_set_new(wrapper, "text", json_incref(text)) == 0 &&
         snag_json_canonical(wrapper, &encoded) == 0 &&

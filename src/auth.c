@@ -149,7 +149,6 @@ read_tokens(int dir, const struct snag_provider_config *provider,
              struct snag_auth_tokens *tokens)
 {
     char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u], error[128];
-    struct snag_buf text;
     json_t *value = NULL;
     const char *kind, *base;
     snag_file_info st;
@@ -160,7 +159,7 @@ read_tokens(int dir, const struct snag_provider_config *provider,
     fd = snag_open_read_security_at(dir, path, false);
     if (fd < 0)
         return errno == ENOENT ? 1 : -1;
-    snag_buf_init(&text, AUTH_FILE_MAX);
+    struct snag_buf text = {.max = AUTH_FILE_MAX};
     if (private_fd(fd, false) < 0 || snag_fstat(fd, &st) < 0 ||
         st.st_size < 1 || (uint64_t)st.st_size > AUTH_FILE_MAX)
         goto out;
@@ -210,11 +209,10 @@ write_tokens(int dir, const struct snag_provider_config *provider,
     char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
     char temp[SNAG_ID_HEX_LEN + 8u], id[SNAG_ID_HEX_LEN + 1u];
     json_t *value = json_object();
-    struct snag_buf text;
     int fd = -1, rc = -1;
 
     temp[0] = '\0';
-    snag_buf_init(&text, AUTH_FILE_MAX);
+    struct snag_buf text = {.max = AUTH_FILE_MAX};
     if (!value ||
         snag_json_set_new(value, "kind", json_string(snag_auth_kind_name(provider->auth))) < 0 ||
         snag_json_set_new(value, "base_url", json_string(provider->base_url)) < 0 ||

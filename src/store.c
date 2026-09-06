@@ -250,12 +250,11 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
                    uint64_t *written_seq, char *error, size_t error_size)
 {
     json_t *event = NULL;
-    struct snag_buf line;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     int64_t actual_end;
     uint64_t seq = session->next_seq;
     int rc = -1;
-    snag_buf_init(&line, SNAG_MAX_EVENT_LINE);
+    struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
     if (!data || seq > SNAG_EVENT_LIMIT - SNAG_EVENT_RESERVE ||
         session->log_end > SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE) {
         (void)snag_fail(error, error_size, ENOSPC, "session log has no admission reserve");
@@ -1800,7 +1799,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *handle = snag_json_string(data, "handle");
         const char *turn_id = snag_json_string(data, "turn_id");
         struct snag_process_state *process = snag_session_process(session, handle);
-        struct snag_buf bytes;
         uint64_t stream, offset;
         int rc;
         if (!session->active_turn || !turn_id ||
@@ -1809,7 +1807,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_integer_u64(data, "offset", &offset) < 0 ||
             offset != process->output_bytes[stream])
             goto invalid;
-        snag_buf_init(&bytes, 16384u);
+        struct snag_buf bytes = {.max = 16384u};
         rc = snag_process_output_decode(data, &bytes);
         if (rc == 0 && bytes.len && offset <= (uint64_t)INT64_MAX - bytes.len)
             process->output_bytes[stream] += bytes.len;
@@ -1935,14 +1933,13 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
                int64_t *complete_end_out, uint64_t *next_seq_out,
                char *error, size_t error_size)
 {
-    struct snag_buf line;
     unsigned char chunk[8192];
     int64_t complete_end = cursor ? (int64_t)cursor->log_offset : 0;
     int64_t read_off = complete_end;
     uint64_t seq = cursor ? cursor->log_seq : 1u;
     int rc = -1;
 
-    snag_buf_init(&line, SNAG_MAX_EVENT_LINE);
+    struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
     for (;;) {
         size_t want = sizeof(chunk);
         ssize_t got;

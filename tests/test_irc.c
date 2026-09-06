@@ -343,7 +343,6 @@ test_runtime_roles(void)
     struct snag_config config, upstream_config;
     struct capture capture = {0}, upstream_capture = {0};
     struct snag_irc *runtime, *upstream;
-    struct snag_buf state;
     char error[256] = {0}, wire[65536], host[64], other[64];
     uint64_t revision;
     unsigned int joins;
@@ -362,7 +361,7 @@ test_runtime_roles(void)
     assert(snag_irc_normalize(&config, error, sizeof(error)) == 0);
     assert(snag_irc_open(&runtime, &config, "/private-workspace", capture_event,
                          capture_trace, &capture, error, sizeof(error)) == 0);
-    snag_buf_init(&state, 65536u);
+    struct snag_buf state = {.max = 65536u};
     assert(snag_irc_state(runtime, &state, error, sizeof(error)) == 0);
     assert(snag_buf_terminate(&state) == 0);
     assert(strstr((char *)state.data, "no active endpoints"));
@@ -887,7 +886,6 @@ test_client_reconnect(void)
     struct snag_irc *server;
     struct snag_irc *next_server;
     struct snag_irc *client = NULL;
-    struct snag_buf snapshot;
     unsigned short port = free_port();
     char address[64u];
     char error[256] = {0};
@@ -944,7 +942,7 @@ test_client_reconnect(void)
     assert(client_capture.last_message.timestamp_ms >=
            history_before / 1000u * 1000u);
     assert(client_capture.last_message.timestamp_ms <= history_after);
-    snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
+    struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
     assert(snag_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
     assert(snapshot.len > 4u * 1000u * 1000u);
     snag_buf_free(&snapshot);
@@ -1179,7 +1177,6 @@ test_client_nick_collision(void)
     struct snag_irc *server;
     struct snag_irc *next_server;
     struct snag_irc *client = NULL;
-    struct snag_buf snapshot;
     unsigned short port = free_port();
     snag_socket occupied[2u];
     char address[64u];
@@ -1243,7 +1240,7 @@ test_client_nick_collision(void)
                   "preferred nick is remote") == 0);
     assert(snag_irc_mentions_agent(client, address, "agent2: respond"));
     assert(!snag_irc_mentions_agent(client, address, "agent: not this client"));
-    snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
+    struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
     assert(snag_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
     assert(snag_buf_terminate(&snapshot) == 0);
     assert(strstr((const char *)snapshot.data,
@@ -1404,7 +1401,6 @@ test_client_events(void)
     }
     {
         unsigned int messages = capture.events[SNAG_IRC_MESSAGE];
-        struct snag_buf snapshot;
 
         /* Observer receives the model rename first, followed by its echo. */
         send_text(operator_fd,
@@ -1431,7 +1427,7 @@ test_client_events(void)
         assert(snag_irc_mentions_agent(client, "local", "@agent7 hello"));
         assert(!snag_irc_mentions_agent(client, "local", "@remoteagent old"));
         assert(!snag_irc_mentions_agent(client, address, "remoteagent: old"));
-        snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
+        struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
         assert(snag_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
         assert(snag_buf_terminate(&snapshot) == 0);
         assert(strstr((const char *)snapshot.data,

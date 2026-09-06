@@ -286,13 +286,12 @@ snag_json_load_canonical(const unsigned char *data, size_t len,
                         char *error, size_t error_size)
 {
     json_t *value;
-    struct snag_buf encoded;
 
     value = snag_json_load_strict(data, len, SNAG_MAX_EVENT_LINE,
                                  error, error_size);
     if (!value)
         return NULL;
-    snag_buf_init(&encoded, SNAG_MAX_EVENT_LINE);
+    struct snag_buf encoded = {.max = SNAG_MAX_EVENT_LINE};
     if (snag_json_canonical(value, &encoded) < 0 || encoded.len != len ||
         memcmp(encoded.data, data, len) != 0) {
         if (error_size)
@@ -311,10 +310,9 @@ int
 snag_json_digest_bounded(const json_t *value, size_t max,
                         char out[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes)
 {
-    struct snag_buf encoded;
     int rc = -1;
 
-    snag_buf_init(&encoded, max);
+    struct snag_buf encoded = {.max = max};
     if (snag_json_canonical(value, &encoded) == 0) {
         if (out)
             snag_sha256_hex(encoded.data, encoded.len, out);

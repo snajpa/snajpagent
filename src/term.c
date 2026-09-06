@@ -224,14 +224,13 @@ snag_term_write(int fd, const void *text, size_t len)
 int
 snag_term_write_safe(int fd, const char *text, size_t len)
 {
-    struct snag_buf out;
     size_t max;
     int rc;
 
     if (len > (SIZE_MAX - 32u) / 8u)
         return snag_errno(EOVERFLOW);
     max = len * 8u + 32u;
-    snag_buf_init(&out, max);
+    struct snag_buf out = {.max = max};
     rc = append_safe(&out, (const unsigned char *)text, len, false, 0u, 0u,
                      len + 1u, NULL, false);
     if (rc == 0)
@@ -381,7 +380,6 @@ int
 snag_term_note_output(struct snag_term *term, const char *text, size_t len,
                      const char *style)
 {
-    struct snag_buf safe;
     int rc = -1;
 
     if (!term || !len)
@@ -398,7 +396,7 @@ snag_term_note_output(struct snag_term *term, const char *text, size_t len,
         term->output_newlines = 2u;
     if (!term->opened || !term->capable)
         return 0;
-    snag_buf_init(&safe, len * 8u + 32u);
+    struct snag_buf safe = {.max = len * 8u + 32u};
     if (snag_term_append_safe(&safe, text, len) < 0)
         goto out;
     for (size_t i = 0u; i < safe.len;) {
@@ -612,7 +610,6 @@ clear_output_baseline(struct snag_term *term)
 int
 snag_term_hide(struct snag_term *term)
 {
-    struct snag_buf out;
     size_t max;
     int rc = -1;
 
@@ -627,7 +624,7 @@ snag_term_hide(struct snag_term *term)
     if (term->rendered_rows > (SIZE_MAX - 256u) / 16u ||
         !snag_size_add(term->rendered_rows * 16u + 256u, term->output_cell.len, &max))
         return snag_errno(EOVERFLOW);
-    snag_buf_init(&out, max);
+    struct snag_buf out = {.max = max};
     if ((term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0) ||
         (term->rendered_cursor_row + 1u < term->rendered_rows &&
          snag_buf_printf(&out, "\033[%zuB",
@@ -1182,7 +1179,6 @@ static int
 paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
              size_t cursor_row, size_t cursor_col, size_t end_row, size_t end_col)
 {
-    struct snag_buf out;
     size_t row = term->prompt_visible ? term->rendered_cursor_row : 0u;
     size_t col = term->prompt_visible ? term->rendered_cursor_col : 0u;
     size_t old_rows = term->prompt_visible ? term->rendered_rows : 0u;
@@ -1194,7 +1190,7 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
     if (frame->max > (SIZE_MAX - 256u) / 16u || old_rows > SIZE_MAX / 32u ||
         !snag_size_add(frame->max * 16u + 256u, old_rows * 32u, &max))
         return snag_errno(EOVERFLOW);
-    snag_buf_init(&out, max);
+    struct snag_buf out = {.max = max};
     if (term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0)
         goto out;
     if (stable) {

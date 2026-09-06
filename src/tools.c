@@ -207,12 +207,11 @@ redact_output(struct managed_process *proc, unsigned int stream, bool final)
 static json_t *
 excerpt_json(const struct output_excerpt *stream)
 {
-    struct snag_buf encoded;
     const struct snag_buf *data = &stream->data;
     bool textual = snag_utf8_valid(data->data, data->len, true);
     json_t *out = NULL;
 
-    snag_buf_init(&encoded, SIZE_MAX);
+    struct snag_buf encoded = {.max = SIZE_MAX};
     if (!textual) {
         if (snag_base64_append(&encoded, data->data, data->len) < 0)
             goto done;
@@ -258,10 +257,9 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
                const struct output_excerpt *stdout_stream,
                const struct output_excerpt *stderr_stream)
 {
-    struct snag_buf text;
     char *out = NULL;
 
-    snag_buf_init(&text, SIZE_MAX);
+    struct snag_buf text = {.max = SIZE_MAX};
     if (strcmp(status, "succeeded") == 0 || strcmp(status, "failed") == 0) {
         if (snag_buf_printf(&text, "Process exited with code %lld.\n", (long long)exit_code) < 0)
             goto done;

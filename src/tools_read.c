@@ -72,13 +72,12 @@ static int
 open_path(const char *workspace, const char *path)
 {
     char *copy, *part, *save = NULL;
-    struct snag_buf full;
     int fd = -1;
     int *ancestors = NULL;
     size_t count = 0;
     bool absolute = snag_path_root_len(path) != 0u;
 
-    snag_buf_init(&full, 8192u);
+    struct snag_buf full = {.max = 8192u};
     if (snag_buf_printf(&full, "%s%s%s", absolute ? "" : workspace,
                        absolute ? "" : "/", path) < 0 ||
         snag_buf_terminate(&full) < 0)
@@ -334,7 +333,6 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
     if (count)
         qsort(names, count, sizeof(*names), compare_names);
     for (size_t i = 0; i < count && rc == 0; ++i) {
-        struct snag_buf child;
         const char *type;
 
         if (checkpoint(q) < 0 ||
@@ -342,7 +340,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
             rc = -1;
             break;
         }
-        snag_buf_init(&child, 8192u);
+        struct snag_buf child = {.max = 8192u};
         rc = snag_buf_printf(&child, "%s%s%s", path,
                             path[strlen(path) - 1u] == '/' ? "" : "/", names[i]);
         if (rc == 0)

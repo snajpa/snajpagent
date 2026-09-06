@@ -1322,8 +1322,7 @@ test_ui_output_order_and_failure(void)
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     /* Beginning a public item must not erase an already delivered shutdown. */
     {
-        struct snag_buf delivered;
-        snag_buf_init(&delivered, 16u);
+        struct snag_buf delivered = {.max = 16u};
         snag_ui_signal(&ui);
         assert(snag_ui_public_begin(&ui, STDOUT_FILENO, NULL, SNAG_PRESENT_CONVERSATION) == 0);
         assert(snag_ui_public(&ui, "stopped", 7u, &delivered) == 0);

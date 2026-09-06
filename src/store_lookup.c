@@ -281,11 +281,10 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
         return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        struct snag_buf row;
         if (matching_snapshot(store, &snapshot, entry, workspace,
                                all, include_archived) < 0)
             continue;
-        snag_buf_init(&row, 8192u);
+        struct snag_buf row = {.max = 8192u};
         if (snag_buf_printf(&row, "%.8s\t%s\t%llu\t%s\t%s%s%s\n",
                            entry, snapshot.default_model,
                            (unsigned long long)snapshot.turn_count,

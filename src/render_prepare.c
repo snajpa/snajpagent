@@ -10,10 +10,9 @@ preview(struct snag_buf *out, const char *text, size_t len, size_t characters,
         size_t cells, bool single_line, bool *truncated)
 {
     size_t used = 0u, width = 0u;
-    struct snag_buf safe;
     int rc = -1;
 
-    snag_buf_init(&safe, 32u);
+    struct snag_buf safe = {.max = 32u};
 
     for (size_t i = 0u; i < len;) {
         unsigned char c = (unsigned char)text[i];
@@ -127,7 +126,7 @@ snag_render_prepare_tool_start(struct snag_render_block *block,
                               const char *workdir, uint32_t default_timeout_ms,
                               unsigned int level, unsigned int columns)
 {
-    struct snag_buf row, args;
+    struct snag_buf args;
     bool truncated = false;
     size_t limit = snag_presentation_limit(SNAG_PRESENT_ARGUMENTS, level);
     size_t bytes = limit == SIZE_MAX ? SNAG_MAX_TOOL_ARGUMENTS * 6u + 2u :
@@ -136,7 +135,7 @@ snag_render_prepare_tool_start(struct snag_render_block *block,
 
     block_init(block, SNAG_PRESENT_ARGUMENTS);
     block->role = SNAG_ROLE_ACTIVITY;
-    snag_buf_init(&row, 4096u);
+    struct snag_buf row = {.max = 4096u};
     if (canonical_prefix(call->arguments, &args, bytes, &truncated) < 0)
         goto out;
     bool arguments_truncated = truncated;
@@ -181,7 +180,6 @@ snag_render_prepare_tool_finish(struct snag_render_block *block, const char *nam
                                const json_t *result, uint32_t max_output_bytes,
                                unsigned int level, unsigned int columns)
 {
-    struct snag_buf row;
     const char *status = snag_json_string(result, "status");
     const char *output = snag_json_string(result, "model_text");
     const char *handle = snag_json_string(result, "handle");
@@ -196,7 +194,7 @@ snag_render_prepare_tool_finish(struct snag_render_block *block, const char *nam
     block_init(block, SNAG_PRESENT_OUTPUT);
     block->role = status && strcmp(status, "succeeded") == 0 ? SNAG_ROLE_SUCCESS :
                   status && strcmp(status, "failed") == 0 ? SNAG_ROLE_ERROR : SNAG_ROLE_WARNING;
-    snag_buf_init(&row, 4096u);
+    struct snag_buf row = {.max = 4096u};
     if (snag_buf_printf(&row, "← %s  ", name) < 0)
         goto out;
     if (json_is_integer(exit_value)) {

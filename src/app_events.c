@@ -57,10 +57,9 @@ append_pending(struct snag_buf *pending, const char *text, size_t len)
 static char *
 pending_batch(const struct snag_buf *pending, size_t *used)
 {
-    struct snag_buf batch;
 
     *used = 0u;
-    snag_buf_init(&batch, SNAG_MAX_STEERING_TEXT + 1u);
+    struct snag_buf batch = {.max = SNAG_MAX_STEERING_TEXT + 1u};
     while (*used < pending->len) {
         const char *text = (const char *)pending->data + *used;
         size_t len = strlen(text);
@@ -203,14 +202,13 @@ int
 snag_app_irc_snapshot(struct app_state *app, const char *reason,
                      char *error, size_t error_size)
 {
-    struct snag_buf snapshot;
     int rc = -1;
 
     if (!app || !app->irc || !reason)
         return snag_errno(EINVAL);
     if (snag_app_sync_destinations(app) < 0)
         return -1;
-    snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
+    struct snag_buf snapshot = {.max = SNAG_MAX_IRC_SNAPSHOT};
     rc = strcmp(reason, "compaction") != 0 ?
         snag_irc_state(app->irc, &snapshot, error, error_size) :
         snag_irc_snapshot(app->irc, &snapshot, error, error_size);
@@ -307,7 +305,6 @@ snag_app_irc_trace(void *opaque, unsigned int level, char direction,
                   const char *endpoint, const char *text, size_t len)
 {
     struct app_state *app = opaque;
-    struct snag_buf safe;
     char label[384u];
     int rc = -1;
 
@@ -316,7 +313,7 @@ snag_app_irc_trace(void *opaque, unsigned int level, char direction,
         return snag_errno(EINVAL);
     if (!snag_ui_enabled(&app->ui, level == 6u ? SNAG_PRESENT_WIRE : SNAG_PRESENT_PROTOCOL))
         return 0;
-    snag_buf_init(&safe, 4u * SNAG_IRC_LINE_MAX);
+    struct snag_buf safe = {.max = 4u * SNAG_IRC_LINE_MAX};
     for (size_t i = 0u; i < len; ++i) {
         unsigned char c = (unsigned char)text[i];
         if (c < 0x20u || c == 0x7fu) {
@@ -542,11 +539,10 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
     *count_method = "unknown";
     rc = 0;
     if (snag_ui_enabled(&app->ui, SNAG_PRESENT_PROTOCOL)) {
-        struct snag_buf encoded;
         struct snag_secret_set secrets = {0};
 
         snag_buf_init(request_body, SNAG_WIRE_BODY_MAX);
-        snag_buf_init(&encoded, SNAG_WIRE_BODY_MAX);
+        struct snag_buf encoded = {.max = SNAG_WIRE_BODY_MAX};
         if (snag_secret_set_build(&secrets, app->config, credential, error, error_size) < 0 ||
             projection->create_request.bytes > SNAG_WIRE_BODY_MAX ||
             snag_json_canonical(projection->create_request.value, &encoded) < 0 ||
@@ -723,12 +719,11 @@ snag_app_tool_output(void *opaque, const char *handle, unsigned int stream,
                      uint64_t offset, const void *bytes, size_t len)
 {
     struct app_state *app = opaque;
-    struct snag_buf encoded;
     char error[256] = {0};
     bool utf8 = snag_utf8_valid(bytes, len, true);
     json_t *event;
     int rc = -1;
-    snag_buf_init(&encoded, 32768u);
+    struct snag_buf encoded = {.max = 32768u};
     if (!utf8 && snag_base64_append(&encoded, bytes, len) < 0)
         goto out;
     event = json_pack("{s:s,s:s,s:i,s:I,s:s,s:s%}",
@@ -757,7 +752,6 @@ read_process_chunk(void *opaque, const struct snag_session *state,
                     const json_t *data, char *error, size_t error_size)
 {
     struct process_read_range *read = opaque;
-    struct snag_buf bytes;
     uint64_t stream, offset;
     int rc = -1;
     (void)state;
@@ -773,7 +767,7 @@ read_process_chunk(void *opaque, const struct snag_session *state,
         return -1;
     if (stream != read->stream)
         return 0;
-    snag_buf_init(&bytes, 16384u);
+    struct snag_buf bytes = {.max = 16384u};
     if (snag_process_output_decode(data, &bytes) < 0 || offset > UINT64_MAX - bytes.len)
         goto out;
     uint64_t end = offset + bytes.len;

@@ -2774,7 +2774,6 @@ fail:
 int
 snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
 {
-    struct snag_buf text, nicks;
     int rc = -1;
 
     memset(view, 0, sizeof(*view));
@@ -2788,8 +2787,8 @@ snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view)
         (void)snag_strcpy(view->room, sizeof(view->room),
                         irc->hosting ? irc->room : irc->conns[0].room[0] ?
                         irc->conns[0].room : irc->conns[0].previous_room);
-    snag_buf_init(&text, sizeof(view->text) - 1u);
-    snag_buf_init(&nicks, sizeof(view->nicks) - 1u);
+    struct snag_buf text = {.max = sizeof(view->text) - 1u};
+    struct snag_buf nicks = {.max = sizeof(view->nicks) - 1u};
     if (snapshot_network(irc, &text, &nicks) == 0) {
         memcpy(view->text, text.data, text.len);
         if (nicks.len)

@@ -854,7 +854,6 @@ test_read_only_and_queue_controllers(void)
     assert(session.active_read_only && !session.active_queued);
     for (unsigned int variant = 0; variant < 15u; ++variant) {
         json_t *requests[3];
-        struct snag_buf serialized;
         unsigned int pass = variant % 5u;
         bool openrouter = variant >= 5u && variant < 10u;
         bool codex = variant >= 10u;
@@ -906,7 +905,7 @@ test_read_only_and_queue_controllers(void)
                 assert(tool_by_name(ts, "update_goal"));
             }
         }
-        snag_buf_init(&serialized, SNAG_CONTEXT_MAX_REQUEST);
+        struct snag_buf serialized = {.max = SNAG_CONTEXT_MAX_REQUEST};
         assert(snag_json_canonical(projection.create_request.value, &serialized) == 0);
         assert(snag_buf_terminate(&serialized) == 0);
         assert((strstr((char *)serialized.data, "distinct goal wording") != NULL) == (pass >= 3u));
@@ -2026,8 +2025,7 @@ main(void)
         assert(strstr(snag_json_string(restored, "content"), "finish compacted work"));
         json_t *requests[] = {projection.create_request.value, projection.count_request.value};
         for (size_t i = 0u; i < 2u; ++i) {
-            struct snag_buf encoded;
-            snag_buf_init(&encoded, SNAG_CONTEXT_MAX_REQUEST);
+            struct snag_buf encoded = {.max = SNAG_CONTEXT_MAX_REQUEST};
             assert(snag_json_canonical(requests[i], &encoded) == 0);
             assert(snag_buf_terminate(&encoded) == 0);
             assert(strstr((const char *)encoded.data, "finish compacted work"));

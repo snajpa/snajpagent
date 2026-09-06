@@ -53,13 +53,12 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
                         const char *config_path, char *error, size_t error_size)
 {
     struct snag_secret_source source = {0};
-    struct snag_buf path;
     json_t *literal = NULL;
     char *home = NULL;
     size_t len = strlen(expression);
     int rc = -1;
 
-    snag_buf_init(&path, SNAG_SECRET_MAX + 1u);
+    struct snag_buf path = {.max = SNAG_SECRET_MAX + 1u};
     if (!len || len > 65536u)
         goto invalid;
     source.expression = snag_strdup_checked(expression, 65536u);

@@ -896,7 +896,6 @@ test_punctuation_wrapping(void)
                         prefix, first) > 0);
         for (size_t i = 0u; i < sizeof(punctuation) / sizeof(punctuation[0]);
              ++i) {
-            struct snag_buf delivered;
 
             assert(snprintf(second, sizeof(second), "%smores",
                             punctuation[i]) > 0);
@@ -905,7 +904,7 @@ test_punctuation_wrapping(void)
                             punctuation[i], enabled ? "  " : "") > 0);
             assert(snprintf(delivered_output, sizeof(delivered_output),
                             "%s%smores", first, punctuation[i]) > 0);
-            snag_buf_init(&delivered, sizeof(delivered_output));
+            struct snag_buf delivered = {.max = sizeof(delivered_output)};
             assert(capture_wrapped(first, second, 20u, enabled != 0u,
                                    first_output, second_output, output,
                                    sizeof(output), &delivered) > 0u);
@@ -914,14 +913,13 @@ test_punctuation_wrapping(void)
             snag_buf_free(&delivered);
         }
         {
-            struct snag_buf delivered;
 
             assert(snprintf(first_output, sizeof(first_output),
                             "%s1234567890 ", prefix) > 0);
             assert(snprintf(second_output, sizeof(second_output),
                             "%s1234567890 \n%s-something", prefix,
                             enabled ? "  " : "") > 0);
-            snag_buf_init(&delivered, 32u);
+            struct snag_buf delivered = {.max = 32u};
             assert(capture_wrapped("1234567890 ", "-something", 20u,
                                    enabled != 0u, first_output, second_output,
                                    output, sizeof(output), &delivered) > 0u);
@@ -1388,7 +1386,6 @@ test_markdown_streaming(void)
     static const char fourth[] = "de`\n";
     struct snag_render render;
     struct snag_term term;
-    struct snag_buf delivered;
     char output[4096] = {0};
     size_t used = 0u;
     int fds[2];
@@ -1405,7 +1402,7 @@ test_markdown_streaming(void)
     render.stdout_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
     snag_render_attach_term(&render, &term);
-    snag_buf_init(&delivered, 1024u);
+    struct snag_buf delivered = {.max = 1024u};
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, first, sizeof(first) - 1u,
                              &delivered) == 0);
@@ -1497,9 +1494,8 @@ test_markdown_tables(void)
         "│ a|b  │ tail  │\n"
         "└──────┴───────┘\n";
     char output[8192];
-    struct snag_buf delivered;
 
-    snag_buf_init(&delivered, sizeof(markdown));
+    struct snag_buf delivered = {.max = sizeof(markdown)};
     assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER,
                             output, sizeof(output), &delivered) > 0u);
     assert(strcmp(output, rendered) == 0);
@@ -1854,7 +1850,6 @@ test_semantic_history(void)
         assert(log_fd >= 0 && unlink(path) == 0);
         FILE *file = fdopen(log_fd, "w+");
         struct snag_render render;
-        struct snag_buf response, finish;
         char args[1401], result[801], output[8192] = {0};
         struct output_capture capture = capture_open(false, true);
         assert(file);
@@ -1863,8 +1858,8 @@ test_semantic_history(void)
         args[sizeof(args) - 1u] = '\0';
         memset(result, 'R', sizeof(result) - 1u);
         result[sizeof(result) - 1u] = '\0';
-        snag_buf_init(&response, 4096u);
-        snag_buf_init(&finish, 4096u);
+        struct snag_buf response = {.max = 4096u};
+        struct snag_buf finish = {.max = 4096u};
         assert(snag_buf_printf(&response,
             "{\"data\":{\"items\":[{\"name\":\"future_tool\",\"call_id\":\"one\","
             "\"arguments\":\"%s\"}]}}\n", args) == 0);
@@ -1964,7 +1959,6 @@ test_append_only_views(unsigned int verbosity)
 {
     struct snag_render render;
     struct snag_irc_event event = {0};
-    struct snag_buf delivered;
     char output[8192] = {0};
     size_t used = 0u;
     struct output_capture capture = capture_open(false, true);
@@ -1980,7 +1974,7 @@ test_append_only_views(unsigned int verbosity)
     assert(snag_render_irc_event(&render, &event) == 0);
     assert(snag_render_event(&render, 1u, "goal_started") == 0);
     assert(snag_render_event(&render, 2u, "compaction_completed") == 0);
-    snag_buf_init(&delivered, 1024u);
+    struct snag_buf delivered = {.max = 1024u};
     assert(snag_render_rollout_begin(&render, STDERR_FILENO, "agent › ", SNAG_PRESENT_CONVERSATION) == 0);
     assert(snag_render_rollout(&render, "hidden-prefix ", 14u, &delivered) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
@@ -2125,7 +2119,6 @@ main(void)
         "\n• First prose line\ncontinued prose\n\n• second paragraph\n\n";
     char output[4096];
     struct snag_render render;
-    struct snag_buf delivered;
 
     assert(setlocale(LC_ALL, "") != NULL);
     assert(setenv("TZ", "UTC0", 1) == 0);
@@ -2158,7 +2151,7 @@ main(void)
     test_interposed_paragraph_gap();
     test_spacing_classes();
 
-    snag_buf_init(&delivered, 1024u);
+    struct snag_buf delivered = {.max = 1024u};
     assert(capture_wrapped("alpha beta gamm", "a delta", 20u, true,
                            "• alpha beta gamm", "• alpha beta gamma\n  delta",
                            output, sizeof(output), &delivered) > 0u);

@@ -195,9 +195,8 @@ test_oversized_public_items_get_specific_correction(void)
     delta[delta_len] = '\0';
     for (size_t kind = 0; kind < 2u; ++kind) {
         struct parsed_stream emitted = parsed_new(SNAG_MAX_PUBLIC_ITEM);
-        struct snag_buf wire;
 
-        snag_buf_init(&wire, SNAG_MAX_RESPONSE_GRAPH);
+        struct snag_buf wire = {.max = SNAG_MAX_RESPONSE_GRAPH};
         assert(snag_buf_printf(&wire,
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_large\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
             "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_large\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
@@ -317,9 +316,8 @@ test_unused_annotation_shapes_are_ignored(void)
 
     for (size_t i = 0; i < sizeof(bad_suffixes) / sizeof(bad_suffixes[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
-        struct snag_buf wire;
 
-        snag_buf_init(&wire, 8192u);
+        struct snag_buf wire = {.max = 8192u};
         assert(snag_buf_append(&wire, prefix, strlen(prefix)) == 0);
         assert(snag_buf_append(&wire, bad_suffixes[i],
                               strlen(bad_suffixes[i])) == 0);
@@ -573,11 +571,10 @@ test_invalid_call_after_public_item(void)
 
     for (size_t i = 0; i < sizeof(calls) / sizeof(calls[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
-        struct snag_buf wire;
 
         assert(snag_response_graph_add_public(&emitted.graph, SNAG_ITEM_ASSISTANT,
             SNAG_PHASE_FINAL_ANSWER, "retained", "previous graph") == 0);
-        snag_buf_init(&wire, 4096u);
+        struct snag_buf wire = {.max = 4096u};
         assert(snag_buf_printf(&wire,
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":["

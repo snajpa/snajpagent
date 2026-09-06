@@ -160,12 +160,11 @@ static int
 render_config_header(struct provider_ctx *ctx, struct snag_buf *redacted,
                      const char *name, const char *value)
 {
-    struct snag_buf line;
     int rc = 0;
 
     if (!value[0])
         return 0;
-    snag_buf_init(&line, SNAG_WIRE_HEADER_MAX);
+    struct snag_buf line = {.max = SNAG_WIRE_HEADER_MAX};
     if (snag_buf_printf(&line, "%s: %s", name, value) < 0 ||
         snag_wire_header_redact(line.data, line.len, &ctx->secrets.wire,
                                redacted) < 0 ||
@@ -180,16 +179,13 @@ static int
 render_request_headers(struct provider_ctx *ctx, const char *request_line,
                        const char *accept, bool has_body)
 {
-    struct snag_buf redacted;
-    struct snag_buf host;
-    struct snag_buf accept_line;
     int rc = 0;
 
     if (!snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE))
         return 0;
-    snag_buf_init(&redacted, SNAG_WIRE_HEADER_MAX);
-    snag_buf_init(&host, SNAG_CONFIG_URL_MAX + 8u);
-    snag_buf_init(&accept_line, SNAG_WIRE_HEADER_MAX);
+    struct snag_buf redacted = {.max = SNAG_WIRE_HEADER_MAX};
+    struct snag_buf host = {.max = SNAG_CONFIG_URL_MAX + 8u};
+    struct snag_buf accept_line = {.max = SNAG_WIRE_HEADER_MAX};
     if (append_host_header(&host, ctx->provider->base_url) < 0 ||
         snag_buf_printf(&accept_line, "accept: %s", accept) < 0)
         goto fail;
@@ -449,7 +445,6 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
            char *error, size_t error_size)
 {
     char url[4096], header[96], parse_error[128];
-    struct snag_buf output;
     struct curl_slist *headers = NULL;
     CURL *curl = NULL;
     CURLM *multi = NULL;
@@ -459,7 +454,7 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
 
     *response = NULL;
     *status = 0;
-    snag_buf_init(&output, (96u * 1024u));
+    struct snag_buf output = {.max = (96u * 1024u)};
     if (snprintf(url, sizeof(url), "%s%s", issuer, path) >= (int)sizeof(url) ||
         curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
         goto out;
@@ -545,10 +540,9 @@ static int
 append_authorization(struct curl_slist **headers,
                      const struct snag_credential *credential)
 {
-    struct snag_buf line;
     int rc;
 
-    snag_buf_init(&line, SNAG_CREDENTIAL_MAX + 32u);
+    struct snag_buf line = {.max = SNAG_CREDENTIAL_MAX + 32u};
     rc = snag_buf_append(&line, "Authorization: Bearer ", 22u);
     if (rc == 0)
         rc = snag_buf_append(&line, credential->value, credential->len);
@@ -564,12 +558,11 @@ static int
 append_named_header(struct curl_slist **headers, const char *name,
                     const char *value)
 {
-    struct snag_buf line;
     int rc;
 
     if (!value[0])
         return 0;
-    snag_buf_init(&line, SNAG_WIRE_HEADER_MAX);
+    struct snag_buf line = {.max = SNAG_WIRE_HEADER_MAX};
     rc = snag_buf_printf(&line, "%s: %s", name, value);
     if (rc == 0)
         rc = append_header(headers, (const char *)line.data);
@@ -813,7 +806,6 @@ append_retry_suffix(char *error, size_t error_size,
 static int
 classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
 {
-    struct snag_buf redacted;
     char json_error[128] = {0};
     int rc;
 
@@ -821,7 +813,7 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
         return snag_fail(error, error_size, EOVERFLOW, ctx->error[0] ? ctx->error :
                   "provider error body could not be retained");
     }
-    snag_buf_init(&redacted, SNAG_WIRE_BODY_MAX);
+    struct snag_buf redacted = {.max = SNAG_WIRE_BODY_MAX};
     rc = snag_wire_json_redact(ctx->error_body.data, ctx->error_body.len,
                               &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));

@@ -246,12 +246,11 @@ commit_goal_event(struct app_state *app, const char *type, json_t *data,
 static int
 render_goal(struct app_state *app)
 {
-    struct snag_buf text;
     int rc;
 
     if (app->session.goal_status == SNAG_GOAL_NONE)
         return snag_ui_text(&app->ui, SNAG_UI_WARNING, "no goal has been set");
-    snag_buf_init(&text, SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 512u);
+    struct snag_buf text = {.max = SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 512u};
     rc = snag_buf_printf(&text,
         "goal %.8s: %s%s\n"
         "turns: %llu · revision: %llu · prompt: %zu/%u bytes\n"

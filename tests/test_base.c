@@ -2841,7 +2841,6 @@ run_base(int argc, char **argv)
     assert(!snag_irc_nick_mentioned("alice", "alice2"));
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     char id[SNAG_ID_HEX_LEN + 1u];
-    struct snag_buf buf;
     static const unsigned char valid[] = "A\xe2\x82\xac\xf0\x9f\x98\x80";
     static const unsigned char invalid[] = {0xc0u, 0x80u};
 
@@ -2870,7 +2869,7 @@ run_base(int argc, char **argv)
     assert(snag_random_id(id) == 0);
     assert(snag_hex_is_lower(id, SNAG_ID_HEX_LEN));
 
-    snag_buf_init(&buf, 4u);
+    struct snag_buf buf = {.max = 4u};
     assert(snag_buf_append(&buf, "abcd", 4u) == 0);
     errno = 0;
     assert(snag_buf_putc(&buf, 'e') < 0 && errno == EOVERFLOW);

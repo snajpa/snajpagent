@@ -498,10 +498,9 @@ snag_render_orientation(struct snag_render *render,
                        const char *workspace, const char *id,
                        uint64_t turns, size_t queued, bool resumed)
 {
-    struct snag_buf line;
     int rc;
 
-    snag_buf_init(&line, 32768u);
+    struct snag_buf line = {.max = 32768u};
     if (resumed) {
         rc = snag_buf_printf(&line,
             SNAJPAGENT_IDENTITY " · resumed · %s · session id %.8s "
@@ -532,12 +531,11 @@ int
 snag_render_history(struct snag_render *render,
                     const char *user, const char *assistant)
 {
-    struct snag_buf line;
     int rc = 0;
 
     if (!user && !assistant)
         return 0;
-    snag_buf_init(&line, 4u * 1024u * 1024u);
+    struct snag_buf line = {.max = 4u * 1024u * 1024u};
     if (render_banner(render, "── history ──\n") < 0 ||
         (user &&
          (snag_buf_append(&line, "user: ", 6u) < 0 ||
@@ -569,7 +567,6 @@ snag_render_history(struct snag_render *render,
 int
 snag_render_submitted(struct snag_render *render, const char *label, const char *text)
 {
-    struct snag_buf line;
     bool terminal = render->stderr_terminal;
     size_t len = strlen(text);
     int rc = 0;
@@ -577,7 +574,7 @@ snag_render_submitted(struct snag_render *render, const char *label, const char 
     if (render->term && snag_term_consume_echoed_submission(render->term, label)) {
         render->trailing_newlines = 1u;
     } else {
-        snag_buf_init(&line, SNAG_MAX_DIRECT_PROMPT * 8u + 64u);
+        struct snag_buf line = {.max = SNAG_MAX_DIRECT_PROMPT * 8u + 64u};
         if (terminal)
             while (len && text[len - 1u] == '\n')
                 --len;
@@ -1705,9 +1702,7 @@ markdown_table_finish(struct snag_render *render)
                                   md->table.len - md->table_line_start,
                                   cells, &count)) {
             if (md->table_active) {
-                struct snag_buf row;
-
-                snag_buf_init(&row, SNAG_MAX_PUBLIC_ITEM);
+                struct snag_buf row = {.max = SNAG_MAX_PUBLIC_ITEM};
                 if (snag_buf_append(&row,
                                    md->table.data + md->table_line_start,
                                    md->table.len - md->table_line_start) < 0) {
@@ -2194,7 +2189,6 @@ static int
 render_public_chunk(struct snag_render *render, const char *text, size_t len,
                   struct snag_buf *delivered)
 {
-    struct snag_buf complete;
     size_t complete_max;
     int rc = -1;
     int saved_errno = 0;
@@ -2202,7 +2196,7 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
     if (!render->public_item_open ||
         !snag_size_add(len, sizeof(render->utf8_pending), &complete_max))
         return snag_errno(EOVERFLOW);
-    snag_buf_init(&complete, complete_max);
+    struct snag_buf complete = {.max = complete_max};
     if (complete_utf8(render->utf8_pending, &render->utf8_pending_len,
                        text, len, &complete) < 0)
         goto out;
@@ -2509,10 +2503,9 @@ static int
 render_message(struct snag_render *render, const char *message,
                const char *color)
 {
-    struct snag_buf line;
     int rc;
 
-    snag_buf_init(&line, 16384u);
+    struct snag_buf line = {.max = 16384u};
     rc = snag_buf_printf(&line, SNAJPAGENT_NAME ": %s\n", message);
     if (rc == 0)
         rc = write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, color,
@@ -2538,10 +2531,9 @@ int
 snag_render_host(struct snag_render *render, const char *text)
 {
     size_t len = strlen(text);
-    struct snag_buf line;
     int rc;
 
-    snag_buf_init(&line, 4u * 1024u * 1024u);
+    struct snag_buf line = {.max = 4u * 1024u * 1024u};
     rc = snag_buf_append(&line, text, len);
     if (rc == 0 && (len == 0u || text[len - 1u] != '\n'))
         rc = snag_buf_putc(&line, '\n');
@@ -2558,13 +2550,12 @@ int
 snag_render_runtime(struct snag_render *render, const char *text)
 {
     size_t len;
-    struct snag_buf line;
     int rc;
 
     if (!snag_render_enabled(render, SNAG_PRESENT_DEBUG))
         return 0;
     len = strlen(text);
-    snag_buf_init(&line, 4u * 1024u * 1024u);
+    struct snag_buf line = {.max = 4u * 1024u * 1024u};
     rc = snag_buf_append(&line, text, len);
     if (rc == 0 && (!len || text[len - 1u] != '\n'))
         rc = snag_buf_putc(&line, '\n');
@@ -3043,7 +3034,6 @@ snag_render_tool_block(struct snag_render *render, const struct snag_render_bloc
 static json_t *
 source_event(struct snag_render *render, struct snag_render_source source)
 {
-    struct snag_buf text;
     json_t *event = NULL;
     char error[128];
 
@@ -3051,7 +3041,7 @@ source_event(struct snag_render *render, struct snag_render_source source)
         errno = EINVAL;
         return NULL;
     }
-    snag_buf_init(&text, source.len);
+    struct snag_buf text = {.max = source.len};
     if (snag_buf_reserve(&text, source.len) < 0)
         goto out;
     while (text.len < source.len) {
@@ -3079,7 +3069,6 @@ render_process_chunks(struct snag_render *render, const json_t *ref,
     const char *handle = snag_json_string(ref, "handle");
     uint64_t start, end, from[2], to[2];
     size_t displayed = 0u, characters = 0u;
-    struct snag_buf line;
     bool truncated = false;
     int rc = -1;
     if (!handle || snag_json_integer_u64(ref, "log_start", &start) < 0 ||
@@ -3090,7 +3079,7 @@ render_process_chunks(struct snag_render *render, const json_t *ref,
         snag_json_integer_u64(ref, "stderr_start", &from[1]) < 0 ||
         snag_json_integer_u64(ref, "stderr_end", &to[1]) < 0)
         return -1;
-    snag_buf_init(&line, SNAG_MAX_EVENT_LINE);
+    struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
     while (start < end && snag_render_enabled(render, SNAG_PRESENT_OUTPUT)) {
         unsigned char input[8192];
         size_t want = end - start > sizeof(input) ? sizeof(input) : (size_t)(end - start);
@@ -3314,7 +3303,6 @@ int
 snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
 {
     const char *notice = NULL;
-    struct snag_buf line;
     int rc = 0;
 
     if (strcmp(type, "compaction_completed") == 0)
@@ -3333,7 +3321,7 @@ snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
     bool debug = snag_render_enabled(render, SNAG_PRESENT_DEBUG);
     if (!notice && !debug)
         return 0;
-    snag_buf_init(&line, 1024u);
+    struct snag_buf line = {.max = 1024u};
     if (notice)
         rc = render_bullet(render, notice);
     snag_buf_reset(&line);
@@ -3355,7 +3343,6 @@ snag_render_resume_hint(const struct snag_render *render, const char *command,
     static const char header[] =
         "• You can resume this session with the following command";
     const char *note = snag_command_shell_note();
-    struct snag_buf block;
     size_t max = command_len;
     bool colored;
     int rc = -1;
@@ -3372,7 +3359,7 @@ snag_render_resume_hint(const struct snag_render *render, const char *command,
         (!snag_size_add(max, sizeof(COLOR_LIFECYCLE) - 1u, &max) ||
          !snag_size_add(max, sizeof(COLOR_RESET) - 1u, &max)))
         return snag_errno(EOVERFLOW);
-    snag_buf_init(&block, max);
+    struct snag_buf block = {.max = max};
     if (colored &&
         snag_buf_append(&block, COLOR_LIFECYCLE,
                        sizeof(COLOR_LIFECYCLE) - 1u) < 0)
@@ -3432,7 +3419,6 @@ int
 snag_render_protocol(struct snag_render *render, const char *label,
                     const char *text, size_t len)
 {
-    struct snag_buf block;
     int rc = -1;
 
     if (!snag_render_enabled(render, SNAG_PRESENT_PROTOCOL))
@@ -3443,7 +3429,7 @@ snag_render_protocol(struct snag_render *render, const char *label,
         return snag_errno(EINVAL);
     if (protocol_warning(render) < 0)
         return -1;
-    snag_buf_init(&block, 2u * 1024u * 1024u + 4096u);
+    struct snag_buf block = {.max = 2u * 1024u * 1024u + 4096u};
     if (snag_buf_printf(&block, "protocol › %s\n", label) < 0 ||
         snag_buf_append(&block, text, len) < 0 ||
         (len && text[len - 1u] != '\n' && snag_buf_putc(&block, '\n') < 0))
@@ -3460,7 +3446,6 @@ int
 snag_render_transport(struct snag_render *render, char direction,
                      const char *text, size_t len)
 {
-    struct snag_buf line;
     int rc = -1;
 
     if (!snag_render_enabled(render, SNAG_PRESENT_WIRE))
@@ -3470,7 +3455,7 @@ snag_render_transport(struct snag_render *render, char direction,
         return snag_errno(EINVAL);
     if (protocol_warning(render) < 0)
         return -1;
-    snag_buf_init(&line, 64u * 1024u + 4u);
+    struct snag_buf line = {.max = 64u * 1024u + 4u};
     if (snag_buf_putc(&line, (unsigned char)direction) < 0 ||
         snag_buf_putc(&line, ' ') < 0 ||
         snag_buf_append(&line, text, len) < 0 || snag_buf_putc(&line, '\n') < 0)

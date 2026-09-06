@@ -275,7 +275,6 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
                      char *error, size_t error_size)
 {
     snag_file_info st;
-    struct snag_buf data;
     int fd;
     int rc = -1;
 
@@ -287,7 +286,7 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
             return 1;
         return snag_errorf(error, error_size, "cannot open model cache: %s", strerror(errno));
     }
-    snag_buf_init(&data, SNAG_MODEL_CACHE_FILE_MAX);
+    struct snag_buf data = {.max = SNAG_MODEL_CACHE_FILE_MAX};
     struct snag_file_privacy privacy;
     if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || snag_fd_privacy(fd, &privacy) < 0 ||
         !privacy.real_owner || !privacy.private_access || st.st_size <= 0 ||
@@ -344,7 +343,6 @@ write_cache(struct snag_store *store, const json_t *providers,
             uint64_t updated_at_ms, struct snag_model_cache *cache,
             char *error, size_t error_size)
 {
-    struct snag_buf data;
     json_t *root = NULL;
     char id[SNAG_ID_HEX_LEN + 1u];
     char tmp_name[64] = {0};
@@ -360,7 +358,7 @@ write_cache(struct snag_store *store, const json_t *providers,
     root = json_pack("{s:O,s:i,s:I}", "providers", providers,
                      "schema_version", SNAG_MODEL_CACHE_SCHEMA,
                      "updated_at_ms", (json_int_t)updated_at_ms);
-    snag_buf_init(&data, SNAG_MODEL_CACHE_FILE_MAX);
+    struct snag_buf data = {.max = SNAG_MODEL_CACHE_FILE_MAX};
     if (!root ||
         snag_json_canonical(root, &data) < 0 || snag_buf_putc(&data, '\n') < 0 ||
         snag_random_id(id) < 0) {

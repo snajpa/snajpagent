@@ -114,9 +114,8 @@ static json_t *
 redact_value(json_t *value, const struct snag_wire_secrets *secrets)
 {
     if (json_is_string(value)) {
-        struct snag_buf text;
         json_t *redacted = NULL;
-        snag_buf_init(&text, SNAG_WIRE_BODY_MAX);
+        struct snag_buf text = {.max = SNAG_WIRE_BODY_MAX};
         if (append_redacted(&text, (const unsigned char *)json_string_value(value),
                             json_string_length(value), secrets, false) == 0)
             redacted = json_stringn(text.data ? (char *)text.data : "", text.len);

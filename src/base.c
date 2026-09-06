@@ -398,9 +398,7 @@ snag_strdup_checked(const char *s, size_t max)
 char *
 snag_join_words(char *const *words, size_t count, size_t max)
 {
-    struct snag_buf buf;
-
-    snag_buf_init(&buf, max + 1u);
+    struct snag_buf buf = {.max = max + 1u};
     for (size_t i = 0; i < count; ++i) {
         size_t len = strlen(words[i]);
         if (!snag_utf8_valid((const unsigned char *)words[i], len, true) ||

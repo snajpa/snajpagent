@@ -983,7 +983,6 @@ build_message(struct snag_responses_stream *stream,
 {
     enum snag_wire_part_kind kind;
     enum snag_item_phase phase;
-    struct snag_buf text;
     size_t public_parts = 0u;
     int rc;
 
@@ -993,7 +992,7 @@ build_message(struct snag_responses_stream *stream,
         return stream_fail(stream, EPROTO,
                            "assistant message did not complete coherently");
     kind = SNAG_WIRE_PART_NONE;
-    snag_buf_init(&text, SNAG_MAX_PUBLIC_ITEM + 1u);
+    struct snag_buf text = {.max = SNAG_MAX_PUBLIC_ITEM + 1u};
     for (size_t i = 0; i < item->part_count; ++i) {
         const struct snag_wire_part *part = &item->parts[i];
 

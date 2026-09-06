@@ -34,10 +34,9 @@ test_json(void)
         "\"nested\":{\"encrypted_content\":\"opaque\","
         "\"text\":\"before needle after\"},\"real\":1.25,"
         "\"key\":\"sk-test-secret\"}";
-    struct snag_buf out;
     char error[256];
 
-    snag_buf_init(&out, SNAG_WIRE_BODY_MAX);
+    struct snag_buf out = {.max = SNAG_WIRE_BODY_MAX};
     assert(snag_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
                                 error, sizeof(error)) == 0);
     expect_text(&out,
@@ -59,14 +58,13 @@ test_max_secret_count(void)
     struct snag_wire_secrets secrets = {secrets_array,
                                        SNAG_WIRE_SECRET_COUNT_MAX};
     static const unsigned char body[] = "{\"text\":\"secret-80\"}";
-    struct snag_buf out;
     char error[256];
 
     for (size_t i = 0; i < SNAG_WIRE_SECRET_COUNT_MAX; ++i) {
         assert(snprintf(values[i], sizeof(values[i]), "secret-%02zu", i) > 0);
         secrets_array[i] = values[i];
     }
-    snag_buf_init(&out, SNAG_WIRE_BODY_MAX);
+    struct snag_buf out = {.max = SNAG_WIRE_BODY_MAX};
     assert(snag_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
                                 error, sizeof(error)) == 0);
     expect_text(&out, "{\"text\":\"<redacted:secret>\"}");
@@ -76,11 +74,10 @@ test_max_secret_count(void)
 static void
 test_invalid_json(void)
 {
-    struct snag_buf out;
     char error[256];
     static const unsigned char duplicate[] = "{\"x\":1,\"x\":2}";
 
-    snag_buf_init(&out, SNAG_WIRE_BODY_MAX);
+    struct snag_buf out = {.max = SNAG_WIRE_BODY_MAX};
     errno = 0;
     assert(snag_wire_json_redact(duplicate, sizeof(duplicate) - 1u, NULL, &out,
                                 error, sizeof(error)) < 0);
@@ -94,10 +91,9 @@ test_secret_object_key_fails_closed(void)
     static const char *const secret_values[] = {"secret-key"};
     const struct snag_wire_secrets secrets = {secret_values, 1u};
     static const unsigned char body[] = "{\"secret-key\":1}";
-    struct snag_buf out;
     char error[256];
 
-    snag_buf_init(&out, SNAG_WIRE_BODY_MAX);
+    struct snag_buf out = {.max = SNAG_WIRE_BODY_MAX};
     assert(snag_wire_json_redact(body, sizeof(body) - 1u, &secrets, &out,
                                 error, sizeof(error)) < 0);
     assert(errno == EACCES);
@@ -110,9 +106,8 @@ test_headers(void)
 {
     static const char *const secret_values[] = {"hidden"};
     const struct snag_wire_secrets secrets = {secret_values, 1u};
-    struct snag_buf out;
 
-    snag_buf_init(&out, SNAG_WIRE_HEADER_MAX * 2u);
+    struct snag_buf out = {.max = SNAG_WIRE_HEADER_MAX * 2u};
     assert(snag_wire_header_redact((const unsigned char *)
         "Authorization: Bearer sk-anything",
         sizeof("Authorization: Bearer sk-anything") - 1u, &secrets, &out) == 0);
