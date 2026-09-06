@@ -57,6 +57,39 @@ export LC_ALL=C.utf8
 version=$($bin -V)
 [ "$version" = "$SNAJPAGENT_TEST_NAME $SNAJPAGENT_TEST_VERSION" ]
 
+python3 - "$bin" "$root" <<'PYVERSION'
+import os, shutil, subprocess, sys
+from pathlib import Path
+repo = Path(sys.argv[1]).parent.parent
+work = Path(sys.argv[2]) / "version-git"
+work.mkdir()
+for name in ("Makefile", "config.mk", "META"):
+    shutil.copy2(repo / name, work / name)
+def git(*args):
+    return subprocess.check_output(["git", "-C", str(work), *args], text=True).strip()
+git("init", "-q", "--initial-branch=master")
+git("config", "user.name", "Version Test")
+git("config", "user.email", "version@example.test")
+git("add", ".")
+git("commit", "-qm", "baseline")
+recipe = "version-test:;@printf '%s\\n' '$(BUILD_VERSION)'"
+def version():
+    return subprocess.run(["make", "--no-print-directory", "-s", "--eval", recipe,
+                           "version-test"], cwd=work, text=True, capture_output=True)
+assert version().returncode != 0  # No guessed version without a tag.
+git("tag", "0.98")
+assert version().stdout.strip() == "0.98"
+git("commit", "--allow-empty", "-qm", "next")
+git("tag", "0.99.0")
+assert version().stdout.strip() == "0.99.0"
+git("commit", "--allow-empty", "-qm", "development")
+assert version().stdout.strip() == "0.99.0-" + git("rev-parse", "--short", "HEAD")
+(work / "dirty").touch()
+assert version().stdout.strip().endswith("-dirty")
+assert "VERSION" not in (repo / "META").read_text()
+print("Git-tag build version: ok")
+PYVERSION
+
 $bin -h >"$root/help" 2>"$root/help.err"
 [ ! -s "$root/help.err" ]
 grep -q -- '-s, --listen\[=ENDPOINT\]' "$root/help"

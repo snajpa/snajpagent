@@ -6,7 +6,7 @@
 #error "SNAJPAGENT_NAME must come from META through the build"
 #endif
 #ifndef SNAJPAGENT_VERSION
-#error "SNAJPAGENT_VERSION must come from META through the build"
+#error "SNAJPAGENT_VERSION must come from Git tags through the build"
 #endif
 
 #define SNAJPAGENT_IDENTITY SNAJPAGENT_NAME " " SNAJPAGENT_VERSION

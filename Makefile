@@ -6,6 +6,7 @@ include META
 
 GIT_HEAD := $(shell git rev-parse --verify HEAD 2>/dev/null)
 GIT_REVISION := $(shell git rev-parse --short HEAD 2>/dev/null)
+ifeq ($(BUILD_VERSION),)
 override VERSION := $(shell git describe --tags --abbrev=0 HEAD 2>/dev/null)
 GIT_VERSION_TAG := $(shell git rev-parse -q --verify 'refs/tags/$(VERSION)^{commit}' 2>/dev/null)
 GIT_DIRTY := $(shell test -z "$$(git status --porcelain 2>/dev/null)" || printf '%s' '-dirty')
@@ -19,6 +20,7 @@ ifeq ($(GIT_HEAD)$(GIT_DIRTY),$(GIT_VERSION_TAG))
 BUILD_VERSION := $(VERSION)
 else
 BUILD_VERSION := $(VERSION)-$(GIT_REVISION)$(GIT_DIRTY)
+endif
 endif
 override CPPFLAGS += -DSNAJPAGENT_NAME='"$(NAME)"' -DSNAJPAGENT_VERSION='"$(BUILD_VERSION)"'
 override CFLAGS += -pthread

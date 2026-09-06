@@ -127,7 +127,15 @@ class FakeResponses:
     def latest_user(request):
         for item in reversed(request.get("input", [])):
             if item.get("role") == "user" and isinstance(item.get("content"), str):
-                return item["content"]
+                content = item["content"]
+                ids = re.findall(r"\[IRC update id=([^ ]+)", content)
+                if ids:
+                    # Resolve the production scheduler's references to its
+                    # separately retained room-event payloads in this request.
+                    return "\n".join(str(event.get("content", ""))
+                        for event in request.get("input", [])
+                        if any(f" id={identity}]" in str(event.get("content", "")) for identity in ids))
+                return content
         return ""
 
     @staticmethod
@@ -3116,6 +3124,177 @@ def run_manual_retry_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_incremental_history_case(binary, root):
+    root.mkdir(mode=0o700, parents=True)
+    provider = FakeResponses()
+    captured = []
+    held, release = threading.Event(), threading.Event()
+    hold_once = [True]
+
+    def respond(handler, request, sequence):
+        captured.append(request)
+        if request.get("model") == "one-model" and hold_once[0] and "pending at process exit" in json.dumps(request):
+            hold_once[0] = False
+            held.set()
+            assert release.wait(10), "pending-input test did not release its request"
+        body = provider.response_body(sequence, "caught up").encode()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        try:
+            handler.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            assert held.is_set() and release.is_set()
+        handler.close_connection = True
+
+    provider.runtime_handler = respond
+    endpoint = f"127.0.0.1:{free_loopback_port()}"
+    environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    terminals = {}
+    generation = {"host": 0, "client": 0}
+    configs = {}
+    for name, model in (("host", "host-model"), ("client", "one-model")):
+        case = root / name
+        (case / "work").mkdir(mode=0o700, parents=True)
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, model)
+        if name == "host":
+            config.write_text(config.read_text() + "[irc]\nhistory_lines = 12\n")
+        configs[name] = config
+
+    def launch(name, session=None):
+        generation[name] += 1
+        case = root / name
+        args = (["-s", endpoint, "-n", "hostbot", "-o", "hostop", "-r", "lab"]
+                if name == "host" else ["-c", endpoint, "-n", "clientbot", "-o", "clientop"])
+        if session:
+            args += ["--resume", session]
+        t = TmuxTerminal(case / f"t{generation[name]}", binary, case / "work",
+                         case / "state", configs[name], 140, 28, args=args, environment=environment)
+        terminals[name] = t
+        t.wait(("hostop" if name == "host" else "clientop") + f"@{MACHINE_HOSTNAME} :")
+        return t
+
+    def sid(t):
+        return read_events(t.dotdir)[0].parent.name
+
+    def records(t):
+        return event_list(read_events(t.dotdir)[1], "irc_event")
+
+    def wait_record(t, text, count=1):
+        deadline = time.monotonic() + 10
+        while sum(e["data"]["text"] == text for e in records(t)) < count:
+            assert time.monotonic() < deadline, (text, t.capture(), provider.failure)
+            time.sleep(0.02)
+        return [e for e in records(t) if e["data"]["text"] == text]
+
+    def observed(text, count=1):
+        deadline = time.monotonic() + 10
+        while True:
+            requests = [r for r in captured if r.get("model") == "one-model"]
+            # Count message payloads, not older requests legitimately retaining context.
+            if any(sum(text in str(item.get("content", "")) for item in r.get("input", [])) == count
+                   for r in requests):
+                return
+            assert time.monotonic() < deadline, (text, requests[-1:] , terminals['client'].capture())
+            time.sleep(0.02)
+
+    try:
+        host = launch("host")
+        client = launch("client")
+        wait_irc_idle([host, client])
+        host.submit("one original conversation marker")
+        wait_record(client, "one original conversation marker")
+        observed("one original conversation marker")
+        wait_irc_idle([host, client])
+        host_id = sid(host)
+        first = wait_record(client, "one original conversation marker")[0]["data"]
+        assert first["stream"] and first["sequence"]
+        host.exit(); host.close()
+        client.wait("disconnected")
+        host = launch("host", host_id)
+        host.wait("set mode · +o clientop")
+        deadline = time.monotonic() + 10
+        while not any(e["data"].get("kind") == "history_ready" for e in records(client)
+                      if e["seq"] > wait_record(client, "one original conversation marker")[0]["seq"]):
+            assert time.monotonic() < deadline, client.capture()
+            time.sleep(0.02)
+        wait_irc_idle([host, client])
+        assert len(wait_record(client, "one original conversation marker")) == 1
+        assert client.capture().count("one original conversation marker") == 1
+        assert all(sum("one original conversation marker" in str(i.get("content", "")) for i in r.get("input", [])) <= 1
+                   for r in captured if r.get("model") == "one-model")
+        client.submit("/disconnect")
+        client.wait("outgoing connections removed")
+        host.submit("identical legitimate message")
+        wait_record(host, "identical legitimate message")
+        host.submit("identical legitimate message")
+        wait_record(host, "identical legitimate message", 2)
+        client.submit("/connect " + endpoint)
+        missed = wait_record(client, "identical legitimate message", 2)
+        assert all(e["data"]["historical"] for e in missed)
+        assert len({e["data"]["sequence"] for e in missed}) == 2
+        assert all(e["data"]["stream"] == first["stream"] for e in missed)
+        observed("identical legitimate message", 2)
+        wait_irc_idle([host, client])
+        client_id = sid(client)
+        client.exit(); client.close()
+        client = launch("client", client_id)
+        wait_irc_idle([host, client])
+        assert len(wait_record(client, "identical legitimate message", 2)) == 2
+        host.submit("after client process restart")
+        wait_record(client, "after client process restart")
+        observed("after client process restart")
+        wait_irc_idle([host, client])
+        host.submit("pending at process exit")
+        wait_record(client, "pending at process exit")
+        assert held.wait(8), client.capture()
+        cutoff = len(captured)
+        client.close()  # Exact task-owned terminal; intentionally interrupt delivery.
+        release.set()
+        client = launch("client", client_id)
+        deadline = time.monotonic() + 10
+        while not any(r.get("model") == "one-model" and "pending at process exit" in json.dumps(r)
+                      for r in captured[cutoff:]):
+            assert time.monotonic() < deadline, client.capture()
+            time.sleep(0.02)
+        wait_irc_idle([host, client])
+        assert len(wait_record(client, "pending at process exit")) == 1
+        client.submit("/disconnect")
+        client.wait("outgoing connections removed")
+        for number in range(16):
+            host.submit(f"retention-gap-{number}")
+            wait_record(host, f"retention-gap-{number}")
+        client.submit("/connect " + endpoint)
+        client.wait("history gap")
+        wait_record(client, "retention-gap-15")
+        wait_irc_idle([host, client])
+        ids = [(e["data"]["stream"], e["data"]["sequence"]) for e in records(client) if e["data"]["stream"]]
+        assert len(ids) == len(set(ids)), "duplicate IDs were admitted"
+        # A new server session at the same address must not reuse an old cursor.
+        host.exit(); host.close()
+        client.wait("disconnected")
+        host = launch("host")
+        host.wait("set mode · +o clientop")
+        host.submit("new stream is not skipped")
+        fresh = wait_record(client, "new stream is not skipped")[0]["data"]
+        assert fresh["stream"] != first["stream"]
+        observed("new stream is not skipped")
+        wait_irc_idle([host, client])
+        client.exit(); host.exit()
+        print("tmux_terminal incremental reconnect history: ok", flush=True)
+    finally:
+        release.set()
+        for name, terminal in terminals.items():
+            try:
+                (root / name / "screen.txt").write_text(terminal.capture())
+            except Exception:
+                pass
+            terminal.close()
+        provider.close()
+
+
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
@@ -3137,6 +3316,7 @@ def run_irc_case(binary, root):
     finally:
         provider.close()
     run_irc_chat_case(binary, root / "chat")
+    run_incremental_history_case(binary, root / "catchup")
 
 
 def run_irc_chat_case(binary, root):

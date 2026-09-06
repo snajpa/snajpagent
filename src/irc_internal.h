@@ -34,6 +34,9 @@ int snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *vi
 int snag_irc_core_history(const struct snag_irc_core *irc, struct snag_buf *out);
 void snag_irc_core_remember(struct snag_irc_core *irc,
                            const struct snag_irc_event *event);
+void snag_irc_core_defer(struct snag_irc_core *irc);
+bool snag_irc_core_received(struct snag_irc_core *irc, const struct snag_irc_event *event);
+int snag_irc_core_ack(struct snag_irc_core *irc, const struct snag_irc_event *event);
 int snag_irc_core_accept(struct snag_irc_core *irc, const struct snag_irc_event *event);
 int snag_irc_core_restore_event(struct snag_irc_core *irc,
                                const struct snag_irc_event *event);

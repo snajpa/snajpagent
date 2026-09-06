@@ -17,7 +17,7 @@ let
       (pkgs.lib.findFirst (pkgs.lib.hasPrefix prefix) (throw "META lacks ${key}") metadata);
   packageName = metaValue "NAME";
   version = if buildVersion != null then buildVersion else
-    "${metaValue "VERSION"}-${source.dirtyShortRev or source.shortRev}";
+    throw "derive buildVersion from Git tags using make prod-linux-x86_64 (or the desired prod target)";
 in assert buildRevision == null || buildRevision == revision; rec {
   inherit pkgs static;
   inherit (x86) tls curl;

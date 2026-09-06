@@ -242,7 +242,7 @@ register_peer(struct snag_irc *server, snag_socket fd, const char *nick,
         agent ? SNAJPAGENT_NAME " agent" : "human");
     assert(n > 0 && (size_t)n < sizeof(input));
     send_text(fd, input);
-    drain_ready(server, fd, wire, wire_size);
+    wait_wire(server, fd, wire, wire_size, " BATCH -");
 }
 
 static void
@@ -1168,14 +1168,14 @@ test_client_nick_collision(void)
 
     assert(send_all(client, false, SNAG_IRC_MESSAGE, "operator alias",
                                  error, sizeof(error)) == 0);
-    assert(strcmp(client_capture.last_message.nick, "operator2") == 0);
     pump_pair(server, client, 20u);
+    assert(strcmp(client_capture.last_message.nick, "operator2") == 0);
     assert(strcmp(server_capture.last_message.nick, "operator2") == 0);
     assert(strcmp(server_capture.last_message.text, "operator alias") == 0);
     assert(send_all(client, true, SNAG_IRC_MESSAGE, "agent alias",
                               error, sizeof(error)) == 0);
-    assert(strcmp(client_capture.last_message.nick, "agent2") == 0);
     pump_pair(server, client, 20u);
+    assert(strcmp(client_capture.last_message.nick, "agent2") == 0);
     assert(strcmp(server_capture.last_message.nick, "agent2") == 0);
     assert(strcmp(server_capture.last_message.text, "agent alias") == 0);
 

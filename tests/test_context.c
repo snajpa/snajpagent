@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "context.h"
+#include "irc.h"
 #include "base.h"
 #include "json.h"
 #include "snajpagent.h"
@@ -1276,6 +1277,60 @@ test_provider_model_projection(void)
     json_decref(empty);
 }
 
+static void
+test_durable_irc_input_watermark(void)
+{
+    char path[4096], error[256], id[SNAG_ID_HEX_LEN + 1u];
+    const char *scratch = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/irc-input-XXXXXX", scratch ? scratch : "/tmp") > 0);
+    assert(mkdtemp(path));
+    struct snag_store store;
+    struct snag_session session;
+    struct snag_context_projection projection;
+    json_t *empty = json_array();
+    snag_store_init(&store); snag_session_init(&session); snag_context_projection_init(&projection);
+    assert(snag_store_open(&store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&store, &session, path, "default", SNAJPAGENT_MODEL,
+                               "medium", error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .endpoint = "localhost:6667", .room = "#lab", .nick = "peer",
+        .text = "unique missed message", .stream = "11111111111111111111111111111111",
+        .sequence = 1u, .historical = true, .input = true};
+    assert(snag_session_commit(&session, "irc_event", snag_irc_event_data(&event), NULL, error, sizeof(error)) == 0);
+    uint64_t received = session.irc_received_seq;
+    assert(received && !session.irc_consumed_seq);
+    snag_session_close(&session); snag_session_init(&session);
+    assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
+    assert(session.irc_received_seq == received && !session.irc_consumed_seq);
+    const char *turn = "22222222222222222222222222222222", *response = "33333333333333333333333333333333";
+    assert(snag_session_commit(&session, "turn_started", turn_started(turn, 1u,
+        "inspect pending room input", path, json_array()), NULL, error, sizeof(error)) == 0);
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
+        NULL, NULL, &projection, error, sizeof(error)) == 0);
+    assert(projection.irc_seq == received);
+    json_t *input = json_object_get(projection.create_request, "input");
+    size_t copies = 0u;
+    for (size_t i = 0u; i < json_array_size(input); ++i) {
+        const char *text = snag_json_string(json_array_get(input, i), "content");
+        if (text && strstr(text, event.text)) ++copies;
+    }
+    assert(copies == 1u);
+    json_t *started = response_started(turn, response, NULL);
+    assert(json_object_set_new(started, "irc_seq", json_integer((json_int_t)projection.irc_seq)) == 0);
+    assert(snag_session_commit(&session, "response_started", started, NULL, error, sizeof(error)) == 0);
+    event.sequence = 2u;
+    strcpy(event.text, "arrived after request froze");
+    assert(snag_session_commit(&session, "irc_event", snag_irc_event_data(&event), NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "response_completed", response_completed(turn, response, "seen first"), NULL, error, sizeof(error)) == 0);
+    assert(session.irc_consumed_seq == received && session.irc_received_seq > received);
+    snag_session_close(&session); snag_session_init(&session);
+    assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
+    assert(session.irc_received_seq > session.irc_consumed_seq && session.irc_consumed_seq == received);
+    snag_context_projection_free(&projection); json_decref(empty);
+    snag_session_close(&session); snag_store_close(&store);
+}
+
 int
 main(void)
 {
@@ -1306,6 +1361,7 @@ main(void)
 
     test_read_only_and_queue_controllers();
     test_provider_model_projection();
+    test_durable_irc_input_watermark();
     test_usage_anchor();
     test_usage_anchor_before_controller_suffix();
     assert(mkdtemp(temp));

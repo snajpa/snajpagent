@@ -49,6 +49,7 @@ struct irc_owner {
     size_t queued;
     bool started, stopping, finished;
     bool hosting;
+    struct snag_irc_event ack; /* Mailbox-protected latest durable position. */
 };
 
 struct snag_irc {
@@ -122,18 +123,7 @@ receive_event(void *opaque, const struct snag_irc_event *event)
         free(record);
         return -1;
     }
-    uint64_t through = 0u;
-    if (publish(owner, record, &through) < 0)
-        return -1;
-    /* Cursor and hosted wire publication may advance only after durable
-     * engine acceptance, not merely after placing bytes in the mailbox. */
-    struct snag_irc *irc = owner->runtime;
-    pthread_mutex_lock(&irc->mutex);
-    while (irc->admitted < through && !irc->failure && !irc->stopping && !owner->stopping)
-        pthread_cond_wait(&irc->changed, &irc->mutex);
-    int rc = irc->admitted >= through && !irc->failure ? 0 : -1;
-    pthread_mutex_unlock(&irc->mutex);
-    return rc;
+    return publish(owner, record, NULL);
 }
 
 static int
@@ -207,16 +197,25 @@ run_owner(void *opaque)
     for (;;) {
         struct irc_request *request;
         bool stopping;
+        struct snag_irc_event ack;
         int rc;
 
         snag_wakeup_drain(owner->wake[0]);
         pthread_mutex_lock(&irc->mutex);
         stopping = owner->stopping || irc->stopping || irc->failure;
+        ack = owner->ack;
+        memset(&owner->ack, 0, sizeof(owner->ack));
         request = owner->request;
         owner->request = NULL;
         pthread_mutex_unlock(&irc->mutex);
         if (stopping)
             break;
+        if (ack.stream[0] && snag_irc_core_ack(owner->core, &ack) < 0) {
+            pthread_mutex_lock(&irc->mutex);
+            irc->failure = errno ? errno : EIO;
+            pthread_mutex_unlock(&irc->mutex);
+            break;
+        }
         if (request) {
             request->result = execute(owner, request);
             request->saved_errno = errno;
@@ -330,11 +329,20 @@ drain(struct snag_irc *irc, int timeout_ms)
         }
         pthread_mutex_unlock(&irc->mutex);
         if (record->kind == IRC_EVENT) {
-            snag_irc_core_remember(irc->history, &record->event);
-            if (irc->event_fn)
-                rc = irc->event_fn(irc->opaque, &record->event);
-            if (rc == 0)
-                rc = snag_irc_core_accept(irc->history, &record->event);
+            if (!snag_irc_core_received(irc->history, &record->event)) {
+                if (irc->event_fn)
+                    rc = irc->event_fn(irc->opaque, &record->event);
+                if (rc == 0) {
+                    snag_irc_core_remember(irc->history, &record->event);
+                    rc = snag_irc_core_accept(irc->history, &record->event);
+                }
+            }
+            if (rc == 0 && record->event.stream[0]) {
+                pthread_mutex_lock(&irc->mutex);
+                owner->ack = record->event;
+                snag_wakeup_send(owner->wake[1]);
+                pthread_mutex_unlock(&irc->mutex);
+            }
         } else if (record->kind == IRC_TRACE && irc->trace_fn) {
             rc = irc->trace_fn(irc->opaque, record->level, record->direction,
                               record->event.endpoint, record->trace,
@@ -450,6 +458,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
         snag_irc_core_copy_history(owner->core, irc->history, hosting) < 0 ||
         snag_irc_core_view(owner->core, &owner->view) < 0)
         goto fail;
+    snag_irc_core_defer(owner->core);
     owner->sent = owner->view;
     owner->target.revision = owner->view.revision;
     memcpy(owner->routing_room, owner->view.room, sizeof(owner->routing_room));
