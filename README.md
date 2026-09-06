@@ -30,6 +30,11 @@ profiles without cleaning. `make install` selects production unless you also
 pass `DEBUG=1`. `make -jN` parallelizes compilation; it does not start foreign
 builds or VMs. `make help` lists targets and overrides without building.
 
+Production defaults to size optimization (`-Os`), with runtime checks and
+unwind information retained. Debug defaults to `-Og`; explicit compiler flags
+can select another optimization level. Neither profile enables host-specific
+instruction sets or makes LTO tooling mandatory.
+
 Production keeps matching symbols beside the executable: `snajpagent.debug`
 on ELF systems, `snajpagent.dSYM` on macOS. Retain these for debugging that
 exact production binary; they are not installed or required at runtime.

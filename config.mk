@@ -5,7 +5,7 @@ CC = cc
 CPPFLAGS = -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700
 DEBUG ?= 0
 ifeq ($(DEBUG),0)
-CFLAGS = -std=c11 -O2 -g -Wall -Wextra -Wpedantic -Werror
+CFLAGS = -std=c11 -Os -g -Wall -Wextra -Wpedantic -Werror
 else ifeq ($(DEBUG),1)
 CFLAGS = -std=c11 -Og -g -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror
 else
