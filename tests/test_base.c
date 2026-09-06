@@ -648,7 +648,7 @@ interrupt_hidden_console(void *opaque)
 {
     (void)opaque;
     assert(snag_sleep_ms(40u) == 0);
-    assert(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0));
+    assert(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, GetCurrentProcessId()));
     return 0;
 }
 
@@ -918,7 +918,7 @@ test_input_mode(void)
     assert(snag_term_input_flush(&host) == 0);
     assert(snag_term_controls_install(&host, test_control_signal, test_control_signal) == 0);
 #ifdef _WIN32
-    assert(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0));
+    assert(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, GetCurrentProcessId()));
     uint64_t deadline = snag_monotonic_ms() + 1000u;
     while (!atomic_load(&console_interrupts) && snag_monotonic_ms() < deadline)
         assert(snag_sleep_ms(1u) == 0);
@@ -1386,8 +1386,30 @@ test_irc_target_parse(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
+#ifdef _WIN32
+    if (argc == 1) {
+        WCHAR program[32768], command[32768];
+        DWORD size = GetModuleFileNameW(NULL, program, 32768u);
+        assert(size && size < 32768u);
+        assert(swprintf(command, 32768u, L"\"%ls\" --console-test-child", program) > 0);
+        STARTUPINFOW startup = {.cb = sizeof(startup)};
+        PROCESS_INFORMATION child;
+        /* Generated control events must never interrupt the parent shell. */
+        assert(CreateProcessW(program, command, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP,
+                               NULL, NULL, &startup, &child));
+        assert(CloseHandle(child.hThread));
+        assert(WaitForSingleObject(child.hProcess, INFINITE) == WAIT_OBJECT_0);
+        DWORD status;
+        assert(GetExitCodeProcess(child.hProcess, &status) && CloseHandle(child.hProcess));
+        return (int)status;
+    }
+    assert(argc == 2 && !strcmp(argv[1], "--console-test-child"));
+#else
+    (void)argc;
+    (void)argv;
+#endif
     assert(snag_irc_nick_mentioned("@ALICE: hi", "alice"));
     assert(snag_irc_nick_mentioned("{op}: hi", "[OP]"));
     assert(snag_irc_nick_mentioned("hello alice", "alice"));
