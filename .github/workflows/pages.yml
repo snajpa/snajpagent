@@ -6,6 +6,7 @@ on:
     branches: [master]
     paths:
       - 'www/**'
+      - 'snajpagent.1'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -27,6 +28,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/configure-pages@v6
+      - name: Install manual formatter
+        run: sudo apt-get update && sudo apt-get install -y groff
+      - name: Format the user manual
+        run: |
+          groff -Thtml -man snajpagent.1 > www/manual.html
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
+          path = Path("www/manual.html")
+          text = path.read_text()
+          text = re.sub(r"<style.*?</style>", "", text, flags=re.S)
+          text = text.replace('<html>', '<html lang="en">')
+          text = text.replace("</head>",
+              '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+              '<link rel="stylesheet" href="style.css">\n</head>')
+          text = text.replace("<body>",
+              '<body class="manual">\n<nav aria-label="Project">'
+              '<a href="index.html">snajpagent</a> · '
+              '<a href="https://github.com/snajpa/snajpagent#readme">README</a> · '
+              '<a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">Manual source</a>'
+              '</nav>')
+          path.write_text(text)
+          PYTHON
       - uses: actions/upload-pages-artifact@v5
         with:
           path: www

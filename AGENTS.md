@@ -24,3 +24,19 @@ one clear behavior is enough.
 
 When a provider lacks an optional native endpoint, keep the user-facing behavior
 working through the existing provider path whenever practical.
+
+## User documentation
+
+`snajpagent.1` is the complete user-manual source. Changes to user-visible
+options, commands, defaults, tools, limits, lifecycle, networking or security
+must update the relevant manual sections in the same change. Check claims
+against source and focused tests, not older prose. Keep README and `www/index.html`
+in sync when introductory workflows change; teach rollout before native
+networking. Their prose budgets are 2,700 and 1,200 words respectively, excluding
+code, not targets. They are unrelated to runtime context limits.
+
+Render the affected manual text with `groff -Tutf8 -man snajpagent.1` and check
+its examples and links before shipping documentation changes. The existing Pages
+workflow formats that same file as `manual.html`; do not hand-edit or check in
+a second generated manual. Screenshots must be real program captures with
+correct status fields and current rendering, never synthesized or recolored.

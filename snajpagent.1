@@ -45,7 +45,7 @@ An interactive session can independently host one single-room IRC server and
 maintain up to 16 outgoing
 IRC connections.  Agents and channel operators share the room; the runtime
 owns joining, history, and reconnection.  Startup flags and runtime slash
-commands control these optional capabilities without changing session identity.
+commands control this native networking without changing session identity.
 .SH GETTING STARTED
 On a fresh interactive launch without configuration or existing environment
 credentials, choose ChatGPT/Codex, OpenRouter, OpenAI, or a custom provider.
@@ -88,9 +88,150 @@ snajpagent
 Enter submits a turn.  Type
 .B /help
 for commands and keys.
+.SH USING SNAJPAGENT
+.SS A session, a turn, and the rollout
+Start in the directory containing the project you want to change.  A session
+keeps its workspace, conversation, tool results, model selection, queue and
+goal on disk.  A turn is one admitted prompt and the model/tool work it causes;
+a response is one provider generation within that turn.  A turn may require
+several responses and tool calls before the model finishes.
+.PP
+Without network roles, startup opens rollout: the local view of the model's
+work.  Describe the result and constraints, for example:
+.PP
+.nf
+Fix the empty-input bug. Keep the public API unchanged.
+Run the tests and summarize the change.
+.fi
+.PP
+Press Enter to submit.  Model text is visible at the default verbosity.
+Use
+.B /verbose 1
+for compact tool activity or
+.B /verbose 2
+for argument and result previews.  You can type while the model works;
+the draft is not input to the model until you submit or queue it.
+.SS Correct now, schedule later
+In rollout, Enter during work supplies immediate steering.  For example,
+"Use the existing parser; do not add a dependency" changes the current turn.
+The provider response is interrupted and continued from its delivered prefix.
+An already-started command is handed back alive, not restarted or killed.
+.PP
+To schedule a separate turn, type "Then add regression coverage" and press
+Tab while work is active.  Except when completing text, Tab puts the draft
+in the durable first-in, first-out queue.  It does not expose the draft to the
+current model cycle.  Queued turns run sequentially after current work,
+not as parallel agents.  The default rollout prompt's
+.B (N)
+counts pending prompts, excluding the running turn.
+.PP
+Use
+.B /queue
+to inspect the queue,
+.B /queue 2 edit
+to revise the second item, or
+.B /queue 2 delete
+to remove it.  The editor preserves its place in the queue and holds automatic
+draining while open.  Enter or active-turn Tab saves the replacement; Ctrl-C
+abandons the edit.  An empty replacement is rejected.
+.B /queue pop
+removes the newest item;
+.B /queue clear
+removes all pending items, not current work.
+.PP
+A paused queue needs
+.B /next
+while idle.  It starts the oldest item and allows the remaining queue to drain;
+it is not a one-item-only step.  Session resume retains queued prompts but
+does not run them automatically.  They take precedence over automatic goal
+continuation.  See PROVIDER FAILURES for the new-input/retry handoff case.
+.SS Tab, editing, interruption, and exit
+An empty draft makes Tab switch chat and rollout, including offline or during
+work.  With text, Tab first tries completion: slash commands, numeric room
+destinations, and chat mentions.  Otherwise it queues during an active turn
+or inserts spaces while idle.  Completion never submits input.  Explicit
+.B /chat
+and
+.B /rollout
+select the named view without starting or cancelling work.
+.PP
+Ctrl-J inserts a newline.  Bracketed paste preserves pasted newlines instead
+of sending them.  Up/Down recall prompts and Ctrl-R searches history.  Ctrl-C
+clears a nonempty draft without interrupting the turn; on an empty draft it
+interrupts active work.  Ctrl-D on an empty draft exits the foreground process.
+The complete editing and exit key reference follows under INTERACTIVE INPUT.
+.SS Continue with a goal
+An ordinary final answer returns control to you.  A goal explicitly asks for
+work to continue across turn boundaries:
+.PP
+.nf
+/goal fix the parser, add tests, and validate the change
+/goal status
+/goal pause
+/goal resume
+.fi
+.PP
+An active goal continues until complete, paused, cancelled, or blocked.
+Queued operator turns run before automatic goal continuation.  Goal pause
+takes effect at a turn boundary; it is not a request to kill a running command.
+Failures, refusal and turn-only interruption pause automatic goal work.
+.PP
+Quitting the foreground process is different from pausing the goal.  No work
+runs after exit, but an active goal stays active in the saved session and
+continues on resume.  Use
+.B /goal pause
+before exiting when you want it to stay paused.  Normal exit prints a resume
+command; keep it for the exact session and configuration.  You can also list
+sessions with
+.B snajpagent -l
+and reopen the newest for the workspace with
+.BR "snajpagent --resume --last" .
+.SS Native networked work
+Networking uses the same session and tools, with a second view for shared IRC
+conversation.  In separate terminals, start a host and a client:
+.PP
+.nf
+snajpagent -s -n builder -o alice -r work
+snajpagent -c -n reviewer -o bob
+.fi
+.PP
+The first hosts one room on localhost:6667; the second joins it automatically.
+Each session has an operator nick and model nick, its own workspace and its
+own local rollout.  A room does not share files, credentials, or command
+processes.  Use separate worktrees when agents should edit independently.
+.PP
+Networked startup opens chat.  Enter sends as the local operator to the selected
+room.  Address a model with its accepted nick, for example
+"@builder check the failing test".  A mention starts work when idle or steers
+at a safe response/tool boundary during work.  Ordinary conversation remains
+background context, not an instruction to start a turn.  Model replies reach
+the room only through explicit
+.B irc_send
+calls; their other text and tool activity remain in rollout.
+.PP
+Empty Tab switches views without pausing the model or disconnecting.  Buffered
+output from the hidden view is displayed on return.  In chat, non-completing
+Tab during work still queues a local future turn; it is not a public send.
+Use Enter for the room.  Runtime
+.B /server start
+and
+.B /connect
+change network roles without restarting the session or changing its current view.
+.SS Read this reference
+Use
+.B man snajpagent
+for the installed reference.  From a checkout,
+.B man -l ./snajpagent.1
+opens the same source.  The hosted edition is
+.IR https://agent.snajpa.net/manual.html .
+The website and README introduce workflows; this manual defines options,
+commands, configuration, tools, files, limits, failures and security.
 .SH BUILDING AND INSTALLING
 Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
-libcurl and Jansson development files.  Plain
+libcurl and Jansson development files.  These instructions describe the
+normal POSIX build.  Native Windows support is in progress, not a complete
+qualified agent release; see DEPENDENCIES.md for its supported foundations.
+Plain
 .B make
 builds only for the host, with size optimization and stripping.  ELF production
 packaging needs strip and objcopy; macOS needs strip and dsymutil.
@@ -402,8 +543,8 @@ of inactivity.  Bracketed paste inserts pasted newlines without submitting.
 Direct prompts accept up to 1 MiB of valid UTF-8; steering and queued turns
 accept up to 256 KiB.  The queue holds up to 128 pending turns within 16 MiB;
 up to 32 steering items may be pending in a turn.  Interactive EOF interrupts
-active work, pauses further queued or goal work, and exits.  The session remains
-resumable.
+active work and exits, preserving the saved goal state.  Queued turns wait
+for explicit continuation on resume.  The session remains resumable.
 .SH DISPLAY
 Startup without network roles opens rollout; startup with roles opens chat. Empty Tab,
 .BR /chat ,
@@ -418,7 +559,8 @@ neither is a full-screen TUI.
 .PP
 The default rollout prompt starts with a goal slot and a shared activity slot,
 then a bare context percentage space-padded to four columns, a space,
-provider/model/effort, and a space before its idle or active marker:
+provider/model/effort, an optional pending-queue count (N), and its idle or
+active marker:
 .B ›
 while idle and
 .B »
@@ -499,6 +641,14 @@ Top-level prose paragraphs are bulleted.  Prompts and model blocks have one
 empty row between them; generated prose wraps align below the paragraph text.
 Timestamped IRC chat messages do not receive the synthetic paragraph bullet;
 genuine Markdown list items retain their structural bullets.
+.PP
+Ordinary operator nicks use magenta and model nicks cyan.  A message mentioning
+this viewer's accepted room-local operator or model nick highlights its timestamp
+and sender nick in bold magenta, including when the sender is another model.
+The message body and its Markdown styles are unchanged.  This display rule
+applies to live and retained chat; it does not change mention admission or
+turn history into fresh instructions.  Color-disabled output has no escapes.
+.PP
 .SH COMMANDS
 Commands normally occupy a single submitted line.
 .BR /ro ,
@@ -1111,8 +1261,10 @@ do not animate.
 .B shell
 Absolute executable used by
 .BR exec_command .
-Default:
+Default on POSIX:
 .BR /bin/sh .
+Experimental native Windows builds use the system cmd.exe path.  Commands
+must use the configured shell's syntax; changing shells does not translate them.
 .TP
 .B default_yield_ms
 Default initial yield interval, 0 through 600000.  Default: 10000.
@@ -1424,6 +1576,163 @@ neither.  Wording locks prevent model rewording, not completion or blocking.
 .PP
 IRC is the network integration.  The event log is durable internal state, not
 a stable external API while snajpagent remains pre-1.0.
+.SH TOOL REFERENCE
+These are model-callable tools, not slash commands to type into the composer.
+The advertised functions depend on turn mode, goal state and networking.
+Arguments use strict JSON objects: all declared fields are present, with
+.B null
+where a nullable field should use its default.  Unknown fields are rejected.
+Runtime validation and tool results remain authoritative even if a provider
+accepts an invalid declaration.  Pre-1.0 tool and event formats are not a
+stable third-party automation API.
+.SS exec_command
+Run one command using the configured shell and explicit absolute
+.BR workdir .
+.B command
+is UTF-8 text up to 256 KiB.  A normal POSIX build runs the shell with
+.B -c
+and does not implicitly use a login shell.  On experimental native Windows,
+the default system cmd.exe receives its native command syntax; a configured
+POSIX shell receives
+.BR -c .
+.PP
+.B stdin
+is null to leave input available for later interaction, or UTF-8 text up to
+1 MiB to send and then close input.  An empty string sends immediate EOF.
+.B pty
+is true for a pseudo-terminal; false or null uses ordinary pipes.  PTY output
+is a terminal stream rather than separate stdout/stderr, and terminal line
+editing/echo rules may affect interactive input.
+.PP
+.B yield_ms
+is 0 through 600000, or null for the configured default.  It bounds the
+foreground wait before returning a handle; it is not a process lifetime.
+.B timeout_ms
+is a positive foreground handoff deadline, bounded by the configured maximum,
+or null for the configured default.  The built-in default has no deadline.
+A deadline yields control without terminating the child.
+.PP
+.B max_output_tokens
+is a positive model-context bound or null for the configured ceiling.
+Returned status distinguishes running, successful/failed exit, and termination
+by signal.  A running result means the invocation returned, not that the
+command completed.  Keep its handle and use
+.BR write_stdin ;
+do not start the same command again merely to wait for it.
+.SS write_stdin
+.B handle
+identifies a currently managed command.
+.B data
+is UTF-8 input up to 1 MiB; use an empty string to wait without writing.
+.B eof
+true closes input after the accepted data; false or null leaves it open.
+.B terminate
+true requests termination and a final result, and requires empty data with
+eof false or null.  Yield and output bounds follow
+.BR exec_command .
+.PP
+Pending input and output are bounded.  Accepted input may still be waiting to
+reach the process; output references distinguish accepted, written, pending
+and open-input state.  Do not resend accepted data or send to a closed input.
+Each handle can participate at most once in a model response's call batch.
+The runtime rejects invalid, stale or concurrently occupied handles rather
+than guessing which process was intended.
+.PP
+Unsettled commands count against
+.BR max_parallel_commands ,
+including commands that have exited but whose final result is not collected.
+The model may perform unrelated work while a command runs, but must settle
+all handles before its final answer or goal completion.  Shutdown cleans up
+managed commands and descendants; saved session history cannot revive them.
+.SS apply_patch
+.B workdir
+must be the exact session workspace.
+.B patch
+contains one bounded patch with this structure:
+.PP
+.nf
+*** Begin Patch
+*** Update File: example.c
+@@
+-old line
++new line
+*** End Patch
+.fi
+.PP
+Also supported are
+.B *** Add File:
+with added lines prefixed by plus, and
+.B *** Delete File:
+without a body.  File paths are relative to the workspace, not absolute;
+parent traversal, duplicate targets and symlink traversal are rejected.
+Update hunks use matching context rather than trusting a guessed line number.
+There is no move/rename operation in this patch grammar.
+.PP
+The tool validates targets and computes replacements before installation,
+checks for concurrent changes, and reports rejection or I/O failure explicitly.
+Do not assume a multi-file transaction survives every crash atomically.
+Inspect the result and current files after failure before retrying.
+Limits are 2 MiB patch text, 1 MiB per patch line, 256 file operations,
+2048 hunks in total, 16 MiB per regular file and 48 MiB aggregate file data.
+Result text and diff previews are bounded.  Use normal command tools for work
+outside this patch grammar; their local authority is not a workspace sandbox.
+.SS Native read-only inspection
+.B list_files
+accepts path, recursive, offset and limit.  Path is required; null recursive
+means false.  It lists hidden entries and labels directories, symlinks and
+special files without following them.
+.PP
+.B read_file
+accepts path, start_line and end_line.  Non-null line bounds are inclusive,
+1-based and at most 2147483647.  Null bounds select the start/end of the file.
+Text is returned with line numbers; use narrower ranges when output is too large.
+.PP
+.B grep
+accepts path, pattern, recursive, ignore_case, literal, offset and limit.
+Patterns are at most 4096 bytes.  Null recursive means true; null ignore_case
+and literal mean false.  The default is POSIX extended regular expressions;
+literal true disables regex interpretation.  Matches use path:line:text.
+.PP
+For listing and search, offset is zero-based (default 0, maximum 1000000),
+limit defaults to 200 and may be 1 through 1000.  Use the returned next offset
+when pagination is incomplete.  Scan-limit exhaustion instead needs a narrower
+path.  The live filesystem can change between pages.  All inspection tools
+require safe non-symlink paths; file reading requires regular UTF-8 text without
+NUL.  Result, traversal and scan ceilings are listed under AUTOMATION AND
+INTEGRATION.  These tools do not interpret shell globs or ignore files.
+.SS Hosted search
+.B web_search
+is executed by the provider, not a local shell helper.  The model receives
+provider search results in the same turn; external pages remain untrusted data.
+OpenRouter's endpoint selects its corresponding native search declaration
+automatically.  Search availability and charges depend on the provider.
+.SS Model goal controls
+.B create_goal
+accepts objective text and is available only when creating a goal is explicitly
+requested and no unfinished goal already exists.  A sentence claiming a goal
+is active is not a substitute for a successful tool result.
+.PP
+.B update_goal
+accepts action and text.  Action rewrite requires new wording; complete
+requires null text; block requires a specific reason.  Only an active goal
+advertises it.  A wording lock rejects model rewording, not completion or
+blocking; the operator retains explicit control through slash commands.
+.SS Model IRC controls
+.B irc_state
+accepts an empty object and reports the actual current destinations and room
+state; it does not open connections.
+.B irc_send
+accepts destination, notice and text.  Null/false notice sends a normal message;
+true sends an informational notice, which does not satisfy a required reply.
+.B irc_topic
+accepts destination and topic and requires the model's current channel-op status.
+.PP
+Destination is a numeric string from irc_state, all for an explicit broadcast,
+or null only when exactly one destination exists.  The model never implicitly
+follows the operator's selected room.  Text and topic are bounded UTF-8;
+topic is at most 280 bytes with no newline.  Successful send acceptance is not
+proof that every remote participant received it.  Runtime joining, history and
+reconnection are not model-managed tools.
 .SH IRC MODE
 Listener mode creates one room.  Its default name is the hostname and its initial
 topic is the server agent's absolute launch workspace.  snajpagent clients join
@@ -1611,6 +1920,105 @@ Host a room and connect another agent:
 snajpagent -s localhost:6667 -n builder -o alice -r work
 snajpagent -c localhost:6667 -n reviewer -o bob
 .fi
+.SH TROUBLESHOOTING
+.TP
+.B The prompt shows ?% for context.
+Usage and capacity are different facts.  A comparable request bound exists,
+but the selected provider/model has no known effective input budget.  Inspect
+.B /status
+and
+.BR /model .
+Refresh advertised limits with
+.B /model cache
+or configure a justified model-limit rule.  The rule's provider name must
+match the selected local provider.  Do not invent a capacity or confuse
+bytes, provider usage, the conservative request bound and the total context
+window.  The percentage is rounded up against the effective input budget,
+which can be smaller than the configured total after safety/output reserves.
+.TP
+.B Tab did not queue my text.
+An empty draft switches views.  Command/destination/mention completion takes
+precedence with matching text.  Otherwise queueing requires an active turn;
+while idle Tab indents.  Use
+.B /queue TEXT
+during active work when you want explicit queue admission.  An open queue
+editor updates the selected item instead of appending a new one.
+.TP
+.B There are queued prompts but nothing is running.
+Retained queues are deliberately paused after session resume.  Interruptions
+and failures can also pause them.  Inspect
+.B /queue
+and use
+.B /next
+while idle.  An open queue editor prevents automatic draining.  A paused queue
+cannot be skipped by automatic goal continuation.
+.TP
+.B A goal continued when I resumed.
+Resume preserves its saved state, and foreground exit does not pause an active
+goal.  Use
+.B /goal pause
+when you want automatic continuation to stay paused, then exit.  Use
+.B /goal status
+to see the saved wording, status and any blocker.  No background daemon runs
+after the process exits.
+.TP
+.B My message was not sent to the room.
+Ordinary rollout text is local input.  Select chat or use an explicit numbered
+send.  Offline chat restores an unsendable draft instead of silently running
+a private turn.  Check
+.B /names
+and
+.B /status
+for actual connection/join state; a requested connection is not an established
+one.  Use accepted nicks after collisions, not the original preference.
+.TP
+.B I cannot see the tools or the model's answer.
+Switch to rollout.  Chat only contains public room traffic; ordinary assistant
+responses are not automatically published.
+.B /verbose 1
+shows compact tools, 2 adds previews, and 3 shows retained arguments/results
+subject to their capture limits.  Avoid higher diagnostic levels on shared
+terminals unless their sensitive contents are acceptable.
+.TP
+.B The model name is not listed or the cache is old.
+Typing a model ID is allowed; the provider decides whether it is usable.
+.B /model
+reads only local cache.
+.B /model cache
+makes an explicit authenticated discovery request.  A failed refresh does not
+replace a working cache.  For IDs containing slashes, numbered rows avoid
+selector ambiguity.  A different local provider name can also change which
+configured limits and source-bound observations apply.
+.TP
+.B Authentication or token counting failed.
+Use
+.B snajpagent login status
+to inspect the configured source without a remote request.  An explicit missing
+key or file does not fall back to stored login.  Check the provider URL, auth
+method and selected provider before changing anything.  A count endpoint
+failure is not necessarily a generation failure: auto falls back only on
+definitive unsupported capability, while true requires exact counting.
+Choosing false disables preflight, not the hard capacity guard.
+.TP
+.B A tool result says running or timed out.
+A yield or foreground deadline hands back a still-managed command.  Wait using
+the existing handle; do not duplicate execution.  A user interruption or process
+exit closes managed work.  Resume restores recorded context, not operating-system
+processes.  After a failed turn,
+.B /retry
+uses retained context/results and does not replay completed tools.
+.TP
+.B Configuration reload failed.
+.B /config
+leaves invalid edited text on disk while keeping the previous valid runtime
+configuration.  Fix the file before restarting.  Only changed IRC fields
+replace current runtime network state; unrelated edits preserve it.
+.TP
+.B Session resume reports a lock or incompatible format.
+A live session cannot be resumed concurrently.  Do not delete its lock to start
+a second owner.  Pre-1.0 internal formats can change; preserve older logs and
+use a compatible binary to inspect them rather than rewriting or deleting
+unknown data.  Archive/deletion of a session does not erase shared prompt history.
 .SH SECURITY
 The model and its tools act with the user's local authority.  Run in a suitable
 workspace, inspect configuration, and protect the dotdir.  There is no command

@@ -13,83 +13,136 @@
   <header>
     <h1>snajpagent</h1>
     <p class="intro">A fast, lightweight, networked coding agent for your terminal.</p>
-    <p>Work with a model in your project. Steer it while it runs.
-      Bring people and agents together through native IRC chat.</p>
+    <p>Give a model a task in your project, let it use files and commands, and steer it
+      while it works. Native IRC brings people and agents into shared rooms, while
+      each session keeps its own workspace, tools, and local working view.</p>
+    <p>If you have used another agent harness, the basic loop is familiar: prompt,
+      model response, tool calls, results, and another response. Here it runs in an
+      ordinary scrolling terminal, not a full-screen interface. There is no resident
+      service; the foreground process owns the work.</p>
     <nav aria-label="Start here">
       <a href="#rollout">1. Rollout</a> · <a href="#network">2. Network</a> ·
-      <a href="#install">Install</a> · <a href="https://github.com/snajpa/snajpagent">Source</a> ·
-      <a href="https://github.com/snajpa/snajpagent#readme">README</a>
+      <a href="#install">Install</a> · <a href="manual.html">User manual</a> ·
+      <a href="https://github.com/snajpa/snajpagent">Source</a>
     </nav>
   </header>
   <main>
     <section id="rollout" aria-labelledby="rollout-heading">
       <h2 id="rollout-heading">1. Work in rollout</h2>
-      <p>Start <code>snajpagent</code> in your project, describe a change, and press Enter.
-        <strong>Rollout</strong> is your local working view. A <strong>turn</strong> is the work
-        started by one prompt, including tool use. Model responses appear here;
-        <code>/verbose 1</code> adds tool activity.</p>
-      <p>While a turn runs:</p>
-      <ul>
-        <li><strong>Enter steers now:</strong> “Keep the public API unchanged.”</li>
-        <li><strong>Tab queues later:</strong> “Then add a regression test.”</li>
-      </ul>
-      <p>Tab tries completion first. Queued prompts do not enter the current turn;
-        after it finishes, they run oldest first. The rollout prompt shows the pending count.
-        <code>/queue</code> lists them; <code>/queue 2 edit</code> revises one.</p>
-      <p>Interrupted or failed work leaves the queue paused. After session resume,
-        queued turns also wait: use <code>/next</code> while idle.</p>
-      <p>Ctrl-J adds a newline. Ctrl-C clears a draft; with an empty draft it interrupts work.
-        <code>/goal finish this change</code> continues across turns until complete or blocked;
-        <code>/goal pause</code> pauses continuation at a turn boundary.</p>
+      <p>Start <code>snajpagent</code> in the project you want to change. Describe the
+        result and constraints, then press Enter: “Fix the empty-input bug, keep the
+        public API unchanged, and run the tests.”</p>
+      <p>A <strong>turn</strong> is that prompt and the work it causes, possibly through
+        several model responses and tool calls. A <strong>session</strong> retains the
+        conversation, settings, tool results, queued prompts, and goals for later resume.
+        <strong>Rollout</strong> is your local view of this work.</p>
+      <p>Model text appears at default verbosity. <code>/verbose 1</code> adds compact
+        tool activity; <code>/verbose 2</code> adds argument and result previews.
+        Change verbosity during work without interrupting it.</p>
       <figure>
         <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1122" height="221"
           alt="A real rollout fixing count_words to handle tabs and newlines, then passing all four checks."></a>
         <figcaption>A real model fixes whitespace handling and runs four checks. Default rollout verbosity.</figcaption>
       </figure>
+      <h3>Steer now, queue for later</h3>
+      <p>Typing while the model works opens a draft; it does not submit anything yet.</p>
+      <ul>
+        <li><strong>Enter steers now:</strong> “Use the existing parser; don't add a dependency.”
+          It interrupts the provider response and continues with your correction.
+          Already-running commands are handed back alive, not restarted or killed.</li>
+        <li><strong>Tab queues later:</strong> “Then add regression coverage.”
+          Except when completing text, it schedules a separate turn without
+          interrupting or changing the current model cycle.</li>
+      </ul>
+      <p>Queued prompts run oldest first after current work, sequentially in the same
+        session. <code>(N)</code> in the rollout prompt counts pending turns, not the
+        running one. <code>/queue</code> lists them; <code>/queue 2 edit</code> revises
+        one; <code>/queue 2 delete</code> removes it. An open editor holds queue draining.</p>
+      <p>After interruption or failure the queue can be paused. Retained turns also
+        wait after session resume. Use <code>/next</code> while idle to resume FIFO
+        execution. Clearing the queue does not cancel current work.</p>
+      <h3>Editing, goals, and resume</h3>
+      <p>Tab tries command completion before queueing. With ordinary text while idle,
+        it indents; with an empty draft, it switches views. Ctrl-J adds a newline.
+        Up/Down recall prompts; Ctrl-R searches history. Ctrl-C clears a nonempty
+        draft, or interrupts work when the draft is empty. <code>/help</code> lists controls.</p>
+      <p>A normal completed turn returns control to you. For continuing work, use
+        <code>/goal fix the bug and validate the change</code>. An active goal continues
+        across turns until complete or blocked; queued operator turns come first.
+        <code>/goal pause</code> pauses continuation at a turn boundary.</p>
+      <p>Ctrl-D on an empty draft exits. No work runs afterward, but an active goal
+        stays active in saved state and continues on resume. Pause it first if you want
+        it to remain paused. Normal exit prints the exact resume command;
+        <code>snajpagent --resume --last</code> reopens the last session for your workspace.</p>
+      <p><code>/status</code> explains the context budget and accounting. The percentage
+        is a comparable request bound, not necessarily an exact token count; <code>?%</code>
+        means the capacity is unknown. <code>/model</code> lists the local catalog;
+        <code>/model cache</code> refreshes it. Use <code>/compact</code> while idle to
+        summarize context, or <code>/ro QUERY</code> for inspection without command execution.</p>
     </section>
     <section id="network" aria-labelledby="network-heading">
       <h2 id="network-heading">2. Work together over the network</h2>
-      <p>Each session has an operator and model nick. They share a room, while each
-        session keeps its own workspace, tools, and rollout. In separate terminals:</p>
+      <p>The same program can host an IRC room and connect to other instances.
+        Each session has an operator nick and a model nick. Conversation is shared;
+        workspaces, credentials, tools, and command processes stay local. Use separate
+        worktrees when agents should edit independently.</p>
       <pre><code>snajpagent -s -n builder -o alice -r work
 snajpagent -c -n reviewer -o bob</code></pre>
-      <p>The first hosts <code>#work</code>; the second joins at <code>localhost:6667</code>.
-        <code>-n</code> names the model; <code>-o</code> names its operator.</p>
-      <p><strong>Chat</strong> is the shared conversation. Enter sends to the room;
-        mention <code>@builder</code> to ask that model to work or steer it.
-        Models explicitly publish through <code>irc_send</code>;
-        other output stays local unless they choose to share it.</p>
+      <p>Run these in separate terminals. The first hosts <code>#work</code> at
+        <code>localhost:6667</code>; the second joins automatically. <code>-n</code>
+        names the model; <code>-o</code> names its operator. <code>/names</code> shows
+        accepted nicks, which can acquire suffixes after a collision.</p>
+      <h3>Shared chat, local work</h3>
+      <p>Networked startup opens <strong>chat</strong>. Enter sends publicly to the
+        selected room. Mention <code>@builder</code> to ask that model to work or steer
+        it at a safe response/tool boundary. Unaddressed conversation remains background
+        context. Models publish chosen messages through <code>irc_send</code>;
+        other text and tools stay in rollout unless the model chooses to share them.</p>
       <p><strong>Empty Tab switches chat ↔ rollout</strong>, even offline.
-        <code>/chat</code> and <code>/rollout</code> select either view.
-        Switching does not stop work; returning displays buffered output.
-        With text, Tab completes commands and chat nicks first, otherwise
-        queues during work or indents while idle. Queueing stays local, even in chat.</p>
+        <code>/chat</code> and <code>/rollout</code> select either view. Switching does
+        not pause work or disconnect; returning displays buffered output. Tab completes
+        commands and chat <code>@nicks</code> first. Non-completing Tab with text during
+        work still queues a <em>local future turn</em>, even in chat. Enter sends to the room.</p>
       <figure>
         <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1122" height="195"
-          alt="Alice and Bob ask builder and reviewer about a whitespace-only regression test in a real IRC room." loading="lazy"></a>
-        <figcaption>Two operators, two models, one real room. Operator nicks are magenta; model nicks are cyan.</figcaption>
+          alt="Operators and models discussing a regression test in a real IRC room." loading="lazy"></a>
+        <figcaption>Real shared chat. Ordinary operator nicks are magenta and model nicks cyan;
+          mentions highlight the timestamp and sender, not the message body.</figcaption>
       </figure>
-      <p>IRC has no authentication or TLS: use localhost, a trusted network, or a secure tunnel.
-        Tools run with your permissions, without an approval sandbox.</p>
+      <p><code>/server start</code> and <code>/connect ENDPOINT</code> manage networking
+        during a session. <code>/server stop</code> stops hosting only;
+        <code>/disconnect</code> removes outgoing links. History and reconnects are
+        runtime-managed. For multiple destinations, <code>/2</code> selects one,
+        <code>/2 TEXT</code> sends there once, and <code>/all TEXT</code> broadcasts once.</p>
+      <p>IRC has <strong>no authentication or TLS</strong>: use localhost, a trusted
+        network, or a secure tunnel. Tools run with your permissions, without a
+        command-approval sandbox. Protect credentials and session history; local
+        rollout is not an automatic guarantee that the model will never share its contents.</p>
     </section>
     <section id="install" aria-labelledby="install-heading">
-      <h2 id="install-heading">Install</h2>
-      <p>Build with C11/POSIX, pthreads, GNU make, libcurl, and Jansson.
+      <h2 id="install-heading">Install and start</h2>
+      <p>The normal build needs C11/POSIX, pthreads, GNU make, libcurl, and Jansson.
         See <a href="https://github.com/snajpa/snajpagent#install-and-choose-a-provider">README</a>
-        for platform dependencies.</p>
+        for platform dependencies and build variants.</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
 make
 sudo make install
 cd /path/to/your/project
 snajpagent</code></pre>
-      <p>Without configuration or credentials, first interactive launch offers provider setup.
-        Authenticate and choose a supported model.</p>
+      <p>Without configuration or existing credentials, first interactive launch offers
+        ChatGPT/Codex, OpenRouter, OpenAI, or custom-provider setup. Authenticate and
+        choose a supported model. Configuration and private credentials live under
+        <code>$HOME/.snajpagent</code>. Applicable <code>AGENTS.md</code> files point
+        the model to project guidance and working documents.</p>
+      <p>Read the <a href="manual.html">user manual</a> for the complete interface,
+        configuration, tools, and troubleshooting. It is the same reference installed
+        as <code>man snajpagent</code>, formatted automatically from one maintained source.</p>
     </section>
   </main>
   <footer>
+    <a href="manual.html">User manual</a> ·
     <a href="https://github.com/snajpa/snajpagent#readme">README</a> ·
-    <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">man snajpagent</a> ·
     <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a>
   </footer>
 </body>

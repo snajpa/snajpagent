@@ -72,3 +72,14 @@ footer {
   border-top: 1px solid var(--rule);
   padding-top: 1rem;
 }
+
+/* groff uses tables and inline margins for layout, not tabular data. */
+.manual { max-width: 90ch; overflow-wrap: anywhere; }
+.manual h1 { text-align: left; }
+.manual p { max-width: none; margin: 0.6rem 0 !important; }
+.manual table, .manual tbody, .manual tr, .manual td {
+  display: block;
+  width: auto;
+}
+.manual td:empty { display: none; }
+.manual h3 { margin-top: 2rem; }
