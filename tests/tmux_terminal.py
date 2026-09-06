@@ -1910,8 +1910,9 @@ def validate_irc_events(dotdir):
             )
 
 
-def foreground_at(styled, text):
+def foreground_at(styled, pattern):
     foreground = None
+    text, colors = [], []
     for chunk in re.split(r"(\x1b\[[0-9;]*m)", styled):
         if chunk.startswith("\x1b["):
             for value in chunk[2:-1].split(";"):
@@ -1920,9 +1921,12 @@ def foreground_at(styled, text):
                     foreground = None
                 elif 30 <= code <= 37:
                     foreground = code
-        elif text in chunk:
-            return foreground
-    raise AssertionError(f"styled terminal has no {text!r}:\n{styled}")
+        else:
+            text.append(chunk)
+            colors.extend([foreground] * len(chunk))
+    match = re.search(pattern, "".join(text))
+    assert match, f"styled terminal has no {pattern!r}:\n{styled}"
+    return colors[match.start(1)]
 
 
 def validate_irc_styles(terminal):
@@ -1936,7 +1940,8 @@ def validate_irc_styles(terminal):
         for nick in nicks
     ]
     for nick, color, role in expected:
-        assert foreground_at(styled, nick + " ") == color, f"{nick} missing {role}:\n{styled}"
+        pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} ({nick}) "
+        assert foreground_at(styled, pattern) == color, f"{nick} missing {role}:\n{styled}"
 
 
 def run_destination_case(binary, root, provider, environment):
@@ -2983,6 +2988,28 @@ def run_provider_clarification_cases(binary, root, provider, environment):
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
+    environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    try:
+        run_provider_retry_input_cases(binary, root, provider, environment)
+        run_provider_clarification_cases(binary, root, provider, environment)
+        run_runtime_networking_cases(binary, root, provider, environment)
+        run_runtime_routing_cases(binary, root, provider, environment)
+        run_runtime_boundary_cases(binary, root, provider, environment)
+        run_runtime_history_case(binary, root, provider, environment)
+        run_destination_case(binary, root, provider, environment)
+        run_listener_collision_case(binary, root, provider, environment)
+        run_multi_tool_cases(binary, root, provider, environment)
+        run_output_cap_cases(binary, root, provider, environment)
+        run_ctrl_d_cases(binary, root, provider, environment)
+        run_model_catalog_case(binary, root, provider, environment)
+    finally:
+        provider.close()
+    run_irc_chat_case(binary, root / "chat")
+
+
+def run_irc_chat_case(binary, root):
+    root.mkdir(mode=0o700, parents=True)
+    provider = FakeResponses()
     irc_port = free_loopback_port()
     endpoint = f"127.0.0.1:{irc_port}"
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
@@ -2999,19 +3026,6 @@ def run_irc_case(binary, root):
     ]
     terminals = {}
     try:
-        run_provider_retry_input_cases(binary, root, provider, environment)
-        run_provider_clarification_cases(binary, root, provider, environment)
-        run_runtime_networking_cases(binary, root, provider, environment)
-        run_runtime_routing_cases(binary, root, provider, environment)
-        run_runtime_boundary_cases(binary, root, provider, environment)
-        run_runtime_history_case(binary, root, provider, environment)
-        run_destination_case(binary, root, provider, environment)
-        run_listener_collision_case(binary, root, provider, environment)
-
-        run_multi_tool_cases(binary, root, provider, environment)
-        run_output_cap_cases(binary, root, provider, environment)
-        run_ctrl_d_cases(binary, root, provider, environment)
-        run_model_catalog_case(binary, root, provider, environment)
         for name, model, _agent, operator, args in specs:
             case = root / name
             workspace = case / "workspace"
@@ -3132,7 +3146,7 @@ def run_irc_case(binary, root):
                 if target == "oneop":
                     deadline = time.monotonic() + 5.0
                     while not any(event["data"].get("text") == message
-                                  for event in event_list(maybe_events(terminals["one"].dotdir), "irc_event")):
+                                  for event in event_list(maybe_events(terminals["one"].dotdir)[1], "irc_event")):
                         assert time.monotonic() < deadline, "client did not retain queued highlight"
                         time.sleep(0.02)
                     terminals["one"].submit("/chat")
@@ -3141,7 +3155,7 @@ def run_irc_case(binary, root):
                     styled = terminal.capture_styled()
                     # Foreground must survive Markdown and soft wrap through
                     # the final text, only in the addressed operator's UI.
-                    assert (foreground_at(styled, ending) == 35) == (
+                    assert (foreground_at(styled, f"({ending})") == 35) == (
                         name == {"hostop": "host", "oneop": "one"}[target]), styled
                 wait_irc_idle(ordered)
         wait_irc_quits(terminals["host"], ("highlightpeer",))
