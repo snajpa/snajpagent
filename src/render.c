@@ -147,9 +147,9 @@ write_literal(int fd, const char *s)
 }
 
 static int
-output_begin(struct snag_render *render, bool persistent)
+output_begin(struct snag_render *render)
 {
-    return render->term ? snag_term_output_begin(render->term, persistent) : 0;
+    return render->term ? snag_term_output_begin(render->term) : 0;
 }
 
 static int
@@ -179,7 +179,7 @@ write_role_chunk(struct snag_render *render, int fd, const char *color,
     }
     if (!len)
         return 0;
-    if (output_begin(render, persistent) < 0)
+    if (output_begin(render) < 0)
         return -1;
     if (colored && write_literal(fd, color) < 0)
         goto out;
@@ -587,20 +587,6 @@ snag_render_before_prompt(struct snag_render *render)
     return 0;
 }
 
-static size_t
-utf8_sequence_size(unsigned char first)
-{
-    if (first < 0x80u)
-        return 1u;
-    if (first >= 0xc2u && first <= 0xdfu)
-        return 2u;
-    if (first >= 0xe0u && first <= 0xefu)
-        return 3u;
-    if (first >= 0xf0u && first <= 0xf4u)
-        return 4u;
-    return 0u;
-}
-
 static int public_write(struct snag_render *render, const char *text, size_t len);
 static int close_public_output(struct snag_render *render);
 static int markdown_finish(struct snag_render *render);
@@ -715,7 +701,7 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
         bool colored = color_enabled(render, fd);
         const char *color = COLOR_AGENT;
         if (colored) {
-            if (output_begin(render, true) < 0)
+            if (output_begin(render) < 0)
                 goto fail;
             render->public_output_open = true;
             if (write_literal(fd, color) < 0)
@@ -770,7 +756,7 @@ public_write(struct snag_render *render, const char *text, size_t len)
     if (render->markdown_measuring)
         return 0;
     if (!render->public_output_open) {
-        if (output_begin(render, true) < 0)
+        if (output_begin(render) < 0)
             return -1;
         render->public_output_open = true;
         if (markdown_paint_style(render) < 0)
@@ -919,7 +905,7 @@ write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
     size_t i = 0u;
 
     while (i < len) {
-        size_t n = utf8_sequence_size(text[i]);
+        size_t n = snag_utf8_size(text[i]);
 
         if (!n || n > len - i) {
             errno = EILSEQ;
@@ -1084,7 +1070,7 @@ markdown_inline(struct snag_render *render, const unsigned char *text, size_t le
             if (render_checkpoint(render) < 0)
                 return -1;
         }
-        size_t n = utf8_sequence_size(text[i]);
+        size_t n = snag_utf8_size(text[i]);
         bool word;
 
         if (!n || n > len - i) {
@@ -1159,7 +1145,7 @@ markdown_inline(struct snag_render *render, const unsigned char *text, size_t le
                 i += n;
                 if (i >= len || i - start >= 1024u)
                     break;
-                n = utf8_sequence_size(text[i]);
+                n = snag_utf8_size(text[i]);
                 if (!n || n > len - i)
                     break;
             } while (!(n == 1u &&
@@ -1283,7 +1269,7 @@ markdown_table_delimiter(const struct markdown_table_cell *cells,
 }
 
 static int
-markdown_inline_finish(struct snag_render *render)
+markdown_inline_tail(struct snag_render *render)
 {
     struct snag_markdown_state *md = &render->markdown_state;
 
@@ -1299,6 +1285,16 @@ markdown_inline_finish(struct snag_render *render)
             markdown_text(render, ">", 1u) < 0)
             return -1;
     }
+    return 0;
+}
+
+static int
+markdown_inline_finish(struct snag_render *render)
+{
+    struct snag_markdown_state *md = &render->markdown_state;
+
+    if (markdown_inline_tail(render) < 0)
+        return -1;
     md->strong = false;
     md->emphasis = false;
     md->strike = false;
@@ -1334,21 +1330,6 @@ markdown_table_cell_width(struct snag_render *render,
         *width = probe.public_column;
     snag_buf_free(&probe.wrap_pending);
     return rc;
-}
-
-static int
-markdown_table_spaces(struct snag_render *render, size_t count)
-{
-    static const char spaces[] = "                ";
-
-    while (count) {
-        size_t amount = count < sizeof(spaces) - 1u ? count :
-                                                        sizeof(spaces) - 1u;
-        if (markdown_text(render, spaces, amount) < 0)
-            return -1;
-        count -= amount;
-    }
-    return 0;
 }
 
 static int
@@ -1419,9 +1400,9 @@ markdown_table_grid_row(struct snag_render *render,
             before = 0u;
         }
         after = widths[i] - width - before;
-        if (markdown_table_spaces(render, before) < 0 ||
+        if (markdown_repeat(render, ' ', before) < 0 ||
             markdown_table_cell(render, cell, header) < 0 ||
-            markdown_table_spaces(render, after) < 0 ||
+            markdown_repeat(render, ' ', after) < 0 ||
             markdown_text(render, i + 1u < columns ? " │ " : " │\n",
                           i + 1u < columns ? strlen(" │ ") :
                                              strlen(" │\n")) < 0)
@@ -1624,6 +1605,34 @@ markdown_table_replay(struct snag_render *render)
 }
 
 static int
+markdown_table_admit(struct snag_render *render,
+                      const struct markdown_table_cell *cells, size_t count)
+{
+    struct snag_markdown_state *md = &render->markdown_state;
+
+    if (!md->table_header_len) {
+        md->table_header_len = md->table.len;
+        md->table_pending = true;
+    } else if (md->table_pending) {
+        struct markdown_table_cell header[MARKDOWN_TABLE_COLUMNS];
+        enum markdown_table_alignment alignment[MARKDOWN_TABLE_COLUMNS];
+        size_t header_len = md->table_header_len;
+        size_t header_count;
+
+        if (header_len && md->table.data[header_len - 1u] == '\n')
+            --header_len;
+        if (!markdown_table_cells(md->table.data, header_len, header,
+                                  &header_count) ||
+            header_count != count ||
+            !markdown_table_delimiter(cells, count, alignment))
+            return markdown_table_replay(render);
+        md->table_pending = false;
+        md->table_active = true;
+    }
+    return 0;
+}
+
+static int
 markdown_table_finish(struct snag_render *render)
 {
     struct snag_markdown_state *md = &render->markdown_state;
@@ -1660,25 +1669,8 @@ markdown_table_finish(struct snag_render *render)
             }
             return markdown_table_replay(render);
         }
-        if (!md->table_header_len) {
-            md->table_header_len = md->table.len;
-            md->table_pending = true;
-        } else if (md->table_pending) {
-            struct markdown_table_cell header[MARKDOWN_TABLE_COLUMNS];
-            enum markdown_table_alignment alignment[MARKDOWN_TABLE_COLUMNS];
-            size_t header_len = md->table_header_len;
-            size_t header_count;
-
-            if (header_len && md->table.data[header_len - 1u] == '\n')
-                --header_len;
-            if (!markdown_table_cells(md->table.data, header_len, header,
-                                      &header_count) ||
-                header_count != count ||
-                !markdown_table_delimiter(cells, count, alignment))
-                return markdown_table_replay(render);
-            md->table_pending = false;
-            md->table_active = true;
-        }
+        if (markdown_table_admit(render, cells, count) < 0)
+            return -1;
     }
     if (md->table_active) {
         rc = markdown_table_render(render);
@@ -1707,28 +1699,7 @@ markdown_table_line_end(struct snag_render *render)
         md->table_line = true;
         return markdown_table_finish(render);
     }
-    if (!md->table_header_len) {
-        md->table_header_len = md->table.len;
-        md->table_pending = true;
-        return 0;
-    }
-    if (md->table_pending) {
-        struct markdown_table_cell header[MARKDOWN_TABLE_COLUMNS];
-        enum markdown_table_alignment alignment[MARKDOWN_TABLE_COLUMNS];
-        size_t header_len = md->table_header_len;
-        size_t header_count;
-
-        if (header_len && md->table.data[header_len - 1u] == '\n')
-            --header_len;
-        if (!markdown_table_cells(md->table.data, header_len, header,
-                                  &header_count) ||
-            header_count != count ||
-            !markdown_table_delimiter(cells, count, alignment))
-            return markdown_table_replay(render);
-        md->table_pending = false;
-        md->table_active = true;
-    }
-    return 0;
+    return markdown_table_admit(render, cells, count);
 }
 
 static int
@@ -1986,18 +1957,8 @@ markdown_newline(struct snag_render *render)
                          markdown_prefix_literal(render)) < 0)
             return -1;
     }
-    if (markdown_flush_delimiter(render, false, true) < 0)
+    if (markdown_inline_tail(render) < 0)
         return -1;
-    if (md->escape && markdown_text(render, "\\", 1u) < 0)
-        return -1;
-    md->escape = false;
-    md->link_after_label = false;
-    if (md->link_url) {
-        md->link_url = false;
-        if (markdown_style_changed(render) < 0 ||
-            markdown_text(render, ">", 1u) < 0)
-            return -1;
-    }
     if (markdown_text(render, "\n", 1u) < 0)
         return -1;
     md->heading = false;
@@ -2020,7 +1981,7 @@ markdown_write(struct snag_render *render, const unsigned char *text, size_t len
             if (render_checkpoint(render) < 0)
                 return -1;
         }
-        size_t n = utf8_sequence_size(text[i]);
+        size_t n = snag_utf8_size(text[i]);
 
         if (!n || n > len - i) {
             errno = EILSEQ;
@@ -2061,7 +2022,7 @@ markdown_write(struct snag_render *render, const unsigned char *text, size_t len
             size_t start = i;
 
             while (i + n < len && n < 1024u && text[i + n] != '\n') {
-                size_t next = utf8_sequence_size(text[i + n]);
+                size_t next = snag_utf8_size(text[i + n]);
                 if (!next || next > len - i - n)
                     break;
                 n += next;
@@ -2102,17 +2063,8 @@ markdown_finish(struct snag_render *render)
             return -1;
         }
     }
-    if (markdown_flush_delimiter(render, false, true) < 0)
+    if (markdown_inline_tail(render) < 0)
         return -1;
-    if (md->escape && markdown_text(render, "\\", 1u) < 0)
-        return -1;
-    md->escape = false;
-    if (md->link_url) {
-        md->link_url = false;
-        if (markdown_style_changed(render) < 0 ||
-            markdown_text(render, ">", 1u) < 0)
-            return -1;
-    }
     if (md->fence && !render->markdown_preserve_fence) {
         if (!render->public_item_ended_lf &&
             markdown_text(render, "\n", 1u) < 0)
@@ -2146,11 +2098,37 @@ markdown_abort(struct snag_render *render)
     return markdown_clear_style(render);
 }
 
+/* Retain an incomplete code point; admit only complete, valid UTF-8. */
+static int
+complete_utf8(unsigned char pending[4], size_t *pending_len,
+              const char *text, size_t len, struct snag_buf *complete)
+{
+    for (size_t i = 0u; i < len; ++i) {
+        if (*pending_len >= 4u)
+            goto invalid;
+        pending[(*pending_len)++] = (unsigned char)text[i];
+        size_t expected = snag_utf8_size(pending[0]);
+        if (!expected || *pending_len > expected)
+            goto invalid;
+        if (*pending_len < expected)
+            continue;
+        if (!snag_utf8_valid(pending, expected, true))
+            goto invalid;
+        if (snag_buf_append(complete, pending, expected) < 0)
+            return -1;
+        *pending_len = 0u;
+    }
+    return 0;
+invalid:
+    *pending_len = 0u;
+    errno = EILSEQ;
+    return -1;
+}
+
 static int
 render_public_chunk(struct snag_render *render, const char *text, size_t len,
                   struct snag_buf *delivered)
 {
-    const unsigned char *input = (const unsigned char *)text;
     struct snag_buf complete;
     size_t complete_max;
     int rc = -1;
@@ -2162,23 +2140,9 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
         return -1;
     }
     snag_buf_init(&complete, complete_max);
-    for (size_t i = 0; i < len; ++i) {
-        size_t expected;
-
-        if (render->utf8_pending_len >= sizeof(render->utf8_pending))
-            goto invalid;
-        render->utf8_pending[render->utf8_pending_len++] = input[i];
-        expected = utf8_sequence_size(render->utf8_pending[0]);
-        if (!expected || render->utf8_pending_len > expected)
-            goto invalid;
-        if (render->utf8_pending_len < expected)
-            continue;
-        if (!snag_utf8_valid(render->utf8_pending, expected, true))
-            goto invalid;
-        if (snag_buf_append(&complete, render->utf8_pending, expected) < 0)
-            goto out;
-        render->utf8_pending_len = 0;
-    }
+    if (complete_utf8(render->utf8_pending, &render->utf8_pending_len,
+                       text, len, &complete) < 0)
+        goto out;
     if (complete.len) {
         if (delivered && snag_buf_reserve(delivered, complete.len) < 0)
             goto out;
@@ -2192,10 +2156,6 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
             goto out;
     }
     rc = 0;
-    goto out;
-invalid:
-    render->utf8_pending_len = 0;
-    errno = EILSEQ;
 out:
     if (rc < 0)
         saved_errno = errno;
@@ -2403,7 +2363,6 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len,
                    struct snag_buf *delivered)
 {
     struct snag_render_record *record = render->rollout_open;
-    const unsigned char *input = (const unsigned char *)text;
     struct snag_buf complete;
     size_t complete_max;
     int rc = -1;
@@ -2414,23 +2373,9 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len,
         return -1;
     }
     snag_buf_init(&complete, complete_max);
-    for (size_t i = 0u; i < len; ++i) {
-        size_t expected;
-
-        if (record->utf8_pending_len >= sizeof(record->utf8_pending))
-            goto invalid;
-        record->utf8_pending[record->utf8_pending_len++] = input[i];
-        expected = utf8_sequence_size(record->utf8_pending[0]);
-        if (!expected || record->utf8_pending_len > expected)
-            goto invalid;
-        if (record->utf8_pending_len < expected)
-            continue;
-        if (!snag_utf8_valid(record->utf8_pending, expected, true))
-            goto invalid;
-        if (snag_buf_append(&complete, record->utf8_pending, expected) < 0)
-            goto out;
-        record->utf8_pending_len = 0u;
-    }
+    if (complete_utf8(record->utf8_pending, &record->utf8_pending_len,
+                       text, len, &complete) < 0)
+        goto out;
     if (complete.len) {
         if (snag_buf_reserve(&record->text, complete.len) < 0 ||
             (delivered && snag_buf_reserve(delivered, complete.len) < 0) ||
@@ -2446,10 +2391,6 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len,
             goto out;
     }
     rc = 0;
-    goto out;
-invalid:
-    record->utf8_pending_len = 0u;
-    errno = EILSEQ;
 out:
     snag_buf_free(&complete);
     return rc;
@@ -2747,7 +2688,7 @@ render_irc_event_now(struct snag_render *render,
     nick_color = event->op ? COLOR_OPERATOR : COLOR_AGENT;
     if (highlight)
         body_color = COLOR_OPERATOR;
-    if (output_begin(render, true) < 0)
+    if (output_begin(render) < 0)
         return -1;
     if (colored && irc_piece(render, highlight ? COLOR_OPERATOR : COLOR_META, false) < 0)
         goto out;

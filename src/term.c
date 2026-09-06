@@ -1442,11 +1442,10 @@ snag_term_set_spinner_states(struct snag_term *term, unsigned int states)
 }
 
 int
-snag_term_output_begin(struct snag_term *term, bool persistent)
+snag_term_output_begin(struct snag_term *term)
 {
     if (!term || !term->opened)
         return 0;
-    (void)persistent;
     if (term->output_depth == UINT_MAX) {
         errno = EOVERFLOW;
         return -1;

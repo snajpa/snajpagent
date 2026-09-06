@@ -14,6 +14,50 @@
 #include <time.h>
 #include <unistd.h>
 
+struct output_capture {
+    int fd;
+    int saved[2];
+};
+
+static struct output_capture
+capture_open(bool stdout_enabled, bool stderr_enabled)
+{
+    struct output_capture capture;
+    const bool enabled[] = {stdout_enabled, stderr_enabled};
+    int fds[2];
+
+    assert(pipe(fds) == 0);
+    capture.fd = fds[0];
+    for (int i = 0; i < 2; ++i) {
+        capture.saved[i] = enabled[i] ? dup(i + 1) : -1;
+        if (enabled[i]) {
+            assert(capture.saved[i] >= 0);
+            assert(dup2(fds[1], i + 1) >= 0);
+        }
+    }
+    close(fds[1]);
+    return capture;
+}
+
+static size_t
+capture_close(struct output_capture *capture, char *out, size_t size, size_t used)
+{
+    ssize_t n;
+
+    for (int i = 0; i < 2; ++i) {
+        if (capture->saved[i] < 0)
+            continue;
+        assert(dup2(capture->saved[i], i + 1) >= 0);
+        close(capture->saved[i]);
+    }
+    while ((n = read(capture->fd, out + used, size - used - 1u)) > 0)
+        used += (size_t)n;
+    assert(n == 0);
+    close(capture->fd);
+    out[used] = '\0';
+    return used;
+}
+
 static size_t
 count_text(const char *haystack, const char *needle)
 {
@@ -408,7 +452,7 @@ test_retained_prompt(void)
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
 
-    assert(snag_term_output_begin(&term, true) == 0);
+    assert(snag_term_output_begin(&term) == 0);
     assert(snag_term_note_output(&term, "public", 6u, "") == 0);
     assert(snag_term_output_end(&term) == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
@@ -423,7 +467,7 @@ test_retained_prompt(void)
     term.input_len = 1u;
     assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
     assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) > 0u);
-    assert(snag_term_output_begin(&term, true) == 0);
+    assert(snag_term_output_begin(&term) == 0);
     assert(snag_term_note_output(&term, "more", 4u, "") == 0);
     assert(snag_term_output_end(&term) == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
@@ -730,28 +774,15 @@ test_destination_editor(void)
 static size_t
 capture(unsigned int verbosity, char *out, size_t out_size)
 {
-    int fds[2];
-    int saved;
     struct snag_render render;
-    ssize_t n;
     size_t used = 0u;
 
-    assert(pipe(fds) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0);
-    assert(dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, verbosity);
     assert(snag_render_protocol(&render, "request JSON", "{\"x\":1}", 7u) == 0);
     assert(snag_render_protocol(&render, "response JSON", "{}", 2u) == 0);
     assert(snag_render_transport(&render, '>', "POST https://example.test", 25u) == 0);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     return used;
 }
 
@@ -760,15 +791,9 @@ capture_orientation(bool resumed, char *out, size_t out_size)
 {
     struct snag_render render;
     struct snag_session session = {0};
-    int fds[2];
-    int saved;
-    ssize_t n;
     size_t used = 0u;
 
-    assert(pipe(fds) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, 0u);
     memcpy(session.id, "0123456789abcdef0123456789abcdef",
            sizeof(session.id));
@@ -780,13 +805,7 @@ capture_orientation(bool resumed, char *out, size_t out_size)
     assert(snag_render_orientation(&render, session.workspace, session.id,
                                   session.turn_count, session.pending_queue_count,
                                   resumed) == 0);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     return used;
 }
 
@@ -810,17 +829,10 @@ capture_wrapped(const char *first, const char *second, unsigned int columns,
 {
     struct snag_render render;
     struct snag_term term;
-    int fds[2];
-    int saved;
-    ssize_t n;
     size_t used = 0u;
 
-    assert(pipe(fds) == 0);
-    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
-    saved = dup(STDOUT_FILENO);
-    assert(saved >= 0);
-    assert(dup2(fds[1], STDOUT_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(true, false);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
     snag_term_init(&term);
     term.columns = columns;
     snag_render_init(&render, 0u);
@@ -829,19 +841,13 @@ capture_wrapped(const char *first, const char *second, unsigned int columns,
     snag_render_attach_term(&render, &term);
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, first, strlen(first), delivered) == 0);
-    used = drain_available(fds[0], out, out_size, used);
+    used = drain_available(capture.fd, out, out_size, used);
     assert(strcmp(out, first_output) == 0);
     assert(snag_render_public(&render, second, strlen(second), delivered) == 0);
-    used = drain_available(fds[0], out, out_size, used);
+    used = drain_available(capture.fd, out, out_size, used);
     assert(strcmp(out, second_output) == 0);
     assert(snag_render_public_end(&render) == 0);
-    assert(dup2(saved, STDOUT_FILENO) >= 0);
-    close(saved);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     snag_term_close(&term);
     return used;
 }
@@ -930,14 +936,8 @@ capture_markdown_width(const char *text, bool enabled, bool split,
     struct snag_term term;
     size_t len = strlen(text);
     size_t used = 0u;
-    ssize_t n;
-    int fds[2];
-    int saved;
 
-    assert(pipe(fds) == 0);
-    saved = dup(STDOUT_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDOUT_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(true, false);
     snag_term_init(&term);
     term.columns = columns;
     snag_render_init(&render, 0u);
@@ -953,13 +953,7 @@ capture_markdown_width(const char *text, bool enabled, bool split,
         assert(snag_render_public(&render, text, len, delivered) == 0);
     }
     assert(snag_render_public_end(&render) == 0);
-    assert(dup2(saved, STDOUT_FILENO) >= 0);
-    close(saved);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     snag_term_close(&term);
     return used;
 }
@@ -971,18 +965,8 @@ capture_prompt_boundary(const char *text, bool markdown,
     struct snag_render render;
     struct snag_term term;
     size_t used = 0u;
-    ssize_t n;
-    int fds[2];
-    int saved_stdout;
-    int saved_stderr;
 
-    assert(pipe(fds) == 0);
-    saved_stdout = dup(STDOUT_FILENO);
-    saved_stderr = dup(STDERR_FILENO);
-    assert(saved_stdout >= 0 && saved_stderr >= 0);
-    assert(dup2(fds[1], STDOUT_FILENO) >= 0);
-    assert(dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(true, true);
     snag_term_init(&term);
     term.columns = 120u;
     snag_render_init(&render, 0u);
@@ -998,15 +982,7 @@ capture_prompt_boundary(const char *text, bool markdown,
     assert(snag_render_before_prompt(&render) == 0);
     snag_render_free(&render);
     snag_term_close(&term);
-    assert(dup2(saved_stdout, STDOUT_FILENO) >= 0);
-    assert(dup2(saved_stderr, STDERR_FILENO) >= 0);
-    close(saved_stdout);
-    close(saved_stderr);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     return used;
 }
 
@@ -1147,14 +1123,8 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     struct snag_irc_event event;
     struct snag_session session;
     size_t used = 0u;
-    ssize_t n;
-    int fds[2];
-    int saved;
 
-    assert(pipe(fds) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, verbosity);
     render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
@@ -1204,13 +1174,7 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     session.last_user = NULL;
     session.last_assistant = "## Literal assistant";
     assert(snag_render_history(&render, session.last_user, session.last_assistant) == 0);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     return used;
 }
 
@@ -1399,15 +1363,9 @@ capture_color(enum snag_color_mode mode, bool chat_view,
     struct snag_response_item call;
     json_t *arguments;
     json_t *result;
-    int fds[2];
-    int saved;
-    ssize_t n;
     size_t used = 0u;
 
-    assert(pipe(fds) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, verbosity);
     if (chat_view)
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
@@ -1469,13 +1427,7 @@ capture_color(enum snag_color_mode mode, bool chat_view,
     if (chat_view)
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
     snag_render_free(&render);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     return used;
 }
 
@@ -1588,26 +1540,14 @@ capture_lifecycle(unsigned int verbosity, enum snag_color_mode color,
     };
     struct snag_render render;
     size_t used = 0u;
-    ssize_t n;
-    int fds[2];
-    int saved;
 
-    assert(pipe(fds) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, verbosity);
     snag_render_set_color(&render, color);
     for (size_t i = 0u; i < sizeof(events) / sizeof(events[0]); ++i)
         assert(snag_render_event(&render, i + 1u, events[i]) == 0);
     snag_render_free(&render);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     return used;
 }
 
@@ -1617,25 +1557,13 @@ capture_resume_hint(enum snag_color_mode color, char *out, size_t out_size)
     static const char command[] = "'snajpagent' --resume '0123'";
     struct snag_render render;
     size_t used = 0u;
-    ssize_t n;
-    int fds[2];
-    int saved;
 
-    assert(pipe(fds) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, 0u);
     snag_render_set_color(&render, color);
     assert(snag_render_resume_hint(&render, command, sizeof(command) - 1u) == 0);
     snag_render_free(&render);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    while ((n = read(fds[0], out + used, out_size - used - 1u)) > 0)
-        used += (size_t)n;
-    assert(n == 0);
-    close(fds[0]);
-    out[used] = '\0';
+    used = capture_close(&capture, out, out_size, used);
     return used;
 }
 

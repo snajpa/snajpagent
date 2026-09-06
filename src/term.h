@@ -163,7 +163,7 @@ int snag_term_set_prompt_template(struct snag_term *term, bool active,
                                  uint32_t per_second, unsigned int states);
 int snag_term_set_spinner_states(struct snag_term *term, unsigned int states);
 int snag_term_hide(struct snag_term *term);
-int snag_term_output_begin(struct snag_term *term, bool persistent);
+int snag_term_output_begin(struct snag_term *term);
 int snag_term_output_end(struct snag_term *term);
 int snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
                   enum snag_term_action *action, char **text);
