@@ -108,6 +108,87 @@ wide_path(const char *path)
 
 static bool private_dacl(PACL dacl, PSID owner);
 
+struct nt_path {
+    wchar_t *wide;
+    UNICODE_STRING name;
+    HANDLE parent;
+    bool allocated_name;
+};
+
+static void
+nt_path_free(struct nt_path *path)
+{
+    if (path->allocated_name)
+        RtlFreeUnicodeString(&path->name);
+    free(path->wide);
+}
+
+static int
+nt_path_init(struct nt_path *out, int dirfd, const char *path, bool relative)
+{
+    memset(out, 0, sizeof(*out));
+    out->wide = wide_path(path);
+    if (!out->wide)
+        return -1;
+    if (!*out->wide) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (relative && !snag_path_root_len(path)) {
+        BY_HANDLE_FILE_INFORMATION info;
+        intptr_t parent = _get_osfhandle(dirfd);
+        if (parent == -1) {
+            errno = EBADF;
+            return -1;
+        }
+        if (!GetFileInformationByHandle((HANDLE)parent, &info))
+            return path_error(GetLastError());
+        if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            errno = ENOTDIR;
+            return -1;
+        }
+        if (*out->wide == L'/' || *out->wide == L'\\') {
+            errno = EINVAL;
+            return -1;
+        }
+        for (wchar_t *p = out->wide; *p; ++p)
+            if (*p == L'/')
+                *p = L'\\';
+        out->name.Buffer = out->wide;
+        out->name.Length = (USHORT)(wcslen(out->wide) * sizeof(*out->wide));
+        out->name.MaximumLength = out->name.Length + sizeof(*out->wide);
+        out->parent = (HANDLE)parent;
+    } else {
+        if (!(BOOLEAN)RtlDosPathNameToNtPathName_U(out->wide, &out->name, NULL, NULL)) {
+            errno = EINVAL;
+            return -1;
+        }
+        out->allocated_name = true;
+    }
+    return 0;
+}
+
+static HANDLE
+nt_open(const struct nt_path *path, DWORD access, DWORD options)
+{
+    HANDLE handle = NULL;
+    OBJECT_ATTRIBUTES attributes = {0};
+    IO_STATUS_BLOCK io;
+
+    attributes.Length = sizeof(attributes);
+    attributes.RootDirectory = path->parent;
+    attributes.ObjectName = (UNICODE_STRING *)&path->name;
+    attributes.Attributes = OBJ_CASE_INSENSITIVE;
+    NTSTATUS status = NtCreateFile(&handle, access | SYNCHRONIZE, &attributes, &io, NULL, 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
+        FILE_SYNCHRONOUS_IO_NONALERT | options, NULL, 0);
+    if (status < 0) {
+        path_error(RtlNtStatusToDosError(status));
+        return NULL;
+    }
+    return handle;
+}
+
 static int
 file_info(HANDLE handle, snag_file_info *out)
 {
@@ -175,63 +256,14 @@ static int
 path_stat(int dirfd, const char *path, bool relative, bool nofollow, snag_file_info *out)
 {
     HANDLE handle = NULL;
-    OBJECT_ATTRIBUTES attributes = {0};
-    IO_STATUS_BLOCK io = {0};
-    UNICODE_STRING name = {0};
-    wchar_t *wide = wide_path(path);
-    bool allocated_name = false;
-    NTSTATUS status;
+    struct nt_path name;
     int rc = -1, error;
 
-    if (!wide)
-        return -1;
-    if (!out || !*wide) {
-        errno = out ? ENOENT : EINVAL;
+    if (nt_path_init(&name, dirfd, path, relative) < 0)
         goto out;
-    }
-    if (relative && !snag_path_root_len(path)) {
-        intptr_t parent = _get_osfhandle(dirfd);
-        snag_file_info info;
-        if (parent == -1) {
-            errno = EBADF;
-            goto out;
-        }
-        if (file_info((HANDLE)parent, &info) < 0)
-            goto out;
-        if (!S_ISDIR(info.st_mode)) {
-            errno = ENOTDIR;
-            goto out;
-        }
-        if (*wide == L'/' || *wide == L'\\') {
-            errno = EINVAL;
-            goto out;
-        }
-        for (wchar_t *p = wide; *p; ++p)
-            if (*p == L'/')
-                *p = L'\\';
-        name.Buffer = wide;
-        name.Length = (USHORT)(wcslen(wide) * sizeof(*wide));
-        name.MaximumLength = name.Length + sizeof(*wide);
-        attributes.RootDirectory = (HANDLE)parent;
-    } else {
-        if (!(BOOLEAN)RtlDosPathNameToNtPathName_U(wide, &name, NULL, NULL)) {
-            errno = EINVAL;
-            goto out;
-        }
-        allocated_name = true;
-    }
-    attributes.Length = sizeof(attributes);
-    attributes.ObjectName = &name;
-    attributes.Attributes = OBJ_CASE_INSENSITIVE;
-    status = NtCreateFile(&handle, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attributes,
-        &io, NULL, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT | (nofollow ? FILE_OPEN_REPARSE_POINT : 0),
-        NULL, 0);
-    if (status < 0) {
-        handle = NULL;
-        path_error(RtlNtStatusToDosError(status));
+    handle = nt_open(&name, FILE_READ_ATTRIBUTES, nofollow ? FILE_OPEN_REPARSE_POINT : 0);
+    if (!handle)
         goto out;
-    }
     rc = file_info(handle, out);
 out:
     error = errno;
@@ -240,9 +272,7 @@ out:
         error = errno;
         rc = -1;
     }
-    if (allocated_name)
-        RtlFreeUnicodeString(&name);
-    free(wide);
+    nt_path_free(&name);
     errno = error;
     return rc;
 }
@@ -269,56 +299,20 @@ static int
 create_private(int dirfd, const char *path, bool relative, bool directory,
                bool exclusive, int *file_fd)
 {
-    HANDLE token = NULL, created = NULL, parent = NULL;
+    HANDLE token = NULL, created = NULL;
     TOKEN_USER *user = NULL;
     SECURITY_DESCRIPTOR descriptor;
     PACL acl = NULL;
-    UNICODE_STRING name = {0};
+    struct nt_path name;
     OBJECT_ATTRIBUTES attributes = {0};
     IO_STATUS_BLOCK io = {0};
-    wchar_t *wide = wide_path(path);
     DWORD acl_size, close_error = 0;
-    bool allocated_name = false, was_created = false;
+    bool was_created = false;
     NTSTATUS status;
     int rc = -1, error;
 
-    if (!wide)
-        return -1;
-    if (!*wide) {
-        errno = ENOENT;
+    if (nt_path_init(&name, dirfd, path, relative) < 0)
         goto out;
-    }
-    if (relative && !snag_path_root_len(path)) {
-        BY_HANDLE_FILE_INFORMATION info;
-        intptr_t handle = _get_osfhandle(dirfd);
-        if (handle == -1) {
-            errno = EBADF;
-            goto out;
-        }
-        parent = (HANDLE)handle;
-        if (!GetFileInformationByHandle(parent, &info))
-            goto native_error;
-        if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            errno = ENOTDIR;
-            goto out;
-        }
-        if (*wide == L'/' || *wide == L'\\') {
-            errno = EINVAL;
-            goto out;
-        }
-        for (wchar_t *p = wide; *p; ++p)
-            if (*p == L'/')
-                *p = L'\\';
-        name.Buffer = wide;
-        name.Length = (USHORT)(wcslen(wide) * sizeof(*wide));
-        name.MaximumLength = name.Length + sizeof(*wide);
-    } else {
-        if (!(BOOLEAN)RtlDosPathNameToNtPathName_U(wide, &name, NULL, NULL)) {
-            errno = EINVAL;
-            goto out;
-        }
-        allocated_name = true;
-    }
     if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token)) {
         if (GetLastError() != ERROR_NO_TOKEN ||
             !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
@@ -340,8 +334,8 @@ create_private(int dirfd, const char *path, bool relative, bool directory,
         !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED))
         goto native_error;
     attributes.Length = sizeof(attributes);
-    attributes.RootDirectory = parent;
-    attributes.ObjectName = &name;
+    attributes.RootDirectory = name.parent;
+    attributes.ObjectName = &name.name;
     attributes.Attributes = OBJ_CASE_INSENSITIVE;
     attributes.SecurityDescriptor = &descriptor;
     DWORD access = FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE;
@@ -421,11 +415,9 @@ out:
         close_error = GetLastError();
     if (token && !CloseHandle(token) && !close_error)
         close_error = GetLastError();
-    if (allocated_name)
-        RtlFreeUnicodeString(&name);
     free(user);
     free(acl);
-    free(wide);
+    nt_path_free(&name);
     errno = error;
     if (rc == 0 && close_error) {
         if (file_fd && *file_fd >= 0) {
