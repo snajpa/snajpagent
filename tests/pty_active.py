@@ -314,8 +314,8 @@ def new_session(before):
 
 def events(session_id):
     path = STATE_ROOT / session_id / "events.jsonl"
-    with path.open(encoding="utf-8") as source:
-        return [json.loads(line) for line in source]
+    # A live writer may expose a partial final JSON/UTF-8 record.
+    return [json.loads(line) for line in path.read_bytes().split(b"\n")[:-1]]
 
 
 def one(items, event_type):
@@ -526,7 +526,7 @@ def test_initial_unrenderable_prompt_is_rejected_atomically():
               "config" / "initial-unrenderable.ini")
     before = session_ids()
 
-    for label in ("x" * 600, "x" * 505 + "{queue}"):
+    for label in ("x" * 600, "x" * 505 + "{queue}", "{queue}"):
         config.write_text(
             "[provider openai]\n[ui]\n"
             "prompt = {chat:x}{rollout-idle:" + label +

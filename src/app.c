@@ -585,18 +585,20 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
     values[4] = hostname;
     values[5] = "100%";
     (void)snprintf(queue, sizeof(queue), "(%u) ", SNAG_MAX_PENDING_TURNS);
-    values[SNAG_PROMPT_QUEUE] = queue;
     values[SNAG_PROMPT_HOUR] = "23";
     values[SNAG_PROMPT_MINUTE] = "59";
     values[SNAG_PROMPT_SECOND] = "60";
-    for (unsigned int mode = 0u; mode < 3u; ++mode) {
-        values[6] = mode == 0u ? "chat" : mode == 1u ?
-                    "rollout-idle" : "rollout-active";
-        if (snag_config_prompt_expand(config->prompt, mode, values,
-                SNAG_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0 ||
-            snag_ui_validate_prompt(ui, label, spinners,
-                config->prompt_spinner_per_second) < 0)
-            goto out;
+    for (unsigned int full = 0u; full < 2u; ++full) {
+        values[SNAG_PROMPT_QUEUE] = full ? queue : "";
+        for (unsigned int mode = 0u; mode < 3u; ++mode) {
+            values[6] = mode == 0u ? "chat" : mode == 1u ?
+                        "rollout-idle" : "rollout-active";
+            if (snag_config_prompt_expand(config->prompt, mode, values,
+                    SNAG_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0 ||
+                snag_ui_validate_prompt(ui, label, spinners,
+                    config->prompt_spinner_per_second) < 0)
+                goto out;
+        }
     }
     rc = 0;
 out:
