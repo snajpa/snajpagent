@@ -639,6 +639,29 @@ test_input_mode(void)
     assert(tcgetattr(0, &raw) == 0 && !(raw.c_lflag & (ECHO | ICANON | ISIG)));
 #endif
     assert(snag_term_input_flush() == 0);
+#ifdef _WIN32
+    INPUT_RECORD keys[3] = {0};
+    const WCHAR characters[] = {0x4e2du, 0xd83du, 0xde00u};
+    const char expected[] = "\xe4\xb8\xad\xf0\x9f\x98\x80";
+    char received[sizeof(expected) - 1u];
+    DWORD written;
+    HANDLE input = (HANDLE)_get_osfhandle(0);
+    for (size_t i = 0; i < 3u; ++i) {
+        keys[i].EventType = KEY_EVENT;
+        keys[i].Event.KeyEvent.bKeyDown = TRUE;
+        keys[i].Event.KeyEvent.wRepeatCount = 1;
+        keys[i].Event.KeyEvent.uChar.UnicodeChar = characters[i];
+    }
+    assert(WriteConsoleInputW(input, keys, 3u, &written) && written == 3u);
+    size_t used = 0;
+    while (used < sizeof(received)) {
+        DWORD got;
+        assert(WaitForSingleObject(input, 1000u) == WAIT_OBJECT_0);
+        assert(ReadFile(input, received + used, (DWORD)(sizeof(received) - used), &got, NULL) && got);
+        used += got;
+    }
+    assert(!memcmp(received, expected, sizeof(received)));
+#endif
     assert(snag_term_input_restore(&host, false) == 0);
 #ifdef _WIN32
     assert(GetConsoleMode((HANDLE)_get_osfhandle(0), &mode) && mode == host.input_mode);
