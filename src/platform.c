@@ -393,7 +393,17 @@ open_read(int dirfd, const char *path, bool relative, bool directory, bool secur
     }
     if (nt_path_init(&name, dirfd, path, relative) < 0)
         goto out;
-    handle = nt_open(&name, FILE_READ_DATA | FILE_READ_ATTRIBUTES | (security ? READ_CONTROL : 0), FILE_OPEN_REPARSE_POINT |
+    /* DOS aliases such as C:\\NUL can translate outside a filesystem root. */
+    if (!name.parent && (name.name.Length < 7u * sizeof(WCHAR) ||
+        wcsncmp(name.name.Buffer, L"\\??\\", 4u) ||
+        !((name.name.Buffer[5] == L':' && name.name.Buffer[6] == L'\\') ||
+          (name.name.Length >= 8u * sizeof(WCHAR) &&
+           !wcsncmp(name.name.Buffer + 4u, L"UNC\\", 4u))))) {
+        errno = EACCES;
+        goto out;
+    }
+    handle = nt_open(&name, FILE_READ_DATA | FILE_READ_ATTRIBUTES |
+                     (security ? READ_CONTROL : 0), FILE_OPEN_REPARSE_POINT |
                      (directory ? FILE_DIRECTORY_FILE : 0));
     if (!handle || file_info(handle, &info) < 0)
         goto out;

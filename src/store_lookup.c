@@ -50,6 +50,20 @@ open_trash_dir(struct snag_store *store, char *error, size_t error_size)
     return open_store_dir(store, "trash", "trash directory", error, error_size);
 }
 
+static int
+finish_directory(struct snag_directory *dir, char *error, size_t error_size)
+{
+    int saved = errno;
+
+    if (snag_directory_close(dir) < 0 && !saved)
+        saved = errno;
+    if (!saved)
+        return 0;
+    snag_errorf(error, error_size, "cannot read session directory: %s", strerror(saved));
+    errno = saved;
+    return -1;
+}
+
 bool
 snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u])
 {
@@ -102,7 +116,8 @@ resolve_prefix(struct snag_store *store, const char *prefix,
             continue;
         record_resolved(target, entry, NULL, &matches);
     }
-    (void)snag_directory_close(dir);
+    if (finish_directory(dir, error, error_size) < 0)
+        return -1;
 
     dir = open_trash_dir(store, error, error_size);
     if (!dir)
@@ -114,7 +129,8 @@ resolve_prefix(struct snag_store *store, const char *prefix,
             continue;
         record_resolved(target, id, entry, &matches);
     }
-    (void)snag_directory_close(dir);
+    if (finish_directory(dir, error, error_size) < 0)
+        return -1;
 
     if (matches != 1u) {
         snag_errorf(error, error_size, matches ? "session id prefix is ambiguous" :
@@ -298,7 +314,8 @@ snag_session_open_last(struct snag_store *store, struct snag_session *session,
             best_time = last;
         }
     }
-    (void)snag_directory_close(dir);
+    if (finish_directory(dir, error, error_size) < 0)
+        return -1;
     if (!best[0]) {
         snag_errorf(error, error_size, "no matching active session");
         errno = ENOENT;
@@ -355,7 +372,8 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
         free(saved_workspace);
         ++shown;
     }
-    (void)snag_directory_close(dir);
+    if (finish_directory(dir, error, error_size) < 0)
+        return -1;
     if (!shown)
         snag_errorf(error, error_size, "no matching sessions");
     return 0;

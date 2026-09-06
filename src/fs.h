@@ -33,7 +33,9 @@ int snag_open_private_dir_at(int dirfd, const char *path);
 void snag_path_slashes(char *path);
 
 struct snag_directory;
+/* Open takes fd ownership only on success; close releases it. */
 struct snag_directory *snag_directory_open(int fd);
+/* Borrowed UTF-8 name; NULL with errno=0 means EOF, otherwise an error. */
 const char *snag_directory_next(struct snag_directory *dir);
 int snag_directory_close(struct snag_directory *dir);
 

@@ -116,6 +116,10 @@ test_private_directory(void)
 #ifdef _WIN32
     wchar_t temp[MAX_PATH], wide[MAX_PATH];
     char path[MAX_PATH * 4u];
+    assert(snag_open_read(NULL, false) == -1 && errno == EINVAL);
+    assert(snag_open_read("NUL", false) == -1 && errno == EACCES);
+    assert(snag_open_read("C:/NUL", false) == -1 && errno == EACCES);
+    assert(snag_open_read("//./pipe/snajpagent-test", false) == -1 && errno == EINVAL);
     DWORD count = GetTempPathW(MAX_PATH, temp);
     assert(count && count < MAX_PATH);
     assert(GetTempFileNameW(temp, L"snp", 0, wide));
@@ -183,6 +187,8 @@ test_private_directory(void)
         file = snag_open_read_at(fd, "data", false);
         assert(file >= 0 && read(file, received, sizeof(received)) == sizeof(received));
         assert(memcmp(bytes, received, sizeof(bytes)) == 0);
+        assert(!snag_directory_open(file) && errno == ENOTDIR);
+        assert(snag_fstat(file, &info) == 0);
         assert(close(file) == 0);
 #ifdef _WIN32
         assert(CreateHardLinkA(alias, data, NULL));
