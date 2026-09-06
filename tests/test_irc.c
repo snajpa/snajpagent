@@ -426,11 +426,17 @@ test_runtime_roles(void)
     route.targets[0] = destinations.items[0].target;
     assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
         "upstream-only", NULL, error, sizeof(error)) == 0);
-    tick(runtime, 3u);
-    tick(upstream, 3u);
+    uint64_t route_deadline = snag_monotonic_ms() + 1000u;
+    do {
+        tick(runtime, 1u);
+        tick(upstream, 1u);
+    } while ((!strstr(upstream_capture.message_text, "upstream-only") ||
+              strcmp(capture.last_message.text, "upstream-only")) &&
+             snag_monotonic_ms() < route_deadline);
     drain_ready(runtime, human, wire, sizeof(wire));
     assert(!strstr(wire, "upstream-only"));
     assert(strstr(upstream_capture.message_text, "upstream-only"));
+    assert(strcmp(capture.last_message.text, "upstream-only") == 0);
     assert(strcmp(capture.last_message.endpoint, other) == 0);
     assert(strcmp(capture.last_message.nick, "agent1") == 0);
     ++route.targets[0].revision;
