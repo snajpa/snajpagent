@@ -102,9 +102,7 @@ out:
     }
     snag_term_host_close(&host);
     if (rc < 0) {
-        volatile char *p = out;
-        for (size_t i = 0; i < size; ++i)
-            p[i] = 0;
+        snag_secret_clear(out, size);
         if (!error[0])
             snag_errorf(error, error_size, "login cancelled or input closed");
     }
@@ -258,9 +256,7 @@ acquire_login(const struct snag_cli *cli, struct snag_provider_config *provider,
     } else if (rc == 0) {
         rc = snag_auth_key(tokens, key, error, error_size);
     }
-    volatile char *p = key;
-    for (size_t i = 0; i < sizeof(key); ++i)
-        p[i] = 0;
+    snag_secret_clear(key, sizeof(key));
     return rc;
 }
 

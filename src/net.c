@@ -160,14 +160,9 @@ failed(void)
 #endif
 }
 
-snag_socket
-snag_socket_open(int family, int type, int protocol)
+static snag_socket
+prepare_socket(snag_socket fd)
 {
-#ifdef _WIN32
-    snag_socket fd = WSASocketW(family, type, protocol, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
-#else
-    snag_socket fd = socket(family, type, protocol);
-#endif
     if (fd == SNAG_SOCKET_INVALID) {
         (void)failed();
         return fd;
@@ -182,21 +177,20 @@ snag_socket_open(int family, int type, int protocol)
 }
 
 snag_socket
+snag_socket_open(int family, int type, int protocol)
+{
+#ifdef _WIN32
+    return prepare_socket(WSASocketW(family, type, protocol, NULL, 0,
+                                     WSA_FLAG_NO_HANDLE_INHERIT));
+#else
+    return prepare_socket(socket(family, type, protocol));
+#endif
+}
+
+snag_socket
 snag_socket_accept(snag_socket listener)
 {
-    snag_socket fd = accept(listener, NULL, NULL);
-
-    if (fd == SNAG_SOCKET_INVALID) {
-        (void)failed();
-        return fd;
-    }
-    if (nonblocking(fd) < 0) {
-        int saved = errno;
-        (void)snag_socket_close(fd);
-        errno = saved;
-        return SNAG_SOCKET_INVALID;
-    }
-    return fd;
+    return prepare_socket(accept(listener, NULL, NULL));
 }
 
 void

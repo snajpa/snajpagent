@@ -8,13 +8,9 @@
 void
 snag_credential_clear(struct snag_credential *credential)
 {
-    volatile unsigned char *p;
-
     if (!credential)
         return;
-    p = (volatile unsigned char *)credential;
-    for (size_t i = 0; i < sizeof(*credential); ++i)
-        p[i] = 0u;
+    snag_secret_clear(credential, sizeof(*credential));
     credential->root_fd = -1;
 }
 

@@ -1391,23 +1391,33 @@ server_who(struct snag_irc_core *irc, struct irc_conn *peer)
 }
 
 static int
-server_dispatch(struct snag_irc_core *irc, struct irc_conn *peer, char *line)
+trace_message(struct snag_irc_core *irc, const char *endpoint,
+              const struct irc_message *message)
 {
-    struct irc_message message;
     char trace[96u];
 
-    if (parse_message(line, &message) < 0)
-        return 0;
     if (irc->trace_fn) {
         int n = snprintf(trace, sizeof(trace), "%s params=%zu",
-                         message.command, message.param_count);
+                         message->command, message->param_count);
         if (n < 0 || (size_t)n >= sizeof(trace) ||
-            irc->trace_fn(irc->event_opaque, 5u, '<', irc->listen,
+            irc->trace_fn(irc->event_opaque, 5u, '<', endpoint,
                           trace, (size_t)n) < 0) {
             irc->callback_failed = true;
             return -1;
         }
     }
+    return 0;
+}
+
+static int
+server_dispatch(struct snag_irc_core *irc, struct irc_conn *peer, char *line)
+{
+    struct irc_message message;
+
+    if (parse_message(line, &message) < 0)
+        return 0;
+    if (trace_message(irc, irc->listen, &message) < 0)
+        return -1;
     if (strcmp(message.command, "CAP") == 0) {
         const char *sub = message.param_count ? message.params[0] : "";
         const char *caps = message.param_count > 1u ? message.params[1] : "";
@@ -1710,23 +1720,14 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
 {
     struct irc_message message;
     char nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
-    char trace[96u];
     const char *sender;
     uint64_t timestamp_ms;
 
     if (parse_message(line, &message) < 0)
         return 0;
     timestamp_ms = server_time_tag(message.tags);
-    if (irc->trace_fn) {
-        int n = snprintf(trace, sizeof(trace), "%s params=%zu",
-                         message.command, message.param_count);
-        if (n < 0 || (size_t)n >= sizeof(trace) ||
-            irc->trace_fn(irc->event_opaque, 5u, '<', link->endpoint,
-                          trace, (size_t)n) < 0) {
-            irc->callback_failed = true;
-            return -1;
-        }
-    }
+    if (trace_message(irc, link->endpoint, &message) < 0)
+        return -1;
     if (strcmp(message.command, "PING") == 0)
         return queue_line(link, "PONG :%s",
                           message.param_count ? message.params[0] :

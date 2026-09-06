@@ -16,9 +16,7 @@
 void
 snag_auth_clear(struct snag_auth_tokens *tokens)
 {
-    volatile unsigned char *p = (volatile unsigned char *)tokens;
-    for (size_t i = 0; i < sizeof(*tokens); ++i)
-        p[i] = 0;
+    snag_secret_clear(tokens, sizeof(*tokens));
     tokens->credential.root_fd = -1;
 }
 
@@ -29,11 +27,8 @@ snag_auth_json_free(json_t *value)
         for (void *iter = json_object_iter(value); iter;
              iter = json_object_iter_next(value, iter)) {
             json_t *item = json_object_iter_value(iter);
-            if (json_is_string(item)) {
-                volatile char *p = (volatile char *)json_string_value(item);
-                for (size_t i = 0; i < json_string_length(item); ++i)
-                    p[i] = 0;
-            }
+            if (json_is_string(item))
+                snag_secret_clear((void *)json_string_value(item), json_string_length(item));
         }
     }
     json_decref(value);

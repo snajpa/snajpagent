@@ -610,6 +610,27 @@ materialize_prompt_wrap(struct snag_term *term)
     return 0;
 }
 
+static void
+clear_prompt_frame(struct snag_term *term)
+{
+    term->prompt_visible = false;
+    term->rendered_rows = 0u;
+    term->rendered_cursor_row = 0u;
+    term->rendered_cursor_col = 0u;
+    term->rendered_end_at_margin = false;
+    term->rendered_cursor_pending_wrap = false;
+}
+
+static void
+clear_output_baseline(struct snag_term *term)
+{
+    term->output_seen = false;
+    term->output_ended_lf = true;
+    term->output_detour = false;
+    term->output_columns = 0u;
+    snag_buf_reset(&term->output_line);
+}
+
 int
 snag_term_hide(struct snag_term *term)
 {
@@ -657,12 +678,7 @@ snag_term_hide(struct snag_term *term)
     }
     if (snag_term_write(STDERR_FILENO, out.data, out.len) < 0)
         goto out;
-    term->prompt_visible = false;
-    term->rendered_rows = 0u;
-    term->rendered_cursor_row = 0u;
-    term->rendered_cursor_col = 0u;
-    term->rendered_end_at_margin = false;
-    term->rendered_cursor_pending_wrap = false;
+    clear_prompt_frame(term);
     term->output_detour = false;
     rc = 0;
 out:
@@ -690,17 +706,8 @@ leave_prompt(struct snag_term *term)
                               term->capable ? 2u : 1u) < 0) {
         return -1;
     }
-    term->prompt_visible = false;
-    term->rendered_rows = 0u;
-    term->rendered_cursor_row = 0u;
-    term->rendered_cursor_col = 0u;
-    term->rendered_end_at_margin = false;
-    term->rendered_cursor_pending_wrap = false;
-    term->output_seen = false;
-    term->output_ended_lf = true;
-    term->output_detour = false;
-    term->output_columns = 0u;
-    snag_buf_reset(&term->output_line);
+    clear_prompt_frame(term);
+    clear_output_baseline(term);
     return 0;
 }
 
@@ -2337,17 +2344,8 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
         term->cancel_pending = true;
         goto logical;
     }
-    term->prompt_visible = false;
-    term->rendered_rows = 0u;
-    term->rendered_cursor_row = 0u;
-    term->rendered_cursor_col = 0u;
-    term->rendered_end_at_margin = false;
-    term->rendered_cursor_pending_wrap = false;
-    term->output_seen = false;
-    term->output_ended_lf = true;
-    term->output_detour = false;
-    term->output_columns = 0u;
-    snag_buf_reset(&term->output_line);
+    clear_prompt_frame(term);
+    clear_output_baseline(term);
 logical:
     history_reset_navigation(term);
     term->prompt_clock.captured = false;
@@ -2517,11 +2515,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         if (snag_term_hide(term) < 0 ||
             snag_term_write(STDERR_FILENO, "\n^C\n", 4u) < 0)
             return -1;
-        term->output_seen = false;
-        term->output_ended_lf = true;
-        term->output_detour = false;
-        term->output_columns = 0u;
-        snag_buf_reset(&term->output_line);
+        clear_output_baseline(term);
     }
     if (consume_resize(term) < 0 || flush_completions(term) < 0)
         return -1;

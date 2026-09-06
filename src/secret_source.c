@@ -124,11 +124,8 @@ invalid:
                "invalid secret source; use ${ENV}, a double-quoted literal, or a file path");
 done:
     free(home);
-    if (json_is_string(literal)) {
-        volatile char *p = (volatile char *)json_string_value(literal);
-        for (size_t i = 0; i < json_string_length(literal); ++i)
-            p[i] = 0;
-    }
+    if (json_is_string(literal))
+        snag_secret_clear((void *)json_string_value(literal), json_string_length(literal));
     json_decref(literal);
     snag_secret_source_free(&source);
     snag_buf_free(&path);
@@ -187,9 +184,7 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
     rc = 0;
 done:
     if (value) {
-        volatile char *p = value;
-        for (size_t i = 0; i < len; ++i)
-            p[i] = 0;
+        snag_secret_clear(value, len);
         free(value);
     }
     if (fd >= 0)

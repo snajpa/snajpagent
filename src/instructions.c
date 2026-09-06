@@ -236,50 +236,35 @@ walk_project_chain(struct snag_instruction_set *set,
                    const char *root, const char *workspace,
                    char *error, size_t error_size)
 {
-    char *current = snag_strdup_checked(root, SNAG_PATH_MAX_BYTES);
+    char *current = snag_strdup_checked(workspace, SNAG_PATH_MAX_BYTES);
+    size_t end = strlen(root);
+    int rc = -1;
 
     if (!current)
         return -1;
-    if (try_instruction_dir(set, current, error, error_size) < 0)
-        goto fail;
-    while (strcmp(current, workspace) != 0) {
-        const char *rest = workspace + strlen(current);
-        const char *end;
-        char segment[SNAG_PATH_MAX_BYTES + 1u];
-        char *next;
-        size_t len;
-
-        if (strcmp(current, "/") == 0)
-            rest = workspace + 1u;
-        else if (*rest == '/')
-            ++rest;
-        else {
-            snag_errorf(error, error_size,
-                      "project root is not an ancestor of workspace");
-            errno = EINVAL;
-            goto fail;
-        }
-        end = strchr(rest, '/');
-        len = end ? (size_t)(end - rest) : strlen(rest);
-        if (!len || len > SNAG_PATH_MAX_BYTES) {
-            errno = EINVAL;
-            goto fail;
-        }
-        memcpy(segment, rest, len);
-        segment[len] = '\0';
-        next = snag_path_join(current, segment);
-        if (!next)
-            goto fail;
-        free(current);
-        current = next;
-        if (try_instruction_dir(set, current, error, error_size) < 0)
-            goto fail;
+    if (strncmp(root, workspace, end) != 0 ||
+        (strcmp(root, "/") && workspace[end] && workspace[end] != '/')) {
+        snag_errorf(error, error_size,
+                    "project root is not an ancestor of workspace");
+        errno = EINVAL;
+        goto out;
     }
+    for (;;) {
+        char saved = current[end];
+        current[end] = '\0';
+        if (try_instruction_dir(set, current, error, error_size) < 0)
+            goto out;
+        current[end] = saved;
+        if (!saved)
+            break;
+        if (saved == '/')
+            ++end;
+        end += strcspn(current + end, "/");
+    }
+    rc = 0;
+out:
     free(current);
-    return 0;
-fail:
-    free(current);
-    return -1;
+    return rc;
 }
 
 int
