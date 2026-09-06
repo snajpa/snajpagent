@@ -456,5 +456,5 @@ in a narrow tmux, admits the applicable `/root/AGENTS.md`, waits through all
 local tool work and response cycles, and exits normally. Acceptance compares
 the normalized logical text sequence in the final rendered pane/history with
 the byte-exact `response_completed` data, checks the
-`turn_started.data.instructions` path/size/SHA-256 metadata, and rejects
+`turn_started.data.instructions` advertised-path metadata, and rejects
 dropped, duplicated, reordered, overwritten, or visibly escaped text.

@@ -21,28 +21,30 @@ snag_instructions_init(struct snag_instruction_set *set)
 void
 snag_instructions_free(struct snag_instruction_set *set)
 {
-    for (size_t i = 0; i < set->count; ++i) {
-        free(set->sources[i].path);
-        free(set->sources[i].text);
-    }
+    for (size_t i = 0; i < set->count; ++i)
+        free(set->paths[i]);
     snag_instructions_init(set);
 }
 
 static int
-append_source(struct snag_instruction_set *set, const char *path,
-              const unsigned char *data, size_t len,
-              char *error, size_t error_size)
+try_candidate(struct snag_instruction_set *set, const char *path,
+              bool *added, char *error, size_t error_size)
 {
-    struct snag_instruction_source *src;
+    snag_file_info st;
     char *canonical;
-    char *text;
 
-    if (set->count >= SNAG_MAX_INSTRUCTION_SOURCES ||
-        len > SNAG_MAX_INSTRUCTION_FILE ||
-        set->bytes > SNAG_MAX_INSTRUCTION_BYTES - len) {
+    *added = false;
+    if (snag_lstat(path, &st) < 0) {
+        if (errno == ENOENT)
+            return 0;
+        snag_errorf(error, error_size, "cannot inspect instruction %s: %s",
+                    path, strerror(errno));
+        return -1;
+    }
+    if (S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode)) {
         snag_errorf(error, error_size,
-                  "instruction discovery exceeds 16 files or 128 KiB");
-        errno = EOVERFLOW;
+                    "instruction %s must be a non-symlink regular file", path);
+        errno = EINVAL;
         return -1;
     }
     canonical = snag_realpath(path);
@@ -53,109 +55,36 @@ append_source(struct snag_instruction_set *set, const char *path,
         errno = EINVAL;
         return -1;
     }
+    *added = true;
     for (size_t i = 0; i < set->count; ++i) {
-        if (strcmp(set->sources[i].path, canonical) == 0) {
+        if (strcmp(set->paths[i], canonical) == 0) {
             free(canonical);
-            snag_errorf(error, error_size, "duplicate instruction path discovered");
-            errno = EINVAL;
-            return -1;
+            return 0;
         }
     }
-    text = malloc(len + 1u);
-    if (!text) {
+    if (set->count == SNAG_MAX_INSTRUCTION_SOURCES) {
         free(canonical);
-        return -1;
-    }
-    memcpy(text, data, len);
-    text[len] = '\0';
-    src = &set->sources[set->count++];
-    src->path = canonical;
-    src->text = text;
-    src->bytes = len;
-    snag_sha256_hex(data, len, src->sha256);
-    set->bytes += len;
-    return 0;
-}
-
-static int
-try_candidate(struct snag_instruction_set *set, const char *path,
-              bool *added, char *error, size_t error_size)
-{
-    snag_file_info st;
-    struct snag_buf text;
-    int fd = -1;
-    int rc = -1;
-
-    *added = false;
-    if (snag_lstat(path, &st) < 0) {
-        if (errno == ENOENT)
-            return 0;
-        snag_errorf(error, error_size, "cannot inspect instruction %s: %s",
-                  path, strerror(errno));
-        return -1;
-    }
-    if (S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode)) {
-        snag_errorf(error, error_size,
-                  "instruction %s must be a non-symlink regular file", path);
-        errno = EINVAL;
-        return -1;
-    }
-    if (st.st_size == 0)
-        return 0;
-    if (st.st_size < 0 || (uintmax_t)st.st_size > SNAG_MAX_INSTRUCTION_FILE) {
-        snag_errorf(error, error_size, "instruction %s exceeds 32 KiB", path);
+        snag_errorf(error, error_size, "instruction discovery exceeds %u files",
+                    SNAG_MAX_INSTRUCTION_SOURCES);
         errno = EOVERFLOW;
         return -1;
     }
-    fd = snag_open_read(path, false);
-    if (fd < 0) {
-        snag_errorf(error, error_size, "cannot open instruction %s: %s",
-                  path, strerror(errno));
+    set->paths[set->count++] = canonical;
+    return 0;
+}
+
+int
+snag_instructions_add_file(struct snag_instruction_set *set, const char *path,
+                           char *error, size_t error_size)
+{
+    bool added;
+    if (try_candidate(set, path, &added, error, error_size) < 0)
         return -1;
-    }
-    snag_buf_init(&text, SNAG_MAX_INSTRUCTION_FILE + 1u);
-    for (;;) {
-        unsigned char chunk[4096];
-        ssize_t got = read(fd, chunk, sizeof(chunk));
-        if (got < 0) {
-            if (errno == EINTR)
-                continue;
-            snag_errorf(error, error_size, "cannot read instruction %s: %s",
-                      path, strerror(errno));
-            goto out;
-        }
-        if (got == 0)
-            break;
-        if (snag_buf_append(&text, chunk, (size_t)got) < 0 ||
-            text.len > SNAG_MAX_INSTRUCTION_FILE) {
-            snag_errorf(error, error_size, "instruction %s exceeds 32 KiB", path);
-            errno = EOVERFLOW;
-            goto out;
-        }
-    }
-    if (text.len == 0u) {
-        rc = 0;
-        goto out;
-    }
-    if (!snag_utf8_valid(text.data, text.len, true)) {
-        snag_errorf(error, error_size,
-                  "instruction %s must be valid UTF-8 without NUL bytes", path);
-        errno = EILSEQ;
-        goto out;
-    }
-    if (append_source(set, path, text.data, text.len, error, error_size) < 0)
-        goto out;
-    *added = true;
-    rc = 0;
-out:
-    {
-        int saved = errno;
-        if (fd >= 0)
-            (void)close(fd);
-        snag_buf_free(&text);
-        errno = saved;
-    }
-    return rc;
+    if (added)
+        return 0;
+    snag_errorf(error, error_size, "instruction file is missing: %s", path);
+    errno = ENOENT;
+    return -1;
 }
 
 static int
@@ -176,9 +105,39 @@ try_instruction_dir(struct snag_instruction_set *set, const char *dir,
         if (rc < 0)
             return -1;
         if (added)
-            return 0;
+            return 1;
     }
     return 0;
+}
+
+int
+snag_instructions_add_directory(struct snag_instruction_set *set, const char *dir,
+                                char *error, size_t error_size)
+{
+    char *canonical = dir && *dir ? snag_realpath(dir) : NULL;
+    snag_file_info st;
+    int rc = -1;
+
+    if (!canonical || strlen(canonical) > SNAG_PATH_MAX_BYTES ||
+        !snag_utf8_valid((const unsigned char *)canonical, strlen(canonical), true) ||
+        snag_stat(canonical, &st) < 0 || !S_ISDIR(st.st_mode)) {
+        snag_errorf(error, error_size, "-d requires an existing UTF-8 directory: %s",
+                    dir ? dir : "");
+        errno = EINVAL;
+        goto out;
+    }
+    rc = try_instruction_dir(set, canonical, error, error_size);
+    if (rc == 0) {
+        snag_errorf(error, error_size, "-d directory has no AGENTS.md or AGENTS.override.md: %s",
+                    canonical);
+        errno = ENOENT;
+        rc = -1;
+    } else if (rc > 0) {
+        rc = 0;
+    }
+out:
+    free(canonical);
+    return rc;
 }
 
 static char *
@@ -382,10 +341,7 @@ snag_instructions_metadata_json(const struct snag_instruction_set *set)
     if (!array)
         return NULL;
     for (size_t i = 0; set && i < set->count; ++i) {
-        const struct snag_instruction_source *src = &set->sources[i];
-        if (json_array_append_new(array,
-            json_pack("{s:I,s:s,s:s}", "bytes", (json_int_t)src->bytes,
-                      "path", src->path, "sha256", src->sha256)) < 0) {
+        if (json_array_append_new(array, json_string(set->paths[i])) < 0) {
             json_decref(array);
             return NULL;
         }
@@ -397,45 +353,27 @@ int
 snag_instructions_metadata_valid(const json_t *array,
                                 char *error, size_t error_size)
 {
-    static const char *const keys[] = {"bytes", "path", "sha256"};
-    size_t total = 0;
     size_t count;
 
     if (!json_is_array(array) ||
-        (count = json_array_size((json_t *)array)) > SNAG_MAX_INSTRUCTION_SOURCES) {
-        snag_errorf(error, error_size, "invalid instruction metadata array");
-        errno = EINVAL;
-        return -1;
-    }
+        (count = json_array_size(array)) > SNAG_MAX_INSTRUCTION_SOURCES)
+        goto invalid;
     for (size_t i = 0; i < count; ++i) {
-        json_t *item = json_array_get((json_t *)array, i);
-        const char *path = snag_json_string(item, "path");
-        const char *sha = snag_json_string(item, "sha256");
-        uint64_t bytes;
-
-        if (!snag_json_exact_keys(item, keys, 3u) || !snag_path_root_len(path) ||
-            strlen(path) > SNAG_PATH_MAX_BYTES ||
-            !snag_utf8_valid((const unsigned char *)path, strlen(path), true) ||
-            !sha || !snag_hex_is_lower(sha, SNAG_SHA256_HEX_LEN) ||
-            snag_json_integer_u64(item, "bytes", &bytes) < 0 || bytes == 0u ||
-            bytes > SNAG_MAX_INSTRUCTION_FILE ||
-            total > SNAG_MAX_INSTRUCTION_BYTES - (size_t)bytes) {
-            snag_errorf(error, error_size, "invalid instruction metadata entry");
-            errno = EINVAL;
-            return -1;
-        }
-        for (size_t j = 0; j < i; ++j) {
-            const char *prev = snag_json_string(json_array_get((json_t *)array, j),
-                                               "path");
-            if (prev && strcmp(prev, path) == 0) {
-                snag_errorf(error, error_size, "duplicate instruction metadata path");
-                errno = EINVAL;
-                return -1;
-            }
-        }
-        total += (size_t)bytes;
+        const json_t *value = json_array_get(array, i);
+        const char *path = json_string_value(value);
+        if (!snag_path_root_len(path) || strlen(path) > SNAG_PATH_MAX_BYTES ||
+            json_string_length(value) != strlen(path) ||
+            !snag_utf8_valid((const unsigned char *)path, strlen(path), true))
+            goto invalid;
+        for (size_t j = 0; j < i; ++j)
+            if (strcmp(json_string_value(json_array_get(array, j)), path) == 0)
+                goto invalid;
     }
     return 0;
+invalid:
+    snag_errorf(error, error_size, "invalid or duplicate instruction path metadata");
+    errno = EINVAL;
+    return -1;
 }
 
 int
@@ -447,22 +385,16 @@ snag_instructions_match_metadata(const struct snag_instruction_set *set,
 
     if (snag_instructions_metadata_valid(array, error, error_size) < 0)
         return -1;
-    count = json_array_size((json_t *)array);
+    count = json_array_size(array);
     if ((!set && count != 0u) || (set && count != set->count))
         goto mismatch;
-    for (size_t i = 0; set && i < set->count; ++i) {
-        json_t *item = json_array_get((json_t *)array, i);
-        uint64_t bytes;
-        if (snag_json_integer_u64(item, "bytes", &bytes) < 0 ||
-            bytes != set->sources[i].bytes ||
-            strcmp(snag_json_string(item, "path"), set->sources[i].path) != 0 ||
-            strcmp(snag_json_string(item, "sha256"), set->sources[i].sha256) != 0)
+    for (size_t i = 0; set && i < set->count; ++i)
+        if (strcmp(json_string_value(json_array_get(array, i)), set->paths[i]) != 0)
             goto mismatch;
-    }
     return 0;
 mismatch:
     snag_errorf(error, error_size,
-              "active turn instruction metadata no longer matches frozen contents");
+                "active turn instruction paths no longer match advertised paths");
     errno = EINVAL;
     return -1;
 }

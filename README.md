@@ -94,6 +94,30 @@ Higher levels are diagnostics. `/verbose N` changes the level immediately.
 Color and terminal Markdown are automatic; disable them with `--no-color`
 and `--no-markdown`.
 
+### Working documents
+
+The model starts looking for working notes in the workspace (startup directory,
+or `-C DIR`). snajpagent advertises applicable `AGENTS.md` paths, not their full
+contents; the model reads relevant guidance and follows its pointers with tools.
+Add other local documentation roots with repeatable `-d DIR`:
+
+```sh
+snajpagent -d /path/to/project-notes -d /path/to/device-notes
+```
+
+Each extra root needs `AGENTS.md` (or `AGENTS.override.md`). Relative `-d` paths
+use the launch directory, independently of `-C`. Duplicate paths are collapsed.
+Roots are invocation-local; the printed resume command includes them.
+
+For example, point `AGENTS.md` at your existing maintenance notes, then ask:
+“Fix the reconnect bug; retain what you learn in those notes.” The model can
+record the established cause, remaining work and useful references. If you
+correct a mistaken assumption, it should repair that account so a later run
+can read it, check current facts and continue without repeating the research.
+No particular notes filename or directory layout is required. Small and
+read-only tasks should not generate documentation chores. Notes do not grant
+permission, control goals, or automatically synchronize between devices.
+
 ## Resume or script
 
 Normal exit prints the exact command to resume your session. You can also use:

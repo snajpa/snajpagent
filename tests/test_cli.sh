@@ -1034,6 +1034,64 @@ assert len(starts) == 2 and len(rejected) == 1 and len(failed) == 1
 assert failed[0]["data"]["class"] == "context"
 PY
 
+# Document roots: CLI validation, quoting, launch-relative paths and resume hints.
+python3 - "$bin" "$root" <<'PY'
+import json
+import pathlib
+import shlex
+import subprocess
+import sys
+
+binary, root = sys.argv[1], pathlib.Path(sys.argv[2])
+state = root / "docs-state"
+workspace = root / "docs-workspace"
+workspace.mkdir()
+agents = workspace / "AGENTS.md"
+agents.write_text("Workspace content must not be injected.\n")
+dirs = [root / 'docs "quoted"', root / "docs-second"]
+for directory in dirs:
+    directory.mkdir()
+    (directory / "AGENTS.md").write_text("Private working notes.\n")
+config = root / "docs.ini"
+config.write_text("[provider openai]\n[agent]\nread_agents_md=true\n")
+common = [binary, "--dotdir", str(state), "--config", str(config)]
+launch = root / "work"
+options = ["-C", str(workspace), "-d", '../docs "quoted"',
+           "-d" + str(dirs[1]), "-d", str(dirs[0] / ".")]
+result = subprocess.run([*common, *options, "-e", "--", "ping"],
+                        cwd=launch, text=True, capture_output=True, timeout=15)
+assert result.returncode == 0, result.stderr
+session = next((state / "sessions").iterdir())
+def turns():
+    return [e["data"] for e in map(json.loads, (session / "events.jsonl").read_text().splitlines())
+            if e["type"] == "turn_started"]
+expected = [str(agents), *[str(d / "AGENTS.md") for d in dirs]]
+assert turns()[-1]["instructions"][-3:] == expected
+command = shlex.split(result.stderr.splitlines()[-1])
+assert [pathlib.Path(command[i + 1]) for i, arg in enumerate(command) if arg == "-d"] == dirs
+resumed = subprocess.run([command[0], "-e", *command[1:], "--", "ping"], cwd=workspace,
+                         text=True, capture_output=True, timeout=15)
+assert resumed.returncode == 0, resumed.stderr
+assert turns()[-1]["instructions"][-3:] == expected
+for args in (["-d"], ["-d", ""], ["-d", str(agents)],
+             ["-d", str(root / "missing")], ["-d", str(launch)],
+             ["-d", str(dirs[0]), "-l"], ["-d", str(dirs[0]), "login", "status"]):
+    result = subprocess.run([*common, *args], cwd=launch,
+                            text=True, capture_output=True, timeout=15)
+    assert result.returncode == 2, (args, result.stderr)
+    assert len(turns()) == 2
+args = []
+for i in range(17):
+    directory = root / f"docs-limit-{i}"
+    directory.mkdir()
+    (directory / "AGENTS.md").touch()
+    args += ["-d", str(directory)]
+result = subprocess.run([*common, *args, "-e", "--", "ping"],
+                        text=True, capture_output=True, timeout=15)
+assert result.returncode == 2 and "exceeds 16 files" in result.stderr, result.stderr
+print("working-docs CLI: ok")
+PY
+
 TERM=xterm "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=dumb "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=xterm python3 "$(dirname "$bin")/pty_terminal_matrix.py" "$bin" "$root/work"

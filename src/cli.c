@@ -42,6 +42,7 @@ snag_cli_free(struct snag_cli *cli)
 {
     free(cli->auth_provider);
     free(cli->workspace);
+    snag_instructions_free(&cli->doc_instructions);
     free(cli->dotdir);
     free(cli->model);
     free(cli->provider);
@@ -212,6 +213,13 @@ parse_short(struct snag_cli *cli, int argc, char **argv, int *index,
             break;
         case 'h': cli->help = true; break;
         case 'V': cli->version = true; break;
+        case 'd':
+            arg = option_argument(argc, argv, index, p, "-d", error, error_size);
+            if (!arg || snag_instructions_add_directory(&cli->doc_instructions,
+                                                        arg, error, error_size) < 0)
+                return -1;
+            p += strlen(p);
+            break;
         case 'c':
             arg = optional_endpoint(argc, argv, index, p);
             p += strlen(p);
@@ -340,6 +348,7 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first,
             goto invalid;
     }
     if (cli->list || cli->last || cli->all || cli->provider || cli->irc_listen || cli->irc_client_count ||
+        cli->doc_instructions.count ||
         cli->irc_no_listen || cli->irc_no_client ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
         (cli->device_auth && cli->with_api_key) ||
@@ -528,6 +537,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
     if (cli->list && (cli->resume || cli->execute || cli->last || cli->workspace ||
+                      cli->doc_instructions.count ||
                       cli->model || cli->provider || cli->effort || cli->verbosity ||
                       cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
                       cli->irc_client_count || cli->irc_model_nick ||
@@ -654,6 +664,7 @@ snag_cli_usage(int fd)
         "      --markdown               render model Markdown (default)\n"
         "      --no-markdown            show model Markdown literally\n"
         "  -C DIR                       workspace (or resume relocation)\n"
+        "  -d DIR                       additional working docs with AGENTS.md; repeatable\n"
         "  -m MODEL                     next-turn model override\n"
         "  -v                           exact detail level: repeat 1 through 6 times\n"
         "                               1 tools; 2 previews; 3 full tools;\n"

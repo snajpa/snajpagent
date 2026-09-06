@@ -8,24 +8,17 @@
 #include <stddef.h>
 
 #define SNAG_MAX_INSTRUCTION_SOURCES 16u
-#define SNAG_MAX_INSTRUCTION_FILE (32u * 1024u)
-#define SNAG_MAX_INSTRUCTION_BYTES (128u * 1024u)
-
-struct snag_instruction_source {
-    char *path;
-    char sha256[SNAG_SHA256_HEX_LEN + 1u];
-    size_t bytes;
-    char *text;
-};
-
 struct snag_instruction_set {
-    struct snag_instruction_source sources[SNAG_MAX_INSTRUCTION_SOURCES];
+    char *paths[SNAG_MAX_INSTRUCTION_SOURCES];
     size_t count;
-    size_t bytes;
 };
 
 void snag_instructions_init(struct snag_instruction_set *set);
 void snag_instructions_free(struct snag_instruction_set *set);
+int snag_instructions_add_directory(struct snag_instruction_set *set, const char *dir,
+                                   char *error, size_t error_size);
+int snag_instructions_add_file(struct snag_instruction_set *set, const char *path,
+                              char *error, size_t error_size);
 int snag_instructions_discover(struct snag_instruction_set *set,
                               const char *workspace,
                               char *error, size_t error_size);

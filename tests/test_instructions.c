@@ -69,23 +69,37 @@ main(void)
     snag_instructions_init(&set);
     assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) == 0);
     assert(set.count == 4u);
-    assert(strstr(set.sources[0].text, "global override") != NULL);
-    assert(strstr(set.sources[1].text, "root guidance") != NULL);
-    assert(strstr(set.sources[2].text, "sub override") != NULL);
-    assert(strstr(set.sources[3].text, "leaf guidance") != NULL);
-    assert(set.bytes == strlen("global override\nroot guidance\nsub override\nleaf guidance\n"));
+    assert(strstr(set.paths[0], "/snajpagent/AGENTS.override.md") != NULL);
+    assert(strstr(set.paths[1], "/repo/AGENTS.md") != NULL);
+    assert(strstr(set.paths[2], "/sub/AGENTS.override.md") != NULL);
+    assert(strcmp(set.paths[3], path) == 0);
+    assert(snag_instructions_add_directory(&set, leaf, error, sizeof(error)) == 0);
+    assert(set.count == 4u); /* repeated roots do not duplicate pointers */
     metadata = snag_instructions_metadata_json(&set);
     assert(metadata);
     assert(snag_instructions_metadata_valid(metadata, error, sizeof(error)) == 0);
     assert(snag_instructions_match_metadata(&set, metadata, error, sizeof(error)) == 0);
+    write_file(path, "Changed after discovery; only pointers are frozen.\n");
+    assert(snag_instructions_match_metadata(&set, metadata, error, sizeof(error)) == 0);
+    assert(json_array_append_new(metadata, json_string(path)) == 0);
+    assert(snag_instructions_metadata_valid(metadata, error, sizeof(error)) < 0);
+    json_array_clear(metadata);
+    assert(json_array_append_new(metadata, json_string("relative/AGENTS.md")) == 0);
+    assert(snag_instructions_metadata_valid(metadata, error, sizeof(error)) < 0);
     json_decref(metadata);
     snag_instructions_free(&set);
 
     assert(snprintf(path, sizeof(path), "%s/AGENTS.override.md", leaf) > 0);
     write_file(path, "bad\xff\n");
-    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
-    assert(errno == EILSEQ || errno == EINVAL);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) == 0);
+    assert(strcmp(set.paths[3], path) == 0); /* content is not read by discovery */
     (void)unlink(path);
+    assert(symlink("AGENTS.md", path) == 0);
+    assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) < 0);
+    assert(errno == EINVAL);
+    assert(unlink(path) == 0);
+    assert(snag_instructions_add_directory(&set, temp, error, sizeof(error)) < 0);
+    assert(snag_instructions_add_directory(&set, "", error, sizeof(error)) < 0);
     assert(snprintf(path, sizeof(path), "%s/.git", sub) > 0);
     assert(symlink("../repo/.git", path) == 0);
     assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) < 0);

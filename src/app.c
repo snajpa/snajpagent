@@ -2890,6 +2890,14 @@ run_turn(struct app_state *app, const char *prompt,
     } else {
         snag_instructions_free(&app->turn_instructions);
     }
+    for (size_t i = 0; i < app->cli->doc_instructions.count; ++i) {
+        if (snag_instructions_add_file(&app->turn_instructions,
+                app->cli->doc_instructions.paths[i], error, sizeof(error)) < 0) {
+            (void)app_error(app, error);
+            result = 3;
+            goto out;
+        }
+    }
     if (snag_random_id(turn_id) < 0) {
         (void)app_error(app, "cryptographic turn id generation failed");
         result = 3;
@@ -3844,6 +3852,16 @@ build_resume_command(const struct app_state *app, const char *program,
     if (cli->config_path &&
         append_command_option(command, "--config", cli->config_path) < 0)
         goto out;
+    for (size_t i = 0; i < cli->doc_instructions.count; ++i) {
+        const char *path = cli->doc_instructions.paths[i];
+        const char *slash = strrchr(path, '/');
+        char dir[SNAG_PATH_MAX_BYTES + 1u];
+        if (!slash)
+            goto out;
+        (void)snprintf(dir, sizeof(dir), "%.*s", (int)(slash - path + 1), path);
+        if (append_command_option(command, "-d", dir) < 0)
+            goto out;
+    }
     switch (cli->color) {
     case SNAG_CLI_COLOR_UNSET: break;
     case SNAG_CLI_COLOR_AUTO:

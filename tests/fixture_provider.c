@@ -442,7 +442,7 @@ snag_fixture_response(const char *prompt, const json_t *steering,
                            "msg_fixture_model_goal_checkpoint",
                            "model-created checkpoint", 0);
     }
-    if (strcmp(prompt, "ro_native") == 0) {
+    if (strcmp(prompt, "ro_native") == 0 || strncmp(prompt, "ro_native ", 10u) == 0) {
         static const char *const names[] = {"list_files", "read_file", "grep"};
         static const char *const arguments[] = {
             "{\"path\":\".\",\"recursive\":false,\"offset\":null,\"limit\":null}",
@@ -455,6 +455,11 @@ snag_fixture_response(const char *prompt, const json_t *steering,
                 strlen(text), 4096u, error, error_size);
             if (!args)
                 return -1;
+            if (cycle == 2u && prompt[9] == ' ' &&
+                snag_json_set_new(args, "path", json_string(prompt + 10u)) < 0) {
+                json_decref(args);
+                return -1;
+            }
             return snag_response_graph_add_call(graph, "item_native", "call_native",
                                                names[cycle - 1u], args);
         }

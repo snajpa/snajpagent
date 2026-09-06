@@ -213,6 +213,20 @@ Use an existing directory as the workspace.  With
 .BR \-\-resume ,
 relocate the resumed session to it.
 .TP
+.BI \-d " directory"
+Advertise an additional local working-document root.  Repeat for multiple roots.
+Each directory must contain a regular, non-symlink
+.B AGENTS.md
+or
+.BR AGENTS.override.md ;
+the override takes precedence.  Relative paths resolve against the launch
+directory, independently of
+.BR \-C .
+Canonical duplicate paths are collapsed.  These roots are invocation-local;
+the printed resume command includes them.  They remain explicit pointers even
+when automatic discovery is disabled.  They do not grant unrelated write
+permission or synchronize documents between hosts.
+.TP
 .BI \-m " model"
 Override the next model.  On resume this is a one-turn override unless combined
 with an explicit provider selection or selected again in the session.
@@ -803,13 +817,16 @@ and
 Goal wording limit, 1 through 1048576.  Default: 262144.
 .TP
 .B read_agents_md
-Read global and project
+Discover global and project
 .B AGENTS.override.md
 or
 .B AGENTS.md
-instructions before each turn.  Default:
+instruction-file paths before each turn.  Default:
 .BR true .
-Project instructions are reread before turns; see
+The model chooses relevant files to read with tools; contents are not injected.
+Explicit
+.B \-d
+roots are independent of this setting.  See
 .BR FILES .
 .SS "provider NAME"
 Up to 16 ordered named sections are accepted.  The spelling
@@ -1183,13 +1200,24 @@ workspace.  In each directory,
 takes precedence over
 .BR AGENTS.md .
 Outside a repository, only the workspace directory is searched.  Global
-instructions precede project instructions.  Each file is limited to 32 KiB;
-the combined set is limited to 16 files and 128 KiB.  Files must be regular,
-non-symlink UTF-8 text.  Set
+instructions precede project instructions, followed by explicit
+.B \-d
+entry points.  The combined set is limited to 16 distinct canonical paths.
+Files must be regular and non-symlink; discovery does not read their contents.
+The model is given safely quoted paths and reads relevant guidance with normal
+tools, subject to those tools' file and output limits.  An empty override still
+takes precedence.  Per-turn metadata records advertised paths, not content
+hashes or proof of reading.  Set
 .B read_agents_md=false
 under
 .B [agent]
-to disable both global and project discovery.
+to disable both global and project discovery, but not explicit
+.B \-d
+roots.  The default working-document search location is the session workspace.
+Useful notes retain findings, decisions, scoped corrections and unfinished work;
+they are not a second goal controller.  Verify changeable facts when resuming,
+keep proposals distinct from approval, and preserve local scope on each host.
+No notes layout, recursive Markdown scan, or memory service is required.
 .SH ENVIRONMENT
 .TP
 .B HOME
@@ -1257,7 +1285,8 @@ and
 They also expose provider-hosted
 .BR web_search ,
 executed by the provider, never as a local function or external command.
-File and web contents are untrusted data, not instructions.
+Listed AGENTS guidance remains subordinate to the read-only query and its
+restrictions.  Other file and web contents are untrusted data, not instructions.
 All other local tool dispatch, including process control, patches,
 goal lifecycle, and IRC, is unavailable for that turn.
 .PP

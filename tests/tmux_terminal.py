@@ -1192,12 +1192,7 @@ def run_render_case(binary, root):
         if len(turn) != 1:
             raise AssertionError("expected one durable turn")
         instructions = turn[0]["data"]["instructions"]
-        expected_sha = hashlib.sha256(agents_text.encode()).hexdigest()
-        expected = {
-            "bytes": len(agents_text.encode()),
-            "path": str(agents),
-            "sha256": expected_sha,
-        }
+        expected = str(agents)
         if not instructions or instructions[-1] != expected:
             raise AssertionError(f"unexpected AGENTS.md metadata {instructions!r}")
 
@@ -3135,12 +3130,7 @@ def validate_live_screen(screen, events, workspace):
         raise AssertionError("live run did not durably admit the exact prompt once")
     instructions = turns[0]["data"]["instructions"]
     agents = Path(workspace) / "AGENTS.md"
-    contents = agents.read_bytes()
-    expected = {
-        "bytes": len(contents),
-        "path": str(agents),
-        "sha256": hashlib.sha256(contents).hexdigest(),
-    }
+    expected = str(agents)
     if expected not in instructions:
         raise AssertionError(f"live run did not admit {agents}: {instructions!r}")
 

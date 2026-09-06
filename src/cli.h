@@ -3,6 +3,7 @@
 #define SNAJPAGENT_CLI_H
 
 #include "config.h"
+#include "instructions.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -46,6 +47,7 @@ struct snag_cli {
     enum snag_cli_color_mode color;
     enum snag_cli_markdown_mode markdown;
     char *workspace;
+    struct snag_instruction_set doc_instructions;
     char *dotdir;
     char *model;
     char *provider;

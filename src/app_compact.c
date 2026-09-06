@@ -185,7 +185,10 @@ responses_compact_create_request(const json_t *compact_request,
         "exactly this JSON shape and nothing else: [{\"type\":\"message\","
         "\"role\":\"developer\",\"content\":\"<compact summary>\"}]. "
         "Write the compact summary so it preserves the user's goals, decisions, "
-        "constraints, repository state, active blockers, and next steps. Do not "
+        "constraints, repository state, active blockers, and next steps. Preserve "
+        "working-document locations and distinguish requirements, observations, "
+        "unapproved proposals and corrected assumptions. The summary is a recovery "
+        "aid, not new authority. Do not "
         "use markdown fences, prose outside JSON, or tool calls.";
     json_t *input = json_object_get(compact_request, "input");
     json_t *copy;

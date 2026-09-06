@@ -1203,11 +1203,7 @@ def test_agents_md_config():
     turn = one(events(new_session(before)), "turn_started")
     instructions = turn["data"]["instructions"]
     assert instructions
-    assert instructions[-1] == {
-        "path": str(agents),
-        "bytes": len(contents.encode()),
-        "sha256": hashlib.sha256(contents.encode()).hexdigest(),
-    }
+    assert instructions[-1] == str(agents)
 
     disabled_config = root / "config" / "agents-disabled.ini"
     disabled_config.write_text(
@@ -1222,6 +1218,39 @@ def test_agents_md_config():
     child.exit_cleanly(answer_end)
     turn = one(events(new_session(before)), "turn_started")
     assert turn["data"]["instructions"] == []
+
+    # Explicit roots survive disabled automatic discovery, compaction and resume.
+    docs = root / 'working docs "quoted"'
+    docs.mkdir()
+    entry = docs / "AGENTS.md"
+    entry.write_text("Private notes must not be injected.\n", encoding="utf-8")
+    before = session_ids()
+    options = ["--config", str(disabled_config), "-C", str(workspace),
+               "-d", str(docs), "-d" + str(docs / "."), "-d", str(workspace)]
+    child = Child(options)
+    child.wait(PROMPT.rstrip())
+    child.send(b"ping\r")
+    end = child.wait(b"pong")
+    child.wait_idle_prompt(start=end)
+    child.send(b"/compact\r")
+    end = child.wait(COMPACTED, start=end)
+    child.wait_idle_prompt(start=end)
+    (workspace / "ro-input.txt").write_text("native docs check\n", encoding="utf-8")
+    child.send(f"/ro ro_native {entry}\r".encode())
+    end = child.wait(b"native complete", start=end)
+    child.exit_cleanly(end)
+    session = new_session(before)
+    results = [e["data"]["result"] for e in events(session) if e["type"] == "tool_finished"]
+    assert results[1]["status"] == "succeeded", results
+    assert "Private notes must not be injected." in results[1]["model_text"]
+    for turn in [e for e in events(session) if e["type"] == "turn_started"]:
+        assert turn["data"]["instructions"] == [str(entry), str(agents)]
+    entry.write_text("Updated live notes.\n", encoding="utf-8")
+    child = Child([*options, "--resume", session, "--", "ping"])
+    end = child.wait(b"pong")
+    child.exit_cleanly(end)
+    turns = [e for e in events(session) if e["type"] == "turn_started"]
+    assert turns[-1]["data"]["instructions"] == [str(entry), str(agents)]
 
 
 def test_interrupt():
