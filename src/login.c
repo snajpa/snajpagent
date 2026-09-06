@@ -11,7 +11,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +33,7 @@ login_pump(void *opaque, uint32_t wait_ms)
 {
     (void)opaque;
     if (!cancelled && wait_ms)
-        (void)poll(NULL, 0, (int)wait_ms);
+        (void)snag_sleep_ms(wait_ms);
     return cancelled ? 2 : 0;
 }
 

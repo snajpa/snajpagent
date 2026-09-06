@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <locale.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -18,6 +19,30 @@
 #include <fcntl.h>
 #include <uniwidth.h>
 #include <wchar.h>
+
+int
+snag_sleep_ms(unsigned int milliseconds)
+{
+    if (milliseconds > INT_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    Sleep(milliseconds);
+    return 0;
+}
+
+void
+snag_ignore_sigpipe(void)
+{
+    /* Windows reports broken-pipe I/O errors without a SIGPIPE signal. */
+}
+
+bool
+snag_text_locale_init(void)
+{
+    /* Paths, scalar widths and regex use explicit UTF-8, not msvcrt multibyte I/O. */
+    return setlocale(LC_CTYPE, "C") != NULL;
+}
 
 static int
 path_error(DWORD error)
@@ -1507,6 +1532,35 @@ snag_sync_dir(int fd)
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/file.h>
+#include <poll.h>
+#include <signal.h>
+#include <langinfo.h>
+#include <strings.h>
+
+int
+snag_sleep_ms(unsigned int milliseconds)
+{
+    if (milliseconds > INT_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    return poll(NULL, 0, (int)milliseconds);
+}
+
+void
+snag_ignore_sigpipe(void)
+{
+    (void)signal(SIGPIPE, SIG_IGN);
+}
+
+bool
+snag_text_locale_init(void)
+{
+    const char *locale = setlocale(LC_CTYPE, "");
+    const char *codeset = locale ? nl_langinfo(CODESET) : NULL;
+
+    return codeset && (!strcasecmp(codeset, "UTF-8") || !strcasecmp(codeset, "UTF8"));
+}
 
 int64_t
 snag_seek(int fd, int64_t offset, int whence)

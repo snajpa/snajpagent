@@ -5,7 +5,6 @@
 #include "json.h"
 
 #include <errno.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -147,7 +146,7 @@ lock_provider(int dir, const char *name, snag_auth_pump_fn pump, void *opaque)
             errno = ETIMEDOUT;
             goto fail;
         }
-        if (pump ? pump(opaque, 50u) != 0 : poll(NULL, 0, 50) < 0) {
+        if (pump ? pump(opaque, 50u) != 0 : snag_sleep_ms(50u) < 0) {
             errno = ECANCELED;
             goto fail;
         }

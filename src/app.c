@@ -18,9 +18,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <langinfo.h>
-#include <locale.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdarg.h>
@@ -4309,17 +4306,11 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     }
     signal_handlers_installed = true;
-    {
-        const char *locale_name = setlocale(LC_CTYPE, "");
-        const char *codeset = locale_name ? nl_langinfo(CODESET) : NULL;
-        if (!locale_name || !codeset ||
-            (strcasecmp(codeset, "UTF-8") != 0 &&
-             strcasecmp(codeset, "UTF8") != 0)) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
-                                       "a UTF-8 locale is required");
-            rc = 2;
-            goto out;
-        }
+    if (!snag_text_locale_init()) {
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
+                                   "a UTF-8 locale is required");
+        rc = 2;
+        goto out;
     }
     error[0] = '\0';
     dotdir = snag_app_dotdir(cli->dotdir, error, sizeof(error));

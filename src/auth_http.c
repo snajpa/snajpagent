@@ -6,7 +6,6 @@
 
 #include "provider.h"
 #include <errno.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -276,7 +275,7 @@ snag_auth_device(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
                 snag_errorf(error, error_size, "device login expired; start login again");
                 goto out;
             }
-            if (pump ? pump(opaque, 100u) != 0 : poll(NULL, 0, 100) < 0) {
+            if (pump ? pump(opaque, 100u) != 0 : snag_sleep_ms(100u) < 0) {
                 errno = ECANCELED;
                 snag_errorf(error, error_size, "device login cancelled");
                 goto out;

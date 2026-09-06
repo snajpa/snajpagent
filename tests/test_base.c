@@ -627,6 +627,12 @@ test_platform(void)
     char content[4] = {0};
     int fd;
 
+    assert(snag_sleep_ms(0u) == 0);
+    before = snag_monotonic_ms();
+    assert(snag_sleep_ms(20u) == 0 && snag_monotonic_ms() >= before + 1u);
+    assert(snag_sleep_ms(UINT_MAX) == -1 && errno == EINVAL);
+    assert(snag_text_locale_init());
+
     assert(seconds > 0 && wall / 1000u <= (uint64_t)seconds);
     assert(wall / 1000u + 1u >= (uint64_t)seconds);
     assert(snag_random_bytes(NULL, 0u) == 0);
