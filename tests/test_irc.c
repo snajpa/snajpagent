@@ -688,8 +688,7 @@ test_server(void)
     assert(capture.events[SNAG_IRC_JOIN] != 0u);
 
     send_text(human, "PING :token-123\r\nMODE #lab +o agent\r\n");
-    tick(server, 10u);
-    drain_ready(server, human, wire, sizeof(wire));
+    wait_wire(server, human, wire, sizeof(wire), "MODE #lab +o agent");
     assert(strstr(wire, "PONG") && strstr(wire, "token-123"));
     assert(strstr(wire, "MODE #lab +o agent") != NULL);
     assert(send_all(server, true, SNAG_IRC_TOPIC, "agent topic",
@@ -813,7 +812,7 @@ test_server(void)
     assert(snag_socket_close(slow) == 0);
 
     send_text(human, "MODE #lab -o agent\r\n");
-    tick(server, 5u);
+    wait_wire(server, human, wire, sizeof(wire), "MODE #lab -o agent");
     error[0] = '\0';
     assert(send_all(server, true, SNAG_IRC_TOPIC, "denied",
                                    error, sizeof(error)) == 1);
