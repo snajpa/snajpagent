@@ -726,7 +726,8 @@ test_regex(void)
         {"^[[:alpha:]]+$", "\xf0\x9f\x98\x80", 0, false}
     };
 #ifdef _WIN32
-    assert(setlocale(LC_CTYPE, "English_United States.65001"));
+    /* The static engine is UTF-8 even when the legacy CRT is in the C locale. */
+    assert(setlocale(LC_CTYPE, "C"));
 #else
     assert(setlocale(LC_CTYPE, ""));
 #endif

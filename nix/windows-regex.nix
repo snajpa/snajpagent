@@ -21,6 +21,8 @@ let
     AC_PROG_RANLIB
     AM_PROG_AR
     gl_INIT
+    REPLACE_MB_CUR_MAX=4
+    AC_DEFINE([locale_charset], [snag_regex_charset], [Private UTF-8 regex charset.])
     AC_CONFIG_HEADERS([config.h])
     AC_CONFIG_FILES([Makefile lib/Makefile])
     AC_OUTPUT
@@ -42,6 +44,12 @@ let
     #include "snajpagent-gnulib-regex.h"
     #endif
   '';
+  charset = pkgs.writeText "localcharset.c" ''
+    /* SPDX-License-Identifier: GPL-2.0-only */
+    #include <config.h>
+    #include "localcharset.h"
+    const char *locale_charset(void) { return "UTF-8"; }
+  '';
 in windows.stdenv.mkDerivation {
   pname = "snajpagent-regex-windows-static";
   version = "20260905";
@@ -57,6 +65,7 @@ in windows.stdenv.mkDerivation {
     chmod u+w configure.ac Makefile.am
     bash ${gnulib}/gnulib-tool --import --lgpl=2 --no-vc-files \
       --lib=libsnagregex --source-base=lib --m4-base=m4 regex
+    cp ${charset} lib/localcharset.c
     autoreconf -fiv
   '';
   configureFlags = [ "--disable-nls" "--disable-dependency-tracking"
