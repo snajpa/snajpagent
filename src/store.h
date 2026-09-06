@@ -55,14 +55,14 @@ struct snag_pending_steering {
     char steering_id[SNAG_ID_HEX_LEN + 1u];
     uint64_t seq;
     uint64_t received_ms, first_context_ms;
-    char *text;
+    const char *text;
 };
 
 struct snag_queued_turn {
     char queue_id[SNAG_ID_HEX_LEN + 1u];
     uint64_t seq;
     uint64_t received_ms, first_context_ms;
-    char *text;
+    const char *text;
     bool read_only;
 };
 
@@ -122,14 +122,16 @@ struct snag_session {
     char capacity_ceiling_model[SNAG_MODEL_MAX_BYTES];
     char capacity_ceiling_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char default_effort[SNAG_EFFORT_MAX_BYTES];
-    char *workspace;
+    const char *workspace;
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
     char *dir_path;
-    char *first_user;
-    char *last_user;
-    char *last_assistant;
-    char *goal_prompt;
-    char *goal_blocker;
+    const char *first_user;
+    const char *last_user;
+    const char *last_assistant;
+    const char *goal_prompt;
+    const char *goal_blocker;
+    /* Private immutable string owners; text fields above and in pending inputs borrow. */
+    json_t *strings;
     json_t *compact_output;
     int dir_fd;
     int log_fd;

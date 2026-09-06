@@ -174,22 +174,11 @@ static void
 clear_pending_steering(struct snag_session *session)
 {
     for (size_t i = 0; i < session->pending_steering_count; ++i) {
-        free(session->pending_steering[i].text);
+        json_object_del(session->strings, session->pending_steering[i].steering_id);
         session->pending_steering[i].text = NULL;
     }
     session->pending_steering_count = 0;
     session->pending_steering_bytes = 0;
-}
-static void
-free_pending_user_state(struct snag_session *session)
-{
-    clear_pending_steering(session);
-    for (size_t i = 0; i < session->pending_queue_count; ++i) {
-        free(session->pending_queue[i].text);
-        session->pending_queue[i].text = NULL;
-    }
-    session->pending_queue_count = 0;
-    session->pending_queue_bytes = 0;
 }
 void
 snag_session_init(struct snag_session *session)
@@ -205,15 +194,8 @@ snag_session_init(struct snag_session *session)
 static void
 free_session_state(struct snag_session *session)
 {
-    free_pending_user_state(session);
-    free(session->workspace);
-    free(session->first_user);
-    free(session->last_user);
-    free(session->last_assistant);
-    free(session->goal_prompt);
-    free(session->goal_blocker);
-    if (session->compact_output)
-        json_decref(session->compact_output);
+    json_decref(session->strings);
+    json_decref(session->compact_output);
 }
 
 void
@@ -353,13 +335,19 @@ out:
     return rc;
 }
 static int
-replace_text(char **slot, const char *text, size_t max)
+replace_text(struct snag_session *session, const char **slot, const char *key,
+             const char *text, size_t max)
 {
-    char *copy = snag_strdup_checked(text, max);
-    if (!copy)
+    if (strlen(text) > max) {
+        errno = EOVERFLOW;
         return -1;
-    free(*slot);
-    *slot = copy;
+    }
+    if (!session->strings && !(session->strings = json_object()))
+        return -1;
+    /* Never retain the caller's mutable JSON string. Stages share only our copies. */
+    if (snag_json_set_new(session->strings, key, json_string(text)) < 0)
+        return -1;
+    *slot = snag_json_string(session->strings, key);
     return 0;
 }
 static bool
@@ -593,16 +581,14 @@ add_pending_steering(struct snag_session *session, const char *id,
                      const char *text, size_t len, uint64_t seq)
 {
     struct snag_pending_steering *pending;
-    char *copy = snag_strdup_checked(text, SNAG_MAX_STEERING_TEXT);
-
-    if (!copy)
-        return -1;
-    pending = &session->pending_steering[session->pending_steering_count++];
+    pending = &session->pending_steering[session->pending_steering_count];
     memset(pending, 0, sizeof(*pending));
+    if (replace_text(session, &pending->text, id, text, SNAG_MAX_STEERING_TEXT) < 0)
+        return -1;
+    ++session->pending_steering_count;
     memcpy(pending->steering_id, id, sizeof(pending->steering_id));
     pending->seq = seq;
     pending->received_ms = session->last_time_ms;
-    pending->text = copy;
     session->pending_steering_bytes += len;
     return 0;
 }
@@ -616,7 +602,7 @@ consume_oldest_queue(struct snag_session *session)
         return -1;
     }
     len = strlen(session->pending_queue[0].text);
-    free(session->pending_queue[0].text);
+    json_object_del(session->strings, session->pending_queue[0].queue_id);
     if (session->pending_queue_count > 1u)
         memmove(&session->pending_queue[0], &session->pending_queue[1],
                 (session->pending_queue_count - 1u) *
@@ -708,7 +694,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_utf8_valid((const unsigned char *)workspace,
                             strlen(workspace), true))
             goto invalid;
-        if (replace_text(&session->workspace, workspace,
+        if (replace_text(session, &session->workspace, "workspace", workspace,
                          SNAG_PATH_MAX_BYTES) < 0)
             return -1;
         if (!snag_strcpy(session->default_effort,
@@ -767,7 +753,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_path_root_len(new_workspace) || strlen(new_workspace) > SNAG_PATH_MAX_BYTES ||
             !snag_utf8_valid((const unsigned char *)new_workspace,
                             strlen(new_workspace), true) ||
-            replace_text(&session->workspace, new_workspace,
+            replace_text(session, &session->workspace, "workspace", new_workspace,
                          SNAG_PATH_MAX_BYTES) < 0)
             goto invalid;
     } else if (strcmp(type, "session_archived") == 0) {
@@ -811,16 +797,16 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_text_blank(prompt) ||
             (len = strlen(prompt)) > SNAG_MAX_GOAL_PROMPT ||
             !snag_utf8_valid((const unsigned char *)prompt, len, true) ||
-            replace_text(&session->goal_prompt, prompt,
+            replace_text(session, &session->goal_prompt, "goal_prompt", prompt,
                          SNAG_MAX_GOAL_PROMPT) < 0)
             goto invalid;
         if ((!session->first_user &&
-             replace_text(&session->first_user, prompt,
+             replace_text(session, &session->first_user, "first_user", prompt,
                           SNAG_MAX_GOAL_PROMPT) < 0) ||
-            replace_text(&session->last_user, prompt,
+            replace_text(session, &session->last_user, "last_user", prompt,
                          SNAG_MAX_GOAL_PROMPT) < 0)
             return -1;
-        free(session->goal_blocker);
+        json_object_del(session->strings, "goal_blocker");
         session->goal_blocker = NULL;
         memcpy(session->goal_id, goal_id, sizeof(session->goal_id));
         session->goal_status = SNAG_GOAL_ACTIVE;
@@ -844,12 +830,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             (len = strlen(prompt)) > SNAG_MAX_GOAL_PROMPT ||
             !snag_utf8_valid((const unsigned char *)prompt, len, true) ||
             strcmp(prompt, session->goal_prompt) == 0 ||
-            replace_text(&session->goal_prompt, prompt,
+            replace_text(session, &session->goal_prompt, "goal_prompt", prompt,
                          SNAG_MAX_GOAL_PROMPT) < 0)
             goto invalid;
         ++session->goal_revision;
         if (strcmp(actor, "user") == 0 &&
-            replace_text(&session->last_user, prompt,
+            replace_text(session, &session->last_user, "last_user", prompt,
                          SNAG_MAX_GOAL_PROMPT) < 0)
             return -1;
     } else if (strcmp(type, "goal_lock_changed") == 0) {
@@ -883,7 +869,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
              session->goal_status != SNAG_GOAL_BLOCKED) ||
             !goal_id || strcmp(goal_id, session->goal_id) != 0)
             goto invalid;
-        free(session->goal_blocker);
+        json_object_del(session->strings, "goal_blocker");
         session->goal_blocker = NULL;
         session->goal_status = SNAG_GOAL_ACTIVE;
     } else if (strcmp(type, "goal_blocked") == 0) {
@@ -899,7 +885,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !reason || !*reason || snag_text_blank(reason) ||
             (len = strlen(reason)) > SNAG_MAX_GOAL_BLOCKER ||
             !snag_utf8_valid((const unsigned char *)reason, len, true) ||
-            replace_text(&session->goal_blocker, reason,
+            replace_text(session, &session->goal_blocker, "goal_blocker", reason,
                          SNAG_MAX_GOAL_BLOCKER) < 0)
             goto invalid;
         session->goal_status = SNAG_GOAL_BLOCKED;
@@ -914,7 +900,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             (strcmp(actor, "model") == 0 &&
              (session->goal_status != SNAG_GOAL_ACTIVE || session->process_count)))
             goto invalid;
-        free(session->goal_blocker);
+        json_object_del(session->strings, "goal_blocker");
         session->goal_blocker = NULL;
         session->goal_status = SNAG_GOAL_COMPLETED;
     } else if (strcmp(type, "goal_cancelled") == 0) {
@@ -923,7 +909,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!snag_json_exact_keys(data, keys, 1u) || !snag_goal_unfinished(session->goal_status) ||
             !goal_id || strcmp(goal_id, session->goal_id) != 0)
             goto invalid;
-        free(session->goal_blocker);
+        json_object_del(session->strings, "goal_blocker");
         session->goal_blocker = NULL;
         session->goal_status = SNAG_GOAL_CANCELLED;
     } else if (strcmp(type, "compaction_started") == 0) {
@@ -1136,7 +1122,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *text = snag_json_string(data, "text");
         const char *turn_id = snag_json_string(data, "while_turn_id");
         size_t len;
-        char *copy;
         struct snag_queued_turn *queued;
 
         if (!snag_json_exact_keys(data, keys, json_object_get(data, "received_at_ms") ? 5u : 4u) ||
@@ -1149,14 +1134,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->pending_queue_count >= SNAG_MAX_PENDING_TURNS ||
             session->pending_queue_bytes > SNAG_MAX_PENDING_QUEUE_TEXT - len)
             goto invalid;
-        copy = snag_strdup_checked(text, SNAG_MAX_QUEUED_TEXT);
-        if (!copy)
-            return -1;
-        queued = &session->pending_queue[session->pending_queue_count++];
+        queued = &session->pending_queue[session->pending_queue_count];
         memset(queued, 0, sizeof(*queued));
+        if (replace_text(session, &queued->text, queue_id, text, SNAG_MAX_QUEUED_TEXT) < 0)
+            return -1;
+        ++session->pending_queue_count;
         memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
         queued->seq = seq;
-        queued->text = copy;
         queued->received_ms = session->last_time_ms;
         if (json_object_get(data, "received_at_ms") &&
             snag_json_integer_u64(data, "received_at_ms", &queued->received_ms) < 0)
@@ -1170,7 +1154,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         struct snag_queued_turn *queued = NULL;
         size_t old_len;
         size_t len;
-        char *copy;
 
         if (!snag_json_exact_keys(data, keys, json_object_get(data, "received_at_ms") ? 4u : 3u) || !queue_id || !text || !*text ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
@@ -1191,11 +1174,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->pending_queue_bytes >
                 SNAG_MAX_PENDING_QUEUE_TEXT - (len - old_len))
             goto invalid;
-        copy = snag_strdup_checked(text, SNAG_MAX_QUEUED_TEXT);
-        if (!copy)
+        if (replace_text(session, &queued->text, queue_id, text, SNAG_MAX_QUEUED_TEXT) < 0)
             return -1;
-        free(queued->text);
-        queued->text = copy;
         queued->received_ms = session->last_time_ms;
         if (json_object_get(data, "received_at_ms") &&
             snag_json_integer_u64(data, "received_at_ms", &queued->received_ms) < 0)
@@ -1239,7 +1219,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 if (remove[i]) {
                     session->pending_queue_bytes -=
                         strlen(session->pending_queue[i].text);
-                    free(session->pending_queue[i].text);
+                    json_object_del(session->strings, session->pending_queue[i].queue_id);
                     session->pending_queue[i].text = NULL;
                     continue;
                 }
@@ -1353,8 +1333,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->cyber_clarifications = 0u;
         clear_response_state(session);
         if (!goal && ((!session->first_user &&
-             replace_text(&session->first_user, text, SNAG_MAX_DIRECT_PROMPT) < 0) ||
-            replace_text(&session->last_user, text, SNAG_MAX_DIRECT_PROMPT) < 0))
+             replace_text(session, &session->first_user, "first_user", text, SNAG_MAX_DIRECT_PROMPT) < 0) ||
+            replace_text(session, &session->last_user, "last_user", text, SNAG_MAX_DIRECT_PROMPT) < 0))
             return -1;
         if (queued && consume_oldest_queue(session) < 0)
             goto invalid;
@@ -1779,7 +1759,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             const struct snag_response_item *item = &view;
             if (item->kind == SNAG_ITEM_ASSISTANT ||
                 item->kind == SNAG_ITEM_REFUSAL) {
-                if (replace_text(&session->last_assistant, item->text,
+                if (replace_text(session, &session->last_assistant, "last_assistant", item->text,
                                  SNAG_MAX_PUBLIC_ITEM) < 0) {
                     snag_response_graph_free(&graph);
                     return -1;
@@ -2263,57 +2243,14 @@ snag_session_each_event_since(struct snag_session *session,
                           error, error_size);
 }
 
-static char *
-clone_optional(const char *value, size_t max)
-{
-    return value ? snag_strdup_checked(value, max) : NULL;
-}
-
 static int
 clone_session_state(const struct snag_session *source,
                     struct snag_session *staged)
 {
     *staged = *source;
-    for (size_t i = 0; i < staged->pending_steering_count; ++i)
-        staged->pending_steering[i].text = NULL;
-    for (size_t i = 0; i < staged->pending_queue_count; ++i)
-        staged->pending_queue[i].text = NULL;
-
-    staged->workspace = clone_optional(source->workspace, SNAG_PATH_MAX_BYTES);
-    staged->first_user = clone_optional(source->first_user, SNAG_MAX_DIRECT_PROMPT);
-    staged->last_user = clone_optional(source->last_user, SNAG_MAX_DIRECT_PROMPT);
-    staged->last_assistant = clone_optional(source->last_assistant,
-                                            SNAG_MAX_PUBLIC_ITEM);
-    staged->goal_prompt = clone_optional(source->goal_prompt,
-                                         SNAG_MAX_GOAL_PROMPT);
-    staged->goal_blocker = clone_optional(source->goal_blocker,
-                                          SNAG_MAX_GOAL_BLOCKER);
+    staged->strings = source->strings ? json_copy(source->strings) : NULL;
     staged->compact_output = json_incref(source->compact_output);
-    if ((source->workspace && !staged->workspace) ||
-        (source->first_user && !staged->first_user) ||
-        (source->last_user && !staged->last_user) ||
-        (source->last_assistant && !staged->last_assistant) ||
-        (source->goal_prompt && !staged->goal_prompt) ||
-        (source->goal_blocker && !staged->goal_blocker) ||
-        (source->compact_output && !staged->compact_output))
-        goto fail;
-    for (size_t i = 0; i < source->pending_steering_count; ++i) {
-        staged->pending_steering[i].text =
-            clone_optional(source->pending_steering[i].text,
-                           SNAG_MAX_STEERING_TEXT);
-        if (!staged->pending_steering[i].text)
-            goto fail;
-    }
-    for (size_t i = 0; i < source->pending_queue_count; ++i) {
-        staged->pending_queue[i].text =
-            clone_optional(source->pending_queue[i].text,
-                           SNAG_MAX_QUEUED_TEXT);
-        if (!staged->pending_queue[i].text)
-            goto fail;
-    }
-    return 0;
-fail:
-    return -1;
+    return source->strings && !staged->strings ? -1 : 0;
 }
 
 int

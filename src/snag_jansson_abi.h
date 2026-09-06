@@ -119,6 +119,7 @@ static inline int json_array_append(json_t *array, json_t *value)
 
 const char *json_string_value(const json_t *string);
 size_t json_string_length(const json_t *string);
+int json_string_set(json_t *string, const char *value);
 json_int_t json_integer_value(const json_t *integer);
 double json_real_value(const json_t *real);
 

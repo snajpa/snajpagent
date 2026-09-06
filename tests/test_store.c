@@ -638,8 +638,14 @@ main(void)
                                   error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
         commit_event(&session, "turn_started", turn_started_data(&session, turn_id));
-        commit_event(&session, "future_turn_queued", queued_data(turn_id, first_id, "first"));
+        json_t *enqueued = queued_data(turn_id, first_id, "first");
+        commit_event(&session, "future_turn_queued", json_incref(enqueued));
+        const char *first_text = session.pending_queue[0].text;
+        assert(json_string_set(json_object_get(enqueued, "text"), "caller mutation") == 0);
+        assert(!strcmp(first_text, "first"));
+        json_decref(enqueued);
         commit_event(&session, "future_turn_queued", queued_data(turn_id, second_id, "second"));
+        assert(session.pending_queue[0].text == first_text);
         first_seq = session.pending_queue[0].seq;
         second_seq = session.pending_queue[1].seq;
         durable_end = session.log_end;
@@ -655,6 +661,16 @@ main(void)
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
         commit_event(&session, "future_turn_edited", edited_data(second_id, "second edited"));
+        int writable = session.log_fd;
+        session.log_fd = openat(session.dir_fd, "events.jsonl", O_RDONLY);
+        assert(session.log_fd >= 0);
+        struct snag_session failed = session;
+        assert(snag_session_commit(&session, "future_turn_edited",
+            edited_data(first_id, "not adopted"), NULL, error, sizeof(error)) < 0);
+        assert(memcmp(&session, &failed, sizeof(session)) == 0);
+        assert(!strcmp(first_text, "first"));
+        assert(close(session.log_fd) == 0);
+        session.log_fd = writable;
         assert(session.pending_queue_count == 2u);
         assert(strcmp(session.pending_queue[0].text, "first") == 0);
         assert(strcmp(session.pending_queue[1].text, "second edited") == 0);
