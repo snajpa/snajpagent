@@ -210,14 +210,27 @@ register_peer(struct snag_irc *server, snag_socket fd, const char *nick,
     char input[1024u];
     int n = snprintf(input, sizeof(input),
         "CAP LS 302\r\nCAP REQ :batch server-time draft/chathistory%s\r\n"
-        "CAP END\r\nNICK %s\r\nUSER %s 0 * :%s\r\nJOIN #lab\r\n",
+        "CAP END\r\nNICK %s\r\nUSER %s 0 * :%s\r\nJOIN #lab\r\n"
+        "PING :snajpagent-registration-ready\r\n",
         agent ? " " SNAJPAGENT_NAME "/agent" : "", nick, nick,
         agent ? SNAJPAGENT_NAME " agent" : "human");
 
     assert(n > 0 && (size_t)n < sizeof(input));
     send_text(fd, input);
-    tick(server, 20u);
-    assert(drain(fd, wire, wire_size) != 0u);
+    size_t used = 0;
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    for (;;) {
+        tick(server, 1u);
+        used += drain(fd, wire + used, wire_size - used);
+        if (strstr(wire, " :snajpagent-registration-ready\r\n"))
+            break;
+        if (used + 1u == wire_size || snag_monotonic_ms() >= deadline) {
+            (void)fprintf(stderr, "registration did not finish for %s: %s\n", nick, wire);
+            abort();
+        }
+        snag_socket_event ready = {fd, SNAG_NET_READ, 0};
+        assert(snag_socket_poll(&ready, 1u, 20) >= 0);
+    }
 }
 
 static void
