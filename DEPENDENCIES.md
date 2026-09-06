@@ -129,7 +129,10 @@ autotools and Gnulib probes use their actual pthread link flags.
 
 The ARM64 production build has run in official Windows PE 10.0.28000.1 under
 QEMU TCG, with native base/console/file/process checks and real provider
-round trips for internal RO, parallel commands and ConPTY. The executable is
+round trips for internal RO, parallel commands and ConPTY. TLS rejects an
+untrusted CA and wrong hostname, accepts an explicitly trusted test CA, and
+transient HTTP retry preserves the request. Interactive session replay and
+normal exit also pass. The executable is
 approximately 4.2 MB. This is not full desktop or earliest Windows 10 ARM64
 qualification. VM NIC drivers belong to the guest hardware setup, not the
 agent's executable dependencies.
