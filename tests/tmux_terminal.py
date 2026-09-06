@@ -124,6 +124,16 @@ class FakeResponses:
         return self.server.server_address[1]
 
     @staticmethod
+    def reply(handler, body, content_type="text/event-stream", status=200, close_header=False):
+        handler.send_response(status)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(body)))
+        if close_header:
+            handler.send_header("Connection", "close")
+        handler.end_headers()
+        handler.wfile.write(body)
+
+    @staticmethod
     def latest_user(request):
         for item in reversed(request.get("input", [])):
             if item.get("role") == "user" and isinstance(item.get("content"), str):
@@ -335,12 +345,7 @@ class FakeResponses:
             else:
                 text = f"{self.AGENTS[model]} local completion {marker}"
                 body = self.response_body(sequence, text).encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(body)))
-            handler.send_header("Connection", "close")
-            handler.end_headers()
-            handler.wfile.write(body)
+            self.reply(handler, body, close_header=True)
             handler.close_connection = True
         except Exception as exc:
             with self.lock:
@@ -377,11 +382,7 @@ class FakeResponses:
             if not self.exit_release.wait(10.0):
                 raise AssertionError("Ctrl-D did not release the held request")
             return
-        handler.send_response(200)
-        handler.send_header("Content-Type", "text/event-stream")
-        handler.send_header("Content-Length", str(len(body)))
-        handler.end_headers()
-        handler.wfile.write(body)
+        self.reply(handler, body)
 
     def output_cap_body(self, request, sequence, prompt):
         _, ceiling, selected = prompt.split()
@@ -505,12 +506,7 @@ class FakeResponses:
                     f"unexpected fake catalog endpoint {handler.path!r}"
                 )
             body = json.dumps(response, separators=(",", ":")).encode()
-            handler.send_response(status)
-            handler.send_header("Content-Type", "application/json")
-            handler.send_header("Content-Length", str(len(body)))
-            handler.send_header("Connection", "close")
-            handler.end_headers()
-            handler.wfile.write(body)
+            self.reply(handler, body, "application/json", status=status, close_header=True)
             handler.close_connection = True
         except Exception as exc:
             with self.lock:
@@ -2995,11 +2991,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
                 arrived.set()
                 assert release.wait(15.0)
             body = b'{"object":"response.input_tokens","input_tokens":20}'
-            handler.send_response(200)
-            handler.send_header("Content-Type", "application/json")
-            handler.send_header("Content-Length", str(len(body)))
-            handler.end_headers()
-            handler.wfile.write(body)
+            provider.reply(handler, body, "application/json")
             handler.close_connection = True
 
         def respond(handler, request, sequence):
@@ -3020,12 +3012,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
                 body = provider.function_body(sequence, "runtime-route", tool, arguments).encode()
             else:
                 body = provider.response_body(sequence, "runtime routing complete").encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(body)))
-            handler.send_header("Connection", "close")
-            handler.end_headers()
-            handler.wfile.write(body)
+            provider.reply(handler, body, close_header=True)
             handler.close_connection = True
 
         provider.runtime_handler = respond
@@ -3170,12 +3157,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                 }).encode()
             else:
                 body = provider.response_body(sequence, f"boundary completion {number}").encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(body)))
-            handler.send_header("Connection", "close")
-            handler.end_headers()
-            handler.wfile.write(body)
+            provider.reply(handler, body, close_header=True)
             handler.close_connection = True
 
         provider.runtime_handler = respond
@@ -3287,11 +3269,7 @@ def run_runtime_history_case(binary, root, provider, environment):
             arrived.set()
             assert release.wait(15.0)
         body = provider.response_body(sequence, f"history completion {len(requests)}").encode()
-        handler.send_response(200)
-        handler.send_header("Content-Type", "text/event-stream")
-        handler.send_header("Content-Length", str(len(body)))
-        handler.end_headers()
-        handler.wfile.write(body)
+        provider.reply(handler, body)
         handler.close_connection = True
 
     provider.runtime_handler = respond
@@ -4084,12 +4062,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
             else:
                 body = provider.response_body(sequence, "manual retry complete")
             encoded = body.encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(encoded)))
-            handler.send_header("Connection", "close")
-            handler.end_headers()
-            handler.wfile.write(encoded)
+            provider.reply(handler, encoded, close_header=True)
             handler.close_connection = True
 
         provider.runtime_handler = respond
@@ -4179,11 +4152,7 @@ def run_tool_cases(binary, root, provider, environment):
         assert outputs == (number - 1 if name else number), request
         body = (provider.response_body(sequence, "tool cases done") if not name else
                 provider.function_body(sequence, call_id, name, arguments)).encode()
-        handler.send_response(200)
-        handler.send_header("Content-Type", "text/event-stream")
-        handler.send_header("Content-Length", str(len(body)))
-        handler.end_headers()
-        handler.wfile.write(body)
+        provider.reply(handler, body)
         handler.close_connection = True
 
     def invoke(tool, args, status="succeeded"):
