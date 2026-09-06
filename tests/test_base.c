@@ -9,6 +9,8 @@
 #include <string.h>
 #include <time.h>
 #include <wchar.h>
+#include <locale.h>
+#include <regex.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -705,6 +707,46 @@ test_platform(void)
 }
 
 static void
+test_regex(void)
+{
+    static const struct {
+        const char *pattern, *text;
+        int flags;
+        bool match;
+    } cases[] = {
+        {"^alpha", "Alpha beta", REG_ICASE, true},
+        {"^(ab|cd){2}$", "abcd", 0, true},
+        {"^(ab|cd){2}$", "abcde", 0, false},
+        {"[[:digit:]]+", "value 42", 0, true},
+        {"^.$", "\xc3\xa9", 0, true},
+        {"^.$", "\xf0\x9f\x98\x80", 0, true},
+        {"^..$", "\xf0\x9f\x98\x80", 0, false},
+        {"^\xc3\x89$", "\xc3\xa9", REG_ICASE, true},
+        {"^[[:alpha:]]+$", "\xc3\xa9", 0, true},
+        {"^[[:alpha:]]+$", "\xf0\x9f\x98\x80", 0, false}
+    };
+#ifdef _WIN32
+    assert(setlocale(LC_CTYPE, "English_United States.65001"));
+#else
+    assert(setlocale(LC_CTYPE, ""));
+#endif
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        regex_t regex;
+        assert(regcomp(&regex, cases[i].pattern, REG_EXTENDED | REG_NOSUB | cases[i].flags) == 0);
+        int rc = regexec(&regex, cases[i].text, 0, NULL, 0);
+        if (rc != (cases[i].match ? 0 : REG_NOMATCH)) {
+            (void)fprintf(stderr, "regex case %zu: rc=%d expected match=%d\n", i, rc, cases[i].match);
+            abort();
+        }
+        regfree(&regex);
+    }
+    regex_t invalid;
+    char message[128];
+    int rc = regcomp(&invalid, "[", REG_EXTENDED | REG_NOSUB);
+    assert(rc != 0 && regerror(rc, &invalid, message, sizeof(message)) > 1u);
+}
+
+static void
 test_path_join(void)
 {
     assert(snag_path_root_len(NULL) == 0u);
@@ -843,6 +885,7 @@ main(void)
     test_platform();
     test_realpath();
     test_private_directory();
+    test_regex();
 #ifdef _WIN32
     test_windows_privacy();
 #endif

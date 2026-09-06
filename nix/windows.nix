@@ -110,4 +110,5 @@ let
   ] networkLibraries;
 in {
   inherit windows threads jansson tls curl networkLibraries;
+  regex = import ./windows-regex.nix { inherit pkgs windows threads unistring; };
 }
