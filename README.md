@@ -35,11 +35,15 @@ unwind information retained. Debug defaults to `-Og`; explicit compiler flags
 can select another optimization level. Neither profile enables host-specific
 instruction sets or makes LTO tooling mandatory.
 
-For a self-contained Linux x86-64 executable, use `make prod-linux-x86_64`.
-This explicit target needs Nix on the build host and may download/build its
-pinned dependencies. Copy `build/matrix/linux-x86_64/bin/snajpagent` to the
+For a self-contained Linux x86-64 or ARM64 executable, use
+`make prod-linux-x86_64` or `make prod-linux-aarch64`.
+These explicit targets need Nix on the build host and may download/build their
+pinned dependencies. Copy `build/matrix/linux-ARCH/bin/snajpagent` to the
 destination; it needs no third-party libraries or certificate sidecar there.
-Matching optional symbols are under `build/matrix/linux-x86_64/bin/.debug/`.
+Matching optional symbols are under `build/matrix/linux-ARCH/bin/.debug/`.
+Both use static PIE and conservative architecture baselines (x86-64 or ARMv8-A),
+not the build host's instruction set. Independent targets can build together
+with `make -j2 prod-linux-x86_64 prod-linux-aarch64`.
 The first implementation targets modern Linux; older-kernel qualification is
 separate. See [dependencies](DEPENDENCIES.md) for embedded trust, license/source
 obligations and the `SSL_CERT_FILE` override. Plain `make` remains host-only.
