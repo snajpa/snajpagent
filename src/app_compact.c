@@ -200,14 +200,13 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     struct snag_response_graph graph;
     struct snag_graph_decision decision;
     struct snag_provider_failure failure = {0};
-    int cancel_code = 0;
     int rc;
 
     snag_response_graph_init(&graph);
-    rc = snag_provider_responses_create(
-        create_request, app->config, app->turn_provider, credential,
-        &app->ui, NULL, NULL, snag_app_provider_input_pump, app, &graph,
-        &failure, error, error_size, &cancel_code, NULL);
+    rc = snag_provider_responses_create((struct snag_provider_connection){
+        app->config, app->turn_provider, credential, &app->ui,
+        snag_app_provider_input_pump, app},
+        create_request, NULL, NULL, &graph, &failure, error, error_size, NULL);
     if (rc != 0 && snag_provider_failure_is_capacity(&failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc != 0)

@@ -99,9 +99,10 @@ fail:
     if (snag_auth_read(app->store.root_fd, provider, false, NULL, &credential,
                       snag_app_active_input_pump, app, error, error_size) < 0)
         return -1;
-    rc = snag_provider_models_list(app->config, provider, &credential,
-                                  &app->ui, snag_app_provider_input_pump, app,
-                                  models, error, error_size);
+    rc = snag_provider_models_list((struct snag_provider_connection){
+        app->config, provider, &credential, &app->ui,
+        snag_app_provider_input_pump, app},
+        models, error, error_size);
     snag_credential_clear(&credential);
     return rc;
 #endif
@@ -169,20 +170,16 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
 #else
     bool endpoint_unsupported = false;
     uint64_t exact_tokens = 0u;
-    int cancel_code = 0;
     int rc;
 
     if (!snag_app_exact_count_enabled(
             app->turn_provider->exact_token_count,
             app->turn_capacity.count_capability))
         return SNAG_APP_COUNT_SKIPPED;
-    rc = snag_provider_responses_count(count_request, app->config,
-                                      app->turn_provider, credential,
-                                      &app->ui,
-                                      snag_app_provider_input_pump, app,
-                                      &exact_tokens, &endpoint_unsupported,
-                                      error, error_size,
-                                      &cancel_code, NULL);
+    rc = snag_provider_responses_count((struct snag_provider_connection){
+        app->config, app->turn_provider, credential, &app->ui,
+        snag_app_provider_input_pump, app},
+        count_request, &exact_tokens, &endpoint_unsupported, error, error_size, NULL);
     if (rc == 0) {
         *input_tokens = exact_tokens;
         *count_method = "exact";
@@ -230,14 +227,10 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
         }
     return snag_context_compact_output_set(output, fixture_output, error, error_size);
 #else
-    int cancel_code = 0;
-    int rc = snag_provider_responses_compact(compact_request, app->config,
-                                            app->turn_provider,
-                                            credential, &app->ui,
-                                            snag_app_provider_input_pump, app,
-                                            output,
-                                            error, error_size, &cancel_code, NULL);
-    return rc;
+    return snag_provider_responses_compact((struct snag_provider_connection){
+        app->config, app->turn_provider, credential, &app->ui,
+        snag_app_provider_input_pump, app},
+        compact_request, output, error, error_size, NULL);
 #endif
 }
 
@@ -317,20 +310,16 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
                                 snag_app_stream_public, snag_app_active_input_pump,
                                 app, graph, failure, error, error_size);
 #else
-    int cancel_code = 0;
     (void)prompt;
     (void)steering;
     (void)cycle;
     if (retry_count)
         *retry_count = 0u;
-    int rc = snag_provider_responses_create(create_request, app->config,
-                                           app->turn_provider, credential,
-                                           &app->ui,
-                                           snag_app_stream_public, app,
-                                           snag_app_provider_input_pump, app, graph,
-                                           failure, error, error_size, &cancel_code,
-                                           retry_count);
-    return rc;
+    return snag_provider_responses_create((struct snag_provider_connection){
+        app->config, app->turn_provider, credential, &app->ui,
+        snag_app_provider_input_pump, app},
+        create_request, snag_app_stream_public, app, graph, failure, error, error_size,
+        retry_count);
 #endif
 }
 

@@ -651,7 +651,6 @@ test_local_provider_transport(void)
     json_t *models = NULL;
     uint64_t tokens = 0u;
     unsigned int retries = 99u;
-    int cancel = 99;
     char endpoint[128];
     char error[256] = {0};
 
@@ -677,9 +676,10 @@ test_local_provider_transport(void)
                     "%s", "snajpagent") > 0);
     credential_set(&credential, "transport-secret");
 
-    assert(snag_provider_models_list(&config, &config.providers[1],
-                                    &credential, NULL, NULL, NULL, &models,
-                                    error, sizeof(error)) == 0);
+    assert(snag_provider_models_list((struct snag_provider_connection){
+        &config, &config.providers[1], &credential, NULL,
+        NULL, NULL},
+        &models, error, sizeof(error)) == 0);
     assert(json_array_size(models) == 2u);
     assert(strcmp(snag_json_string(json_array_get(models, 0), "id"),
                   "gpt-standard") == 0);
@@ -715,12 +715,11 @@ test_local_provider_transport(void)
     models = NULL;
 
     request = request_with_marker("transport-count");
-    assert(snag_provider_responses_count(request, &config, &config.providers[1],
-                                        &credential, NULL,
-                                        NULL, NULL, &tokens, NULL, error,
-                                        sizeof(error), &cancel, &retries) == 0);
+    assert(snag_provider_responses_count((struct snag_provider_connection){
+        &config, &config.providers[1], &credential, NULL,
+        NULL, NULL},
+        request, &tokens, NULL, error, sizeof(error), &retries) == 0);
     assert(tokens == 7u);
-    assert(cancel == 0);
     assert(retries == 0u);
     json_decref(request);
 
@@ -728,11 +727,10 @@ test_local_provider_transport(void)
     snag_response_graph_init(&graph);
     memset(&emitted, 0, sizeof(emitted));
     snag_buf_init(&emitted.text, 128u);
-    assert(snag_provider_responses_create(request, &config,
-                                         &config.providers[1], &credential, NULL,
-                                         emit_capture, &emitted, NULL, NULL,
-                                         &graph, NULL, error, sizeof(error), &cancel,
-                                         &retries) == 0);
+    assert(snag_provider_responses_create((struct snag_provider_connection){
+        &config, &config.providers[1], &credential, NULL,
+        NULL, NULL},
+        request, emit_capture, &emitted, &graph, NULL, error, sizeof(error), &retries) == 0);
     assert(strcmp(graph.provider_response_id, "resp_transport") == 0);
     assert(graph.count == 1u);
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
@@ -746,11 +744,10 @@ test_local_provider_transport(void)
     json_decref(request);
 
     request = request_with_marker("transport-compact");
-    assert(snag_provider_responses_compact(request, &config,
-                                          &config.providers[1], &credential, NULL,
-                                          NULL, NULL, &compact_output,
-                                          error, sizeof(error),
-                                          &cancel, &retries) == 0);
+    assert(snag_provider_responses_compact((struct snag_provider_connection){
+        &config, &config.providers[1], &credential, NULL,
+        NULL, NULL},
+        request, &compact_output, error, sizeof(error), &retries) == 0);
     assert(json_is_array(compact_output.value));
     assert(json_array_size(compact_output.value) == 1u);
     assert(compact_output.bytes > 0u);
@@ -791,9 +788,10 @@ test_codex_path_selection(void)
                     sizeof(config.providers[0].name), "codex") > 0);
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snag_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, NULL, NULL, &models,
-                                    error, sizeof(error)) == 0);
+    assert(snag_provider_models_list((struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL,
+        NULL, NULL},
+        &models, error, sizeof(error)) == 0);
     assert(json_array_size(models) == 1u);
     assert(strcmp(snag_json_string(json_array_get(models, 0), "id"),
                   "lookalike-openai") == 0);
@@ -808,9 +806,10 @@ test_codex_path_selection(void)
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s",
                     "http://backend-api/codex") > 0);
-    assert(snag_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, NULL, NULL, &models,
-                                    error, sizeof(error)) == 0);
+    assert(snag_provider_models_list((struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL,
+        NULL, NULL},
+        &models, error, sizeof(error)) == 0);
     assert(json_array_size(models) == 2u);
     json_decref(models);
     assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
@@ -823,9 +822,10 @@ test_codex_path_selection(void)
                     (unsigned int)server.port) > 0);
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snag_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, NULL, NULL, &models,
-                                    error, sizeof(error)) < 0);
+    assert(snag_provider_models_list((struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL,
+        NULL, NULL},
+        &models, error, sizeof(error)) < 0);
     assert(models == NULL);
     assert(strstr(error, "invalid model entry") != NULL);
     stop_server(&server);
@@ -839,9 +839,10 @@ test_codex_path_selection(void)
                     sizeof(config.providers[0].name), "neutral") > 0);
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snag_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, NULL, NULL, &models,
-                                    error, sizeof(error)) < 0);
+    assert(snag_provider_models_list((struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL,
+        NULL, NULL},
+        &models, error, sizeof(error)) < 0);
     assert(models == NULL);
     assert(strstr(error, "catalog rejected") != NULL);
     stop_server(&server);
@@ -852,9 +853,10 @@ test_codex_path_selection(void)
                     (unsigned int)server.port) > 0);
     assert(snprintf(config.providers[0].base_url,
                     sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snag_provider_models_list(&config, &config.providers[0],
-                                    &credential, NULL, NULL, NULL, &models,
-                                    error, sizeof(error)) < 0);
+    assert(snag_provider_models_list((struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL,
+        NULL, NULL},
+        &models, error, sizeof(error)) < 0);
     assert(models == NULL);
     assert(strstr(error, "invalid model entry") != NULL);
     stop_server(&server);
@@ -877,7 +879,6 @@ test_structured_create_failures(void)
         json_t *request = request_with_marker("capacity-failure");
         char endpoint[128];
         char error[256] = {0};
-        int cancel = 0;
 
         start_server(&server, fixtures[i], false);
         assert(snprintf(endpoint, sizeof(endpoint),
@@ -899,10 +900,10 @@ test_structured_create_failures(void)
         credential_set(&credential, "transport-secret");
         snag_response_graph_init(&graph);
         memset(&failure, 0, sizeof(failure));
-        assert(snag_provider_responses_create(request, &config,
-                   &config.providers[0], &credential, NULL,
-                   NULL, NULL, NULL, NULL, &graph, &failure,
-                   error, sizeof(error), &cancel, NULL) < 0);
+        assert(snag_provider_responses_create((struct snag_provider_connection){
+            &config, &config.providers[0], &credential, NULL,
+            NULL, NULL},
+            request, NULL, NULL, &graph, &failure, error, sizeof(error), NULL) < 0);
         assert(snag_provider_failure_is_capacity(&failure));
         assert(!strstr(error, "transport-secret"));
         assert(!strstr(failure.message, "transport-secret"));
@@ -1016,7 +1017,6 @@ test_create_retries(void)
         json_t *request = request_with_marker("retry-current-cycle");
         char error[512] = {0};
         unsigned int retries = 99u;
-        int cancel = 99;
         int pipefd[2], saved_stderr = -1;
         struct snag_ui ui;
         struct retry_cancel cancellation = {.code = i < count ? 0 : (int)(i - count + 1u)};
@@ -1042,10 +1042,10 @@ test_create_retries(void)
         credential_set(&credential, "transport-secret");
         snag_response_graph_init(&graph);
         snag_buf_init(&emitted.text, 1024u);
-        int rc = snag_provider_responses_create(request, &config,
-            &config.providers[0], &credential, cancellation.code ? &ui : NULL,
-            emit_capture, &emitted, cancellation.code ? cancel_retry : NULL,
-            &cancellation, &graph, &failure, error, sizeof(error), &cancel, &retries);
+        int rc = snag_provider_responses_create((struct snag_provider_connection){
+            &config, &config.providers[0], &credential, cancellation.code ? &ui : NULL,
+            cancellation.code ? cancel_retry : NULL, &cancellation},
+            request, emit_capture, &emitted, &graph, &failure, error, sizeof(error), &retries);
         if (cancellation.code) {
             snag_ui_free(&ui);
             assert(dup2(saved_stderr, STDERR_FILENO) == STDERR_FILENO);
@@ -1058,7 +1058,7 @@ test_create_retries(void)
             fprintf(stderr, "retry case %zu: rc=%d retries=%u: %s\n", i, rc, retries, error);
         int expected_cancel = cancellation.code == SNAG_PROVIDER_NEW_INPUT ? 0 : cancellation.code;
         assert(rc == (expected_cancel ? expected_cancel : retry_case->diagnostic ? -1 : 0));
-        assert(retries == retry_case->retries && cancel == expected_cancel);
+        assert(retries == retry_case->retries);
         assert(!strstr(error, "transport-secret") && !strstr(failure.message, "transport-secret"));
         if (retry_case->diagnostic) {
             assert(strstr(error, retry_case->diagnostic));
@@ -1112,10 +1112,10 @@ test_count_capability_statuses(void)
                         sizeof(config.providers[0].openrouter_title), "%s",
                         "snajpagent") > 0);
         credential_set(&credential, "transport-secret");
-        assert(snag_provider_responses_count(request, &config,
-                   &config.providers[0], &credential, NULL, NULL, NULL,
-                   &tokens, &endpoint_unsupported,
-                   error, sizeof(error), NULL, NULL) < 0);
+        assert(snag_provider_responses_count((struct snag_provider_connection){
+            &config, &config.providers[0], &credential, NULL,
+            NULL, NULL},
+            request, &tokens, &endpoint_unsupported, error, sizeof(error), NULL) < 0);
         assert(endpoint_unsupported);
         json_decref(request);
         snag_config_free(&config);
@@ -1247,7 +1247,6 @@ test_openrouter_search_transport(void)
     struct emitted_text emitted = {0};
     json_t *request;
     char endpoint[128], error[256] = {0};
-    int cancel = 0;
     unsigned int retries = 0u;
 
     start_server(&server, MODEL_OPENROUTER_SEARCH, false);
@@ -1272,10 +1271,11 @@ test_openrouter_search_transport(void)
     assert(snag_config_provider_is_openrouter(&config.providers[0]));
     snag_buf_init(&emitted.text, 128u);
     snag_response_graph_init(&graph);
-    assert(snag_provider_responses_create(request, &config, &config.providers[0],
-        &credential, NULL, emit_capture, &emitted, NULL, NULL, &graph, NULL,
-        error, sizeof(error), &cancel, &retries) == 0);
-    assert(!cancel && !retries);
+    assert(snag_provider_responses_create((struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL,
+        NULL, NULL},
+        request, emit_capture, &emitted, &graph, NULL, error, sizeof(error), &retries) == 0);
+    assert(!retries);
     assert(graph.count == 2u);
     assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "Found https://example.com") == 0);
@@ -1296,12 +1296,13 @@ test_openrouter_search_transport(void)
     snag_response_graph_init(&graph);
     snag_buf_reset(&emitted.text);
     emitted.calls = 0u;
-    assert(snag_provider_responses_create(request, &config, &config.providers[0],
-        &credential, NULL, emit_capture, &emitted, NULL, NULL, &graph, NULL,
-        error, sizeof(error), &cancel, &retries) == 0);
+    assert(snag_provider_responses_create((struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL,
+        NULL, NULL},
+        request, emit_capture, &emitted, &graph, NULL, error, sizeof(error), &retries) == 0);
     assert(graph.count == 1u && snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
-    assert(emitted.calls == 1u && !cancel && !retries);
+    assert(emitted.calls == 1u && !retries);
     snag_response_graph_free(&graph);
     snag_buf_free(&emitted.text);
     json_decref(request);
@@ -1547,8 +1548,10 @@ test_provider_auth(void)
             assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
             assert(snag_auth_read(store.root_fd, &config.providers[0], false, NULL,
                 &credential, NULL, NULL, error, sizeof(error)) == 0);
-            int rc = snag_provider_models_list(&config, &config.providers[0], &credential,
-                NULL, NULL, NULL, &models, error, sizeof(error));
+            int rc = snag_provider_models_list((struct snag_provider_connection){
+                &config, &config.providers[0], &credential, NULL,
+                NULL, NULL},
+                &models, error, sizeof(error));
             if (rc < 0 && mode == MODEL_AUTH_401)
                 (void)fprintf(stderr, "auth fixture failed: %s\n", error);
             assert((rc == 0) == (mode == MODEL_AUTH_401));
@@ -1572,8 +1575,10 @@ test_provider_auth(void)
         start_server(&server, pass == 2u ? MODEL_COMPACT_403 : MODEL_COMPACT_404, false);
         snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
-        int rc = snag_provider_responses_compact(request, &config, &config.providers[0],
-            &credential, NULL, NULL, NULL, &output, error, sizeof(error), NULL, NULL);
+        int rc = snag_provider_responses_compact((struct snag_provider_connection){
+            &config, &config.providers[0], &credential, NULL,
+            NULL, NULL},
+            request, &output, error, sizeof(error), NULL);
         assert(rc == (pass < 2u ? SNAG_PROVIDER_UNSUPPORTED : -1));
         assert(output.value == NULL);
         stop_server(&server);

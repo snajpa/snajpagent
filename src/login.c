@@ -288,9 +288,10 @@ choose_model(const struct snag_cli *cli, const struct snag_config *config,
         goto out;
     if (!*answer || strcmp(answer, "y") == 0 || strcmp(answer, "Y") == 0) {
         tokens->credential.root_fd = -1; /* Uncommitted credentials. */
-        if (snag_provider_models_list(config, provider, &tokens->credential,
-                                      NULL, login_pump, NULL, &models,
-                                      error, error_size) < 0) {
+        if (snag_provider_models_list((struct snag_provider_connection){
+            config, provider, &tokens->credential, NULL,
+            login_pump, NULL},
+            &models, error, error_size) < 0) {
             if (cancelled)
                 goto out;
             (void)fprintf(stderr, "Model discovery failed: %s\nYou can enter a model ID manually.\n", error);
