@@ -375,6 +375,7 @@ snag_term_note_output(struct snag_term *term, const char *text, size_t len,
     if (!term || !len)
         return 0;
     term->output_seen = true;
+    term->output_gap = 2u;
     term->output_ended_lf = text[len - 1u] == '\n';
     size_t trailing = 0u;
     while (trailing < len && trailing < 2u && text[len - trailing - 1u] == '\n')
@@ -1293,7 +1294,7 @@ redraw(struct snag_term *term)
     if (term->prompt_template[0])
         memcpy(term->label, current, strlen(current) + 1u);
     label = prompt_label(term, &label_len);
-    if (term->active && !term->prompt_visible && term->output_seen &&
+    if (!term->prompt_visible && term->output_seen &&
         !term->output_detour) {
         unsigned int rows = term->output_gap > term->output_newlines ?
             term->output_gap - term->output_newlines : !term->output_ended_lf;

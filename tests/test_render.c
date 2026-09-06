@@ -1081,6 +1081,70 @@ test_interposed_paragraph_gap(void)
 }
 
 static void
+test_spacing_classes(void)
+{
+    const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
+    const char *events[] = {"goal_started", "goal_reworded", "goal_paused",
+        "goal_resumed", "goal_blocked", "goal_completed", "goal_cancelled",
+        "compaction_completed"};
+    char output[8192];
+    struct snag_render render;
+    struct snag_term term;
+    struct output_capture capture = capture_open(true, true);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+    snag_term_init(&term);
+    term.opened = term.capable = true;
+    term.columns = 120u;
+    snag_render_init(&render, 0u);
+    render.stdout_terminal = render.stderr_terminal = true;
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    snag_render_attach_term(&render, &term);
+    assert(snag_term_set_prompt_template(&term, false, "input › ", frames, 8u, 0u) == 0);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
+    assert(snag_render_input_submitted(&render, "input › ", "one") == 0);
+    assert(snag_render_input_submitted(&render, "input › ", "two") == 0);
+    assert(term.prompt_visible && term.output_detour == 0u);
+    assert(term.output_newlines == 1u && term.output_gap == 1u);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
+    assert(!strstr(output, "\n\n"));
+    assert(snag_render_host(&render, "diagnostic") == 0);
+    assert(term.prompt_visible && term.output_detour == 1u);
+    assert(term.output_newlines == 1u && term.output_gap == 2u);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
+    assert(snag_term_set_prompt_template(&term, false, "input › ", frames, 8u, 0u) == 0);
+    assert(drain_available(capture.fd, output, sizeof(output), 0u) == 0u);
+    for (size_t i = 0u; i < sizeof(events) / sizeof(events[0]); ++i) {
+        assert(snag_render_event(&render, i + 1u, events[i]) == 0);
+        assert(term.prompt_visible && term.output_detour == 1u);
+        (void)drain_available(capture.fd, output, sizeof(output), 0u);
+        assert(!strstr(output, "\n\n•") || i == 0u);
+    }
+    snag_render_free(&render);
+    snag_term_close(&term);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+
+    /* Exact permanent transcript, including retained bullet-class replay. */
+    capture = capture_open(true, true);
+    snag_render_init(&render, 0u);
+    render.stdout_terminal = render.stderr_terminal = true;
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    assert(snag_render_input_submitted(&render, "input › ", "one\n\n") == 0);
+    assert(snag_render_input_submitted(&render, "input › ", "two") == 0);
+    for (size_t i = 0u; i < sizeof(events) / sizeof(events[0]); ++i)
+        assert(snag_render_event(&render, i + 1u, events[i]) == 0);
+    assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
+    assert(snag_render_public(&render, "# heading", 9u, NULL) == 0);
+    assert(snag_render_public_end(&render) == 0);
+    assert(snag_render_input_submitted(&render, "input › ", "three") == 0);
+    snag_render_free(&render);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strcmp(output, "input › one\ninput › two\n\n"
+        "• Goal set\n• Goal updated\n• Goal paused at the current turn boundary\n"
+        "• Goal resumed\n• Goal blocked by model\n• Goal cleared\n• Goal cleared\n"
+        "• Compacted\n\nheading\n\ninput › three\n") == 0);
+}
+
+static void
 test_live_paragraph_gap(void)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
@@ -1236,7 +1300,7 @@ test_input_model_boundaries(void)
         assert(n == 0);
         close(fds[0]);
         output[used] = '\0';
-        assert(strcmp(output, "\n") == 0);
+        assert(strcmp(output, "") == 0);
     }
 }
 
@@ -2122,6 +2186,7 @@ main(void)
     test_paragraph_spacing();
     test_live_paragraph_gap();
     test_interposed_paragraph_gap();
+    test_spacing_classes();
 
     snag_buf_init(&delivered, 1024u);
     assert(capture_wrapped("alpha beta gamm", "a delta", 20u, true,
@@ -2206,7 +2271,7 @@ main(void)
     assert(strcmp(output,
         "• Compacted\n"
         "• Goal set\n"
-        "• Goal set\n"
+        "• Goal updated\n"
         "• Goal cleared\n"
         "• Goal cleared\n") == 0);
     assert(capture_lifecycle(4u, SNAG_COLOR_NEVER,

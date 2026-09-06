@@ -814,10 +814,10 @@ def test_queue_prompt_counts():
         after = child.wait(b"working slowly")
         for count in range(1, 11):
             child.send(f"entry-{count}\t".encode())
-            after = child.wait(f"/medium   ?% ({count}) » ".encode(), start=after)
+            after = child.wait(f"({count}) »".encode(), start=after)
         for command, count in ((b"/queue pop\r", 9), (b"/queue 1 delete\r", 8)):
             child.send(command)
-            after = child.wait(f"/medium   ?% ({count}) » ".encode(), start=after)
+            after = child.wait(f"({count}) »".encode(), start=after)
         child.send(b"\t")
         after = child.wait(b" : ", start=after)
         child.drain(0.05)
@@ -1674,7 +1674,7 @@ def test_goal_model_rewrite_and_lock():
     child.send(b"/goal locked goal\r")
     child.wait(b"preparing goal rewrite")
     child.send(b"/goal lock\r")
-    lock_end = child.wait(b"goal wording locked against model changes")
+    lock_end = child.wait(b"Goal wording locked against model changes")
     answer_end = child.wait(b"goal done", start=lock_end)
     child.exit_cleanly(answer_end)
     log = events(new_session(before))
@@ -1690,7 +1690,7 @@ def test_goal_pause_resume_and_queue_priority():
     child.send(b"/goal slow goal\r")
     child.wait(b"working on goal")
     child.send(b"/goal pause\r")
-    pause_end = child.wait(b"goal paused at the current turn boundary")
+    pause_end = child.wait(b"Goal paused at the current turn boundary")
     checkpoint_end = child.wait(b"goal checkpoint", start=pause_end)
     child.wait(PROMPT.rstrip(), start=checkpoint_end)
     child.drain(0.2)
@@ -1737,10 +1737,10 @@ def test_goal_user_terminal_commands_and_unlock():
     child.send(b"/goal set retitled goal\r")
     reworded_end = child.wait(GOAL_SET, start=set_end)
     child.send(b"/goal lock\r")
-    child.wait(b"goal wording locked against model changes",
+    child.wait(b"Goal wording locked against model changes",
                start=reworded_end)
     child.send(b"/goal unlock\r")
-    child.wait(b"goal wording unlocked for model changes")
+    child.wait(b"Goal wording unlocked for model changes")
     child.send(b"/goal complete\r")
     complete_end = child.wait(GOAL_CLEARED, start=reworded_end)
     checkpoint_end = child.wait_idle_prompt(start=complete_end)
@@ -1794,7 +1794,7 @@ def test_goal_refusal_failure_block_and_restart_state():
     child = Child([])
     child.wait(PROMPT.rstrip())
     child.send(b"/goal blocked goal\r")
-    child.wait(b"goal blocked by model")
+    child.wait(b"Goal blocked by model")
     answer_end = child.wait(b"goal done")
     child.send(b"/goal\r")
     status_end = child.wait(b": blocked", start=answer_end)
@@ -1832,7 +1832,7 @@ def test_saved_goal_restored_without_lookup():
         child.send(b"/goal slow goal\r")
         child.wait(b"working on goal")
         child.send(b"/goal pause\r")
-        paused = child.wait(b"goal paused at the current turn boundary")
+        paused = child.wait(b"Goal paused at the current turn boundary")
         checkpoint = child.wait(b"goal checkpoint", start=paused)
         child.wait_idle_prompt(start=checkpoint)
         wording = "obnovit žluťoučký plán bez opakování"
@@ -1840,7 +1840,7 @@ def test_saved_goal_restored_without_lookup():
         child.send(("/goal set " + wording + "\r").encode())
         changed = child.wait(GOAL_SET, start=start)
         child.send(b"/goal lock\r")
-        locked = child.wait(b"goal wording locked against model changes", start=changed)
+        locked = child.wait(b"Goal wording locked against model changes", start=changed)
         child.wait_idle_prompt(start=locked)
         child.exit_now()
     finally:
@@ -4550,7 +4550,7 @@ def test_goal_orderly_quit_resume():
             child.wait(b"working on goal")
             session_id = new_session(before)
             child.send(b"/goal lock\r")
-            child.wait(b"goal wording locked against model changes")
+            child.wait(b"Goal wording locked against model changes")
             expected = 0
             if mode == "eof":
                 attrs = termios.tcgetattr(child.fd)

@@ -428,8 +428,7 @@ goal_simple_command(struct app_state *app, const char *command)
             return goal_error(app, "only an active goal can be paused");
         if (snag_app_goal_pause(app, "user", error, sizeof(error)) < 0)
             return goal_error(app, error);
-        return snag_ui_text(&app->ui, SNAG_UI_HOST,
-                               "goal paused at the current turn boundary");
+        return 0;
     }
     if (strcmp(command, "resume") == 0) {
         if (app->session.goal_status != SNAG_GOAL_PAUSED &&
@@ -441,7 +440,7 @@ goal_simple_command(struct app_state *app, const char *command)
         app->goal_armed = true;
         if (app->session.pending_queue_count != 0u && !app->queue_edit_id[0])
             app->queue_armed = true;
-        return snag_ui_text(&app->ui, SNAG_UI_HOST, "goal resumed");
+        return 0;
     }
     if (strcmp(command, "lock") == 0 || strcmp(command, "unlock") == 0) {
         bool locked = strcmp(command, "lock") == 0;
@@ -460,9 +459,7 @@ goal_simple_command(struct app_state *app, const char *command)
         if (commit_goal_event(app, "goal_lock_changed", data,
                               error, sizeof(error)) < 0)
             return goal_error(app, error);
-        return snag_ui_text(&app->ui, SNAG_UI_HOST,
-            locked ? "goal wording locked against model changes" :
-                     "goal wording unlocked for model changes");
+        return 0;
     }
     if (strcmp(command, "complete") == 0) {
         if (!snag_goal_unfinished(app->session.goal_status))
@@ -627,8 +624,6 @@ snag_app_goal_tool(struct app_state *app,
                               error, error_size) < 0)
             return -1;
         app->goal_armed = false;
-        if (snag_ui_text(&app->ui, SNAG_UI_HOST, "goal blocked by model") < 0)
-            return -1;
         return tool_result(true, "goal marked blocked", result);
     }
     return tool_result(false, "update_goal action is invalid", result);

@@ -29,6 +29,8 @@
 #define COLOR_HOST "\033[34m"
 #define MARKDOWN_TABLE_COLUMNS 16u
 
+enum { BOUNDARY_NONE, BOUNDARY_CONTENT, BOUNDARY_PROMPT, BOUNDARY_BULLET };
+
 enum markdown_table_alignment {
     TABLE_LEFT,
     TABLE_CENTER,
@@ -51,6 +53,7 @@ struct snag_render_record {
     struct snag_render_record *next;
     enum snag_render_record_kind kind;
     enum snag_presentation presentation;
+    unsigned int boundary;
     struct snag_buf text;
     const char *color;
     char *label;
@@ -177,8 +180,37 @@ trailing_newlines(unsigned int prior, const char *text, size_t len)
     return total < 2u ? total : 2u;
 }
 
+/* Classes share a single physical separator. Blank-only writes can satisfy a
+   request without changing the preceding visible class. */
 static int
-write_role_chunk(struct snag_render *render, int fd, const char *color,
+boundary_before(struct snag_render *render, int fd, unsigned int kind,
+                const char *text, size_t len)
+{
+    if (!(fd == STDOUT_FILENO ? render->stdout_terminal : render->stderr_terminal) ||
+        render->markdown_measuring)
+        return 0;
+    size_t i = 0u;
+    while (i < len && text[i] == '\n')
+        ++i;
+    if (i == len)
+        return 0;
+    bool gap = (render->boundary && render->boundary != kind) ||
+               (!render->boundary && kind == BOUNDARY_BULLET);
+    if (gap && render->trailing_newlines + i < 2u) {
+        size_t count = 2u - render->trailing_newlines - i;
+        if (snag_term_write(fd, "\n\n", count) < 0 ||
+            (render->term && snag_term_note_output(render->term, "\n\n", count, "") < 0))
+            return -1;
+        render->trailing_newlines = 2u;
+        if (render->public_item_open)
+            render->public_column = 0u;
+    }
+    render->boundary = kind;
+    return 0;
+}
+
+static int
+write_role_chunk(struct snag_render *render, unsigned int boundary, int fd, const char *color,
                  const char *text, size_t len, size_t colored_len,
                  bool terminal_safe, bool persistent)
 {
@@ -194,6 +226,8 @@ write_role_chunk(struct snag_render *render, int fd, const char *color,
         return 0;
     if (output_begin(render) < 0)
         return -1;
+    if (boundary_before(render, fd, boundary, text, len) < 0)
+        goto out;
     if (colored && write_literal(fd, color) < 0)
         goto out;
     if (colored_len &&
@@ -233,31 +267,30 @@ out:
 }
 
 static int
-write_role_block(struct snag_render *render, int fd, const char *color,
+write_role_block(struct snag_render *render, unsigned int boundary, int fd, const char *color,
                  const char *text, size_t len, size_t colored_len,
                  bool terminal_safe, bool persistent)
 {
     bool deferred = render->term && render->term->defer_redraw;
-    bool prose = len && render->public_item_open && render->markdown_rendering &&
+    bool prose = len && boundary == BOUNDARY_CONTENT &&
+                 render->public_item_open && render->markdown_rendering &&
                  render->markdown_prose_bullets && render->markdown_state.prose;
     int rc = 0;
 
     if (prose) {
         if (markdown_gap(render) < 0 || close_public_output(render) < 0)
             return -1;
-        if (render->term)
-            render->term->output_gap = 0u;
     }
 
     if (!len)
-        return write_role_chunk(render, fd, color, text, len, colored_len,
+        return write_role_chunk(render, boundary, fd, color, text, len, colored_len,
                                  terminal_safe, persistent);
     while (len) {
         size_t amount = text_slice(text, len);
         size_t colored = colored_len < amount ? colored_len : amount;
         if (render->term)
             render->term->defer_redraw = deferred || len > amount;
-        if (write_role_chunk(render, fd, color, text, amount, colored,
+        if (write_role_chunk(render, boundary, fd, color, text, amount, colored,
                               terminal_safe, persistent) < 0) {
             rc = -1;
             break;
@@ -305,7 +338,7 @@ write_optional_block(struct snag_render *render, enum snag_presentation kind,
         }
         size_t amount = text_slice(text, len);
         size_t colored = colored_len < amount ? colored_len : amount;
-        if (write_role_chunk(render, STDERR_FILENO, color, text, amount,
+        if (write_role_chunk(render, BOUNDARY_CONTENT, STDERR_FILENO, color, text, amount,
                               colored, render->stderr_terminal, true) < 0)
             return -1;
         ended_lf = text[amount - 1u] == '\n';
@@ -343,20 +376,21 @@ pop_record(struct snag_render *render, enum snag_render_view view)
 }
 
 static int
-view_block(struct snag_render *render, enum snag_render_view view, int fd,
+view_block(struct snag_render *render, unsigned int boundary, enum snag_render_view view, int fd,
            const char *color, const char *text, size_t len,
            size_t colored_len, bool terminal_safe, bool persistent)
 {
     struct snag_render_record *record;
 
     if (render->view == view && !render->view_head[view])
-        return write_role_block(render, fd, color, text, len, colored_len,
+        return write_role_block(render, boundary, fd, color, text, len, colored_len,
                                 terminal_safe, persistent);
     record = calloc(1u, sizeof(*record));
     if (!record)
         return -1;
     record->kind = SNAG_RENDER_RECORD_BLOCK;
     record->fd = fd;
+    record->boundary = boundary;
     record->color = color;
     record->colored_len = colored_len;
     record->terminal_safe = terminal_safe;
@@ -368,6 +402,20 @@ view_block(struct snag_render *render, enum snag_render_view view, int fd,
     }
     queue_record(render, view, record);
     return render->view == view ? flush_view(render, view) : 0;
+}
+
+static int
+render_bullet(struct snag_render *render, const char *notice)
+{
+    struct snag_buf line;
+    snag_buf_init(&line, 1024u);
+    int rc = snag_buf_printf(&line, "• %s\n", notice);
+    if (rc == 0)
+        rc = view_block(render, BOUNDARY_BULLET, SNAG_RENDER_ROLLOUT, STDERR_FILENO,
+                        COLOR_LIFECYCLE, (char *)line.data, line.len, line.len,
+                        render->stderr_terminal, true);
+    snag_buf_free(&line);
+    return rc;
 }
 
 static size_t
@@ -382,7 +430,7 @@ static int
 write_block(struct snag_render *render, int fd, const char *text, size_t len,
             bool terminal_safe, bool persistent)
 {
-    return write_role_block(render, fd, "", text, len, 0u,
+    return write_role_block(render, BOUNDARY_CONTENT, fd, "", text, len, 0u,
                              terminal_safe, persistent);
 }
 
@@ -468,7 +516,7 @@ snag_render_orientation(struct snag_render *render,
                             workspace, id);
     }
     if (rc == 0)
-        rc = write_role_block(render, STDERR_FILENO, COLOR_AGENT,
+        rc = write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_AGENT,
                               (char *)line.data, line.len, line.len,
                               render->stderr_terminal, true);
     snag_buf_free(&line);
@@ -478,7 +526,7 @@ snag_render_orientation(struct snag_render *render,
 static int
 render_banner(struct snag_render *render, const char *text)
 {
-    return write_role_block(render, STDERR_FILENO, COLOR_HOST, text,
+    return write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_HOST, text,
                             strlen(text), strlen(text), render->stderr_terminal, true);
 }
 
@@ -520,82 +568,59 @@ snag_render_history(struct snag_render *render,
     return rc;
 }
 
-static int
-render_submitted(struct snag_render *render, const char *label, const char *text,
-                 bool separate)
+int
+snag_render_submitted(struct snag_render *render, const char *label, const char *text)
 {
     struct snag_buf line;
-    int rc;
+    bool terminal = render->stderr_terminal;
+    size_t len = strlen(text);
+    int rc = 0;
 
-    if (render->term &&
-        snag_term_consume_echoed_submission(render->term, label)) {
-        rc = separate && render->stderr_terminal ?
-             write_block(render, STDERR_FILENO, "\n", 1u, false, true) : 0;
-        if (rc == 0 && render->stderr_terminal) {
-            render->previous_public_item = false;
-            render->trailing_newlines = separate ? 2u : 1u;
-            if (render->public_item_open) {
-                render->public_item_ended_lf = true;
-                render->public_trailing_newlines = separate ? 2u : 1u;
-            }
-        }
-        return rc;
-    }
-    snag_buf_init(&line, SNAG_MAX_DIRECT_PROMPT * 8u + 64u);
-    if (render->public_item_open && !render->public_item_ended_lf &&
-        !(render->markdown_rendering && render->markdown_prose_bullets &&
-          render->markdown_state.prose)) {
-        if (snag_buf_putc(&line, '\n') < 0) {
-            snag_buf_free(&line);
-            return -1;
-        }
-        render->public_item_ended_lf = true;
-    }
-    rc = snag_buf_append(&line, label, strlen(label));
-    if (rc == 0)
-        rc = snag_buf_append(&line, text, strlen(text));
-    if (rc == 0 && separate && render->stderr_terminal) {
-        size_t len = strlen(text);
-        size_t trailing = 0u;
-
-        while (trailing < len && trailing < 2u &&
-               text[len - trailing - 1u] == '\n')
-            ++trailing;
-        while (trailing++ < 2u)
-            if (snag_buf_putc(&line, '\n') < 0) {
+    if (render->term && snag_term_consume_echoed_submission(render->term, label)) {
+        render->trailing_newlines = 1u;
+    } else {
+        snag_buf_init(&line, SNAG_MAX_DIRECT_PROMPT * 8u + 64u);
+        if (terminal)
+            while (len && text[len - 1u] == '\n')
+                --len;
+        if (rc == 0)
+            rc = snag_buf_append(&line, label, strlen(label));
+        if (rc == 0)
+            rc = snag_buf_append(&line, text, len);
+        if (rc == 0)
+            rc = snag_buf_putc(&line, '\n');
+        if (rc == 0 && output_begin(render) < 0)
+            rc = -1;
+        else if (rc == 0) {
+            rc = write_role_chunk(render, BOUNDARY_PROMPT, STDERR_FILENO, COLOR_AGENT,
+                                  (char *)line.data, line.len,
+                                  line.len - len - 1u, terminal, true);
+            if (terminal && render->term)
+                render->term->output_gap = 1u;
+            if (output_end(render) < 0)
                 rc = -1;
-                break;
-            }
-    } else if (rc == 0) {
-        rc = snag_buf_putc(&line, '\n');
+        }
+        snag_buf_free(&line);
     }
-    if (rc == 0)
-        rc = write_role_block(render, STDERR_FILENO, COLOR_AGENT,
-                              (char *)line.data, line.len, strlen(label),
-                              render->stderr_terminal, true);
-    if (rc == 0 && render->stderr_terminal) {
+    if (rc == 0 && terminal) {
+        render->boundary = BOUNDARY_PROMPT;
         render->previous_public_item = false;
+        if (render->term)
+            render->term->output_gap = 1u;
         if (render->public_item_open) {
             render->public_item_ended_lf = true;
-            render->public_trailing_newlines = separate ? 2u : 1u;
+            render->public_trailing_newlines = 1u;
+            render->public_column = 0u;
         }
     }
-    snag_buf_free(&line);
     return rc;
-}
-
-int
-snag_render_submitted(struct snag_render *render, const char *label,
-                     const char *text)
-{
-    return render_submitted(render, label, text, false);
 }
 
 int
 snag_render_input_submitted(struct snag_render *render, const char *label,
                            const char *text)
 {
-    return render_submitted(render, label, text, true);
+    return snag_render_submitted(render, label, text);
 }
 
 int
@@ -792,6 +817,8 @@ public_write(struct snag_render *render, const char *text, size_t len)
         if (markdown_paint_style(render) < 0)
             return -1;
     }
+    if (boundary_before(render, render->public_fd, BOUNDARY_CONTENT, text, len) < 0)
+        return -1;
     if ((terminal ? snag_term_write_safe(render->public_fd, text, len) :
                     snag_term_write(render->public_fd, text, len)) < 0)
         return -1;
@@ -802,8 +829,9 @@ public_write(struct snag_render *render, const char *text, size_t len)
     render->public_item_ended_lf = text[len - 1u] == '\n';
     render->public_trailing_newlines =
         trailing_newlines(render->public_trailing_newlines, text, len);
-    if (terminal)
+    if (terminal) {
         render->trailing_newlines = trailing_newlines(render->trailing_newlines, text, len);
+    }
     return 0;
 }
 
@@ -820,9 +848,6 @@ close_public_output(struct snag_render *render)
         saved_errno = errno;
     }
     render->public_output_open = false;
-    if (render->term)
-        render->term->output_gap = render->markdown_rendering &&
-            render->markdown_prose_bullets && render->markdown_state.prose ? 2u : 0u;
     if (output_end(render) < 0 && rc == 0)
         rc = -1;
     if (saved_errno)
@@ -2187,6 +2212,9 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
         if (output_begin(render) < 0)
             goto out;
         output = true;
+        if (public_terminal(render) && render->boundary == BOUNDARY_PROMPT &&
+            markdown_gap(render) < 0)
+            goto out;
         if (delivered && snag_buf_reserve(delivered, complete.len) < 0)
             goto out;
         if (public_terminal(render) ?
@@ -2503,7 +2531,7 @@ render_message(struct snag_render *render, const char *message,
     snag_buf_init(&line, 16384u);
     rc = snag_buf_printf(&line, SNAJPAGENT_NAME ": %s\n", message);
     if (rc == 0)
-        rc = write_role_block(render, STDERR_FILENO, color,
+        rc = write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, color,
                               (char *)line.data, line.len, line.len,
                               render->stderr_terminal, true);
     snag_buf_free(&line);
@@ -2534,7 +2562,7 @@ snag_render_host(struct snag_render *render, const char *text)
     if (rc == 0 && (len == 0u || text[len - 1u] != '\n'))
         rc = snag_buf_putc(&line, '\n');
     if (rc == 0)
-        rc = write_role_block(render, STDERR_FILENO, COLOR_HOST,
+        rc = write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_HOST,
                               (char *)line.data, line.len,
                               first_line_len((char *)line.data, line.len),
                               render->stderr_terminal, true);
@@ -2739,6 +2767,8 @@ render_irc_event_now(struct snag_render *render,
     nick_color = highlight ? COLOR_OPERATOR : event->op ? COLOR_CHAT_OPERATOR : COLOR_CHAT_AGENT;
     if (output_begin(render) < 0)
         return -1;
+    if (boundary_before(render, STDERR_FILENO, BOUNDARY_CONTENT, event->nick, strlen(event->nick)) < 0)
+        goto out;
     if (source[0] &&
         ((colored && irc_piece(render, COLOR_META, false) < 0) ||
          irc_piece(render, source, true) < 0))
@@ -2812,6 +2842,7 @@ render_irc_event_now(struct snag_render *render,
     if (irc_piece(render, "\n", false) < 0)
         goto out;
     render->trailing_newlines = 1u;
+    render->boundary = BOUNDARY_CONTENT;
     rc = 0;
 out:
     if (colored)
@@ -2878,7 +2909,7 @@ flush_view(struct snag_render *render, enum snag_render_view view)
         int rc;
 
         if (record->kind == SNAG_RENDER_RECORD_BLOCK) {
-            rc = write_role_block(render, record->fd, record->color,
+            rc = write_role_block(render, record->boundary, record->fd, record->color,
                                   (const char *)record->text.data,
                                   record->text.len, record->colored_len,
                                   record->terminal_safe, record->persistent);
@@ -3021,7 +3052,7 @@ snag_render_tool_block(struct snag_render *render, const struct snag_render_bloc
 
     if (!snag_render_enabled(render, SNAG_PRESENT_TOOL))
         return 0;
-    if (write_role_block(render, STDERR_FILENO,
+    if (write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO,
                       colors[block->role], (const char *)block->text.data,
                       block->text.len, block->colored_len,
                       render->stderr_terminal, true) < 0 || render_checkpoint(render) < 0)
@@ -3229,6 +3260,16 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
         if (render->history_fd < 0)
             return -1;
     }
+    if (strcmp(type, "goal_lock_changed") == 0) {
+        json_t *event = source_event(render, source);
+        if (!event)
+            return -1;
+        bool locked = json_is_true(json_object_get(json_object_get(event, "data"), "locked"));
+        int rc = render_bullet(render, locked ? "Goal wording locked against model changes" :
+                                               "Goal wording unlocked for model changes");
+        json_decref(event);
+        return rc;
+    }
     if (strcmp(type, "response_completed") == 0) {
         render->response_source = source;
     }
@@ -3293,9 +3334,16 @@ snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
 
     if (strcmp(type, "compaction_completed") == 0)
         notice = "Compacted";
-    else if (strcmp(type, "goal_started") == 0 ||
-             strcmp(type, "goal_reworded") == 0)
+    else if (strcmp(type, "goal_started") == 0)
         notice = "Goal set";
+    else if (strcmp(type, "goal_reworded") == 0)
+        notice = "Goal updated";
+    else if (strcmp(type, "goal_paused") == 0)
+        notice = "Goal paused at the current turn boundary";
+    else if (strcmp(type, "goal_resumed") == 0)
+        notice = "Goal resumed";
+    else if (strcmp(type, "goal_blocked") == 0)
+        notice = "Goal blocked by model";
     else if (strcmp(type, "goal_completed") == 0 ||
              strcmp(type, "goal_cancelled") == 0)
         notice = "Goal cleared";
@@ -3303,15 +3351,8 @@ snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
     if (!notice && !debug)
         return 0;
     snag_buf_init(&line, 1024u);
-    if (notice) {
-        if (snag_buf_printf(&line, "• %s\n", notice) < 0)
-            rc = -1;
-    }
-    if (rc == 0 && notice)
-        rc = view_block(render, SNAG_RENDER_ROLLOUT, STDERR_FILENO,
-                        COLOR_LIFECYCLE,
-                        (char *)line.data, line.len, line.len,
-                        render->stderr_terminal, true);
+    if (notice)
+        rc = render_bullet(render, notice);
     snag_buf_reset(&line);
     if (rc == 0 && debug) {
         rc = snag_buf_printf(&line, "event › %llu %s synced\n",
@@ -3399,7 +3440,7 @@ protocol_warning(struct snag_render *render)
 
     if (render->protocol_warning_shown)
         return 0;
-    if (write_role_block(render, STDERR_FILENO, COLOR_WARNING,
+    if (write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_WARNING,
                          warning, sizeof(warning) - 1u,
                          sizeof(warning) - 1u,
                          render->stderr_terminal, true) < 0)
