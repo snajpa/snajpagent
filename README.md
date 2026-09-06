@@ -219,7 +219,9 @@ private prompt.
 Colors indicate roles, not individuals: operator nicks are cyan and model
 nicks blue across host/client views. Mentions of your accepted operator/model
 nick highlight the timestamp, sender nick and `›` in magenta. Message bodies
-and rendered Markdown keep their normal appearance.
+and rendered Markdown keep their normal appearance. A sender mentioning only
+its own nick does not trigger highlighting. Exact hues depend on the terminal
+palette; names and markers remain meaningful without color.
 
 Reconnect catches up only on missing room events, using durable IDs and cursors.
 Already-received conversation is not shown or added as new model input again.

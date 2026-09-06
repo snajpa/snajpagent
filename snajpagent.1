@@ -651,10 +651,11 @@ empty row between them; generated prose wraps align below the paragraph text.
 Timestamped IRC chat messages do not receive the synthetic paragraph bullet;
 genuine Markdown list items retain their structural bullets.
 .PP
-Ordinary operator nicks use magenta and model nicks cyan.  A message mentioning
-this viewer's accepted room-local operator or model nick highlights its timestamp
-and sender nick in bold magenta, including when the sender is another model.
-The message body and its Markdown styles are unchanged.  This display rule
+Ordinary chat operator nicks use cyan and model nicks blue.  A message
+mentioning this viewer's accepted room-local operator or model nick highlights
+its timestamp, sender nick and message separator in bold magenta.  A sender
+mentioning only its own nick does not trigger highlighting.  The message body
+and its Markdown styles are unchanged.  This display rule
 applies to live and retained chat; it does not change mention admission or
 turn history into fresh instructions.  Color-disabled output has no escapes.
 .PP
@@ -1352,10 +1353,7 @@ new model input.  Current topic, membership and accepted nicknames still refresh
 An expired cursor reports a retention gap and replays the available newer tail.
 New clients receive one bounded initial history.  Interrupted delivery is
 recovered from the client's session until a model response consumes it.
-.PP
-Ordinary chat agent nicknames are blue; operator nicknames are cyan.  A mention
-of a local operator or model highlights the timestamp, sender and message
-separator in magenta, leaving plain and Markdown message bodies unchanged.
+
 .SH FILES
 .TP
 .I $HOME/.snajpagent/config.ini
