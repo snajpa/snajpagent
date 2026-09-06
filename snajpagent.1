@@ -338,7 +338,9 @@ Complete a slash command when possible.  In chat, complete an
 at the cursor from current room members.  Ambiguous matches expand their common
 prefix; no match leaves the draft unchanged.  Mention completion never queues
 or sends text.  While idle, otherwise insert spaces.
-During a turn, queue the draft for a later FIFO turn.  Empty Tab always switches
+During a turn, queue the draft for a later FIFO turn, except that
+.B /verbose
+applies locally immediately.  Empty Tab always switches
 chat and rollout views, including offline.
 .TP
 .B Ctrl-J
@@ -560,7 +562,9 @@ Show or set reasoning effort.  Setting is idle only.
 .TP
 .BR /verbose " [0..6]"
 Show or set this process's current verbosity immediately, even during active
-work.  It is local feedback, never chat or model input.  The printed resume
+work (Enter or active-turn Tab).  Subsequent output uses the new level;
+already visited detail is not replayed.  It is local feedback, never chat or
+model input.  The printed resume
 command carries this current level, not the original startup flag count.
 .TP
 .B /archive

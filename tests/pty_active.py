@@ -1888,6 +1888,37 @@ def test_preferences_and_verbosity():
     assert turn["data"]["config"]["effort"] == "quantum"
 
 
+def test_active_verbosity():
+    for key in (b"\r", b"\t"):
+        for initial, level in ((0, 3), (3, 0)):
+            before = session_ids()
+            child = Child(["-v"] * initial)
+            try:
+                child.wait_idle_prompt()
+                child.send(b"managed_command_queue\r")
+                child.wait("⠋".encode())
+                session = new_session(before)
+                start = len(child.buf)
+                child.send(f"/verbose {level}".encode() + key)
+                after = child.wait(f"verbosity: {level} (".encode(),
+                                   start=start, timeout=0.25)
+                assert b"managed command queue complete" not in child.buf
+                end = child.wait(b"managed command queue complete", start=after)
+                child.exit_cleanly(end)
+                output = b"fixture managed wait completed"
+                assert (output in child.buf[after:]) == (level == 3)
+                log = events(session)
+                assert one(log, "turn_started")["data"]["text"] == "managed_command_queue"
+                one(log, "turn_completed")
+                result = one(log, "tool_finished")["data"]["result"]
+                assert output.decode() in json.dumps(result)
+                assert not any(e["type"] in (
+                    "steering_added", "future_turn_queued", "response_interrupted"
+                ) for e in log)
+            finally:
+                child.kill()
+
+
 def test_runtime_verbosity_resume():
     for level in (0, 1, 6):
         child = Child(["-vvv"])
@@ -4246,7 +4277,7 @@ def test_editor_during_render_flood():
         assert text == expected
 
 
-def test_editor_during_blocked_engine():
+def test_editor_during_blocked_engine(key=b"\r"):
     child = Child([])
     failure = None
     try:
@@ -4261,7 +4292,12 @@ def test_editor_during_blocked_engine():
         child.drain(0.4)
         assert b"engine-block-start \n" in child.buf.replace(b"\r", b"")
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1
-        child.send(b"/verbose 2\r")
+        child.send(b"/verbose 2" + key)
+        after = child.wait(b"verbosity: 2 (previews)", start=after, timeout=0.25)
+        child.send(b"/verbose 7" + key)
+        after = child.wait(b"/verbose expects one integer from 0 through 6",
+                           start=after, timeout=0.25)
+        child.send(b"/verbose " + key)
         after = child.wait(b"verbosity: 2 (previews)", start=after, timeout=0.25)
         assert b"engine-block-end" not in child.buf
         fcntl.ioctl(child.fd, termios.TIOCSWINSZ,
@@ -4335,6 +4371,8 @@ if __name__ == "__main__":
     test_stalled_output_consumes_input()
     test_editor_during_render_flood()
     test_editor_during_blocked_engine()
+    test_editor_during_blocked_engine(b"\t")
+    test_active_verbosity()
     test_five_ctrl_c_exit()
     test_ctrl_c_sequence_reset()
     test_full_input_queue_keeps_exit_live()

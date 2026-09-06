@@ -91,6 +91,8 @@ cache; `/model NUMBER` selects a row. Add `save` to persist the selection.
 Rollout shows the model's conversation. Add `-v` for compact tool activity,
 `-vv` for previews, or `-vvv` for full retained arguments and results.
 Higher levels are diagnostics. `/verbose N` changes the level immediately.
+During a turn, Enter or Tab applies it locally to subsequent output, without
+steering the model or replaying earlier detail.
 Color and terminal Markdown are automatic; disable them with `--no-color`
 and `--no-markdown`.
 
