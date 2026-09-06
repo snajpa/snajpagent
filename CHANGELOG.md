@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Add `/retry` to continue a failed turn from retained context and tool results,
+  preserving read-only mode and supporting resumed sessions. Turn failures hint
+  the command. Mention highlighting now colors only ordinary text and timestamps,
+  leaving rendered Markdown styles and sender-role colors intact.
+
 - Publish hosted IRC wire traffic and local events from the same fields.
   JOIN precedes operator promotion everywhere; automatic MODE events name the
   server actor and target consistently, so lifecycle colors match clients.

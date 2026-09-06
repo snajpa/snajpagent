@@ -132,6 +132,8 @@ snajpagent --resume --last
 ```
 
 Resume pauses goals and queued turns. Use `/goal resume` or `/next` when ready.
+After a turn fails, use `/retry` to continue it from retained context and tool
+results. Read-only mode is preserved; starting another turn clears the retry.
 
 For scripts, supply a prompt as arguments or through stdin:
 

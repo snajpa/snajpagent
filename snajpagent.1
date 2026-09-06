@@ -599,6 +599,14 @@ to run it after the current turn.  Ordinary steering inside a read-only turn
 cannot lift its restrictions.  Empty queries are rejected;
 .B //ro
 is literal text.  One-shot argument and stdin prompts also support this prefix.
+.TP
+.B /retry
+After a turn fails, continue it from retained conversation and tool results.
+The original prompt is not duplicated and completed tools are not replayed.
+Read-only mode is preserved; current next-turn model settings apply.
+Available in both views and after session resume, until another turn starts.
+Active turns cannot be retried. Queued work and paused goals stay paused.
+Turn failures display a hint to try this command.
 .SS Goals
 An active goal continues across ordinary turns until complete, paused,
 cancelled, or blocked.  Queued operator turns run before the next automatic

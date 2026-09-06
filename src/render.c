@@ -638,7 +638,7 @@ markdown_paint_style(struct snag_render *render)
     if (md->strike) ADD_STYLE(";2");
     if (md->inline_code || md->fence) ADD_STYLE(";33");
     if (md->link_url) ADD_STYLE(";4;34");
-    if (render->markdown_highlight) ADD_STYLE(";1;35");
+    if (render->markdown_highlight && len == 3u) ADD_STYLE(";1;35");
 #undef ADD_STYLE
     sequence[len++] = 'm';
     memcpy(render->public_style, sequence, len);
@@ -2737,7 +2737,7 @@ render_irc_event_now(struct snag_render *render,
         strftime(when, sizeof(when), "%H:%M:%S", &tm) == 0)
         memcpy(when, "--:--:--", 9u);
     colored = render->color_stderr;
-    nick_color = event->op || highlight ? COLOR_OPERATOR : COLOR_AGENT;
+    nick_color = event->op ? COLOR_OPERATOR : COLOR_AGENT;
     if (highlight)
         body_color = COLOR_OPERATOR;
     if (output_begin(render, true) < 0)

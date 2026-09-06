@@ -102,6 +102,14 @@ to new input remains durably failed, but does not pause the armed future-turn
 queue; the next queued input is sent automatically. No whole-turn replay or
 provider switching is involved.
 
+After a turn fails, `/retry` starts one explicit continuation from retained
+conversation and tool results, without resubmitting the original prompt or
+replaying completed tools. It preserves read-only mode, uses current next-turn
+settings, and works after session resume. Starting another turn clears retry
+eligibility; active turns cannot be retried. Failures hint `/retry` in both
+views. Queued turns and paused goals stay paused. This uses ordinary durable
+turn events; retry eligibility is derived while replaying the session.
+
 A pre-output `cyber_policy` rejection can receive three model-facing
 clarifications per turn through the existing `response_output_correction`
 transition. Its independent counter is replayed from those exact correction

@@ -393,8 +393,11 @@ Locality, nick changes and history replay do not change a sender's palette.
 Attributes are always reset at field boundaries so user/model text cannot
 inherit them.
 Messages and notices mentioning the local operator's or model's currently
-accepted nick for their room highlight the whole entry in bold magenta,
-including wrapped lines and Markdown text. Matching uses IRC case folding and nick boundaries,
+accepted nick for their room highlight the timestamp and ordinary text in bold
+magenta, including wrapped lines. Rendered Markdown styles (bold, emphasis,
+headings, quotes, code, links and table headers) keep their normal appearance.
+Sender nicks keep their role color too.
+Matching uses IRC case folding and nick boundaries,
 not substrings or another server's aliases. The same display rule applies to
 retained chat; it does not change model steering or promote history or operator
 mentions into model input. Color disabled means no highlight escapes.

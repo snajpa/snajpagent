@@ -1306,6 +1306,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                         sizeof(session->active_turn_effort), effort))
             goto invalid;
         session->active_turn = true;
+        session->last_turn_failed = false;
         session->max_parallel_commands = (uint32_t)max_parallel;
         session->parallel_tool_calls = json_is_true(json_object_get(config, "parallel_tool_calls"));
         session->active_read_only = json_is_true(json_object_get(data, "read_only"));
@@ -2054,6 +2055,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !string_in(class_name, classes, sizeof(classes) / sizeof(classes[0])) ||
             !message || strlen(message) > 8192u)
             goto invalid;
+        session->last_turn_failed = true;
+        session->retry_read_only = session->active_read_only;
         session->active_turn = false;
         session->active_read_only = false;
         session->active_queued = false;

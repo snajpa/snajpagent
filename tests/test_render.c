@@ -1495,6 +1495,9 @@ test_local_mention_highlight(void)
         {"@alice topic", "alice", "#room", SNAG_IRC_TOPIC, false, false},
         {"unregistered nick", "", "#room", SNAG_IRC_MESSAGE, false, false},
         {"@local-other also addressed", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
+        {"# @alice heading", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
+        {"> @alice quote", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
+        {"@alice *italic* ~~strike~~ [link](https://example.test)", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
     };
     for (unsigned int flags = 0u; flags < 8u; ++flags) {
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
@@ -1544,16 +1547,29 @@ test_local_mention_highlight(void)
             close(saved);
             close(fds[0]);
             assert((strstr(output, "\033[1;35m[1] ") != NULL) == (color && cases[i].highlight));
+            if (color && !cases[i].op && cases[i].kind == SNAG_IRC_MESSAGE)
+                assert(strstr(output, "\033[1;36mpeer "));
             assert(strstr(output + used, "ordinary") && strstr(output + used, "followup"));
             assert(!strstr(output + used, "35m"));
             if (!color)
                 assert(!strchr(output, '\033'));
             if (color && i == 0u) {
-                assert(strstr(output, "\033[0;1;1;35m"));
-                assert(strstr(output, "\033[0;33;1;35m"));
+                assert(strstr(output, "\033[0;1m"));
+                assert(strstr(output, "\033[0;33m"));
+                assert(!strstr(output, ";1;1;35m"));
+                assert(!strstr(output, ";33;1;35m"));
                 assert(strstr(output, "code\033[0m"));
                 assert(strstr(output, "\033[0;1;35m"));
                 assert(strstr(output, "tail\033[0m"));
+            }
+            if (color && i == 11u)
+                assert(strstr(output, "\033[0;1;36m"));
+            if (color && i == 12u)
+                assert(strstr(output, "\033[0;34m"));
+            if (color && i == 13u) {
+                assert(strstr(output, "\033[0;3m"));
+                assert(strstr(output, "\033[0;2m"));
+                assert(strstr(output, "\033[0;4;34m"));
             }
         }
     }

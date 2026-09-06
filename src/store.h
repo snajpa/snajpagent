@@ -152,6 +152,8 @@ struct snag_session {
     size_t pending_steering_count;
     size_t pending_queue_count;
     bool active_turn;
+    bool last_turn_failed;
+    bool retry_read_only;
     bool active_read_only;
     bool active_queued;
     bool archived;

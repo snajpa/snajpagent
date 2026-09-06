@@ -1946,12 +1946,15 @@ def validate_irc_styles(terminal, own):
         for nick in nicks
     ]
     for nick, color, role in expected:
-        # Fixture replies contain the sender's nick, so they are local-model
-        # mentions in that model's own viewer.
-        if nick == own:
-            color, role = 35, "local-model mention magenta"
         pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} ({nick}) "
         assert foreground_at(styled, pattern) == color, f"{nick} missing {role}:\n{styled}"
+        if not nick.startswith("@"):
+            # Self-mentions highlight timestamps, not sender nicks or the
+            # fixture's explicitly bold body text.
+            pattern = rf"(?m)^(\d{{2}}:\d{{2}}:\d{{2}}) {nick} "
+            assert foreground_at(styled, pattern) == (35 if nick == own else None)
+            pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} › ({nick}) heard"
+            assert foreground_at(styled, pattern) is None
 
 
 def run_destination_case(binary, root, provider, environment):
@@ -2995,11 +2998,121 @@ def run_provider_clarification_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_manual_retry_cases(binary, root, provider, environment):
+    for mode in ("queue", "read-only-resume", "chat"):
+        case = root / ("manual-" + mode)
+        workspace = case / "work"
+        workspace.mkdir(mode=0o700, parents=True)
+        (workspace / "input.txt").write_text("retained tool result\n")
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        requests = []
+        arrived, release = threading.Event(), threading.Event()
+        original = "manual retry original " + mode
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            attempt = len(requests)
+            if attempt == 1:
+                arrived.set()
+                assert release.wait(10.0), "active retry command was not handled"
+                if mode == "read-only-resume":
+                    body = provider.function_body(sequence, "retry-read", "read_file", {
+                        "path": "input.txt", "start_line": 1, "end_line": 1})
+                else:
+                    body = provider.function_body(sequence, "retry-read", "exec_command", {
+                        "command": "cat input.txt", "workdir": str(workspace),
+                        "stdin": None, "pty": False, "timeout_ms": None,
+                        "yield_ms": 1000, "max_output_tokens": None})
+            elif attempt in (2, 3):
+                body = provider.event("response.failed", {"type": "response.failed",
+                    "response": {"error": {"code": "fixture_failure",
+                        "message": f"manual retry failure {attempt}"}}})
+            else:
+                body = provider.response_body(sequence, "manual retry complete")
+            encoded = body.encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(encoded)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(encoded)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "term", binary, workspace, case / "state", config,
+            140, 28, environment=environment)
+        try:
+            terminal.wait("host-model/medium ›")
+            terminal.submit("/retry")
+            terminal.wait("no failed turn to retry")
+            assert not requests
+            terminal.submit(("/ro " if mode == "read-only-resume" else "") + original)
+            assert arrived.wait(5.0)
+            terminal.submit("/retry")
+            terminal.wait("that command is unavailable while a turn is active")
+            if mode == "queue":
+                terminal.submit("/queue still paused")
+                terminal.wait("next › still paused")
+            release.set()
+            terminal.wait("manual retry failure 2")
+            terminal.wait("turn failed; try /retry to continue")
+            wait_irc_idle([terminal])
+            assert len(requests) == 2
+            if mode == "read-only-resume":
+                log_path, _ = read_events(terminal.dotdir)
+                terminal.exit()
+                terminal.close()
+                terminal = TmuxTerminal(case / "resume", binary, workspace, case / "state", config,
+                    140, 28, args=["--resume", log_path.parent.name], environment=environment)
+                terminal.wait("host-model/medium ›")
+            if mode == "chat":
+                terminal.submit("/chat")
+                terminal.wait("chat is offline")
+            terminal.submit("/retry")
+            terminal.wait("manual retry failure 3")
+            wait_irc_idle([terminal])
+            terminal.submit("/retry")
+            if mode == "chat":
+                terminal.submit("/rollout")
+            terminal.wait("manual retry complete")
+            wait_irc_idle([terminal])
+            _, events = read_events(terminal.dotdir)
+            turns = event_list(events, "turn_started")
+            assert len(turns) == 3 and len(requests) == 4
+            assert len(event_list(events, "turn_failed")) == 2
+            assert len(event_list(events, "tool_started")) == 1, "retry replayed completed tool"
+            assert all(e["data"]["read_only"] == (mode == "read-only-resume") for e in turns)
+            for request in requests[2:]:
+                assert sum(item.get("role") == "user" and item.get("content") == original
+                           for item in request["input"]) == 1, "retry duplicated the original prompt"
+                assert "retained tool result" in json.dumps(request), "retry lost tool context"
+                assert "still paused" not in json.dumps(request), "retry consumed paused queue"
+                names = {tool.get("name") for tool in request["tools"]}
+                assert ("exec_command" not in names) == (mode == "read-only-resume")
+            if mode == "queue":
+                assert len(event_list(events, "future_turn_queued")) == 1
+                assert all(e["data"]["input_kind"] == "direct" for e in turns)
+            terminal.submit("/retry")
+            wait_irc_idle([terminal])
+            assert len(requests) == 4, "retry after success started stale work"
+            terminal.exit()
+            replay = subprocess.run([binary, "--dotdir", str(terminal.dotdir), "-l"],
+                                    capture_output=True, text=True, env={**os.environ, **environment})
+            assert replay.returncode == 0, replay.stderr
+            print(f"tmux_terminal manual retry {mode}: ok", flush=True)
+        finally:
+            release.set()
+            terminal.close()
+            provider.runtime_handler = None
+
+
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
     try:
+        run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)
         run_runtime_networking_cases(binary, root, provider, environment)
@@ -3216,8 +3329,11 @@ def run_irc_chat_case(binary, root):
                 for name, terminal in terminals.items():
                     terminal.wait(ending)
                     styled = terminal.capture_styled()
-                    # Foreground must survive Markdown and soft wrap through
-                    # the final text, only in the addressed local identity's UI.
+                    # Highlight ordinary prose through wraps, but preserve
+                    # sender-role and explicit Markdown styles in every UI.
+                    assert foreground_at(styled, r"(highlight start)") != 35, styled
+                    assert foreground_at(styled, r"(code)") == 33, styled
+                    assert foreground_at(styled, r"\d{2}:\d{2}:\d{2} (highlightpeer)") == 36, styled
                     assert (foreground_at(styled, f"({ending})") == 35) == (
                         name == viewer), styled
                 wait_irc_idle(ordered)

@@ -194,6 +194,7 @@ static const struct snag_term_command commands[] = {
     {"/verbose [0..6]", "show or set this process's verbosity"},
     {"/queue [TEXT|ACTION]", "list/add/edit/delete/clear/pop queued turns (/q alias)"},
     {"/next", "run the oldest paused turn"},
+    {"/retry", "continue the last failed turn from retained context"},
     {"/archive", "archive idle session and exit"},
     {"/compact", "compact the idle session context"},
     {"/delete", "delete idle session after confirmation"},
@@ -400,6 +401,8 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
         snag_errorf(error, error_size, "durable event output failed");
         return -1;
     }
+    if (strcmp(type, "turn_failed") == 0)
+        return app_warning(app, "turn failed; try /retry to continue");
     return 0;
 }
 #define commit_event snag_app_commit_event
@@ -4163,6 +4166,7 @@ interactive_loop(struct app_state *app, const char *initial)
             bool single_line = strchr(prompt, '\n') == NULL;
             bool read_only;
             const char *query = snag_prompt_parse(prompt, &read_only);
+            bool retry = single_line && strcmp(prompt, "/retry") == 0;
             bool handled = false;
             int local_rc = 0;
             local_rc = handle_destination_command(app, prompt, &handled);
@@ -4206,9 +4210,11 @@ interactive_loop(struct app_state *app, const char *initial)
                         return chain_rc;
                     }
                 }
-            } else if (!read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
+            } else if (retry && !app->session.last_turn_failed) {
+                (void)app_error(app, "no failed turn to retry");
+            } else if (!retry && !read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
                 (void)app_error(app, "unknown slash command");
-            } else if (!read_only && input_view == SNAG_RENDER_CHAT) {
+            } else if (!retry && !read_only && input_view == SNAG_RENDER_CHAT) {
                 const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
                                      prompt + 1 : prompt;
                 if (send_operator_routed(app, prompt, actual, SNAG_IRC_MESSAGE) < 0) {
@@ -4219,6 +4225,11 @@ interactive_loop(struct app_state *app, const char *initial)
                 const char *actual = query;
                 int turn_rc;
 
+                if (retry) {
+                    actual = "Retry the last failed turn. Continue from the retained "
+                             "conversation and tool results; do not repeat completed actions.";
+                    read_only = app->session.retry_read_only;
+                }
                 if (read_only && !*actual) {
                     (void)app_error(app, "usage: /ro QUERY (query must not be empty)");
                     free(owned);
