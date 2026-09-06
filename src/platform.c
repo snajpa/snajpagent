@@ -9,6 +9,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <aclapi.h>
 #include <wincrypt.h>
 #include <io.h>
 #include <uniwidth.h>
@@ -32,6 +33,8 @@ path_error(DWORD error)
         errno = EILSEQ; break;
     case ERROR_DIRECTORY:
         errno = ENOTDIR; break;
+    case ERROR_NOT_SUPPORTED: case ERROR_INVALID_FUNCTION:
+        errno = ENOTSUP; break;
     case ERROR_CANT_RESOLVE_FILENAME:
         errno = ELOOP; break;
     case ERROR_INVALID_NAME: case ERROR_INVALID_PARAMETER:
@@ -40,6 +43,144 @@ path_error(DWORD error)
         errno = EIO; break;
     }
     return -1;
+}
+
+static TOKEN_USER *
+token_user(HANDLE token)
+{
+    DWORD size = 0;
+    TOKEN_USER *user;
+
+    (void)GetTokenInformation(token, TokenUser, NULL, 0, &size);
+    if (!size) {
+        path_error(GetLastError());
+        return NULL;
+    }
+    user = malloc(size);
+    if (user && !GetTokenInformation(token, TokenUser, user, size, &size)) {
+        DWORD error = GetLastError();
+        free(user);
+        path_error(error);
+        return NULL;
+    }
+    return user;
+}
+
+static bool
+private_dacl(PACL dacl, PSID owner)
+{
+    SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
+    DWORD system_sid[SECURITY_MAX_SID_SIZE / sizeof(DWORD) + 1u];
+    DWORD admin_sid[SECURITY_MAX_SID_SIZE / sizeof(DWORD) + 1u];
+    GENERIC_MAPPING mapping = {
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS
+    };
+
+    if (!dacl || !IsValidAcl(dacl) || !owner || !IsValidSid(owner) ||
+        !InitializeSid(system_sid, &authority, 1u) ||
+        !InitializeSid(admin_sid, &authority, 2u))
+        return false;
+    *GetSidSubAuthority(system_sid, 0u) = SECURITY_LOCAL_SYSTEM_RID;
+    *GetSidSubAuthority(admin_sid, 0u) = SECURITY_BUILTIN_DOMAIN_RID;
+    *GetSidSubAuthority(admin_sid, 1u) = DOMAIN_ALIAS_RID_ADMINS;
+    for (DWORD i = 0u; i < dacl->AceCount; ++i) {
+        ACE_HEADER *header;
+        ACCESS_ALLOWED_ACE *ace;
+        PSID sid;
+        DWORD mask;
+        size_t offset = offsetof(ACCESS_ALLOWED_ACE, SidStart);
+
+        if (!GetAce(dacl, i, (void **)&header))
+            return false;
+        if ((header->AceFlags & INHERIT_ONLY_ACE) ||
+            header->AceType == ACCESS_DENIED_ACE_TYPE)
+            continue;
+        if (header->AceType != ACCESS_ALLOWED_ACE_TYPE ||
+            header->AceSize < offset + 8u)
+            return false;
+        ace = (ACCESS_ALLOWED_ACE *)header;
+        mask = ace->Mask;
+        MapGenericMask(&mask, &mapping);
+        if (!(mask & ~(READ_CONTROL | SYNCHRONIZE | FILE_READ_ATTRIBUTES)))
+            continue;
+        sid = &ace->SidStart;
+        if (GetSidLengthRequired(*GetSidSubAuthorityCount(sid)) > header->AceSize - offset ||
+            !IsValidSid(sid))
+            return false;
+        if (!EqualSid(sid, owner) && !EqualSid(sid, system_sid) && !EqualSid(sid, admin_sid))
+            return false;
+    }
+    return true;
+}
+
+int
+snag_fd_privacy(int fd, struct snag_file_privacy *out)
+{
+    struct snag_file_privacy privacy = {0};
+    HANDLE process = NULL, thread = NULL;
+    TOKEN_USER *real = NULL, *effective = NULL;
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    PSID owner = NULL;
+    PACL dacl = NULL;
+    intptr_t handle;
+    DWORD code, close_error = 0;
+    int rc = -1, error;
+
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+    handle = _get_osfhandle(fd);
+    if (handle == -1) {
+        errno = EBADF;
+        return -1;
+    }
+    code = GetSecurityInfo((HANDLE)handle, SE_FILE_OBJECT,
+                           OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                           &owner, NULL, &dacl, NULL, &descriptor);
+    if (code != ERROR_SUCCESS) {
+        path_error(code);
+        goto out;
+    }
+    if (!owner || !IsValidSid(owner)) {
+        errno = EACCES;
+        goto out;
+    }
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &process)) {
+        path_error(GetLastError());
+        goto out;
+    }
+    if (!(real = token_user(process)))
+        goto out;
+    privacy.real_owner = EqualSid(owner, real->User.Sid) != 0;
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &thread)) {
+        if (!(effective = token_user(thread)))
+            goto out;
+        privacy.effective_owner = EqualSid(owner, effective->User.Sid) != 0;
+    } else if (GetLastError() == ERROR_NO_TOKEN) {
+        privacy.effective_owner = privacy.real_owner;
+    } else {
+        path_error(GetLastError());
+        goto out;
+    }
+    privacy.private_access = private_dacl(dacl, owner);
+    rc = 0;
+out:
+    error = errno;
+    if (thread && !CloseHandle(thread))
+        close_error = GetLastError();
+    if (process && !CloseHandle(process) && !close_error)
+        close_error = GetLastError();
+    free(real);
+    free(effective);
+    if (descriptor)
+        LocalFree(descriptor);
+    errno = error;
+    if (rc == 0 && close_error)
+        return path_error(close_error);
+    if (rc == 0)
+        *out = privacy;
+    return rc;
 }
 
 char *
@@ -305,6 +446,24 @@ snag_sync_dir(int fd)
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
+#include <sys/stat.h>
+
+int
+snag_fd_privacy(int fd, struct snag_file_privacy *out)
+{
+    struct stat st;
+
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fstat(fd, &st) < 0)
+        return -1;
+    out->real_owner = st.st_uid == getuid();
+    out->effective_owner = st.st_uid == geteuid();
+    out->private_access = !(st.st_mode & 077u);
+    return 0;
+}
 
 char *
 snag_realpath(const char *path)

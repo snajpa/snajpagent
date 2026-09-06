@@ -66,6 +66,10 @@ uint64_t snag_monotonic_ms(void);
 int snag_write_full(int fd, const void *data, size_t len);
 int snag_sync_file(int fd);
 int snag_sync_dir(int fd);
+struct snag_file_privacy {
+    bool real_owner, effective_owner, private_access;
+};
+int snag_fd_privacy(int fd, struct snag_file_privacy *out);
 char *snag_strdup_checked(const char *s, size_t max);
 char *snag_path_join(const char *left, const char *right);
 size_t snag_path_root_len(const char *path);

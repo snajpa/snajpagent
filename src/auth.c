@@ -80,7 +80,9 @@ static int
 private_fd(int fd, bool directory)
 {
     struct stat st;
-    if (fstat(fd, &st) < 0 || st.st_uid != geteuid() || (st.st_mode & 077u) ||
+    struct snag_file_privacy privacy;
+    if (fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0 ||
+        !privacy.effective_owner || !privacy.private_access ||
         (directory ? !S_ISDIR(st.st_mode) :
                      (!S_ISREG(st.st_mode) || st.st_nlink != 1u))) {
         errno = EACCES;

@@ -11,10 +11,97 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <aclapi.h>
+#include <fcntl.h>
 #include <io.h>
 #else
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#endif
+
+#ifdef _WIN32
+static void
+test_windows_privacy(void)
+{
+    HANDLE token, handle;
+    TOKEN_USER *user;
+    DWORD size = 0;
+    wchar_t temp[MAX_PATH], path[MAX_PATH], directory[MAX_PATH + 5u];
+    DWORD world[SECURITY_MAX_SID_SIZE / sizeof(DWORD) + 1u];
+    SID_IDENTIFIER_AUTHORITY authority = SECURITY_WORLD_SID_AUTHORITY;
+    EXPLICIT_ACCESSW entries[2] = {0};
+    struct snag_file_privacy privacy;
+    const DWORD rights[] = {0u, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        READ_CONTROL | SYNCHRONIZE | FILE_READ_ATTRIBUTES, FILE_GENERIC_READ};
+    const bool expected[] = {true, false, false, true, true};
+    DWORD count = GetTempPathW(MAX_PATH, temp);
+    int fd;
+
+    assert(count && count < MAX_PATH);
+    assert(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token));
+    assert(!GetTokenInformation(token, TokenUser, NULL, 0, &size) && size);
+    user = malloc(size);
+    assert(user && GetTokenInformation(token, TokenUser, user, size, &size));
+    assert(CloseHandle(token));
+    assert(InitializeSid(world, &authority, 1u));
+    *GetSidSubAuthority(world, 0u) = SECURITY_WORLD_RID;
+    entries[0].grfAccessPermissions = FILE_ALL_ACCESS;
+    entries[0].grfAccessMode = SET_ACCESS;
+    entries[0].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entries[0].Trustee.ptstrName = (LPWSTR)user->User.Sid;
+    entries[1].grfAccessMode = SET_ACCESS;
+    entries[1].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entries[1].Trustee.ptstrName = (LPWSTR)world;
+    assert(GetTempFileNameW(temp, L"snp", 0, path));
+    handle = CreateFileW(path, GENERIC_READ | GENERIC_WRITE | WRITE_DAC | WRITE_OWNER,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    assert(handle != INVALID_HANDLE_VALUE);
+    fd = _open_osfhandle((intptr_t)handle, _O_BINARY | _O_RDWR);
+    assert(fd >= 0);
+    for (size_t i = 0; i < sizeof(rights) / sizeof(rights[0]); ++i) {
+        PACL acl = NULL;
+        entries[1].grfAccessPermissions = rights[i];
+        entries[1].grfInheritance = i == 4u ?
+            SUB_CONTAINERS_AND_OBJECTS_INHERIT | INHERIT_ONLY : NO_INHERITANCE;
+        assert(SetEntriesInAclW(rights[i] ? 2u : 1u, entries, NULL, &acl) == ERROR_SUCCESS);
+        assert(SetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION |
+                               DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                               user->User.Sid, NULL, acl, NULL) == ERROR_SUCCESS);
+        LocalFree(acl);
+        assert(snag_fd_privacy(fd, &privacy) == 0);
+        assert(privacy.real_owner && privacy.effective_owner);
+        assert(privacy.private_access == expected[i]);
+    }
+    assert(SetSecurityInfo(handle, SE_FILE_OBJECT,
+                           DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                           NULL, NULL, NULL, NULL) == ERROR_SUCCESS);
+    assert(SetFileAttributesW(path, FILE_ATTRIBUTE_READONLY));
+    assert(snag_fd_privacy(fd, &privacy) == 0 && !privacy.private_access);
+    assert(SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL));
+    assert(_close(fd) == 0);
+    assert(DeleteFileW(path));
+
+    assert(swprintf(directory, sizeof(directory) / sizeof(directory[0]), L"%ls-dir", path) > 0);
+    assert(CreateDirectoryW(directory, NULL));
+    handle = CreateFileW(directory, READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    assert(handle != INVALID_HANDLE_VALUE);
+    PACL acl = NULL;
+    assert(SetEntriesInAclW(1u, entries, NULL, &acl) == ERROR_SUCCESS);
+    assert(SetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION |
+                           DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                           user->User.Sid, NULL, acl, NULL) == ERROR_SUCCESS);
+    LocalFree(acl);
+    fd = _open_osfhandle((intptr_t)handle, _O_BINARY | _O_RDONLY);
+    assert(fd >= 0);
+    assert(snag_fd_privacy(fd, &privacy) == 0 && privacy.private_access && privacy.effective_owner);
+    assert(_close(fd) == 0);
+    assert(RemoveDirectoryW(directory));
+    free(user);
+}
 #endif
 
 static void
@@ -97,6 +184,15 @@ test_platform(void)
     assert(snag_write_full(fd, NULL, 0u) == 0);
     assert(snag_write_full(fd, "abc", 3u) == 0);
     assert(snag_sync_file(fd) == 0);
+    struct snag_file_privacy privacy;
+#ifndef _WIN32
+    assert(snag_fd_privacy(fd, &privacy) == 0);
+    assert(privacy.effective_owner && privacy.private_access);
+    assert(privacy.real_owner == (getuid() == geteuid()));
+    assert(fchmod(fd, 0644) == 0);
+    assert(snag_fd_privacy(fd, &privacy) == 0 && !privacy.private_access);
+    assert(fchmod(fd, 0600) == 0);
+#endif
     rewind(file);
     assert(fread(content, 1u, 3u, file) == 3u);
     assert(strcmp(content, "abc") == 0);
@@ -109,6 +205,10 @@ test_platform(void)
     assert(snag_sync_file(-1) == -1 && errno == EBADF);
     errno = 0;
     assert(snag_sync_dir(-1) == -1 && errno == EBADF);
+    errno = 0;
+    assert(snag_fd_privacy(-1, &privacy) == -1 && errno == EBADF);
+    errno = 0;
+    assert(snag_fd_privacy(-1, NULL) == -1 && errno == EINVAL);
 }
 
 static void
@@ -242,6 +342,9 @@ main(void)
     test_path_join();
     test_platform();
     test_realpath();
+#ifdef _WIN32
+    test_windows_privacy();
+#endif
     puts("test_base: ok");
     return 0;
 }
