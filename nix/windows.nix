@@ -44,7 +44,8 @@ let
       buildInputs = dependencies ++ [ threads ];
       strictDeps = true;
       enableParallelBuilding = true;
-      env.CFLAGS = "-Os -g -D_WIN32_WINNT=0x0601 -DWINVER=0x0601";
+      env.CFLAGS = "-Os -g -D_WIN32_WINNT=0x0601 -DWINVER=0x0601"
+        + pkgs.lib.optionalString windows.stdenv.cc.isClang " -pthread";
       configureFlags = [ "--disable-shared" "--enable-static"
                          "--disable-dependency-tracking" ] ++ flags;
     } // pkgs.lib.optionalAttrs windows.stdenv.cc.isClang {

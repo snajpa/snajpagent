@@ -58,7 +58,8 @@ in windows.stdenv.mkDerivation {
   nativeBuildInputs = [ pkgs.autoconf pkgs.automake pkgs.python3 pkgs.perl
                         pkgs.gettext windows.buildPackages.pkg-config ];
   buildInputs = [ threads unistring ];
-  env.CFLAGS = "-Os -g -D_WIN32_WINNT=0x0601 -DWINVER=0x0601";
+  env.CFLAGS = "-Os -g -D_WIN32_WINNT=0x0601 -DWINVER=0x0601"
+    + pkgs.lib.optionalString windows.stdenv.cc.isClang " -pthread";
   preConfigure = ''
     cp ${configure} configure.ac
     cp ${makefile} Makefile.am
