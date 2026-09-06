@@ -3183,8 +3183,10 @@ def run_incremental_history_case(binary, root):
                 if name == "host" else ["-c", endpoint, "-n", "clientbot", "-o", "clientop"])
         if session:
             args += ["--resume", session]
+        state = terminals[name].dotdir if session else case / (
+            "state" if generation[name] == 1 else f"state{generation[name]}")
         t = TmuxTerminal(case / f"t{generation[name]}", binary, case / "work",
-                         case / "state", configs[name], 140, 28, args=args, environment=environment)
+                         state, configs[name], 140, 28, args=args, environment=environment)
         terminals[name] = t
         t.wait(("hostop" if name == "host" else "clientop") + f"@{MACHINE_HOSTNAME} :")
         return t
@@ -3301,7 +3303,10 @@ def run_incremental_history_case(binary, root):
         assert fresh["stream"] != first["stream"]
         observed("new stream is not skipped")
         wait_irc_idle([host, client])
-        client.exit(); host.exit()
+        client.exit()
+        wait_irc_quits(host, ("clientbot", "clientop"))
+        wait_irc_idle([host])
+        host.exit()
         print("tmux_terminal incremental reconnect history: ok", flush=True)
     finally:
         release.set()
