@@ -26,6 +26,7 @@
 
 # Release and evidence artifacts
 /build/
+/.assets-cache/
 
 # Python cache
 __pycache__/

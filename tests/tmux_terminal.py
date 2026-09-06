@@ -2053,7 +2053,8 @@ def run_listener_collision_case(binary, root, provider, environment):
                                     "#{pane_dead_status}").strip() != "0"
                 screen = terminal.capture(join_wrapped=True)
                 assert f"cannot listen on IRC endpoint {endpoint}:" in screen, screen
-                assert "Address already in use" in screen, screen
+                assert ("Address already in use" in screen or
+                        "Address in use" in screen), screen
         terminals[0].submit("/names")
         terminals[0].wait(f"members[{endpoint}]:", join_wrapped=True)
         terminals[0].exit()

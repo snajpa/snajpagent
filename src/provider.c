@@ -25,6 +25,33 @@
 #include <time.h>
 #include <unistd.h>
 
+static CURLcode
+provider_trust(CURL *curl)
+{
+    const char *file = getenv("SSL_CERT_FILE");
+    CURLcode rc;
+
+    if (file && *file) {
+        rc = curl_easy_setopt(curl, CURLOPT_CAINFO, file);
+        return rc != CURLE_OK ? rc :
+            curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO, file);
+    }
+#ifdef SNAJPAGENT_CA_BUNDLE
+    static const unsigned char certificates[] = {
+#include SNAJPAGENT_CA_BUNDLE
+        0
+    };
+    struct curl_blob bundle = {
+        (void *)certificates, sizeof(certificates), CURL_BLOB_NOCOPY
+    };
+    rc = curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &bundle);
+    return rc != CURLE_OK ? rc :
+        curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO_BLOB, &bundle);
+#else
+    return CURLE_OK;
+#endif
+}
+
 struct provider_ctx {
     struct snag_sse_parser sse;
     struct snag_responses_stream stream;
@@ -428,6 +455,7 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
     (void)snprintf(header, sizeof(header), "Content-Type: %s", type);
     headers = curl_slist_append(NULL, header);
     if (!curl || !multi || !headers ||
+        provider_trust(curl) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
@@ -1455,7 +1483,8 @@ provider_request_setup(struct provider_ctx *ctx,
                    "provider request headers could not be rendered");
         return -1;
     }
-    if (curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
+    if (provider_trust(ctx->curl) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK ||
         (has_body ?

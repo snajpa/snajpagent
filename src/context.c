@@ -1427,7 +1427,8 @@ create_request_object(struct context_builder *builder)
 static json_t *
 count_request_object(const json_t *create)
 {
-    json_t *request = json_copy(create);
+    /* Jansson 2.14's non-mutating shallow copy takes a non-const pointer. */
+    json_t *request = json_copy((json_t *)create);
 
     /* Only the envelope differs; input, reasoning and tools stay immutable. */
     json_object_del(request, "stream");

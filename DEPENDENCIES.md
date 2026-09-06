@@ -3,8 +3,8 @@
 # Dependency and vendoring inventory
 
 This repository intentionally does **not** vendor third-party implementation
-source. The first release is limited to first-party source plus platform/POSIX
-interfaces, system libcurl, and system Jansson. That policy is machine-checked
+source. Ordinary native builds use first-party source plus platform/POSIX
+interfaces, system libcurl, and system Jansson. That source policy is machine-checked
 by `make depscheck`; the built executable closure is captured and validated by
 `make depclosurecheck`, release evidence bundles are created/checked by
 `make evidencebundle` and `make evidencecheck`, the evidence validators are
@@ -25,6 +25,40 @@ The linked/runtime dependencies for a normal provider-capable build are:
 | libcurl backend closure | not vendored | TLS, resolver, compression, HTTP, and other backends selected by the system libcurl build |
 | tmux | not vendored; test-only | optional rendered-screen regression in `make check`; required by `make tmuxcheck` and `make terminallivecheck` |
 
+## Self-contained Linux x86-64 build
+
+`make prod-linux-x86_64` explicitly uses the pinned nixpkgs revision in
+`nix/portable.nix`. Its independent Nix build does not replace the ordinary
+host binary or objects. The executable statically links musl, Jansson and
+libcurl with Mbed TLS; DNS (c-ares), IDN (libidn2/libunistring), HTTP/2 and
+gzip/Brotli/Zstd support remain available. No third-party shared libraries,
+Nix installation or certificate sidecar are required on the destination.
+This is distinct from the smaller native executable, which uses system libraries.
+
+The TLS CA input is nixpkgs' pinned Mozilla/NSS standard-PEM export. It is
+embedded at build time, never fetched on startup. `SSL_CERT_FILE` explicitly
+replaces it for provider and login/refresh connections, including HTTPS proxies.
+Certificate-chain and hostname verification remain enabled. The standard-PEM
+export is used because Mbed TLS does not read OpenSSL's auxiliary trusted-PEM
+format; do not blindly convert auxiliary records into additional trusted roots.
+Future releases must update the pinned trust/dependency inputs deliberately.
+
+The static artifact's linkage is inspected directly with `file` and `readelf`:
+it must have no ELF interpreter or dynamic dependencies. Static PIE retains
+address randomization; its self-relocation dynamic section is not a shared
+library dependency. The existing
+`make depclosurecheck` is for the ordinary system-library build, not proof of
+static TLS or application behavior. Functional tests and real execution are
+still required; an empty dynamic dependency list is not feature qualification.
+
+Select Mbed TLS's GPL-2.0-or-later license option with this GPL-2.0-only
+application. libidn2 and libunistring also offer GPLv2-compatible options;
+libunistring 1.4.1's upstream README explicitly documents its dual license even
+though nixpkgs metadata lists LGPLv3 only. Preserve upstream notices, the
+Mozilla certificate-data license, and corresponding source/build instructions
+when redistributing a linked executable. Pinned dependencies live in the Nix
+store; external non-Nix media/SDK inputs belong in the ignored `.assets-cache/`.
+
 `src/snag_jansson.h` is the only Jansson include surface in first-party C code. It
 prefers a system `<jansson.h>` when one is available. Some minimal qualification
 roots carry `libjansson.so.4` without the development header; for those roots the
@@ -37,7 +71,7 @@ header.
 `src/provider.c` is the only first-party file allowed to include libcurl headers.
 All other code reaches HTTP transport through the provider interface.
 
-A release build still must archive the concrete executable dependency closure for each shipped platform:
+A system-library release build still must archive the concrete executable dependency closure for each shipped platform:
 the selected Jansson library, libcurl library, and libcurl's enabled TLS,
 resolver, compression, HTTP, and other runtime backends. `make depclosurecheck`
 uses the platform loader tools (`ldd` on Linux, `otool -L` on macOS) to reject

@@ -57,7 +57,7 @@ typedef struct json_error_t {
 } json_error_t;
 
 json_t *json_pack(const char *fmt, ...);
-json_t *json_copy(const json_t *value);
+json_t *json_copy(json_t *value);
 int json_array_extend(json_t *array, json_t *other);
 
 json_t *json_object(void);

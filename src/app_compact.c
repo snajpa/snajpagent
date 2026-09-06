@@ -216,7 +216,7 @@ out:
 static json_t *
 responses_compact_count_request(const json_t *create_request)
 {
-    json_t *request = json_copy(create_request);
+    json_t *request = json_copy((json_t *)create_request);
 
     if (!request)
         return NULL;

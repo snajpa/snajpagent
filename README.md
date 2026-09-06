@@ -35,6 +35,15 @@ unwind information retained. Debug defaults to `-Og`; explicit compiler flags
 can select another optimization level. Neither profile enables host-specific
 instruction sets or makes LTO tooling mandatory.
 
+For a self-contained Linux x86-64 executable, use `make prod-linux-x86_64`.
+This explicit target needs Nix on the build host and may download/build its
+pinned dependencies. Copy `build/matrix/linux-x86_64/bin/snajpagent` to the
+destination; it needs no third-party libraries or certificate sidecar there.
+Matching optional symbols are under `build/matrix/linux-x86_64/bin/.debug/`.
+The first implementation targets modern Linux; older-kernel qualification is
+separate. See [dependencies](DEPENDENCIES.md) for embedded trust, license/source
+obligations and the `SSL_CERT_FILE` override. Plain `make` remains host-only.
+
 Production keeps matching symbols beside the executable: `snajpagent.debug`
 on ELF systems, `snajpagent.dSYM` on macOS. Retain these for debugging that
 exact production binary; they are not installed or required at runtime.
@@ -166,5 +175,5 @@ or TLS: keep it local or use a trusted network or secure tunnel.
 
 Read `man snajpagent` or the [source manual](snajpagent.1) for the complete interface.
 [Design notes](design/architecture.md) explain the implementation.
-`make check` runs the [tests](tests/); it needs Python 3, with tmux for terminal checks.
+`make check` runs the [tests](tests/); it needs Python 3 and Perl, with tmux for terminal checks.
 The license is [GPL-2.0-only](COPYING); see [LICENSE_SCOPE](LICENSE_SCOPE).

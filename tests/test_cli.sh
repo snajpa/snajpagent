@@ -19,6 +19,7 @@ unset OPENAI_API_KEY
 dotdir="$HOME/.$SNAJPAGENT_TEST_NAME"
 export SNAJPAGENT_DOTDIR="$dotdir"
 export SNAJPAGENT_TEST_ROOT="$root"
+export NO_COLOR=1
 cd "$root/work"
 
 resume_header='• You can resume this session with the following command:'
