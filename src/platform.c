@@ -328,6 +328,22 @@ snag_default_shell(void)
     return snag_wide_to_utf8(directory);
 }
 
+char *
+snag_program_path(const char *program)
+{
+    wchar_t path[32768];
+    (void)program;
+    DWORD size = GetModuleFileNameW(NULL, path, 32768u);
+    if (!size || size >= 32768u) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    char *out = snag_wide_to_utf8(path);
+    if (out)
+        snag_path_slashes(out);
+    return out;
+}
+
 int
 snag_hostname(char *out, size_t size)
 {
@@ -1851,6 +1867,67 @@ snag_fsync(int fd)
 #include <langinfo.h>
 #include <strings.h>
 #include <sys/wait.h>
+
+char *
+snag_program_path(const char *program)
+{
+    const char *path;
+    size_t program_len;
+
+    if (!program || !*program) {
+        errno = EINVAL;
+        return NULL;
+    }
+    program_len = strlen(program);
+    if (strchr(program, '/')) {
+        char *resolved = snag_realpath(program);
+
+        if (resolved && strlen(resolved) <= SNAG_PATH_MAX_BYTES &&
+            snag_utf8_valid((const unsigned char *)resolved,
+                           strlen(resolved), true))
+            return resolved;
+        free(resolved);
+        return snag_strdup_checked(program, SNAG_PATH_MAX_BYTES);
+    }
+    path = getenv("PATH");
+    if (path) {
+        const char *start = path;
+
+        for (;;) {
+            const char *end = strchr(start, ':');
+            size_t dir_len = end ? (size_t)(end - start) : strlen(start);
+            const char *dir = dir_len ? start : ".";
+            size_t actual_dir_len = dir_len ? dir_len : 1u;
+
+            if (actual_dir_len <= SNAG_PATH_MAX_BYTES &&
+                program_len <= SNAG_PATH_MAX_BYTES - actual_dir_len - 1u) {
+                size_t size = actual_dir_len + 1u + program_len + 1u;
+                char *candidate = malloc(size);
+
+                if (candidate) {
+                    char *resolved;
+
+                    memcpy(candidate, dir, actual_dir_len);
+                    candidate[actual_dir_len] = '/';
+                    memcpy(candidate + actual_dir_len + 1u, program,
+                           program_len + 1u);
+                    resolved = access(candidate, X_OK) == 0 ?
+                               snag_realpath(candidate) : NULL;
+                    free(candidate);
+                    if (resolved && strlen(resolved) <= SNAG_PATH_MAX_BYTES &&
+                        snag_utf8_valid((const unsigned char *)resolved,
+                                       strlen(resolved), true))
+                        return resolved;
+                    free(resolved);
+                }
+            }
+            if (!end)
+                break;
+            start = end + 1u;
+        }
+    }
+    return snag_strdup_checked(program, SNAG_PATH_MAX_BYTES);
+}
 
 char *
 snag_environment(const char *name)

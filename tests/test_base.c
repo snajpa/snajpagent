@@ -1430,6 +1430,9 @@ test_platform(void)
     assert(!snag_environment(NULL) && errno == EINVAL);
     char *shell = snag_default_shell();
     assert(shell && snag_file_executable(shell) == 0);
+    char *program = snag_program_path(shell);
+    assert(program && snag_file_executable(program) == 0 && snag_path_root_len(program));
+    free(program);
     free(shell);
     char hostname[1024];
     assert(snag_hostname(hostname, sizeof(hostname)) == 0 && hostname[0]);

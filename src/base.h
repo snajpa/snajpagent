@@ -50,6 +50,7 @@ int snag_key_ref_compare(const void *left, const void *right);
 int snag_fd_cloexec(int fd);
 int snag_isatty(int fd);
 char *snag_default_shell(void);
+char *snag_program_path(const char *program);
 int snag_file_executable(const char *path);
 int snag_editor_run(const char *path, bool *success);
 int snag_hostname(char *out, size_t size);

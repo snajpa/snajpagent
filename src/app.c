@@ -3587,65 +3587,6 @@ snag_app_dotdir(const char *override, char *error, size_t error_size)
     return path;
 }
 
-static char *
-resolved_program_path(const char *program)
-{
-    const char *path;
-    size_t program_len;
-
-    if (!program || !*program)
-        program = SNAJPAGENT_NAME;
-    program_len = strlen(program);
-    if (strchr(program, '/')) {
-        char *resolved = snag_realpath(program);
-
-        if (resolved && strlen(resolved) <= SNAG_PATH_MAX_BYTES &&
-            snag_utf8_valid((const unsigned char *)resolved,
-                           strlen(resolved), true))
-            return resolved;
-        free(resolved);
-        return snag_strdup_checked(program, SNAG_PATH_MAX_BYTES);
-    }
-    path = getenv("PATH");
-    if (path) {
-        const char *start = path;
-
-        for (;;) {
-            const char *end = strchr(start, ':');
-            size_t dir_len = end ? (size_t)(end - start) : strlen(start);
-            const char *dir = dir_len ? start : ".";
-            size_t actual_dir_len = dir_len ? dir_len : 1u;
-
-            if (actual_dir_len <= SNAG_PATH_MAX_BYTES &&
-                program_len <= SNAG_PATH_MAX_BYTES - actual_dir_len - 1u) {
-                size_t size = actual_dir_len + 1u + program_len + 1u;
-                char *candidate = malloc(size);
-
-                if (candidate) {
-                    char *resolved;
-
-                    memcpy(candidate, dir, actual_dir_len);
-                    candidate[actual_dir_len] = '/';
-                    memcpy(candidate + actual_dir_len + 1u, program,
-                           program_len + 1u);
-                    resolved = access(candidate, X_OK) == 0 ?
-                               snag_realpath(candidate) : NULL;
-                    free(candidate);
-                    if (resolved && strlen(resolved) <= SNAG_PATH_MAX_BYTES &&
-                        snag_utf8_valid((const unsigned char *)resolved,
-                                       strlen(resolved), true))
-                        return resolved;
-                    free(resolved);
-                }
-            }
-            if (!end)
-                break;
-            start = end + 1u;
-        }
-    }
-    return snag_strdup_checked(program, SNAG_PATH_MAX_BYTES);
-}
-
 static int
 append_command_literal(struct snag_buf *command, const char *word)
 {
@@ -3694,7 +3635,7 @@ static int
 build_resume_command(const struct app_state *app, const char *program,
                      const char *dotdir, struct snag_buf *command)
 {
-    char *resolved = resolved_program_path(program);
+    char *resolved = snag_program_path(program && *program ? program : SNAJPAGENT_NAME);
     const struct snag_cli *cli = app->cli;
     const struct snag_config *config = app->config;
     int rc = -1;
