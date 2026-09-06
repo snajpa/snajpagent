@@ -279,7 +279,7 @@ read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
     struct snag_buf prompt;
     unsigned char chunk[4096];
 
-    if (isatty(STDIN_FILENO) == 1) {
+    if (snag_isatty(STDIN_FILENO) == 1) {
         snag_errorf(error, error_size,
                   "-e requires a prompt after -- or non-terminal stdin");
         errno = EINVAL;

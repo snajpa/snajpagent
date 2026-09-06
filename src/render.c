@@ -368,8 +368,8 @@ snag_render_init(struct snag_render *render, unsigned int verbosity)
     render->markdown_prose_bullets = true;
     render->view = SNAG_RENDER_ROLLOUT;
     render->public_fd = -1;
-    render->stdout_terminal = isatty(STDOUT_FILENO) == 1;
-    render->stderr_terminal = isatty(STDERR_FILENO) == 1;
+    render->stdout_terminal = snag_isatty(STDOUT_FILENO) == 1;
+    render->stderr_terminal = snag_isatty(STDERR_FILENO) == 1;
 }
 
 void

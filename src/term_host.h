@@ -47,5 +47,6 @@ int snag_term_input_flush(struct snag_term_host *host);
 /* Buffer capacity is at least four bytes; incomplete UTF-16 returns EAGAIN. */
 ssize_t snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size);
 bool snag_term_input_resized(struct snag_term_host *host);
+int snag_term_output_open(int fd);
 
 #endif

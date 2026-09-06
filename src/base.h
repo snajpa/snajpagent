@@ -48,6 +48,7 @@ bool snag_size_add(size_t a, size_t b, size_t *out);
 size_t snag_utf8_size(unsigned char first);
 int snag_key_ref_compare(const void *left, const void *right);
 int snag_fd_cloexec(int fd);
+int snag_isatty(int fd);
 size_t snag_utf8_decode(const unsigned char *text, size_t len, uint32_t *out);
 bool snag_utf8_valid(const unsigned char *s, size_t len, bool reject_nul);
 int snag_char_width(uint32_t cp);

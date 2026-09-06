@@ -47,11 +47,11 @@ read_line(const char *prompt, char *out, size_t size, bool secret,
     int rc = -1;
 
     memset(out, 0, size);
-    if (!from_stdin && (!isatty(STDIN_FILENO) || !isatty(STDERR_FILENO))) {
+    if (!from_stdin && (!snag_isatty(STDIN_FILENO) || !snag_isatty(STDERR_FILENO))) {
         snag_errorf(error, error_size, "login needs a terminal; use a named provider and --with-api-key for stdin credentials");
         return -1;
     }
-    if (secret && isatty(STDIN_FILENO)) {
+    if (secret && snag_isatty(STDIN_FILENO)) {
         if (tcgetattr(STDIN_FILENO, &before) < 0)
             goto out;
         hidden = before;
@@ -219,7 +219,7 @@ acquire_login(const struct snag_cli *cli, struct snag_provider_config *provider,
             return -1;
         if (rc == 0 && (provider->auth == SNAG_AUTH_API_KEY ||
                        tokens->expires_at_ms > snag_time_ms() + 60000u)) {
-            if (!isatty(STDIN_FILENO) || !isatty(STDERR_FILENO))
+            if (!snag_isatty(STDIN_FILENO) || !snag_isatty(STDERR_FILENO))
                 return 0;
             if (read_line("Use the existing stored login? [Y/n]: ", key, sizeof(key),
                            false, false, error, error_size) < 0)
@@ -368,7 +368,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         return 0;
 #endif
     if (setup && (cli->execute || cli->resume || cli->list || cli->config_path || cli->provider ||
-                   !isatty(STDIN_FILENO) || !isatty(STDERR_FILENO)))
+                   !snag_isatty(STDIN_FILENO) || !snag_isatty(STDERR_FILENO)))
         return 0;
     snag_config_init(&config);
     snag_store_init(&store);
@@ -430,7 +430,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     signals = true;
     if (choose_provider(cli, &config, &provider, &existing, error, sizeof(error)) < 0)
         goto out;
-    if (first && !cli->model && !isatty(STDIN_FILENO)) {
+    if (first && !cli->model && !snag_isatty(STDIN_FILENO)) {
         snag_errorf(error, sizeof(error), "first noninteractive login needs -m MODEL before login");
         goto out;
     }

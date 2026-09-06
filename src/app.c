@@ -4370,7 +4370,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (snag_ui_set_verbosity(&app.ui, cli->verbosity) < 0)
         goto out;
     if (!cli->execute && !cli->list &&
-        (isatty(STDIN_FILENO) != 1 || isatty(STDERR_FILENO) != 1)) {
+        (snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1)) {
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
             "interactive mode requires terminal stdin and stderr; use -e for scripts");
         rc = 2;

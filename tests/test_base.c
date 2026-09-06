@@ -691,7 +691,24 @@ test_console_keys(struct snag_term_host *host)
 static void
 test_input_mode(void)
 {
-    if (!isatty(0))
+    assert(snag_isatty(-1) == 0 && errno == EBADF);
+#ifdef _WIN32
+    int sink = _open("NUL", _O_WRONLY | _O_BINARY);
+    assert(sink >= 0 && !snag_isatty(sink) && close(sink) == 0);
+#endif
+    if (snag_isatty(2)) {
+        int copy = snag_term_output_open(2);
+        assert(copy >= 0 && snag_isatty(copy));
+#ifdef _WIN32
+        DWORD flags;
+        assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &flags) &&
+               !(flags & HANDLE_FLAG_INHERIT));
+#else
+        assert(fcntl(copy, F_GETFD) & FD_CLOEXEC);
+#endif
+        assert(close(copy) == 0 && snag_isatty(2));
+    }
+    if (!snag_isatty(0))
         return;
     struct snag_term_host host = {0};
 #ifdef _WIN32
@@ -773,7 +790,7 @@ test_input_mode(void)
            restored.c_iflag == host.input_mode.c_iflag);
 #endif
     assert(snag_term_input_raw(&host) == 0 && snag_term_input_restore(&host, true) == 0);
-    if (isatty(2))
+    if (snag_isatty(2))
         assert(snag_term_host_columns() > 0u);
     else
         assert(snag_term_host_columns() == 0u);

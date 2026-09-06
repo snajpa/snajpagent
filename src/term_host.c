@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "term_host.h"
+#include "base.h"
+#include "fs.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +23,26 @@ reset_input(struct snag_term_host *host)
     host->input_resized = false;
     memset(host->input_events, 0, sizeof(host->input_events));
     memset(host->input_key, 0, sizeof(host->input_key));
+}
+
+int
+snag_term_output_open(int fd)
+{
+    HANDLE copy;
+    if (!snag_isatty(fd))
+        return -1;
+    if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)_get_osfhandle(fd),
+                          GetCurrentProcess(), &copy, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+        errno = EIO;
+        return -1;
+    }
+    int result = _open_osfhandle((intptr_t)copy, _O_WRONLY | _O_BINARY | _O_NOINHERIT);
+    if (result < 0) {
+        int saved = errno;
+        (void)CloseHandle(copy);
+        errno = saved;
+    }
+    return result;
 }
 
 bool
@@ -318,6 +340,28 @@ snag_term_signals_unblock(void)
 #include <pthread.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <fcntl.h>
+
+int
+snag_term_output_open(int fd)
+{
+    char path[SNAG_PATH_MAX_BYTES];
+    snag_file_info original, owned;
+    int error = ttyname_r(fd, path, sizeof(path));
+    int copy = error ? -1 : open(path, O_WRONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+
+    if (error)
+        errno = error;
+    if (copy < 0 || snag_fstat(fd, &original) < 0 || snag_fstat(copy, &owned) < 0 ||
+        original.st_rdev != owned.st_rdev || !S_ISCHR(owned.st_mode)) {
+        int saved = copy < 0 ? errno : EIO;
+        if (copy >= 0)
+            (void)close(copy);
+        errno = saved;
+        return -1;
+    }
+    return copy;
+}
 
 bool
 snag_term_host_capable(void)

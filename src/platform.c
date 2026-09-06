@@ -21,6 +21,22 @@
 #include <wchar.h>
 
 int
+snag_isatty(int fd)
+{
+    intptr_t handle = _get_osfhandle(fd);
+    DWORD mode;
+
+    if (handle == -1) {
+        errno = EBADF;
+        return 0;
+    }
+    if (GetConsoleMode((HANDLE)handle, &mode))
+        return 1;
+    errno = ENOTTY;
+    return 0;
+}
+
+int
 snag_sleep_ms(unsigned int milliseconds)
 {
     if (milliseconds > INT_MAX) {
@@ -1556,6 +1572,12 @@ snag_fsync(int fd)
 #include <signal.h>
 #include <langinfo.h>
 #include <strings.h>
+
+int
+snag_isatty(int fd)
+{
+    return isatty(fd);
+}
 
 int
 snag_sleep_ms(unsigned int milliseconds)
