@@ -1461,7 +1461,7 @@ test_local_mention_highlight(void)
         {"> @alice quote", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
         {"@alice *italic* ~~strike~~ [link](https://example.test)", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
     };
-    for (unsigned int flags = 0u; flags < 8u; ++flags) {
+    for (unsigned int flags = 0u; flags < 16u; ++flags) {
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
             struct snag_render render;
             struct snag_term term;
@@ -1486,6 +1486,7 @@ test_local_mention_highlight(void)
             assert(snag_term_set_destinations(&term, &destinations) == 0);
             snag_render_init(&render, 0u);
             render.stderr_terminal = true;
+            render.markdown = !(flags & 8u);
             snag_render_attach_term(&render, &term);
             snag_render_set_color(&render, color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER);
             if (flags & 2u)
@@ -1508,27 +1509,37 @@ test_local_mention_highlight(void)
             assert(dup2(saved, STDERR_FILENO) >= 0);
             close(saved);
             close(fds[0]);
-            assert((strstr(output, "\033[1;35m[1] ") != NULL) == (color && cases[i].highlight));
-            if (color && !cases[i].op && cases[i].kind == SNAG_IRC_MESSAGE)
-                assert(strstr(output, "\033[1;36mpeer "));
+            assert((strstr(output, "[1] \033[1;35m") != NULL) == (color && cases[i].highlight));
+            if (color) {
+                assert(strstr(output, strcmp(cases[i].room, "#room") == 0 ?
+                              "\033[2m[1] " : "\033[2m[server #other] "));
+                if (cases[i].kind == SNAG_IRC_MESSAGE || cases[i].kind == SNAG_IRC_NOTICE) {
+                    const char *body = strstr(output, "peer ");
+                    assert(body && strncmp(body + 5u, "\033[0m", 4u) == 0);
+                    assert(!strstr(body + 5u, "35m"));
+                    assert((strstr(output, "\033[1;35mpeer ") != NULL) ==
+                           (!cases[i].op && cases[i].highlight &&
+                            cases[i].kind == SNAG_IRC_MESSAGE));
+                }
+            }
             assert(strstr(output + used, "ordinary") && strstr(output + used, "followup"));
             assert(!strstr(output + used, "35m"));
             if (!color)
                 assert(!strchr(output, '\033'));
-            if (color && i == 0u) {
+            if (color && !(flags & 8u) && i == 0u) {
                 assert(strstr(output, "\033[0;1m"));
                 assert(strstr(output, "\033[0;33m"));
                 assert(!strstr(output, ";1;1;35m"));
                 assert(!strstr(output, ";33;1;35m"));
                 assert(strstr(output, "code\033[0m"));
-                assert(strstr(output, "\033[0;1;35m"));
-                assert(strstr(output, "tail\033[0m"));
+                assert(!strstr(output, "\033[0;1;35m"));
+                assert(strstr(output, "tail"));
             }
-            if (color && i == 11u)
+            if (color && !(flags & 8u) && i == 11u)
                 assert(strstr(output, "\033[0;1;36m"));
-            if (color && i == 12u)
+            if (color && !(flags & 8u) && i == 12u)
                 assert(strstr(output, "\033[0;34m"));
-            if (color && i == 13u) {
+            if (color && !(flags & 8u) && i == 13u) {
                 assert(strstr(output, "\033[0;3m"));
                 assert(strstr(output, "\033[0;2m"));
                 assert(strstr(output, "\033[0;4;34m"));

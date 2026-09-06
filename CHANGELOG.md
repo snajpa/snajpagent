@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Limit mention highlighting to the timestamp and sender nick. Leave message
+  bodies, Markdown, wrapped continuations and separators unchanged. Match the
+  local operator's or model's accepted room nickname; honor disabled colors.
+
 - Preserve active goals across orderly process exit, including Ctrl-D/EOF
   and shutdown signals. Closing the process no longer saves
   an unintended paused goal before the printed resume command is used.
@@ -19,8 +23,7 @@
 
 - Add `/retry` to continue a failed turn from retained context and tool results,
   preserving read-only mode and supporting resumed sessions. Turn failures hint
-  the command. Mention highlighting now colors only ordinary text and timestamps,
-  leaving rendered Markdown styles and sender-role colors intact.
+  the command.
 
 - Publish hosted IRC wire traffic and local events from the same fields.
   JOIN precedes operator promotion everywhere; automatic MODE events name the
@@ -30,10 +33,6 @@
   nicknames: expand common prefixes, list ambiguous choices on double Tab, and
   add a separating space for unique matches. Preserve the draft/cursor, room
   membership scope, and input responsiveness while output is stalled.
-
-- Highlight the whole chat entry when a message or notice mentions the local
-  operator's or model's accepted room nickname, using the existing IRC mention
-  matching. Keep highlighting across Markdown and wrapping; honor disabled colors.
 
 - Use the same cyan agent and magenta operator chat colors on servers and
   clients. Remove presentation-only local-agent tracking and nickname updates;

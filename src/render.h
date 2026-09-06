@@ -109,7 +109,6 @@ struct snag_render {
     bool markdown_measuring;
     bool markdown_preserve_fence;
     bool markdown_prose_bullets;
-    bool markdown_highlight;
     enum snag_render_view view;
     struct snag_term *term;
     struct snag_render_record *view_head[SNAG_RENDER_VIEW_COUNT];

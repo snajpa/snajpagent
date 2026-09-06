@@ -1946,14 +1946,17 @@ def validate_irc_styles(terminal, own):
         for nick in nicks
     ]
     for nick, color, role in expected:
+        if nick == own:
+            color, role = 35, "mention magenta"
         pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} ({nick}) "
         assert foreground_at(styled, pattern) == color, f"{nick} missing {role}:\n{styled}"
         if not nick.startswith("@"):
-            # Self-mentions highlight timestamps, not sender nicks or the
-            # fixture's explicitly bold body text.
+            # Self-mentions highlight timestamps and sender nicks, never the body.
             pattern = rf"(?m)^(\d{{2}}:\d{{2}}:\d{{2}}) {nick} "
             assert foreground_at(styled, pattern) == (35 if nick == own else None)
             pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} › ({nick}) heard"
+            assert foreground_at(styled, pattern) is None
+            pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} (›) {nick} heard"
             assert foreground_at(styled, pattern) is None
 
 
@@ -3335,13 +3338,15 @@ def run_irc_chat_case(binary, root):
                 for name, terminal in terminals.items():
                     terminal.wait(ending)
                     styled = terminal.capture_styled()
-                    # Highlight ordinary prose through wraps, but preserve
-                    # sender-role and explicit Markdown styles in every UI.
-                    assert foreground_at(styled, r"(highlight start)") != 35, styled
+                    # Only the addressed viewer highlights this message's
+                    # timestamp and sender; its entire body remains unchanged.
+                    assert foreground_at(styled, r"(highlight start)") is None, styled
                     assert foreground_at(styled, r"(code)") == 33, styled
-                    assert foreground_at(styled, r"\d{2}:\d{2}:\d{2} (highlightpeer)") == 36, styled
-                    assert (foreground_at(styled, f"({ending})") == 35) == (
-                        name == viewer), styled
+                    prefix = r"(?m)^\d{2}:\d{2}:\d{2} (highlightpeer) › @" + target.upper()
+                    assert foreground_at(styled, prefix) == (35 if name == viewer else 36), styled
+                    prefix = r"(?m)^(\d{2}:\d{2}:\d{2}) highlightpeer › @" + target.upper()
+                    assert foreground_at(styled, prefix) == (35 if name == viewer else None), styled
+                    assert foreground_at(styled, f"({ending})") is None, styled
                 wait_irc_idle(ordered)
         wait_irc_quits(terminals["host"], ("highlightpeer",))
         wait_irc_idle(ordered)
