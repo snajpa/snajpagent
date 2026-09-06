@@ -1774,6 +1774,8 @@ def test_goal_refusal_failure_block_and_restart_pause():
     paused_end = resumed.wait(
         b"active goal was paused on resume; use /goal resume to continue"
     )
+    assert b": paused" in resumed.buf[:paused_end]
+    assert b"slow goal" in resumed.buf[:paused_end]
     resumed.send(b"/goal\r")
     status_end = resumed.wait(b": paused", start=paused_end)
     resumed.wait(PROMPT.rstrip(), start=status_end)
@@ -1781,6 +1783,53 @@ def test_goal_refusal_failure_block_and_restart_pause():
     log = events(session_id)
     pauses = [item for item in log if item["type"] == "goal_paused"]
     assert pauses[-1]["data"]["reason"] == "session_resumed"
+
+
+def test_saved_goal_restored_without_lookup():
+    before = session_ids()
+    child = Child([])
+    try:
+        child.wait_idle_prompt()
+        child.send(b"/goal slow goal\r")
+        child.wait(b"working on goal")
+        child.send(b"/goal pause\r")
+        paused = child.wait(b"goal paused at the current turn boundary")
+        checkpoint = child.wait(b"goal checkpoint", start=paused)
+        child.wait_idle_prompt(start=checkpoint)
+        wording = "obnovit žluťoučký plán bez opakování"
+        start = len(child.buf)
+        child.send(("/goal set " + wording + "\r").encode())
+        changed = child.wait(GOAL_SET, start=start)
+        child.send(b"/goal lock\r")
+        locked = child.wait(b"goal wording locked against model changes", start=changed)
+        child.wait_idle_prompt(start=locked)
+        child.exit_now()
+    finally:
+        child.kill()
+    session_id = new_session(before)
+    original = events(session_id)
+    goal_id = one(original, "goal_started")["data"]["goal_id"]
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "goal-resume.ini"
+    config.write_text("[ui]\nresume_history_turns = 0\n", encoding="utf-8")
+    for selector in ([session_id], ["--last"]):
+        resumed = Child(["--config", str(config), "--resume", *selector])
+        try:
+            status = resumed.wait(f"goal {goal_id[:8]}: paused · wording locked".encode())
+            restored = resumed.wait(wording.encode(), start=status)
+            assert b"revision: 2" in resumed.buf[status:restored]
+            resumed.wait_idle_prompt(start=restored)
+            resumed.drain(0.1)
+            assert len(events(session_id)) == len(original)
+            # A normal follow-up must not create a replacement or resume it.
+            resumed.send(b"ping\r")
+            answer = resumed.wait(b"pong", start=restored)
+            resumed.exit_cleanly(answer)
+        finally:
+            resumed.kill()
+        current = events(session_id)
+        assert [e for e in current if e["type"].startswith("goal_")] == [
+            e for e in original if e["type"].startswith("goal_")]
+        original = current
 
 
 def test_queue_mutation_commands():
@@ -4467,6 +4516,7 @@ if __name__ == "__main__":
     test_goal_pause_resume_and_queue_priority()
     test_goal_user_terminal_commands_and_unlock()
     test_goal_refusal_failure_block_and_restart_pause()
+    test_saved_goal_restored_without_lookup()
     test_queue_mutation_commands()
     test_preferences_and_verbosity()
     test_runtime_verbosity_resume()

@@ -309,9 +309,7 @@ append_goal_controller(struct context_builder *builder)
     if (!builder->session || builder->session->active_read_only ||
         builder->session->active_queued || builder->session->pending_queue_count)
         return 0;
-    if (builder->session->goal_status != SNAG_GOAL_ACTIVE) {
-        if (snag_goal_unfinished(builder->session->goal_status))
-            return 0;
+    if (!snag_goal_unfinished(builder->session->goal_status)) {
         return append_message(builder, "developer",
             "No persistent goal is active. If and only if the user or "
             "system/developer instructions explicitly request starting or "
@@ -319,19 +317,27 @@ append_goal_controller(struct context_builder *builder)
             "Writing or committing Markdown does not activate continuation. "
             "Do not infer a goal from ordinary work.");
     }
-    snag_buf_init(&text, SNAG_MAX_GOAL_PROMPT + 1024u);
+    bool active = builder->session->goal_status == SNAG_GOAL_ACTIVE;
+    snag_buf_init(&text, SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 2048u);
     rc = snag_buf_printf(&text,
-        "Persistent goal %.8s is active (revision %llu, wording %s). "
-        "Keep working across turns until it is complete or genuinely blocked. "
+        "Persistent goal %.8s is %s (revision %llu, wording %s). %s\n\nCurrent goal wording:\n%s",
+        builder->session->goal_id,
+        snag_goal_status_name(builder->session->goal_status),
+        (unsigned long long)builder->session->goal_revision,
+        builder->session->goal_locked ? "locked" : "unlocked",
+        active ? "Keep working across turns until it is complete or genuinely blocked. "
         "A normal final answer is a checkpoint and " SNAJPAGENT_NAME " will start another "
         "goal turn. Use update_goal action=complete with text=null only when the "
         "goal is finished. Use action=block with a specific reason only when no "
         "dependency-ready work remains. You may use action=rewrite to improve the "
-        "wording only when it is unlocked.\n\nCurrent goal wording:\n%s",
-        builder->session->goal_id,
-        (unsigned long long)builder->session->goal_revision,
-        builder->session->goal_locked ? "locked" : "unlocked",
+        "wording only when it is unlocked." :
+        "This saved goal remains part of the session, but automatic continuation "
+        "is stopped. Retain its wording and status as context for the user's "
+        "request; do not treat it as a new goal or ask the user to restate it. "
+        "Restoring this context does not resume or change the goal.",
         builder->session->goal_prompt);
+    if (rc == 0 && builder->session->goal_blocker)
+        rc = snag_buf_printf(&text, "\n\nRecorded blocker:\n%s", builder->session->goal_blocker);
     if (rc == 0)
         rc = append_message(builder, "developer",
                             (const char *)text.data);

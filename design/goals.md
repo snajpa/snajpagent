@@ -152,3 +152,11 @@ Goal state, wording changes, locks, blockers, and status transitions are
 append-only session events. Resume reconstructs them from the same validated
 event log as turns and tools. Synthetic continuation turns are identified as
 goal turns in that log and do not masquerade as new user messages.
+
+Restoration is separate from continuation. Reopening a session automatically
+displays its saved goal, wording, status, revision, lock and blocker, even when
+resume history is disabled. Ordinary model requests retain the current wording
+and status of paused/blocked unfinished goals after replay and compaction;
+their saved state is context, not an instruction to resume. No goal is recreated
+and the user need not repeat its wording. Read-only/queued goal-controller
+suppression and the lifecycle tool restrictions above remain unchanged.

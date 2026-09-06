@@ -4502,6 +4502,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             app.irc, render_room_history, &app.ui) < 0) ||
         (cli->resume && config.resume_history_turns != 0u && !app.networked &&
          snag_ui_history(&app.ui, &app.session) < 0) ||
+        (cli->resume && app.session.goal_status != SNAG_GOAL_NONE &&
+         snag_app_goal_command(&app, "/goal", false) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u &&
          app_warning(&app,
              "queued future turns are paused; use /next to continue FIFO") < 0) ||

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Restore saved goal visibility on session resume: show its wording and state
+  automatically, and retain paused/blocked goal context in ordinary model
+  requests after replay and compaction without restarting automatic work.
+
 - Add `/retry` to continue a failed turn from retained context and tool results,
   preserving read-only mode and supporting resumed sessions. Turn failures hint
   the command. Mention highlighting now colors only ordinary text and timestamps,

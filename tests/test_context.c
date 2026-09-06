@@ -2222,6 +2222,16 @@ main(void)
     assert(snag_session_commit(&session, "goal_paused",
                               goal_paused_data(goal), NULL,
                               error, sizeof(error)) == 0);
+    char resumed_id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(resumed_id, session.id, sizeof(resumed_id));
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(&store, &session, resumed_id, error, sizeof(error)) == 0);
+    assert(session.goal_status == SNAG_GOAL_PAUSED && session.goal_locked);
+    assert(strcmp(session.goal_id, goal) == 0);
+    assert(strcmp(session.goal_prompt, "finish compacted work") == 0);
+    assert(session.goal_turn_count == 1u && session.goal_revision == 1u);
+    assert(session.compact_id[0]);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
                              empty_steering, 0u, false, NULL,
                              &instructions, &projection,
@@ -2234,8 +2244,33 @@ main(void)
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(tool_by_name(tools, "create_goal") == NULL);
         assert(tool_by_name(tools, "update_goal") == NULL);
-        assert(message_matching(semantic, "goal_controller") == NULL);
+        json_t *restored = message_matching(semantic, "Persistent goal ");
+        assert(restored && strstr(snag_json_string(restored, "content"), "is paused"));
+        assert(strstr(snag_json_string(restored, "content"), "wording locked"));
+        assert(strstr(snag_json_string(restored, "content"), "finish compacted work"));
+        json_t *requests[] = {projection.create_request, projection.count_request};
+        for (size_t i = 0u; i < 2u; ++i) {
+            char *encoded = json_dumps(requests[i], JSON_COMPACT);
+            assert(encoded && strstr(encoded, "finish compacted work"));
+            assert(strstr(encoded, "automatic continuation is stopped"));
+            free(encoded);
+        }
     }
+
+    assert(snag_session_commit(&session, "goal_resumed", json_pack("{s:s}",
+        "goal_id", goal), NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "goal_blocked", json_pack("{s:s,s:s,s:s}",
+        "goal_id", goal, "actor", "model", "reason", "retained dependency"),
+        NULL, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(&store, &session, resumed_id, error, sizeof(error)) == 0);
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
+        empty_steering, 0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
+    json_t *restored = message_matching(json_object_get(projection.model_input, "items"), "Persistent goal ");
+    assert(restored && strstr(snag_json_string(restored, "content"), "is blocked"));
+    assert(strstr(snag_json_string(restored, "content"), "Recorded blocker:\nretained dependency"));
+    assert(!tool_by_name(json_object_get(projection.create_request, "tools"), "update_goal"));
 
     json_decref(empty_steering);
     snag_context_projection_free(&projection);

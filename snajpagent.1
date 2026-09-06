@@ -1517,7 +1517,11 @@ Temporary connection outages do not remove desired roles from the command.
 .PP
 Resuming an active goal pauses it; use
 .B /goal resume
-to continue.  Queued turns are also paused; use
+to continue.  Resume automatically displays the saved goal and wording,
+including its status, revision, lock and blocker, even with history disabled.
+Paused and blocked goal wording remains in ordinary model context after resume
+and compaction; it need not be re-entered.  Restoration does not restart work.
+Queued turns are also paused; use
 .B /next
 to restart FIFO execution.  Interrupted active turns are recovered from their
 durable prefix.

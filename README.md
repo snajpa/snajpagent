@@ -79,6 +79,9 @@ For autonomous work, enter a goal:
 
 The agent continues across turns. `/goal pause` stops automatic continuation
 after the current turn; `/goal resume` continues it. Queued prompts run first.
+Session resume restores and shows the saved goal without needing `/goal` or
+re-entering its wording. Paused/blocked goals remain available to the model as
+context without restarting automatic work.
 `/status` shows the goal, queue, model, and connection state.
 
 The model can keep independent commands running while doing other work.
