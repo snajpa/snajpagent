@@ -2147,6 +2147,51 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     *handled = false;
     return 0;
 }
+static int
+cancel_queue_edit(struct app_state *app, bool active)
+{
+    if (app->queue_edit_id[0]) {
+        app->queue_armed = app->queue_edit_was_armed;
+        app->queue_edit_id[0] = '\0';
+        app->queue_edit_number = 0u;
+        app->queue_edit_was_armed = false;
+    }
+    return set_input_prompt(app, active);
+}
+
+static int
+input_view_toggle(struct app_state *app)
+{
+    if (app->queue_edit_id[0]) {
+        (void)app_error(app, "queue replacement must be nonempty");
+        return 0;
+    }
+    return toggle_view(app);
+}
+
+static int
+handle_input_command(struct app_state *app, const char *line, bool active,
+                     bool *handled, bool *prompt_ready)
+{
+    bool single_line = strchr(line, '\n') == NULL;
+    char error[256] = {0};
+    int rc = handle_destination_command(app, line, handled);
+
+    if (rc < 0 || *handled)
+        return rc;
+    if (single_line && line[0] == '/' && line[1] != '/') {
+        rc = handle_common_command(app, line, active, handled, prompt_ready);
+        if (rc < 0 || *handled)
+            return rc;
+    }
+    if (active || single_line) {
+        rc = handle_queue_command(app, line, active, handled, error, sizeof(error));
+        if (rc != 0 && error[0])
+            (void)app_error(app, error);
+    }
+    return rc;
+}
+
 int
 snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
 {
@@ -2215,30 +2260,16 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         free(line);
         return 2;
     }
-    if ((action == SNAG_TERM_CANCEL || action == SNAG_TERM_INTERRUPT) &&
-        app->queue_edit_id[0]) {
-        app->queue_armed = app->queue_edit_was_armed;
-        app->queue_edit_id[0] = '\0';
-        app->queue_edit_number = 0u;
-        app->queue_edit_was_armed = false;
-        return set_input_prompt(app, true);
-    }
-    if (action == SNAG_TERM_CANCEL) {
-        return set_input_prompt(app, true);
-    }
+    if (action == SNAG_TERM_CANCEL ||
+        (action == SNAG_TERM_INTERRUPT && app->queue_edit_id[0]))
+        return cancel_queue_edit(app, true);
     if (action == SNAG_TERM_INTERRUPT) {
         app->interrupt_requested = true;
         free(line);
         return set_input_prompt(app, true) < 0 ? -1 : 2;
     }
-    if (action == SNAG_TERM_VIEW) {
-        if (app->queue_edit_id[0]) {
-            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
-                "queue replacement must be nonempty");
-            return 0;
-        }
-        return toggle_view(app);
-    }
+    if (action == SNAG_TERM_VIEW)
+        return input_view_toggle(app);
     if (!line)
         return 0;
     remember_input(app, line);
@@ -2270,23 +2301,9 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 rc = snag_ui_restore_draft(&app->ui, line);
             goto active_done;
         }
-        rc = handle_destination_command(app, line, &handled);
+        rc = handle_input_command(app, line, true, &handled, &prompt_ready);
         if (rc < 0)
             goto active_done;
-        if (!handled && single_line && line[0] == '/' && line[1] != '/') {
-            rc = handle_common_command(app, line, true, &handled,
-                                       &prompt_ready);
-            if (rc < 0)
-                goto active_done;
-        }
-        if (!handled) {
-            rc = handle_queue_command(app, line, true, &handled,
-                                      error, sizeof(error));
-            if (rc != 0 && error[0])
-                (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
-            if (rc < 0)
-                goto active_done;
-        }
         if (handled) {
             if (!app->queue_edit_id[0] && !prompt_ready &&
                 set_input_prompt(app, true) < 0)
@@ -4073,59 +4090,134 @@ run_ready_chains(struct app_state *app)
 }
 
 static int
+submit_idle(struct app_state *app, const char *prompt,
+            enum snag_render_view input_view, bool *prompt_ready)
+{
+    bool single_line = strchr(prompt, '\n') == NULL;
+    bool read_only, handled = false, exit_now = false;
+    const char *query = snag_prompt_parse(prompt, &read_only);
+    if (!*prompt) query = "Continue.";
+    bool retry = single_line && strcmp(prompt, "/retry") == 0;
+    int rc = 0;
+
+    if (app->queue_edit_id[0]) {
+        char error[256] = {0};
+        rc = finish_queue_edit(app, prompt, false, error, sizeof(error));
+        if (rc != 0 && error[0])
+            (void)app_error(app, error);
+        *prompt_ready = true;
+        return rc < 0 ? 3 : 0;
+    }
+    if (!*prompt && input_view == SNAG_RENDER_CHAT)
+        return 0;
+    if (input_view == SNAG_RENDER_ROLLOUT &&
+        snag_ui_submitted(&app->ui, app->ui.label, prompt, true) < 0)
+        return 6;
+    rc = handle_input_command(app, prompt, false, &handled, prompt_ready);
+    if (rc < 0)
+        return 3;
+    if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
+        rc = snag_app_lifecycle_command(app, prompt, &handled, &exit_now);
+        if (rc < 0 || exit_now)
+            return rc < 0 ? 3 : 1;
+    }
+    if (handled) {
+        rc = run_ready_chains(app);
+    } else if (single_line && strcmp(prompt, "/exit") == 0) {
+        return 1;
+    } else if (single_line && strcmp(prompt, "/next") == 0) {
+        if (app->session.pending_queue_count == 0u) {
+            (void)app_error(app, "future-turn queue is empty");
+        } else {
+            app->queue_armed = true;
+            rc = run_ready_chains(app);
+        }
+    } else if (retry && !app->session.last_turn_failed) {
+        (void)app_error(app, "no failed turn to retry");
+    } else if (!retry && !read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
+        (void)app_error(app, "unknown slash command");
+    } else if (!retry && !read_only && input_view == SNAG_RENDER_CHAT) {
+        if (send_operator_routed(app, prompt, query, SNAG_IRC_MESSAGE) < 0)
+            return 3;
+    } else {
+        if (retry) {
+            query = "Retry the last failed turn. Continue from the retained "
+                    "conversation and tool results; do not repeat completed actions.";
+            read_only = app->session.retry_read_only;
+        }
+        if (read_only && !*query) {
+            (void)app_error(app, "usage: /ro QUERY (query must not be empty)");
+            return 0;
+        }
+        if (input_view == SNAG_RENDER_CHAT &&
+            snag_ui_submitted(&app->ui, app->ui.label, query, true) < 0)
+            return 6;
+        app->queue_armed = false;
+        rc = run_tracked_turn(app, query, NULL, false, read_only);
+        if (rc == 3 || rc == 6)
+            return rc;
+        if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
+            (app->queue_armed || app->goal_armed))
+            rc = run_ready_chains(app);
+        else if (rc != 0)
+            app->queue_armed = false;
+    }
+    return rc == 3 || rc == 6 ? rc : 0;
+}
+
+static int
 interactive_loop(struct app_state *app, const char *initial)
 {
     char *owned = NULL;
-    const char *prompt = initial;
-    if (set_input_prompt(app, false) < 0)
-        return 6;
-    if (initial && (snag_app_sync_destinations(app) < 0 ||
-                    snag_ui_capture_route(&app->ui, initial) < 0))
+    int rc = 0;
+
+    if (set_input_prompt(app, false) < 0 ||
+        (initial && (snag_app_sync_destinations(app) < 0 ||
+                     snag_ui_capture_route(&app->ui, initial) < 0)))
         return 6;
     if (!initial && app->goal_armed) {
-        int rc = run_ready_chains(app);
+        rc = run_ready_chains(app);
         if (rc == 3 || rc == 6)
             return rc;
     }
     for (;;) {
         enum snag_term_action action = SNAG_TERM_NONE;
         bool prompt_ready = false;
-        if (capture_shutdown_signal(app))
-            return 0;
-        if (app->input_closed)
-            return 0;
+        const char *prompt = initial;
+
+        initial = NULL;
+        free(owned);
+        owned = NULL;
+        if (capture_shutdown_signal(app) || app->input_closed) {
+            rc = 0;
+            break;
+        }
         if (!prompt) {
             bool local_operator = false;
-            char *irc_prompt = snag_app_irc_take_pending(
-                app, &local_operator, false);
-
-            if (irc_prompt) {
-                int turn_rc;
+            owned = snag_app_irc_take_pending(app, &local_operator, false);
+            if (owned) {
                 app->queue_armed = false;
-                turn_rc = run_tracked_turn(app, irc_prompt, NULL, false, false);
-                free(irc_prompt);
-                if (turn_rc == 3 || turn_rc == 6)
-                    return turn_rc;
-                if ((turn_rc == 0 || turn_rc == SNAG_APP_INPUT_READY) &&
+                rc = run_tracked_turn(app, owned, NULL, false, false);
+                if (rc == 3 || rc == 6)
+                    break;
+                if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
                     (app->queue_armed || app->goal_armed)) {
-                    int chain_rc = run_ready_chains(app);
-                    if (chain_rc == 3 || chain_rc == 6)
-                        return chain_rc;
+                    rc = run_ready_chains(app);
+                    if (rc == 3 || rc == 6)
+                        break;
                 }
                 continue;
             }
-        }
-        if (!prompt) {
             int poll_rc = snag_ui_poll(&app->ui,
-                                        app->networked || app->irc_background.len ? 25 : -1,
-                                        false, &action, &owned);
+                app->networked || app->irc_background.len ? 25 : -1,
+                false, &action, &owned);
             if (owned) app->input_received_ms = app->ui.input_received_ms;
             history_warning(app);
             if (poll_rc < 0) {
                 int input_errno = errno;
                 if (capture_shutdown_signal(app)) {
-                    free(owned);
-                    return 0;
+                    rc = 0;
+                    break;
                 }
                 (void)app_error(app,
                     errno == EOVERFLOW ? "prompt exceeds 1 MiB" :
@@ -4133,189 +4225,53 @@ interactive_loop(struct app_state *app, const char *initial)
                     "terminal input could not be read");
                 if ((input_errno != EOVERFLOW && input_errno != EILSEQ) ||
                     set_input_prompt(app, false) < 0)
-                    return 6;
+                    goto ui_failed;
                 continue;
             }
             if (app->networked) {
-                char irc_error[256] = {0};
-                if (tick_irc(app, irc_error, sizeof(irc_error)) < 0) {
-                    (void)app_error(app, irc_error[0] ? irc_error :
-                                    "IRC event loop failed");
-                    return 3;
+                char error[256] = {0};
+                if (tick_irc(app, error, sizeof(error)) < 0) {
+                    (void)app_error(app, error[0] ? error : "IRC event loop failed");
+                    rc = 3;
+                    break;
                 }
             }
             if (poll_rc == 0)
                 continue;
             if (action == SNAG_TERM_EXIT) {
-                free(owned);
-                return 0;
+                rc = 0;
+                break;
             }
             if (action == SNAG_TERM_CANCEL) {
-                if (app->queue_edit_id[0]) {
-                    app->queue_armed = app->queue_edit_was_armed;
-                    app->queue_edit_id[0] = '\0';
-                    app->queue_edit_number = 0u;
-                    app->queue_edit_was_armed = false;
-                }
-                if (set_input_prompt(app, false) < 0)
-                    return 6;
+                if (cancel_queue_edit(app, false) < 0)
+                    goto ui_failed;
                 continue;
             }
             if (action == SNAG_TERM_VIEW) {
-                if (app->queue_edit_id[0])
-                    (void)app_error(app, "queue replacement must be nonempty");
-                else if (toggle_view(app) < 0)
-                    return 6;
+                if (input_view_toggle(app) < 0)
+                    goto ui_failed;
                 continue;
             }
             if (action != SNAG_TERM_SUBMIT || !owned) {
-                free(owned);
-                owned = NULL;
                 if (set_input_prompt(app, false) < 0)
-                    return 6;
+                    goto ui_failed;
                 continue;
             }
             prompt = owned;
-        }
-        if (owned)
             remember_input(app, prompt);
-        if (app->queue_edit_id[0]) {
-            char edit_error[256] = {0};
-            int edit_rc = finish_queue_edit(app, prompt, false,
-                                            edit_error, sizeof(edit_error));
-
-            if (edit_rc != 0 && edit_error[0])
-                (void)app_error(app, edit_error);
-            free(owned);
-            owned = NULL;
-            prompt = NULL;
-            if (edit_rc < 0)
-                return 3;
-            continue;
         }
-        enum snag_render_view input_view = owned ? app->ui.input_view : app->ui.view;
-        if (!*prompt && input_view == SNAG_RENDER_CHAT) {
-            free(owned);
-            owned = NULL;
-            prompt = NULL;
-            if (set_input_prompt(app, false) < 0) return 6;
-            continue;
-        }
-        if (input_view == SNAG_RENDER_ROLLOUT) {
-            if (snag_ui_submitted(&app->ui,
-                    app->ui.label, prompt, true) < 0) {
-                free(owned);
-                return 6;
-            }
-        }
-        {
-            bool single_line = strchr(prompt, '\n') == NULL;
-            bool read_only;
-            const char *query = snag_prompt_parse(prompt, &read_only);
-            bool retry = single_line && strcmp(prompt, "/retry") == 0;
-            bool handled = false;
-            int local_rc = 0;
-            local_rc = handle_destination_command(app, prompt, &handled);
-            if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/')
-                local_rc = handle_common_command(app, prompt, false, &handled,
-                                                 &prompt_ready);
-            if (local_rc < 0) { free(owned); return 3; }
-            if (!handled && single_line) {
-                char queue_error[256] = {0};
-
-                local_rc = handle_queue_command(app, prompt, false, &handled,
-                                                 queue_error,
-                                                 sizeof(queue_error));
-                if (local_rc != 0 && queue_error[0])
-                    (void)app_error(app, queue_error);
-                if (local_rc < 0) { free(owned); return 3; }
-            }
-            if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
-                bool exit_now = false;
-                local_rc = snag_app_lifecycle_command(app, prompt, &handled, &exit_now);
-                if (local_rc < 0 || exit_now) { free(owned); return local_rc < 0 ? 3 : 0; }
-            }
-            if (handled) {
-                int chain_rc = run_ready_chains(app);
-                if (chain_rc == 3 || chain_rc == 6) {
-                    free(owned);
-                    return chain_rc;
-                }
-            } else if (single_line && strcmp(prompt, "/exit") == 0) {
-                free(owned);
-                return 0;
-            } else if (single_line && strcmp(prompt, "/next") == 0) {
-                int chain_rc;
-                if (app->session.pending_queue_count == 0u) {
-                    (void)app_error(app, "future-turn queue is empty");
-                } else {
-                    app->queue_armed = true;
-                    chain_rc = run_ready_chains(app);
-                    if (chain_rc == 3 || chain_rc == 6) {
-                        free(owned);
-                        return chain_rc;
-                    }
-                }
-            } else if (retry && !app->session.last_turn_failed) {
-                (void)app_error(app, "no failed turn to retry");
-            } else if (!retry && !read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
-                (void)app_error(app, "unknown slash command");
-            } else if (!retry && !read_only && input_view == SNAG_RENDER_CHAT) {
-                const char *actual = prompt[0] == '/' && prompt[1] == '/' ?
-                                     prompt + 1 : prompt;
-                if (send_operator_routed(app, prompt, actual, SNAG_IRC_MESSAGE) < 0) {
-                    free(owned);
-                    return 3;
-                }
-            } else {
-                const char *actual = !*prompt ? "Continue." : query;
-                int turn_rc;
-
-                if (retry) {
-                    actual = "Retry the last failed turn. Continue from the retained "
-                             "conversation and tool results; do not repeat completed actions.";
-                    read_only = app->session.retry_read_only;
-                }
-                if (read_only && !*actual) {
-                    (void)app_error(app, "usage: /ro QUERY (query must not be empty)");
-                    free(owned);
-                    owned = NULL;
-                    prompt = NULL;
-                    if (set_input_prompt(app, false) < 0)
-                        return 6;
-                    continue;
-                }
-
-                if (input_view == SNAG_RENDER_CHAT &&
-                    snag_ui_submitted(&app->ui,
-                        app->ui.label, actual, true) < 0) {
-                    free(owned);
-                    return 6;
-                }
-                app->queue_armed = false;
-                turn_rc = run_tracked_turn(app, actual, NULL, false, read_only);
-                if (turn_rc == 3 || turn_rc == 6) {
-                    free(owned);
-                    return turn_rc;
-                }
-                if ((turn_rc == 0 || turn_rc == SNAG_APP_INPUT_READY) &&
-                    (app->queue_armed || app->goal_armed)) {
-                    int chain_rc = run_ready_chains(app);
-                    if (chain_rc == 3 || chain_rc == 6) {
-                        free(owned);
-                        return chain_rc;
-                    }
-                } else if (turn_rc != 0) {
-                    app->queue_armed = false;
-                }
-            }
-        }
-        free(owned);
-        owned = NULL;
-        prompt = NULL;
+        rc = submit_idle(app, prompt, owned ? app->ui.input_view : app->ui.view,
+                         &prompt_ready);
+        if (rc != 0)
+            break;
         if (!prompt_ready && set_input_prompt(app, false) < 0)
-            return 6;
+            goto ui_failed;
     }
+    free(owned);
+    return rc == 1 ? 0 : rc;
+ui_failed:
+    free(owned);
+    return 6;
 }
 static int
 render_room_history(void *opaque, const struct snag_irc_event *event)
