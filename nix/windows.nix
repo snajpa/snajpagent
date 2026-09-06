@@ -36,7 +36,7 @@ let
       ] ++ flags;
     };
   autotoolsLibrary = package: flags: dependencies:
-    windows.stdenv.mkDerivation {
+    windows.stdenv.mkDerivation ({
       pname = "${package.pname}-windows-${arch}-static";
       inherit (package) version src;
       patches = package.patches or [];
@@ -45,14 +45,15 @@ let
       strictDeps = true;
       enableParallelBuilding = true;
       env.CFLAGS = "-Os -g -D_WIN32_WINNT=0x0601 -DWINVER=0x0601";
-      preBuild = pkgs.lib.optionalString windows.stdenv.cc.isClang ''
+      configureFlags = [ "--disable-shared" "--enable-static"
+                         "--disable-dependency-tracking" ] ++ flags;
+    } // pkgs.lib.optionalAttrs windows.stdenv.cc.isClang {
+      preBuild = ''
         for variable in RC WINDRES; do
           makeFlagsArray+=("$variable=${windows.stdenv.cc.targetPrefix}windres -I${windows.windows.mingw_w64_headers}/include")
         done
       '';
-      configureFlags = [ "--disable-shared" "--enable-static"
-                         "--disable-dependency-tracking" ] ++ flags;
-    };
+    });
   jansson = cmakeLibrary windows.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
     "-DJANSSON_BUILD_DOCS=OFF"
