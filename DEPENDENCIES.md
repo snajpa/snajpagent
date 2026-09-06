@@ -81,6 +81,10 @@ its hashes. Matching optional symbols are retained as a dSYM with the same
 UUID. This is not Developer ID signing, notarization, or runtime qualification:
 the initial targets are explicitly experimental until actual macOS tests
 pass. No separately installed third-party shared libraries are introduced.
+Application link-time optimization uses the pinned LLVM toolchain. Its merged
+object stays in the isolated build directory until dSYM generation, preserving
+optimized application debug information; it is not a runtime file or a new
+host-build default.
 
 `make -jN prod-macos-universal` uses independent slice prerequisites and
 `llvm-lipo` to combine the executables and their dSYM DWARF payloads. The
