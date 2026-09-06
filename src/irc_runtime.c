@@ -432,9 +432,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
     }
     if ((hosting && host_owner(irc)) || irc->owner_count ==
         SNAG_CONFIG_IRC_CLIENT_MAX + (host_owner(irc) || hosting ? 1u : 0u)) {
-        snag_errorf(error, error_size, "IRC role limit reached");
-        errno = E2BIG;
-        return -1;
+        return snag_fail(error, error_size, E2BIG, "IRC role limit reached");
     }
     if (irc->last_destination_id == UINT32_MAX) {
         errno = EOVERFLOW;

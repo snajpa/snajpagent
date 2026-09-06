@@ -70,10 +70,8 @@ add_client(struct snag_cli *cli, const char *value,
     char *copy;
 
     if (cli->irc_client_count >= SNAG_CLI_IRC_CLIENT_MAX) {
-        snag_errorf(error, error_size, "at most %u -c options are supported",
+        return snag_fail(error, error_size, E2BIG, "at most %u -c options are supported",
                   SNAG_CLI_IRC_CLIENT_MAX);
-        errno = E2BIG;
-        return -1;
     }
     copy = snag_strdup_checked(value, SNAG_CONFIG_URL_MAX);
     if (!copy) {
@@ -84,9 +82,7 @@ add_client(struct snag_cli *cli, const char *value,
     for (size_t i = 0; i < cli->irc_client_count; ++i)
         if (strcmp(cli->irc_clients[i], copy) == 0) {
             free(copy);
-            snag_errorf(error, error_size, "duplicate -c endpoint");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "duplicate -c endpoint");
         }
     cli->irc_clients[cli->irc_client_count++] = copy;
     return 0;
@@ -97,9 +93,7 @@ set_once(char **slot, const char *value, const char *name,
          char *error, size_t error_size)
 {
     if (*slot) {
-        snag_errorf(error, error_size, "duplicate %s option", name);
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "duplicate %s option", name);
     }
     *slot = snag_strdup_checked(value, SNAG_PATH_MAX_BYTES);
     if (!*slot) {
@@ -142,9 +136,7 @@ set_color(struct snag_cli *cli, enum snag_cli_color_mode color,
           const char *name, char *error, size_t error_size)
 {
     if (cli->color != SNAG_CLI_COLOR_UNSET) {
-        snag_errorf(error, error_size, "duplicate %s option", name);
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "duplicate %s option", name);
     }
     cli->color = color;
     return 0;
@@ -155,9 +147,7 @@ set_markdown(struct snag_cli *cli, enum snag_cli_markdown_mode markdown,
              const char *name, char *error, size_t error_size)
 {
     if (cli->markdown != SNAG_CLI_MARKDOWN_UNSET) {
-        snag_errorf(error, error_size, "duplicate %s option", name);
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "duplicate %s option", name);
     }
     cli->markdown = markdown;
     return 0;
@@ -176,10 +166,8 @@ parse_color_value(struct snag_cli *cli, const char *value,
     else if (strcmp(value, "never") == 0)
         color = SNAG_CLI_COLOR_NEVER;
     else {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "%s accepts auto, always, or never", name);
-        errno = EINVAL;
-        return -1;
     }
     return set_color(cli, color, name, error, error_size);
 }
@@ -249,9 +237,7 @@ parse_short(struct snag_cli *cli, int argc, char **argv, int *index,
             break;
         }
         default:
-            snag_errorf(error, error_size, "unknown option -%c", flag);
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "unknown option -%c", flag);
         }
     }
     return 0;
@@ -272,10 +258,8 @@ read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
     unsigned char chunk[4096];
 
     if (snag_isatty(STDIN_FILENO) == 1) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "-e requires a prompt after -- or non-terminal stdin");
-        errno = EINVAL;
-        return -1;
     }
     snag_buf_init(&prompt, SNAG_MAX_DIRECT_PROMPT + 2u);
     for (;;) {
@@ -460,10 +444,8 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
                    strncmp(arg, "--client=", 9u) == 0) {
             const char *attached = arg[8] == '=' ? arg + 9u : NULL;
             if (attached && !*attached) {
-                snag_errorf(error, error_size,
+                return snag_fail(error, error_size, EINVAL,
                           "--client= requires a nonempty endpoint");
-                errno = EINVAL;
-                return -1;
             }
             const char *value = optional_endpoint(argc, argv, &i, attached);
             if (add_client(cli, value, error, error_size) < 0)
@@ -472,10 +454,8 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
                    strncmp(arg, "--listen=", 9u) == 0) {
             const char *attached = arg[8] == '=' ? arg + 9u : NULL;
             if (attached && !*attached) {
-                snag_errorf(error, error_size,
+                return snag_fail(error, error_size, EINVAL,
                           "--listen= requires a nonempty endpoint");
-                errno = EINVAL;
-                return -1;
             }
             const char *value = optional_endpoint(argc, argv, &i, attached);
             if (set_once(&cli->irc_listen, value, "--listen",

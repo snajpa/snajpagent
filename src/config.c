@@ -1153,10 +1153,8 @@ validate_shell(struct snag_config *config, char *error, size_t error_size)
     free(resolved);
     return 0;
 invalid:
-    snag_errorf(error, error_size,
+    return snag_fail(error, error_size, EINVAL,
               "configured shell must resolve to an executable regular file");
-    errno = EINVAL;
-    return -1;
 }
 
 static bool
@@ -1176,18 +1174,14 @@ validate_config(struct snag_config *config, bool private_file,
                  char *error, size_t error_size)
 {
     if (config_has_literals(config) && !private_file) {
-        snag_errorf(error, error_size, "literal secrets require an owner-private configuration file (0600)");
-        errno = EACCES;
-        return -1;
+        return snag_fail(error, error_size, EACCES, "literal secrets require an owner-private configuration file (0600)");
     }
     for (size_t i = 0; i < config->provider_count; ++i) {
         if (config->providers[i].auth == SNAG_AUTH_CHATGPT &&
             (strcmp(config->providers[i].base_url, SNAG_CHATGPT_BASE) != 0 ||
              config->providers[i].api_key.kind != SNAG_SECRET_NONE)) {
-            snag_errorf(error, error_size,
+            return snag_fail(error, error_size, EINVAL,
                        "chatgpt authentication requires " SNAG_CHATGPT_BASE " and no api_key");
-            errno = EINVAL;
-            return -1;
         }
     }
     for (size_t i = 0; i < config->model_limit_count; ++i) {
@@ -1197,26 +1191,20 @@ validate_config(struct snag_config *config, bool private_file,
              !limit->max_output_tokens) ||
             (limit->context_window_tokens && limit->max_output_tokens &&
              limit->max_output_tokens >= limit->context_window_tokens)) {
-            snag_errorf(error, error_size,
+            return snag_fail(error, error_size, EINVAL,
                       "invalid model-limit section for %s/%s",
                       limit->provider, limit->model);
-            errno = EINVAL;
-            return -1;
         }
     }
     if (config->default_timeout_ms > config->max_timeout_ms) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "tool default_timeout_ms cannot exceed max_timeout_ms");
-        errno = EINVAL;
-        return -1;
     }
     if (validate_shell(config, error, error_size) < 0)
         return -1;
     if (config->provider[0] && !snag_config_provider(config, config->provider)) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "configured agent provider is not defined");
-        errno = EINVAL;
-        return -1;
     }
     return 0;
 }
@@ -1234,9 +1222,7 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
     int rc = -1;
 
     if (!config->shell) {
-        snag_errorf(error, error_size, "cannot initialize configuration defaults");
-        errno = ENOMEM;
-        return -1;
+        return snag_fail(error, error_size, ENOMEM, "cannot initialize configuration defaults");
     }
     owned_path = snag_config_path(explicit_path, dotdir, error, error_size);
     if (!owned_path)

@@ -383,9 +383,7 @@ write_cache(struct snag_store *store, const json_t *providers,
     if (!store || store->root_fd < 0 || !cache || !updated_at_ms ||
         updated_at_ms > (uint64_t)INT64_MAX ||
         !providers_valid(providers, true)) {
-        snag_errorf(error, error_size, "refusing to write an invalid model cache");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "refusing to write an invalid model cache");
     }
     root = json_pack("{s:O,s:i,s:I}", "providers", providers,
                      "schema_version", SNAG_MODEL_CACHE_SCHEMA,
@@ -491,9 +489,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
     if (!store || store->root_fd < 0 || !cache || !updated_at_ms ||
         updated_at_ms > (uint64_t)INT64_MAX ||
         !providers_valid(providers, false)) {
-        snag_errorf(error, error_size, "invalid model cache replacement");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid model cache replacement");
     }
     lock_fd = lock_cache(store, error, error_size);
     if (lock_fd < 0)
@@ -896,9 +892,7 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
 
     if (!config || !provider || !model || !*model || !protocol || !capacity ||
         (strcmp(protocol, "codex") != 0 && strcmp(protocol, "openai") != 0)) {
-        snag_errorf(error, error_size, "invalid model capacity selection");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid model capacity selection");
     }
     memset(capacity, 0, sizeof(*capacity));
     cached_provider = provider_entry(cache ? cache->providers : NULL,
@@ -921,9 +915,7 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
     override = snag_config_resolve_limits(config, provider->name, model, &configured, sources);
     if (limits) {
         if (!read_limits(limits, capacity)) {
-            snag_errorf(error, error_size, "invalid cached capacity limits");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid cached capacity limits");
         }
         catalog_used = capacity->context_window_tokens ||
             capacity->max_context_window_tokens ||
@@ -942,15 +934,13 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
     if (override)
         capacity->source = SNAG_CAPACITY_CONFIG;
     if (capacity->context_window_tokens && capacity->max_output_tokens >= capacity->context_window_tokens) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "output reservation %llu (rule %s) leaves no input in context %llu (rule %s) for %s/%s",
                   (unsigned long long)capacity->max_output_tokens,
                   sources[2] ? (sources[2]->model[0] ? sources[2]->model : "provider-wide") : "catalog",
                   (unsigned long long)capacity->context_window_tokens,
                   sources[0] ? (sources[0]->model[0] ? sources[0]->model : "provider-wide") : "catalog",
                   provider->name, model);
-        errno = EINVAL;
-        return -1;
     }
     if (!override && catalog_used)
         capacity->source = SNAG_CAPACITY_CATALOG;

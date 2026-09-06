@@ -33,9 +33,7 @@ fail(struct snag_sse_parser *parser, char *error, size_t error_size,
      const char *message)
 {
     parser->failed = true;
-    snag_errorf(error, error_size, "%s", message);
-    errno = EPROTO;
-    return -1;
+    return snag_fail(error, error_size, EPROTO, "%s", message);
 }
 
 static int

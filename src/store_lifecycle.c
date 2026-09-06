@@ -115,9 +115,7 @@ snag_session_complete_delete(struct snag_store *store, struct snag_session *sess
 {
     if (!store || !session || !session->delete_requested ||
         !session->trash_name[0] || session->dir_fd < 0) {
-        snag_errorf(error, error_size, "no completed delete intent is open");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "no completed delete intent is open");
     }
     if (snag_rename_at(store->sessions_fd, session->id,
                  store->trash_fd, session->trash_name) < 0) {
@@ -143,9 +141,7 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
     int rc = -1;
 
     if (!snag_store_trash_id(trash_name, id)) {
-        snag_errorf(error, error_size, "invalid deleted-session trash name");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid deleted-session trash name");
     }
     dir_fd = snag_open_read_security_at(store->trash_fd, trash_name, true);
     if (dir_fd < 0) {
@@ -185,9 +181,7 @@ snag_session_delete(struct snag_store *store, struct snag_session *session,
     if (!confirmed_prefix || strlen(confirmed_prefix) != 8u ||
         !snag_hex_is_lower(confirmed_prefix, 8u) ||
         memcmp(confirmed_prefix, session->id, 8u) != 0) {
-        snag_errorf(error, error_size, "delete confirmation did not match session id");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "delete confirmation did not match session id");
     }
     if (make_trash_name(session, trash_name, error, error_size) < 0)
         return -1;

@@ -2818,6 +2818,12 @@ run_base(int argc, char **argv)
     (void)argc;
     (void)argv;
 #endif
+    char failure[8];
+    assert(snag_fail(failure, sizeof(failure), EINVAL, "%s %u", "bad", 3u) == -1);
+    assert(errno == EINVAL && strcmp(failure, "bad 3") == 0);
+    assert(snag_fail(failure, sizeof(failure), EIO, "%s", "too long a message") == -1);
+    assert(errno == EIO && strcmp(failure, "too lon") == 0);
+    assert(snag_fail(NULL, 0u, EOVERFLOW, "unretained") == -1 && errno == EOVERFLOW);
     assert(snag_irc_nick_mentioned("@ALICE: hi", "alice"));
     assert(snag_irc_nick_mentioned("{op}: hi", "[OP]"));
     assert(snag_irc_nick_mentioned("hello alice", "alice"));

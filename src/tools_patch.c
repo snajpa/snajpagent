@@ -227,35 +227,25 @@ path_valid(const char *path, char *error, size_t error_size)
 
     if (!len || len > PATCH_PATH_MAX || path[0] == '/' ||
         !snag_utf8_valid((const unsigned char *)path, len, true)) {
-        snag_errorf(error, error_size, "patch path is not a bounded relative UTF-8 path");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "patch path is not a bounded relative UTF-8 path");
     }
     if (len >= 2u && ((path[0] >= 'A' && path[0] <= 'Z') ||
                       (path[0] >= 'a' && path[0] <= 'z')) &&
         path[1] == ':') {
-        snag_errorf(error, error_size, "patch path uses a drive-prefix form");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "patch path uses a drive-prefix form");
     }
     if (starts_with(path, "//")) {
-        snag_errorf(error, error_size, "patch path uses a UNC-like form");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "patch path uses a UNC-like form");
     }
     while (*p) {
         if ((unsigned char)*p < 0x20u || (unsigned char)*p == 0x7fu ||
             *p == '\\') {
-            snag_errorf(error, error_size, "patch path contains a rejected byte");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "patch path contains a rejected byte");
         }
         if (*p == '/') {
             if (p == component || (p - component == 1 && component[0] == '.') ||
                 (p - component == 2 && component[0] == '.' && component[1] == '.')) {
-                snag_errorf(error, error_size, "patch path contains an invalid component");
-                errno = EINVAL;
-                return -1;
+                return snag_fail(error, error_size, EINVAL, "patch path contains an invalid component");
             }
             component = p + 1;
         }
@@ -263,9 +253,7 @@ path_valid(const char *path, char *error, size_t error_size)
     }
     if (p == component || (p - component == 1 && component[0] == '.') ||
         (p - component == 2 && component[0] == '.' && component[1] == '.')) {
-        snag_errorf(error, error_size, "patch path contains an invalid final component");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "patch path contains an invalid final component");
     }
     return 0;
 }
@@ -281,9 +269,7 @@ normalize_patch_text(const char *patch, size_t len, char **out,
     *out = NULL;
     if (len > PATCH_TEXT_MAX ||
         !snag_utf8_valid((const unsigned char *)patch, len, true)) {
-        snag_errorf(error, error_size, "patch must be bounded UTF-8 without NUL");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "patch must be bounded UTF-8 without NUL");
     }
     text = malloc(len + 1u);
     if (!text)
@@ -354,9 +340,7 @@ check_duplicate_path(const struct patch_set *set, const char *path,
 {
     for (size_t i = 0; i < set->count; ++i) {
         if (strcmp(set->ops[i].path, path) == 0) {
-            snag_errorf(error, error_size, "patch contains duplicate target path");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "patch contains duplicate target path");
         }
     }
     return 0;
@@ -370,9 +354,7 @@ parse_hunk_header(const char *line, enum hunk_type *type,
     if (strcmp(line, "@@") == 0)
         return 0;
     if (!starts_with(line, "@@ ") || line[3] == '\0') {
-        snag_errorf(error, error_size, "invalid hunk header");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid hunk header");
     }
     if (strcmp(line + 3, "@start") == 0)
         *type = HUNK_START;
@@ -389,9 +371,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
 
     if (strcmp(lines[0], "*** Begin Patch") != 0 ||
         strcmp(lines[line_count - 1u], "*** End Patch") != 0) {
-        snag_errorf(error, error_size, "patch frame must begin and end exactly");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "patch frame must begin and end exactly");
     }
     while (i + 1u < line_count) {
         struct patch_op *op;
@@ -408,9 +388,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
             type = OP_UPDATE;
             path = lines[i] + strlen("*** Update File: ");
         } else {
-            snag_errorf(error, error_size, "expected a file operation header");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "expected a file operation header");
         }
         if (path_valid(path, error, error_size) < 0 ||
             check_duplicate_path(set, path, error, error_size) < 0 ||
@@ -422,9 +400,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
         if (type == OP_ADD) {
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 if (lines[i][0] != '+') {
-                    snag_errorf(error, error_size, "add-file body lines must start with +");
-                    errno = EINVAL;
-                    return -1;
+                    return snag_fail(error, error_size, EINVAL, "add-file body lines must start with +");
                 }
                 if (line_vec_push(&op->add_lines, lines[i] + 1) < 0)
                     return -1;
@@ -433,9 +409,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
             }
         } else if (type == OP_DELETE) {
             if (i + 1u < line_count && !is_file_header(lines[i])) {
-                snag_errorf(error, error_size, "delete-file sections cannot have a body");
-                errno = EINVAL;
-                return -1;
+                return snag_fail(error, error_size, EINVAL, "delete-file sections cannot have a body");
             }
         } else {
             while (i + 1u < line_count && !is_file_header(lines[i])) {
@@ -450,17 +424,13 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                        !is_hunk_header(lines[i])) {
                     if (hunk->type == HUNK_START || hunk->type == HUNK_END) {
                         if (lines[i][0] != '+') {
-                            snag_errorf(error, error_size,
+                            return snag_fail(error, error_size, EINVAL,
                                       "anchored hunks may contain only + lines");
-                            errno = EINVAL;
-                            return -1;
                         }
                     } else if (lines[i][0] != ' ' && lines[i][0] != '-' &&
                                lines[i][0] != '+') {
-                        snag_errorf(error, error_size,
+                        return snag_fail(error, error_size, EINVAL,
                                   "update hunk body lines must start with space, -, or +");
-                        errno = EINVAL;
-                        return -1;
                     }
                     if (line_vec_push(&hunk->preview_lines, lines[i]) < 0)
                         return -1;
@@ -483,30 +453,22 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                 }
                 if ((hunk->type == HUNK_START || hunk->type == HUNK_END) &&
                     hunk->new_lines.n == 0u) {
-                    snag_errorf(error, error_size,
+                    return snag_fail(error, error_size, EINVAL,
                               "anchored hunks must insert at least one line");
-                    errno = EINVAL;
-                    return -1;
                 }
                 if (hunk->type == HUNK_NORMAL &&
                     (!hunk->changed || hunk->old_lines.n == 0u)) {
-                    snag_errorf(error, error_size,
+                    return snag_fail(error, error_size, EINVAL,
                               "normal hunks need a nonempty old pattern and a change");
-                    errno = EINVAL;
-                    return -1;
                 }
             }
             if (op->hunk_count == 0u) {
-                snag_errorf(error, error_size, "update-file sections need at least one hunk");
-                errno = EINVAL;
-                return -1;
+                return snag_fail(error, error_size, EINVAL, "update-file sections need at least one hunk");
             }
         }
     }
     if (set->count == 0u) {
-        snag_errorf(error, error_size, "patch contains no file operations");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "patch contains no file operations");
     }
     return 0;
 }
@@ -561,9 +523,7 @@ open_parent_dir(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1
         len = slash ? (size_t)(slash - p) : strlen(p);
         if (len > SNAG_NAME_MAX_BYTES) {
             close(dir_fd);
-            snag_errorf(error, error_size, "patch path component is too long");
-            errno = ENAMETOOLONG;
-            return -1;
+            return snag_fail(error, error_size, ENAMETOOLONG, "patch path component is too long");
         }
         memcpy(leaf, p, len);
         leaf[len] = '\0';
@@ -680,9 +640,7 @@ parse_file_lines(char *bytes, size_t len, struct line_vec *lines,
     size_t start = 0;
 
     if (!snag_utf8_valid((const unsigned char *)bytes, len, true)) {
-        snag_errorf(error, error_size, "update target is not strict UTF-8 without NUL");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "update target is not strict UTF-8 without NUL");
     }
     *final_nl = len && bytes[len - 1u] == '\n';
     for (size_t i = 0; i < len; ++i) {
@@ -692,10 +650,8 @@ parse_file_lines(char *bytes, size_t len, struct line_vec *lines,
             continue;
         if ((is_crlf && (i + 1u >= len || bytes[i + 1u] != '\n')) ||
             (style != STYLE_NONE && (style == STYLE_CRLF) != is_crlf)) {
-            snag_errorf(error, error_size,
+            return snag_fail(error, error_size, EINVAL,
                         "update target has mixed or bare carriage-return line endings");
-            errno = EINVAL;
-            return -1;
         }
         style = is_crlf ? STYLE_CRLF : STYLE_LF;
         bytes[i] = '\0';
@@ -723,9 +679,9 @@ line_range_matches(const struct line_vec *lines, size_t pos,
     return true;
 }
 
-static int
+static size_t
 find_unique_match(const struct line_vec *lines, size_t cursor,
-                  const struct line_vec *pattern, size_t *match,
+                  const struct line_vec *pattern,
                   char *error, size_t error_size)
 {
     size_t matches = 0;
@@ -742,14 +698,12 @@ find_unique_match(const struct line_vec *lines, size_t cursor,
             break;
     }
     if (matches != 1u) {
-        snag_errorf(error, error_size,
+        (void)snag_fail(error, error_size, EINVAL,
                   matches ? "update hunk match is ambiguous" :
                             "update hunk did not match");
-        errno = EINVAL;
-        return -1;
+        return SIZE_MAX;
     }
-    *match = found;
-    return 0;
+    return found;
 }
 
 static int
@@ -832,9 +786,9 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
             continue;
         }
         {
-            size_t match;
-            if (find_unique_match(&lines, cursor, &hunk->old_lines, &match,
-                                  error, error_size) < 0)
+            size_t match = find_unique_match(&lines, cursor, &hunk->old_lines,
+                                             error, error_size);
+            if (match == SIZE_MAX)
                 goto out;
             if (append_line_range(&op->new_bytes, &lines, cursor, match,
                                   op->eol_crlf) < 0 ||
@@ -883,10 +837,8 @@ validate_and_compute(struct patch_set *set, int root_fd,
                 return -1;
         }
         if (set->total_file_bytes > PATCH_TOTAL_MAX) {
-            snag_errorf(error, error_size,
+            return snag_fail(error, error_size, EOVERFLOW,
                       "patch input and output files exceed 48 MiB total");
-            errno = EOVERFLOW;
-            return -1;
         }
     }
     return 0;
@@ -1286,10 +1238,8 @@ workdir_valid(const char *workdir, size_t len, const char *session_workspace,
         strcmp(workdir, session_workspace) != 0 ||
         !snag_utf8_valid((const unsigned char *)workdir, len, true) ||
         snag_stat(workdir, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "apply_patch workdir must be the session workspace directory");
-        errno = EINVAL;
-        return -1;
     }
     return 0;
 }
@@ -1315,9 +1265,7 @@ snag_tools_apply_patch(const struct snag_response_item *call,
     int rc = -1;
 
     if (!result) {
-        snag_errorf(error, error_size, "invalid apply_patch result destination");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid apply_patch result destination");
     }
     *result = NULL;
     snag_buf_init(&summary, PATCH_MODEL_MAX);

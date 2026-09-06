@@ -51,6 +51,7 @@ int snag_command_finish(struct snag_buf *command);
 const char *snag_command_shell_note(void);
 
 void snag_errorf(char *error, size_t size, const char *fmt, ...);
+int snag_fail(char *error, size_t size, int code, const char *fmt, ...);
 
 bool snag_size_add(size_t a, size_t b, size_t *out);
 size_t snag_utf8_size(unsigned char first);

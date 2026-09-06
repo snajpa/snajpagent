@@ -405,17 +405,13 @@ identifiers_valid(const struct snag_response_graph *graph,
 
         if (public_kind(item->kind) &&
             !snag_hex_is_lower(item->local_item_id, SNAG_ID_HEX_LEN)) {
-            snag_errorf(error, error_size,
+            return snag_fail(error, error_size, EINVAL,
                       "response item %zu has an invalid local id", i);
-            errno = EINVAL;
-            return -1;
         }
         if (item->kind == SNAG_ITEM_TOOL_CALL &&
             !snag_hex_is_lower(item->call_id, SNAG_ID_HEX_LEN)) {
-            snag_errorf(error, error_size,
+            return snag_fail(error, error_size, EINVAL,
                       "response item %zu has an invalid call id", i);
-            errno = EINVAL;
-            return -1;
         }
         for (size_t j = 0; j < i; ++j) {
             struct snag_response_item previous = snag_response_graph_item(graph, j);
@@ -423,18 +419,14 @@ identifiers_valid(const struct snag_response_graph *graph,
                 public_kind(previous.kind) &&
                 strcmp(item->local_item_id,
                        previous.local_item_id) == 0) {
-                snag_errorf(error, error_size,
+                return snag_fail(error, error_size, EINVAL,
                           "response graph repeats a local item id");
-                errno = EINVAL;
-                return -1;
             }
             if (item->kind == SNAG_ITEM_TOOL_CALL &&
                 previous.kind == SNAG_ITEM_TOOL_CALL &&
                 strcmp(item->call_id, previous.call_id) == 0) {
-                snag_errorf(error, error_size,
+                return snag_fail(error, error_size, EINVAL,
                           "response graph repeats a call id");
-                errno = EINVAL;
-                return -1;
             }
         }
     }
@@ -455,9 +447,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
 
     memset(decision, 0, sizeof(*decision));
     if (!graph->provider_response_id || graph->count > SNAG_MAX_RESPONSE_ITEMS) {
-        snag_errorf(error, error_size, "response graph has no valid response id");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "response graph has no valid response id");
     }
     if (identifiers_valid(graph, error, error_size) < 0)
         return -1;
@@ -466,9 +456,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
         const struct snag_response_item *item = &view;
         bad_index = i;
         if (!provider_id_valid(item->provider_item_id)) {
-            snag_errorf(error, error_size, "response item %zu has invalid identity", i);
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "response item %zu has invalid identity", i);
         }
         if (!item_valid(json_array_get(graph->items, i)))
             goto bad_item;
@@ -493,9 +481,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
         }
     }
     if (calls > SNAG_MAX_CALLS_PER_RESPONSE) {
-        snag_errorf(error, error_size, "response graph exceeds 32 tool calls");
-        errno = EOVERFLOW;
-        return -1;
+        return snag_fail(error, error_size, EOVERFLOW, "response graph exceeds 32 tool calls");
     }
     {
         json_t *items = graph->items ? json_incref(graph->items) : json_array();
@@ -503,9 +489,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
         if (items)
             json_decref(items);
         if (rc < 0) {
-            snag_errorf(error, error_size, "response graph exceeds 8 MiB");
-            errno = EOVERFLOW;
-            return -1;
+            return snag_fail(error, error_size, EOVERFLOW, "response graph exceeds 8 MiB");
         }
     }
     decision->call_count = calls;
@@ -533,9 +517,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
     return 0;
 
 bad_item:
-    snag_errorf(error, error_size, "response item %zu has an invalid shape", bad_index);
-    errno = EINVAL;
-    return -1;
+    return snag_fail(error, error_size, EINVAL, "response item %zu has an invalid shape", bad_index);
 }
 
 int
@@ -568,15 +550,11 @@ snag_response_graph_from_json(struct snag_response_graph *graph, const json_t *i
                              char *error, size_t error_size)
 {
     if (!json_is_array(items) || json_array_size(items) > SNAG_MAX_RESPONSE_ITEMS) {
-        snag_errorf(error, error_size, "invalid response item array");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid response item array");
     }
     for (size_t i = 0u; i < json_array_size(items); ++i)
         if (append_item(graph, json_deep_copy(json_array_get(items, i))) < 0) {
-            snag_errorf(error, error_size, "invalid response item at index %zu", graph->count);
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid response item at index %zu", graph->count);
         }
     return identifiers_valid(graph, error, error_size);
 }

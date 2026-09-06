@@ -101,9 +101,7 @@ resolve_prefix(struct snag_store *store, const char *prefix,
 
     memset(target, 0, sizeof(*target));
     if (len < 8u || len > SNAG_ID_HEX_LEN || !snag_hex_is_lower(prefix, len)) {
-        snag_errorf(error, error_size, "session id must be 8..32 lowercase hex characters");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "session id must be 8..32 lowercase hex characters");
     }
     dir = open_sessions_dir(store, error, error_size);
     if (!dir)
@@ -266,9 +264,7 @@ snag_session_open_last(struct snag_store *store, struct snag_session *session,
     if (finish_directory(dir, error, error_size) < 0)
         return -1;
     if (!best[0]) {
-        snag_errorf(error, error_size, "no matching active session");
-        errno = ENOENT;
-        return -1;
+        return snag_fail(error, error_size, ENOENT, "no matching active session");
     }
     return open_full_id(store, session, best, error, error_size);
 }

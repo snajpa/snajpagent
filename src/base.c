@@ -128,6 +128,19 @@ snag_errorf(char *error, size_t size, const char *fmt, ...)
     va_end(ap);
 }
 
+int
+snag_fail(char *error, size_t size, int code, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    if (size)
+        (void)vsnprintf(error, size, fmt, ap);
+    va_end(ap);
+    errno = code;
+    return -1;
+}
+
 size_t
 snag_utf8_size(unsigned char first)
 {

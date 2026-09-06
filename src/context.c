@@ -715,10 +715,8 @@ append_interrupted_prefix(struct context_builder *builder, const json_t *data,
 
     if (!json_is_array(partial) ||
         append_response_items(builder, partial, error, error_size) < 0) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "invalid interrupted public response context");
-        errno = EINVAL;
-        return -1;
     }
     return 0;
 }
@@ -867,9 +865,7 @@ context_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, co
     if (strcmp(type, "irc_snapshot") == 0) {
         const char *text = snag_json_string(data, "text");
         if (!text) {
-            snag_errorf(error, error_size, "invalid IRC snapshot context");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid IRC snapshot context");
         }
         return append_message(builder, "user", text);
     }
@@ -880,9 +876,7 @@ context_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, co
         bool goal_turn = kind && strcmp(kind, "goal") == 0;
         if (!turn_id || !snag_hex_is_lower(turn_id, SNAG_ID_HEX_LEN) ||
             !text || !kind || builder->active_turn) {
-            snag_errorf(error, error_size, "invalid turn context transition");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid turn context transition");
         }
         if (builder->steering &&
             strcmp(turn_id, builder->target_turn_id) == 0 &&
@@ -904,10 +898,8 @@ context_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, co
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 ||
             append_deferred_steering(builder) < 0) {
-            snag_errorf(error, error_size,
+            return snag_fail(error, error_size, EINVAL,
                       "invalid response-start steering context");
-            errno = EINVAL;
-            return -1;
         }
         return 0;
     }
@@ -925,9 +917,7 @@ context_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, co
             !steering_id ||
             (pending &&
              !steering_matches_snapshot(builder, steering_id, text))) {
-            snag_errorf(error, error_size, "invalid steering context transition");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid steering context transition");
         }
         if (strcmp(type, "steering_added") != 0)
             return append_message(builder, "developer", text);
@@ -948,10 +938,8 @@ context_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, co
             (pending &&
              !steering_matches_snapshot(builder, correction_id, text)) ||
             append_interrupted_prefix(builder, data, error, error_size) < 0) {
-            snag_errorf(error, error_size,
+            return snag_fail(error, error_size, EINVAL,
                        "invalid response-output correction context");
-            errno = EINVAL;
-            return -1;
         }
         return append_message(builder,
                               "developer", text);
@@ -964,9 +952,7 @@ context_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, co
             goto invalid_interrupted;
         return append_interrupted_prefix(builder, data, error, error_size);
 invalid_interrupted:
-        snag_errorf(error, error_size, "invalid interrupted response context");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid interrupted response context");
     }
     if (strcmp(type, "response_completed") == 0) {
         const char *turn_id = snag_json_string(data, "turn_id");
@@ -975,9 +961,7 @@ invalid_interrupted:
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 ||
             !status || strcmp(status, "completed") != 0) {
-            snag_errorf(error, error_size, "invalid completed response context");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid completed response context");
         }
         return append_response_items(builder, items, error, error_size);
     }
@@ -988,9 +972,7 @@ invalid_interrupted:
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !call_id ||
             snag_tool_result_valid(result) < 0) {
-            snag_errorf(error, error_size, "invalid tool result context");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid tool result context");
         }
         return append_tool_result(builder, call_id, result);
     }
@@ -1001,18 +983,14 @@ invalid_interrupted:
         if (!builder->active_turn || !turn_id ||
             strcmp(turn_id, builder->active_turn_id) != 0 || !cause ||
             snag_tool_result_valid(result) < 0) {
-            snag_errorf(error, error_size, "invalid process closure context");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid process closure context");
         }
         return append_process_closed(builder, cause, result);
     }
     if (strcmp(type, "turn_completed") == 0 ||
         strcmp(type, "turn_completed_silent") == 0) {
         if (!builder->active_turn) {
-            snag_errorf(error, error_size, "invalid completed turn context");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid completed turn context");
         }
         if (append_deferred_steering(builder) < 0)
             return -1;
@@ -1023,9 +1001,7 @@ invalid_interrupted:
     if (strcmp(type, "turn_failed") == 0) {
         const char *class_name = snag_json_string(data, "class");
         if (!builder->active_turn || !class_name) {
-            snag_errorf(error, error_size, "invalid failed turn context");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid failed turn context");
         }
         if (append_deferred_steering(builder) < 0 ||
             append_host_failed(builder, class_name) < 0)
@@ -1038,9 +1014,7 @@ invalid_interrupted:
         const char *origin = snag_json_string(data, "origin");
         const char *reason = snag_json_string(data, "reason");
         if (!builder->active_turn || !origin || !reason) {
-            snag_errorf(error, error_size, "invalid interrupted turn context");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "invalid interrupted turn context");
         }
         if (append_deferred_steering(builder) < 0 ||
             append_host_interrupted(builder, origin, reason) < 0)
@@ -1468,9 +1442,7 @@ compact_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, co
         json_t *result = json_object_get(data, "result");
         const char *status = snag_json_string(result, "status");
         if (!builder->compact_pending_calls) {
-            snag_errorf(error, error_size, "compact tool result has no pending call");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "compact tool result has no pending call");
         }
         --builder->compact_pending_calls;
         for (size_t i = 0u; i < builder->compact_call_count; ++i)
@@ -1510,17 +1482,13 @@ snag_context_compact_output_valid(const json_t *output,
         *output_bytes = 0u;
     if (!json_is_array(output) || json_array_size(output) == 0u ||
         json_array_size(output) > SNAG_CONTEXT_MAX_COMPACT_ITEMS) {
-        snag_errorf(error, error_size, "compact output must be a nonempty bounded array");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "compact output must be a nonempty bounded array");
     }
     for (size_t i = 0; i < json_array_size(output); ++i) {
         json_t *item = json_array_get(output, i);
         const char *type = snag_json_string(item, "type");
         if (!json_is_object(item) || !type || !*type || strlen(type) > 128u) {
-            snag_errorf(error, error_size, "compact output contains an unsupported item");
-            errno = EINVAL;
-            return -1;
+            return snag_fail(error, error_size, EINVAL, "compact output contains an unsupported item");
         }
     }
     if (snag_json_digest_bounded(output, SNAG_CONTEXT_MAX_COMPACT,
@@ -1658,9 +1626,7 @@ snag_context_compact_output_count_request_build(const json_t *output,
     if (count_request)
         snag_json_document_free(count_request);
     if (!output || !model || !count_request) {
-        snag_errorf(error, error_size, "invalid compact output count request");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid compact output count request");
     }
     count_request->value = compact_count_request_object(output, model);
     if (!count_request->value) {

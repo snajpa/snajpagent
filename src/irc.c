@@ -446,9 +446,7 @@ snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
     }
     if ((cli->irc_no_listen && cli->irc_listen) ||
         (cli->irc_no_client && cli->irc_client_count)) {
-        snag_errorf(error, error_size, "conflicting positive and negative IRC role options");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "conflicting positive and negative IRC role options");
     }
     if (cli->irc_no_listen)
         config->irc.listen_explicit = false;
@@ -496,10 +494,8 @@ snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli,
                     error_size) < 0)
         return -1;
     if (snag_irc_enabled(config) && cli->prompt && !cli->prompt_after_dashdash) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "networked initial chat text must follow --");
-        errno = EINVAL;
-        return -1;
     }
     return snag_irc_normalize(config, error, error_size);
 }
@@ -510,9 +506,7 @@ snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
     const char *login;
 
     if (!config || config->irc.client_count > SNAG_CONFIG_IRC_CLIENT_MAX) {
-        snag_errorf(error, error_size, "invalid IRC configuration");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid IRC configuration");
     }
     if (!config->irc.model_nick[0]) {
         if (numbered_nick(config->irc.model_nick, "agent", 0u, false) < 0)
@@ -520,9 +514,7 @@ snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
         config->irc.model_nick_implicit = true;
     }
     if (!nick_valid(config->irc.model_nick)) {
-        snag_errorf(error, error_size, "IRC model nick is invalid");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "IRC model nick is invalid");
     }
     if (!endpoint_valid(config->irc.listen)) {
         snag_errorf(error, error_size, "invalid IRC listen endpoint");
@@ -537,11 +529,9 @@ snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
         for (size_t j = 0; j < i; ++j)
             if (snag_irc_endpoint_equal(config->irc.clients[i],
                                config->irc.clients[j])) {
-                snag_errorf(error, error_size,
+                return snag_fail(error, error_size, EINVAL,
                           "duplicate IRC client endpoint: %s",
                           config->irc.clients[i]);
-                errno = EINVAL;
-                return -1;
             }
     }
     if (!config->irc.operator_nick[0]) {
@@ -559,10 +549,8 @@ snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
     }
     if (!nick_valid(config->irc.operator_nick) ||
         irc_casecmp(config->irc.operator_nick, config->irc.model_nick) == 0) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "IRC operator and model nicks must be valid and distinct");
-        errno = EINVAL;
-        return -1;
     }
     if (config->irc.room_name[0]) {
         char normalized[sizeof(config->irc.room_name)];
@@ -598,10 +586,8 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     hints.ai_protocol = IPPROTO_TCP;
     gai = snag_socket_addresses(host, port, &hints, &addresses);
     if (gai != 0) {
-        snag_errorf(error, error_size, "cannot resolve IRC listen endpoint: %s",
+        return snag_fail(error, error_size, EADDRNOTAVAIL, "cannot resolve IRC listen endpoint: %s",
                   gai_strerror(gai));
-        errno = EADDRNOTAVAIL;
-        return -1;
     }
     for (it = addresses; it; it = it->ai_next) {
         fd = snag_socket_open(it->ai_family, it->ai_socktype, it->ai_protocol);
@@ -2833,9 +2819,7 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
     if (!irc || !topic || strlen(topic) > IRC_TOPIC_MAX ||
         strchr(topic, '\r') || strchr(topic, '\n') ||
         !snag_utf8_valid((const unsigned char *)topic, strlen(topic), true)) {
-        snag_errorf(error, error_size, "IRC topic is invalid or too long");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "IRC topic is invalid or too long");
     }
     if (sanitize_text(clean, sizeof(clean), topic) < 0) {
         snag_errorf(error, error_size, "IRC topic is invalid or too long");
@@ -2860,12 +2844,10 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
         ++destinations;
     }
     if (!destinations) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EACCES,
                   role == LINK_AGENT ?
                   "agent identity is not an operator in any joined room" :
                   "operator identity is not an operator in any joined room");
-        errno = EACCES;
-        return -1;
     }
     return 0;
 fail:

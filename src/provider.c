@@ -405,9 +405,7 @@ provider_endpoint_url(const struct snag_provider_config *provider,
     int written;
 
     if (!provider || !path || !url || !buffer || !buffer_size) {
-        snag_errorf(error, error_size, "invalid provider endpoint");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid provider endpoint");
     }
     base = provider->base_url;
 #if defined(SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS) || defined(SNAJPAGENT_TEST_FIXTURE)
@@ -430,9 +428,7 @@ provider_endpoint_url(const struct snag_provider_config *provider,
     written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len,
                        base, append_path);
     if (written <= 0 || (size_t)written >= buffer_size) {
-        snag_errorf(error, error_size, "provider endpoint is too long");
-        errno = ENAMETOOLONG;
-        return -1;
+        return snag_fail(error, error_size, ENAMETOOLONG, "provider endpoint is too long");
     }
     *url = buffer;
     return 0;
@@ -666,9 +662,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
                        retries_done + 1u, SNAG_PROVIDER_MAX_RETRIES,
                        reason, (unsigned long long)delay_ms);
         if (snag_ui_text(ctx->render, SNAG_UI_WARNING, line) < 0) {
-            snag_errorf(error, error_size, "provider retry diagnostics could not be rendered");
-            errno = EIO;
-            return -1;
+            return snag_fail(error, error_size, EIO, "provider retry diagnostics could not be rendered");
         }
     }
     for (;;) {
@@ -831,10 +825,8 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
     int rc;
 
     if (ctx->body_failed) {
-        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        return snag_fail(error, error_size, EOVERFLOW, ctx->error[0] ? ctx->error :
                   "provider error body could not be retained");
-        errno = EOVERFLOW;
-        return -1;
     }
     snag_buf_init(&redacted, SNAG_WIRE_BODY_MAX);
     rc = snag_wire_json_redact(ctx->error_body.data, ctx->error_body.len,
@@ -872,10 +864,8 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
     int rc = -1;
 
     if (ctx->body_failed) {
-        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        return snag_fail(error, error_size, EOVERFLOW, ctx->error[0] ? ctx->error :
                   "input-token count body could not be retained");
-        errno = EOVERFLOW;
-        return -1;
     }
     root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
                                 SNAG_WIRE_BODY_MAX, json_error,
@@ -912,10 +902,8 @@ parse_compact_body(struct provider_ctx *ctx, struct snag_json_document *output,
     int rc = -1;
 
     if (ctx->body_failed) {
-        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        return snag_fail(error, error_size, EOVERFLOW, ctx->error[0] ? ctx->error :
                   "compact response body could not be retained");
-        errno = EOVERFLOW;
-        return -1;
     }
     root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
                                 SNAG_CONTEXT_MAX_COMPACT, json_error,
@@ -1220,9 +1208,7 @@ decode_models(const unsigned char *data, size_t len, bool codex,
     if (models)
         *models = NULL;
     if (!data || !len || !models) {
-        snag_errorf(error, error_size, "invalid model catalog source");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid model catalog source");
     }
     root = snag_json_load_strict(data, len,
                                 SNAG_WIRE_BODY_MAX, json_error,
@@ -1305,10 +1291,8 @@ parse_models_body(struct provider_ctx *ctx, bool codex, json_t **models,
                   char *error, size_t error_size)
 {
     if (ctx->body_failed) {
-        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
+        return snag_fail(error, error_size, EOVERFLOW, ctx->error[0] ? ctx->error :
                   "model-list response body exceeds the supported limit");
-        errno = EOVERFLOW;
-        return -1;
     }
     return decode_models(ctx->error_body.data, ctx->error_body.len, codex,
                          models, error, error_size);
@@ -1464,21 +1448,15 @@ provider_request_setup(struct provider_ctx *ctx,
                        has_body ? "POST" : "GET",
                        url_request_target(endpoint));
     if (written <= 0 || (size_t)written >= sizeof(request_line)) {
-        snag_errorf(error, error_size, "provider request line is too long");
-        errno = ENAMETOOLONG;
-        return -1;
+        return snag_fail(error, error_size, ENAMETOOLONG, "provider request line is too long");
     }
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
-        snag_errorf(error, error_size, "libcurl could not initialize");
-        errno = EIO;
-        return -1;
+        return snag_fail(error, error_size, EIO, "libcurl could not initialize");
     }
     ctx->curl_global = true;
     ctx->curl = curl_easy_init();
     if (!ctx->curl) {
-        snag_errorf(error, error_size, "libcurl easy handle could not initialize");
-        errno = ENOMEM;
-        return -1;
+        return snag_fail(error, error_size, ENOMEM, "libcurl easy handle could not initialize");
     }
     if (request_auth_headers(ctx) < 0) {
         snag_errorf(error, error_size, "provider headers could not be allocated");
@@ -1515,9 +1493,7 @@ provider_request_setup(struct provider_ctx *ctx,
         curl_easy_setopt(ctx->curl, CURLOPT_USERAGENT,
                          SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
-        snag_errorf(error, error_size, "libcurl option setup failed");
-        errno = EIO;
-        return -1;
+        return snag_fail(error, error_size, EIO, "libcurl option setup failed");
     }
     return 0;
 }
@@ -1602,9 +1578,7 @@ snag_provider_models_list(const struct snag_config *config,
     if (models)
         *models = NULL;
     if (!config || !provider || !credential || !credential->len || !models) {
-        snag_errorf(error, error_size, "invalid model-list request");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid model-list request");
     }
     provider_ctx_init(&ctx, config, provider, credential, render, pump, pump_opaque,
                       SNAG_WIRE_BODY_MAX, SNAG_WIRE_BODY_MAX);
@@ -1645,17 +1619,13 @@ snag_provider_responses_count(const json_t *count_request,
         *endpoint_unsupported = false;
     if (!count_request || !config || !provider || !credential || !credential->len ||
         !input_tokens) {
-        snag_errorf(error, error_size, "invalid input-token count request");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid input-token count request");
     }
     *input_tokens = 0u;
     if (provider->auth == SNAG_AUTH_CHATGPT) {
         if (endpoint_unsupported)
             *endpoint_unsupported = true;
-        snag_errorf(error, error_size, "direct Codex does not provide exact input-token preflight");
-        errno = ENOTSUP;
-        return -1;
+        return snag_fail(error, error_size, ENOTSUP, "direct Codex does not provide exact input-token preflight");
     }
     provider_ctx_init(&ctx, config, provider, credential, render, pump,
                       pump_opaque, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
@@ -1708,9 +1678,7 @@ snag_provider_responses_compact(const json_t *compact_request,
     if (!compact_request || !config || !provider || !credential ||
         !credential->len ||
         !output) {
-        snag_errorf(error, error_size, "invalid compact request");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid compact request");
     }
     provider_ctx_init(&ctx, config, provider, credential, render, pump,
                       pump_opaque, SNAG_CONTEXT_MAX_COMPACT,
@@ -1764,9 +1732,7 @@ snag_provider_responses_create(const json_t *create_request,
         *retry_count = 0u;
     if (!create_request || !config || !provider || !credential ||
         !credential->len || !graph) {
-        snag_errorf(error, error_size, "invalid provider request");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid provider request");
     }
     provider_ctx_init(&ctx, config, provider, credential, render, pump,
                       pump_opaque, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);

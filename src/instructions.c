@@ -42,18 +42,14 @@ try_candidate(struct snag_instruction_set *set, const char *path,
         return -1;
     }
     if (S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode)) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                     "instruction %s must be a non-symlink regular file", path);
-        errno = EINVAL;
-        return -1;
     }
     canonical = snag_realpath(path);
     if (!canonical || strlen(canonical) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)canonical, strlen(canonical), true)) {
         free(canonical);
-        snag_errorf(error, error_size, "instruction path cannot be canonicalized");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "instruction path cannot be canonicalized");
     }
     *added = true;
     for (size_t i = 0; i < set->count; ++i) {
@@ -64,10 +60,8 @@ try_candidate(struct snag_instruction_set *set, const char *path,
     }
     if (set->count == SNAG_MAX_INSTRUCTION_SOURCES) {
         free(canonical);
-        snag_errorf(error, error_size, "instruction discovery exceeds %u files",
+        return snag_fail(error, error_size, EOVERFLOW, "instruction discovery exceeds %u files",
                     SNAG_MAX_INSTRUCTION_SOURCES);
-        errno = EOVERFLOW;
-        return -1;
     }
     set->paths[set->count++] = canonical;
     return 0;
@@ -82,9 +76,7 @@ snag_instructions_add_file(struct snag_instruction_set *set, const char *path,
         return -1;
     if (added)
         return 0;
-    snag_errorf(error, error_size, "instruction file is missing: %s", path);
-    errno = ENOENT;
-    return -1;
+    return snag_fail(error, error_size, ENOENT, "instruction file is missing: %s", path);
 }
 
 static int
@@ -363,9 +355,7 @@ snag_instructions_metadata_valid(const json_t *array,
     }
     return 0;
 invalid:
-    snag_errorf(error, error_size, "invalid or duplicate instruction path metadata");
-    errno = EINVAL;
-    return -1;
+    return snag_fail(error, error_size, EINVAL, "invalid or duplicate instruction path metadata");
 }
 
 int
@@ -385,8 +375,6 @@ snag_instructions_match_metadata(const struct snag_instruction_set *set,
             goto mismatch;
     return 0;
 mismatch:
-    snag_errorf(error, error_size,
+    return snag_fail(error, error_size, EINVAL,
                 "active turn instruction paths no longer match advertised paths");
-    errno = EINVAL;
-    return -1;
 }

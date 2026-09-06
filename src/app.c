@@ -278,9 +278,7 @@ snag_app_capacity_resolve(struct app_state *app,
     int cache_rc;
 
     if (!app || !provider || !model || !capacity) {
-        snag_errorf(error, error_size, "invalid model capacity selection");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid model capacity selection");
     }
     snag_model_cache_free(&app->model_cache);
     app->capacity_cache_error[0] = '\0';
@@ -308,16 +306,12 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
     const struct snag_provider_config *provider = app->session.active_turn ?
         snag_config_provider(app->config, app->session.active_turn_provider) : next_provider(app);
     if (!provider) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, ENOENT,
                   "selected provider is not present in the current configuration");
-        errno = ENOENT;
-        return -1;
     }
     if (!effort) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, ENOTSUP,
                   "reasoning effort is empty, oversized, or invalid UTF-8");
-        errno = ENOTSUP;
-        return -1;
     }
     app->turn_model = model;
     app->turn_effort = effort;

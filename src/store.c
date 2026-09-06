@@ -36,9 +36,7 @@ snag_store_verify_private_fd(int fd, bool directory, const char *name,
     valid = (directory ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode)) &&
             privacy.real_owner && privacy.private_access;
     if (!valid) {
-        snag_errorf(error, error_size, "%s must be private and user-owned", name);
-        errno = EACCES;
-        return -1;
+        return snag_fail(error, error_size, EACCES, "%s must be private and user-owned", name);
     }
     return 0;
 }
@@ -65,9 +63,7 @@ ensure_directory(const char *path, bool require_private,
         }
     }
     if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-        snag_errorf(error, error_size, "%s is not a real directory", path);
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "%s is not a real directory", path);
     }
     if (require_private) {
         int fd = open_dir_path(path), rc;
@@ -134,10 +130,8 @@ snag_store_open(struct snag_store *store, const char *dotdir,
     int rc = -1;
     if (!snag_path_root_len(dotdir) || strlen(dotdir) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)dotdir, strlen(dotdir), true)) {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, EINVAL,
                   "dotdir must be an absolute UTF-8 path within the supported limit");
-        errno = EINVAL;
-        return -1;
     }
     store->root_path = snag_strdup_checked(dotdir, SNAG_PATH_MAX_BYTES);
     if (!store->root_path ||
@@ -2091,17 +2085,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         clear_turn_state(session);
         clear_pending_steering(session);
     } else {
-        snag_errorf(error, error_size,
+        return snag_fail(error, error_size, ENOTSUP,
                   "event type %s is not implemented by this checkpoint", type);
-        errno = ENOTSUP;
-        return -1;
     }
     return 0;
 invalid:
-    snag_errorf(error, error_size, "invalid %s transition at sequence %llu", type,
+    return snag_fail(error, error_size, EINVAL, "invalid %s transition at sequence %llu", type,
               (unsigned long long)seq);
-    errno = EINVAL;
-    return -1;
 }
 
 static int
@@ -2244,9 +2234,7 @@ snag_store_scan_log(struct snag_session *session,
     session->log_end = complete_end;
     session->next_seq = next_seq;
     if (next_seq == 1) {
-        snag_errorf(error, error_size, "session event log is empty");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "session event log is empty");
     }
     session->active_compact_id[0] = '\0';
     session->active_compact_source_sha256[0] = '\0';
@@ -2263,9 +2251,7 @@ snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
     if (!session || !fn || (!session->pending_log && session->log_fd < 0) ||
         session->log_end < 0 ||
         !snag_hex_is_lower(session->id, SNAG_ID_HEX_LEN)) {
-        snag_errorf(error, error_size, "invalid session event iterator");
-        errno = EINVAL;
-        return -1;
+        return snag_fail(error, error_size, EINVAL, "invalid session event iterator");
     }
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
