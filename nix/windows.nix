@@ -108,7 +108,43 @@ let
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
   ] networkLibraries;
-in {
-  inherit windows threads jansson tls curl networkLibraries;
   regex = import ./windows-regex.nix { inherit pkgs windows threads unistring; };
+in {
+  inherit windows threads jansson tls curl networkLibraries regex;
+  application = { source, packageName, version, revision }: windows.stdenv.mkDerivation {
+    pname = "${packageName}-windows-x86_64";
+    inherit version;
+    src = source;
+    outputs = [ "out" "debug" ];
+    nativeBuildInputs = [ windows.buildPackages.pkg-config ];
+    buildInputs = [ threads jansson curl regex ] ++ networkLibraries;
+    enableParallelBuilding = true;
+    dontStrip = true;
+    preBuild = ''
+      mkdir -p build
+      od -An -v -t u1 ${pkgs.cacert}/etc/ssl/certs/ca-no-trust-rules-bundle.crt |
+        sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
+      makeFlagsArray+=(
+        'TARGET_OS=Windows' 'BIN=${packageName}.exe'
+        'DEBUG_SYMBOLS=debug-${packageName}.exe'
+        "CC=$CC" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
+        'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
+        'CPPFLAGS=-D_WIN32_WINNT=0x0601 -DWINVER=0x0601 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
+        'CFLAGS=-std=c11 -Os -g -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
+        'LDFLAGS=-static -municode -flto -Wl,--gc-sections'
+        "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
+        "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread"
+        "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
+        "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
+      )
+    '';
+    installPhase = ''
+      runHook preInstall
+      mkdir -p "$out/bin" "$debug"
+      cp ${packageName}.exe "$out/bin/"
+      cp debug-${packageName}.exe "$debug/"
+      ln -s "$debug" "$out/bin/.debug"
+      runHook postInstall
+    '';
+  };
 }
