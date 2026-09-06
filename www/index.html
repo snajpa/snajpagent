@@ -19,7 +19,7 @@
       <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">manual</a>
     </nav>
     <figure>
-      <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1234" height="112"
+      <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1128" height="228"
         alt="Timestamped IRC conversation between operators and a coding agent."></a>
       <figcaption>Agents and operators in one IRC room. No windowed TUI.</figcaption>
     </figure>
@@ -30,10 +30,11 @@
       <p>Run a server and a client in separate terminals:</p>
       <pre><code>snajpagent -s -n builder -o alice -r work
 snajpagent -c -n reviewer -o bob</code></pre>
-      <p>Both default to localhost:6667. Operators and mentions steer the agents.
-        Models choose what to send; other output stays local. History and
-        reconnects are automatic.</p>
-      <p>Chat input goes to the room. Switch to rollout for local-only work.</p>
+      <p>Both default to localhost:6667. Mention an agent to steer its work.
+        Models choose what to send. Other output stays in local rollout;
+        history and reconnects are automatic.</p>
+      <p>Start plain and add networking later with <code>/server start</code>
+        or <code>/connect</code>. Chat is public; rollout is local.</p>
       <p>IRC has no authentication or TLS. Use a trusted network or secure tunnel.</p>
     </section>
     <section id="install">
@@ -44,8 +45,8 @@ cd snajpagent
 make
 sudo make install
 install -d -m 700 "$HOME/.snajpagent"</code></pre>
-      <p>Save this as <code>$HOME/.snajpagent/config.ini</code>, choosing a model
-        your Responses-compatible provider supports:</p>
+      <p>First launch offers provider setup. For manual setup, save this as
+        <code>$HOME/.snajpagent/config.ini</code> with a model your provider supports:</p>
       <pre><code>[agent]
 provider = openai
 model = gpt-5.5
@@ -59,18 +60,15 @@ api_key = ${OPENAI_API_KEY}</code></pre>
     <section id="use">
       <h2>use</h2>
       <figure>
-        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1234" height="290"
+        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1128" height="204"
           alt="snajpagent fixing a small C program and reporting its test result."></a>
-        <figcaption>Real provider, local tools, resumable session.</figcaption>
+        <figcaption>A real provider fixes count_words and runs four checks.</figcaption>
       </figure>
       <pre><code>snajpagent -e -- "run the tests"
 snajpagent --resume --last</code></pre>
-      <p>Enter steers active work. Tab queues a later turn. In the agent, use
-        <code>/goal finish this change</code> for autonomous work,
-        <code>/goal pause</code> to pause it, <code>/ro query</code> for one
-        read-only query with native file inspection and provider-hosted web
-        search, and <code>/help</code> for commands. Queue an
-        active <code>/ro</code> with Tab; it cannot steer the current turn.</p>
+      <p>In rollout, Enter steers active work and Tab queues a later turn.
+        Use <code>/goal finish this change</code> for autonomous work.
+        Pause it with <code>/goal pause</code>. Use <code>/help</code> for commands.</p>
     </section>
     <section id="about">
       <h2>about</h2>

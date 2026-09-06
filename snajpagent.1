@@ -134,11 +134,12 @@ Use an existing directory as the workspace.  With
 relocate the resumed session to it.
 .TP
 .BI \-m " model"
-Override the next model.  On resume this is a one-turn override unless selected
-again in the session.
+Override the next model.  On resume this is a one-turn override unless combined
+with an explicit provider selection or selected again in the session.
 .TP
 .BI \-\-effort " level"
-Override reasoning effort.  On resume this is a one-turn override.
+Override reasoning effort.  On resume this is a one-turn override unless
+combined with an explicit provider selection.
 .TP
 .BI \-\-dotdir " directory"
 Use an absolute private application directory instead of
@@ -232,9 +233,10 @@ The default port is 6667.  In networked mode initial chat text must follow
 .SH INTERACTIVE INPUT
 .TP
 .B Enter
-Submit while idle.  In rollout during model generation, submit immediate steering at the
-next safe boundary.  A running command is handed back alive; it is not killed.
-In chat, send to the room; only a model-nick mention steers active work.
+Submit while idle.  In rollout during model generation, interrupt the response
+and steer from its delivered prefix.  A running command is handed back alive;
+it is not killed.  In chat, send to the selected room.  A model-nick mention
+steers at the next safe response/tool boundary without truncating generation.
 .TP
 .B Tab
 Complete a slash command when possible.  In chat, complete an
@@ -395,7 +397,11 @@ empty row between them; generated prose wraps align below the paragraph text.
 Timestamped IRC chat messages do not receive the synthetic paragraph bullet;
 genuine Markdown list items retain their structural bullets.
 .SH COMMANDS
-Commands occupy a single submitted line.  Prefix text with
+Commands normally occupy a single submitted line.
+.BR /ro ,
+numbered sends and
+.B /all
+also accept multiline message text.  Prefix text with
 .B //
 to submit a literal leading
 .BR / .
@@ -598,8 +604,8 @@ enable a persistent broadcast mode.  A later connection does not receive it.
 An unavailable destination is reported locally; messages are not redirected.
 .SH MODEL SELECTION AND CONTEXT
 The provider, model, and effort are session preferences.  A typed selector
-without a provider uses the first configured provider, not necessarily the
-current one.  An omitted effort uses configuration.  The value
+without a provider stays on the currently selected provider.  An omitted
+effort uses configuration.  The value
 .B default
 for the model resolves to the compiled default;
 .B default
@@ -628,8 +634,9 @@ Automatic compaction uses the provider threshold and resolved input capacity;
 setting the proactive threshold to zero does not disable capacity handling.
 Native compaction is used when enabled.  Set
 .B native_compaction=false
-to summarize through ordinary Responses when a provider lacks that endpoint;
-there is no automatic compaction-protocol fallback.  Manual
+to summarize through ordinary Responses.  Direct ChatGPT/Codex also falls back
+once to Responses summarization when its native endpoint is unavailable;
+other native failures remain errors.  Manual
 .B /compact
 is idle only.  Compaction changes model context, not the append-only local log.
 .SH LOGIN
@@ -727,7 +734,8 @@ Project instructions are reread before turns; see
 .SS "provider NAME"
 Up to 16 ordered named sections are accepted.  The spelling
 .B [provider]
-is no longer accepted. Names have no privileged meaning. New sessions use the
+is not accepted. Names contain 1 through 63 ASCII letters, digits, dots,
+underscores or hyphens. Names have no privileged meaning. New sessions use the
 first declaration unless an explicit provider preference or
 .B --provider NAME
 selects another. Unqualified model changes stay on the current provider.
@@ -741,7 +749,8 @@ Credential source: ${ENV_NAME}, a double-quoted literal with JSON escaping,
 or an unquoted file path. A bare environment name means a file, not a variable.
 Relative files use the config directory; leading ~/ expands the user's home.
 Files may have one final LF/CRLF and may be symlinks for rotation.
-Literal secrets require a user-owned private configuration file (0600).
+Literal secrets require a user-owned configuration with no group/other
+permissions; mode 0600 is the normal choice.
 Absent means use the provider's managed stored login; empty is invalid.
 .TP
 .B auth
@@ -822,6 +831,7 @@ Optional printable ASCII
 .B X-Title
 value.
 .SS "model-limit PROVIDER/MODEL"
+Up to 128 rules are accepted.
 Set provider-wide defaults with [model-limit PROVIDER], patterned rules with
 [model-limit PROVIDER/PATTERN], and exact rules with [model-limit PROVIDER/MODEL].
 The first slash separates the provider; remaining slashes belong to the model.
@@ -842,11 +852,30 @@ model name. Duplicate targets/keys are errors. Unspecified fields inherit
 catalog metadata. Explicit values supersede the catalog, but output headroom
 and learned backend ceilings still constrain usable input.
 .SS "model-alias PROVIDER/NAME"
-The required model key is a literal upstream model ID. These declarations
+Up to 128 declarations are accepted. The local name uses the provider-name
+syntax. The required model key is a literal upstream model ID. These declarations
 define ordinary provider-local models with independent limits; several names
 may route to the same upstream model. Targets never resolve recursively.
 Selection, sessions and limits use the local name; provider requests use the
 upstream ID. Upstream names do not add another limit-rule matching tier.
+.PP
+For example, give one provider-local model a smaller context budget:
+.PP
+.nf
+[model-alias openai/review]
+model = gpt-5.5
+
+[model-limit openai]
+max_output_tokens = 16000
+
+[model-limit openai/review]
+context_window_tokens = 128000
+.fi
+.PP
+Select it with
+.B --provider openai -m review
+or
+.BR "/model openai/review/high" .
 .SS ui
 .TP
 .B color
@@ -1022,7 +1051,7 @@ or
 .BR localop0 .
 .TP
 .B room_name
-Hosted room, requires a listener.  Default: hostname.  Leading
+Preferred room for current or future hosting.  Default: hostname.  Leading
 .B #
 is optional.
 .TP
@@ -1286,8 +1315,8 @@ requirement.  Other room traffic never forces a reply.
 .PP
 The accepted per-server nick drives mentions, echo suppression, and model
 instructions.  Live IRC nick changes retain op status and produce room
-notifications.  The local prompt uses the hosted operator nick, or the first
-outgoing server's accepted nick.  There is no local slash command for changing
+notifications.  Chat uses the selected destination's accepted operator nick.
+There is no local slash command for changing
 nicks; standard IRC clients can use
 .BR NICK .
 .PP
