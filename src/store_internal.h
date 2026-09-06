@@ -23,7 +23,7 @@ int snag_store_open_session_files(struct snag_session *session, bool create,
                                  char *error, size_t error_size);
 int snag_store_scan_log(struct snag_session *session,
                        enum snag_tail_policy tail_policy,
-                       bool allow_active, char *error, size_t error_size);
+                       char *error, size_t error_size);
 int snag_store_complete_trash_delete(struct snag_store *store,
                                     const char *trash_name,
                                     char *error, size_t error_size);

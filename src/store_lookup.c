@@ -141,8 +141,8 @@ resolve_prefix(struct snag_store *store, const char *prefix,
 }
 
 static int
-open_full_id(struct snag_store *store, struct snag_session *session,
-             const char *id, char *error, size_t error_size)
+open_session_dir(struct snag_store *store, struct snag_session *session,
+                  const char *id, char *error, size_t error_size)
 {
     char *sessions = NULL;
 
@@ -160,11 +160,18 @@ open_full_id(struct snag_store *store, struct snag_session *session,
                   strerror(errno));
         return -1;
     }
-    if (snag_store_verify_private_fd(session->dir_fd, true, "session directory",
-                                    error, error_size) < 0)
+    return snag_store_verify_private_fd(session->dir_fd, true, "session directory",
+                                        error, error_size);
+}
+
+static int
+open_full_id(struct snag_store *store, struct snag_session *session,
+             const char *id, char *error, size_t error_size)
+{
+    if (open_session_dir(store, session, id, error, error_size) < 0)
         return -1;
     if (snag_store_open_session_files(session, false, error, error_size) < 0 ||
-        snag_store_scan_log(session, SNAG_TAIL_TRUNCATE, true,
+        snag_store_scan_log(session, SNAG_TAIL_TRUNCATE,
                            error, error_size) < 0)
         return -1;
     if (session->delete_requested) {
@@ -198,20 +205,7 @@ static int
 open_snapshot(struct snag_store *store, struct snag_session *session,
               const char *id, char *error, size_t error_size)
 {
-    char *sessions = NULL;
-    memcpy(session->id, id, SNAG_ID_HEX_LEN + 1u);
-    sessions = snag_path_join(store->root_path, "sessions");
-    if (sessions) {
-        session->dir_path = snag_path_join(sessions, id);
-        free(sessions);
-    }
-    if (!session->dir_path)
-        return -1;
-    session->dir_fd = snag_open_read_security_at(store->sessions_fd, id, true);
-    if (session->dir_fd < 0)
-        return -1;
-    if (snag_store_verify_private_fd(session->dir_fd, true, "session directory",
-                                    error, error_size) < 0)
+    if (open_session_dir(store, session, id, error, error_size) < 0)
         return -1;
     session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
     if (session->log_fd < 0)
@@ -222,41 +216,26 @@ open_snapshot(struct snag_store *store, struct snag_session *session,
     session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0)
         return -1;
-    return snag_store_scan_log(session, SNAG_TAIL_IGNORE, true,
+    return snag_store_scan_log(session, SNAG_TAIL_IGNORE,
                               error, error_size);
 }
 
+/* On success the caller owns the snapshot; no selected-field copies. */
 static int
-session_matches(struct snag_store *store, const char *id, const char *workspace,
-                bool all, bool include_archived, uint64_t *last,
-                uint64_t *turns, char **first, char **saved_workspace,
-                char *model, size_t model_size, bool *archived)
+matching_snapshot(struct snag_store *store, struct snag_session *snapshot,
+                   const char *id, const char *workspace,
+                   bool all, bool include_archived)
 {
-    struct snag_session tmp;
     char error[128];
-    int rc = -1;
 
-    snag_session_init(&tmp);
-    if (open_snapshot(store, &tmp, id, error, sizeof(error)) < 0)
-        goto out;
-    if (tmp.delete_requested || (!include_archived && tmp.archived) ||
-        (!all && strcmp(tmp.workspace, workspace) != 0))
-        goto out;
-    *last = tmp.last_time_ms;
-    *turns = tmp.turn_count;
-    if (archived)
-        *archived = tmp.archived;
-    if (tmp.first_user)
-        *first = snag_strdup_checked(tmp.first_user, SNAG_MAX_DIRECT_PROMPT);
-    if (saved_workspace)
-        *saved_workspace = snag_strdup_checked(tmp.workspace, SNAG_PATH_MAX_BYTES);
-    if ((saved_workspace && !*saved_workspace) ||
-        !snag_strcpy(model, model_size, tmp.default_model))
-        goto out;
-    rc = 0;
-out:
-    snag_session_close(&tmp);
-    return rc;
+    snag_session_init(snapshot);
+    if (strlen(id) == SNAG_ID_HEX_LEN && snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
+        open_snapshot(store, snapshot, id, error, sizeof(error)) == 0 &&
+        !snapshot->delete_requested && (include_archived || !snapshot->archived) &&
+        (all || strcmp(snapshot->workspace, workspace) == 0))
+        return 0;
+    snag_session_close(snapshot);
+    return -1;
 }
 
 int
@@ -273,23 +252,16 @@ snag_session_open_last(struct snag_store *store, struct snag_session *session,
     if (!dir)
         return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
-        uint64_t last, turns;
-        char *first = NULL;
-        char model[SNAG_MODEL_MAX_BYTES];
-        if (strlen(entry) != SNAG_ID_HEX_LEN ||
-            !snag_hex_is_lower(entry, SNAG_ID_HEX_LEN) ||
-            session_matches(store, entry, workspace, all, false,
-                            &last, &turns, &first, NULL, model,
-                            sizeof(model), NULL) < 0) {
-            free(first);
+        struct snag_session snapshot;
+        if (matching_snapshot(store, &snapshot, entry, workspace, all, false) < 0)
             continue;
-        }
-        free(first);
+        uint64_t last = snapshot.last_time_ms;
         if (!best[0] || last > best_time ||
             (last == best_time && strcmp(entry, best) > 0)) {
             memcpy(best, entry, sizeof(best));
             best_time = last;
         }
+        snag_session_close(&snapshot);
     }
     if (finish_directory(dir, error, error_size) < 0)
         return -1;
@@ -314,39 +286,27 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
     if (!dir)
         return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
-        uint64_t last, turns;
-        char *first = NULL;
-        char *saved_workspace = NULL;
-        char model[SNAG_MODEL_MAX_BYTES];
-        bool archived = false;
+        struct snag_session snapshot;
         struct snag_buf row;
-        if (strlen(entry) != SNAG_ID_HEX_LEN ||
-            !snag_hex_is_lower(entry, SNAG_ID_HEX_LEN) ||
-            session_matches(store, entry, workspace, all,
-                            include_archived, &last, &turns, &first,
-                            &saved_workspace, model, sizeof(model),
-                            &archived) < 0) {
-            free(first);
-            free(saved_workspace);
+        if (matching_snapshot(store, &snapshot, entry, workspace,
+                               all, include_archived) < 0)
             continue;
-        }
         snag_buf_init(&row, 8192u);
         if (snag_buf_printf(&row, "%.8s\t%s\t%llu\t%s\t%s%s%s\n",
-                           entry, model, (unsigned long long)turns,
-                           archived ? "archived" : "active",
-                           first ? first : "", all ? "\t" : "",
-                           all ? saved_workspace : "") < 0 ||
+                           entry, snapshot.default_model,
+                           (unsigned long long)snapshot.turn_count,
+                           snapshot.archived ? "archived" : "active",
+                           snapshot.first_user ? snapshot.first_user : "",
+                           all ? "\t" : "", all ? snapshot.workspace : "") < 0 ||
             emit(opaque, (const char *)row.data, row.len) < 0) {
             snag_buf_free(&row);
-            free(first);
-            free(saved_workspace);
+            snag_session_close(&snapshot);
             (void)snag_directory_close(dir);
             snag_errorf(error, error_size, "cannot write session list");
             return -1;
         }
         snag_buf_free(&row);
-        free(first);
-        free(saved_workspace);
+        snag_session_close(&snapshot);
         ++shown;
     }
     if (finish_directory(dir, error, error_size) < 0)

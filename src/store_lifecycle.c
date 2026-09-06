@@ -75,27 +75,10 @@ unlink_expected_file(int dir_fd, const char *name, bool optional,
     return -1;
 }
 
-int
-snag_session_complete_delete(struct snag_store *store, struct snag_session *session,
-                            char *error, size_t error_size)
+static int
+remove_deleted_session(struct snag_store *store, struct snag_session *session,
+                        char *error, size_t error_size)
 {
-    if (!store || !session || !session->delete_requested ||
-        !session->trash_name[0] || session->dir_fd < 0) {
-        snag_errorf(error, error_size, "no completed delete intent is open");
-        errno = EINVAL;
-        return -1;
-    }
-    if (snag_rename_at(store->sessions_fd, session->id,
-                 store->trash_fd, session->trash_name) < 0) {
-        snag_errorf(error, error_size, "cannot move session to trash: %s",
-                  strerror(errno));
-        return -1;
-    }
-    if (snag_sync_dir(store->sessions_fd) < 0 || snag_sync_dir(store->trash_fd) < 0) {
-        snag_errorf(error, error_size, "cannot sync delete rename: %s",
-                  strerror(errno));
-        return -1;
-    }
     if (close_fd_slot(&session->log_fd) < 0 ||
         close_fd_slot(&session->lock_fd) < 0) {
         snag_errorf(error, error_size, "cannot close deleted-session files: %s",
@@ -127,6 +110,30 @@ snag_session_complete_delete(struct snag_store *store, struct snag_session *sess
 }
 
 int
+snag_session_complete_delete(struct snag_store *store, struct snag_session *session,
+                            char *error, size_t error_size)
+{
+    if (!store || !session || !session->delete_requested ||
+        !session->trash_name[0] || session->dir_fd < 0) {
+        snag_errorf(error, error_size, "no completed delete intent is open");
+        errno = EINVAL;
+        return -1;
+    }
+    if (snag_rename_at(store->sessions_fd, session->id,
+                 store->trash_fd, session->trash_name) < 0) {
+        snag_errorf(error, error_size, "cannot move session to trash: %s",
+                  strerror(errno));
+        return -1;
+    }
+    if (snag_sync_dir(store->sessions_fd) < 0 || snag_sync_dir(store->trash_fd) < 0) {
+        snag_errorf(error, error_size, "cannot sync delete rename: %s",
+                  strerror(errno));
+        return -1;
+    }
+    return remove_deleted_session(store, session, error, error_size);
+}
+
+int
 snag_store_complete_trash_delete(struct snag_store *store, const char *trash_name,
                                 char *error, size_t error_size)
 {
@@ -154,7 +161,7 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
                                     "deleted-session directory", error,
                                     error_size) < 0 ||
         snag_store_open_session_files(&session, false, error, error_size) < 0 ||
-        snag_store_scan_log(&session, SNAG_TAIL_REJECT, true,
+        snag_store_scan_log(&session, SNAG_TAIL_REJECT,
                            error, error_size) < 0)
         goto out;
     if (!session.delete_requested || strcmp(session.trash_name, trash_name) != 0) {
@@ -162,34 +169,7 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
         errno = EINVAL;
         goto out;
     }
-    if (close_fd_slot(&session.log_fd) < 0 ||
-        close_fd_slot(&session.lock_fd) < 0) {
-        snag_errorf(error, error_size, "cannot close deleted-session files: %s",
-                  strerror(errno));
-        goto out;
-    }
-    if (unlink_expected_file(session.dir_fd, "events.jsonl", false,
-                             error, error_size) < 0 ||
-        unlink_expected_file(session.dir_fd, "meta.json", true,
-                             error, error_size) < 0 ||
-        unlink_expected_file(session.dir_fd, "lock", false,
-                             error, error_size) < 0)
-        goto out;
-    if (close_fd_slot(&session.dir_fd) < 0) {
-        snag_errorf(error, error_size, "cannot close deleted-session directory: %s",
-                  strerror(errno));
-        goto out;
-    }
-    if (snag_unlink_at(store->trash_fd, trash_name, true) < 0) {
-        snag_errorf(error, error_size, "cannot remove deleted-session directory: %s",
-                  strerror(errno));
-        goto out;
-    }
-    if (snag_sync_dir(store->trash_fd) < 0) {
-        snag_errorf(error, error_size, "cannot sync trash cleanup: %s", strerror(errno));
-        goto out;
-    }
-    rc = 0;
+    rc = remove_deleted_session(store, &session, error, error_size);
 out:
     snag_session_close(&session);
     return rc;

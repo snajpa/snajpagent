@@ -177,18 +177,23 @@ out:
     return rc;
 }
 static void
-free_pending_user_state(struct snag_session *session)
+clear_pending_steering(struct snag_session *session)
 {
     for (size_t i = 0; i < session->pending_steering_count; ++i) {
         free(session->pending_steering[i].text);
         session->pending_steering[i].text = NULL;
     }
+    session->pending_steering_count = 0;
+    session->pending_steering_bytes = 0;
+}
+static void
+free_pending_user_state(struct snag_session *session)
+{
+    clear_pending_steering(session);
     for (size_t i = 0; i < session->pending_queue_count; ++i) {
         free(session->pending_queue[i].text);
         session->pending_queue[i].text = NULL;
     }
-    session->pending_steering_count = 0;
-    session->pending_steering_bytes = 0;
     session->pending_queue_count = 0;
     session->pending_queue_bytes = 0;
 }
@@ -420,6 +425,31 @@ clear_response_state(struct snag_session *session)
     memset(session->pending_calls, 0, sizeof(session->pending_calls));
 }
 
+static void
+clear_turn_state(struct snag_session *session)
+{
+    session->active_turn = false;
+    session->active_read_only = false;
+    session->active_queued = false;
+    session->active_turn_id[0] = '\0';
+    session->active_turn_model[0] = '\0';
+    clear_response_state(session);
+}
+
+static bool
+current_response(const struct snag_session *session, const json_t *data)
+{
+    const char *response_id = snag_json_string(data, "response_id");
+    const char *turn_id = snag_json_string(data, "turn_id");
+    uint64_t cycle;
+
+    return session->response_open && response_id && turn_id &&
+        strcmp(response_id, session->active_response_id) == 0 &&
+        strcmp(turn_id, session->active_turn_id) == 0 &&
+        snag_json_integer_u64(data, "cycle", &cycle) == 0 &&
+        cycle == session->active_cycle;
+}
+
 static bool
 all_pending_finished(const struct snag_session *session)
 {
@@ -516,27 +546,12 @@ valid_trash_name(const struct snag_session *session, const char *name)
                             SNAG_TRASH_SUFFIX_HEX_LEN);
 }
 static struct snag_pending_call *
-find_pending_call(struct snag_session *session, const char *call_id,
-                  size_t *index_out)
+find_pending_call(struct snag_session *session, const char *call_id)
 {
-    for (size_t i = 0; i < session->pending_call_count; ++i) {
-        if (strcmp(session->pending_calls[i].call_id, call_id) == 0) {
-            if (index_out)
-                *index_out = i;
+    for (size_t i = 0; i < session->pending_call_count; ++i)
+        if (strcmp(session->pending_calls[i].call_id, call_id) == 0)
             return &session->pending_calls[i];
-        }
-    }
     return NULL;
-}
-static void
-clear_pending_steering(struct snag_session *session)
-{
-    for (size_t i = 0; i < session->pending_steering_count; ++i) {
-        free(session->pending_steering[i].text);
-        session->pending_steering[i].text = NULL;
-    }
-    session->pending_steering_count = 0;
-    session->pending_steering_bytes = 0;
 }
 static bool
 pending_user_id_exists(const struct snag_session *session, const char *id)
@@ -1508,8 +1523,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *provider_source_sha256 =
             snag_json_string(data, "provider_source_sha256");
         const char *request_hash = snag_json_string(data, "request_sha256");
-        const char *response_id = snag_json_string(data, "response_id");
-        const char *turn_id = snag_json_string(data, "turn_id");
         json_t *context_limit =
             json_object_get(data, "context_limit_tokens");
         json_t *requested_input =
@@ -1520,11 +1533,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         uint64_t requested_input_tokens = 0u;
         uint64_t expected_ceiling = 0u;
         uint64_t recorded_ceiling = 0u;
-        uint64_t cycle;
         bool expected_ceiling_known;
         bool same_binding;
 
-        if (!snag_json_exact_keys(data, keys, 10u) || !session->response_open ||
+        if (!snag_json_exact_keys(data, keys, 10u) || !current_response(session, data) ||
             !code || strcmp(code, "context_length_exceeded") != 0 ||
             !message || strlen(message) > 255u ||
             !provider_source_sha256 ||
@@ -1534,9 +1546,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                                                 SNAG_SHA256_HEX_LEN) ||
             strcmp(request_hash,
                    session->active_response_request_sha256) != 0 ||
-            !response_id || strcmp(response_id,
-                                    session->active_response_id) != 0 ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             (!json_is_null(context_limit) &&
              (snag_json_integer_u64(data, "context_limit_tokens",
                                    &context_limit_tokens) < 0 ||
@@ -1553,9 +1562,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
              (snag_json_integer_u64(data, "observed_hard_input_tokens",
                                    &recorded_ceiling) < 0 ||
               recorded_ceiling == 0u ||
-              recorded_ceiling > SNAG_CONFIG_TOKEN_LIMIT_MAX)) ||
-            snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
-            cycle != session->active_cycle)
+              recorded_ceiling > SNAG_CONFIG_TOKEN_LIMIT_MAX)))
             goto invalid;
         expected_ceiling = snag_capacity_safety_ceiling(
             context_limit_tokens, requested_input_tokens,
@@ -1595,30 +1602,22 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             "text", "turn_id"
         };
         const char *correction_id = snag_json_string(data, "correction_id");
-        const char *response_id = snag_json_string(data, "response_id");
         const char *text = snag_json_string(data, "text");
-        const char *turn_id = snag_json_string(data, "turn_id");
         json_t *partial = json_object_get(data, "partial_public");
-        uint64_t cycle;
         size_t len;
         bool cyber = text && strcmp(text, SNAG_CYBER_CLARIFICATION) == 0;
 
-        if (!snag_json_exact_keys(data, keys, 6u) || !session->response_open ||
+        if (!snag_json_exact_keys(data, keys, 6u) || !current_response(session, data) ||
             (cyber ? session->cyber_clarifications >= SNAG_CYBER_CLARIFICATIONS_MAX :
                      session->output_correction_used) ||
             !correction_id ||
             !snag_hex_is_lower(correction_id, SNAG_ID_HEX_LEN) ||
             pending_user_id_exists(session, correction_id) ||
-            !response_id ||
-            strcmp(response_id, session->active_response_id) != 0 ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             !text ||
             (!cyber && strcmp(text, SNAG_EMPTY_OUTPUT_CORRECTION) != 0 &&
              strcmp(text, SNAG_OVERSIZED_OUTPUT_CORRECTION) != 0) ||
             snag_partial_public_validate(partial, error, error_size) < 0 ||
             (cyber && json_array_size(partial) != 0u) ||
-            snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
-            cycle != session->active_cycle ||
             session->pending_steering_count >= SNAG_MAX_STEERING_PER_TURN ||
             session->pending_steering_bytes >
                 SNAG_MAX_STEERING_PER_TURN * SNAG_MAX_STEERING_TEXT -
@@ -1638,24 +1637,17 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         };
         static const char *const origins[] = {"user", "steering", "recovery", "output"};
         static const char *const reasons[] = {"cancelled", "steered", "process_lost", "output_lost"};
-        const char *response_id = snag_json_string(data, "response_id");
-        const char *turn_id = snag_json_string(data, "turn_id");
         const char *origin = snag_json_string(data, "origin");
         const char *reason = snag_json_string(data, "reason");
         json_t *partial = json_object_get(data, "partial_public");
-        uint64_t cycle;
-        if (!snag_json_exact_keys(data, keys, 6u) || !session->response_open ||
-            !response_id || strcmp(response_id, session->active_response_id) != 0 ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
+        if (!snag_json_exact_keys(data, keys, 6u) || !current_response(session, data) ||
             !string_in(origin, origins, sizeof(origins) / sizeof(origins[0])) ||
             !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])) ||
             ((strcmp(origin, "steering") == 0) !=
              (strcmp(reason, "steered") == 0)) ||
             (strcmp(origin, "steering") == 0 &&
              session->pending_steering_count == 0u) ||
-            snag_partial_public_validate(partial, error, error_size) < 0 ||
-            snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
-            cycle != session->active_cycle)
+            snag_partial_public_validate(partial, error, error_size) < 0)
             goto invalid;
         session->response_open = false;
         session->response_complete = false;
@@ -1669,21 +1661,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         static const char *const classes[] = {
             "context", "provider", "protocol", "resource", "output", "internal"
         };
-        const char *response_id = snag_json_string(data, "response_id");
-        const char *turn_id = snag_json_string(data, "turn_id");
         const char *class_name = snag_json_string(data, "class");
         const char *message = snag_json_string(data, "message");
         json_t *partial = json_object_get(data, "partial_public");
-        uint64_t cycle;
         uint64_t retry_count;
-        if (!snag_json_exact_keys(data, keys, 7u) || !session->response_open ||
-            !response_id || strcmp(response_id, session->active_response_id) != 0 ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
+        if (!snag_json_exact_keys(data, keys, 7u) || !current_response(session, data) ||
             !string_in(class_name, classes, sizeof(classes) / sizeof(classes[0])) ||
             !message || strlen(message) > 8192u ||
             snag_partial_public_validate(partial, error, error_size) < 0 ||
-            snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
-            cycle != session->active_cycle ||
             snag_json_integer_u64(data, "retry_count", &retry_count) < 0 ||
             retry_count > 2u)
             goto invalid;
@@ -1698,24 +1683,18 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         json_t *items = json_object_get(data, "items");
         const char *provider_response_id = snag_json_string(data, "provider_response_id");
         const char *response_id = snag_json_string(data, "response_id");
-        const char *turn_id = snag_json_string(data, "turn_id");
         const char *status = snag_json_string(data, "status");
         struct snag_response_graph graph;
         struct snag_graph_decision decision;
-        uint64_t cycle;
         int graph_rc;
 
         snag_response_graph_init(&graph);
-        if (!snag_json_exact_keys(data, keys, 7u) || !session->response_open ||
-            !response_id || strcmp(response_id, session->active_response_id) != 0 ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
+        if (!snag_json_exact_keys(data, keys, 7u) || !current_response(session, data) ||
             !status || strcmp(status, "completed") != 0 ||
             !provider_response_id ||
             snag_response_graph_set_provider_id(&graph, provider_response_id) < 0 ||
             snag_response_usage_from_json(json_object_get(data, "usage"),
                                          &graph.usage) < 0 ||
-            snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
-            cycle != session->active_cycle ||
             snag_response_graph_from_json(&graph, items, error, error_size) < 0) {
             snag_response_graph_free(&graph);
             goto invalid;
@@ -1822,13 +1801,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *workspace = snag_json_string(data, "resolved_workdir");
         const char *turn_id = snag_json_string(data, "turn_id");
         struct snag_pending_call *call;
-        size_t index;
         if (!snag_json_exact_keys(data, keys, 4u) || !session->active_turn ||
             !session->response_complete || session->response_outcome != SNAG_GRAPH_CALLS ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             !action || !snag_hex_is_lower(action, SNAG_SHA256_HEX_LEN) ||
             !workspace || strcmp(workspace, session->workspace) != 0 ||
-            !call_id || !(call = find_pending_call(session, call_id, &index)) ||
+            !call_id || !(call = find_pending_call(session, call_id)) ||
             strcmp(action, call->action_sha256) != 0 ||
             call->started || call->finished)
             goto invalid;
@@ -1862,11 +1840,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *status = snag_json_string(result, "status");
         const char *handle = snag_json_string(result, "handle");
         struct snag_pending_call *call;
-        size_t index;
         if (!snag_json_exact_keys(data, keys, 3u) || !session->active_turn ||
             !session->response_complete || !turn_id ||
             strcmp(turn_id, session->active_turn_id) != 0 || !call_id ||
-            !(call = find_pending_call(session, call_id, &index)) || call->finished ||
+            !(call = find_pending_call(session, call_id)) || call->finished ||
             snag_tool_result_valid(result) < 0 || !status)
             goto invalid;
         if (call->started) {
@@ -1979,12 +1956,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->pending_call_count != 0u ||
             session->pending_steering_count != 0u)
             goto invalid;
-        session->active_turn = false;
-        session->active_read_only = false;
-        session->active_queued = false;
-        session->active_turn_id[0] = '\0';
-        session->active_turn_model[0] = '\0';
-        clear_response_state(session);
+        clear_turn_state(session);
     } else if (strcmp(type, "turn_completed_silent") == 0) {
         static const char *const keys[] = {"reason", "response_id", "turn_id"};
         static const char *const reasons[] = {
@@ -2008,12 +1980,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->pending_call_count != 0u ||
             session->pending_steering_count != 0u)
             goto invalid;
-        session->active_turn = false;
-        session->active_read_only = false;
-        session->active_queued = false;
-        session->active_turn_id[0] = '\0';
-        session->active_turn_model[0] = '\0';
-        clear_response_state(session);
+        clear_turn_state(session);
     } else if (strcmp(type, "turn_interrupted") == 0) {
         static const char *const keys[] = {"origin", "reason", "turn_id"};
         static const char *const origins[] = {"user", "recovery", "output"};
@@ -2031,12 +1998,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !string_in(origin, origins, sizeof(origins) / sizeof(origins[0])) ||
             !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])))
             goto invalid;
-        session->active_turn = false;
-        session->active_read_only = false;
-        session->active_queued = false;
-        session->active_turn_id[0] = '\0';
-        session->active_turn_model[0] = '\0';
-        clear_response_state(session);
+        clear_turn_state(session);
         clear_pending_steering(session);
     } else if (strcmp(type, "turn_failed") == 0) {
         static const char *const keys[] = {"class", "message", "turn_id"};
@@ -2057,12 +2019,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         session->last_turn_failed = true;
         session->retry_read_only = session->active_read_only;
-        session->active_turn = false;
-        session->active_read_only = false;
-        session->active_queued = false;
-        session->active_turn_id[0] = '\0';
-        session->active_turn_model[0] = '\0';
-        clear_response_state(session);
+        clear_turn_state(session);
         clear_pending_steering(session);
     } else {
         snag_errorf(error, error_size,
@@ -2196,7 +2153,7 @@ out:
 
 int
 snag_store_scan_log(struct snag_session *session,
-                   enum snag_tail_policy tail_policy, bool allow_active,
+                   enum snag_tail_policy tail_policy,
                    char *error, size_t error_size)
 {
     int64_t complete_end;
@@ -2210,12 +2167,6 @@ snag_store_scan_log(struct snag_session *session,
     if (next_seq == 1) {
         snag_errorf(error, error_size, "session event log is empty");
         errno = EINVAL;
-        return -1;
-    }
-    if (session->active_turn && !allow_active) {
-        snag_errorf(error, error_size,
-                   "active-turn recovery is unavailable in this scan mode");
-        errno = ENOTSUP;
         return -1;
     }
     session->active_compact_id[0] = '\0';
