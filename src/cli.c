@@ -233,29 +233,17 @@ parse_short(struct snag_cli *cli, int argc, char **argv, int *index,
                          error_size) < 0)
                 return -1;
             break;
-        case 'C': case 'm': case 'o': case 'n': case 'r':
-            arg = option_argument(argc, argv, index, p, flag == 'C' ? "-C" :
-                                  flag == 'm' ? "-m" :
-                                  flag == 'o' ? "-o" :
-                                  flag == 'n' ? "-n" : "-r", error, error_size);
-            if (!arg)
+        case 'C': case 'm': case 'o': case 'n': case 'r': {
+            char name[] = {'-', flag, '\0'};
+            char **slot = flag == 'C' ? &cli->workspace : flag == 'm' ? &cli->model :
+                          flag == 'o' ? &cli->irc_operator_nick :
+                          flag == 'n' ? &cli->irc_model_nick : &cli->irc_room_name;
+            arg = option_argument(argc, argv, index, p, name, error, error_size);
+            if (!arg || set_once(slot, arg, name, error, error_size) < 0)
                 return -1;
             p += strlen(p);
-            if (flag == 'C' && set_once(&cli->workspace, arg, "-C", error, error_size) < 0)
-                return -1;
-            if (flag == 'm' && set_once(&cli->model, arg, "-m", error, error_size) < 0)
-                return -1;
-            if (flag == 'o' &&
-                set_once(&cli->irc_operator_nick, arg, "-o", error,
-                         error_size) < 0)
-                return -1;
-            if (flag == 'n' &&
-                set_once(&cli->irc_model_nick, arg, "-n", error,
-                         error_size) < 0)
-                return -1;
-            if (flag == 'r' && set_once(&cli->irc_room_name, arg, "-r", error, error_size) < 0)
-                return -1;
             break;
+        }
         default:
             snag_errorf(error, error_size, "unknown option -%c", flag);
             errno = EINVAL;
@@ -360,6 +348,34 @@ invalid:
     return -1;
 }
 
+static int
+parse_long_string(struct snag_cli *cli, int argc, char **argv, int *index,
+                   char *error, size_t error_size)
+{
+    const struct { const char *name; char **slot; } options[] = {
+        {"--model-nick", &cli->irc_model_nick},
+        {"--operator-nick", &cli->irc_operator_nick},
+        {"--room-name", &cli->irc_room_name},
+        {"--dotdir", &cli->dotdir},
+        {"--provider", &cli->provider},
+        {"--config", &cli->config_path},
+        {"--effort", &cli->effort},
+    };
+    const char *arg = argv[*index];
+
+    for (size_t i = 0u; i < sizeof(options) / sizeof(options[0]); ++i) {
+        const char *name = options[i].name;
+        size_t len = strlen(name);
+        if (strncmp(arg, name, len) || (arg[len] && arg[len] != '='))
+            continue;
+        const char *value = option_argument(argc, argv, index,
+            arg[len] == '=' ? arg + len + 1u : NULL, name, error, error_size);
+        return value ? set_once(options[i].slot, value, name, error, error_size) : -1;
+    }
+    snag_errorf(error, error_size, "unknown option %s", arg);
+    return -1;
+}
+
 int
 snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
               char *error, size_t error_size)
@@ -453,69 +469,9 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
             if (set_once(&cli->irc_listen, value, "--listen",
                          error, error_size) < 0)
                 return -1;
-        } else if (strcmp(arg, "--model-nick") == 0 ||
-                   strncmp(arg, "--model-nick=", 13u) == 0) {
-            const char *attached = arg[12] == '=' ? arg + 13u : NULL;
-            const char *value = option_argument(argc, argv, &i, attached,
-                                                "--model-nick", error,
-                                                error_size);
-            if (!value ||
-                set_once(&cli->irc_model_nick, value, "--model-nick",
-                         error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--operator-nick") == 0 ||
-                   strncmp(arg, "--operator-nick=", 16u) == 0) {
-            const char *attached = arg[15] == '=' ? arg + 16u : NULL;
-            const char *value = option_argument(argc, argv, &i, attached,
-                                                "--operator-nick", error,
-                                                error_size);
-            if (!value || set_once(&cli->irc_operator_nick, value,
-                                   "--operator-nick", error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--room-name") == 0 ||
-                   strncmp(arg, "--room-name=", 12u) == 0) {
-            const char *attached = arg[11] == '=' ? arg + 12u : NULL;
-            const char *value = option_argument(argc, argv, &i, attached,
-                                                "--room-name", error,
-                                                error_size);
-            if (!value || set_once(&cli->irc_room_name, value, "--room-name",
-                                   error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--dotdir") == 0 ||
-                   strncmp(arg, "--dotdir=", 9u) == 0) {
-            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
-            const char *value = option_argument(argc, argv, &i, attached,
-                                                "--dotdir", error, error_size);
-            if (!value || set_once(&cli->dotdir, value, "--dotdir",
-                                   error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--provider") == 0 ||
-                   strncmp(arg, "--provider=", 11u) == 0) {
-            const char *attached = arg[10] == '=' ? arg + 11u : NULL;
-            const char *value = option_argument(argc, argv, &i, attached,
-                                                "--provider", error, error_size);
-            if (!value || set_once(&cli->provider, value, "--provider", error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--config") == 0 ||
-                   strncmp(arg, "--config=", 9u) == 0) {
-            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
-            const char *value = option_argument(argc, argv, &i, attached,
-                                                "--config", error, error_size);
-            if (!value || set_once(&cli->config_path, value, "--config",
-                                   error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--effort") == 0 ||
-                   strncmp(arg, "--effort=", 9u) == 0) {
-            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
-            const char *value = option_argument(argc, argv, &i, attached,
-                                                "--effort", error,
-                                                error_size);
-            if (!value || set_once(&cli->effort, value, "--effort",
-                                   error, error_size) < 0)
-                return -1;
         } else if (arg[1] == '-') {
-            snag_errorf(error, error_size, "unknown option %s", arg);
-            return -1;
+            if (parse_long_string(cli, argc, argv, &i, error, error_size) < 0)
+                return -1;
         } else if (parse_short(cli, argc, argv, &i, error, error_size) < 0) {
             return -1;
         }

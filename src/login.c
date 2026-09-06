@@ -197,12 +197,10 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
         provider->auth = SNAG_AUTH_API_KEY;
         snag_secret_source_free(&provider->api_key);
     }
-    for (const unsigned char *p = (const unsigned char *)provider->name; *p; ++p)
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-              (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-')) {
-            snag_errorf(error, error_size, "invalid provider name");
-            return -1;
-        }
+    if (provider->name[0] && !snag_config_name_valid(provider->name)) {
+        snag_errorf(error, error_size, "invalid provider name");
+        return -1;
+    }
     if (!plain_value(provider->name) || !plain_value(provider->base_url) ||
         (strncmp(provider->base_url, "https://", 8u) && strncmp(provider->base_url, "http://", 7u)) ||
         strchr(provider->base_url, '@') || strchr(provider->base_url, '?') || strchr(provider->base_url, '#')) {

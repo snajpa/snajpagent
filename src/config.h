@@ -144,6 +144,7 @@ struct snag_config {
 
 void snag_config_init(struct snag_config *config);
 void snag_config_provider_init(struct snag_provider_config *provider, const char *name);
+bool snag_config_name_valid(const char *name);
 void snag_config_free(struct snag_config *config);
 int snag_config_load(struct snag_config *config, const char *explicit_path,
                     const char *dotdir,

@@ -93,13 +93,9 @@ private_fd(int fd, bool directory)
 static bool
 provider_valid(const struct snag_provider_config *provider)
 {
-    if (!provider || !provider->name[0] ||
+    if (!provider || !snag_config_name_valid(provider->name) ||
         (provider->auth != SNAG_AUTH_API_KEY && provider->auth != SNAG_AUTH_CHATGPT))
         return false;
-    for (const unsigned char *p = (const unsigned char *)provider->name; *p; ++p)
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-              (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
-            return false;
     return provider->auth != SNAG_AUTH_CHATGPT ||
            strcmp(provider->base_url, SNAG_CHATGPT_BASE) == 0;
 }

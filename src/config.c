@@ -42,7 +42,6 @@ struct parse_state {
         struct snag_provider_model model;
     } models[SNAG_CONFIG_MODEL_ALIAS_MAX];
     size_t model_count;
-    bool providers_started;
 };
 
 static int
@@ -496,23 +495,9 @@ static int
 set_provider_section(struct parse_state *state, const char *name)
 {
     struct snag_config *config = state->config;
-    const unsigned char *p = (const unsigned char *)name;
 
-    if (!*p || strlen(name) > SNAG_CONFIG_PROVIDER_NAME_MAX)
+    if (!snag_config_name_valid(name))
         goto invalid;
-    for (; *p; ++p)
-        if (!((*p >= 'A' && *p <= 'Z') ||
-              (*p >= 'a' && *p <= 'z') ||
-              (*p >= '0' && *p <= '9') ||
-              *p == '.' || *p == '_' || *p == '-'))
-            goto invalid;
-    if (!state->providers_started) {
-        for (size_t i = 0; i < config->provider_count; ++i)
-            snag_secret_source_free(&config->providers[i].api_key);
-        memset(config->providers, 0, sizeof(config->providers));
-        config->provider_count = 0u;
-        state->providers_started = true;
-    }
     for (size_t i = 0; i < config->provider_count; ++i)
         if (strcmp(config->providers[i].name, name) == 0)
             goto invalid;
@@ -527,12 +512,12 @@ invalid:
     return -1;
 }
 
-static bool
-provider_name_valid(const char *name)
+bool
+snag_config_name_valid(const char *name)
 {
     const unsigned char *p = (const unsigned char *)name;
 
-    if (!*p || strlen(name) > SNAG_CONFIG_PROVIDER_NAME_MAX)
+    if (!name || !*p || strlen(name) > SNAG_CONFIG_PROVIDER_NAME_MAX)
         return false;
     for (; *p; ++p)
         if (!((*p >= 'A' && *p <= 'Z') ||
@@ -558,7 +543,7 @@ set_model_limit_section(struct parse_state *state, char *name)
         goto invalid;
     if (slash)
         *slash = '\0';
-    if (!provider_name_valid(name))
+    if (!snag_config_name_valid(name))
         goto invalid;
     for (size_t i = 0; i < config->model_limit_count; ++i)
         if (strcmp(config->model_limits[i].provider, name) == 0 &&
@@ -585,7 +570,7 @@ set_model_alias_section(struct parse_state *state, char *name)
     if (!slash || state->model_count >= SNAG_CONFIG_MODEL_ALIAS_MAX)
         goto invalid;
     *slash = '\0';
-    if (!provider_name_valid(name) || !provider_name_valid(slash + 1u))
+    if (!snag_config_name_valid(name) || !snag_config_name_valid(slash + 1u))
         goto invalid;
     for (size_t i = 0; i < state->model_count; ++i)
         if (strcmp(state->models[i].provider, name) == 0 &&
@@ -940,6 +925,7 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
         snag_secret_source_free(&config->providers[i].api_key);
         free(config->providers[i].models);
     }
+    memset(config->providers, 0, sizeof(config->providers));
     config->provider_count = 0u;
     for (;;) {
         char *next = strchr(line, '\n');
@@ -1511,7 +1497,7 @@ snag_config_validate_provider(const struct snag_provider_config *provider,
 {
     struct snag_buf text;
     int rc = -1;
-    if (!provider || !provider_name_valid(provider->name) ||
+    if (!provider || !snag_config_name_valid(provider->name) ||
         (provider->auth == SNAG_AUTH_CHATGPT &&
          (strcmp(provider->base_url, SNAG_CHATGPT_BASE) || provider->api_key.kind != SNAG_SECRET_NONE))) {
         snag_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
@@ -1708,7 +1694,7 @@ snag_config_save_provider(const char *path, bool allow_create,
                          const char *initial_model, const char *effort,
                          char *error, size_t error_size)
 {
-    if (!provider || !provider_name_valid(provider->name) ||
+    if (!provider || !snag_config_name_valid(provider->name) ||
         (provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
         strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r')) {
         snag_errorf(error, error_size, "invalid provider settings");
