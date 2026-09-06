@@ -780,8 +780,7 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
     }
     return 0;
 fail:
-    snag_errorf(error, error_size, "command I/O or output journal failed: %s", strerror(errno));
-    return -1;
+    return snag_errorf(error, error_size, "command I/O or output journal failed: %s", strerror(errno));
 }
 
 int
@@ -794,8 +793,7 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result,
     int64_t exit_code = -1;
     int signal_number = -1, rc = -1;
     if (!proc || !journal_read) {
-        snag_errorf(error, error_size, "command handle or output journal unavailable");
-        return -1;
+        return snag_errorf(error, error_size, "command handle or output journal unavailable");
     }
     for (unsigned int s = 0u; s < 2u; ++s) {
         size_t cap = proc->max_output_tokens;

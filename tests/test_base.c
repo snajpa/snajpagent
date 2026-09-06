@@ -2819,6 +2819,12 @@ run_base(int argc, char **argv)
     (void)argv;
 #endif
     char failure[8];
+    assert(snag_errorf(failure, sizeof(failure), "%s %u", "bad", 3u) == -1);
+    assert(strcmp(failure, "bad 3") == 0);
+    assert(snag_errorf(failure, sizeof(failure), "%s", "too long a message") == -1);
+    assert(strcmp(failure, "too lon") == 0);
+    errno = EDOM;
+    assert(snag_errorf(NULL, 0u, "unretained") == -1 && errno == EDOM);
     assert(snag_errno(ENOENT) == -1 && errno == ENOENT);
     assert(snag_errno(EIO) == -1 && errno == EIO);
     assert(snag_fail(failure, sizeof(failure), EINVAL, "%s %u", "bad", 3u) == -1);

@@ -156,10 +156,8 @@ snag_wire_json_redact(const unsigned char *data, size_t len,
     json_t *value;
     int rc;
 
-    if (!out || secrets_valid(secrets) < 0) {
-        snag_errorf(error, error_size, "invalid diagnostic secret set");
-        return -1;
-    }
+    if (!out || secrets_valid(secrets) < 0)
+        return snag_errorf(error, error_size, "invalid diagnostic secret set");
     value = snag_json_load_strict(data, len, SNAG_WIRE_BODY_MAX,
                                  error, error_size);
     if (!value)
@@ -169,10 +167,8 @@ snag_wire_json_redact(const unsigned char *data, size_t len,
     rc = redacted ? snag_json_diagnostic(redacted, out) : -1;
     json_decref(redacted);
     json_decref(value);
-    if (rc < 0) {
-        snag_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
-        return -1;
-    }
+    if (rc < 0)
+        return snag_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
     return 0;
 }
 

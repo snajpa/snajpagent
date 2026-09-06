@@ -674,10 +674,8 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
             return SNAG_PROVIDER_NEW_INPUT;
         if (!remaining)
             break;
-        if (snag_wakeup_wait(snag_ui_wake_fd(ctx->render), (int)slice) < 0 && errno != EINTR) {
-            snag_errorf(error, error_size, "provider retry wait failed");
-            return -1;
-        }
+        if (snag_wakeup_wait(snag_ui_wake_fd(ctx->render), (int)slice) < 0 && errno != EINTR)
+            return snag_errorf(error, error_size, "provider retry wait failed");
     }
     return 0;
 }
@@ -1428,10 +1426,8 @@ provider_request_setup(struct provider_ctx *ctx,
     if (snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential,
                               error, error_size) < 0)
         return -1;
-    if (has_body && snag_json_canonical(request, &ctx->body) < 0) {
-        snag_errorf(error, error_size, "%s", body_error);
-        return -1;
-    }
+    if (has_body && snag_json_canonical(request, &ctx->body) < 0)
+        return snag_errorf(error, error_size, "%s", body_error);
     if (provider_endpoint_url(ctx->provider, path, url, sizeof(url), &endpoint,
                               error, error_size) < 0)
         return -1;
@@ -1449,15 +1445,11 @@ provider_request_setup(struct provider_ctx *ctx,
     if (!ctx->curl) {
         return snag_fail(error, error_size, ENOMEM, "libcurl easy handle could not initialize");
     }
-    if (request_auth_headers(ctx) < 0) {
-        snag_errorf(error, error_size, "provider headers could not be allocated");
-        return -1;
-    }
-    if (render_request_headers(ctx, request_line, accept, has_body) < 0) {
-        snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
+    if (request_auth_headers(ctx) < 0)
+        return snag_errorf(error, error_size, "provider headers could not be allocated");
+    if (render_request_headers(ctx, request_line, accept, has_body) < 0)
+        return snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                    "provider request headers could not be rendered");
-        return -1;
-    }
     if (provider_trust(ctx->curl) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||

@@ -37,9 +37,8 @@ try_candidate(struct snag_instruction_set *set, const char *path,
     if (snag_lstat(path, &st) < 0) {
         if (errno == ENOENT)
             return 0;
-        snag_errorf(error, error_size, "cannot inspect instruction %s: %s",
+        return snag_errorf(error, error_size, "cannot inspect instruction %s: %s",
                     path, strerror(errno));
-        return -1;
     }
     if (S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode)) {
         return snag_fail(error, error_size, EINVAL,

@@ -172,10 +172,8 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
         }
     }
     if (cli->device_auth) {
-        if (strcmp(provider->base_url, SNAG_CHATGPT_BASE) != 0) {
-            snag_errorf(error, error_size, "--device-auth requires the direct Codex provider");
-            return -1;
-        }
+        if (strcmp(provider->base_url, SNAG_CHATGPT_BASE) != 0)
+            return snag_errorf(error, error_size, "--device-auth requires the direct Codex provider");
         provider->auth = SNAG_AUTH_CHATGPT;
         snag_secret_source_free(&provider->api_key);
     }
@@ -187,25 +185,19 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
             return -1;
         if (local_name[0])
             (void)snag_strcpy(provider->name, sizeof(provider->name), local_name);
-        if (snag_config_provider(config, provider->name)) {
-            snag_errorf(error, error_size, "provider name is already configured");
-            return -1;
-        }
+        if (snag_config_provider(config, provider->name))
+            return snag_errorf(error, error_size, "provider name is already configured");
     }
     if (cli->with_api_key) {
         provider->auth = SNAG_AUTH_API_KEY;
         snag_secret_source_free(&provider->api_key);
     }
-    if (provider->name[0] && !snag_config_name_valid(provider->name)) {
-        snag_errorf(error, error_size, "invalid provider name");
-        return -1;
-    }
+    if (provider->name[0] && !snag_config_name_valid(provider->name))
+        return snag_errorf(error, error_size, "invalid provider name");
     if (!plain_value(provider->name) || !plain_value(provider->base_url) ||
         (strncmp(provider->base_url, "https://", 8u) && strncmp(provider->base_url, "http://", 7u)) ||
-        strchr(provider->base_url, '@') || strchr(provider->base_url, '?') || strchr(provider->base_url, '#')) {
-        snag_errorf(error, error_size, "invalid provider endpoint");
-        return -1;
-    }
+        strchr(provider->base_url, '@') || strchr(provider->base_url, '?') || strchr(provider->base_url, '#'))
+        return snag_errorf(error, error_size, "invalid provider endpoint");
     size_t len = strlen(provider->base_url);
     while (len && provider->base_url[len - 1u] == '/')
         provider->base_url[--len] = '\0';

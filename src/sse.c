@@ -164,8 +164,7 @@ snag_sse_feed(struct snag_sse_parser *parser, const void *data, size_t len,
 
     if (parser->failed) {
         errno = EPROTO;
-        snag_errorf(error, error_size, "SSE parser is already failed");
-        return -1;
+        return snag_errorf(error, error_size, "SSE parser is already failed");
     }
     if (len > SNAG_MAX_PROVIDER_WIRE - parser->wire_bytes)
         return fail(parser, error, error_size,
@@ -202,8 +201,7 @@ snag_sse_finish(struct snag_sse_parser *parser, char *error, size_t error_size)
 {
     if (parser->failed) {
         errno = EPROTO;
-        snag_errorf(error, error_size, "SSE parser is failed");
-        return -1;
+        return snag_errorf(error, error_size, "SSE parser is failed");
     }
     if (parser->pending_cr || parser->line.len || parser->data_seen ||
         parser->event.len)

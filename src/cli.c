@@ -313,18 +313,14 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index,
         const char *name = long_option ? option->name : short_name;
         char flag = option->short_name;
         if (option->toggle) {
-            if (*option->toggle && flag != 'h' && flag != 'V') {
-                snag_errorf(error, error_size, "duplicate %s option", name);
-                return -1;
-            }
+            if (*option->toggle && flag != 'h' && flag != 'V')
+                return snag_errorf(error, error_size, "duplicate %s option", name);
             *option->toggle = true;
             if (flag == 'h' && long_option)
                 cli->manual = true;
         } else if (flag == 'v') {
-            if (cli->verbosity == SNAG_VERBOSITY_MAX) {
-                snag_errorf(error, error_size, "at most six -v flags are allowed");
-                return -1;
-            }
+            if (cli->verbosity == SNAG_VERBOSITY_MAX)
+                return snag_errorf(error, error_size, "at most six -v flags are allowed");
             ++cli->verbosity;
         } else if (flag == 'c' || flag == 's') {
             if (long_option && attached && !*attached)
@@ -387,17 +383,13 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
     }
     if ((cli->help || cli->version) &&
         (argc != 2 ||
-         (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "--help") != 0 && strcmp(argv[1], "-V") != 0))) {
-        snag_errorf(error, error_size, "-h, --help and -V must stand alone");
-        return -1;
-    }
+         (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "--help") != 0 && strcmp(argv[1], "-V") != 0)))
+        return snag_errorf(error, error_size, "-h, --help and -V must stand alone");
     if (cli->help || cli->version)
         return 0;
     if ((cli->irc_no_listen && cli->irc_listen) ||
-        (cli->irc_no_client && cli->irc_client_count)) {
-        snag_errorf(error, error_size, "conflicting positive and negative IRC role options");
-        return -1;
-    }
+        (cli->irc_no_client && cli->irc_client_count))
+        return snag_errorf(error, error_size, "conflicting positive and negative IRC role options");
     if (!cli->execute && !cli->resume && !dashdash && positional >= 0 &&
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
@@ -406,48 +398,32 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
                       cli->model || cli->provider || cli->effort || cli->verbosity ||
                       cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
                       cli->irc_client_count || cli->irc_model_nick ||
-                      cli->irc_operator_nick || cli->irc_room_name)) {
-        snag_errorf(error, error_size,
+                      cli->irc_operator_nick || cli->irc_room_name))
+        return snag_errorf(error, error_size,
                   "-l accepts only --config, --dotdir, --all, --update-model-cache, and presentation options");
-        return -1;
-    }
     if (cli->execute && (cli->irc_listen ||
                          cli->irc_client_count || cli->irc_model_nick ||
-                         cli->irc_operator_nick || cli->irc_room_name)) {
-        snag_errorf(error, error_size,
+                         cli->irc_operator_nick || cli->irc_room_name))
+        return snag_errorf(error, error_size,
                   "-e cannot be combined with network options");
-        return -1;
-    }
     if ((cli->irc_listen || cli->irc_client_count) &&
-        positional >= 0 && !dashdash && !cli->resume) {
-        snag_errorf(error, error_size,
+        positional >= 0 && !dashdash && !cli->resume)
+        return snag_errorf(error, error_size,
                   "networked initial chat text must follow --");
-        return -1;
-    }
-    if (cli->last && !cli->resume) {
-        snag_errorf(error, error_size, "--last requires --resume");
-        return -1;
-    }
-    if (cli->all && !cli->resume && !cli->list) {
-        snag_errorf(error, error_size, "--all requires --resume or -l");
-        return -1;
-    }
+    if (cli->last && !cli->resume)
+        return snag_errorf(error, error_size, "--last requires --resume");
+    if (cli->all && !cli->resume && !cli->list)
+        return snag_errorf(error, error_size, "--all requires --resume or -l");
     if (cli->model && !bounded_preference(cli->model,
-                                          SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 2u)) {
-        snag_errorf(error, error_size,
+                                          SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 2u))
+        return snag_errorf(error, error_size,
                   "model exceeds the supported structural bounds");
-        return -1;
-    }
-    if (cli->provider && !bounded_preference(cli->provider, SNAG_CONFIG_PROVIDER_NAME_MAX + 1u)) {
-        snag_errorf(error, error_size, "provider name is empty or oversized");
-        return -1;
-    }
+    if (cli->provider && !bounded_preference(cli->provider, SNAG_CONFIG_PROVIDER_NAME_MAX + 1u))
+        return snag_errorf(error, error_size, "provider name is empty or oversized");
     if (cli->effort && !bounded_preference(cli->effort,
-                                           SNAG_CONFIG_EFFORT_MAX)) {
-        snag_errorf(error, error_size,
+                                           SNAG_CONFIG_EFFORT_MAX))
+        return snag_errorf(error, error_size,
                   "reasoning effort exceeds the supported structural bounds");
-        return -1;
-    }
     if (cli->resume) {
         if (positional >= 0 && !dashdash && !cli->last) {
             if (strlen(argv[positional]) > SNAG_ID_HEX_LEN)
@@ -455,35 +431,25 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
             cli->resume_id = argv[positional];
             ++positional;
             if (positional < argc) {
-                if (strcmp(argv[positional], "--") != 0) {
-                    snag_errorf(error, error_size, "resume follow-up must follow --");
-                    return -1;
-                }
+                if (strcmp(argv[positional], "--") != 0)
+                    return snag_errorf(error, error_size, "resume follow-up must follow --");
                 dashdash = true;
                 ++positional;
             }
         }
-        if (cli->last && positional >= 0 && !dashdash) {
-            snag_errorf(error, error_size, "--last cannot be combined with a session id");
-            return -1;
-        }
-        if (cli->all && cli->resume_id) {
-            snag_errorf(error, error_size, "--all is invalid with an exact session id");
-            return -1;
-        }
+        if (cli->last && positional >= 0 && !dashdash)
+            return snag_errorf(error, error_size, "--last cannot be combined with a session id");
+        if (cli->all && cli->resume_id)
+            return snag_errorf(error, error_size, "--all is invalid with an exact session id");
         if (positional >= 0 && positional < argc) {
             cli->prompt = snag_join_words(argv + positional, (size_t)(argc - positional),
                                          SNAG_MAX_DIRECT_PROMPT);
-            if (!cli->prompt) {
-                snag_errorf(error, error_size, "prompt is invalid or exceeds 1 MiB");
-                return -1;
-            }
+            if (!cli->prompt)
+                return snag_errorf(error, error_size, "prompt is invalid or exceeds 1 MiB");
         }
     } else if (!cli->list && positional >= 0 && positional < argc) {
-        if (cli->execute && !dashdash) {
-            snag_errorf(error, error_size, "-e requires -- before its prompt");
-            return -1;
-        }
+        if (cli->execute && !dashdash)
+            return snag_errorf(error, error_size, "-e requires -- before its prompt");
         cli->prompt = snag_join_words(argv + positional, (size_t)(argc - positional),
                                      SNAG_MAX_DIRECT_PROMPT);
         if (!cli->prompt)
@@ -492,10 +458,8 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
     if (cli->execute && !cli->prompt &&
         read_execute_prompt(cli, error, error_size) < 0)
         return -1;
-    if (cli->execute && !*cli->prompt) {
-        snag_errorf(error, error_size, "-e requires a nonempty prompt");
-        return -1;
-    }
+    if (cli->execute && !*cli->prompt)
+        return snag_errorf(error, error_size, "-e requires a nonempty prompt");
     cli->prompt_after_dashdash = dashdash;
     return 0;
 }

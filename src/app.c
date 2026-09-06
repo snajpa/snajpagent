@@ -359,8 +359,7 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
          snag_ui_durable(&app->ui, app->session.log_fd, source, type,
                          app->config->default_timeout_ms, app->config->max_output_bytes) < 0) ||
         snag_ui_event(&app->ui, seq, type) < 0) {
-        snag_errorf(error, error_size, "durable event output failed");
-        return -1;
+        return snag_errorf(error, error_size, "durable event output failed");
     }
     if (strcmp(type, "turn_failed") == 0 && app->session.goal_status != SNAG_GOAL_ACTIVE)
         return app_warning(app, "turn failed; try /retry to continue");
@@ -667,8 +666,7 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
         app->queue_edit_id[0] = '\0';
         app->queue_edit_number = 0u;
         app->queue_edit_was_armed = false;
-        snag_errorf(error, error_size, "queue editor could not be displayed");
-        return -1;
+        return snag_errorf(error, error_size, "queue editor could not be displayed");
     }
     return 0;
 }
@@ -716,10 +714,8 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
         return -1;
     }
     if (snag_ui_submitted(&app->ui,
-            app->ui.label, original, false) < 0) {
-        snag_errorf(error, error_size, "edited turn acknowledgement could not be rendered");
-        return -1;
-    }
+            app->ui.label, original, false) < 0)
+        return snag_errorf(error, error_size, "edited turn acknowledgement could not be rendered");
 clear:
     app->queue_edit_id[0] = '\0';
     app->queue_edit_number = 0u;
@@ -757,20 +753,16 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
             "queued text must be nonempty valid UTF-8 within 256 KiB");
         return 1;
     }
-    if (snag_random_id(queue_id) < 0) {
-        snag_errorf(error, error_size, "cryptographic queue id generation failed");
-        return -1;
-    }
+    if (snag_random_id(queue_id) < 0)
+        return snag_errorf(error, error_size, "cryptographic queue id generation failed");
     if (commit_event(app, "future_turn_queued",
                      json_pack("{s:b,s:s,s:s,s:s}", "read_only", read_only,
                          "queue_id", queue_id, "text", queued_text,
                          "while_turn_id", app->session.active_turn_id),
                      error, error_size) < 0)
         return -1;
-    if (snag_ui_submitted(&app->ui, "queued (/next or /q c) › ", text, false) < 0) {
-        snag_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
-        return -1;
-    }
+    if (snag_ui_submitted(&app->ui, "queued (/next or /q c) › ", text, false) < 0)
+        return snag_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
     if (arm)
         app->queue_armed = true;
     return 0;
@@ -1583,9 +1575,8 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
     if (fd < 0) {
         if (errno == ENOENT)
             return 0;
-        snag_errorf(error, error_size, "cannot open configuration %s: %s",
+        return snag_errorf(error, error_size, "cannot open configuration %s: %s",
                   path, strerror(errno));
-        return -1;
     }
     if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
@@ -1612,11 +1603,9 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
         }
         break;
     }
-    if (close(fd) < 0) {
-        snag_errorf(error, error_size, "cannot close configuration: %s",
+    if (close(fd) < 0)
+        return snag_errorf(error, error_size, "cannot close configuration: %s",
                   strerror(errno));
-        return -1;
-    }
     snag_sha256_final(&digest, hash);
     for (size_t i = 0u; i < sizeof(hash); ++i)
         (void)snprintf(snapshot->sha256 + i * 2u, 3u, "%02x", hash[i]);
@@ -1791,8 +1780,7 @@ run_config_editor(struct app_state *app, bool *success,
         return -1;
     if (rc < 0) {
         errno = saved;
-        snag_errorf(error, error_size, "cannot run $EDITOR: %s", strerror(errno));
-        return -1;
+        return snag_errorf(error, error_size, "cannot run $EDITOR: %s", strerror(errno));
     }
     return 0;
 }
@@ -2340,10 +2328,8 @@ commit_pending_result(struct app_state *app, const char *turn_id,
     json_t *data = json_pack("{s:s,s:O,s:s}",
         "call_id", call_id, "result", result, "turn_id", turn_id);
     json_decref(result);
-    if (!data) {
-        snag_errorf(error, error_size, "cannot allocate tool completion event");
-        return -1;
-    }
+    if (!data)
+        return snag_errorf(error, error_size, "cannot allocate tool completion event");
     return commit_event(app, "tool_finished", data, error, error_size);
 }
 static int
@@ -2448,10 +2434,8 @@ fail_response(struct app_state *app, const char *turn_id,
         "retry_count", (json_int_t)retry_count, "turn_id", turn_id);
     json_decref(partial);
 
-    if (!data) {
-        snag_errorf(error, error_size, "cannot allocate response failure event");
-        return -1;
-    }
+    if (!data)
+        return snag_errorf(error, error_size, "cannot allocate response failure event");
     return commit_event(app, "response_failed", data, error, error_size) < 0 ||
            fail_turn(app, turn_id, cause, class_name, message,
                      error, error_size) < 0 ? -1 : 0;

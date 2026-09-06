@@ -285,8 +285,7 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
     if (fd < 0) {
         if (errno == ENOENT)
             return 1;
-        snag_errorf(error, error_size, "cannot open model cache: %s", strerror(errno));
-        return -1;
+        return snag_errorf(error, error_size, "cannot open model cache: %s", strerror(errno));
     }
     snag_buf_init(&data, SNAG_MODEL_CACHE_FILE_MAX);
     struct snag_file_privacy privacy;
@@ -321,11 +320,9 @@ lock_cache(struct snag_store *store, char *error, size_t error_size)
     int saved;
 
     fd = snag_create_private_at(store->root_fd, "models.lock", false);
-    if (fd < 0) {
-        snag_errorf(error, error_size, "cannot open model cache lock: %s",
+    if (fd < 0)
+        return snag_errorf(error, error_size, "cannot open model cache lock: %s",
                   strerror(errno));
-        return -1;
-    }
     if (snag_store_verify_private_fd(fd, false, "model cache lock",
                                     error, error_size) < 0)
         goto fail;

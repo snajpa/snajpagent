@@ -875,11 +875,9 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
         for (size_t j = 0; j < config->provider_count; ++j)
             if (strcmp(config->providers[j].name, state.models[i].provider) == 0)
                 provider = &config->providers[j];
-        if (!provider || !state.models[i].model.upstream[0]) {
-            snag_errorf(error, error_size, "model-alias %s/%s needs a configured provider and one real upstream target",
+        if (!provider || !state.models[i].model.upstream[0])
+            return snag_errorf(error, error_size, "model-alias %s/%s needs a configured provider and one real upstream target",
                        state.models[i].provider, state.models[i].model.name);
-            return -1;
-        }
         models = realloc(provider->models, (provider->model_count + 1u) * sizeof(*models));
         if (!models)
             return -1;
@@ -946,9 +944,8 @@ read_config(const char *path, bool require_file, struct snag_buf *text,
     if (fd < 0) {
         if (!require_file && errno == ENOENT)
             return 1;
-        snag_errorf(error, error_size, "cannot open configuration %s: %s",
+        return snag_errorf(error, error_size, "cannot open configuration %s: %s",
                   path, strerror(errno));
-        return -1;
     }
     if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
@@ -1380,10 +1377,8 @@ snag_config_validate_provider(const struct snag_provider_config *provider,
     int rc = -1;
     if (!provider || !snag_config_name_valid(provider->name) ||
         (provider->auth == SNAG_AUTH_CHATGPT &&
-         (strcmp(provider->base_url, SNAG_CHATGPT_BASE) || provider->api_key.kind != SNAG_SECRET_NONE))) {
-        snag_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
-        return -1;
-    }
+         (strcmp(provider->base_url, SNAG_CHATGPT_BASE) || provider->api_key.kind != SNAG_SECRET_NONE)))
+        return snag_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
     snag_buf_init(&text, SNAG_CONFIG_FILE_MAX);
     if (snag_buf_printf(&text, "[provider %s]\n", provider->name) == 0 &&
         provider_settings(&text, provider) == 0)
@@ -1570,10 +1565,8 @@ snag_config_save_provider(const char *path, bool allow_create,
 {
     if (!provider || !snag_config_name_valid(provider->name) ||
         (provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
-        strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r')) {
-        snag_errorf(error, error_size, "invalid provider settings");
-        return -1;
-    }
+        strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r'))
+        return snag_errorf(error, error_size, "invalid provider settings");
     return save_config_settings(path, allow_create, provider->name,
         initial_model ? initial_model : "", effort ? effort : "default",
         provider, error, error_size);

@@ -63,8 +63,7 @@ snag_secret_set_build(struct snag_secret_set *set,
     }
     return 0;
 failed:
-    snag_errorf(error, error_size, "cannot retain secret protection snapshot");
-    return -1;
+    return snag_errorf(error, error_size, "cannot retain secret protection snapshot");
 }
 
 int

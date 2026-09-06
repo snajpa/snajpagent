@@ -252,10 +252,8 @@ snag_auth_load(int root_fd, const struct snag_provider_config *provider,
 {
     int dir, rc;
     snag_auth_clear(tokens);
-    if (!provider_valid(provider)) {
-        snag_errorf(error, error_size, "invalid stored credential provider");
-        return -1;
-    }
+    if (!provider_valid(provider))
+        return snag_errorf(error, error_size, "invalid stored credential provider");
     dir = auth_dir(root_fd, false);
     if (dir < 0) {
         rc = errno == ENOENT ? 1 : -1;

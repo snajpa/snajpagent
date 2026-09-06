@@ -28,11 +28,9 @@ snag_store_verify_private_fd(int fd, bool directory, const char *name,
     snag_file_info st;
     struct snag_file_privacy privacy;
     bool valid;
-    if (snag_fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0) {
-        snag_errorf(error, error_size, "cannot inspect %s: %s", name,
+    if (snag_fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0)
+        return snag_errorf(error, error_size, "cannot inspect %s: %s", name,
                   strerror(errno));
-        return -1;
-    }
     valid = (directory ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode)) &&
             privacy.real_owner && privacy.private_access;
     if (!valid) {
@@ -46,21 +44,15 @@ ensure_directory(const char *path, bool require_private,
 {
     snag_file_info st;
     if (snag_lstat(path, &st) < 0) {
-        if (errno != ENOENT) {
-            snag_errorf(error, error_size, "cannot inspect %s: %s", path,
+        if (errno != ENOENT)
+            return snag_errorf(error, error_size, "cannot inspect %s: %s", path,
                       strerror(errno));
-            return -1;
-        }
-        if (snag_mkdir_private(path) < 0) {
-            snag_errorf(error, error_size, "cannot create %s: %s", path,
+        if (snag_mkdir_private(path) < 0)
+            return snag_errorf(error, error_size, "cannot create %s: %s", path,
                       strerror(errno));
-            return -1;
-        }
-        if (snag_lstat(path, &st) < 0) {
-            snag_errorf(error, error_size, "cannot verify %s: %s", path,
+        if (snag_lstat(path, &st) < 0)
+            return snag_errorf(error, error_size, "cannot verify %s: %s", path,
                       strerror(errno));
-            return -1;
-        }
     }
     if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
         return snag_fail(error, error_size, EINVAL, "%s is not a real directory", path);
@@ -74,10 +66,8 @@ ensure_directory(const char *path, bool require_private,
         if (close(fd) < 0 && rc == 0)
             return -1;
         errno = saved;
-        if (rc < 0) {
-            snag_errorf(error, error_size, "%s must be private (mode 0700)", path);
-            return -1;
-        }
+        if (rc < 0)
+            return snag_errorf(error, error_size, "%s must be private (mode 0700)", path);
     }
     return 0;
 }
@@ -220,10 +210,8 @@ lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
 {
     int fd;
     fd = snag_create_private_at(dir_fd, "lock", false);
-    if (fd < 0) {
-        snag_errorf(error, error_size, "cannot open session lock: %s", strerror(errno));
-        return -1;
-    }
+    if (fd < 0)
+        return snag_errorf(error, error_size, "cannot open session lock: %s", strerror(errno));
     if (snag_fd_cloexec(fd) < 0 ||
         snag_store_verify_private_fd(fd, false, "session lock", error, error_size) < 0) {
         (void)close(fd);
@@ -246,19 +234,15 @@ snag_store_open_session_files(struct snag_session *session, bool create,
     if (lock_session(session->dir_fd, &session->lock_fd, error, error_size) < 0)
         return -1;
     session->log_fd = snag_open_private_append_at(session->dir_fd, "events.jsonl", create);
-    if (session->log_fd < 0) {
-        snag_errorf(error, error_size, "cannot open event log: %s", strerror(errno));
-        return -1;
-    }
+    if (session->log_fd < 0)
+        return snag_errorf(error, error_size, "cannot open event log: %s", strerror(errno));
     if (snag_fd_cloexec(session->log_fd) < 0 ||
         snag_store_verify_private_fd(session->log_fd, false, "event log",
                           error, error_size) < 0)
         return -1;
     session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
-    if (session->log_end < 0) {
-        snag_errorf(error, error_size, "cannot seek event log: %s", strerror(errno));
-        return -1;
-    }
+    if (session->log_end < 0)
+        return snag_errorf(error, error_size, "cannot seek event log: %s", strerror(errno));
     return 0;
 }
 static int

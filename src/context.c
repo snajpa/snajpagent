@@ -462,10 +462,8 @@ install_compact_output(struct context_builder *builder, const json_t *output,
                                           error, error_size) < 0 ||
         truncate_array(builder->request_input, builder->base_request_count) < 0 ||
         json_array_extend(builder->request_input, (json_t *)output) < 0 ||
-        append_rollout_log_location(builder) < 0) {
-        snag_errorf(error, error_size, "cannot install compact output");
-        return -1;
-    }
+        append_rollout_log_location(builder) < 0)
+        return snag_errorf(error, error_size, "cannot install compact output");
     return 0;
 }
 
@@ -627,8 +625,7 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
                                 NULL, &source_bytes) < 0) {
         if (errno == EOVERFLOW && builder->compact_best_known)
             goto trim;
-        snag_errorf(error, error_size, "cannot encode complete compaction group within 12 MiB");
-        return -1;
+        return snag_errorf(error, error_size, "cannot encode complete compaction group within 12 MiB");
     }
     if (source_bytes <= builder->compact_budget ||
          (!builder->compact_best_known &&
@@ -1280,8 +1277,7 @@ snag_context_compact_output_valid(const json_t *output,
     if (snag_json_digest_bounded(output, SNAG_CONTEXT_MAX_COMPACT,
                                 output_hash, output_bytes) == 0)
         return 0;
-    snag_errorf(error, error_size, "compact output exceeds 12 MiB");
-    return -1;
+    return snag_errorf(error, error_size, "compact output exceeds 12 MiB");
 }
 
 int
@@ -1411,10 +1407,8 @@ snag_context_compact_output_count_request_build(const json_t *output,
         return snag_fail(error, error_size, EINVAL, "invalid compact output count request");
     }
     count_request->value = compact_count_request_object(output, model);
-    if (!count_request->value) {
-        snag_errorf(error, error_size, "cannot build compact output count request");
-        return -1;
-    }
+    if (!count_request->value)
+        return snag_errorf(error, error_size, "cannot build compact output count request");
     if (snag_json_document_measure(count_request, SNAG_CONTEXT_MAX_COMPACT) < 0) {
         snag_errorf(error, error_size,
                   "compact output count request exceeds 12 MiB");

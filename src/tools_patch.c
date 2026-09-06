@@ -490,9 +490,8 @@ open_parent_dir(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1
         int next_fd = snag_open_read_at(dir_fd, leaf, true);
         if (next_fd < 0) {
             close(dir_fd);
-            snag_errorf(error, error_size,
+            return snag_errorf(error, error_size,
                       "patch parent directory cannot be opened without following symlinks");
-            return -1;
         }
         close(dir_fd);
         dir_fd = next_fd;

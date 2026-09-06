@@ -117,16 +117,17 @@ snag_path_join(const char *left, const char *right)
     return path;
 }
 
-void
+int
 snag_errorf(char *error, size_t size, const char *fmt, ...)
 {
     va_list ap;
 
     if (!size)
-        return;
+        return -1;
     va_start(ap, fmt);
     (void)vsnprintf(error, size, fmt, ap);
     va_end(ap);
+    return -1;
 }
 
 int

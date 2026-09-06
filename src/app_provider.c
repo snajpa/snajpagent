@@ -125,10 +125,8 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
 #ifdef SNAJPAGENT_TEST_FIXTURE
     (void)credential;
     if (strcmp(snag_json_string(count_request, "model"),
-               snag_config_model_upstream(app->turn_provider, app->turn_model)) != 0) {
-        snag_errorf(error, error_size, "fixture count request did not resolve the provider model");
-        return -1;
-    }
+               snag_config_model_upstream(app->turn_provider, app->turn_model)) != 0)
+        return snag_errorf(error, error_size, "fixture count request did not resolve the provider model");
     (void)input_tokens;
     if (app->turn_provider->exact_token_count == SNAG_TOKEN_COUNT_STRICT) {
         *count_method = "exact";
@@ -294,10 +292,8 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
                 const char *text = snag_json_string(json_array_get(content, j), "text");
                 if ((read_only || app->session.active_queued ||
                      app->session.pending_queue_count) && text &&
-                    strncmp(text, "Persistent goal ", 16u) == 0) {
-                    snag_errorf(error, error_size, "fixture: goal reminder bypassed queued work");
-                    return -1;
-                }
+                    strncmp(text, "Persistent goal ", 16u) == 0)
+                    return snag_errorf(error, error_size, "fixture: goal reminder bypassed queued work");
             }
         }
     }

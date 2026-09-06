@@ -405,10 +405,8 @@ static int
 config_copy(char *dst, size_t size, const char *src, const char *what,
             char *error, size_t error_size)
 {
-    if (!src || !*src || !snag_strcpy(dst, size, src)) {
-        snag_errorf(error, error_size, "%s exceeds its supported bound", what);
-        return -1;
-    }
+    if (!src || !*src || !snag_strcpy(dst, size, src))
+        return snag_errorf(error, error_size, "%s exceeds its supported bound", what);
     return 0;
 }
 
@@ -497,16 +495,12 @@ snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
     if (!nick_valid(config->irc.model_nick)) {
         return snag_fail(error, error_size, EINVAL, "IRC model nick is invalid");
     }
-    if (!endpoint_valid(config->irc.listen)) {
-        snag_errorf(error, error_size, "invalid IRC listen endpoint");
-        return -1;
-    }
+    if (!endpoint_valid(config->irc.listen))
+        return snag_errorf(error, error_size, "invalid IRC listen endpoint");
     for (size_t i = 0; i < config->irc.client_count; ++i) {
-        if (!endpoint_valid(config->irc.clients[i])) {
-            snag_errorf(error, error_size, "invalid IRC client endpoint: %s",
+        if (!endpoint_valid(config->irc.clients[i]))
+            return snag_errorf(error, error_size, "invalid IRC client endpoint: %s",
                       config->irc.clients[i]);
-            return -1;
-        }
         for (size_t j = 0; j < i; ++j)
             if (snag_irc_endpoint_equal(config->irc.clients[i],
                                config->irc.clients[j])) {
@@ -536,10 +530,8 @@ snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
     if (config->irc.room_name[0]) {
         char normalized[sizeof(config->irc.room_name)];
         if (normalize_room(normalized, sizeof(normalized),
-                           config->irc.room_name) < 0) {
-            snag_errorf(error, error_size, "invalid IRC room name");
-            return -1;
-        }
+                           config->irc.room_name) < 0)
+            return snag_errorf(error, error_size, "invalid IRC room name");
         memcpy(config->irc.room_name, normalized, sizeof(normalized));
     }
     return 0;
@@ -557,10 +549,8 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     int saved = EADDRNOTAVAIL;
     int gai;
 
-    if (split_endpoint(endpoint, host, sizeof(host), port, sizeof(port)) < 0) {
-        snag_errorf(error, error_size, "invalid IRC listen endpoint");
-        return -1;
-    }
+    if (split_endpoint(endpoint, host, sizeof(host), port, sizeof(port)) < 0)
+        return snag_errorf(error, error_size, "invalid IRC listen endpoint");
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -2322,8 +2312,7 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
         (config->irc.listen_explicit ? config->irc.client_count != 0u :
                                       config->irc.client_count != 1u))) {
         errno = EINVAL;
-        snag_errorf(error, error_size, "invalid IRC startup state");
-        return -1;
+        return snag_errorf(error, error_size, "invalid IRC startup state");
     }
     *out = NULL;
     irc = calloc(1u, sizeof(*irc));
@@ -2581,8 +2570,7 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
     }
     return 0;
 fail:
-    snag_errorf(error, error_size, "IRC event loop failed: %s", strerror(errno));
-    return -1;
+    return snag_errorf(error, error_size, "IRC event loop failed: %s", strerror(errno));
 }
 
 static size_t
@@ -2652,8 +2640,7 @@ send_chat(struct snag_irc_core *irc, enum link_role role,
     if (!irc || !text || !*text ||
         !snag_utf8_valid((const unsigned char *)text, strlen(text), true)) {
         errno = EINVAL;
-        snag_errorf(error, error_size, "IRC chat must be nonempty valid UTF-8");
-        return -1;
+        return snag_errorf(error, error_size, "IRC chat must be nonempty valid UTF-8");
     }
     remaining = strlen(cursor);
     while (remaining) {
@@ -2678,8 +2665,7 @@ send_chat(struct snag_irc_core *irc, enum link_role role,
     }
     return 0;
 fail:
-    snag_errorf(error, error_size, "cannot queue IRC chat: %s", strerror(errno));
-    return -1;
+    return snag_errorf(error, error_size, "cannot queue IRC chat: %s", strerror(errno));
 }
 
 static int
@@ -2694,10 +2680,8 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
         !snag_utf8_valid((const unsigned char *)topic, strlen(topic), true)) {
         return snag_fail(error, error_size, EINVAL, "IRC topic is invalid or too long");
     }
-    if (sanitize_text(clean, sizeof(clean), topic) < 0) {
-        snag_errorf(error, error_size, "IRC topic is invalid or too long");
-        return -1;
-    }
+    if (sanitize_text(clean, sizeof(clean), topic) < 0)
+        return snag_errorf(error, error_size, "IRC topic is invalid or too long");
     identity = &irc->conns[role];
     if (!identity->joined || !identity->op)
         return snag_fail(error, error_size, EACCES,
@@ -2713,8 +2697,7 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
     }
     return 0;
 fail:
-    snag_errorf(error, error_size, "cannot queue IRC topic change");
-    return -1;
+    return snag_errorf(error, error_size, "cannot queue IRC topic change");
 }
 
 int

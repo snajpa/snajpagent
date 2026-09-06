@@ -491,27 +491,21 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
 {
     if (term->opened) {
         errno = EALREADY;
-        snag_errorf(error, error_size, "terminal already open: %s", strerror(errno));
-        return -1;
+        return snag_errorf(error, error_size, "terminal already open: %s", strerror(errno));
     }
-    if (snag_term_input_capture(&term->host) < 0) {
-        snag_errorf(error, error_size, "cannot read terminal attributes: %s", strerror(errno));
-        return -1;
-    }
+    if (snag_term_input_capture(&term->host) < 0)
+        return snag_errorf(error, error_size, "cannot read terminal attributes: %s", strerror(errno));
     term->capable = term_control_capable();
     update_size(term);
-    if (term->capable && set_raw(term) < 0) {
-        snag_errorf(error, error_size, "cannot enter terminal input mode: %s", strerror(errno));
-        return -1;
-    }
+    if (term->capable && set_raw(term) < 0)
+        return snag_errorf(error, error_size, "cannot enter terminal input mode: %s", strerror(errno));
     if (snag_term_controls_install(&term->host, mark_sigint, mark_sigwinch) < 0) {
         int saved_errno = errno;
         if (term->raw)
             (void)snag_term_input_restore(&term->host, true);
         term->raw = false;
         errno = saved_errno;
-        snag_errorf(error, error_size, "cannot install terminal control handlers: %s", strerror(errno));
-        return -1;
+        return snag_errorf(error, error_size, "cannot install terminal control handlers: %s", strerror(errno));
     }
     term->controls_installed = true;
     sigint_pending = 0;
@@ -525,8 +519,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
             int saved_errno = errno;
             snag_term_close(term);
             errno = saved_errno;
-            snag_errorf(error, error_size, "cannot open private terminal output: %s", strerror(errno));
-            return -1;
+            return snag_errorf(error, error_size, "cannot open private terminal output: %s", strerror(errno));
         }
         term->output_fd[fd - STDOUT_FILENO] = copy;
     }
@@ -535,8 +528,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
         int saved_errno = errno;
         snag_term_close(term);
         errno = saved_errno;
-        snag_errorf(error, error_size, "cannot enable bracketed paste: %s", strerror(errno));
-        return -1;
+        return snag_errorf(error, error_size, "cannot enable bracketed paste: %s", strerror(errno));
     }
     term->bracketed_paste = term->capable;
     return 0;
@@ -548,9 +540,8 @@ snag_term_external_begin(struct snag_term *term,
 {
     if (!term || !term->opened) {
         errno = EINVAL;
-        snag_errorf(error, error_size, "terminal is not open: %s",
+        return snag_errorf(error, error_size, "terminal is not open: %s",
                    strerror(errno));
-        return -1;
     }
     if (snag_term_hide(term) < 0)
         goto fail;
@@ -565,9 +556,8 @@ snag_term_external_begin(struct snag_term *term,
         goto fail;
     return 0;
 fail:
-    snag_errorf(error, error_size, "cannot release terminal for editor: %s",
+    return snag_errorf(error, error_size, "cannot release terminal for editor: %s",
                strerror(errno));
-    return -1;
 }
 
 int
@@ -576,9 +566,8 @@ snag_term_external_end(struct snag_term *term,
 {
     if (!term || !term->opened) {
         errno = EINVAL;
-        snag_errorf(error, error_size, "terminal is not open: %s",
+        return snag_errorf(error, error_size, "terminal is not open: %s",
                    strerror(errno));
-        return -1;
     }
     sigint_pending = 0;
     sigwinch_pending = 0;
@@ -593,9 +582,8 @@ snag_term_external_end(struct snag_term *term,
     term->bracketed_paste = term->capable;
     return 0;
 fail:
-    snag_errorf(error, error_size, "cannot restore terminal after editor: %s",
+    return snag_errorf(error, error_size, "cannot restore terminal after editor: %s",
                strerror(errno));
-    return -1;
 }
 
 static void

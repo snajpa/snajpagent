@@ -520,8 +520,7 @@ snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint,
     if (rc < 0) {
         /* Fatal admission failure: close() still owns this retired allocation. */
         owner->started = false;
-        snag_errorf(error, error_size, "cannot drain removed IRC endpoint");
-        return -1;
+        return snag_errorf(error, error_size, "cannot drain removed IRC endpoint");
     }
     pending = snag_irc_core_pending(owner->core);
     event.timestamp_ms = snag_time_ms();
@@ -799,8 +798,7 @@ snag_irc_tick(struct snag_irc *irc, int timeout_ms,
 {
     if (irc && start_owners(irc) == 0 && drain(irc, timeout_ms) == 0)
         return 0;
-    snag_errorf(error, error_size, "IRC event loop failed: %s", strerror(errno));
-    return -1;
+    return snag_errorf(error, error_size, "IRC event loop failed: %s", strerror(errno));
 }
 
 int
@@ -882,8 +880,7 @@ snag_irc_state(const struct snag_irc *irc, struct snag_buf *out,
         return snag_buf_printf(out, "no active endpoints\n");
     return 0;
 fail:
-    snag_errorf(error, error_size, "IRC snapshot exceeds its bound");
-    return -1;
+    return snag_errorf(error, error_size, "IRC snapshot exceeds its bound");
 }
 
 int

@@ -153,11 +153,9 @@ open_session_dir(struct snag_store *store, struct snag_session *session,
     if (!session->dir_path)
         return -1;
     session->dir_fd = snag_open_read_security_at(store->sessions_fd, id, true);
-    if (session->dir_fd < 0) {
-        snag_errorf(error, error_size, "cannot open session %s: %s", id,
+    if (session->dir_fd < 0)
+        return snag_errorf(error, error_size, "cannot open session %s: %s", id,
                   strerror(errno));
-        return -1;
-    }
     return snag_store_verify_private_fd(session->dir_fd, true, "session directory",
                                         error, error_size);
 }
@@ -298,8 +296,7 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
             snag_buf_free(&row);
             snag_session_close(&snapshot);
             (void)snag_directory_close(dir);
-            snag_errorf(error, error_size, "cannot write session list");
-            return -1;
+            return snag_errorf(error, error_size, "cannot write session list");
         }
         snag_buf_free(&row);
         snag_session_close(&snapshot);
