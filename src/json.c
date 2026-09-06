@@ -7,6 +7,33 @@
 #include <stdlib.h>
 #include <string.h>
 
+void
+snag_json_document_free(struct snag_json_document *document)
+{
+    json_decref(document->value);
+    memset(document, 0, sizeof(*document));
+}
+
+int
+snag_json_document_measure(struct snag_json_document *document, size_t max)
+{
+    document->bytes = 0u;
+    document->sha256[0] = '\0';
+    return snag_json_digest_bounded(document->value, max,
+                                    document->sha256, &document->bytes);
+}
+
+int
+snag_json_document_set(struct snag_json_document *document, json_t *value, size_t max)
+{
+    snag_json_document_free(document);
+    document->value = value;
+    if (snag_json_document_measure(document, max) == 0)
+        return 0;
+    snag_json_document_free(document);
+    return -1;
+}
+
 static int
 encode_string(struct snag_buf *out, const char *s, size_t len)
 {

@@ -3067,7 +3067,7 @@ run_turn(struct app_state *app, const char *prompt,
                 error, sizeof(error));
             goto out;
         }
-        provider_rc = snag_app_provider_count(app, projection.count_request, &credential,
+        provider_rc = snag_app_provider_count(app, projection.count_request.value, &credential,
             &projection.input_tokens_bound, &count_method,
             error, sizeof(error));
         if (provider_rc == 1 && app->steering_requested) {
@@ -3119,7 +3119,7 @@ run_turn(struct app_state *app, const char *prompt,
 
             if (over_hard &&
                 (hard_compaction_attempts >= 8u ||
-                 strcmp(over_budget_request_hash, projection.request_sha256) == 0)) {
+                 strcmp(over_budget_request_hash, projection.create_request.sha256) == 0)) {
                 char failure[256];
 
                 (void)snprintf(failure, sizeof(failure),
@@ -3134,7 +3134,7 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             if (over_hard)
-                memcpy(over_budget_request_hash, projection.request_sha256,
+                memcpy(over_budget_request_hash, projection.create_request.sha256,
                        sizeof(over_budget_request_hash));
             compact_rc = snag_app_compact_before_response(app, &credential,
                     projection.input_tokens_bound, count_method, &compacted,
@@ -3163,7 +3163,7 @@ run_turn(struct app_state *app, const char *prompt,
             }
         }
         if (capacity_recovery_used &&
-            strcmp(rejected_request_hash, projection.request_sha256) == 0) {
+            strcmp(rejected_request_hash, projection.create_request.sha256) == 0) {
             static const char failure[] =
                 "capacity recovery produced an identical provider request";
             result = finish_turn_failure(app, turn_id, NULL, "context",
@@ -3185,8 +3185,8 @@ run_turn(struct app_state *app, const char *prompt,
             result = 6;
             goto out;
         }
-        json_decref(projection.count_request);
-        projection.count_request = NULL;
+        json_decref(projection.count_request.value);
+        projection.count_request.value = NULL;
         if (app_textf(app, SNAG_UI_RUNTIME,
                 "response › %s started · turn=%s · cycle=%u · model=%s · profile=%s",
                 response_id, turn_id, cycle, app->turn_model,
@@ -3220,7 +3220,7 @@ run_turn(struct app_state *app, const char *prompt,
         response_begin_ms = snag_time_ms();
         error[0] = '\0';
         provider_rc = snag_app_provider_run(app, turn_prompt, steering, cycle,
-                                   projection.create_request, &credential, &graph,
+                                   projection.create_request.value, &credential, &graph,
                                    &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
         if (provider_rc < 0 && provider_failure.retry_after_ms > app->recovery_delay_ms)
@@ -3230,8 +3230,8 @@ run_turn(struct app_state *app, const char *prompt,
             if (control_rc != 0)
                 provider_rc = control_rc;
         }
-        json_decref(projection.create_request);
-        projection.create_request = NULL;
+        json_decref(projection.create_request.value);
+        projection.create_request.value = NULL;
         json_decref(steering);
         steering = NULL;
         if ((provider_rc == 1 && app->steering_requested) ||
@@ -3350,12 +3350,12 @@ run_turn(struct app_state *app, const char *prompt,
                 provider_capacity_source_sha256(app->turn_provider, app->turn_model,
                                                 provider_source_hash);
 
-                if (strcmp(rejected_request_hash, projection.request_sha256) == 0) {
+                if (strcmp(rejected_request_hash, projection.create_request.sha256) == 0) {
                     (void)snprintf(failure, sizeof(failure),
                                    "provider rejected an identical context request twice");
                 } else if (commit_event(app, "response_capacity_rejected",
                         snag_app_response_capacity_rejected_data(
-                            turn_id, response_id, cycle, projection.request_sha256,
+                            turn_id, response_id, cycle, projection.create_request.sha256,
                             &provider_failure, &app->turn_capacity,
                             provider_source_hash), error, sizeof(error)) < 0) {
                     (void)app_error(app, error[0] ? error :
@@ -3366,7 +3366,7 @@ run_turn(struct app_state *app, const char *prompt,
                     int recovery_rc;
                     bool ceiling_matches;
 
-                    memcpy(rejected_request_hash, projection.request_sha256,
+                    memcpy(rejected_request_hash, projection.create_request.sha256,
                            sizeof(rejected_request_hash));
                     ceiling_matches = capacity_ceiling_matches(
                         app, app->turn_provider, app->turn_model);

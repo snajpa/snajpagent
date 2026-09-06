@@ -203,14 +203,12 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
 int
 snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
                          const struct snag_credential *credential,
-                         json_t **output, uint64_t *output_tokens_bound,
+                         struct snag_json_document *output,
                          char *error, size_t error_size)
 {
 #ifdef SNAJPAGENT_TEST_FIXTURE
     json_t *fixture_output = json_pack("[{s:s,s:s}]",
         "encrypted_content", "fixture-native-compact", "type", "compaction");
-    char hash[SNAG_SHA256_HEX_LEN + 1u];
-    size_t bytes = 0u;
 
     (void)compact_request;
     (void)credential;
@@ -230,26 +228,14 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
                 return pump_rc;
             }
         }
-    if (output)
-        *output = NULL;
-    if (output_tokens_bound)
-        *output_tokens_bound = 0u;
-    if (!output || !output_tokens_bound || !fixture_output ||
-        snag_context_compact_output_valid(fixture_output, hash, &bytes,
-                                         error, error_size) < 0) {
-        json_decref(fixture_output);
-        return -1;
-    }
-    *output = fixture_output;
-    *output_tokens_bound = 0u;
-    return 0;
+    return snag_context_compact_output_set(output, fixture_output, error, error_size);
 #else
     int cancel_code = 0;
     int rc = snag_provider_responses_compact(compact_request, app->config,
                                             app->turn_provider,
                                             credential, &app->ui,
                                             snag_app_provider_input_pump, app,
-                                            output, output_tokens_bound,
+                                            output,
                                             error, error_size, &cancel_code, NULL);
     return rc;
 #endif

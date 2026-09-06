@@ -18,21 +18,14 @@ int snag_context_provider_model(const struct snag_provider_config *provider,
                                 const char *model, json_t *request);
 
 struct snag_context_projection {
-    json_t *model_input;
-    json_t *create_request;
-    json_t *count_request;
-    size_t model_input_bytes;
+    struct snag_json_document model_input, create_request, count_request;
     size_t request_input_bytes;
     size_t request_input_count;
     size_t request_controller_count;
-    size_t create_request_bytes;
-    size_t count_request_bytes;
     uint64_t input_tokens_bound;
     uint64_t irc_seq;
-    char model_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char request_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char request_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char count_request_sha256[SNAG_SHA256_HEX_LEN + 1u];
+    uint64_t source_seq; /* Selected complete group for compaction. */
 };
 
 void snag_context_projection_init(struct snag_context_projection *projection);
@@ -51,23 +44,18 @@ int snag_context_compact_request_build(struct snag_session *session,
                                       bool active_prefix,
                                       uint64_t source_budget,
                                       bool allow_oversized_first,
-                                      json_t **request,
-                                      json_t **count_request,
-                                      char source_hash[SNAG_SHA256_HEX_LEN + 1u],
-                                      size_t *source_bytes,
-                                      char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                                      size_t *request_bytes,
-                                      uint64_t *source_seq,
+                                      struct snag_context_projection *projection,
                                       char *error, size_t error_size);
 int snag_context_compact_output_count_request_build(const json_t *output,
                                       const char *model,
-                                      json_t **count_request,
-                                      char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                                      size_t *request_bytes,
+                                      struct snag_json_document *count_request,
                                       char *error, size_t error_size);
 int snag_context_compact_output_valid(const json_t *output,
                                      char output_hash[SNAG_SHA256_HEX_LEN + 1u],
                                      size_t *output_bytes,
                                      char *error, size_t error_size);
+/* Consumes a compact result and retains its validated canonical measurement. */
+int snag_context_compact_output_set(struct snag_json_document *document, json_t *value,
+                                    char *error, size_t error_size);
 
 #endif

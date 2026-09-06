@@ -647,10 +647,9 @@ test_local_provider_transport(void)
     struct snag_response_graph graph;
     struct emitted_text emitted;
     json_t *request;
-    json_t *compact_output = NULL;
+    struct snag_json_document compact_output = {0};
     json_t *models = NULL;
     uint64_t tokens = 0u;
-    uint64_t compact_bytes = 0u;
     unsigned int retries = 99u;
     int cancel = 99;
     char endpoint[128];
@@ -750,13 +749,13 @@ test_local_provider_transport(void)
     assert(snag_provider_responses_compact(request, &config,
                                           &config.providers[1], &credential, NULL,
                                           NULL, NULL, &compact_output,
-                                          &compact_bytes, error, sizeof(error),
+                                          error, sizeof(error),
                                           &cancel, &retries) == 0);
-    assert(json_is_array(compact_output));
-    assert(json_array_size(compact_output) == 1u);
-    assert(compact_bytes == 0u); /* Output bytes are not a token count. */
+    assert(json_is_array(compact_output.value));
+    assert(json_array_size(compact_output.value) == 1u);
+    assert(compact_output.bytes > 0u);
     assert(retries == 0u);
-    json_decref(compact_output);
+    snag_json_document_free(&compact_output);
     json_decref(request);
 
     snag_config_free(&config);
@@ -1562,8 +1561,8 @@ test_provider_auth(void)
     }
     assert(unsetenv("SNAJPAGENT_TEST_AUTH_BASE") == 0);
     for (unsigned int pass = 0u; pass < 3u; ++pass) {
-        json_t *request = request_with_marker("transport-compact"), *output = NULL;
-        uint64_t bytes;
+        json_t *request = request_with_marker("transport-compact");
+        struct snag_json_document output = {0};
         credential_set(&credential, "transport-secret");
         credential.root_fd = -1;
         config.providers[0].auth = pass == 0u ? SNAG_AUTH_API_KEY : SNAG_AUTH_CHATGPT;
@@ -1574,9 +1573,9 @@ test_provider_auth(void)
         snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
         int rc = snag_provider_responses_compact(request, &config, &config.providers[0],
-            &credential, NULL, NULL, NULL, &output, &bytes, error, sizeof(error), NULL, NULL);
+            &credential, NULL, NULL, NULL, &output, error, sizeof(error), NULL, NULL);
         assert(rc == (pass < 2u ? SNAG_PROVIDER_UNSUPPORTED : -1));
-        assert(output == NULL);
+        assert(output.value == NULL);
         stop_server(&server);
         json_decref(request);
     }

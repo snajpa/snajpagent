@@ -281,7 +281,7 @@ int snag_app_provider_models(struct app_state *app,
                             char *error, size_t error_size);
 int snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
                              const struct snag_credential *credential,
-                             json_t **output, uint64_t *output_tokens_bound,
+                             struct snag_json_document *output,
                              char *error, size_t error_size);
 int snag_app_provider_run(struct app_state *app, const char *prompt,
                          const json_t *steering, unsigned int cycle,

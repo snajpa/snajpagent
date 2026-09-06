@@ -902,22 +902,15 @@ out:
 }
 
 static int
-parse_compact_body(struct provider_ctx *ctx, json_t **output,
-                   uint64_t *output_tokens_bound,
+parse_compact_body(struct provider_ctx *ctx, struct snag_json_document *output,
                    char *error, size_t error_size)
 {
     char json_error[128] = {0};
-    char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-    size_t output_bytes = 0u;
     json_t *root;
     json_t *body_output;
     const char *object;
     int rc = -1;
 
-    if (output)
-        *output = NULL;
-    if (output_tokens_bound)
-        *output_tokens_bound = 0u;
     if (ctx->body_failed) {
         snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                   "compact response body could not be retained");
@@ -936,28 +929,14 @@ parse_compact_body(struct provider_ctx *ctx, json_t **output,
     object = snag_json_string(root, "object");
     body_output = json_object_get(root, "output");
     if (!object || strcmp(object, "response.compaction") != 0 ||
-        snag_context_compact_output_valid(body_output, output_hash,
-                                         &output_bytes,
-                                         error, error_size) < 0) {
+        snag_context_compact_output_set(output, json_incref(body_output),
+                                        error, error_size) < 0) {
         if (error && !error[0])
             snag_errorf(error, error_size,
                       "compact response has an invalid shape");
         errno = EPROTO;
         goto out;
     }
-    if (!output || !output_tokens_bound ||
-        output_bytes > (size_t)UINT64_MAX) {
-        snag_errorf(error, error_size, "invalid compact response destination");
-        errno = EINVAL;
-        goto out;
-    }
-    *output = json_deep_copy(body_output);
-    if (!*output) {
-        snag_errorf(error, error_size, "compact output could not be retained");
-        errno = ENOMEM;
-        goto out;
-    }
-    *output_tokens_bound = 0u;
     rc = 0;
 out:
     json_decref(root);
@@ -1712,8 +1691,7 @@ snag_provider_responses_compact(const json_t *compact_request,
                                struct snag_ui *render,
                                snag_provider_pump_fn pump,
                                void *pump_opaque,
-                               json_t **output,
-                               uint64_t *output_tokens_bound,
+                               struct snag_json_document *output,
                                char *error, size_t error_size,
                                int *cancel_code,
                                unsigned int *retry_count)
@@ -1726,12 +1704,10 @@ snag_provider_responses_compact(const json_t *compact_request,
     if (retry_count)
         *retry_count = 0u;
     if (output)
-        *output = NULL;
-    if (output_tokens_bound)
-        *output_tokens_bound = 0u;
+        snag_json_document_free(output);
     if (!compact_request || !config || !provider || !credential ||
         !credential->len ||
-        !output || !output_tokens_bound) {
+        !output) {
         snag_errorf(error, error_size, "invalid compact request");
         errno = EINVAL;
         return -1;
@@ -1748,8 +1724,7 @@ snag_provider_responses_compact(const json_t *compact_request,
     if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc == 0)
-        rc = parse_compact_body(&ctx, output, output_tokens_bound,
-                                error, error_size);
+        rc = parse_compact_body(&ctx, output, error, error_size);
     if (rc < 0 &&
         (ctx.http_status == 404 || ctx.http_status == 405 || ctx.http_status == 501))
         rc = SNAG_PROVIDER_UNSUPPORTED;

@@ -11,21 +11,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static int
-hash_json_bounded(const json_t *value, size_t max,
-                  char hash[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes,
-                  char *error, size_t error_size)
-{
-    if (hash)
-        hash[0] = '\0';
-    if (bytes)
-        *bytes = 0u;
-    if (snag_json_digest_bounded(value, max, hash, bytes) == 0)
-        return 0;
-    snprintf(error, error_size, "canonical compaction JSON exceeds bound");
-    return -1;
-}
-
 static bool
 count_method_valid(const char *method)
 {
@@ -44,20 +29,19 @@ static json_t *
 compaction_started_data(const struct snag_session *session,
                         const char *model, const char *compact_id,
                         const char *reason, const char *count_method,
-                        uint64_t source_seq, const char *source_hash,
-                        const char *request_hash,
-                        const char *count_request_hash,
+                        const struct snag_context_projection *projection,
                         uint64_t input_tokens_bound)
 {
     return json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s?,s:s,s:s,s:s,s:I,s:s}",
         "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
         "compact_id", compact_id, "count_method", count_method,
-        "count_request_sha256", count_request_hash,
+        "count_request_sha256", projection->count_request.sha256,
         "input_tokens_bound", (json_int_t)input_tokens_bound, "model", model,
         "predecessor_compact_id", session->compact_id[0] ? session->compact_id : NULL,
         "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
-        "request_sha256", request_hash, "source_seq", (json_int_t)source_seq,
-        "source_sha256", source_hash);
+        "request_sha256", projection->create_request.sha256,
+        "source_seq", (json_int_t)projection->source_seq,
+        "source_sha256", projection->model_input.sha256);
 }
 
 static json_t *
@@ -201,82 +185,49 @@ responses_compact_count_request(const json_t *create_request)
 static int
 run_responses_compaction(struct app_state *app, const json_t *create_request,
                          const struct snag_credential *credential,
-                         json_t **output, uint64_t *output_tokens_bound,
+                         struct snag_json_document *output,
                          char *error, size_t error_size)
 {
-    char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-    size_t output_bytes = 0u;
-
-    if (output)
-        *output = NULL;
-    if (output_tokens_bound)
-        *output_tokens_bound = 0u;
-    if (!output || !output_tokens_bound) {
-        snprintf(error, error_size, "invalid Responses compaction output");
-        errno = EINVAL;
-        return -1;
-    }
+    snag_json_document_free(output);
 #ifdef SNAJPAGENT_TEST_FIXTURE
-    json_t *fixture_output = json_pack("[{s:s,s:s,s:s}]",
-        "content", "fixture responses compact summary",
-        "role", "developer", "type", "message");
-
     (void)app;
     (void)create_request;
     (void)credential;
-    if (!fixture_output)
-        return -1;
-    if (snag_context_compact_output_valid(fixture_output, output_hash,
-                                         &output_bytes, error, error_size) < 0) {
-        json_decref(fixture_output);
-        return -1;
-    }
-    *output = fixture_output;
-    *output_tokens_bound = 0u;
-    return 0;
+    return snag_context_compact_output_set(output, json_pack("[{s:s,s:s,s:s}]",
+        "content", "fixture responses compact summary",
+        "role", "developer", "type", "message"), error, error_size);
 #else
     struct snag_response_graph graph;
     struct snag_graph_decision decision;
     struct snag_provider_failure failure = {0};
     int cancel_code = 0;
-    int provider_rc;
-    int rc = -1;
+    int rc;
 
     snag_response_graph_init(&graph);
-    provider_rc = snag_provider_responses_create(
+    rc = snag_provider_responses_create(
         create_request, app->config, app->turn_provider, credential,
         &app->ui, NULL, NULL, snag_app_provider_input_pump, app, &graph,
         &failure, error, error_size, &cancel_code, NULL);
-    if (provider_rc != 0) {
-        rc = snag_provider_failure_is_capacity(&failure) ?
-            SNAG_PROVIDER_CONTEXT_OVERFLOW : provider_rc;
+    if (rc != 0 && snag_provider_failure_is_capacity(&failure))
+        rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
+    if (rc != 0)
         goto out;
-    }
-    if (snag_response_graph_classify(&graph, &decision,
-                                    error, error_size) < 0)
+    rc = -1;
+    if (snag_response_graph_classify(&graph, &decision, error, error_size) < 0)
         goto out;
     struct snag_response_item final = snag_response_graph_item(&graph, decision.final_index);
     if (decision.outcome != SNAG_GRAPH_FINAL ||
-        decision.final_index >= graph.count ||
-        !final.text) {
+        decision.final_index >= graph.count || !final.text) {
         snprintf(error, error_size,
                  "Responses compaction did not return a final JSON answer");
         errno = EPROTO;
         goto out;
     }
-    *output = snag_json_load_strict(
+    json_t *value = snag_json_load_strict(
         (const unsigned char *)final.text, strlen(final.text),
         SNAG_CONTEXT_MAX_COMPACT, error, error_size);
-    if (!*output)
-        goto out;
-    if (snag_context_compact_output_valid(*output, output_hash, &output_bytes,
-                                         error, error_size) < 0) {
-        json_decref(*output);
-        *output = NULL;
-        goto out;
-    }
-    *output_tokens_bound = 0u;
-    rc = 0;
+    if (value)
+        rc = snag_context_compact_output_set(output, value, error, error_size);
 out:
     snag_response_graph_free(&graph);
     return rc;
@@ -291,29 +242,16 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
 {
     struct snag_credential owned_credential;
     const struct snag_credential *credential = provided_credential;
-    json_t *request = NULL;
-    json_t *provider_request = NULL;
-    json_t *count_request = NULL;
-    json_t *output_count_request = NULL;
-    json_t *output = NULL;
+    struct snag_context_projection projection = {0};
+    struct snag_json_document output_count = {0};
+    struct snag_json_document output = {0};
     char compact_id[SNAG_ID_HEX_LEN + 1u];
-    char source_hash[SNAG_SHA256_HEX_LEN + 1u];
-    char request_hash[SNAG_SHA256_HEX_LEN + 1u];
-    char count_request_hash[SNAG_SHA256_HEX_LEN + 1u];
-    char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-    char output_count_request_hash[SNAG_SHA256_HEX_LEN + 1u];
     const char *count_method = "unknown";
     const char *output_count_method = "unknown";
     const char *model;
     const char *effort;
-    size_t source_bytes = 0u;
-    size_t request_bytes = 0u;
-    size_t count_request_bytes = 0u;
-    size_t output_count_request_bytes = 0u;
-    size_t output_bytes = 0u;
     uint64_t input_tokens_bound = 0u;
     uint64_t output_tokens_bound = 0u;
-    uint64_t source_seq;
     uint64_t source_budget;
     uint64_t threshold;
     bool use_exact;
@@ -378,10 +316,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                                             active_prefix,
                                             source_budget,
                                             true,
-                                            &request, &count_request,
-                                            source_hash, &source_bytes,
-                                            request_hash, &request_bytes,
-                                            &source_seq, error, error_size);
+                                            &projection, error, error_size);
         if (build_rc == 1) {
             if (selection != 0u) {
                 snprintf(error, error_size,
@@ -398,46 +333,42 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         }
         if (build_rc < 0)
             goto out;
-        if (source_bytes == 0u || source_bytes > (size_t)INT64_MAX) {
+        if (projection.model_input.bytes == 0u || projection.model_input.bytes > (size_t)INT64_MAX) {
             snprintf(error, error_size, "compact source has invalid bounds");
             errno = EINVAL;
             goto out;
         }
-        if (native) {
-            provider_request = json_incref(request);
-        } else {
-            provider_request = responses_compact_create_request(
-                request, model, effort, &app->turn_capacity);
-            json_decref(count_request);
-            count_request = responses_compact_count_request(provider_request);
+        if (!native) {
+            json_t *wire = responses_compact_create_request(
+                projection.create_request.value, model, effort, &app->turn_capacity);
+            json_decref(projection.create_request.value);
+            projection.create_request.value = wire;
+            json_decref(projection.count_request.value);
+            projection.count_request.value = responses_compact_count_request(projection.create_request.value);
         }
-        if (provider_request && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
+        if (projection.create_request.value && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
             native &&
-            snag_json_set_new(provider_request, "instructions", json_string("")) < 0)
+            snag_json_set_new(projection.create_request.value, "instructions", json_string("")) < 0)
             goto out;
-        if (provider_request && !native && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
-            snag_context_codex_request(provider_request) < 0)
+        if (projection.create_request.value && !native && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
+            snag_context_codex_request(projection.create_request.value) < 0)
             goto out;
-        if (!provider_request || !count_request ||
-            snag_context_provider_model(app->turn_provider, model, provider_request) < 0 ||
-            snag_context_provider_model(app->turn_provider, model, count_request) < 0) {
+        if (!projection.create_request.value || !projection.count_request.value ||
+            snag_context_provider_model(app->turn_provider, model, projection.create_request.value) < 0 ||
+            snag_context_provider_model(app->turn_provider, model, projection.count_request.value) < 0) {
             snprintf(error, error_size,
                      "cannot build bounded compaction provider request");
             errno = ENOMEM;
             goto out;
         }
-        if (hash_json_bounded(provider_request, SNAG_CONTEXT_MAX_COMPACT,
-                              request_hash, &request_bytes,
-                              error, error_size) < 0 || request_bytes == 0u ||
-            hash_json_bounded(count_request, SNAG_CONTEXT_MAX_COMPACT,
-                              count_request_hash, &count_request_bytes,
-                              error, error_size) < 0 ||
-            count_request_bytes == 0u) {
+        if (snag_json_document_measure(&projection.create_request, SNAG_CONTEXT_MAX_COMPACT) < 0 || projection.create_request.bytes == 0u ||
+            snag_json_document_measure(&projection.count_request, SNAG_CONTEXT_MAX_COMPACT) < 0 ||
+            projection.count_request.bytes == 0u) {
             snprintf(error, error_size,
                      "compaction provider request exceeds 12 MiB");
             goto out;
         }
-        if (reduced && !strcmp(prior_request, request_hash)) {
+        if (reduced && !strcmp(prior_request, projection.create_request.sha256)) {
             snprintf(error, error_size, "irreducible complete history group exceeds provider context");
             goto out;
         }
@@ -445,7 +376,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         count_method = "unknown";
         stage_rc = SNAG_APP_COUNT_SKIPPED;
         if (use_exact) {
-            stage_rc = snag_app_provider_count(app, count_request, credential,
+            stage_rc = snag_app_provider_count(app, projection.count_request.value, credential,
                 &input_tokens_bound, &count_method,
                 error, error_size);
             if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED &&
@@ -466,15 +397,14 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             }
             if (commit_rendered(app, "compaction_started",
                     compaction_started_data(&app->session, model, compact_id, reason,
-                        count_method, source_seq, source_hash, request_hash,
-                        count_request_hash, input_tokens_bound), error, error_size) < 0)
+                        count_method, &projection, input_tokens_bound), error, error_size) < 0)
                 goto out;
             started = true;
             stage_rc = native ?
-                snag_app_provider_compact(app, provider_request, credential,
-                    &output, &output_tokens_bound, error, error_size) :
-                run_responses_compaction(app, provider_request, credential,
-                    &output, &output_tokens_bound, error, error_size);
+                snag_app_provider_compact(app, projection.create_request.value, credential,
+                    &output, error, error_size) :
+                run_responses_compaction(app, projection.create_request.value, credential,
+                    &output, error, error_size);
             if (stage_rc == 0) {
                 generated = true;
                 break;
@@ -496,34 +426,25 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         }
         /* Shrink bytes only after a measured rejection/count: no token conversion.
          * The walker preserves complete groups; identical irreducible input stops. */
-        memcpy(prior_request, request_hash, sizeof(prior_request));
+        memcpy(prior_request, projection.create_request.sha256, sizeof(prior_request));
         reduced = true;
-        source_budget = source_bytes / 2u;
+        source_budget = projection.model_input.bytes / 2u;
         if (!source_budget)
             source_budget = 1u;
-        json_decref(provider_request);
-        provider_request = NULL;
-        json_decref(count_request);
-        count_request = NULL;
-        json_decref(request);
-        request = NULL;
+        snag_context_projection_free(&projection);
     }
     if (!generated) {
         snprintf(error, error_size, "compaction input still exceeds context after eight attempts");
         goto out;
     }
-    if (snag_context_compact_output_valid(output, output_hash, &output_bytes,
-                                         error, error_size) < 0)
-        goto out;
     output_tokens_bound = 0u;
-    if (snag_context_compact_output_count_request_build(output,
+    if (snag_context_compact_output_count_request_build(output.value,
             snag_config_model_upstream(app->turn_provider, model),
-            &output_count_request, output_count_request_hash,
-            &output_count_request_bytes, error, error_size) < 0 ||
-        output_count_request_bytes == 0u)
+            &output_count, error, error_size) < 0 ||
+        output_count.bytes == 0u)
         goto out;
     if (use_exact) {
-        stage_rc = snag_app_provider_count(app, output_count_request, credential,
+        stage_rc = snag_app_provider_count(app, output_count.value, credential,
             &output_tokens_bound, &output_count_method, error, error_size);
         if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED &&
             stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
@@ -541,11 +462,11 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         goto out;
     }
     if (commit_rendered(app, "compaction_completed",
-            compaction_completed_data(compact_id, source_hash, output_hash,
+            compaction_completed_data(compact_id, projection.model_input.sha256, output.sha256,
                                       count_method, output_count_method,
-                                      output_count_request_hash,
+                                      output_count.sha256,
                                       input_tokens_bound, output_tokens_bound,
-                                      output),
+                                      output.value),
             error, error_size) < 0)
         goto out;
     if (app->networked &&
@@ -572,16 +493,9 @@ out:
                 cleanup_error, sizeof(cleanup_error)) < 0)
             snprintf(error, error_size, "%s", cleanup_error);
     }
-    if (output)
-        json_decref(output);
-    if (output_count_request)
-        json_decref(output_count_request);
-    if (count_request)
-        json_decref(count_request);
-    if (provider_request)
-        json_decref(provider_request);
-    if (request)
-        json_decref(request);
+    snag_json_document_free(&output);
+    snag_json_document_free(&output_count);
+    snag_context_projection_free(&projection);
     snag_credential_clear(&owned_credential);
     return rc;
 }

@@ -5,6 +5,18 @@
 #include "base.h"
 #include "snag_jansson.h"
 
+/* Owned canonical document. Refresh its measurement after any mutation. */
+struct snag_json_document {
+    json_t *value;
+    size_t bytes;
+    char sha256[SNAG_SHA256_HEX_LEN + 1u];
+};
+
+void snag_json_document_free(struct snag_json_document *document);
+/* Consumes value; failure leaves an empty document. Initialize with {0}. */
+int snag_json_document_set(struct snag_json_document *document, json_t *value, size_t max);
+int snag_json_document_measure(struct snag_json_document *document, size_t max);
+
 int snag_json_canonical(const json_t *value, struct snag_buf *out);
 /* Diagnostic JSON accepts real numbers; durable canonical JSON does not. */
 int snag_json_diagnostic(const json_t *value, struct snag_buf *out);

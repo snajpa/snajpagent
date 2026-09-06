@@ -601,21 +601,21 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
         snag_buf_init(request_body, SNAG_WIRE_BODY_MAX);
         snag_buf_init(&encoded, SNAG_WIRE_BODY_MAX);
         if (snag_secret_set_build(&secrets, app->config, credential, error, error_size) < 0 ||
-            projection->create_request_bytes > SNAG_WIRE_BODY_MAX ||
-            snag_json_canonical(projection->create_request, &encoded) < 0 ||
+            projection->create_request.bytes > SNAG_WIRE_BODY_MAX ||
+            snag_json_canonical(projection->create_request.value, &encoded) < 0 ||
             snag_wire_json_redact(encoded.data, encoded.len, &secrets.wire,
                                  request_body, error, error_size) < 0) {
             snag_buf_reset(request_body);
             rc = snag_buf_printf(request_body,
                 "<request body omitted; bytes=%zu; sha256=%s>\n",
-                projection->create_request_bytes, projection->request_sha256);
+                projection->create_request.bytes, projection->create_request.sha256);
         }
         snag_buf_free(&encoded);
         snag_secret_set_free(&secrets);
     }
     /* Only the request views and accounting facts survive into the cycle. */
-    json_decref(projection->model_input);
-    projection->model_input = NULL;
+    json_decref(projection->model_input.value);
+    projection->model_input.value = NULL;
     return rc;
 }
 json_t *
@@ -648,18 +648,18 @@ snag_app_response_started_data(const struct app_state *app,
         "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
         "compact_id", *compact_id ? compact_id : NULL,
         "count_method", count_method,
-        "count_request_sha256", projection->count_request_sha256,
+        "count_request_sha256", projection->count_request.sha256,
         "capacity_source", snag_capacity_source_name(capacity->source),
         "cycle", (json_int_t)cycle, "effort", app->turn_effort,
         "hard_input_tokens", "input_tokens_bound", (json_int_t)projection->input_tokens_bound,
-        "model", app->turn_model, "model_input_bytes", (json_int_t)projection->model_input_bytes,
-        "model_input_sha256", projection->model_input_sha256,
+        "model", app->turn_model, "model_input_bytes", (json_int_t)projection->model_input.bytes,
+        "model_input_sha256", projection->model_input.sha256,
         "profile_id", SNAJPAGENT_PROFILE_ID, "provider", app->turn_provider->name,
         "provider_source_sha256", provider_source_sha256,
         "request_input_bytes", (json_int_t)projection->request_input_bytes,
         "request_input_count", (json_int_t)projection->request_input_count,
         "request_input_sha256", projection->request_input_sha256,
-        "requested_output_tokens", "request_sha256", projection->request_sha256,
+        "requested_output_tokens", "request_sha256", projection->create_request.sha256,
         "response_id", response_id, "source_bound", capacity->source_bound,
         "steering_ids", ids, "turn_id", turn_id);
     if (data &&

@@ -508,30 +508,29 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         NULL, error, sizeof(error)) == 0);
 
     for (unsigned int part = 0u; part < 2u; ++part) {
-        json_t *request = NULL, *count = NULL, *output = compact_output_fixture();
-        char hash[65], request_hash[65], output_hash[65], compact[33];
-        size_t bytes, request_bytes, output_bytes;
-        uint64_t seq;
+        struct snag_context_projection prefix = {0};
+        json_t *output = compact_output_fixture();
+        char output_hash[65], compact[33];
+        size_t output_bytes;
         snprintf(compact, sizeof(compact), "%032x", 0xd000u + part);
         assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL,
-            "medium", true, 130000u, false, &request, &count, hash, &bytes,
-            request_hash, &request_bytes, &seq, error, sizeof(error)) == 0);
-        assert(seq == boundaries[part == 0u ? 0u : 2u]);
-        assert(bytes <= 130000u);
+            "medium", true, 130000u, false, &prefix, error, sizeof(error)) == 0);
+        assert(prefix.source_seq == boundaries[part == 0u ? 0u : 2u]);
+        assert(prefix.model_input.bytes <= 130000u);
         assert(snag_context_compact_output_valid(output, output_hash, &output_bytes,
                                                 error, sizeof(error)) == 0);
-        data = compaction_started_data(&session, compact, "hard_budget", seq,
-                                        hash, request_hash, bytes);
+        data = compaction_started_data(&session, compact, "hard_budget", prefix.source_seq,
+                                        prefix.model_input.sha256, prefix.create_request.sha256, prefix.model_input.bytes);
         assert(json_object_set_new(data, "count_method", json_string("statistical_upper_estimate")) == 0);
         assert(snag_session_commit(&session, "compaction_started", data, NULL, error, sizeof(error)) == 0);
-        data = compaction_completed_data(compact, hash, output_hash, request_hash,
-                                          bytes, output_bytes, output);
+        data = compaction_completed_data(compact, prefix.model_input.sha256, output_hash, prefix.create_request.sha256,
+                                          prefix.model_input.bytes, output_bytes, output);
         assert(json_object_set_new(data, "count_method", json_string("statistical_upper_estimate")) == 0);
         assert(snag_session_commit(&session, "compaction_completed", data, NULL, error, sizeof(error)) == 0);
         snag_context_projection_init(&projection);
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
             0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
-        json_t *input = json_object_get(projection.create_request, "input");
+        json_t *input = json_object_get(projection.create_request.value, "input");
         size_t calls = 0u, results = 0u, users = 0u;
         for (size_t i = 0u; i < json_array_size(input); ++i) {
             json_t *item = json_array_get(input, i);
@@ -551,8 +550,7 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         assert(strstr(snag_json_string(timing, "content"),
                       "first_context_at=2026-09-07T00:01:30Z"));
         snag_context_projection_free(&projection);
-        json_decref(request);
-        json_decref(count);
+        snag_context_projection_free(&prefix);
         json_decref(output);
         snag_session_close(&session);
         assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
@@ -633,20 +631,19 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     const char *compact = "c6000000000000000000000000000000";
     assert(snag_session_commit(&session, "steering_added", steering_added(turn, steer, "fresh steer"),
                               NULL, error, sizeof(error)) == 0);
-    json_t *request = NULL, *count = NULL, *output = compact_output_fixture();
-    char hash[65], request_hash[65], output_hash[65];
-    size_t bytes, request_bytes, output_bytes;
-    uint64_t seq;
+    struct snag_context_projection prefix = {0};
+    json_t *output = compact_output_fixture();
+    char output_hash[65];
+    size_t output_bytes;
     assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL,
-        "medium", true, 0u, false, &request, &count, hash, &bytes,
-        request_hash, &request_bytes, &seq, error, sizeof(error)) == 0);
-    assert(seq < session.next_seq - 1u); /* Unconsumed steering is not summarized. */
+        "medium", true, 0u, false, &prefix, error, sizeof(error)) == 0);
+    assert(prefix.source_seq < session.next_seq - 1u); /* Unconsumed steering is not summarized. */
     assert(snag_context_compact_output_valid(output, output_hash, &output_bytes, error, sizeof(error)) == 0);
     assert(snag_session_commit(&session, "compaction_started",
-        compaction_started_data(&session, compact, "hard_budget", seq, hash, request_hash, bytes),
+        compaction_started_data(&session, compact, "hard_budget", prefix.source_seq, prefix.model_input.sha256, prefix.create_request.sha256, prefix.model_input.bytes),
         NULL, error, sizeof(error)) == 0);
     assert(snag_session_commit(&session, "compaction_completed",
-        compaction_completed_data(compact, hash, output_hash, request_hash, bytes, output_bytes, output),
+        compaction_completed_data(compact, prefix.model_input.sha256, output_hash, prefix.create_request.sha256, prefix.model_input.bytes, output_bytes, output),
         NULL, error, sizeof(error)) == 0);
     struct snag_context_projection projection;
     struct snag_instruction_set instructions;
@@ -658,7 +655,7 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     assert(json_array_append_new(snapshot, item) == 0);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, snapshot, 0u, false,
         NULL, &instructions, &projection, error, sizeof(error)) == 0);
-    json_t *input = json_object_get(projection.create_request, "input");
+    json_t *input = json_object_get(projection.create_request.value, "input");
     unsigned int user = 0u, steering = 0u;
     for (size_t i = 0u; i < json_array_size(input); ++i) {
         const char *text = snag_json_string(json_array_get(input, i), "content");
@@ -673,8 +670,7 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     snag_context_projection_free(&projection);
     snag_instructions_free(&instructions);
     json_decref(snapshot);
-    json_decref(request);
-    json_decref(count);
+    snag_context_projection_free(&prefix);
     json_decref(output);
     assert(snag_session_commit(&session, "process_closed", process_closed_data(turn, b,
         snag_tool_result_outcome_unknown("owner_lost")), NULL, error, sizeof(error)) == 0);
@@ -1013,21 +1009,21 @@ test_read_only_and_queue_controllers(void)
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u,
             empty, 128000u, true, &config, NULL, &projection, error, sizeof(error)) == 0);
         if (codex) {
-            assert(json_object_get(projection.create_request, "truncation") == NULL);
-            assert(json_object_get(projection.create_request, "max_output_tokens") == NULL);
-            assert(strcmp(snag_json_string(projection.create_request, "instructions"), "") == 0);
+            assert(json_object_get(projection.create_request.value, "truncation") == NULL);
+            assert(json_object_get(projection.create_request.value, "max_output_tokens") == NULL);
+            assert(strcmp(snag_json_string(projection.create_request.value, "instructions"), "") == 0);
             assert(strcmp(json_string_value(json_array_get(json_object_get(
-                projection.create_request, "include"), 0u)), "reasoning.encrypted_content") == 0);
+                projection.create_request.value, "include"), 0u)), "reasoning.encrypted_content") == 0);
         } else {
-            assert(strcmp(snag_json_string(projection.create_request, "truncation"), "disabled") == 0);
-            assert(json_integer_value(json_object_get(projection.create_request, "max_output_tokens")) == 128000);
-            assert(json_object_get(projection.create_request, "include") == NULL);
+            assert(strcmp(snag_json_string(projection.create_request.value, "truncation"), "disabled") == 0);
+            assert(json_integer_value(json_object_get(projection.create_request.value, "max_output_tokens")) == 128000);
+            assert(json_object_get(projection.create_request.value, "include") == NULL);
         }
-        assert(json_is_false(json_object_get(projection.create_request, "store")));
-        assert(json_is_true(json_object_get(projection.create_request, "stream")));
-        requests[0] = projection.model_input;
-        requests[1] = projection.create_request;
-        requests[2] = projection.count_request;
+        assert(json_is_false(json_object_get(projection.create_request.value, "store")));
+        assert(json_is_true(json_object_get(projection.create_request.value, "stream")));
+        requests[0] = projection.model_input.value;
+        requests[1] = projection.create_request.value;
+        requests[2] = projection.count_request.value;
         for (size_t i = 0; i < 3u; ++i) {
             json_t *ts = json_object_get(requests[i], "tools");
             json_t *web = tool_by_type(ts, search_type);
@@ -1047,7 +1043,7 @@ test_read_only_and_queue_controllers(void)
             }
         }
         snag_buf_init(&serialized, SNAG_CONTEXT_MAX_REQUEST);
-        assert(snag_json_canonical(projection.create_request, &serialized) == 0);
+        assert(snag_json_canonical(projection.create_request.value, &serialized) == 0);
         assert(snag_buf_terminate(&serialized) == 0);
         assert((strstr((char *)serialized.data, "distinct goal wording") != NULL) == (pass >= 3u));
         assert((strstr((char *)serialized.data, "This turn is a read-only query") != NULL) == (pass == 0u));
@@ -1105,10 +1101,10 @@ test_provider_model_projection(void)
     assert(snag_context_build(&session, "small", "high", 1u, empty, 16000u, true,
                               &config, NULL, &projection, error, sizeof(error)) == 0);
     assert(strcmp(session.default_model, "small") == 0 && strcmp(session.active_turn_model, "small") == 0);
-    assert(strcmp(snag_json_string(projection.create_request, "model"), "gpt-6-astra") == 0);
-    assert(strcmp(snag_json_string(projection.count_request, "model"), "gpt-6-astra") == 0);
-    assert(snag_json_digest(projection.create_request, digest) == 0);
-    assert(strcmp(digest, projection.request_sha256) == 0);
+    assert(strcmp(snag_json_string(projection.create_request.value, "model"), "gpt-6-astra") == 0);
+    assert(strcmp(snag_json_string(projection.count_request.value, "model"), "gpt-6-astra") == 0);
+    assert(snag_json_digest(projection.create_request.value, digest) == 0);
+    assert(strcmp(digest, projection.create_request.sha256) == 0);
     snag_context_projection_free(&projection);
     snag_session_close(&session);
     snag_store_close(&store);
@@ -1150,7 +1146,7 @@ test_durable_irc_input_watermark(void)
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
         NULL, NULL, &projection, error, sizeof(error)) == 0);
     assert(projection.irc_seq == received);
-    json_t *input = json_object_get(projection.create_request, "input");
+    json_t *input = json_object_get(projection.create_request.value, "input");
     size_t copies = 0u;
     for (size_t i = 0u; i < json_array_size(input); ++i) {
         const char *text = snag_json_string(json_array_get(input, i), "content");
@@ -1177,7 +1173,7 @@ test_durable_irc_input_watermark(void)
         NULL, NULL, &projection, error, sizeof(error)) == 0);
     struct snag_buf serialized;
     snag_buf_init(&serialized, SNAG_CONTEXT_MAX_REQUEST);
-    assert(snag_json_canonical(projection.create_request, &serialized) == 0);
+    assert(snag_json_canonical(projection.create_request.value, &serialized) == 0);
     assert(snag_buf_terminate(&serialized) == 0);
     assert(strstr((char *)serialized.data, "unique missed message"));
     assert(strstr((char *)serialized.data, "arrived after request froze"));
@@ -1405,77 +1401,55 @@ main(void)
                               turn_completed(turn1, resp1),
                               NULL, error, sizeof(error)) == 0);
     {
-        json_t *compact_request = NULL;
-        json_t *compact_count_request = NULL;
+        struct snag_context_projection compact = {0};
         json_t *compact_output = compact_output_fixture();
-        json_t *output_count_request = NULL;
-        char source_hash[SNAG_SHA256_HEX_LEN + 1u];
-        char request_hash[SNAG_SHA256_HEX_LEN + 1u];
+        struct snag_json_document output_count = {0};
         char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-        char output_count_hash[SNAG_SHA256_HEX_LEN + 1u];
-        size_t source_bytes = 0u;
-        size_t request_bytes = 0u;
         size_t output_bytes = 0u;
-        size_t output_count_bytes = 0u;
-        uint64_t source_seq = 0u;
         assert(snag_context_compact_request_build(&session,
                                                  session.default_model,
                                                  session.default_effort,
                                                  false, 0u, false,
-                                                 &compact_request,
-                                                 &compact_count_request,
-                                                 source_hash, &source_bytes,
-                                                 request_hash, &request_bytes,
-                                                 &source_seq,
+                                                 &compact,
                                                  error, sizeof(error)) == 0);
-        assert(compact_request != NULL);
-        assert(compact_count_request != NULL);
-        assert(source_seq == session.next_seq - 1u);
-        assert(source_bytes > 0u && request_bytes > 0u);
+        assert(compact.create_request.value != NULL);
+        assert(compact.count_request.value != NULL);
+        assert(compact.source_seq == session.next_seq - 1u);
+        assert(compact.model_input.bytes > 0u && compact.create_request.bytes > 0u);
         assert(snag_context_compact_output_valid(compact_output, output_hash,
                                                 &output_bytes,
                                                 error, sizeof(error)) == 0);
         assert(snag_context_compact_output_count_request_build(compact_output,
-                   session.default_model, &output_count_request,
-                   output_count_hash, &output_count_bytes,
+                   session.default_model, &output_count,
                    error, sizeof(error)) == 0);
-        assert(output_count_request != NULL && output_count_bytes > 0u);
+        assert(output_count.value != NULL && output_count.bytes > 0u);
         assert(snag_session_commit(&session, "compaction_started",
                                   compaction_started_data(&session, compact1,
-                                      "manual", source_seq, source_hash,
-                                      request_hash, (uint64_t)source_bytes),
+                                      "manual", compact.source_seq, compact.model_input.sha256,
+                                      compact.create_request.sha256, (uint64_t)compact.model_input.bytes),
                                   NULL, error, sizeof(error)) == 0);
         assert(snag_session_commit(&session, "compaction_completed",
                                   compaction_completed_data(compact1,
-                                      source_hash, output_hash, output_count_hash,
-                                      (uint64_t)source_bytes,
+                                      compact.model_input.sha256, output_hash, output_count.sha256,
+                                      (uint64_t)compact.model_input.bytes,
                                       (uint64_t)output_bytes, compact_output),
                                   NULL, error, sizeof(error)) == 0);
         assert(strcmp(session.compact_id, compact1) == 0);
-        json_decref(compact_request);
-        json_decref(compact_count_request);
-        json_decref(output_count_request);
+        snag_context_projection_free(&compact);
+        snag_json_document_free(&output_count);
         json_decref(compact_output);
     }
     {
         struct snag_session active;
         struct snag_context_projection active_projection;
         struct snag_instruction_set no_instructions;
-        json_t *compact_request = NULL;
-        json_t *compact_count_request = NULL;
+        struct snag_context_projection compact = {0};
         json_t *compact_output = compact_output_fixture();
-        json_t *output_count_request = NULL;
+        struct snag_json_document output_count = {0};
         json_t *active_steering = json_array();
         json_t *input;
-        char source_hash[SNAG_SHA256_HEX_LEN + 1u];
-        char request_hash[SNAG_SHA256_HEX_LEN + 1u];
         char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-        char output_count_hash[SNAG_SHA256_HEX_LEN + 1u];
-        size_t source_bytes = 0u;
-        size_t request_bytes = 0u;
         size_t output_bytes = 0u;
-        size_t output_count_bytes = 0u;
-        uint64_t source_seq = 0u;
         uint64_t active_prefix_seq;
         const char *active_turn1 = "08080808080808080808080808080808";
         const char *active_resp1 = "09090909090909090909090909090909";
@@ -1532,36 +1506,33 @@ main(void)
                                  active_steering, 0u, false, NULL,
                                  &no_instructions,
                                  &active_projection, error, sizeof(error)) == 0);
-        assert(message_matching(json_object_get(active_projection.model_input,
+        assert(message_matching(json_object_get(active_projection.model_input.value,
                                             "items"),
                             "The complete rollout log") == NULL);
         snag_context_projection_free(&active_projection);
         assert(snag_context_compact_request_build(&active,
                    active_model, active.default_effort, true, 0u, false,
-                   &compact_request,
-                   &compact_count_request, source_hash, &source_bytes,
-                   request_hash, &request_bytes, &source_seq,
+                   &compact,
                    error, sizeof(error)) == 0);
-        assert(compact_request != NULL && compact_count_request != NULL);
-        assert(source_seq == active_prefix_seq);
-        assert(source_bytes > 0u && request_bytes > 0u);
+        assert(compact.create_request.value != NULL && compact.count_request.value != NULL);
+        assert(compact.source_seq == active_prefix_seq);
+        assert(compact.model_input.bytes > 0u && compact.create_request.bytes > 0u);
         assert(snag_context_compact_output_valid(compact_output, output_hash,
                                                 &output_bytes,
                                                 error, sizeof(error)) == 0);
         assert(snag_context_compact_output_count_request_build(compact_output,
-                   active_model, &output_count_request,
-                   output_count_hash, &output_count_bytes,
+                   active_model, &output_count,
                    error, sizeof(error)) == 0);
         assert(snag_session_commit(&active, "compaction_started",
                                   compaction_started_data(&active,
-                                      active_compact, "hard_budget", source_seq,
-                                      source_hash, request_hash,
-                                      (uint64_t)source_bytes),
+                                      active_compact, "hard_budget", compact.source_seq,
+                                      compact.model_input.sha256, compact.create_request.sha256,
+                                      (uint64_t)compact.model_input.bytes),
                                   NULL, error, sizeof(error)) == 0);
         assert(snag_session_commit(&active, "compaction_completed",
                                   compaction_completed_data(active_compact,
-                                      source_hash, output_hash, output_count_hash,
-                                      (uint64_t)source_bytes,
+                                      compact.model_input.sha256, output_hash, output_count.sha256,
+                                      (uint64_t)compact.model_input.bytes,
                                       (uint64_t)output_bytes, compact_output),
                                   NULL, error, sizeof(error)) == 0);
         assert(active.active_turn);
@@ -1571,7 +1542,7 @@ main(void)
                                  &no_instructions,
                                  &active_projection, error, sizeof(error)) == 0);
         assert(active_projection.request_controller_count == 1u);
-        input = json_object_get(active_projection.create_request, "input");
+        input = json_object_get(active_projection.create_request.value, "input");
         assert(json_is_array(input));
         assert(json_array_size(input) == 5u);
         assert(active.dir_path[0] == '/');
@@ -1589,9 +1560,8 @@ main(void)
                       "developer") == 0);
         assert(strstr(snag_json_string(json_array_get(input, 4), "content"),
                       "create_goal") != NULL);
-        json_decref(compact_request);
-        json_decref(compact_count_request);
-        json_decref(output_count_request);
+        snag_context_projection_free(&compact);
+        snag_json_document_free(&output_count);
         json_decref(compact_output);
         json_decref(active_steering);
         snag_context_projection_free(&active_projection);
@@ -1653,7 +1623,7 @@ main(void)
                                  snapshot, 0u, false, NULL, &no_instructions,
                                  &steered_projection,
                                  error, sizeof(error)) == 0);
-        input = json_object_get(steered_projection.create_request, "input");
+        input = json_object_get(steered_projection.create_request.value, "input");
         assert(json_array_size(input) >= 6u);
         assert(strcmp(snag_json_string(json_array_get(input, 2), "role"),
                       "assistant") == 0);
@@ -1740,7 +1710,7 @@ main(void)
                                  snapshot, 0u, false, NULL, &no_instructions,
                                  &steered_projection,
                                  error, sizeof(error)) == 0);
-        input = json_object_get(steered_projection.create_request, "input");
+        input = json_object_get(steered_projection.create_request.value, "input");
         assert(strcmp(snag_json_string(json_array_get(input, 2), "type"),
                       "function_call") == 0);
         assert(strcmp(snag_json_string(json_array_get(input, 3), "type"),
@@ -1765,23 +1735,15 @@ main(void)
 
     {
         struct snag_session bounded;
-        json_t *compact_request = NULL;
-        json_t *compact_count_request = NULL;
+        struct snag_context_projection compact = {0};
         json_t *compact_output = NULL;
-        json_t *output_count_request = NULL;
+        struct snag_json_document output_count = {0};
         json_t *bounded_steering = NULL;
         json_t *input;
         struct snag_context_projection bounded_projection;
-        char source_hash[SNAG_SHA256_HEX_LEN + 1u];
-        char request_hash[SNAG_SHA256_HEX_LEN + 1u];
         char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-        char output_count_hash[SNAG_SHA256_HEX_LEN + 1u];
         size_t first_bytes = 0u;
-        size_t source_bytes = 0u;
-        size_t request_bytes = 0u;
         size_t output_bytes = 0u;
-        size_t output_count_bytes = 0u;
-        uint64_t source_seq = 0u;
         uint64_t first_turn_end;
         uint64_t second_turn_end;
         const char *bounded_compact = "15151515151515151515151515151515";
@@ -1815,14 +1777,10 @@ main(void)
         first_turn_end = bounded.next_seq - 1u;
         assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort, false, 0u, false,
-                   &compact_request, &compact_count_request,
-                   source_hash, &first_bytes, request_hash, &request_bytes,
-                   &source_seq, error, sizeof(error)) == 0);
-        assert(source_seq == first_turn_end && first_bytes > 0u);
-        json_decref(compact_request);
-        json_decref(compact_count_request);
-        compact_request = NULL;
-        compact_count_request = NULL;
+                   &compact, error, sizeof(error)) == 0);
+        first_bytes = compact.model_input.bytes;
+        assert(compact.source_seq == first_turn_end && first_bytes > 0u);
+        snag_context_projection_free(&compact);
         assert(snag_session_commit(&bounded, "turn_started",
                                   turn_started(bounded_turn2, 2, "second",
                                                workspace, NULL),
@@ -1846,42 +1804,34 @@ main(void)
                                   NULL, error, sizeof(error)) == 0);
         assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort,
-                   true, (uint64_t)first_bytes, false, &compact_request,
-                   &compact_count_request, source_hash, &source_bytes,
-                   request_hash, &request_bytes, &source_seq,
+                   true, (uint64_t)first_bytes, false, &compact,
                    error, sizeof(error)) == 0);
-        assert(source_seq == first_turn_end);
-        assert(source_bytes <= first_bytes);
-        json_decref(compact_request);
-        json_decref(compact_count_request);
-        compact_request = NULL;
-        compact_count_request = NULL;
+        assert(compact.source_seq == first_turn_end);
+        assert(compact.model_input.bytes <= first_bytes);
+        snag_context_projection_free(&compact);
         assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort,
-                   true, 1u, true, &compact_request,
-                   &compact_count_request, source_hash, &source_bytes,
-                   request_hash, &request_bytes, &source_seq,
+                   true, 1u, true, &compact,
                    error, sizeof(error)) == 0);
-        assert(source_seq == first_turn_end);
-        assert(source_bytes > 1u);
+        assert(compact.source_seq == first_turn_end);
+        assert(compact.model_input.bytes > 1u);
         compact_output = compact_output_fixture();
         assert(snag_context_compact_output_valid(compact_output, output_hash,
                                                 &output_bytes,
                                                 error, sizeof(error)) == 0);
         assert(snag_context_compact_output_count_request_build(compact_output,
-                   bounded.default_model, &output_count_request,
-                   output_count_hash, &output_count_bytes,
+                   bounded.default_model, &output_count,
                    error, sizeof(error)) == 0);
         assert(snag_session_commit(&bounded, "compaction_started",
                                   compaction_started_data(&bounded,
-                                      bounded_compact, "hard_budget", source_seq,
-                                      source_hash, request_hash,
-                                      (uint64_t)source_bytes),
+                                      bounded_compact, "hard_budget", compact.source_seq,
+                                      compact.model_input.sha256, compact.create_request.sha256,
+                                      (uint64_t)compact.model_input.bytes),
                                   NULL, error, sizeof(error)) == 0);
         assert(snag_session_commit(&bounded, "compaction_completed",
                                   compaction_completed_data(bounded_compact,
-                                      source_hash, output_hash, output_count_hash,
-                                      (uint64_t)source_bytes,
+                                      compact.model_input.sha256, output_hash, output_count.sha256,
+                                      (uint64_t)compact.model_input.bytes,
                                       (uint64_t)output_bytes, compact_output),
                                   NULL, error, sizeof(error)) == 0);
         assert(bounded.compact_seq == first_turn_end);
@@ -1892,7 +1842,7 @@ main(void)
                                  bounded_steering, 0u, false, NULL,
                                  &instructions, &bounded_projection,
                                  error, sizeof(error)) == 0);
-        input = json_object_get(bounded_projection.create_request, "input");
+        input = json_object_get(bounded_projection.create_request.value, "input");
         assert(json_is_array(input));
         assert(json_array_size(input) == 7u);
         assert(strcmp(snag_json_string(json_array_get(input, 1u), "type"),
@@ -1907,22 +1857,16 @@ main(void)
         assert(strcmp(snag_json_string(json_array_get(input, 5u), "content"),
                       "current") == 0);
         second_turn_end = first_turn_end + 4u;
-        json_decref(compact_request);
-        json_decref(compact_count_request);
-        compact_request = NULL;
-        compact_count_request = NULL;
+        snag_context_projection_free(&compact);
         assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort,
-                   true, 0u, false, &compact_request, &compact_count_request,
-                   source_hash, &source_bytes, request_hash, &request_bytes,
-                   &source_seq, error, sizeof(error)) == 0);
-        assert(source_seq == second_turn_end);
+                   true, 0u, false, &compact, error, sizeof(error)) == 0);
+        assert(compact.source_seq == second_turn_end);
         snag_context_projection_free(&bounded_projection);
         json_decref(bounded_steering);
-        json_decref(output_count_request);
+        snag_json_document_free(&output_count);
         json_decref(compact_output);
-        json_decref(compact_request);
-        json_decref(compact_count_request);
+        snag_context_projection_free(&compact);
         snag_session_close(&bounded);
     }
 
@@ -1939,32 +1883,32 @@ main(void)
                              empty_steering, 64000u, true, NULL,
                              &instructions, &projection,
                              error, sizeof(error)) == 0);
-    assert(projection.model_input_bytes > 0);
-    assert(projection.create_request_bytes > 0);
-    assert(projection.count_request_bytes > 0);
-    assert(strcmp(projection.model_input_sha256,
-                  projection.request_sha256) != 0);
-    assert(strcmp(projection.count_request_sha256,
-                  projection.request_sha256) != 0);
-    assert(json_is_object(projection.count_request));
+    assert(projection.model_input.bytes > 0);
+    assert(projection.create_request.bytes > 0);
+    assert(projection.count_request.bytes > 0);
+    assert(strcmp(projection.model_input.sha256,
+                  projection.create_request.sha256) != 0);
+    assert(strcmp(projection.count_request.sha256,
+                  projection.create_request.sha256) != 0);
+    assert(json_is_object(projection.count_request.value));
     assert(json_integer_value(json_object_get(
-               projection.create_request, "max_output_tokens")) == 64000);
+               projection.create_request.value, "max_output_tokens")) == 64000);
     assert(json_integer_value(json_object_get(
-               projection.model_input, "max_output_tokens")) == 64000);
-    assert(json_object_get(projection.count_request, "stream") == NULL);
-    assert(json_object_get(projection.count_request, "store") == NULL);
-    assert(json_object_get(projection.count_request, "max_output_tokens") == NULL);
-    assert(strcmp(snag_json_string(projection.count_request, "model"),
+               projection.model_input.value, "max_output_tokens")) == 64000);
+    assert(json_object_get(projection.count_request.value, "stream") == NULL);
+    assert(json_object_get(projection.count_request.value, "store") == NULL);
+    assert(json_object_get(projection.count_request.value, "max_output_tokens") == NULL);
+    assert(strcmp(snag_json_string(projection.count_request.value, "model"),
                   SNAJPAGENT_MODEL) == 0);
     {
-        json_t *tools = json_object_get(projection.create_request, "tools");
+        json_t *tools = json_object_get(projection.create_request.value, "tools");
         assert(json_array_size(tools) == 5u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(tool_by_name(tools, "create_goal") != NULL);
         assert(tool_by_name(tools, "update_goal") == NULL);
     }
-    items = json_object_get(projection.model_input, "items");
-    request_input = json_object_get(projection.create_request, "input");
+    items = json_object_get(projection.model_input.value, "items");
+    request_input = json_object_get(projection.create_request.value, "input");
     assert(json_is_array(items));
     assert(json_array_size(items) == 6);
     assert(json_is_array(request_input));
@@ -1978,7 +1922,7 @@ main(void)
                   session.dir_path) != NULL);
     assert(strstr(snag_json_string(json_array_get(request_input, 3), "content"),
                   "/events.jsonl") != NULL);
-    request_input = json_object_get(projection.count_request, "input");
+    request_input = json_object_get(projection.count_request.value, "input");
     assert(json_is_array(request_input));
     assert(json_array_size(request_input) == 6);
     assert(strcmp(snag_json_string(json_array_get(request_input, 2), "type"),
@@ -1992,10 +1936,10 @@ main(void)
                   "Notes support the task") != NULL);
     assert(json_equal(json_array_get(items, 2),
                       json_array_get(session.compact_output, 0)));
-    assert(items == json_object_get(projection.create_request, "input"));
-    assert(items == json_object_get(projection.count_request, "input"));
-    assert(json_object_get(projection.create_request, "tools") ==
-           json_object_get(projection.count_request, "tools"));
+    assert(items == json_object_get(projection.create_request.value, "input"));
+    assert(items == json_object_get(projection.count_request.value, "input"));
+    assert(json_object_get(projection.create_request.value, "tools") ==
+           json_object_get(projection.count_request.value, "tools"));
     assert(strcmp(snag_json_string(json_array_get(items, 3), "role"),
                   "developer") == 0);
     assert(strstr(snag_json_string(json_array_get(items, 3), "content"),
@@ -2062,8 +2006,8 @@ main(void)
                              &instructions, &projection,
                              error, sizeof(error)) == 0);
     {
-        json_t *tools = json_object_get(projection.create_request, "tools");
-        json_t *input = json_object_get(projection.create_request, "input");
+        json_t *tools = json_object_get(projection.create_request.value, "tools");
+        json_t *input = json_object_get(projection.create_request.value, "input");
         json_t *tool_output = tool_by_type(input, "function_call_output");
         json_t *gate;
         const char *gate_text;
@@ -2108,8 +2052,8 @@ main(void)
                                  empty_steering, 0u, false, &network_config,
                                  &instructions, &projection,
                                  error, sizeof(error)) == 0);
-        tools = json_object_get(projection.create_request, "tools");
-        input = json_object_get(projection.create_request, "input");
+        tools = json_object_get(projection.create_request.value, "tools");
+        input = json_object_get(projection.create_request.value, "input");
         assert(json_array_size(tools) == 8u);
         assert(tool_by_name(tools, "irc_send"));
         assert(tool_by_name(tools, "irc_state"));
@@ -2162,13 +2106,13 @@ main(void)
                              &instructions, &projection,
                              error, sizeof(error)) == 0);
     {
-        json_t *tools = json_object_get(projection.create_request, "tools");
-        json_t *semantic = json_object_get(projection.model_input, "items");
+        json_t *tools = json_object_get(projection.create_request.value, "tools");
+        json_t *semantic = json_object_get(projection.model_input.value, "items");
         json_t *continuation = message_matching(semantic, SNAG_GOAL_CONTINUATION_TEXT);
         json_t *controller = message_matching(semantic, "Persistent goal ");
         json_t *closed = message_matching(semantic, "managed process closed;");
         json_t *historical_output = tool_by_type(
-            json_object_get(projection.create_request, "input"),
+            json_object_get(projection.create_request.value, "input"),
             "function_call_output");
         const char *historical_text;
 
@@ -2220,8 +2164,8 @@ main(void)
                                  empty_steering, 0u, false, &network_config,
                                  &instructions, &projection,
                                  error, sizeof(error)) == 0);
-        tools = json_object_get(projection.create_request, "tools");
-        semantic = json_object_get(projection.model_input, "items");
+        tools = json_object_get(projection.create_request.value, "tools");
+        semantic = json_object_get(projection.model_input.value, "items");
         harness = message_matching(semantic, "IRC chat mode is active.");
         assert(json_array_size(tools) == 8u);
         assert_context_tool_schemas(tools, NULL, 7654321u, 6000u);
@@ -2263,8 +2207,8 @@ main(void)
                              &instructions, &projection,
                              error, sizeof(error)) == 0);
     {
-        json_t *tools = json_object_get(projection.create_request, "tools");
-        json_t *semantic = json_object_get(projection.model_input, "items");
+        json_t *tools = json_object_get(projection.create_request.value, "tools");
+        json_t *semantic = json_object_get(projection.model_input.value, "items");
 
         assert(json_array_size(tools) == 4u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
@@ -2274,7 +2218,7 @@ main(void)
         assert(restored && strstr(snag_json_string(restored, "content"), "is paused"));
         assert(strstr(snag_json_string(restored, "content"), "wording locked"));
         assert(strstr(snag_json_string(restored, "content"), "finish compacted work"));
-        json_t *requests[] = {projection.create_request, projection.count_request};
+        json_t *requests[] = {projection.create_request.value, projection.count_request.value};
         for (size_t i = 0u; i < 2u; ++i) {
             struct snag_buf encoded;
             snag_buf_init(&encoded, SNAG_CONTEXT_MAX_REQUEST);
@@ -2296,10 +2240,10 @@ main(void)
     assert(snag_session_open(&store, &session, resumed_id, error, sizeof(error)) == 0);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
         empty_steering, 0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
-    json_t *restored = message_matching(json_object_get(projection.model_input, "items"), "Persistent goal ");
+    json_t *restored = message_matching(json_object_get(projection.model_input.value, "items"), "Persistent goal ");
     assert(restored && strstr(snag_json_string(restored, "content"), "is blocked"));
     assert(strstr(snag_json_string(restored, "content"), "Recorded blocker:\nretained dependency"));
-    assert(!tool_by_name(json_object_get(projection.create_request, "tools"), "update_goal"));
+    assert(!tool_by_name(json_object_get(projection.create_request.value, "tools"), "update_goal"));
 
     json_decref(empty_steering);
     snag_context_projection_free(&projection);

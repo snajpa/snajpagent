@@ -108,6 +108,22 @@ test_canonical_remains_durable_only(void)
 int
 main(void)
 {
+    struct snag_json_document document = {0};
+    json_t *value = json_pack("{s:i}", "a", 1);
+    char expected[SNAG_SHA256_HEX_LEN + 1u];
+    assert(value && snag_json_document_set(&document, json_incref(value), 7u) == 0);
+    snag_sha256_hex("{\"a\":1}", 7u, expected);
+    assert(document.value == value && document.bytes == 7u);
+    assert(!strcmp(document.sha256, expected));
+    assert(json_object_set_new(value, "a", json_integer(12)) == 0);
+    assert(snag_json_document_measure(&document, 7u) < 0);
+    assert(document.value == value && !document.bytes && !document.sha256[0]);
+    assert(snag_json_document_measure(&document, 8u) == 0 && document.bytes == 8u);
+    assert(snag_json_document_set(&document, json_string("too large"), 1u) < 0);
+    assert(!document.value && !document.bytes && !document.sha256[0]);
+    assert(json_integer_value(json_object_get(value, "a")) == 12);
+    json_decref(value);
+    snag_json_document_free(&document);
     test_strict_accepts_wire_json();
     test_strict_rejects_ambiguous_or_invalid_input();
     test_nesting_limit();

@@ -62,12 +62,9 @@ snag_context_projection_init(struct snag_context_projection *projection)
 void
 snag_context_projection_free(struct snag_context_projection *projection)
 {
-    if (projection->model_input)
-        json_decref(projection->model_input);
-    if (projection->create_request)
-        json_decref(projection->create_request);
-    if (projection->count_request)
-        json_decref(projection->count_request);
+    snag_json_document_free(&projection->model_input);
+    snag_json_document_free(&projection->create_request);
+    snag_json_document_free(&projection->count_request);
     snag_context_projection_init(projection);
 }
 
@@ -1534,29 +1531,35 @@ snag_context_compact_output_valid(const json_t *output,
 }
 
 int
+snag_context_compact_output_set(struct snag_json_document *document, json_t *value,
+                               char *error, size_t error_size)
+{
+    snag_json_document_free(document);
+    document->value = value;
+    if (snag_context_compact_output_valid(value, document->sha256, &document->bytes,
+                                          error, error_size) == 0)
+        return 0;
+    snag_json_document_free(document);
+    return -1;
+}
+
+int
 snag_context_compact_request_build(struct snag_session *session,
                       const char *model, const char *effort,
                       bool active_prefix,
                       uint64_t source_budget,
                       bool allow_oversized_first,
-                      json_t **request, json_t **count_request,
-                      char source_hash[SNAG_SHA256_HEX_LEN + 1u],
-                      size_t *source_bytes,
-                      char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                      size_t *request_bytes, uint64_t *source_seq,
+                      struct snag_context_projection *projection,
                       char *error, size_t error_size)
 {
     struct context_builder builder;
-    json_t *req = NULL;
-    json_t *count = NULL;
     int rc = -1;
 
-    if (request)
-        *request = NULL;
-    if (count_request)
-        *count_request = NULL;
-    if (source_seq)
-        *source_seq = 0u;
+    if (!projection) {
+        errno = EINVAL;
+        return -1;
+    }
+    snag_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
     builder.session = session;
     builder.model = model;
@@ -1570,8 +1573,7 @@ snag_context_compact_request_build(struct snag_session *session,
     if (session && session->active_turn_id[0])
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
-    if (!session || !model || !effort || !request || !count_request ||
-        !source_seq || !builder.request_input ||
+    if (!session || !model || !effort || !builder.request_input ||
         !builder.input_timing || !builder.deferred_steering ||
         session->response_open || session->pending_call_count ||
         (!active_prefix && session->process_count) ||
@@ -1619,30 +1621,24 @@ snag_context_compact_request_build(struct snag_session *session,
     }
     if (ensure_conversation_input(builder.request_input) < 0)
         goto out;
-    req = compact_count_request_object(builder.request_input, model);
-    count = json_incref(req);
-    if (!req) {
+    projection->create_request.value = compact_count_request_object(builder.request_input, model);
+    if (!projection->create_request.value) {
         snag_errorf(error, error_size, "cannot build compact request");
         goto out;
     }
-    if (snag_json_digest_bounded(builder.request_input, SNAG_CONTEXT_MAX_COMPACT,
-                          source_hash, source_bytes) < 0 ||
-        snag_json_digest_bounded(req, SNAG_CONTEXT_MAX_COMPACT,
-                          request_hash, request_bytes) < 0) {
+    if (snag_json_document_set(&projection->model_input,
+            json_incref(builder.request_input), SNAG_CONTEXT_MAX_COMPACT) < 0 ||
+        snag_json_document_measure(&projection->create_request, SNAG_CONTEXT_MAX_COMPACT) < 0) {
         snag_errorf(error, error_size, "compact request exceeds 12 MiB");
         goto out;
     }
-    *request = req;
-    *count_request = count;
-    *source_seq = builder.compact_source_seq;
-    req = NULL;
-    count = NULL;
+    projection->count_request = projection->create_request;
+    json_incref(projection->count_request.value);
+    projection->source_seq = builder.compact_source_seq;
     rc = 0;
 out:
-    if (req)
-        json_decref(req);
-    if (count)
-        json_decref(count);
+    if (rc != 0)
+        snag_context_projection_free(projection);
     json_decref(builder.tools);
     if (builder.request_input)
         json_decref(builder.request_input);
@@ -1656,39 +1652,28 @@ out:
 int
 snag_context_compact_output_count_request_build(const json_t *output,
                                       const char *model,
-                                      json_t **count_request,
-                                      char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                                      size_t *request_bytes,
+                                      struct snag_json_document *count_request,
                                       char *error, size_t error_size)
 {
-    json_t *count = NULL;
-    int rc = -1;
-
     if (count_request)
-        *count_request = NULL;
+        snag_json_document_free(count_request);
     if (!output || !model || !count_request) {
         snag_errorf(error, error_size, "invalid compact output count request");
         errno = EINVAL;
         return -1;
     }
-    count = compact_count_request_object(output, model);
-    if (!count) {
+    count_request->value = compact_count_request_object(output, model);
+    if (!count_request->value) {
         snag_errorf(error, error_size, "cannot build compact output count request");
-        goto out;
+        return -1;
     }
-    if (snag_json_digest_bounded(count, SNAG_CONTEXT_MAX_COMPACT,
-                          request_hash, request_bytes) < 0) {
+    if (snag_json_document_measure(count_request, SNAG_CONTEXT_MAX_COMPACT) < 0) {
         snag_errorf(error, error_size,
                   "compact output count request exceeds 12 MiB");
-        goto out;
+        snag_json_document_free(count_request);
+        return -1;
     }
-    *count_request = count;
-    count = NULL;
-    rc = 0;
-out:
-    if (count)
-        json_decref(count);
-    return rc;
+    return 0;
 }
 
 int
@@ -1816,38 +1801,32 @@ snag_context_build(struct snag_session *session, const char *model,
         projection->irc_seq = builder.deferred_irc_seq - 1u;
     if (ensure_conversation_input(builder.request_input) < 0)
         goto out;
-    projection->model_input = model_input_object(&builder);
-    projection->create_request = create_request_object(&builder);
-    projection->count_request = count_request_object(projection->create_request);
-    if (!projection->model_input || !projection->create_request ||
-        !projection->count_request ||
+    projection->model_input.value = model_input_object(&builder);
+    projection->create_request.value = create_request_object(&builder);
+    projection->count_request.value = count_request_object(projection->create_request.value);
+    if (!projection->model_input.value || !projection->create_request.value ||
+        !projection->count_request.value ||
         snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
-                                     model, projection->model_input) < 0 ||
+                                     model, projection->model_input.value) < 0 ||
         snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
-                                     model, projection->create_request) < 0 ||
+                                     model, projection->create_request.value) < 0 ||
         snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
-                                     model, projection->count_request) < 0 ||
-        snag_json_digest_bounded(projection->model_input, SNAG_CONTEXT_MAX_REQUEST,
-                          projection->model_input_sha256,
-                          &projection->model_input_bytes) < 0 ||
-        snag_json_digest_bounded(json_object_get(projection->create_request, "input"),
+                                     model, projection->count_request.value) < 0 ||
+        snag_json_document_measure(&projection->model_input, SNAG_CONTEXT_MAX_REQUEST) < 0 ||
+        snag_json_digest_bounded(json_object_get(projection->create_request.value, "input"),
                           SNAG_CONTEXT_MAX_REQUEST,
                           projection->request_input_sha256,
                           &projection->request_input_bytes) < 0 ||
-        snag_json_digest_bounded(projection->create_request, SNAG_CONTEXT_MAX_REQUEST,
-                          projection->request_sha256,
-                          &projection->create_request_bytes) < 0 ||
-        snag_json_digest_bounded(projection->count_request, SNAG_CONTEXT_MAX_REQUEST,
-                          projection->count_request_sha256,
-                          &projection->count_request_bytes) < 0) {
+        snag_json_document_measure(&projection->create_request, SNAG_CONTEXT_MAX_REQUEST) < 0 ||
+        snag_json_document_measure(&projection->count_request, SNAG_CONTEXT_MAX_REQUEST) < 0) {
         snag_errorf(error, error_size, "response request projection exceeds 32 MiB");
         goto out;
     }
     projection->request_input_count = json_array_size(
-        json_object_get(projection->create_request, "input"));
+        json_object_get(projection->create_request.value, "input"));
     projection->request_controller_count =
         projection->request_input_count - controller_start;
-    if (projection->model_input_bytes > (size_t)LLONG_MAX) {
+    if (projection->model_input.bytes > (size_t)LLONG_MAX) {
         snag_errorf(error, error_size, "response request projection is too large");
         errno = EOVERFLOW;
         goto out;
