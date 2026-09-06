@@ -106,6 +106,29 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
     size_t capacity = (size - prefix) / 3u;
     if (capacity > 256u)
         capacity = 256u;
+    if (!(mode & ENABLE_LINE_INPUT)) {
+        INPUT_RECORD records[64];
+        DWORD count;
+        size_t units = 0;
+        WCHAR last = 0;
+        if (!PeekConsoleInputW(input, records, 64u, &count)) {
+            errno = EIO;
+            return -1;
+        }
+        for (DWORD i = 0; i < count; ++i) {
+            const KEY_EVENT_RECORD *key = &records[i].Event.KeyEvent;
+            if (records[i].EventType == KEY_EVENT && key->bKeyDown && key->uChar.UnicodeChar) {
+                units += key->wRepeatCount;
+                last = key->uChar.UnicodeChar;
+            }
+        }
+        if (units && last >= 0xd800u && last <= 0xdbffu)
+            --units;
+        if (!units)
+            units = 1u;
+        if (capacity > units)
+            capacity = units;
+    }
     if (prefix)
         wide[0] = host->input_high;
     if (!ReadConsoleW(input, wide + prefix, (DWORD)capacity, &got, NULL)) {
