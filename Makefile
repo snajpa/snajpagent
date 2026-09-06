@@ -159,6 +159,8 @@ tests/test_tools: $(PLATFORM_SRC) src/json.c src/wire.c src/credential.c src/sec
 
 tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(HEADERS)
 
+tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
+
 tests/test_base tests/test_sse tests/test_provider_retry:
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^)
 

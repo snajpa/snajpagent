@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "checked_json.h"
 #include "turn.h"
 #include "tools.h"
 #include "fs.h"
@@ -107,11 +108,9 @@ test_native_read_results(void)
 static json_t *
 args(void)
 {
-    json_t *o = json_pack("{s:s,s:b,s:n,s:i,s:s,s:i}",
+    return checked_json(json_pack("{s:s,s:b,s:n,s:i,s:s,s:i}",
         "command", "true", "pty", 0, "stdin", "timeout_ms", 1000, "workdir", "/tmp",
-        "yield_ms", 1000);
-    assert(o);
-    return o;
+        "yield_ms", 1000));
 }
 
 int

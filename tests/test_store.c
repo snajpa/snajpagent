@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "checked_json.h"
 #include "store.h"
 #include "instructions.h"
 #include "irc.h"
@@ -35,10 +36,8 @@ static json_t *
 change_data(const char *old_key, const char *old_value,
             const char *new_key, const char *new_value)
 {
-    json_t *data = json_pack("{s:s,s:s}",
-        old_key, old_value, new_key, new_value);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s}",
+        old_key, old_value, new_key, new_value));
 }
 
 static int
@@ -68,10 +67,8 @@ check_replay(void *opaque, const struct snag_session *state, uint64_t seq,
 static json_t *
 delete_data(const char *prefix, const char *trash_name)
 {
-    json_t *data = json_pack("{s:s,s:s}",
-        "confirmed_id_prefix", prefix, "trash_name", trash_name);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s}",
+        "confirmed_id_prefix", prefix, "trash_name", trash_name));
 }
 
 static json_t *
@@ -82,7 +79,7 @@ turn_started_data(const struct snag_session *session, const char *turn_id)
     json_t *metadata = snag_instructions_metadata_json(&instructions);
     snag_instructions_free(&instructions);
     assert(metadata);
-    json_t *data = json_pack(
+    return checked_json(json_pack(
         "{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
         "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:i,s:s}",
         "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
@@ -92,45 +89,35 @@ turn_started_data(const struct snag_session *session, const char *turn_id)
         "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
         "input_kind", "direct", "read_only", 0, "instructions", metadata,
         "queue_id", "queue_seq", "text", "queue test", "turn_id", turn_id,
-        "turn_number", 1, "workspace", session->workspace);
-    assert(data);
-    return data;
+        "turn_number", 1, "workspace", session->workspace));
 }
 
 static json_t *
 queued_data(const char *turn_id, const char *queue_id, const char *text)
 {
-    json_t *data = json_pack("{s:s,s:b,s:s,s:s}",
-        "queue_id", queue_id, "read_only", 0, "text", text, "while_turn_id", turn_id);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:b,s:s,s:s}",
+        "queue_id", queue_id, "read_only", 0, "text", text, "while_turn_id", turn_id));
 }
 
 static json_t *
 edited_data(const char *queue_id, const char *text)
 {
-    json_t *data = json_pack("{s:s,s:b,s:s}",
-        "queue_id", queue_id, "read_only", 0, "text", text);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:b,s:s}",
+        "queue_id", queue_id, "read_only", 0, "text", text));
 }
 
 static json_t *
 goal_started_data(const char *goal_id, const char *prompt)
 {
-    json_t *data = json_pack("{s:s,s:s}",
-        "goal_id", goal_id, "prompt", prompt);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s}",
+        "goal_id", goal_id, "prompt", prompt));
 }
 
 static json_t *
 goal_actor_data(const char *goal_id, const char *actor)
 {
-    json_t *data = json_pack("{s:s,s:s}",
-        "actor", actor, "goal_id", goal_id);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s}",
+        "actor", actor, "goal_id", goal_id));
 }
 
 static json_t *
@@ -145,10 +132,8 @@ goal_reworded_data(const char *goal_id, const char *actor,
 static json_t *
 goal_lock_data(const char *goal_id, bool locked)
 {
-    json_t *data = json_pack("{s:s,s:b}",
-        "goal_id", goal_id, "locked", locked);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:b}",
+        "goal_id", goal_id, "locked", locked));
 }
 
 static json_t *
@@ -169,23 +154,19 @@ compaction_started_data(const struct snag_session *session,
 {
     static const char hash[] =
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    json_t *data = json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:n,s:s,s:s,s:s,s:I,s:s}",
+    return checked_json(json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:n,s:s,s:s,s:s,s:I,s:s}",
         "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "compact_id", compact_id,
         "count_method", "qualified_upper_bound", "count_request_sha256", hash,
         "input_tokens_bound", (json_int_t)(1), "model", session->default_model,
         "predecessor_compact_id", "profile_id", SNAJPAGENT_PROFILE_ID, "reason", "manual",
-        "request_sha256", hash, "source_seq", (json_int_t)(1), "source_sha256", hash);
-    assert(data);
-    return data;
+        "request_sha256", hash, "source_seq", (json_int_t)(1), "source_sha256", hash));
 }
 
 static json_t *
 compaction_interrupted_data(const char *compact_id, const char *reason)
 {
-    json_t *data = json_pack("{s:s,s:s}",
-        "compact_id", compact_id, "reason", reason);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s}",
+        "compact_id", compact_id, "reason", reason));
 }
 
 static size_t

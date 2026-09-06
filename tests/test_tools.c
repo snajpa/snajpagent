@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "checked_json.h"
 #include "base.h"
 #include "config.h"
 #include "credential.h"
@@ -141,13 +142,11 @@ static json_t *
 call_args_yield(const char *command, const char *workdir, int timeout_ms,
                 int yield_ms, const char *stdin_text)
 {
-    json_t *args = json_pack("{s:s,s:s,s:o,s:I,s:n,s:o}",
+    return checked_json(json_pack("{s:s,s:s,s:o,s:I,s:n,s:o}",
         "command", command, "workdir", workdir,
         "timeout_ms", timeout_ms < 0 ? json_null() : json_integer(timeout_ms),
         "yield_ms", (json_int_t)(yield_ms), "max_output_tokens",
-        "stdin", stdin_text ? json_string(stdin_text) : json_null());
-    assert(args);
-    return args;
+        "stdin", stdin_text ? json_string(stdin_text) : json_null()));
 }
 
 static json_t *
@@ -321,11 +320,10 @@ static json_t *
 run_write_stdin_call_limit(const char *handle, const char *data, bool eof,
                            int yield_ms, int max_output_tokens)
 {
-    json_t *args = json_pack("{s:s,s:s,s:o,s:b,s:I,s:o}",
+    json_t *args = checked_json(json_pack("{s:s,s:s,s:o,s:b,s:I,s:o}",
         "handle", handle, "data", data, "eof", eof ? json_true() : json_false(), "terminate", 0,
         "yield_ms", (json_int_t)(yield_ms),
-        "max_output_tokens", max_output_tokens < 0 ? json_null() : json_integer(max_output_tokens));
-    assert(args);
+        "max_output_tokens", max_output_tokens < 0 ? json_null() : json_integer(max_output_tokens)));
     return run_tool_with_args("write_stdin", args);
 }
 
@@ -339,19 +337,17 @@ run_write_stdin_call(const char *handle, const char *data, bool eof,
 static json_t *
 run_terminate_call(const char *handle, const char *data, bool eof)
 {
-    json_t *args = json_pack("{s:s,s:s,s:o,s:b,s:I,s:n}",
+    json_t *args = checked_json(json_pack("{s:s,s:s,s:o,s:b,s:I,s:n}",
         "handle", handle, "data", data, "eof", eof ? json_true() : json_false(), "terminate", 1,
-        "yield_ms", (json_int_t)(0), "max_output_tokens");
-    assert(args);
+        "yield_ms", (json_int_t)(0), "max_output_tokens"));
     return run_tool_with_args("write_stdin", args);
 }
 
 static json_t *
 run_malformed_write_stdin_call(const char *handle)
 {
-    json_t *args = json_pack("{s:s,s:s,s:b,s:b,s:I}",
-        "handle", handle, "data", "", "eof", 0, "terminate", 0, "yield_ms", (json_int_t)(0));
-    assert(args);
+    json_t *args = checked_json(json_pack("{s:s,s:s,s:b,s:b,s:I}",
+        "handle", handle, "data", "", "eof", 0, "terminate", 0, "yield_ms", (json_int_t)(0)));
     return run_tool_with_args("write_stdin", args);
 }
 

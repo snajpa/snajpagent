@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "checked_json.h"
 #include "context.h"
 #include "irc.h"
 #include "base.h"
@@ -34,27 +35,23 @@ write_file(const char *path, const char *text)
 static json_t *
 turn_config(void)
 {
-    json_t *config = json_pack("{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b}",
+    return checked_json(json_pack("{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b}",
         "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "medium",
         "max_output_tokens", "model", SNAJPAGENT_MODEL, "provider", "default",
         "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1,
         "replay_schema", 1, "tool_schema", 1,
-        "max_parallel_commands", 4, "parallel_tool_calls", 1);
-    assert(config);
-    return config;
+        "max_parallel_commands", 4, "parallel_tool_calls", 1));
 }
 
 static json_t *
 turn_started(const char *turn_id, unsigned int number, const char *text,
              const char *workspace, json_t *instructions)
 {
-    json_t *data = json_pack("{s:o,s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+    return checked_json(json_pack("{s:o,s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
         "config", turn_config(), "input_kind", "direct", "read_only", 0,
         "instructions", instructions ? instructions : json_array(), "queue_id", "queue_seq",
         "text", text, "turn_id", turn_id, "turn_number", (json_int_t)number,
-        "workspace", workspace);
-    assert(data);
-    return data;
+        "workspace", workspace));
 }
 
 static json_t *
@@ -83,35 +80,29 @@ goal_turn_started(const char *turn_id, unsigned int number,
 static json_t *
 goal_started_data(const char *goal_id, const char *prompt)
 {
-    json_t *data = json_pack("{s:s,s:s}",
-        "goal_id", goal_id, "prompt", prompt);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s}",
+        "goal_id", goal_id, "prompt", prompt));
 }
 
 static json_t *
 goal_lock_data(const char *goal_id, bool locked)
 {
-    json_t *data = json_pack("{s:s,s:b}",
-        "goal_id", goal_id, "locked", locked);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:b}",
+        "goal_id", goal_id, "locked", locked));
 }
 
 static json_t *
 goal_paused_data(const char *goal_id)
 {
-    json_t *data = json_pack("{s:s,s:s}",
-        "goal_id", goal_id, "reason", "user");
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s}",
+        "goal_id", goal_id, "reason", "user"));
 }
 
 static json_t *
 response_started(const char *turn_id, const char *response_id,
                  const char *compact_id)
 {
-    json_t *data = json_pack(
+    return checked_json(json_pack(
         "{s:i,s:n,s:s,s:s?,s:s,s:s,s:s,s:i,s:s,s:n,s:i,s:s,s:i,s:s,s:i,s:i,s:s,"
         "s:s,s:s,s:s,s:s,s:n,s:s,s:b,s:[],s:s}",
         "irc_seq", 0, "baseline_sha256", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
@@ -126,9 +117,7 @@ response_started(const char *turn_id, const char *response_id,
         "provider_source_sha256", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         "request_sha256", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "requested_output_tokens", "response_id", response_id, "source_bound", 0,
-        "steering_ids", "turn_id", turn_id);
-    assert(data);
-    return data;
+        "steering_ids", "turn_id", turn_id));
 }
 
 static json_t *
@@ -144,86 +133,70 @@ response_started_model(const char *turn_id, const char *response_id,
 static json_t *
 usage(void)
 {
-    json_t *u = json_pack("{s:i,s:i,s:n,s:i}",
+    return checked_json(json_pack("{s:i,s:i,s:n,s:i}",
         "input_tokens", 10, "output_tokens", 1, "reasoning_tokens",
-        "total_tokens", 11);
-    assert(u);
-    return u;
+        "total_tokens", 11));
 }
 
 static json_t *
 assistant_item(const char *text)
 {
-    json_t *item = json_pack("{s:s,s:s,s:s,s:s,s:s}",
+    return checked_json(json_pack("{s:s,s:s,s:s,s:s,s:s}",
         "kind", "assistant", "local_item_id", "11111111111111111111111111111111",
-        "phase", "final_answer", "provider_item_id", "msg_1", "text", text);
-    assert(item);
-    return item;
+        "phase", "final_answer", "provider_item_id", "msg_1", "text", text));
 }
 
 static json_t *
 response_completed(const char *turn_id, const char *response_id,
                    const char *text)
 {
-    json_t *data = json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
+    return checked_json(json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
         "cycle", 1, "items", assistant_item(text), "provider_response_id", "resp_1",
-        "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage());
-    assert(data);
-    return data;
+        "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage()));
 }
 
 static json_t *
 response_capacity_rejected(const char *turn_id, const char *response_id)
 {
-    json_t *data = json_pack("{s:s,s:i,s:i,s:s,s:i,s:s,s:s,s:i,s:s,s:s}",
+    return checked_json(json_pack("{s:s,s:i,s:i,s:s,s:i,s:s,s:s,s:i,s:s,s:s}",
         "code", "context_length_exceeded", "context_limit_tokens", 272000,
         "cycle", 1, "message", "too large",
         "observed_hard_input_tokens", 272000,
         "provider_source_sha256", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "request_sha256", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "requested_input_tokens", 300000, "response_id", response_id,
-        "turn_id", turn_id);
-    assert(data);
-    return data;
+        "turn_id", turn_id));
 }
 
 static json_t *
 turn_completed(const char *turn_id, const char *response_id)
 {
-    json_t *data = json_pack("{s:s,s:s,s:s}",
+    return checked_json(json_pack("{s:s,s:s,s:s}",
         "final_item_id", "11111111111111111111111111111111", "final_response_id", response_id,
-        "turn_id", turn_id);
-    assert(data);
-    return data;
+        "turn_id", turn_id));
 }
 
 static json_t *
 steering_added(const char *turn_id, const char *steering_id, const char *text)
 {
-    json_t *data = json_pack("{s:s,s:s,s:s}",
-        "steering_id", steering_id, "text", text, "turn_id", turn_id);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s,s:s}",
+        "steering_id", steering_id, "text", text, "turn_id", turn_id));
 }
 
 static json_t *
 response_interrupted(const char *turn_id, const char *response_id,
                      const char *prefix)
 {
-    json_t *data = json_pack("{s:i,s:s,s:[o],s:s,s:s,s:s}",
+    return checked_json(json_pack("{s:i,s:s,s:[o],s:s,s:s,s:s}",
         "cycle", 1, "origin", "steering", "partial_public", assistant_item(prefix),
-        "reason", "steered", "response_id", response_id, "turn_id", turn_id);
-    assert(data);
-    return data;
+        "reason", "steered", "response_id", response_id, "turn_id", turn_id));
 }
 
 static json_t *
 compact_output_fixture(void)
 {
-    json_t *output = json_pack("[{s:s,s:s}]",
-        "encrypted_content", "test-native-compact", "type", "compaction");
-    assert(output);
-    return output;
+    return checked_json(json_pack("[{s:s,s:s}]",
+        "encrypted_content", "test-native-compact", "type", "compaction"));
 }
 
 static json_t *
@@ -233,7 +206,7 @@ compaction_started_data(const struct snag_session *session,
                         const char *request_hash,
                         uint64_t input_tokens_bound)
 {
-    json_t *data = json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:o,s:s,s:s,s:s,s:I,s:s}",
+    return checked_json(json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:o,s:s,s:s,s:s,s:I,s:s}",
         "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "compact_id", compact_id,
         "count_method", "qualified_upper_bound", "count_request_sha256", request_hash,
         "input_tokens_bound", (json_int_t)input_tokens_bound,
@@ -241,9 +214,7 @@ compaction_started_data(const struct snag_session *session,
         "predecessor_compact_id", session->compact_id[0] ? json_string(session->compact_id) : json_null(),
         "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason ? reason : "manual",
         "request_sha256", request_hash, "source_seq", (json_int_t)source_seq,
-        "source_sha256", source_hash);
-    assert(data);
-    return data;
+        "source_sha256", source_hash));
 }
 
 static json_t *
@@ -255,36 +226,31 @@ compaction_completed_data(const char *compact_id,
                           uint64_t output_tokens_bound,
                           const json_t *output)
 {
-    json_t *data = json_pack("{s:s,s:s,s:I,s:o,s:s,s:s,s:s,s:I,s:s}",
+    return checked_json(json_pack("{s:s,s:s,s:I,s:o,s:s,s:s,s:s,s:I,s:s}",
         "compact_id", compact_id, "count_method", "qualified_upper_bound",
         "input_tokens_bound", (json_int_t)input_tokens_bound,
         "output", json_deep_copy(output), "output_count_method", "qualified_upper_bound",
         "output_count_request_sha256", output_count_hash, "output_sha256", output_hash,
         "output_tokens_bound", (json_int_t)output_tokens_bound,
-        "source_sha256", source_hash);
-    assert(data);
-    return data;
+        "source_sha256", source_hash));
 }
 
 static json_t *
 empty_excerpt(void)
 {
-    json_t *out = json_pack("{s:i,s:s,s:i,s:s,s:i}",
+    return checked_json(json_pack("{s:i,s:s,s:i,s:s,s:i}",
         "discarded_bytes", 0, "encoding", "utf8", "original_bytes", 0,
-        "retained", "", "retained_bytes", 0);
-    assert(out);
-    return out;
+        "retained", "", "retained_bytes", 0));
 }
 
 static json_t *
 running_result_limit(const char *handle, const char *model_text,
                      const char *reason, int max_output_tokens)
 {
-    json_t *result = json_pack("{s:I,s:n,s:s,s:s,s:o,s:n,s:s,s:o,s:o}",
+    json_t *result = checked_json(json_pack("{s:I,s:n,s:s,s:s,s:o,s:n,s:s,s:o,s:o}",
         "duration_ms", (json_int_t)(50), "exit_code", "handle", handle, "model_text", model_text,
         "reason", reason ? json_string(reason) : json_null(), "signal", "status", "running",
-        "stderr", empty_excerpt(), "stdout", empty_excerpt());
-    assert(result);
+        "stderr", empty_excerpt(), "stdout", empty_excerpt()));
     if (max_output_tokens >= 0)
         assert(snag_json_set_new(result, "max_output_tokens",
                                 json_integer(max_output_tokens)) == 0);
@@ -295,44 +261,36 @@ running_result_limit(const char *handle, const char *model_text,
 static json_t *
 tool_call_item(const char *call_id, const char *workspace)
 {
-    json_t *item = json_pack("{s:{s:s,s:b,s:n,s:i,s:s,s:i,s:n},s:s,s:s,s:s,s:s,s:s}",
+    return checked_json(json_pack("{s:{s:s,s:b,s:n,s:i,s:s,s:i,s:n},s:s,s:s,s:s,s:s,s:s}",
         "arguments", "command", "cat", "pty", 0, "stdin", "timeout_ms", 3000,
         "workdir", workspace, "yield_ms", 100, "max_output_tokens", "call_id", call_id,
         "kind", "tool_call", "name", "exec_command", "provider_call_id", "call_exec",
-        "provider_item_id", "item_exec");
-    assert(item);
-    return item;
+        "provider_item_id", "item_exec"));
 }
 
 static json_t *
 response_completed_call(const char *turn_id, const char *response_id,
                         const char *call_id, const char *workspace)
 {
-    json_t *data = json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
+    return checked_json(json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
         "cycle", 1, "items", tool_call_item(call_id, workspace), "provider_response_id", "resp_call",
-        "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage());
-    assert(data);
-    return data;
+        "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage()));
 }
 
 static json_t *
 tool_started_data(const char *turn_id, const char *call_id,
                   const char *action_sha256, const char *workspace)
 {
-    json_t *data = json_pack("{s:s,s:s,s:s,s:s}",
+    return checked_json(json_pack("{s:s,s:s,s:s,s:s}",
         "action_sha256", action_sha256, "call_id", call_id, "resolved_workdir", workspace,
-        "turn_id", turn_id);
-    assert(data);
-    return data;
+        "turn_id", turn_id));
 }
 
 static json_t *
 tool_finished_data(const char *turn_id, const char *call_id, json_t *result)
 {
-    json_t *data = json_pack("{s:s,s:o,s:s}",
-        "call_id", call_id, "result", result, "turn_id", turn_id);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:o,s:s}",
+        "call_id", call_id, "result", result, "turn_id", turn_id));
 }
 
 static json_t *message_matching(json_t *, const char *);
@@ -472,19 +430,15 @@ test_compact_groups(struct snag_store *store, const char *workspace)
 static json_t *
 process_closed_data(const char *turn_id, const char *handle, json_t *result)
 {
-    json_t *data = json_pack("{s:s,s:s,s:o,s:s}",
-        "cause", "internal_failure", "handle", handle, "result", result, "turn_id", turn_id);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s,s:o,s:s}",
+        "cause", "internal_failure", "handle", handle, "result", result, "turn_id", turn_id));
 }
 
 static json_t *
 turn_interrupted_data(const char *turn_id)
 {
-    json_t *data = json_pack("{s:s,s:s,s:s}",
-        "origin", "recovery", "reason", "session_recovered", "turn_id", turn_id);
-    assert(data);
-    return data;
+    return checked_json(json_pack("{s:s,s:s,s:s}",
+        "origin", "recovery", "reason", "session_recovered", "turn_id", turn_id));
 }
 
 static void
