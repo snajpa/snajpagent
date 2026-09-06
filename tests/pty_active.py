@@ -3042,10 +3042,25 @@ def test_known_context_meter():
     assert isinstance(used, int) and used > 0
     percent = min(100, (used * 100 + hard - 1) // hard)
     assert percent > 0
-    child.wait(f"{percent}%".encode(), start=start)
+    prefix = "" if response["count_method"] == "exact" else "~"
+    child.wait(f"{prefix}{percent}%".encode(), start=start)
     child.send(b"\x03")
     interrupted = child.wait(b"turn interrupted", start=start)
     child.exit_cleanly(interrupted)
+
+    child = Child(["--config", str(config), "--resume", session_id])
+    child.wait_idle_prompt()
+    start = len(child.buf)
+    child.send(b"context_anchor_chain\r")
+    answered = child.wait(b"context anchor complete", start=start)
+    child.wait_idle_prompt(start=answered)
+    completed = [event["data"] for event in events(session_id)
+                 if event["type"] == "response_completed"][-1]
+    used = completed["usage"]["input_tokens"]
+    percent = min(100, (used * 100 + hard - 1) // hard)
+    # The idle prompt must replace the estimate with unprefixed measured usage.
+    child.wait(f" {percent}% first/gpt-5.6-luna/high › ".encode(), start=answered)
+    child.exit_cleanly(answered)
 
 
 def test_config_and_cli_model_passthrough():

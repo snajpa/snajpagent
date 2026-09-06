@@ -414,7 +414,8 @@ format_context_meter(struct app_state *app, bool active,
     } else {
         percent = (unsigned int)((used * 100u + hard - 1u) / hard);
     }
-    n = snprintf(meter, 32u, "%u%%", percent);
+    n = snprintf(meter, 32u, "%s%u%%",
+                 app->session.context_meter_estimated ? "~" : "", percent);
     if (n < 0 || n >= 32) {
         errno = EOVERFLOW;
         return -1;

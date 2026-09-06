@@ -1474,6 +1474,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                sizeof(session->context_meter_provider_source_sha256));
         session->context_meter_input_tokens = token_bound;
         session->context_meter_valid = true;
+        session->context_meter_estimated = strcmp(method, "exact") != 0;
         session->active_cycle = (unsigned int)cycle;
         session->response_open = true;
     } else if (strcmp(type, "response_capacity_rejected") == 0) {
@@ -1698,6 +1699,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 session->active_response_request_input_count;
             session->usage_anchor_input_tokens = graph.usage.input_tokens;
             session->usage_anchor_valid = true;
+            /* Replace this request's preflight estimate, not its lineage. */
+            session->context_meter_input_tokens = graph.usage.input_tokens;
+            session->context_meter_estimated = false;
         }
         session->response_open = false;
         session->response_complete = true;

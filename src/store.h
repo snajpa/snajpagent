@@ -169,6 +169,7 @@ struct snag_session {
     bool goal_locked;
     bool usage_anchor_valid;
     bool context_meter_valid;
+    bool context_meter_estimated;
     bool capacity_ceiling_valid;
 };
 

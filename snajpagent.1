@@ -602,8 +602,16 @@ active marker:
 .B ›
 while idle and
 .B »
-while active.  The percentage uses the latest comparable token bound and
-resolved input budget, rounded up.  A fresh or incomparable state shows
+while active.  The percentage uses the latest comparable request input count
+and resolved input budget, rounded up.  Before measured usage is available,
+a non-exact preflight bound is prefixed with
+.BR ~
+(for example,
+.BR ~11% ).
+Completed response input usage replaces that request's preflight value.
+This is not cumulative session usage or an exact count of the next request;
+estimates and provider-reported usage can decrease without local compaction.
+A fresh or incomparable state shows
 .BR 0% ;
 an unknown budget shows
 .BR ?% .

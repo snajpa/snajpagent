@@ -1348,9 +1348,74 @@ test_durable_irc_input_watermark(void)
     snag_session_close(&session); snag_store_close(&store);
 }
 
+static void
+test_context_meter_usage(void)
+{
+    char temp[4096], error[256] = {0};
+    char session_id[SNAG_ID_HEX_LEN + 1u];
+    const char *scratch = getenv("TMPDIR");
+    const uint64_t bounds[] = {73069u, 86071u, 52373u, 50034u, 1000u};
+    const uint64_t measured[] = {73368u, 25055u, 43097u, 50034u, 0u};
+    struct snag_store store;
+    struct snag_session session;
+
+    assert(snprintf(temp, sizeof(temp), "%s/context-meter-XXXXXX",
+                    scratch ? scratch : "/tmp") > 0);
+    assert(mkdtemp(temp));
+    snag_store_init(&store);
+    snag_session_init(&session);
+    assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
+    assert(snag_session_create(&store, &session, temp, "default",
+                              SNAJPAGENT_MODEL, "medium",
+                              error, sizeof(error)) == 0);
+    memcpy(session_id, session.id, sizeof(session_id));
+    for (unsigned int i = 0; i < 5u; ++i) {
+        char turn[SNAG_ID_HEX_LEN + 1u], response[SNAG_ID_HEX_LEN + 1u];
+        json_t *data;
+
+        assert(snprintf(turn, sizeof(turn), "%032x", i + 1u) == SNAG_ID_HEX_LEN);
+        assert(snprintf(response, sizeof(response), "%032x", i + 10u) == SNAG_ID_HEX_LEN);
+        assert(snag_session_commit(&session, "turn_started",
+                    turn_started(turn, i + 1u, "next", temp, NULL),
+                    NULL, error, sizeof(error)) == 0);
+        data = response_started(turn, response, NULL);
+        assert(json_object_set_new(data, "input_tokens_bound",
+                                   json_integer((json_int_t)bounds[i])) == 0);
+        if (i != 0u)
+            assert(json_object_set_new(data, "count_method",
+                        json_string("statistical_upper_estimate")) == 0);
+        assert(snag_session_commit(&session, "response_started", data,
+                                   NULL, error, sizeof(error)) == 0);
+        assert(session.context_meter_input_tokens == bounds[i]);
+        assert(session.context_meter_estimated == (i != 0u));
+        data = response_completed(turn, response, "answer");
+        assert(json_object_set_new(data, "usage",
+                    json_pack("{s:o,s:n,s:n,s:n}", "input_tokens",
+                        i == 3u ? json_null() : json_integer((json_int_t)measured[i]),
+                        "output_tokens", "reasoning_tokens", "total_tokens")) == 0);
+        assert(snag_session_commit(&session, "response_completed", data,
+                                   NULL, error, sizeof(error)) == 0);
+        assert(session.context_meter_input_tokens == measured[i]);
+        assert(session.context_meter_estimated == (i == 3u));
+        assert(snag_session_commit(&session, "turn_completed",
+                    turn_completed(turn, response), NULL, error, sizeof(error)) == 0);
+        snag_session_close(&session);
+        assert(snag_session_open(&store, &session, session_id,
+                                 error, sizeof(error)) == 0);
+        assert(session.context_meter_valid);
+        assert(session.context_meter_input_tokens == measured[i]);
+        assert(session.context_meter_estimated == (i == 3u));
+        assert(!strcmp(session.context_meter_provider, "default"));
+        assert(!session.context_meter_compact_id[0]);
+    }
+    snag_session_close(&session);
+    snag_store_close(&store);
+}
+
 int
 main(void)
 {
+    test_context_meter_usage();
     char temp[] = "/tmp/snajpagent-context-XXXXXX";
     char state[4096];
     char workspace[4096];
