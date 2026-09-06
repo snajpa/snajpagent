@@ -151,30 +151,6 @@ compaction_state_valid(const struct app_state *app, const char *reason,
     return 0;
 }
 
-static int
-build_compaction_request(struct app_state *app, bool active_prefix,
-                         const char *model, const char *effort,
-                         uint64_t source_budget, bool allow_oversized_first,
-                         json_t **request, json_t **count_request,
-                         char source_hash[SNAG_SHA256_HEX_LEN + 1u],
-                         size_t *source_bytes,
-                         char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                         size_t *request_bytes, uint64_t *source_seq,
-                         char *error, size_t error_size)
-{
-    if (active_prefix)
-        return snag_context_compact_active_prefix_request_build(&app->session,
-            model, effort, source_budget, allow_oversized_first,
-            request, count_request,
-            source_hash, source_bytes,
-            request_hash, request_bytes, source_seq, error, error_size);
-    return snag_context_compact_request_build(&app->session, model, effort,
-        source_budget, allow_oversized_first, request, count_request,
-        source_hash, source_bytes,
-        request_hash,
-        request_bytes, source_seq, error, error_size);
-}
-
 static json_t *
 responses_compact_create_request(const json_t *compact_request,
                                  const char *model, const char *effort,
@@ -408,7 +384,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     if (source_budget > SNAG_CONTEXT_MAX_COMPACT - 4096u)
         source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
-        build_rc = build_compaction_request(app, active_prefix, model, effort,
+        build_rc = snag_context_compact_request_build(&app->session, model, effort,
+                                            active_prefix,
                                             source_budget,
                                             use_exact,
                                             &request, &count_request,

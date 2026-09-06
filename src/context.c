@@ -603,12 +603,9 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
         return -1;
     }
 trim:
+    if (truncate_array(builder->request_input, builder->compact_best_request_count) < 0)
+        return -1;
     count = json_array_size(builder->request_input);
-    while (count > builder->compact_best_request_count) {
-        if (json_array_remove(builder->request_input, count - 1u) < 0)
-            return -1;
-        --count;
-    }
     builder->compact_source_seq = builder->compact_best_seq;
     builder->compact_new_items = count > builder->base_request_count ?
         count - builder->base_request_count : 0u;
@@ -913,80 +910,22 @@ invalid_interrupted:
 }
 
 static json_t *
-required_array(const char *const *names, size_t count)
+tool_schema(const char *name, const char *description, json_t *properties)
 {
-    json_t *array = json_array();
+    json_t *required = json_array(), *tool = NULL;
 
-    if (!array)
-        return NULL;
-    for (size_t i = 0; i < count; ++i) {
-        if (json_array_append_string(array, names[i]) < 0) {
-            json_decref(array);
-            return NULL;
-        }
-    }
-    return array;
-}
-
-static json_t *
-string_array(const char *a, const char *b)
-{
-    const char *const names[] = {a, b};
-    return required_array(names, sizeof(names) / sizeof(names[0]));
-}
-
-static json_t *
-primitive_schema(const char *type, bool nullable)
-{
-    return nullable ? json_pack("{s:[s,s]}", "type", type, "null") :
-                      json_pack("{s:s}", "type", type);
-}
-
-static json_t *
-string_schema(void)
-{
-    return primitive_schema("string", false);
-}
-
-static json_t *
-nullable_string_schema(void)
-{
-    return primitive_schema("string", true);
-}
-
-static json_t *
-goal_action_schema(void)
-{
-    return json_pack("{s:s,s:[s,s,s]}", "type", "string",
-                     "enum", "rewrite", "complete", "block");
-}
-
-static json_t *
-nullable_bool_schema(void)
-{
-    return primitive_schema("boolean", true);
-}
-
-static json_t *
-integer_schema(json_int_t minimum, json_int_t maximum, bool nullable)
-{
-    return nullable ?
-        json_pack("{s:I,s:I,s:[s,s]}", "minimum", minimum, "maximum", maximum,
-                  "type", "integer", "null") :
-        json_pack("{s:I,s:I,s:s}", "minimum", minimum, "maximum", maximum,
-                  "type", "integer");
-}
-
-static json_t *
-tool_schema(const char *name, const char *description,
-            json_t *properties, json_t *required)
-{
-    json_t *tool = json_pack(
-        "{s:s,s:s,s:{s:b,s:O,s:O,s:s},s:b,s:s}",
+    if (!properties || !required)
+        goto out;
+    /* Property insertion order is also the provider's required-field order. */
+    for (void *iter = json_object_iter(properties); iter;
+         iter = json_object_iter_next(properties, iter))
+        if (json_array_append_string(required, json_object_iter_key(iter)) < 0)
+            goto out;
+    tool = json_pack("{s:s,s:s,s:{s:b,s:O,s:O,s:s},s:b,s:s}",
         "description", description, "name", name,
         "parameters", "additionalProperties", 0, "properties", properties,
         "required", required, "type", "object", "strict", 1, "type", "function");
-
+out:
     json_decref(properties);
     json_decref(required);
     return tool;
@@ -995,46 +934,33 @@ tool_schema(const char *name, const char *description,
 static json_t *
 exec_tool_schema(uint32_t max_timeout_ms, uint32_t max_output_tokens)
 {
-    static const char *const required[] = {
-        "command", "workdir", "stdin", "pty", "yield_ms", "timeout_ms",
-        "max_output_tokens"
-    };
     char description[512];
-    json_t *properties = json_object();
+
     if (snprintf(description, sizeof(description),
             "Run one POSIX shell command from an explicit absolute workdir. "
             "Set timeout_ms only when this command needs a deadline; null "
             "runs without a timeout. Pick a positive max_output_tokens limit "
             "for result text sent to model context, or null for the configured "
             "ceiling (%u). Larger requests are capped; this is a conservative "
-            "one-token-per-UTF-8-byte upper bound.",
-            max_output_tokens) < 0 || !properties ||
-        snag_json_set_new(properties, "command", string_schema()) < 0 ||
-        snag_json_set_new(properties, "workdir", string_schema()) < 0 ||
-        snag_json_set_new(properties, "stdin", nullable_string_schema()) < 0 ||
-        snag_json_set_new(properties, "pty", nullable_bool_schema()) < 0 ||
-        snag_json_set_new(properties, "yield_ms", integer_schema(0, 600000, true)) < 0 ||
-        snag_json_set_new(properties, "timeout_ms",
-                     integer_schema(1, max_timeout_ms, true)) < 0 ||
-        snag_json_set_new(properties, "max_output_tokens",
-                     integer_schema(1, max_output_tokens, true)) < 0) {
-        if (properties)
-            json_decref(properties);
+            "one-token-per-UTF-8-byte upper bound.", max_output_tokens) < 0)
         return NULL;
-    }
-    return tool_schema("exec_command", description,
-                       properties, required_array(required, sizeof(required) / sizeof(required[0])));
+    return tool_schema("exec_command", description, json_pack(
+        "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
+         "s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I}}",
+        "command", "type", "string", "workdir", "type", "string",
+        "stdin", "type", "string", "null", "pty", "type", "boolean", "null",
+        "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
+        "timeout_ms", "type", "integer", "null",
+            "minimum", 1, "maximum", (json_int_t)max_timeout_ms,
+        "max_output_tokens", "type", "integer", "null",
+            "minimum", 1, "maximum", (json_int_t)max_output_tokens));
 }
 
 static json_t *
 stdin_tool_schema(uint32_t max_output_tokens)
 {
-    static const char *const required[] = {
-        "handle", "data", "eof", "terminate", "yield_ms",
-        "max_output_tokens"
-    };
     char description[512];
-    json_t *properties = json_object();
+
     if (snprintf(description, sizeof(description),
             "Wait for or write bounded UTF-8 data to an existing managed "
             "process. Set terminate=true only with empty data and "
@@ -1042,77 +968,48 @@ stdin_tool_schema(uint32_t max_output_tokens)
             "Pick a positive max_output_tokens limit for new result text sent "
             "to model context, or null for the configured ceiling (%u). Larger "
             "requests are capped; this is a conservative one-token-per-UTF-8-byte upper bound.",
-            max_output_tokens) < 0 || !properties ||
-        snag_json_set_new(properties, "data", string_schema()) < 0 ||
-        snag_json_set_new(properties, "eof", nullable_bool_schema()) < 0 ||
-        snag_json_set_new(properties, "handle",
-                     string_schema()) < 0 ||
-        snag_json_set_new(properties, "terminate", nullable_bool_schema()) < 0 ||
-        snag_json_set_new(properties, "yield_ms", integer_schema(0, 600000, true)) < 0 ||
-        snag_json_set_new(properties, "max_output_tokens",
-                     integer_schema(1, max_output_tokens, true)) < 0) {
-        if (properties)
-            json_decref(properties);
+            max_output_tokens) < 0)
         return NULL;
-    }
-    return tool_schema("write_stdin", description,
-                       properties, required_array(required, sizeof(required) / sizeof(required[0])));
+    return tool_schema("write_stdin", description, json_pack(
+        "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
+         "s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:I}}",
+        "handle", "type", "string", "data", "type", "string",
+        "eof", "type", "boolean", "null", "terminate", "type", "boolean", "null",
+        "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
+        "max_output_tokens", "type", "integer", "null",
+            "minimum", 1, "maximum", (json_int_t)max_output_tokens));
 }
 
 static json_t *
 patch_tool_schema(void)
 {
-    json_t *properties = json_object();
-    if (!properties ||
-        snag_json_set_new(properties, "patch", string_schema()) < 0 ||
-        snag_json_set_new(properties, "workdir", string_schema()) < 0) {
-        if (properties)
-            json_decref(properties);
-        return NULL;
-    }
-    return tool_schema("apply_patch", "Apply one unified patch in the session workspace.",
-                       properties, string_array("patch", "workdir"));
+    return tool_schema("apply_patch",
+        "Apply one unified patch in the session workspace.",
+        json_pack("{s:{s:s},s:{s:s}}",
+                  "patch", "type", "string", "workdir", "type", "string"));
 }
 
 static json_t *
 create_goal_tool_schema(void)
 {
-    static const char *const required[] = {"objective"};
-    json_t *properties = json_object();
-
-    if (!properties ||
-        snag_json_set_new(properties, "objective", string_schema()) < 0) {
-        if (properties)
-            json_decref(properties);
-        return NULL;
-    }
     return tool_schema("create_goal",
         "Create a persistent goal only when the user or system/developer "
         "instructions explicitly request it; never infer one from ordinary "
         "work. Writing or committing goal documentation does not activate "
         "continuation. After success, a normal final answer is a checkpoint "
-        "and " SNAJPAGENT_NAME " starts another goal turn.", properties,
-        required_array(required, sizeof(required) / sizeof(required[0])));
+        "and " SNAJPAGENT_NAME " starts another goal turn.",
+        json_pack("{s:{s:s}}", "objective", "type", "string"));
 }
 
 static json_t *
 update_goal_tool_schema(void)
 {
-    static const char *const required[] = {"action", "text"};
-    json_t *properties = json_object();
-
-    if (!properties ||
-        snag_json_set_new(properties, "action", goal_action_schema()) < 0 ||
-        snag_json_set_new(properties, "text", nullable_string_schema()) < 0) {
-        if (properties)
-            json_decref(properties);
-        return NULL;
-    }
     return tool_schema("update_goal",
         "Update the active persistent goal: rewrite uses new wording in text, "
         "complete requires null text, and block uses a specific reason in text.",
-        properties,
-        required_array(required, sizeof(required) / sizeof(required[0])));
+        json_pack("{s:{s:s,s:[s,s,s]},s:{s:[s,s]}}",
+            "action", "type", "string", "enum", "rewrite", "complete", "block",
+            "text", "type", "string", "null"));
 }
 
 static json_t *
@@ -1124,17 +1021,6 @@ web_search_tool_schema(const char *type)
 static json_t *
 irc_send_tool_schema(void)
 {
-    static const char *const required[] = {"destination", "notice", "text"};
-    json_t *properties = json_object();
-
-    if (!properties ||
-        snag_json_set_new(properties, "destination", nullable_string_schema()) < 0 ||
-        snag_json_set_new(properties, "notice", nullable_bool_schema()) < 0 ||
-        snag_json_set_new(properties, "text", string_schema()) < 0) {
-        if (properties)
-            json_decref(properties);
-        return NULL;
-    }
     return tool_schema("irc_send",
         "Send bounded room chat as the agent identity. This is the only way "
         "model text reaches the room; assistant response text remains local. "
@@ -1142,8 +1028,10 @@ irc_send_tool_schema(void)
         "or all for an explicit broadcast. Null selects the sole destination "
         "only when there is exactly one. Sends never follow operator UI selection. "
         "Set notice true only for a non-reply informational notice. "
-        "Connection, join, and retry work is owned by the runtime.", properties,
-        required_array(required, sizeof(required) / sizeof(required[0])));
+        "Connection, join, and retry work is owned by the runtime.",
+        json_pack("{s:{s:[s,s]},s:{s:[s,s]},s:{s:s}}",
+            "destination", "type", "string", "null",
+            "notice", "type", "boolean", "null", "text", "type", "string"));
 }
 
 static json_t *
@@ -1151,65 +1039,52 @@ irc_state_tool_schema(void)
 {
     return tool_schema("irc_state",
         "Read the already-maintained room, topic, endpoint, membership, and "
-        "operator state without polling or changing connections.",
-        json_object(), json_array());
+        "operator state without polling or changing connections.", json_object());
 }
 
 static json_t *
 irc_topic_tool_schema(void)
 {
-    static const char *const required[] = {"destination", "topic"};
-    json_t *properties = json_object();
-
-    if (!properties ||
-        snag_json_set_new(properties, "destination", nullable_string_schema()) < 0 ||
-        snag_json_set_new(properties, "topic", string_schema()) < 0) {
-        if (properties)
-            json_decref(properties);
-        return NULL;
-    }
     return tool_schema("irc_topic",
         "Change the room topic as the agent identity; this succeeds only "
         "where that identity currently has channel operator mode. Destination "
         "is a numbered string from irc_state, all for explicit broadcast, "
         "or null only when exactly one destination exists.",
-        properties,
-        required_array(required, sizeof(required) / sizeof(required[0])));
+        json_pack("{s:{s:[s,s]},s:{s:s}}",
+            "destination", "type", "string", "null", "topic", "type", "string"));
 }
 
 static json_t *
 read_only_schema(const char *name)
 {
-    static const char *const list_keys[] = {"path", "recursive", "offset", "limit"};
-    static const char *const read_keys[] = {"path", "start_line", "end_line"};
-    static const char *const grep_keys[] = {
-        "path", "pattern", "recursive", "ignore_case", "literal", "offset", "limit"
-    };
     bool read = strcmp(name, "read_file") == 0;
     bool grep = strcmp(name, "grep") == 0;
-    json_t *props = json_object();
+    json_t *props;
 
-    if (!props || snag_json_set_new(props, "path", string_schema()) < 0 ||
-        (read &&
-         (snag_json_set_new(props, "start_line", integer_schema(1, INT32_MAX, true)) < 0 ||
-          snag_json_set_new(props, "end_line", integer_schema(1, INT32_MAX, true)) < 0)) ||
-        (!read &&
-         (snag_json_set_new(props, "recursive", nullable_bool_schema()) < 0 ||
-          snag_json_set_new(props, "offset", integer_schema(0, 1000000, true)) < 0 ||
-          snag_json_set_new(props, "limit", integer_schema(1, 1000, true)) < 0)) ||
-        (grep &&
-         (snag_json_set_new(props, "pattern", string_schema()) < 0 ||
-          snag_json_set_new(props, "ignore_case", nullable_bool_schema()) < 0 ||
-          snag_json_set_new(props, "literal", nullable_bool_schema()) < 0))) {
-        json_decref(props);
-        return NULL;
-    }
+    if (read)
+        props = json_pack("{s:{s:s},s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:i}}",
+            "path", "type", "string",
+            "start_line", "type", "integer", "null", "minimum", 1, "maximum", INT32_MAX,
+            "end_line", "type", "integer", "null", "minimum", 1, "maximum", INT32_MAX);
+    else if (grep)
+        props = json_pack("{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
+                           "s:{s:[s,s]},s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:i}}",
+            "path", "type", "string", "pattern", "type", "string",
+            "recursive", "type", "boolean", "null",
+            "ignore_case", "type", "boolean", "null",
+            "literal", "type", "boolean", "null",
+            "offset", "type", "integer", "null", "minimum", 0, "maximum", 1000000,
+            "limit", "type", "integer", "null", "minimum", 1, "maximum", 1000);
+    else
+        props = json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:i}}",
+            "path", "type", "string", "recursive", "type", "boolean", "null",
+            "offset", "type", "integer", "null", "minimum", 0, "maximum", 1000000,
+            "limit", "type", "integer", "null", "minimum", 1, "maximum", 1000);
     return tool_schema(name, read ?
         "Read a regular UTF-8 file natively, with numbered lines. Null bounds read the whole file; otherwise inclusive 1-based bounds. Oversized output fails: use narrower ranges. Literal relative/workspace or absolute paths, no symlinks." : grep ?
         "Search UTF-8 regular files natively using POSIX extended regex (literal=true for literal text). Returns path:line:text. Directories recurse by default, no symlink following. Null ignore_case/literal=false, offset=0, limit=200. Incomplete scans are explicit; narrow path or pattern on scan limits." :
         "List files and directories natively, sorted per directory, including hidden entries and symlinks (never followed). Relative paths use the workspace. Null recursive=false, offset=0, limit=200. Use next_offset for more entries; narrow path on scan limits.",
-        props, required_array(read ? read_keys : grep ? grep_keys : list_keys,
-                               read ? 3u : grep ? 7u : 4u));
+        props);
 }
 
 static json_t *
@@ -1607,8 +1482,8 @@ snag_context_compact_output_valid(const json_t *output,
     return rc;
 }
 
-static int
-compact_request_build(struct snag_session *session,
+int
+snag_context_compact_request_build(struct snag_session *session,
                       const char *model, const char *effort,
                       bool active_prefix,
                       uint64_t source_budget,
@@ -1670,9 +1545,8 @@ compact_request_build(struct snag_session *session,
             rc = 1;
             goto out;
         }
-        while (json_array_size(builder.request_input) > builder.compact_best_request_count)
-            if (json_array_remove(builder.request_input, json_array_size(builder.request_input) - 1u) < 0)
-                goto out;
+        if (truncate_array(builder.request_input, builder.compact_best_request_count) < 0)
+            goto out;
         builder.compact_source_seq = builder.compact_best_seq;
     }
     if (active_prefix && !builder.compact_stopped && !builder.compact_current) {
@@ -1721,50 +1595,6 @@ out:
     if (builder.deferred_steering)
         json_decref(builder.deferred_steering);
     return rc;
-}
-
-int
-snag_context_compact_request_build(struct snag_session *session,
-                                      const char *model, const char *effort,
-                                      uint64_t source_budget,
-                                      bool allow_oversized_first,
-                                      json_t **request,
-                                      json_t **count_request,
-                                      char source_hash[SNAG_SHA256_HEX_LEN + 1u],
-                                      size_t *source_bytes,
-                                      char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                                      size_t *request_bytes,
-                                      uint64_t *source_seq,
-                                      char *error, size_t error_size)
-{
-    return compact_request_build(session, model, effort, false, source_budget,
-                                 allow_oversized_first,
-                                 request,
-                                 count_request, source_hash, source_bytes,
-                                 request_hash, request_bytes, source_seq,
-                                 error, error_size);
-}
-
-int
-snag_context_compact_active_prefix_request_build(struct snag_session *session,
-                                      const char *model, const char *effort,
-                                      uint64_t source_budget,
-                                      bool allow_oversized_first,
-                                      json_t **request,
-                                      json_t **count_request,
-                                      char source_hash[SNAG_SHA256_HEX_LEN + 1u],
-                                      size_t *source_bytes,
-                                      char request_hash[SNAG_SHA256_HEX_LEN + 1u],
-                                      size_t *request_bytes,
-                                      uint64_t *source_seq,
-                                      char *error, size_t error_size)
-{
-    return compact_request_build(session, model, effort, true, source_budget,
-                                 allow_oversized_first,
-                                 request,
-                                 count_request, source_hash, source_bytes,
-                                 request_hash, request_bytes, source_seq,
-                                 error, error_size);
 }
 
 int

@@ -547,8 +547,8 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         size_t bytes, request_bytes, output_bytes;
         uint64_t seq;
         snprintf(compact, sizeof(compact), "%032x", 0xd000u + part);
-        assert(snag_context_compact_active_prefix_request_build(&session, SNAJPAGENT_MODEL,
-            "medium", 130000u, false, &request, &count, hash, &bytes,
+        assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL,
+            "medium", true, 130000u, false, &request, &count, hash, &bytes,
             request_hash, &request_bytes, &seq, error, sizeof(error)) == 0);
         assert(seq == boundaries[part == 0u ? 0u : 2u]);
         assert(bytes <= 130000u);
@@ -671,8 +671,8 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     char hash[65], request_hash[65], output_hash[65];
     size_t bytes, request_bytes, output_bytes;
     uint64_t seq;
-    assert(snag_context_compact_active_prefix_request_build(&session, SNAJPAGENT_MODEL,
-        "medium", 0u, false, &request, &count, hash, &bytes,
+    assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL,
+        "medium", true, 0u, false, &request, &count, hash, &bytes,
         request_hash, &request_bytes, &seq, error, sizeof(error)) == 0);
     assert(seq < session.next_seq - 1u); /* Unconsumed steering is not summarized. */
     assert(snag_context_compact_output_valid(output, output_hash, &output_bytes, error, sizeof(error)) == 0);
@@ -809,6 +809,19 @@ message_matching(json_t *items, const char *needle)
 static json_t *
 assert_strict_tool_contract(json_t *tool)
 {
+    static const struct { const char *name, *required; } order[] = {
+        {"exec_command", "command workdir stdin pty yield_ms timeout_ms max_output_tokens"},
+        {"write_stdin", "handle data eof terminate yield_ms max_output_tokens"},
+        {"apply_patch", "patch workdir"},
+        {"create_goal", "objective"},
+        {"update_goal", "action text"},
+        {"irc_send", "destination notice text"},
+        {"irc_state", ""},
+        {"irc_topic", "destination topic"},
+        {"list_files", "path recursive offset limit"},
+        {"read_file", "path start_line end_line"},
+        {"grep", "path pattern recursive ignore_case literal offset limit"}
+    };
     const char *key;
     json_t *schema;
     json_t *params;
@@ -828,6 +841,20 @@ assert_strict_tool_contract(json_t *tool)
     assert(json_is_object(properties));
     assert(json_is_array(required));
     assert(json_object_size(properties) == json_array_size(required));
+    for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); ++i) {
+        if (strcmp(snag_json_string(tool, "name"), order[i].name))
+            continue;
+        const char *expected = order[i].required;
+        for (size_t j = 0; j < json_array_size(required); ++j) {
+            const char *actual = json_string_value(json_array_get(required, j));
+            size_t len = strcspn(expected, " ");
+            assert(actual && strlen(actual) == len && !strncmp(actual, expected, len));
+            expected += len;
+            if (*expected)
+                ++expected;
+        }
+        assert(!*expected);
+    }
     for (iter = json_object_iter(properties); iter;
          iter = json_object_iter_next(properties, iter)) {
         key = json_object_iter_key(iter);
@@ -1399,7 +1426,7 @@ main(void)
         assert(snag_context_compact_request_build(&session,
                                                  session.default_model,
                                                  session.default_effort,
-                                                 0u, false,
+                                                 false, 0u, false,
                                                  &compact_request,
                                                  &compact_count_request,
                                                  source_hash, &source_bytes,
@@ -1514,8 +1541,8 @@ main(void)
                                             "items"),
                             "The complete rollout log") == NULL);
         snag_context_projection_free(&active_projection);
-        assert(snag_context_compact_active_prefix_request_build(&active,
-                   active_model, active.default_effort, 0u, false,
+        assert(snag_context_compact_request_build(&active,
+                   active_model, active.default_effort, true, 0u, false,
                    &compact_request,
                    &compact_count_request, source_hash, &source_bytes,
                    request_hash, &request_bytes, &source_seq,
@@ -1792,7 +1819,7 @@ main(void)
                                   NULL, error, sizeof(error)) == 0);
         first_turn_end = bounded.next_seq - 1u;
         assert(snag_context_compact_request_build(&bounded,
-                   bounded.default_model, bounded.default_effort, 0u, false,
+                   bounded.default_model, bounded.default_effort, false, 0u, false,
                    &compact_request, &compact_count_request,
                    source_hash, &first_bytes, request_hash, &request_bytes,
                    &source_seq, error, sizeof(error)) == 0);
@@ -1822,9 +1849,9 @@ main(void)
                                   turn_started(bounded_turn3, 3, "current",
                                                workspace, NULL),
                                   NULL, error, sizeof(error)) == 0);
-        assert(snag_context_compact_active_prefix_request_build(&bounded,
+        assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort,
-                   (uint64_t)first_bytes, false, &compact_request,
+                   true, (uint64_t)first_bytes, false, &compact_request,
                    &compact_count_request, source_hash, &source_bytes,
                    request_hash, &request_bytes, &source_seq,
                    error, sizeof(error)) == 0);
@@ -1834,9 +1861,9 @@ main(void)
         json_decref(compact_count_request);
         compact_request = NULL;
         compact_count_request = NULL;
-        assert(snag_context_compact_active_prefix_request_build(&bounded,
+        assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort,
-                   1u, true, &compact_request,
+                   true, 1u, true, &compact_request,
                    &compact_count_request, source_hash, &source_bytes,
                    request_hash, &request_bytes, &source_seq,
                    error, sizeof(error)) == 0);
@@ -1889,9 +1916,9 @@ main(void)
         json_decref(compact_count_request);
         compact_request = NULL;
         compact_count_request = NULL;
-        assert(snag_context_compact_active_prefix_request_build(&bounded,
+        assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort,
-                   0u, false, &compact_request, &compact_count_request,
+                   true, 0u, false, &compact_request, &compact_count_request,
                    source_hash, &source_bytes, request_hash, &request_bytes,
                    &source_seq, error, sizeof(error)) == 0);
         assert(source_seq == second_turn_end);
