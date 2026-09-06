@@ -2080,7 +2080,8 @@ def test_command_name_completion():
         choices = (b"/help", b"/history") if prefix == b"/h" else (b"/compact", b"/config")
         for choice in choices:
             child.wait(choice, start=start)
-        child.wait(prefix, start=child.buf.rfind(choices[-1]))
+        # The prefix also occurs inside choices; observe the repainted prompt.
+        child.wait(PROMPT + prefix, start=child.buf.rfind(choices[-1]))
         clear_draft_incrementally(child)
 
     start = len(child.buf)
