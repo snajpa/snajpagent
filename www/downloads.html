@@ -1,0 +1,96 @@
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="snajpagent binary downloads for Linux, macOS and Windows, release policy, and platform compatibility.">
+  <title>Download snajpagent</title>
+  <link rel="canonical" href="https://agent.snajpa.net/downloads.html">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Download snajpagent</h1>
+    <p class="intro">Standalone binaries for every implemented platform, with every new version.</p>
+    <nav aria-label="Project">
+      <a href="index.html">Home</a> · <a href="manual.html">User manual</a> ·
+      <a href="https://github.com/snajpa/snajpagent/releases">Releases</a> ·
+      <a href="https://github.com/snajpa/snajpagent">Source</a>
+    </nav>
+  </header>
+  <main>
+    <section aria-labelledby="availability-heading">
+      <h2 id="availability-heading">Release downloads</h2>
+      <!-- At release time replace this pending notice and each availability cell
+           with the published version/date, exact asset links and byte sizes.
+           Add SHA256SUMS, source, manual, licensing and release-note links.
+           Follow RELEASE.md; never link to unpublished assets. -->
+      <p><strong>No binary release downloads are published yet.</strong>
+        These targets have working build recipes, but local builds are not public
+        release assets. Until the first binary release, use the
+        <a href="manual.html#BUILDING%20AND%20INSTALLING">source-build instructions</a>.</p>
+      <div class="table-scroll" role="region" aria-label="Implemented release targets" tabindex="0">
+        <table>
+          <caption>Required binary downloads for each new version</caption>
+          <thead><tr><th scope="col">Platform</th><th scope="col">Package</th><th scope="col">Availability</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Linux x64</th><td><code>linux-x86_64</code> — static PIE</td><td>Awaiting first release</td></tr>
+            <tr><th scope="row">Linux ARM64</th><td><code>linux-aarch64</code> — static PIE</td><td>Awaiting first release</td></tr>
+            <tr><th scope="row">macOS Intel</th><td><code>macos-x86_64</code> — experimental</td><td>Awaiting first release</td></tr>
+            <tr><th scope="row">macOS Apple Silicon</th><td><code>macos-arm64</code> — experimental</td><td>Awaiting first release</td></tr>
+            <tr><th scope="row">macOS universal</th><td><code>macos-universal</code> — both architectures, experimental</td><td>Awaiting first release</td></tr>
+            <tr><th scope="row">Windows x64</th><td><code>windows-x86_64</code> — experimental</td><td>Awaiting first release</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Every new version, including patch releases and prereleases, must ship
+        the entire implemented matrix. Additional platforms join as their
+        production targets land; planned or unfinished ports are not advertised
+        as available. See the <a href="https://github.com/snajpa/snajpagent/blob/master/RELEASE.md">release policy</a>.
+        Published versions and their notes will remain in the
+        <a href="https://github.com/snajpa/snajpagent/releases">release archive</a>.</p>
+    </section>
+    <section aria-labelledby="compatibility-heading">
+      <h2 id="compatibility-heading">Choose the right build</h2>
+      <ul>
+        <li><strong>Linux:</strong> choose x64 for Intel/AMD 64-bit PCs or ARM64
+          for AArch64 machines. Both builds statically link musl and application
+          libraries. They do not require Nix, system libcurl, or a matching glibc.
+          Earlier builds were exercised on Alpine 3.22.5 / Linux 6.12; that is
+          not a promise of compatibility with every older kernel.</li>
+        <li><strong>macOS:</strong> universal contains both Intel and Apple Silicon
+          slices. Application libraries are included, but Apple's system library
+          is still required. The build deployment target is macOS 11; actual
+          macOS runtime qualification is pending. Builds are ad-hoc signed, not
+          Developer ID signed or notarized.</li>
+        <li><strong>Windows:</strong> the x64 executable includes application
+          libraries and uses only Windows system DLLs. Runtime checks have run
+          in modern Windows PE; a Windows 7 compile target is not a Windows 7
+          compatibility claim. ARM64 and older Windows qualification remain
+          in progress, outside the current production matrix.</li>
+      </ul>
+      <p>The portable builds include TLS and CA roots; there is no first-run
+        library or certificate download. Build success and runtime qualification
+        are different. Each release must identify its actual test scope and
+        limitations; consult the <a href="https://github.com/snajpa/snajpagent/blob/master/DEPENDENCIES.md">dependency and platform notes</a>.</p>
+    </section>
+    <section aria-labelledby="use-heading">
+      <h2 id="use-heading">Using a release binary</h2>
+      <p>When assets are published, download the file for your OS and architecture
+        and verify it against that release's <code>SHA256SUMS</code>. On Linux or
+        macOS, rename it to <code>snajpagent</code> and make it executable with
+        <code>chmod +x snajpagent</code>. On Windows, keep the <code>.exe</code>
+        extension. Matching debug symbols are optional, separate downloads.</p>
+      <p>Run it in your project directory and follow the provider setup prompts.
+        Start with <a href="index.html#rollout">rollout and steering</a>, then
+        <a href="index.html#network">native networking</a>. Tools run with your
+        local permissions; the program is not a command-approval sandbox.</p>
+    </section>
+  </main>
+  <footer>
+    <p><a href="index.html">snajpagent</a> ·
+      <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a></p>
+  </footer>
+</body>
+</html>

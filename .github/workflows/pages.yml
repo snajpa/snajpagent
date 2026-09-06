@@ -46,6 +46,7 @@ jobs:
           text = text.replace("<body>",
               '<body class="manual">\n<nav aria-label="Project">'
               '<a href="index.html">snajpagent</a> · '
+              '<a href="downloads.html">Downloads</a> · '
               '<a href="https://github.com/snajpa/snajpagent#readme">README</a> · '
               '<a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">Manual source</a>'
               '</nav>')

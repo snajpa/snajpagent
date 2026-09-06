@@ -227,6 +227,23 @@ opens the same source.  The hosted edition is
 The website and README introduce workflows; this manual defines options,
 commands, configuration, tools, files, limits, failures and security.
 .SH BUILDING AND INSTALLING
+.SS Binary releases
+Release availability and platform compatibility are listed at
+.IR https://agent.snajpa.net/downloads.html .
+Every new version, including patch releases and prereleases, ships all
+implemented production targets listed by the Makefile's PROD_TARGETS.
+Additional implemented targets join subsequent releases; unfinished ports
+are not claimed as available.  Experimental builds are labeled with their
+actual testing scope, not silently omitted.  See RELEASE.md in the source
+tree for the publication policy.
+.PP
+Each release provides platform-specific executable downloads, SHA256SUMS,
+source/build and license material, the manual, and separate matching symbols.
+Verify the downloaded executable against the release checksum before use.
+On Unix, rename it to snajpagent and make it executable with chmod +x;
+on Windows retain the .exe extension.  Debug symbols are not required to run.
+Until the first binary release is published, use the source builds below.
+.SS Source builds
 Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
 libcurl and Jansson development files.  These instructions describe the
 normal POSIX build.  An experimental native Windows x86-64 package is also

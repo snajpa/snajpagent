@@ -37,6 +37,11 @@ h2 {
   border-bottom: 1px solid var(--rule);
 }
 p, ul { max-width: 72ch; }
+.table-scroll { overflow-x: auto; }
+.table-scroll table { border-collapse: collapse; width: 100%; }
+.table-scroll caption { text-align: left; margin-bottom: 0.5rem; }
+.table-scroll th, .table-scroll td { text-align: left; padding: 0.6rem; border-bottom: 1px solid var(--rule); }
+.table-scroll th { vertical-align: top; }
 .intro { font-size: 1.15rem; }
 li { margin: 0.4rem 0; }
 nav, footer { line-height: 2; }

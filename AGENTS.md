@@ -27,6 +27,12 @@ working through the existing provider path whenever practical.
 
 ## User documentation
 
+Every new version must ship binaries for the entire implemented production
+matrix and update the website downloads in the same release. Follow
+`RELEASE.md`; `PROD_TARGETS` is the current required matrix. New implemented
+targets join automatically; experimental status is disclosed, not an excuse
+to omit an artifact. Local builds and source pushes are not binary releases.
+
 `snajpagent.1` is the complete user-manual source. Changes to user-visible
 options, commands, defaults, tools, limits, lifecycle, networking or security
 must update the relevant manual sections in the same change. Check claims

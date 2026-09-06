@@ -248,6 +248,11 @@ Protect credentials, configuration, session logs, and prompt history.
 
 ## Install and choose a provider
 
+[Downloads](https://agent.snajpa.net/downloads.html) lists release availability
+and platform caveats. Every new version must ship the full implemented binary
+matrix; see the [release policy](RELEASE.md). Until the first binary release is
+published, build from source:
+
 The normal build needs C11/POSIX with pthreads, GNU make, libcurl, and Jansson:
 
 ```sh
