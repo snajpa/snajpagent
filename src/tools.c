@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "tools.h"
 #include "fs.h"
+#include "process_host.h"
 
 #include "tools_patch.h"
 
@@ -12,16 +13,6 @@
 #include <fcntl.h>
 #include "snag_jansson.h"
 #include <limits.h>
-#include <poll.h>
-#if defined(__linux__)
-#define SNAJPAGENT_HAVE_PTY 1
-#include <pty.h>
-#include <sys/ioctl.h>
-#elif defined(__APPLE__)
-#define SNAJPAGENT_HAVE_PTY 1
-#include <sys/ioctl.h>
-#include <util.h>
-#endif
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -29,7 +20,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #ifndef O_CLOEXEC
@@ -60,7 +50,6 @@ struct capture_redactor {
 };
 
 struct process_output {
-    int fd;
     bool open;
     struct capture_stream capture;
     struct capture_redactor redactor;
@@ -68,17 +57,11 @@ struct process_output {
 
 struct managed_process {
     char handle[SNAG_ID_HEX_LEN + 1u];
-    pid_t pid;
-    bool pty;
-    unsigned short pty_rows;
-    unsigned short pty_cols;
-    int stdin_fd;
+    struct snag_child child;
     bool stdin_open;
     bool child_done;
-    bool reaped;
     bool closing;
     bool cancelled;
-    int child_status;
     uint64_t started_ms;
     uint64_t deadline_ms;
     uint32_t max_output_tokens;
@@ -182,30 +165,6 @@ absolute_dir_arg_valid(const char *path)
     return len <= SNAG_PATH_MAX_BYTES &&
            snag_utf8_valid((const unsigned char *)path, len, true) &&
            snag_stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-static int
-set_nonblock(int fd)
-{
-    int flags = fcntl(fd, F_GETFL);
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-        return -1;
-    return 0;
-}
-
-static int
-make_pipe(int p[2])
-{
-    if (pipe(p) < 0)
-        return -1;
-    if (snag_fd_cloexec(p[0]) < 0 || snag_fd_cloexec(p[1]) < 0) {
-        int saved = errno;
-        (void)close(p[0]);
-        (void)close(p[1]);
-        errno = saved;
-        return -1;
-    }
-    return 0;
 }
 
 static void
@@ -538,29 +497,11 @@ filtered_environment(const struct snag_config *config)
 }
 
 static void
-close_if_open(int *fd)
-{
-    if (*fd >= 0) {
-        (void)close(*fd);
-        *fd = -1;
-    }
-}
-
-static void
-kill_child_group(pid_t pid, int signo)
-{
-    if (pid <= 0)
-        return;
-    if (kill(-pid, signo) < 0 && errno == ESRCH)
-        (void)kill(pid, signo);
-}
-
-static void
-write_stdin_chunk(int fd, const char *data, size_t len, size_t *written,
+write_stdin_chunk(struct managed_process *proc, const char *data, size_t len, size_t *written,
                   bool *open_flag)
 {
     while (*written < len) {
-        ssize_t n = write(fd, data + *written, len - *written);
+        ssize_t n = snag_child_write(&proc->child, data + *written, len - *written);
         if (n > 0) {
             *written += (size_t)n;
             continue;
@@ -573,106 +514,6 @@ write_stdin_chunk(int fd, const char *data, size_t len, size_t *written,
         return;
     }
 }
-
-static void
-exec_child(const char *shell, const char *command, const char *workdir,
-           int stdin_rd, int stdout_wr, int stderr_wr, char **env)
-{
-    if (chdir(workdir) < 0)
-        _exit(125);
-    if (dup2(stdin_rd, STDIN_FILENO) < 0 ||
-        dup2(stdout_wr, STDOUT_FILENO) < 0 ||
-        dup2(stderr_wr, STDERR_FILENO) < 0)
-        _exit(125);
-    for (int fd = 3; fd < 256; ++fd)
-        (void)close(fd);
-    execle(shell, shell, "-c", command, (char *)NULL, env);
-    _exit(errno == ENOENT ? 127 : 126);
-}
-
-#if defined(SNAJPAGENT_HAVE_PTY)
-static void
-host_winsize(unsigned short *rows, unsigned short *cols)
-{
-    static const int fds[] = {STDERR_FILENO, STDOUT_FILENO, STDIN_FILENO};
-    struct winsize ws;
-
-    *rows = 24;
-    *cols = 80;
-    for (size_t i = 0; i < sizeof(fds) / sizeof(fds[0]); ++i) {
-        memset(&ws, 0, sizeof(ws));
-        if (ioctl(fds[i], TIOCGWINSZ, &ws) == 0 && ws.ws_row && ws.ws_col) {
-            *rows = ws.ws_row;
-            *cols = ws.ws_col;
-            return;
-        }
-    }
-}
-
-static void
-pty_apply_current_size(int fd, unsigned short *rows, unsigned short *cols)
-{
-    struct winsize ws;
-    unsigned short new_rows;
-    unsigned short new_cols;
-
-    if (fd < 0)
-        return;
-    host_winsize(&new_rows, &new_cols);
-    if (*rows == new_rows && *cols == new_cols)
-        return;
-    memset(&ws, 0, sizeof(ws));
-    ws.ws_row = new_rows;
-    ws.ws_col = new_cols;
-    if (ioctl(fd, TIOCSWINSZ, &ws) == 0) {
-        *rows = new_rows;
-        *cols = new_cols;
-    }
-}
-
-static int
-open_pty_pair(int *master_fd, int *slave_fd,
-              unsigned short *rows, unsigned short *cols)
-{
-    struct winsize ws;
-
-    host_winsize(rows, cols);
-    memset(&ws, 0, sizeof(ws));
-    ws.ws_row = *rows;
-    ws.ws_col = *cols;
-    return openpty(master_fd, slave_fd, NULL, NULL, &ws);
-}
-
-static void
-exec_pty_child(const char *shell, const char *command, const char *workdir,
-               int slave_fd, char **env)
-{
-    if (setsid() < 0)
-        _exit(125);
-    (void)ioctl(slave_fd, TIOCSCTTY, 0);
-    exec_child(shell, command, workdir, slave_fd, slave_fd, slave_fd, env);
-}
-#else
-static void
-pty_apply_current_size(int fd, unsigned short *rows, unsigned short *cols)
-{
-    (void)fd;
-    (void)rows;
-    (void)cols;
-}
-
-static int
-open_pty_pair(int *master_fd, int *slave_fd,
-              unsigned short *rows, unsigned short *cols)
-{
-    (void)master_fd;
-    (void)slave_fd;
-    (void)rows;
-    (void)cols;
-    errno = ENOTSUP;
-    return -1;
-}
-#endif
 
 static uint64_t
 saturating_deadline(uint64_t start, uint32_t delta_ms)
@@ -703,8 +544,7 @@ snag_tools_journal(snag_tool_output_fn write, snag_tool_read_fn read, void *opaq
 static void
 managed_close_input(struct managed_process *proc)
 {
-    if (!proc->pty)
-        close_if_open(&proc->stdin_fd);
+    snag_child_close_stream(&proc->child, 2u);
     proc->stdin_open = false;
 }
 
@@ -713,15 +553,8 @@ managed_release(struct managed_process *proc)
 {
     if (!proc)
         return;
-    if (!proc->reaped && proc->pid > 0) {
-        kill_child_group(proc->pid, SIGKILL);
-        while (waitpid(proc->pid, NULL, 0) < 0 && errno == EINTR)
-            ;
-    }
-    if (!proc->pty)
-        close_if_open(&proc->stdin_fd);
+    snag_child_free(&proc->child);
     for (unsigned int s = 0u; s < 2u; ++s) {
-        close_if_open(&proc->output[s].fd);
         redactor_free(&proc->output[s].redactor);
         capture_free(&proc->output[s].capture);
     }
@@ -805,8 +638,7 @@ begin_close(struct managed_process *proc, bool user_interrupt)
     managed_close_input(proc);
     proc->closing = true;
     proc->cancelled = user_interrupt;
-    if (!proc->reaped)
-        kill_child_group(proc->pid, user_interrupt ? SIGINT : SIGTERM);
+    snag_child_signal(&proc->child, user_interrupt ? SNAG_CHILD_INTERRUPT : SNAG_CHILD_TERMINATE);
     proc->deadline_ms = saturating_deadline(snag_monotonic_ms(),
                                             SNAG_TOOL_CLOSE_GRACE_MS);
 }
@@ -864,18 +696,17 @@ process_read(struct managed_process *proc, unsigned int stream)
 {
     struct process_output *output = &proc->output[stream];
     unsigned char bytes[4096];
-    ssize_t n = read(output->fd, bytes, sizeof(bytes));
+    ssize_t n = snag_child_read(&proc->child, stream, bytes, sizeof(bytes));
     if (n > 0) {
         if (redactor_feed(&output->redactor, bytes, (size_t)n) < 0)
             return -1;
-    } else if (n == 0 || (n < 0 && proc->pty && errno == EIO)) {
+    } else if (n == 0) {
         if (redactor_finish(&output->redactor) < 0)
             return -1;
         output->open = false;
-        close_if_open(&output->fd);
-        if (proc->pty) {
+        snag_child_close_stream(&proc->child, stream);
+        if (proc->child.pty) {
             proc->stdin_open = false;
-            proc->stdin_fd = -1;
         }
     } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
         return -1;
@@ -891,16 +722,16 @@ process_write(struct managed_process *proc)
     if (end - before > 4096u)
         end = before + 4096u;
     if (before < end)
-        write_stdin_chunk(proc->stdin_fd, (const char *)proc->input.data, end,
+        write_stdin_chunk(proc, (const char *)proc->input.data, end,
                            &proc->input_written, &proc->stdin_open);
     proc->input_written_total += proc->input_written - before;
     if (proc->input_written == proc->input.len) {
         snag_buf_reset(&proc->input);
         proc->input_written = 0u;
         if (proc->input_eof && proc->stdin_open) {
-            if (proc->pty && !proc->pty_eof_sent) {
+            if (proc->child.pty && !proc->pty_eof_sent) {
                 size_t written = 0u;
-                write_stdin_chunk(proc->stdin_fd, "\004", 1u, &written,
+                write_stdin_chunk(proc, "\004", 1u, &written,
                                    &proc->stdin_open);
                 proc->pty_eof_sent = written == 1u;
                 if (!proc->pty_eof_sent)
@@ -914,9 +745,9 @@ process_write(struct managed_process *proc)
 int
 snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size)
 {
-    struct pollfd fds[SNAG_MAX_PROCESSES * 3u + 1u];
+    struct snag_child_event fds[SNAG_MAX_PROCESSES * 3u];
     struct { struct managed_process *proc; unsigned int stream; } map[SNAG_MAX_PROCESSES * 3u + 1u];
-    nfds_t count = 0u;
+    size_t count = 0u;
     uint64_t now = snag_monotonic_ms();
     int rc;
     if (timeout_ms > (int)SNAG_TOOL_POLL_MS)
@@ -926,14 +757,11 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         if (!proc)
             continue;
         if (!proc->child_done) {
-            siginfo_t info;
-            memset(&info, 0, sizeof(info));
-            if (waitid(P_PID, (id_t)proc->pid, &info, WEXITED | WNOHANG | WNOWAIT) < 0) {
-                if (errno == ECHILD)
-                    proc->reaped = true; /* Ownership is lost: never signal a reused PID. */
+            int exited = snag_child_exited(&proc->child);
+            if (exited < 0) {
                 if (errno != EINTR)
                     goto fail;
-            } else if (info.si_pid == proc->pid) {
+            } else if (exited) {
                 proc->child_done = true;
                 managed_close_input(proc);
             }
@@ -941,7 +769,7 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         if (!process_ready(proc) && now >= proc->deadline_ms) {
             proc->deadline_ms = UINT64_MAX;
             if (proc->closing) {
-                kill_child_group(proc->pid, SIGKILL);
+                snag_child_signal(&proc->child, SNAG_CHILD_KILL);
             } else {
                 proc->handoff = "timeout_handoff";
             }
@@ -949,29 +777,27 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         if (proc->deadline_ms > now &&
             proc->deadline_ms - now < (uint64_t)timeout_ms)
             timeout_ms = (int)(proc->deadline_ms - now);
-        if (proc->pty && proc->output[0].open)
-            pty_apply_current_size(proc->output[0].fd, &proc->pty_rows, &proc->pty_cols);
+        if (proc->child.pty && proc->output[0].open)
+            snag_child_resize(&proc->child);
         bool input = proc->stdin_open &&
                      (proc->input.len || (proc->input_eof && !proc->pty_eof_sent));
-        if (input && !proc->input.len && !proc->pty)
+        if (input && !proc->input.len && !proc->child.pty)
             process_write(proc);
         for (unsigned int s = 0u; s < 3u; ++s) {
-            int fd = s < 2u ? proc->output[s].fd : proc->stdin_fd;
-            bool open = s < 2u ? proc->output[s].open : input && !proc->pty;
-            if (!open || fd < 0)
+            bool open = s < 2u ? proc->output[s].open : input && proc->stdin_open && !proc->child.pty;
+            if (!open)
                 continue;
-            fds[count] = (struct pollfd){fd, s == 2u ? POLLOUT : POLLIN, 0};
-            if (s == 0u && proc->pty && input)
-                fds[count].events |= POLLOUT;
+            fds[count] = (struct snag_child_event){&proc->child, s,
+                s == 2u ? SNAG_CHILD_WRITE : SNAG_CHILD_READ, 0};
+            if (s == 0u && proc->child.pty && input)
+                fds[count].events |= SNAG_CHILD_WRITE;
             map[count].proc = proc;
             map[count++].stream = s;
         }
     }
-    nfds_t streams = count;
-    if (wake_fd != SNAG_WAKE_INVALID)
-        fds[count++] = (struct pollfd){wake_fd, POLLIN, 0};
+    size_t streams = count;
     do {
-        rc = poll(fds, count, timeout_ms);
+        rc = snag_child_wait(fds, count, wake_fd, timeout_ms);
     } while (rc < 0 && errno == EINTR);
     if (rc < 0)
         goto fail;
@@ -982,18 +808,18 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         struct managed_process *proc = map[i].proc;
         if (!fds[i].revents)
             continue;
-        if (fds[i].revents & POLLOUT) {
+        if (fds[i].revents & SNAG_CHILD_WRITE) {
             process_write(proc);
             ++serviced;
         }
-        if (serviced < 16u && map[i].stream < 2u && (fds[i].revents & (POLLIN | POLLHUP | POLLERR))) {
+        if (serviced < 16u && map[i].stream < 2u && (fds[i].revents & (SNAG_CHILD_READ | SNAG_CHILD_END))) {
             if (process_read(proc, map[i].stream) < 0)
                 goto fail;
             ++serviced;
         }
-        if (map[i].stream == 2u && (fds[i].revents & (POLLHUP | POLLERR)))
+        if (map[i].stream == 2u && (fds[i].revents & SNAG_CHILD_END))
             managed_close_input(proc);
-        if (fds[i].revents & POLLNVAL)
+        if (fds[i].revents & SNAG_CHILD_ERROR)
             goto fail;
         next_fd = (i + 1u) % streams;
     }
@@ -1029,29 +855,21 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result,
     if (process_ready(proc)) {
         /* Keep the exited leader unreaped until collection: its PID/group
          * cannot be reused while draining descendants or closing the job. */
-        if (!proc->reaped) {
-            kill_child_group(proc->pid, SIGKILL);
-            pid_t got;
-            do {
-                got = waitpid(proc->pid, &proc->child_status, WNOHANG);
-            } while (got < 0 && errno == EINTR);
-            if (got != proc->pid) {
-                if (got < 0 && errno == ECHILD)
-                    proc->reaped = true;
+        if (!proc->child.reaped) {
+            snag_child_signal(&proc->child, SNAG_CHILD_KILL);
+            if (snag_child_reap(&proc->child) < 0)
                 goto out;
-            }
-            proc->reaped = true;
         }
         reason = NULL;
         if (proc->cancelled) {
             status = "cancelled";
             reason = "turn_cancelled";
-        } else if (WIFEXITED(proc->child_status)) {
-            exit_code = WEXITSTATUS(proc->child_status);
+        } else if (proc->child.exit_code >= 0) {
+            exit_code = proc->child.exit_code;
             status = exit_code ? "failed" : "succeeded";
-        } else if (WIFSIGNALED(proc->child_status)) {
+        } else if (proc->child.signal_number >= 0) {
             status = "signaled";
-            signal_number = WTERMSIG(proc->child_status);
+            signal_number = proc->child.signal_number;
         } else {
             status = "outcome_unknown";
             reason = "owner_lost";
@@ -1112,15 +930,7 @@ start_command(const char *handle, const char *command, const char *workdir,
                          const struct snag_credential *credential,
                          char *error, size_t error_size)
 {
-    int in_pipe[2] = {-1, -1};
-    int out_pipe[2] = {-1, -1};
-    int err_pipe[2] = {-1, -1};
-    int pty_master = -1;
-    int pty_slave = -1;
-    unsigned short pty_rows = 24;
-    unsigned short pty_cols = 80;
     char **env = NULL;
-    pid_t pid;
     struct managed_process *proc = NULL;
     size_t slot;
     size_t stdin_len = stdin_text ? strlen(stdin_text) : 0u;
@@ -1129,91 +939,20 @@ start_command(const char *handle, const char *command, const char *workdir,
         ;
     if (slot == SNAG_MAX_PROCESSES || !(proc = calloc(1u, sizeof(*proc))))
         return -1;
-    proc->stdin_fd = proc->output[0].fd = proc->output[1].fd = -1;
+    snag_child_init(&proc->child);
     processes[slot] = proc;
     managed_register_cleanup();
     if (snag_secret_set_build(&proc->secrets, config, credential, error, error_size) < 0)
         goto out;
-    if (pty) {
-        if (open_pty_pair(&pty_master, &pty_slave,
-                          &pty_rows, &pty_cols) < 0) {
-            snag_errorf(error, error_size, "cannot create tool PTY: %s",
-                      strerror(errno));
-            goto out;
-        }
-        if (snag_fd_cloexec(pty_master) < 0 || snag_fd_cloexec(pty_slave) < 0 ||
-            set_nonblock(pty_master) < 0) {
-            snag_errorf(error, error_size, "cannot configure tool PTY: %s",
-                      strerror(errno));
-            goto out;
-        }
-    } else {
-        if (make_pipe(in_pipe) < 0 || make_pipe(out_pipe) < 0 ||
-            make_pipe(err_pipe) < 0) {
-            snag_errorf(error, error_size, "cannot create tool pipes: %s",
-                      strerror(errno));
-            goto out;
-        }
-        if (set_nonblock(in_pipe[1]) < 0 || set_nonblock(out_pipe[0]) < 0 ||
-            set_nonblock(err_pipe[0]) < 0) {
-            snag_errorf(error, error_size, "cannot configure tool pipes: %s",
-                      strerror(errno));
-            goto out;
-        }
-    }
     env = filtered_environment(config);
     if (!env) {
         snag_errorf(error, error_size, "cannot allocate tool environment");
         goto out;
     }
-    pid = fork();
-    if (pid < 0) {
-        snag_errorf(error, error_size, "cannot fork tool process: %s", strerror(errno));
+    if (snag_child_spawn(&proc->child, config->shell, command, workdir, env, pty) < 0) {
+        snag_errorf(error, error_size, "cannot start tool process: %s", strerror(errno));
         goto out;
     }
-    if (pid == 0) {
-        sigset_t signals;
-        sigemptyset(&signals);
-        (void)sigprocmask(SIG_SETMASK, &signals, NULL);
-        if (pty) {
-            close_if_open(&pty_master);
-#if defined(SNAJPAGENT_HAVE_PTY)
-            exec_pty_child(config->shell, command, workdir, pty_slave, env);
-#else
-            _exit(125);
-#endif
-        } else {
-            close_if_open(&in_pipe[1]);
-            close_if_open(&out_pipe[0]);
-            close_if_open(&err_pipe[0]);
-            (void)setpgid(0, 0);
-            exec_child(config->shell, command, workdir,
-                       in_pipe[0], out_pipe[1], err_pipe[1], env);
-        }
-    }
-    if (pty) {
-        close_if_open(&pty_slave);
-    } else {
-        (void)setpgid(pid, pid);
-        close_if_open(&in_pipe[0]);
-        close_if_open(&out_pipe[1]);
-        close_if_open(&err_pipe[1]);
-    }
-
-    proc->stdin_fd = pty ? pty_master : in_pipe[1];
-    proc->output[0].fd = pty ? pty_master : out_pipe[0];
-    proc->output[1].fd = pty ? -1 : err_pipe[0];
-    if (pty)
-        pty_master = -1;
-    else {
-        in_pipe[1] = -1;
-        out_pipe[0] = -1;
-        err_pipe[0] = -1;
-    }
-    proc->pid = pid;
-    proc->pty = pty;
-    proc->pty_rows = pty_rows;
-    proc->pty_cols = pty_cols;
     proc->stdin_open = true;
     proc->output[0].open = true;
     proc->output[1].open = !pty;
@@ -1240,14 +979,6 @@ start_command(const char *handle, const char *command, const char *workdir,
 
 out:
     managed_release(proc);
-    close_if_open(&in_pipe[0]);
-    close_if_open(&in_pipe[1]);
-    close_if_open(&out_pipe[0]);
-    close_if_open(&out_pipe[1]);
-    close_if_open(&err_pipe[0]);
-    close_if_open(&err_pipe[1]);
-    close_if_open(&pty_master);
-    close_if_open(&pty_slave);
     free(env);
     return -1;
 }

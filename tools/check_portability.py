@@ -21,7 +21,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> int:
-    tools = (ROOT / "src" / "tools.c").read_text(encoding="utf-8")
+    tools = (ROOT / "src" / "process_host.c").read_text(encoding="utf-8")
     config = (ROOT / "config.mk").read_text(encoding="utf-8")
     status = (ROOT / "IMPLEMENTATION_STATUS.md").read_text(encoding="utf-8")
     qualification = (ROOT / "QUALIFICATION.md").read_text(encoding="utf-8")
