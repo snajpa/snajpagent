@@ -535,7 +535,7 @@ test_completion_choices(void)
         {"/c", "/co", "/connect", "/config"},
         {"/1", "/1", "/12", "/17"},
         {"@ag", "@agent", "@agent1", "@agent2"},
-        {"/17 @ag", "/17 @agent", "@agent1", "@agent2"},
+        {"/17 @ag", "/17 @Agent", "@Agent1", "@agent2"},
         {"/all @ag", "/all @agent", "@agent1", "@agent2"},
         {"@č", "@če", "@čenda", "@červen"},
     };
@@ -601,6 +601,19 @@ test_completion_choices(void)
         assert(memcmp(term.draft.data, expected, term.draft.len) == 0);
         assert(term.cursor == 6u);
         assert(!term.completion_armed);
+    }
+    const char *submissions[] = {"/help ", "/17 ", "/model value ", "ordinary ", "//help "};
+    const char *submitted[] = {"/help", "/17", "/model value ", "ordinary ", "//help "};
+    for (size_t i = 0u; i < 5u; ++i) {
+        enum snag_term_action action;
+        char *text = NULL;
+        assert(snag_term_restore_draft(&term, submissions[i]) == 0);
+        term.input[0] = '\r';
+        term.input_len = 1u;
+        assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
+        assert(action == SNAG_TERM_SUBMIT && text && strcmp(text, submitted[i]) == 0);
+        free(text);
+        term.input_pos = term.input_len = 0u;
     }
     snag_term_close(&term);
     assert(dup2(saved, STDERR_FILENO) >= 0);

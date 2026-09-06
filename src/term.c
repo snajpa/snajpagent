@@ -2216,6 +2216,13 @@ complete_action(struct snag_term *term, enum snag_term_action action,
     copy = snag_strdup_checked((char *)term->draft.data, SNAG_MAX_DIRECT_PROMPT);
     if (!copy)
         return -1;
+    /* A completion separator is not an argument to a bare slash command.
+     * Preserve argument/body whitespace and all ordinary or escaped text. */
+    if (copy[0] == '/' && copy[1] != '/') {
+        size_t token = strcspn(copy, " \t");
+        if (copy[token] && strspn(copy + token, " \t") == strlen(copy + token))
+            copy[token] = '\0';
+    }
     snag_buf_reset(&term->draft);
     term->cursor = 0u;
     term->prompt_wanted = false;
