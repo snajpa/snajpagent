@@ -4160,22 +4160,25 @@ def run_manual_retry_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
-def run_patch_cases(binary, root, provider, environment):
+def run_tool_cases(binary, root, provider, environment):
     case = root / "patch"
     workspace = case / "work"
     workspace.mkdir(mode=0o700, parents=True)
     config = case / "config.ini"
     write_irc_config(config, provider.port, "host-model")
-    call_id, patch = "", ""
+    config.write_text(config.read_text() +
+                      "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=5000\n")
+    call_id, name, arguments = "", "", {}
     number = 0
+    ready = threading.Event()
 
     def respond(handler, request, sequence):
+        assert ready.wait(3), "test did not supply the next tool call"
+        ready.clear()
         outputs = sum(item.get("type") == "function_call_output" for item in request["input"])
-        assert outputs in (number - 1, number), request
-        finished = outputs == number
-        body = (provider.response_body(sequence, call_id + " done") if finished else
-                provider.function_body(sequence, call_id, "apply_patch", {
-                    "patch": patch, "workdir": str(workspace)})).encode()
+        assert outputs == (number - 1 if name else number), request
+        body = (provider.response_body(sequence, "tool cases done") if not name else
+                provider.function_body(sequence, call_id, name, arguments)).encode()
         handler.send_response(200)
         handler.send_header("Content-Type", "text/event-stream")
         handler.send_header("Content-Length", str(len(body)))
@@ -4183,19 +4186,37 @@ def run_patch_cases(binary, root, provider, environment):
         handler.wfile.write(body)
         handler.close_connection = True
 
-    def apply(text, status="succeeded"):
-        nonlocal call_id, patch, number
+    def invoke(tool, args, status="succeeded"):
+        nonlocal call_id, name, arguments, number
         number += 1
-        call_id, patch = f"patch-{number}", text
-        terminal.submit(f"apply patch case {number}")
-        terminal.wait(call_id + " done")
-        wait_irc_idle([terminal])
+        call_id, name, arguments = f"tool-{number}", tool, args
+        ready.set()
+        if number == 1:
+            terminal.submit("tool behavior cases")
+        wait_event_count(terminal.dotdir, "tool_finished", number)
         _, events = read_events(terminal.dotdir)
         finished = event_list(events, "tool_finished")
-        assert len(finished) == number, "patch case executed more than once"
+        assert len(finished) == number, "tool case executed more than once"
         result = finished[-1]["data"]["result"]
-        assert result["status"] == status, result
-        return result["model_text"]
+        assert result["status"] == status if status else result["status"] != "running", result
+        if result["status"] == "running":
+            assert re.fullmatch("[0-9a-f]{32}", result["handle"]), result
+        return result
+
+    def apply(text, status="succeeded"):
+        return invoke("apply_patch", {"patch": text, "workdir": str(workspace)}, status)["model_text"]
+
+    def command(text, timeout=1000, pty=False, status="succeeded", yield_ms=0):
+        result = invoke("exec_command", {
+            "command": text, "workdir": str(workspace), "timeout_ms": timeout,
+            "yield_ms": yield_ms, "max_output_tokens": None, "stdin": None, "pty": pty}, status)
+        assert result["max_output_tokens"] == 6000
+        return result
+
+    def interact(handle, text="", eof=False, yield_ms=0, status="succeeded", **options):
+        return invoke("write_stdin", {
+            "handle": handle, "data": text, "eof": eof, "yield_ms": yield_ms,
+            "max_output_tokens": None, "terminate": False, **options}, status)
 
     mask = os.umask(0o027)
     try:
@@ -4261,9 +4282,91 @@ def run_patch_cases(binary, root, provider, environment):
             assert "Diff preview (bounded" in preview
             assert "diff preview truncated" in preview
             assert (workspace / "big.txt").read_bytes() == (payload + "\n").encode()
+
+            result = command("printf out; printf err >&2")
+            assert result["stdout"]["retained"] == "out"
+            assert result["stderr"]["retained"] == "err"
+            result = command("exit 7", status="failed")
+            assert type(result["exit_code"]) is int and result["exit_code"] == 7
+            result = command("sleep 0.05; printf no-timeout", timeout=None)
+            assert result["stdout"]["retained"] == "no-timeout"
+            result = command("perl -e 'binmode STDOUT; print pack(q{C*}, 0, 255)'")
+            assert result["stdout"]["encoding"] == "base64"
+            assert result["stdout"]["retained"] == "AP8="
+            assert result["stdout"]["discarded_bytes"] == 0
+            assert "AP8=" in result["model_text"]
+            result = command("printf out; printf err >&2", pty=True)
+            assert "out" in result["stdout"]["retained"]
+            assert "err" in result["stdout"]["retained"]
+            assert result["stderr"]["original_bytes"] == 0
+
+            result = command("sleep 0.15; printf survived", timeout=20, status="running")
+            assert result["reason"] == "timeout_handoff"
+            assert "process continues in the background" in result["model_text"]
+            time.sleep(0.25)
+            done = interact(result["handle"], max_output_tokens=222)
+            assert done["max_output_tokens"] == 222
+            assert done["stdout"]["retained"] == "survived"
+
+            for pty in (False, True):
+                tag = "pty" if pty else "got"
+                result = command("printf 'ready\\n'; IFS= read -r line; "
+                                 f"printf '{tag}:%s\\n' \"$line\"", timeout=5000,
+                                 pty=pty, yield_ms=100, status="running")
+                if pty:
+                    assert result["stderr"]["original_bytes"] == 0
+                done = interact(result["handle"], "hello\r" if pty else "hello\n",
+                                eof=True, yield_ms=5000)
+                assert f"{tag}:hello" in done["stdout"]["retained"]
+                if pty:
+                    assert "hello" in done["stdout"]["retained"]
+                    assert done["stderr"]["original_bytes"] == 0
+
+            result = command("printf 'start\\n'; sleep 0.05; printf 'done\\n'",
+                             timeout=None, yield_ms=10, status="running")
+            time.sleep(0.5)
+            assert "done" in interact(result["handle"])["stdout"]["retained"]
+            interact("0" * 32, "x", status="not_run")
+            for malformed in (False, True):
+                result = command("IFS= read -r line; printf 'got:%s\\n' \"$line\"",
+                                 timeout=5000, yield_ms=50, status="running")
+                if malformed:
+                    rejected = invoke("write_stdin", {
+                        "handle": result["handle"], "data": "", "eof": False,
+                        "terminate": False, "yield_ms": 0}, "not_run")
+                    assert rejected["handle"] is None
+                else:
+                    interact("0" * 32, "wrong\\n", eof=True, status="not_run")
+                done = interact(result["handle"], "right\\n", eof=True, yield_ms=5000)
+                assert "got:right" in done["stdout"]["retained"]
+                if not malformed:
+                    assert "got:wrong" not in done["stdout"]["retained"]
+
+            for invalid in (False, True):
+                result = command("sleep 5", timeout=5000, yield_ms=50, status="running")
+                if invalid:
+                    for text, eof in (("must not be written", False), ("", True)):
+                        rejected = interact(result["handle"], text, eof=eof,
+                                            terminate=True, status="not_run")
+                        assert rejected["handle"] is None
+                done = interact(result["handle"], terminate=True, status=None)
+                if not invalid:
+                    assert done["handle"] is None
+
+            result = command("(sleep 0.25; printf leaked > leaked.txt) & wait",
+                             timeout=50, status="running")
+            time.sleep(0.5)
+            interact(result["handle"])
+            assert (workspace / "leaked.txt").exists()
+            (workspace / "leaked.txt").unlink()
+            name = None
+            ready.set()
+            terminal.wait("tool cases done")
+            wait_irc_idle([terminal])
             terminal.exit()
-            print("tmux_terminal patch behavior: ok", flush=True)
+            print("tmux_terminal patch and command behavior: ok", flush=True)
     finally:
+        ready.set()
         provider.runtime_handler = None
 
 
@@ -4955,7 +5058,7 @@ def run_irc_case(binary, root):
         run_automatic_turn_retry_cases(binary, root, provider, environment)
         run_post_exit_drain_cases(binary, root, provider, environment)
         run_tool_yield_cases(binary, root, provider, environment)
-        run_patch_cases(binary, root, provider, environment)
+        run_tool_cases(binary, root, provider, environment)
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)

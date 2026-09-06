@@ -249,21 +249,6 @@ run_command(const char *command, int timeout_ms)
 }
 
 static json_t *
-run_pty_command(const char *command, int timeout_ms)
-{
-    char cwd[4096];
-    struct snag_config config;
-    struct snag_response_graph graph;
-
-    assert(getcwd(cwd, sizeof(cwd)) != NULL);
-    snag_config_init(&config);
-    config.default_timeout_ms = 1000;
-    config.max_timeout_ms = 5000;
-    make_call_with_pty(&graph, command, cwd, timeout_ms, NULL, true);
-    return run_call(&graph, &config, cwd, NULL, NULL, NULL);
-}
-
-static json_t *
 run_tool_with_wait(const char *name, json_t *args,
                    snag_tool_pump_fn pump, void *pump_opaque, uint32_t max_wait_ms)
 {
@@ -339,14 +324,6 @@ run_terminate_call(const char *handle, const char *data, bool eof)
     json_t *args = checked_json(json_pack("{s:s,s:s,s:o,s:b,s:I,s:n}",
         "handle", handle, "data", data, "eof", eof ? json_true() : json_false(), "terminate", 1,
         "yield_ms", (json_int_t)(0), "max_output_tokens"));
-    return run_tool_with_args("write_stdin", args);
-}
-
-static json_t *
-run_malformed_write_stdin_call(const char *handle)
-{
-    json_t *args = checked_json(json_pack("{s:s,s:s,s:b,s:b,s:I}",
-        "handle", handle, "data", "", "eof", 0, "terminate", 0, "yield_ms", (json_int_t)(0)));
     return run_tool_with_args("write_stdin", args);
 }
 
@@ -478,18 +455,6 @@ test_managed_process_hands_off_on_steering(void)
 }
 
 static void
-test_success_and_streams(void)
-{
-    json_t *result = run_command("printf out; printf err >&2", 1000);
-    json_t *out = json_object_get(result, "stdout");
-    json_t *err = json_object_get(result, "stderr");
-    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
-    assert(strcmp(snag_json_string(out, "retained"), "out") == 0);
-    assert(strcmp(snag_json_string(err, "retained"), "err") == 0);
-    json_decref(result);
-}
-
-static void
 test_command_output_limit_selection(void)
 {
     static const int requests[] = {-1, 1, 123, 6789, 6790, INT32_MAX};
@@ -574,52 +539,6 @@ test_command_output_limit_is_required_and_positive(void)
 }
 
 static void
-test_failure_status(void)
-{
-    json_t *result = run_command("exit 7", 1000);
-    json_t *exit_code = json_object_get(result, "exit_code");
-    assert(strcmp(snag_json_string(result, "status"), "failed") == 0);
-    assert(json_is_integer(exit_code));
-    assert(json_integer_value(exit_code) == 7);
-    json_decref(result);
-}
-
-static void
-test_timeout_hands_off_without_killing(void)
-{
-    json_t *result = run_command("sleep 0.15; printf survived", 20);
-    const char *handle;
-    json_t *completed;
-
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    assert(strcmp(snag_json_string(result, "reason"), "timeout_handoff") == 0);
-    assert(strstr(snag_json_string(result, "model_text"),
-                  "process continues in the background") != NULL);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    sleep_ms(250);
-    completed = run_write_stdin_call_limit(handle, "", false, 0, 222);
-    assert(strcmp(snag_json_string(completed, "status"), "succeeded") == 0);
-    assert(json_integer_value(json_object_get(completed,
-               "max_output_tokens")) == 222);
-    assert(strcmp(snag_json_string(json_object_get(completed, "stdout"),
-                                  "retained"), "survived") == 0);
-    json_decref(completed);
-    json_decref(result);
-}
-
-static void
-test_no_timeout(void)
-{
-    json_t *result = run_command("sleep 0.05; printf no-timeout", -1);
-
-    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
-    assert(strcmp(snag_json_string(json_object_get(result, "stdout"),
-                                  "retained"), "no-timeout") == 0);
-    json_decref(result);
-}
-
-static void
 test_large_stdout_is_complete_for_model(void)
 {
     json_t *result = run_command(
@@ -638,20 +557,6 @@ test_large_stdout_is_complete_for_model(void)
 }
 
 static void
-test_binary_stdout_is_complete_for_model(void)
-{
-    json_t *result = run_command(
-        "perl -e 'binmode STDOUT; print pack(q{C*}, 0, 255)'", 1000);
-    json_t *out = json_object_get(result, "stdout");
-
-    assert(strcmp(snag_json_string(out, "encoding"), "base64") == 0);
-    assert(strcmp(snag_json_string(out, "retained"), "AP8=") == 0);
-    assert(json_int_member(out, "discarded_bytes") == 0);
-    assert(strstr(snag_json_string(result, "model_text"), "AP8=") != NULL);
-    json_decref(result);
-}
-
-static void
 test_stdin_uses_blocking_child_fd(void)
 {
     bool delayed = false;
@@ -663,67 +568,6 @@ test_stdin_uses_blocking_child_fd(void)
     assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
     assert(strcmp(snag_json_string(json_object_get(result, "stdout"),
                                   "retained"), "hello") == 0);
-    json_decref(result);
-}
-
-static void
-test_pty_merges_stdout_and_stderr(void)
-{
-    json_t *result = run_pty_command("printf out; printf err >&2", 1000);
-    const char *merged = snag_json_string(json_object_get(result, "stdout"),
-                                         "retained");
-
-    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
-    assert(strstr(merged, "out") != NULL);
-    assert(strstr(merged, "err") != NULL);
-    assert(json_int_member(json_object_get(result, "stderr"),
-                           "original_bytes") == 0);
-    json_decref(result);
-}
-
-static void
-test_managed_pty_write_stdin_completes(void)
-{
-    json_t *result = run_managed_exec_with_pty(
-        "printf 'ready\\n'; IFS= read -r line; printf 'pty:%s\\n' \"$line\"",
-        5000, 100, true);
-    const char *handle;
-    json_t *next;
-    const char *merged;
-
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    assert(json_int_member(json_object_get(result, "stderr"),
-                           "original_bytes") == 0);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    next = run_write_stdin_call(handle, "hello\r", true, 5000);
-    assert(strcmp(snag_json_string(next, "status"), "succeeded") == 0);
-    merged = snag_json_string(json_object_get(next, "stdout"), "retained");
-    assert(strstr(merged, "hello") != NULL);
-    assert(strstr(merged, "pty:hello") != NULL);
-    assert(json_int_member(json_object_get(next, "stderr"),
-                           "original_bytes") == 0);
-    json_decref(next);
-    json_decref(result);
-}
-
-static void
-test_managed_process_write_stdin_completes(void)
-{
-    json_t *result = run_managed_exec(
-        "printf 'ready\\n'; IFS= read -r line; printf 'got:%s\\n' \"$line\"",
-        5000, 100);
-    const char *handle;
-    json_t *next;
-
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    next = run_write_stdin_call(handle, "hello\n", true, 5000);
-    assert(strcmp(snag_json_string(next, "status"), "succeeded") == 0);
-    assert(strstr(snag_json_string(json_object_get(next, "stdout"),
-                                  "retained"), "got:hello") != NULL);
-    json_decref(next);
     json_decref(result);
 }
 
@@ -752,91 +596,6 @@ test_managed_process_accepts_repeated_write_stdin(void)
                                   "retained"), "second:two") != NULL);
     json_decref(done);
     json_decref(next);
-    json_decref(result);
-}
-
-static void
-test_managed_process_without_timeout(void)
-{
-    json_t *result = run_managed_exec(
-        "printf 'start\\n'; sleep 0.05; printf 'done\\n'",
-        -1, 10);
-    const char *handle;
-    json_t *next;
-
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL);
-    {
-        struct timespec remaining = {0, 500000000L};
-        while (nanosleep(&remaining, &remaining) < 0 && errno == EINTR)
-            ;
-    }
-    next = run_write_stdin_call(handle, "", false, 0);
-    assert(strcmp(snag_json_string(next, "status"), "succeeded") == 0);
-    assert(strstr(snag_json_string(json_object_get(next, "stdout"),
-                                  "retained"), "done") != NULL);
-    json_decref(next);
-    json_decref(result);
-}
-
-static void
-test_write_stdin_rejects_unknown_handle(void)
-{
-    json_t *result = run_write_stdin_call("00000000000000000000000000000000",
-                                          "x", false, 0);
-
-    assert(strcmp(snag_json_string(result, "status"), "not_run") == 0);
-    json_decref(result);
-}
-
-static void
-test_wrong_handle_does_not_touch_active_process(void)
-{
-    json_t *result = run_managed_exec(
-        "IFS= read -r line; printf 'got:%s\\n' \"$line\"", 5000, 50);
-    const char *handle;
-    json_t *wrong;
-    json_t *done;
-
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    wrong = run_write_stdin_call("00000000000000000000000000000000",
-                                 "wrong\\n", true, 0);
-    assert(strcmp(snag_json_string(wrong, "status"), "not_run") == 0);
-    done = run_write_stdin_call(handle, "right\\n", true, 5000);
-    assert(strcmp(snag_json_string(done, "status"), "succeeded") == 0);
-    assert(strstr(snag_json_string(json_object_get(done, "stdout"),
-                                  "retained"), "got:right") != NULL);
-    assert(strstr(snag_json_string(json_object_get(done, "stdout"),
-                                  "retained"), "got:wrong") == NULL);
-    json_decref(done);
-    json_decref(wrong);
-    json_decref(result);
-}
-
-static void
-test_malformed_interaction_preserves_active_process(void)
-{
-    json_t *result = run_managed_exec(
-        "IFS= read -r line; printf 'got:%s\\n' \"$line\"", 5000, 50);
-    const char *handle;
-    json_t *rejected;
-    json_t *done;
-
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    rejected = run_malformed_write_stdin_call(handle);
-    assert(strcmp(snag_json_string(rejected, "status"), "not_run") == 0);
-    assert(json_is_null(json_object_get(rejected, "handle")));
-    done = run_write_stdin_call(handle, "right\\n", true, 5000);
-    assert(strcmp(snag_json_string(done, "status"), "succeeded") == 0);
-    assert(strstr(snag_json_string(json_object_get(done, "stdout"),
-                                  "retained"), "got:right") != NULL);
-    json_decref(done);
-    json_decref(rejected);
     json_decref(result);
 }
 
@@ -889,50 +648,6 @@ test_wait_limit_and_pending_termination(void)
 }
 
 static void
-test_write_stdin_terminates_managed_process(void)
-{
-    json_t *result = run_managed_exec("sleep 5", 5000, 50);
-    const char *handle;
-    json_t *terminated;
-    const char *status;
-
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    terminated = run_terminate_call(handle, "", false);
-    status = snag_json_string(terminated, "status");
-    assert(status != NULL && strcmp(status, "running") != 0);
-    assert(json_is_null(json_object_get(terminated, "handle")));
-    json_decref(terminated);
-    json_decref(result);
-}
-
-static void
-test_invalid_termination_preserves_managed_process(void)
-{
-    json_t *result = run_managed_exec("sleep 5", 5000, 50);
-    const char *handle;
-    json_t *rejected;
-    json_t *terminated;
-
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    rejected = run_terminate_call(handle, "must not be written", false);
-    assert(strcmp(snag_json_string(rejected, "status"), "not_run") == 0);
-    assert(json_is_null(json_object_get(rejected, "handle")));
-    json_decref(rejected);
-    rejected = run_terminate_call(handle, "", true);
-    assert(strcmp(snag_json_string(rejected, "status"), "not_run") == 0);
-    assert(json_is_null(json_object_get(rejected, "handle")));
-    json_decref(rejected);
-    terminated = run_terminate_call(handle, "", false);
-    assert(strcmp(snag_json_string(terminated, "status"), "running") != 0);
-    json_decref(terminated);
-    json_decref(result);
-}
-
-static void
 test_managed_process_close_returns_terminal_result(void)
 {
     json_t *result = run_managed_exec(
@@ -958,35 +673,6 @@ test_managed_process_close_returns_terminal_result(void)
     assert(json_is_null(json_object_get(closed, "handle")));
     json_decref(closed);
     json_decref(result);
-}
-
-static void
-test_timeout_handoff_preserves_process_family(void)
-{
-    char *dir = make_temp_workspace();
-    char marker[4096];
-    char command[8192];
-    json_t *result;
-    json_t *completed;
-    const char *handle;
-
-    join_path(marker, sizeof(marker), dir, "leaked.txt");
-    assert(snprintf(command, sizeof(command),
-                    "(sleep 0.25; printf leaked > '%s') & wait",
-                    marker) > 0);
-    result = run_command(command, 50);
-    assert(strcmp(snag_json_string(result, "status"), "running") == 0);
-    handle = snag_json_string(result, "handle");
-    assert(handle != NULL);
-    sleep_ms(500);
-    completed = run_write_stdin_call(handle, "", false, 0);
-    assert(strcmp(snag_json_string(completed, "status"), "succeeded") == 0);
-    assert(access(marker, F_OK) == 0);
-    assert(unlink(marker) == 0);
-    json_decref(completed);
-    json_decref(result);
-    assert(rmdir(dir) == 0);
-    free(dir);
 }
 
 static void
@@ -1375,29 +1061,14 @@ main(void)
     test_steering_with_blocked_stdin();
     test_journal_failure_closes_owned_commands();
     test_native_read_tools();
-    test_success_and_streams();
     test_command_output_limit_selection();
     test_managed_output_ceiling();
     test_command_output_limit_is_required_and_positive();
-    test_failure_status();
-    test_timeout_hands_off_without_killing();
-    test_no_timeout();
-    test_timeout_handoff_preserves_process_family();
     test_large_stdout_is_complete_for_model();
-    test_binary_stdout_is_complete_for_model();
     test_stdin_uses_blocking_child_fd();
-    test_pty_merges_stdout_and_stderr();
-    test_managed_pty_write_stdin_completes();
-    test_managed_process_write_stdin_completes();
-    test_managed_process_accepts_repeated_write_stdin();
-    test_managed_process_without_timeout();
     test_managed_process_hands_off_on_steering();
-    test_write_stdin_rejects_unknown_handle();
-    test_wrong_handle_does_not_touch_active_process();
-    test_malformed_interaction_preserves_active_process();
     test_wait_limit_and_pending_termination();
-    test_write_stdin_terminates_managed_process();
-    test_invalid_termination_preserves_managed_process();
+    test_managed_process_accepts_repeated_write_stdin();
     test_managed_process_close_returns_terminal_result();
     test_managed_close_kills_process_family();
     test_provider_secret_removed_from_environment();
