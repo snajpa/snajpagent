@@ -34,7 +34,7 @@ struct snag_cli {
     enum snag_cli_auth_command auth_command;
     bool device_auth;
     bool with_api_key;
-    char *auth_provider;
+    const char *auth_provider;
     bool resume;
     bool execute;
     bool list;
@@ -48,22 +48,23 @@ struct snag_cli {
     unsigned int verbosity;
     enum snag_cli_color_mode color;
     enum snag_cli_markdown_mode markdown;
-    char *workspace;
+    /* Immutable option values borrow argv for the lifetime of the CLI. */
+    const char *workspace;
     struct snag_instruction_set doc_instructions;
-    char *dotdir;
-    char *model;
-    char *provider;
-    char *effort;
-    char *config_path;
-    char *irc_listen;
+    const char *dotdir;
+    const char *model;
+    const char *provider;
+    const char *effort;
+    const char *config_path;
+    const char *irc_listen;
     bool irc_no_listen;
     bool irc_no_client;
-    char *irc_clients[SNAG_CLI_IRC_CLIENT_MAX];
+    const char *irc_clients[SNAG_CLI_IRC_CLIENT_MAX];
     size_t irc_client_count;
-    char *irc_model_nick;
-    char *irc_operator_nick;
-    char *irc_room_name;
-    char *resume_id;
+    const char *irc_model_nick;
+    const char *irc_operator_nick;
+    const char *irc_room_name;
+    const char *resume_id;
     char *prompt;
 };
 

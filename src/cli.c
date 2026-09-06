@@ -44,21 +44,7 @@ snag_cli_markdown(const struct snag_cli *cli, bool fallback)
 void
 snag_cli_free(struct snag_cli *cli)
 {
-    free(cli->auth_provider);
-    free(cli->workspace);
     snag_instructions_free(&cli->doc_instructions);
-    free(cli->dotdir);
-    free(cli->model);
-    free(cli->provider);
-    free(cli->effort);
-    free(cli->config_path);
-    free(cli->irc_listen);
-    for (size_t i = 0; i < cli->irc_client_count; ++i)
-        free(cli->irc_clients[i]);
-    free(cli->irc_model_nick);
-    free(cli->irc_operator_nick);
-    free(cli->irc_room_name);
-    free(cli->resume_id);
     free(cli->prompt);
     snag_cli_init(cli);
 }
@@ -67,39 +53,28 @@ static int
 add_client(struct snag_cli *cli, const char *value,
            char *error, size_t error_size)
 {
-    char *copy;
-
-    if (cli->irc_client_count >= SNAG_CLI_IRC_CLIENT_MAX) {
+    if (cli->irc_client_count >= SNAG_CLI_IRC_CLIENT_MAX)
         return snag_fail(error, error_size, E2BIG, "at most %u -c options are supported",
-                  SNAG_CLI_IRC_CLIENT_MAX);
-    }
-    copy = snag_strdup_checked(value, SNAG_CONFIG_URL_MAX);
-    if (!copy) {
-        snag_errorf(error, error_size,
-                  "-c endpoint is too long or unavailable");
-        return -1;
-    }
+                         SNAG_CLI_IRC_CLIENT_MAX);
+    if (strlen(value) > SNAG_CONFIG_URL_MAX)
+        return snag_fail(error, error_size, EOVERFLOW, "-c endpoint is too long or unavailable");
     for (size_t i = 0; i < cli->irc_client_count; ++i)
-        if (strcmp(cli->irc_clients[i], copy) == 0) {
-            free(copy);
+        if (strcmp(cli->irc_clients[i], value) == 0)
             return snag_fail(error, error_size, EINVAL, "duplicate -c endpoint");
-        }
-    cli->irc_clients[cli->irc_client_count++] = copy;
+    cli->irc_clients[cli->irc_client_count++] = value;
     return 0;
 }
 
 static int
-set_once(char **slot, const char *value, const char *name,
+set_once(const char **slot, const char *value, const char *name,
          char *error, size_t error_size)
 {
-    if (*slot) {
+    if (*slot)
         return snag_fail(error, error_size, EINVAL, "duplicate %s option", name);
-    }
-    *slot = snag_strdup_checked(value, SNAG_PATH_MAX_BYTES);
-    if (!*slot) {
-        snag_errorf(error, error_size, "%s argument is too long or unavailable", name);
-        return -1;
-    }
+    if (strlen(value) > SNAG_PATH_MAX_BYTES)
+        return snag_fail(error, error_size, EOVERFLOW,
+                         "%s argument is too long or unavailable", name);
+    *slot = value;
     return 0;
 }
 
@@ -170,77 +145,6 @@ parse_color_value(struct snag_cli *cli, const char *value,
                   "%s accepts auto, always, or never", name);
     }
     return set_color(cli, color, name, error, error_size);
-}
-
-static int
-parse_short(struct snag_cli *cli, int argc, char **argv, int *index,
-            char *error, size_t error_size)
-{
-    const char *p = argv[*index] + 1;
-
-    while (*p) {
-        char flag = *p++;
-        const char *arg;
-        switch (flag) {
-        case 'v':
-            if (cli->verbosity == SNAG_VERBOSITY_MAX) {
-                snag_errorf(error, error_size, "at most six -v flags are allowed");
-                return -1;
-            }
-            ++cli->verbosity;
-            break;
-        case 'e':
-            if (cli->execute) {
-                snag_errorf(error, error_size, "duplicate -e option");
-                return -1;
-            }
-            cli->execute = true;
-            break;
-        case 'l':
-            if (cli->list) {
-                snag_errorf(error, error_size, "duplicate -l option");
-                return -1;
-            }
-            cli->list = true;
-            break;
-        case 'h': cli->help = true; break;
-        case 'V': cli->version = true; break;
-        case 'd':
-            arg = option_argument(argc, argv, index, p, "-d", error, error_size);
-            if (!arg || snag_instructions_add_directory(&cli->doc_instructions,
-                                                        arg, error, error_size) < 0)
-                return -1;
-            p += strlen(p);
-            break;
-        case 'c':
-            arg = optional_endpoint(argc, argv, index, p);
-            p += strlen(p);
-            if (add_client(cli, arg, error, error_size) < 0)
-                return -1;
-            break;
-        case 's':
-            arg = optional_endpoint(argc, argv, index, p);
-            p += strlen(p);
-            if (set_once(&cli->irc_listen, arg, "-s", error,
-                         error_size) < 0)
-                return -1;
-            break;
-        case 'C': case 'm': case 'o': case 'n': case 'r': {
-            char name[] = {'-', flag, '\0'};
-            char **slot = flag == 'C' ? &cli->workspace : flag == 'm' ? &cli->model :
-                          flag == 'o' ? &cli->irc_operator_nick :
-                          flag == 'n' ? &cli->irc_model_nick : &cli->irc_room_name;
-            arg = option_argument(argc, argv, index, p, name, error, error_size);
-            if (!arg || set_once(slot, arg, name, error, error_size) < 0)
-                return -1;
-            p += strlen(p);
-            break;
-        }
-        default:
-            return snag_fail(error, error_size, EINVAL, "unknown option -%c", flag);
-        }
-    }
-    return 0;
 }
 
 static bool
@@ -316,11 +220,13 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first,
             cli->device_auth = true;
         else if (strcmp(argv[i], "--with-api-key") == 0 && !cli->with_api_key)
             cli->with_api_key = true;
-        else if (argv[i][0] != '-' && !cli->auth_provider)
-            cli->auth_provider = snag_strdup_checked(argv[i], SNAG_CONFIG_PROVIDER_NAME_MAX);
-        else
-            goto invalid;
-        if (argv[i][0] != '-' && !cli->auth_provider)
+        else if (argv[i][0] != '-' && !cli->auth_provider) {
+            if (strlen(argv[i]) > SNAG_CONFIG_PROVIDER_NAME_MAX) {
+                errno = EOVERFLOW;
+                goto invalid;
+            }
+            cli->auth_provider = argv[i];
+        } else
             goto invalid;
     }
     if (cli->update_model_cache || cli->list || cli->last || cli->all || cli->provider || cli->irc_listen || cli->irc_client_count ||
@@ -337,31 +243,126 @@ invalid:
 }
 
 static int
-parse_long_string(struct snag_cli *cli, int argc, char **argv, int *index,
-                   char *error, size_t error_size)
+parse_options(struct snag_cli *cli, int argc, char **argv, int *index,
+              char *error, size_t error_size)
 {
-    const struct { const char *name; char **slot; } options[] = {
-        {"--model-nick", &cli->irc_model_nick},
-        {"--operator-nick", &cli->irc_operator_nick},
-        {"--room-name", &cli->irc_room_name},
-        {"--dotdir", &cli->dotdir},
-        {"--provider", &cli->provider},
-        {"--config", &cli->config_path},
-        {"--effort", &cli->effort},
+    const struct option {
+        const char *name;
+        char short_name;
+        bool argument;
+        const char **slot;
+        bool *toggle;
+    } options[] = {
+        {NULL, 'C', true, &cli->workspace, NULL},
+        {NULL, 'm', true, &cli->model, NULL},
+        {"--model-nick", 'n', true, &cli->irc_model_nick, NULL},
+        {"--operator-nick", 'o', true, &cli->irc_operator_nick, NULL},
+        {"--room-name", 'r', true, &cli->irc_room_name, NULL},
+        {"--dotdir", 0, true, &cli->dotdir, NULL},
+        {"--provider", 0, true, &cli->provider, NULL},
+        {"--config", 0, true, &cli->config_path, NULL},
+        {"--effort", 0, true, &cli->effort, NULL},
+        {"--listen", 's', true, &cli->irc_listen, NULL},
+        {"--client", 'c', true, NULL, NULL},
+        {"--last", 0, false, NULL, &cli->last},
+        {"--all", 0, false, NULL, &cli->all},
+        {"--resume", 0, false, NULL, &cli->resume},
+        {"--no-listen", 0, false, NULL, &cli->irc_no_listen},
+        {"--no-client", 0, false, NULL, &cli->irc_no_client},
+        {NULL, 'e', false, NULL, &cli->execute},
+        {NULL, 'l', false, NULL, &cli->list},
+        {"--help", 'h', false, NULL, &cli->help},
+        {"--update-model-cache", 0, false, NULL, &cli->update_model_cache},
+        {NULL, 'V', false, NULL, &cli->version},
+        {NULL, 'v', false, NULL, NULL},
+        {NULL, 'd', true, NULL, NULL},
+        {"--color", 0, true, NULL, NULL},
+        {"--no-color", 0, false, NULL, NULL},
+        {"--markdown", 0, false, NULL, NULL},
+        {"--no-markdown", 0, false, NULL, NULL},
     };
-    const char *arg = argv[*index];
+    const char *arg = argv[*index], *p = arg + 1;
+    bool long_option = *p == '-';
 
-    for (size_t i = 0u; i < sizeof(options) / sizeof(options[0]); ++i) {
-        const char *name = options[i].name;
-        size_t len = strlen(name);
-        if (strncmp(arg, name, len) || (arg[len] && arg[len] != '='))
-            continue;
-        const char *value = option_argument(argc, argv, index,
-            arg[len] == '=' ? arg + len + 1u : NULL, name, error, error_size);
-        return value ? set_once(options[i].slot, value, name, error, error_size) : -1;
-    }
-    snag_errorf(error, error_size, "unknown option %s", arg);
-    return -1;
+    do {
+        const struct option *option = NULL;
+        const char *attached = NULL;
+        char short_name[] = {'-', *p, '\0'};
+        for (size_t j = 0; j < sizeof(options) / sizeof(options[0]); ++j) {
+            const struct option *candidate = &options[j];
+            if (long_option) {
+                if (!candidate->name)
+                    continue;
+                size_t len = strlen(candidate->name);
+                if (strncmp(arg, candidate->name, len) ||
+                    (arg[len] && !(candidate->argument && arg[len] == '=')))
+                    continue;
+                attached = arg[len] ? arg + len + 1u : NULL;
+            } else {
+                if (candidate->short_name != *p)
+                    continue;
+                attached = p + 1;
+            }
+            option = candidate;
+            break;
+        }
+        if (!option) {
+            snag_errorf(error, error_size, "unknown option %s", long_option ? arg : short_name);
+            if (!long_option)
+                errno = EINVAL;
+            return -1;
+        }
+        const char *name = long_option ? option->name : short_name;
+        char flag = option->short_name;
+        if (option->toggle) {
+            if (*option->toggle && flag != 'h' && flag != 'V') {
+                snag_errorf(error, error_size, "duplicate %s option", name);
+                return -1;
+            }
+            *option->toggle = true;
+            if (flag == 'h' && long_option)
+                cli->manual = true;
+        } else if (flag == 'v') {
+            if (cli->verbosity == SNAG_VERBOSITY_MAX) {
+                snag_errorf(error, error_size, "at most six -v flags are allowed");
+                return -1;
+            }
+            ++cli->verbosity;
+        } else if (flag == 'c' || flag == 's') {
+            if (long_option && attached && !*attached)
+                return snag_fail(error, error_size, EINVAL,
+                                 "%s= requires a nonempty endpoint", name);
+            const char *value = optional_endpoint(argc, argv, index, attached);
+            if ((flag == 'c' ? add_client(cli, value, error, error_size) :
+                 set_once(option->slot, value, name, error, error_size)) < 0)
+                return -1;
+        } else if (option->slot || flag == 'd') {
+            const char *value = option_argument(argc, argv, index, attached, name, error, error_size);
+            if (!value || (option->slot ?
+                set_once(option->slot, value, name, error, error_size) :
+                snag_instructions_add_directory(&cli->doc_instructions, value, error, error_size)) < 0)
+                return -1;
+        } else if (strcmp(name, "--color") == 0) {
+            if (!attached && *index + 1 < argc &&
+                (strcmp(argv[*index + 1], "auto") == 0 ||
+                 strcmp(argv[*index + 1], "always") == 0 ||
+                 strcmp(argv[*index + 1], "never") == 0))
+                attached = argv[++*index];
+            if ((attached ? parse_color_value(cli, attached, name, error, error_size) :
+                 set_color(cli, SNAG_CLI_COLOR_ALWAYS, name, error, error_size)) < 0)
+                return -1;
+        } else if (strcmp(name, "--no-color") == 0) {
+            if (set_color(cli, SNAG_CLI_COLOR_NEVER, name, error, error_size) < 0)
+                return -1;
+        } else if (set_markdown(cli, strcmp(name, "--markdown") == 0 ?
+                               SNAG_CLI_MARKDOWN_ENABLED : SNAG_CLI_MARKDOWN_DISABLED,
+                               name, error, error_size) < 0) {
+            return -1;
+        }
+        if (long_option || option->argument)
+            return 0;
+    } while (*++p);
+    return 0;
 }
 
 int
@@ -383,90 +384,8 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
             positional = i;
             break;
         }
-        if (strcmp(arg, "--help") == 0) {
-            cli->help = cli->manual = true;
-        } else if (strcmp(arg, "--update-model-cache") == 0) {
-            if (cli->update_model_cache) {
-                snag_errorf(error, error_size, "duplicate --update-model-cache option");
-                return -1;
-            }
-            cli->update_model_cache = true;
-        } else if (strcmp(arg, "--last") == 0) {
-            if (cli->last) { snag_errorf(error, error_size, "duplicate --last option"); return -1; }
-            cli->last = true;
-        } else if (strcmp(arg, "--all") == 0) {
-            if (cli->all) { snag_errorf(error, error_size, "duplicate --all option"); return -1; }
-            cli->all = true;
-        } else if (strcmp(arg, "--resume") == 0) {
-            if (cli->resume) { snag_errorf(error, error_size, "duplicate --resume option"); return -1; }
-            cli->resume = true;
-        } else if (strcmp(arg, "--no-listen") == 0) {
-            if (cli->irc_no_listen) {
-                snag_errorf(error, error_size, "duplicate --no-listen option");
-                return -1;
-            }
-            cli->irc_no_listen = true;
-        } else if (strcmp(arg, "--no-client") == 0) {
-            if (cli->irc_no_client) {
-                snag_errorf(error, error_size, "duplicate --no-client option");
-                return -1;
-            }
-            cli->irc_no_client = true;
-        } else if (strcmp(arg, "--no-color") == 0) {
-            if (set_color(cli, SNAG_CLI_COLOR_NEVER, "--no-color",
-                          error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--markdown") == 0) {
-            if (set_markdown(cli, SNAG_CLI_MARKDOWN_ENABLED, "--markdown",
-                             error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--no-markdown") == 0) {
-            if (set_markdown(cli, SNAG_CLI_MARKDOWN_DISABLED, "--no-markdown",
-                             error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--color") == 0) {
-            if (i + 1 < argc &&
-                (strcmp(argv[i + 1], "auto") == 0 ||
-                 strcmp(argv[i + 1], "always") == 0 ||
-                 strcmp(argv[i + 1], "never") == 0)) {
-                if (parse_color_value(cli, argv[++i], "--color",
-                                      error, error_size) < 0)
-                    return -1;
-            } else if (set_color(cli, SNAG_CLI_COLOR_ALWAYS, "--color",
-                                 error, error_size) < 0) {
-                return -1;
-            }
-        } else if (strncmp(arg, "--color=", 8u) == 0) {
-            if (parse_color_value(cli, arg + 8u, "--color",
-                                  error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--client") == 0 ||
-                   strncmp(arg, "--client=", 9u) == 0) {
-            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
-            if (attached && !*attached) {
-                return snag_fail(error, error_size, EINVAL,
-                          "--client= requires a nonempty endpoint");
-            }
-            const char *value = optional_endpoint(argc, argv, &i, attached);
-            if (add_client(cli, value, error, error_size) < 0)
-                return -1;
-        } else if (strcmp(arg, "--listen") == 0 ||
-                   strncmp(arg, "--listen=", 9u) == 0) {
-            const char *attached = arg[8] == '=' ? arg + 9u : NULL;
-            if (attached && !*attached) {
-                return snag_fail(error, error_size, EINVAL,
-                          "--listen= requires a nonempty endpoint");
-            }
-            const char *value = optional_endpoint(argc, argv, &i, attached);
-            if (set_once(&cli->irc_listen, value, "--listen",
-                         error, error_size) < 0)
-                return -1;
-        } else if (arg[1] == '-') {
-            if (parse_long_string(cli, argc, argv, &i, error, error_size) < 0)
-                return -1;
-        } else if (parse_short(cli, argc, argv, &i, error, error_size) < 0) {
+        if (parse_options(cli, argc, argv, &i, error, error_size) < 0)
             return -1;
-        }
     }
     if ((cli->help || cli->version) &&
         (argc != 2 ||
@@ -533,11 +452,9 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
     }
     if (cli->resume) {
         if (positional >= 0 && !dashdash && !cli->last) {
-            cli->resume_id = snag_strdup_checked(argv[positional], SNAG_ID_HEX_LEN);
-            if (!cli->resume_id) {
-                snag_errorf(error, error_size, "session id is too long or unavailable");
-                return -1;
-            }
+            if (strlen(argv[positional]) > SNAG_ID_HEX_LEN)
+                return snag_fail(error, error_size, EOVERFLOW, "session id is too long or unavailable");
+            cli->resume_id = argv[positional];
             ++positional;
             if (positional < argc) {
                 if (strcmp(argv[positional], "--") != 0) {
