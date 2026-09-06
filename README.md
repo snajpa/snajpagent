@@ -86,7 +86,9 @@ Command timeouts hand execution back alive, not cancelled.
 
 `/model cache` downloads configured providers' catalogs. `/model` lists the
 cache; `/model NUMBER` selects a row. Add `save` to persist the selection.
-`/effort LEVEL` changes reasoning effort while idle.
+`/effort LEVEL` changes reasoning effort while idle. The rollout prompt shows
+`(N)` before `›` or `»` when N future prompts are queued; an empty queue adds
+no space. Custom prompt templates can include `{queue}` for the same badge.
 
 Rollout shows the model's conversation. Add `-v` for compact tool activity,
 `-vv` for previews, or `-vvv` for full retained arguments and results.

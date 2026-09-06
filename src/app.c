@@ -509,6 +509,7 @@ set_input_prompt(struct app_state *app, bool active)
     const char *effort = active ? app->turn_effort :
                                   resolve_effort(next_effort(app));
     char hostname[256u], meter[32u], label[SNAG_TERM_LABEL_BYTES];
+    char queue[32u] = "";
     const char *values[SNAG_PROMPT_HOUR];
     const char *spinners[SNAG_TERM_SPINNER_COUNT] = {
         app->config->prompt_spinner_goal,
@@ -532,6 +533,9 @@ set_input_prompt(struct app_state *app, bool active)
     values[5] = meter;
     values[6] = selected == 0u ? "chat" :
                 selected == 1u ? "rollout-idle" : "rollout-active";
+    if (app->session.pending_queue_count)
+        (void)snprintf(queue, sizeof(queue), "(%zu) ", app->session.pending_queue_count);
+    values[SNAG_PROMPT_QUEUE] = queue;
     if (app->queue_edit_id[0]) {
         struct snag_buf out;
 
@@ -561,7 +565,7 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
                        const struct snag_provider_config *provider,
                        const char *model, const char *effort)
 {
-    char hostname[256u];
+    char hostname[256u], queue[32u];
     const char *values[SNAG_PROMPT_FIELD_COUNT];
     const char *spinners[SNAG_TERM_SPINNER_COUNT] = {
         config->prompt_spinner_goal,
@@ -580,6 +584,8 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
     values[3] = config->irc.operator_nick;
     values[4] = hostname;
     values[5] = "100%";
+    (void)snprintf(queue, sizeof(queue), "(%u) ", SNAG_MAX_PENDING_TURNS);
+    values[SNAG_PROMPT_QUEUE] = queue;
     values[SNAG_PROMPT_HOUR] = "23";
     values[SNAG_PROMPT_MINUTE] = "59";
     values[SNAG_PROMPT_SECOND] = "60";

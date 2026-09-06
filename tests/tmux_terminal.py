@@ -1283,10 +1283,11 @@ def run_queue_case(binary, root):
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("queue_slow")
         terminal.wait("working slowly")
-        for text in ("first", "second", "third", "fourth"):
+        for count, text in enumerate(("first", "second", "third", "fourth"), 1):
             terminal.send_text(text)
             terminal.send_key("Tab")
             terminal.wait(f"next › {text}")
+            wait_idle_prompt_at_bottom(terminal, f"/medium ({count}) »")
 
         terminal.submit("/q")
         wait_queue_listing(terminal, ("first", "second", "third", "fourth"))
@@ -1294,15 +1295,19 @@ def run_queue_case(binary, root):
         terminal.submit("/q p")
         wait_event_count(dotdir, "future_turn_cancelled", 1)
         terminal.wait("1 future turn cancelled")
+        wait_idle_prompt_at_bottom(terminal, "/medium (3) »")
         terminal.submit("/queue pop")
         wait_event_count(dotdir, "future_turn_cancelled", 2)
+        wait_idle_prompt_at_bottom(terminal, "/medium (2) »")
         terminal.submit("/queue 1 delete")
         wait_event_count(dotdir, "future_turn_cancelled", 3)
+        wait_idle_prompt_at_bottom(terminal, "/medium (1) »")
         terminal.submit("/q 1e")
         terminal.wait(" ◴  ?% edit 1 › second")
         terminal.send_text(" active")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 1)
+        wait_idle_prompt_at_bottom(terminal, "/medium (1) »")
 
         terminal.send_text("fifth")
         terminal.send_key("Tab")
@@ -1312,7 +1317,7 @@ def run_queue_case(binary, root):
 
         terminal.send_key("C-c")
         terminal.wait("turn interrupted")
-        terminal.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
+        wait_idle_prompt_at_bottom(terminal, "/medium (2) ›")
         terminal.submit("/queue 1 edit")
         terminal.wait("    ?% edit 1 › second active")
         terminal.send_text(" idle")
@@ -1321,6 +1326,7 @@ def run_queue_case(binary, root):
         terminal.submit("/q c")
         wait_event_count(dotdir, "future_turn_cancelled", 4)
         terminal.wait("2 future turns cancelled")
+        wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
         terminal.submit("/q")
         empty = terminal.wait("future-turn queue is empty")
         assert_order(

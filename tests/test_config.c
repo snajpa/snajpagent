@@ -267,7 +267,7 @@ static void
 test_prompt_numbers(const char *path)
 {
     const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-        "p", "m", "e", "op", "host", "0%", "chat", "3", "7", "9"};
+        "p", "m", "e", "op", "host", "0%", "chat", "", "3", "7", "9"};
     static const char *const contexts[] = {"0%", "9%", "10%", "99%",
                                            "100%", "?%"};
     static const char *const padded[] = {"  0% ", "  9% ", " 10% ", " 99% ",
@@ -278,7 +278,7 @@ test_prompt_numbers(const char *path)
         "hour:2:2", "context:511", "hour:0511", "context:99999999999999999999",
         "model:2", "provider:2", "mode:2", "goal_spinner:1",
         "activity_spinner:1", "provider_spinner", "tool_spinner", "host:2", "operator:2",
-        "effort:2"};
+        "effort:2", "queue:2"};
     char label[SNAG_TERM_LABEL_BYTES], template[256];
 
     for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
@@ -478,21 +478,25 @@ main(void)
     assert(config.prompt_spinner_per_second == 8u);
     {
         static const char *const contexts[] = {"0%", "9%", "10%", "99%", "100%", "?%"};
+        static const char *const queues[] = {"", "(1) ", "(9) ", "(10) ", "(128) "};
         const char *values[SNAG_PROMPT_FIELD_COUNT] = {
-            "p", "m", "e", "op", "host", "0%", "chat", "3", "7", "9"};
+            "p", "m", "e", "op", "host", "0%", "chat", "", "3", "7", "9"};
         char expanded[128], expected[128];
 
-        assert(snag_config_prompt_expand(config.prompt, 0u, values, 0xfdu,
-                                        expanded, sizeof(expanded)) == 0);
-        assert(strcmp(expanded, "\xfd\xfe 03:07:09 op@host : ") == 0);
-        for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
-            values[SNAG_PROMPT_CONTEXT] = contexts[i];
-            for (unsigned int mode = 1u; mode <= 2u; ++mode) {
-                assert(snag_config_prompt_expand(config.prompt, mode, values, 0xfdu,
-                                                expanded, sizeof(expanded)) == 0);
-                assert(snprintf(expected, sizeof(expected), "\xfd\xfe%4s p/m/e %s ",
-                                contexts[i], mode == 1u ? "›" : "»") > 0);
-                assert(strcmp(expanded, expected) == 0);
+        for (size_t q = 0u; q < sizeof(queues) / sizeof(queues[0]); ++q) {
+            values[SNAG_PROMPT_QUEUE] = queues[q];
+            assert(snag_config_prompt_expand(config.prompt, 0u, values, 0xfdu,
+                                            expanded, sizeof(expanded)) == 0);
+            assert(strcmp(expanded, "\xfd\xfe 03:07:09 op@host : ") == 0);
+            for (size_t i = 0u; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
+                values[SNAG_PROMPT_CONTEXT] = contexts[i];
+                for (unsigned int mode = 1u; mode <= 2u; ++mode) {
+                    assert(snag_config_prompt_expand(config.prompt, mode, values, 0xfdu,
+                                                    expanded, sizeof(expanded)) == 0);
+                    assert(snprintf(expected, sizeof(expected), "\xfd\xfe%4s p/m/e %s%s ",
+                                    contexts[i], queues[q], mode == 1u ? "›" : "»") > 0);
+                    assert(strcmp(expanded, expected) == 0);
+                }
             }
         }
     }
@@ -663,7 +667,7 @@ main(void)
     {
         const char *values[SNAG_PROMPT_FIELD_COUNT] = {
             "prov", "model", "high", "", "host", "0%", "rollout-idle",
-            "12", "34", "56"};
+            "", "12", "34", "56"};
         const char template[] =
             "pre{chat:{hour:02}:{minute:02}:{second:02} {operator}:}"
             "{rollout-idle:{provider}/{model}/{effort} "

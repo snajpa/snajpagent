@@ -1014,6 +1014,7 @@ case.  Ordinary fields are
 .BR {host} ,
 .BR {context} ,
 .BR {mode} ,
+.BR {queue} ,
 .BR {hour} ,
 .BR {minute} ,
 and
@@ -1027,6 +1028,13 @@ templates must replace them with one shared activity placeholder.
 Backslash escapes literal braces and backslash.  No shell, environment, or
 command expansion occurs.  snajpagent appends one space after the selected
 label.
+.PP
+.B {queue}
+expands to the number of pending future prompts in parentheses followed by one
+space, such as "(1) ", or nothing when the queue is empty.  Default rollout
+prompts place it immediately before the idle/active marker; default chat and
+queue-edit prompts are unchanged.  It includes paused prompts, excludes the
+running turn, and updates as prompts are queued, started or removed.
 .PP
 Numeric fields accept a minimum space-padded width, for example
 .B {context:4}

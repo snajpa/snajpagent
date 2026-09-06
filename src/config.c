@@ -97,9 +97,9 @@ snag_config_init(struct snag_config *config)
         "{chat:{goal_spinner}{activity_spinner} {hour:02}:{minute:02}:{second:02} "
         "{operator}@{host} :}"
         "{rollout-idle:{goal_spinner}{activity_spinner}{context:4} "
-        "{provider}/{model}/{effort} ›}"
+        "{provider}/{model}/{effort} {queue}›}"
         "{rollout-active:{goal_spinner}{activity_spinner}{context:4} "
-        "{provider}/{model}/{effort} »}";
+        "{provider}/{model}/{effort} {queue}»}";
 
     memset(config, 0, sizeof(*config));
     memcpy(config->model, "default", 8u);
@@ -279,7 +279,7 @@ prompt_body(const char *text, size_t len,
             unsigned char marker, struct snag_buf *out)
 {
     static const char *const fields[] = {"provider", "model", "effort",
-        "operator", "host", "context", "mode", "hour", "minute", "second",
+        "operator", "host", "context", "mode", "queue", "hour", "minute", "second",
         "goal_spinner", "activity_spinner"};
     unsigned int spinners = 0u;
 

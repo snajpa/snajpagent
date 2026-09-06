@@ -526,18 +526,19 @@ def test_initial_unrenderable_prompt_is_rejected_atomically():
               "config" / "initial-unrenderable.ini")
     before = session_ids()
 
-    config.write_text(
-        "[provider openai]\n[ui]\n"
-        "prompt = {chat:x}{rollout-idle:" + ("x" * 600) +
-        "}{rollout-active:z}\n",
-        encoding="utf-8",
-    )
-    child = Child(["--config", str(config)])
-    child.wait(
-        b"configured prompt cannot be rendered with the current selection"
-    )
-    child.finish(expected=2, expect_resume=False)
-    assert session_ids() == before
+    for label in ("x" * 600, "x" * 505 + "{queue}"):
+        config.write_text(
+            "[provider openai]\n[ui]\n"
+            "prompt = {chat:x}{rollout-idle:" + label +
+            "}{rollout-active:z}\n",
+            encoding="utf-8",
+        )
+        child = Child(["--config", str(config)])
+        child.wait(
+            b"configured prompt cannot be rendered with the current selection"
+        )
+        child.finish(expected=2, expect_resume=False)
+        assert session_ids() == before
 
 
 def test_incremental_multiline_delete_clears_old_tail():
@@ -743,8 +744,12 @@ def test_armed_fifo():
     child.wait(b"working slowly")
     child.send(b"ping\t")
     child.wait(b"next " + PROMPT + b"ping")
+    child.wait(b"/medium (1) \xc2\xbb ")
+    child.send(b"retained-draft")
     child.wait(b"slow complete")
     answer_end = child.wait(b"pong")
+    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT + b"retained-draft", start=answer_end)
+    child.send(b"\x15")
     child.exit_cleanly(answer_end)
 
     log = events(new_session(before))
@@ -756,6 +761,34 @@ def test_armed_fifo():
     assert turns[1]["data"]["queue_id"] == queued["data"]["queue_id"]
     assert turns[1]["data"]["queue_seq"] == queued["seq"]
     assert turns[1]["data"]["text"] == "ping"
+
+
+def test_queue_prompt_counts():
+    child = Child([])
+    try:
+        child.wait(DEFAULT_IDLE_PROMPT)
+        child.send(b"queue_slow\r")
+        after = child.wait(b"working slowly")
+        for count in range(1, 11):
+            child.send(f"entry-{count}\t".encode())
+            after = child.wait(f"/medium ({count}) » ".encode(), start=after)
+        for command, count in ((b"/queue pop\r", 9), (b"/queue 1 delete\r", 8)):
+            child.send(command)
+            after = child.wait(f"/medium ({count}) » ".encode(), start=after)
+        child.send(b"\t")
+        after = child.wait(b" : ", start=after)
+        child.drain(0.05)
+        assert b"(8)" not in child.buf[after:]
+        child.send(b"\t")
+        after = child.wait(b"/medium (8) \xc2\xbb ", start=after)
+        child.send(b"/queue clear\r")
+        after = child.wait(b"8 future turns cancelled", start=after)
+        after = child.wait(b"/medium \xc2\xbb ", start=after)
+        child.send(b"\x03")
+        after = child.wait(b"turn interrupted", start=after)
+        child.exit_cleanly(after)
+    finally:
+        child.kill()
 
 
 def test_read_only_queries():
@@ -1475,11 +1508,12 @@ def test_resume_pauses_fifo():
     resumed = Child(["--resume", session_id])
     resumed.wait(b"1 queued paused")
     resumed.wait(b"queued future turns are paused; use /next")
-    resumed.wait(PROMPT.rstrip())
+    resumed.wait(b"/medium (1) \xe2\x80\xba ")
     resumed.drain(0.3)
     assert b"pong" not in resumed.buf
     resumed.send(b"/next\r")
     answer_end = resumed.wait(b"pong")
+    resumed.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=answer_end)
     resumed.exit_cleanly(answer_end)
 
     log = events(session_id)
@@ -4391,6 +4425,7 @@ if __name__ == "__main__":
     test_split_utf8_steering()
     test_typing_pause_and_stream_snapshots()
     test_armed_fifo()
+    test_queue_prompt_counts()
     test_read_only_queries()
     test_read_only_multiline_compaction_and_chat()
     test_read_only_queue_replay_and_edit()
