@@ -78,41 +78,22 @@ static json_t *
 turn_started_data(const struct snag_session *session, const char *turn_id)
 {
     struct snag_instruction_set instructions;
-    json_t *config = json_object();
-    json_t *data = json_object();
-    json_t *metadata;
-
     snag_instructions_init(&instructions);
-    metadata = snag_instructions_metadata_json(&instructions);
+    json_t *metadata = snag_instructions_metadata_json(&instructions);
     snag_instructions_free(&instructions);
-    assert(config && data && metadata);
-    assert(snag_json_set_new(config, "capability_version",
-                            json_string(SNAJPAGENT_CAPABILITY_VERSION)) == 0);
-    assert(snag_json_set_new(config, "effort",
-                            json_string(session->default_effort)) == 0);
-    assert(snag_json_set_new(config, "max_output_tokens", json_null()) == 0);
-    assert(snag_json_set_new(config, "model",
-                            json_string(session->default_model)) == 0);
-    assert(snag_json_set_new(config, "provider",
-                            json_string(session->default_provider)) == 0);
-    assert(snag_json_set_new(config, "profile_id",
-                            json_string(SNAJPAGENT_PROFILE_ID)) == 0);
-    assert(snag_json_set_new(config, "prompt_schema", json_integer(1)) == 0);
-    assert(snag_json_set_new(config, "replay_schema", json_integer(1)) == 0);
-    assert(snag_json_set_new(config, "tool_schema", json_integer(1)) == 0);
-    assert(snag_json_set_new(config, "max_parallel_commands", json_integer(4)) == 0);
-    assert(snag_json_set_new(config, "parallel_tool_calls", json_true()) == 0);
-    assert(snag_json_set_new(data, "config", config) == 0);
-    assert(snag_json_set_new(data, "input_kind", json_string("direct")) == 0);
-    assert(snag_json_set_new(data, "read_only", json_false()) == 0);
-    assert(snag_json_set_new(data, "instructions", metadata) == 0);
-    assert(snag_json_set_new(data, "queue_id", json_null()) == 0);
-    assert(snag_json_set_new(data, "queue_seq", json_null()) == 0);
-    assert(snag_json_set_new(data, "text", json_string("queue test")) == 0);
-    assert(snag_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
-    assert(snag_json_set_new(data, "turn_number", json_integer(1)) == 0);
-    assert(snag_json_set_new(data, "workspace",
-                            json_string(session->workspace)) == 0);
+    assert(metadata);
+    json_t *data = json_pack(
+        "{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+        "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:i,s:s}",
+        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "effort", session->default_effort, "max_output_tokens",
+        "model", session->default_model, "provider", session->default_provider,
+        "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
+        "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
+        "input_kind", "direct", "read_only", 0, "instructions", metadata,
+        "queue_id", "queue_seq", "text", "queue test", "turn_id", turn_id,
+        "turn_number", 1, "workspace", session->workspace);
+    assert(data);
     return data;
 }
 

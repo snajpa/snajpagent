@@ -111,44 +111,23 @@ static json_t *
 response_started(const char *turn_id, const char *response_id,
                  const char *compact_id)
 {
-    json_t *data = json_object();
-    json_t *steering = json_array();
-    assert(data && steering);
-    assert(snag_json_set_new(data, "irc_seq", json_integer(0)) == 0);
-    assert(snag_json_set_new(data, "baseline_sha256", json_null()) == 0);
-    assert(snag_json_set_new(data, "capability_version",
-                            json_string(SNAJPAGENT_CAPABILITY_VERSION)) == 0);
-    assert(snag_json_set_new(data, "compact_id",
-                            compact_id ? json_string(compact_id) : json_null()) == 0);
-    assert(snag_json_set_new(data, "count_method", json_string("exact")) == 0);
-    assert(snag_json_set_new(data, "capacity_source",
-                            json_string("unknown")) == 0);
-    assert(snag_json_set_new(data, "count_request_sha256",
-        json_string("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")) == 0);
-    assert(snag_json_set_new(data, "cycle", json_integer(1)) == 0);
-    assert(snag_json_set_new(data, "effort", json_string("medium")) == 0);
-    assert(snag_json_set_new(data, "hard_input_tokens", json_null()) == 0);
-    assert(snag_json_set_new(data, "input_tokens_bound", json_integer(1000)) == 0);
-    assert(snag_json_set_new(data, "model", json_string(SNAJPAGENT_MODEL)) == 0);
-    assert(snag_json_set_new(data, "model_input_bytes", json_integer(4000)) == 0);
-    assert(snag_json_set_new(data, "model_input_sha256",
-        json_string("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == 0);
-    assert(snag_json_set_new(data, "request_input_bytes", json_integer(3000)) == 0);
-    assert(snag_json_set_new(data, "request_input_count", json_integer(1)) == 0);
-    assert(snag_json_set_new(data, "request_input_sha256",
-        json_string("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")) == 0);
-    assert(snag_json_set_new(data, "profile_id",
-                            json_string(SNAJPAGENT_PROFILE_ID)) == 0);
-    assert(snag_json_set_new(data, "provider", json_string("default")) == 0);
-    assert(snag_json_set_new(data, "provider_source_sha256",
-        json_string("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")) == 0);
-    assert(snag_json_set_new(data, "request_sha256",
-        json_string("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) == 0);
-    assert(snag_json_set_new(data, "requested_output_tokens", json_null()) == 0);
-    assert(snag_json_set_new(data, "response_id", json_string(response_id)) == 0);
-    assert(snag_json_set_new(data, "source_bound", json_false()) == 0);
-    assert(snag_json_set_new(data, "steering_ids", steering) == 0);
-    assert(snag_json_set_new(data, "turn_id", json_string(turn_id)) == 0);
+    json_t *data = json_pack(
+        "{s:i,s:n,s:s,s:s?,s:s,s:s,s:s,s:i,s:s,s:n,s:i,s:s,s:i,s:s,s:i,s:i,s:s,"
+        "s:s,s:s,s:s,s:s,s:n,s:s,s:b,s:[],s:s}",
+        "irc_seq", 0, "baseline_sha256", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "compact_id", compact_id, "count_method", "exact", "capacity_source", "unknown",
+        "count_request_sha256", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "cycle", 1, "effort", "medium", "hard_input_tokens", "input_tokens_bound", 1000,
+        "model", SNAJPAGENT_MODEL, "model_input_bytes", 4000,
+        "model_input_sha256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "request_input_bytes", 3000, "request_input_count", 1,
+        "request_input_sha256", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "profile_id", SNAJPAGENT_PROFILE_ID, "provider", "default",
+        "provider_source_sha256", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "request_sha256", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "requested_output_tokens", "response_id", response_id, "source_bound", 0,
+        "steering_ids", "turn_id", turn_id);
+    assert(data);
     return data;
 }
 
