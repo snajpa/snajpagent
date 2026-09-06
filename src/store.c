@@ -1898,7 +1898,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         snag_buf_init(&bytes, 16384u);
         rc = snag_process_output_decode(data, &bytes);
-        if (rc == 0 && bytes.len && offset <= INT64_MAX - bytes.len)
+        if (rc == 0 && bytes.len && offset <= (uint64_t)INT64_MAX - bytes.len)
             process->output_bytes[stream] += bytes.len;
         else
             rc = -1;
