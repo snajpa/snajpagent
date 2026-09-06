@@ -5,20 +5,26 @@
 #include "irc.h"
 #include "snajpagent.h"
 #include "store.h"
+#include "net.h"
 
-#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <netinet/tcp.h>
-#include <poll.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <unistd.h>
+
+static void
+set_user(const char *value)
+{
+#ifdef _WIN32
+    assert(_putenv_s("USER", value) == 0);
+#else
+    assert(setenv("USER", value, 1) == 0);
+#endif
+}
 
 struct capture {
     unsigned int events[SNAG_IRC_HISTORY_READY + 1u];
@@ -84,32 +90,32 @@ free_port(void)
 {
     struct sockaddr_in address;
     socklen_t size = sizeof(address);
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    snag_socket fd = snag_socket_open(AF_INET, SOCK_STREAM, 0);
 
-    assert(fd >= 0);
+    assert(fd != SNAG_SOCKET_INVALID);
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    assert(bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+    assert(snag_socket_bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
     assert(getsockname(fd, (struct sockaddr *)&address, &size) == 0);
-    assert(close(fd) == 0);
+    assert(snag_socket_close(fd) == 0);
     return ntohs(address.sin_port);
 }
 
-static int
+static snag_socket
 listen_local(unsigned short *port)
 {
     struct sockaddr_in address;
     socklen_t size = sizeof(address);
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    snag_socket fd = snag_socket_open(AF_INET, SOCK_STREAM, 0);
 
-    assert(fd >= 0);
+    assert(fd != SNAG_SOCKET_INVALID);
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    assert(bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+    assert(snag_socket_bind(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
     assert(getsockname(fd, (struct sockaddr *)&address, &size) == 0);
-    assert(listen(fd, 4) == 0);
+    assert(snag_socket_listen(fd, 4) == 0);
     *port = ntohs(address.sin_port);
     return fd;
 }
@@ -122,36 +128,36 @@ endpoint(char out[64u], unsigned short port)
     assert(n > 0 && n < 64);
 }
 
-static int
+static snag_socket
 connect_local(unsigned short port, bool slow)
 {
     struct sockaddr_in address;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    int flags;
+    snag_socket fd = snag_socket_open(AF_INET, SOCK_STREAM, 0);
 
-    assert(fd >= 0);
+    assert(fd != SNAG_SOCKET_INVALID);
     if (slow) {
         int size = 1024;
-        assert(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size)) == 0);
+        assert(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&size, sizeof(size)) == 0);
     }
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = htons(port);
-    assert(connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
-    flags = fcntl(fd, F_GETFL, 0);
-    assert(flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0);
+    int rc = snag_socket_connect(fd, (struct sockaddr *)&address, sizeof(address));
+    assert(rc == 0 || (rc < 0 && errno == EINPROGRESS));
+    snag_socket_event ready = {fd, SNAG_NET_WRITE, 0};
+    assert(snag_socket_poll(&ready, 1u, 1000) > 0 && snag_socket_connected(fd) == 0);
     return fd;
 }
 
 static void
-send_text(int fd, const char *text)
+send_text(snag_socket fd, const char *text)
 {
     size_t offset = 0u;
     size_t len = strlen(text);
 
     while (offset < len) {
-        ssize_t written = send(fd, text + offset, len - offset, 0);
+        ssize_t written = snag_socket_send(fd, text + offset, len - offset);
         if (written < 0 && errno == EINTR)
             continue;
         assert(written > 0);
@@ -174,13 +180,13 @@ tick(struct snag_irc *irc, unsigned int rounds)
 }
 
 static size_t
-drain(int fd, char *out, size_t size)
+drain(snag_socket fd, char *out, size_t size)
 {
     size_t used = 0u;
 
     assert(size > 1u);
     for (;;) {
-        ssize_t got = recv(fd, out + used, size - used - 1u, 0);
+        ssize_t got = snag_socket_recv(fd, out + used, size - used - 1u);
         if (got > 0) {
             used += (size_t)got;
             if (used == size - 1u)
@@ -197,7 +203,7 @@ drain(int fd, char *out, size_t size)
 }
 
 static void
-register_peer(struct snag_irc *server, int fd, const char *nick,
+register_peer(struct snag_irc *server, snag_socket fd, const char *nick,
               bool agent, char *wire, size_t wire_size)
 {
     char input[1024u];
@@ -214,16 +220,16 @@ register_peer(struct snag_irc *server, int fd, const char *nick,
 }
 
 static void
-ping_without_engine(int fd)
+ping_without_engine(snag_socket fd)
 {
     char wire[65536u];
-    struct pollfd ready = {fd, POLLIN, 0};
+    snag_socket_event ready = {fd, SNAG_NET_READ, 0};
     uint64_t deadline = snag_monotonic_ms() + 250u;
 
     (void)drain(fd, wire, sizeof(wire));
     send_text(fd, "PING :independent-owner\r\n");
     do {
-        assert(poll(&ready, 1u, 20) >= 0);
+        assert(snag_socket_poll(&ready, 1u, 20) >= 0);
         (void)drain(fd, wire, sizeof(wire));
         if (strstr(wire, "PONG") && strstr(wire, "independent-owner"))
             return;
@@ -303,7 +309,7 @@ test_runtime_roles(void)
     unsigned int joins;
     unsigned short host_port = free_port();
     unsigned short upstream_port = free_port();
-    int human;
+    snag_socket human;
     struct snag_irc_destinations destinations;
     struct snag_irc_route route = {0}, frozen;
     uint32_t removed_id;
@@ -392,12 +398,12 @@ test_runtime_roles(void)
     /* The owner receives this before removal; admission happens during stop. */
     send_text(human, "PRIVMSG #lab :accepted-before-removal\r\nPING :barrier\r\n");
     {
-        struct pollfd fd = {human, POLLIN, 0};
+        snag_socket_event fd = {human, SNAG_NET_READ, 0};
         bool pong = false;
         uint64_t deadline = snag_monotonic_ms() + 1000u;
 
         while (!pong && snag_monotonic_ms() < deadline) {
-            assert(poll(&fd, 1u, 20) >= 0);
+            assert(snag_socket_poll(&fd, 1u, 20) >= 0);
             (void)drain(human, wire, sizeof(wire));
             pong = strstr(wire, "PONG") != NULL;
         }
@@ -407,7 +413,7 @@ test_runtime_roles(void)
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     assert(strstr(capture.message_text, "accepted-before-removal"));
     assert(strcmp(snag_irc_model_nick(runtime), "agent1") == 0);
-    close(human);
+    snag_socket_close(human);
     tick(upstream, 3u);
     assert(upstream_capture.events[SNAG_IRC_JOIN] == joins);
     assert(snag_irc_send_operator(runtime, "after-host-stop", error, sizeof(error)) == 0);
@@ -441,7 +447,7 @@ test_runtime_roles(void)
     assert(strstr(wire, "accepted-before-removal"));
     assert(!strstr(wire, "after-host-stop"));
     assert(!strstr(wire, "not queued"));
-    close(human);
+    snag_socket_close(human);
     snag_buf_free(&state);
     snag_irc_close(runtime);
     snag_irc_close(upstream);
@@ -467,7 +473,7 @@ test_validation(void)
     assert(config.irc.operator_nick_implicit);
     snag_config_free(&config);
 
-    assert(setenv("USER", "agent", 1) == 0);
+    set_user("agent");
     snag_config_init(&config);
     config.irc.listen_explicit = true;
     assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
@@ -475,14 +481,14 @@ test_validation(void)
     assert(config.irc.operator_nick_implicit);
     snag_config_free(&config);
 
-    assert(setenv("USER", "not valid", 1) == 0);
+    set_user("not valid");
     snag_config_init(&config);
     config.irc.listen_explicit = true;
     assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
     assert(strcmp(config.irc.operator_nick, "operator0") == 0);
     assert(config.irc.operator_nick_implicit);
     snag_config_free(&config);
-    assert(setenv("USER", "root", 1) == 0);
+    set_user("root");
 
     snag_config_init(&config);
     config.irc.client_count = 2u;
@@ -600,10 +606,10 @@ test_server(void)
     char wire[128u * 1024u];
     char traffic[SNAG_IRC_TEXT_MAX + 1u];
     char error[256] = {0};
-    int human;
-    int history;
-    int bad;
-    int slow;
+    snag_socket human;
+    snag_socket history;
+    snag_socket bad;
+    snag_socket slow;
 
     init_server_config(&config, port);
     config.irc.client_count = 1u;
@@ -724,7 +730,7 @@ test_server(void)
     assert(strstr(wire, "@batch=") != NULL);
     assert(strstr(wire, " 332 reader #lab :agent topic") != NULL);
     assert(strstr(wire, "foreign topic must not leak") == NULL);
-    assert(close(history) == 0);
+    assert(snag_socket_close(history) == 0);
     tick(server, 5u);
 
     bad = connect_local(port, false);
@@ -732,7 +738,7 @@ test_server(void)
     memcpy(wire + 8191u, "\r\n", 3u);
     send_text(bad, wire);
     tick(server, 10u);
-    assert(close(bad) == 0);
+    assert(snag_socket_close(bad) == 0);
     send_text(human, "PING :still-alive\r\n");
     tick(server, 5u);
     (void)drain(human, wire, sizeof(wire));
@@ -748,7 +754,7 @@ test_server(void)
         (void)drain(human, wire, sizeof(wire));
     }
     assert(capture.slow_quit);
-    assert(close(slow) == 0);
+    assert(snag_socket_close(slow) == 0);
 
     send_text(human, "MODE #lab -o agent\r\n");
     tick(server, 5u);
@@ -757,7 +763,7 @@ test_server(void)
                                    error, sizeof(error)) < 0);
     assert(errno == EACCES);
     ping_without_engine(human);
-    assert(close(human) == 0);
+    assert(snag_socket_close(human) == 0);
     snag_irc_close(server);
     snag_config_free(&config);
 }
@@ -1023,7 +1029,7 @@ test_explicit_zero_nick_collision(void)
     struct snag_irc *server;
     struct snag_irc *client = NULL;
     unsigned short port = free_port();
-    int occupied[2u];
+    snag_socket occupied[2u];
     char address[64u];
     char wire[8192u];
     char error[256] = {0};
@@ -1058,7 +1064,7 @@ test_explicit_zero_nick_collision(void)
 
     snag_irc_close(client);
     for (size_t i = 0u; i < 2u; ++i)
-        assert(close(occupied[i]) == 0);
+        assert(snag_socket_close(occupied[i]) == 0);
     snag_irc_close(server);
     snag_config_free(&client_config);
     snag_config_free(&server_config);
@@ -1078,7 +1084,7 @@ test_client_nick_collision(void)
     struct snag_irc *client = NULL;
     struct snag_buf snapshot;
     unsigned short port = free_port();
-    int occupied[2u];
+    snag_socket occupied[2u];
     char address[64u];
     char wire[8192u];
     char error[256] = {0};
@@ -1146,7 +1152,7 @@ test_client_nick_collision(void)
     snag_buf_free(&snapshot);
 
     for (size_t i = 0u; i < 2u; ++i)
-        assert(close(occupied[i]) == 0);
+        assert(snag_socket_close(occupied[i]) == 0);
     snag_irc_close(server);
     for (unsigned int i = 0u;
          i < 50u && !client_capture.events[SNAG_IRC_DISCONNECTED]; ++i)
@@ -1178,10 +1184,10 @@ test_client_events(void)
     struct capture capture = {0};
     struct snag_irc *client = NULL;
     unsigned short port;
-    int listener = listen_local(&port);
-    int peers[2u];
-    int operator_fd = -1;
-    int agent_fd = -1;
+    snag_socket listener = listen_local(&port);
+    snag_socket peers[2u];
+    snag_socket operator_fd = SNAG_SOCKET_INVALID;
+    snag_socket agent_fd = SNAG_SOCKET_INVALID;
     char address[64u];
     char wire[8192u];
     char error[256] = {0};
@@ -1199,17 +1205,12 @@ test_client_events(void)
                         capture_trace, &capture, error, sizeof(error)) == 0);
     tick(client, 5u);
     for (size_t i = 0u; i < 2u; ++i) {
-        int flags;
-        int one = 1;
-
-        peers[i] = accept(listener, NULL, NULL);
-        assert(peers[i] >= 0);
+        snag_socket_event ready = {listener, SNAG_NET_READ, 0};
+        assert(snag_socket_poll(&ready, 1u, 1000) > 0);
+        peers[i] = snag_socket_accept(listener);
+        assert(peers[i] != SNAG_SOCKET_INVALID);
         /* Match the real server: fixture timing must not depend on delayed ACKs. */
-        assert(setsockopt(peers[i], IPPROTO_TCP, TCP_NODELAY,
-                          &one, sizeof(one)) == 0);
-        flags = fcntl(peers[i], F_GETFL, 0);
-        assert(flags >= 0 &&
-               fcntl(peers[i], F_SETFL, flags | O_NONBLOCK) == 0);
+        snag_socket_nodelay(peers[i]);
     }
     tick(client, 10u);
     for (size_t i = 0u; i < 2u; ++i) {
@@ -1258,7 +1259,7 @@ test_client_events(void)
         send_text(peers[i], joined);
     }
     tick(client, 20u);
-    assert(operator_fd >= 0);
+    assert(operator_fd != SNAG_SOCKET_INVALID);
     {
         struct snag_buf nicks;
 
@@ -1363,8 +1364,8 @@ test_client_events(void)
     ping_without_engine(agent_fd);
     snag_irc_close(client);
     for (size_t i = 0u; i < 2u; ++i)
-        assert(close(peers[i]) == 0);
-    assert(close(listener) == 0);
+        assert(snag_socket_close(peers[i]) == 0);
+    assert(snag_socket_close(listener) == 0);
     snag_config_free(&config);
 }
 
@@ -1375,7 +1376,7 @@ test_independent_owners(void)
     struct capture capture = {0};
     struct snag_irc *irc = NULL;
     unsigned short port = free_port();
-    int listeners[2u], peers[2u][2u], human;
+    snag_socket listeners[2u], peers[2u][2u], human;
     char address[64u], wire[8192u], error[256u] = {0};
     uint64_t started;
 
@@ -1394,12 +1395,11 @@ test_independent_owners(void)
     tick(irc, 10u);
     for (size_t i = 0u; i < 2u; ++i)
         for (size_t j = 0u; j < 2u; ++j) {
-            struct pollfd ready = {listeners[i], POLLIN, 0};
+            snag_socket_event ready = {listeners[i], SNAG_NET_READ, 0};
 
-            assert(poll(&ready, 1u, 250) == 1);
-            peers[i][j] = accept(listeners[i], NULL, NULL);
-            assert(peers[i][j] >= 0);
-            assert(fcntl(peers[i][j], F_SETFL, O_NONBLOCK) == 0);
+            assert(snag_socket_poll(&ready, 1u, 250) == 1);
+            peers[i][j] = snag_socket_accept(listeners[i]);
+            assert(peers[i][j] != SNAG_SOCKET_INVALID);
         }
     human = connect_local(port, false);
     register_peer(irc, human, "human", false, wire, sizeof(wire));
@@ -1413,11 +1413,11 @@ test_independent_owners(void)
     started = snag_monotonic_ms();
     snag_irc_close(irc);
     assert(snag_monotonic_ms() - started < 250u);
-    assert(close(human) == 0);
+    assert(snag_socket_close(human) == 0);
     for (size_t i = 0u; i < 2u; ++i) {
         for (size_t j = 0u; j < 2u; ++j)
-            assert(close(peers[i][j]) == 0);
-        assert(close(listeners[i]) == 0);
+            assert(snag_socket_close(peers[i][j]) == 0);
+        assert(snag_socket_close(listeners[i]) == 0);
     }
     snag_config_free(&config);
 }
@@ -1441,7 +1441,8 @@ int
 main(void)
 {
     engine_thread = pthread_self();
-    assert(setenv("USER", "root", 1) == 0);
+    assert(snag_network_init() == 0);
+    set_user("root");
     test_validation();
     test_cli_network_roles();
     test_listener_collision();
@@ -1454,6 +1455,7 @@ main(void)
     test_client_events();
     test_independent_owners();
     test_callback_failure();
+    snag_network_free();
     puts("test_irc: ok");
     return 0;
 }
