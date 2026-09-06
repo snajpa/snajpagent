@@ -610,8 +610,9 @@ Turn failures display a hint to try this command.
 .SS Goals
 An active goal continues across ordinary turns until complete, paused,
 cancelled, or blocked.  Queued operator turns run before the next automatic
-goal turn.  Failures, refusal, interruption and input closure pause automatic
-continuation.  Session resume preserves the saved goal state unchanged.
+goal turn.  Failures, refusal and turn-only interruption pause automatic
+continuation.  Quitting the foreground process interrupts its turn but does
+not pause its goal.  Session resume preserves the saved goal state unchanged.
 .TP
 .BR /goal , " /goal status"
 Show the durable goal.  Queued prompts run before automatic goal continuation,

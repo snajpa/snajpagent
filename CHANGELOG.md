@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Preserve active goals across orderly process exit, including Ctrl-D/EOF,
+  five-Ctrl-C exit and shutdown signals. Closing the process no longer saves
+  an unintended paused goal before the printed resume command is used.
+
 - Preserve the session's saved goal state on resume instead of forcing an
   active goal to pause. Continue active goals with existing queue priority;
   leave inactive goals unchanged. Replace per-message chat history labels

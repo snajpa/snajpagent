@@ -4326,10 +4326,18 @@ def test_ctrl_d_exit():
             if prompt == b"queue_slow":
                 assert one(log, "future_turn_queued")["data"]["text"] == "ping"
             if prompt == b"/goal slow goal":
-                assert one(log, "goal_paused")["data"]["reason"] == "input_closed"
+                assert not [e for e in log if e["type"] == "goal_paused"]
             if prompt in (b"queue_slow", b"/goal slow goal"):
                 resumed = Child.from_command(command)
                 try:
+                    if prompt == b"/goal slow goal":
+                        active = resumed.wait(b": active")
+                        done = resumed.wait(b"goal done", start=active)
+                        resumed.exit_cleanly(done)
+                        log = events(command_arguments(command)[-1])
+                        assert one(log, "goal_completed")["data"]["goal_id"] == one(log, "goal_started")["data"]["goal_id"]
+                        assert not [e for e in log if e["type"] in ("goal_paused", "goal_resumed")]
+                        continue
                     resumed.wait_idle_prompt()
                     resumed.drain(0.1)
                     resumed.exit_now()
@@ -4340,6 +4348,69 @@ def test_ctrl_d_exit():
             assert b"engine-block-end" not in child.buf
         finally:
             child.kill()
+
+
+def test_goal_orderly_quit_resume():
+    for mode in ("eof", "five-ctrl-c", "sigterm", "sighup", "host"):
+        before = session_ids()
+        args = []
+        if mode == "host":
+            args = ["-v", "--listen", f"localhost:{free_port()}", "--no-client",
+                    "-n", "goalagent", "-o", "goalop", "-r", "lab"]
+        child = Child(args)
+        try:
+            child.wait(chat_prompt("goalop") if mode == "host" else PROMPT.rstrip())
+            if mode == "host":
+                child.send(b"/rollout\r")
+                switched = child.wait("── rollout ──".encode())
+                child.wait_idle_prompt(start=switched)
+            child.send(b"/goal slow goal\r")
+            child.wait(b"working on goal")
+            session_id = new_session(before)
+            child.send(b"/goal lock\r")
+            child.wait(b"goal wording locked against model changes")
+            expected = 0
+            if mode == "eof":
+                attrs = termios.tcgetattr(child.fd)
+                attrs[3] |= termios.ICANON
+                termios.tcsetattr(child.fd, termios.TCSANOW, attrs)
+                child.send(b"\x04")
+            elif mode in ("sigterm", "sighup"):
+                signum = signal.SIGTERM if mode == "sigterm" else signal.SIGHUP
+                os.kill(child.pid, signum)
+                expected = 128 + signum
+            else:
+                child.send(b"\x03" * 5 if mode == "five-ctrl-c" else b"\x04")
+            child.wait(RESUME_HEADER, timeout=4.0)
+            command = child.finish(expected=expected)
+        finally:
+            child.kill()
+        stopped = events(session_id)
+        goal = one(stopped, "goal_started")["data"]
+        assert one(stopped, "goal_lock_changed")["data"]["locked"]
+        assert not [e for e in stopped if e["type"] in ("goal_paused", "goal_resumed", "goal_completed")]
+        one(stopped, "turn_interrupted")
+        resumed = Child.from_command(command)
+        try:
+            restored = resumed.wait(f"goal {goal['goal_id'][:8]}: active · wording locked".encode())
+            resumed.wait(b"slow goal", start=restored)
+            deadline = time.monotonic() + 8.0
+            while not any(e["type"] == "goal_completed" for e in events(session_id)):
+                assert time.monotonic() < deadline, bytes(resumed.buf)
+                resumed.read_once(0.05)
+            if mode == "host":
+                resumed.wait(chat_prompt("goalop"), start=restored)
+                resumed.exit_now()
+            else:
+                done = resumed.wait(b"goal done", start=restored)
+                resumed.exit_cleanly(done)
+        finally:
+            resumed.kill()
+        restored_log = events(session_id)
+        assert one(restored_log, "goal_started")["data"] == goal
+        assert one(restored_log, "goal_completed")["data"]["goal_id"] == goal["goal_id"]
+        assert not [e for e in restored_log if e["type"] in ("goal_paused", "goal_resumed", "goal_reworded")]
+        print(f"goal orderly quit/resume {mode}: ok", flush=True)
 
 
 def test_five_ctrl_c_exit():
@@ -4540,6 +4611,7 @@ if __name__ == "__main__":
     test_resize_and_suspend_preserve_draft()
     test_compaction_statistical_source()
     test_ctrl_d_exit()
+    test_goal_orderly_quit_resume()
     test_stalled_output_consumes_input()
     test_editor_during_render_flood()
     test_editor_during_blocked_engine()

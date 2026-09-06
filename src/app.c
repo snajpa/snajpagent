@@ -3485,11 +3485,12 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     int rc = run_turn(app, prompt, queued, goal_turn, read_only);
 
     app->irc_turn_replies.count = 0u;
-    if (app->session.goal_status != SNAG_GOAL_ACTIVE)
+    /* Closing the foreground process interrupts its turn, not its goal.
+     * Internal adapter failures still stop the goal below. */
+    if (app->session.goal_status != SNAG_GOAL_ACTIVE ||
+        (app->input_closed && (app->interrupt_requested || app->shutdown_signal)))
         return rc;
-    if (app->input_closed) {
-        reason = "input_closed";
-    } else if (app->last_turn_refused) {
+    if (app->last_turn_refused) {
         reason = "refusal";
         message = "goal paused after model refusal";
     } else if (rc != 0) {

@@ -84,6 +84,7 @@ Normal exit prints a resume command; `snajpagent --resume --last` reopens the
 last session for your workspace. Resume preserves saved goal state: active
 goals continue; paused, blocked, or finished goals stay that way. Retained
 queues wait for `/next` and take precedence over automatic goal continuation.
+Quitting the process interrupts its turn without pausing its goal.
 After failure, `/retry` continues from retained context and tool results,
 without replaying completed tools or resuming a paused queue.
 
