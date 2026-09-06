@@ -425,7 +425,8 @@ snag_fixture_response(const char *prompt, const json_t *steering,
         if (strcmp(goal_prompt, "blocked goal") == 0 && cycle == 1u)
             return add_goal_call(graph, cycle, "block",
                                  "fixture dependency is unavailable");
-        if (cycle == 1u ||
+        /* The user-control case owns completion even after the slow turn ends. */
+        if ((cycle == 1u && strcmp(goal_prompt, "retitled goal") != 0) ||
             ((strcmp(goal_prompt, "locked goal") == 0 ||
               strcmp(goal_prompt, "tiny") == 0) && cycle == 2u))
             return add_goal_call(graph, cycle, "complete", NULL);
