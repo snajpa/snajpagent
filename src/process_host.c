@@ -463,7 +463,7 @@ snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake
     size_t waiting = 0, group = 0;
     uint64_t start = snag_monotonic_ms();
     int rc = 0;
-    if (count > 96u || timeout_ms < 0) {
+    if (count > 96u || timeout_ms < -1) {
         errno = EINVAL;
         return -1;
     }
@@ -513,9 +513,9 @@ snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake
             waits[waiting++] = wake_event;
         }
         uint64_t elapsed = snag_monotonic_ms() - start;
-        if (rc || elapsed >= (uint64_t)timeout_ms)
+        if (rc || (timeout_ms >= 0 && elapsed >= (uint64_t)timeout_ms))
             break;
-        DWORD delay = (DWORD)((uint64_t)timeout_ms - elapsed);
+        DWORD delay = timeout_ms < 0 ? INFINITE : (DWORD)((uint64_t)timeout_ms - elapsed);
         if (waiting > MAXIMUM_WAIT_OBJECTS && delay > 4u)
             delay = 4u;
         if (!waiting)

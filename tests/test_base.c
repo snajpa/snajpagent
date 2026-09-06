@@ -49,6 +49,20 @@ native_process_child(const char *mode)
     unsigned char bytes[4096];
     DWORD got, written;
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE), output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!strcmp(mode, "tree")) {
+        WCHAR program[32768], command[32768];
+        assert(GetModuleFileNameW(NULL, program, 32768u));
+        assert(swprintf(command, 32768u, L"\"%ls\" -c wait", program) > 0);
+        STARTUPINFOW startup = {.cb = sizeof(startup), .dwFlags = STARTF_USESTDHANDLES,
+            .hStdInput = input, .hStdOutput = output, .hStdError = GetStdHandle(STD_ERROR_HANDLE)};
+        PROCESS_INFORMATION child;
+        assert(CreateProcessW(program, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child));
+        char message[64];
+        int n = snprintf(message, sizeof(message), "descendant=%lu\n", (unsigned long)child.dwProcessId);
+        assert(n > 0 && WriteFile(output, message, (DWORD)n, &written, NULL) && written == (DWORD)n);
+        assert(CloseHandle(child.hThread) && CloseHandle(child.hProcess));
+        return 0;
+    }
     if (!strcmp(mode, "wait")) {
         Sleep(30000u);
         return 0;
@@ -190,6 +204,110 @@ test_native_process(bool pty)
     free(shell);
     free(directory);
     snag_environment_entries_free(env);
+}
+
+static unsigned int __stdcall
+wake_native_process_wait(void *opaque)
+{
+    snag_wake_fd *wake = opaque;
+    assert(snag_sleep_ms(40u) == 0);
+    snag_wakeup_send(*wake);
+    return 0;
+}
+
+static void
+test_native_process_fanout(void)
+{
+    WCHAR program[32768];
+    assert(GetModuleFileNameW(NULL, program, 32768u));
+    char *executable = snag_wide_to_utf8(program), *directory = snag_realpath(".");
+    char **env = snag_environment_entries();
+    struct snag_child children[32];
+    struct snag_child_event events[96];
+    unsigned char bytes[4096] = {0};
+    assert(executable && directory && env);
+    for (size_t i = 0; i < 32u; ++i) {
+        snag_child_init(&children[i]);
+        assert(snag_child_spawn(&children[i], executable, "wait", directory, env, false) == 0);
+        size_t sent = 0;
+        for (;;) {
+            ssize_t n = snag_child_write(&children[i], bytes, sizeof(bytes));
+            if (n < 0) {
+                assert(errno == EAGAIN);
+                break;
+            }
+            assert(n > 0);
+            sent += (size_t)n;
+            assert(sent <= 256u * 1024u);
+        }
+        for (unsigned int stream = 0; stream < 3u; ++stream)
+            events[i * 3u + stream] = (struct snag_child_event){&children[i], stream,
+                stream == 2u ? SNAG_CHILD_WRITE : SNAG_CHILD_READ, 0};
+    }
+    snag_wake_fd wake[2];
+    assert(snag_wakeup_create(wake) == 0);
+    HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, wake_native_process_wait, &wake[1], 0, NULL);
+    assert(thread);
+    uint64_t start = snag_monotonic_ms();
+    assert(snag_child_wait(events, 96u, wake[0], 1000) > 0);
+    assert(snag_monotonic_ms() - start < 500u);
+    for (size_t i = 0; i < 96u; ++i)
+        assert(!events[i].revents);
+    assert(WaitForSingleObject(thread, 1000u) == WAIT_OBJECT_0 && CloseHandle(thread));
+    snag_wakeup_drain(wake[0]);
+    snag_wakeup_close(wake);
+    for (size_t i = 0; i < 32u; ++i)
+        snag_child_signal(&children[i], SNAG_CHILD_KILL);
+    for (size_t i = 0; i < 32u; ++i)
+        snag_child_free(&children[i]);
+    snag_environment_entries_free(env);
+    free(executable);
+    free(directory);
+}
+
+static void
+test_native_process_descendant(void)
+{
+    WCHAR program[32768];
+    assert(GetModuleFileNameW(NULL, program, 32768u));
+    char *executable = snag_wide_to_utf8(program), *directory = snag_realpath(".");
+    char **env = snag_environment_entries();
+    struct snag_child child;
+    snag_child_init(&child);
+    assert(executable && directory && env);
+    assert(snag_child_spawn(&child, executable, "tree", directory, env, false) == 0);
+    snag_child_close_stream(&child, 2u);
+    char message[64] = {0};
+    size_t used = 0;
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    while (!strchr(message, '\n')) {
+        assert(snag_monotonic_ms() < deadline);
+        struct snag_child_event event = {&child, 0u, SNAG_CHILD_READ, 0};
+        assert(snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 20) >= 0);
+        if (event.revents) {
+            ssize_t n = snag_child_read(&child, 0u, message + used, sizeof(message) - used - 1u);
+            assert(n > 0);
+            used += (size_t)n;
+        }
+    }
+    assert(!strncmp(message, "descendant=", 11u));
+    DWORD pid = (DWORD)strtoul(message + 11u, NULL, 10);
+    HANDLE descendant = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    assert(descendant);
+    while (!snag_child_exited(&child)) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_sleep_ms(1u) == 0);
+    }
+    assert(WaitForSingleObject(descendant, 0) == WAIT_TIMEOUT);
+    struct snag_child_event quiet = {&child, 0u, SNAG_CHILD_READ, 0};
+    assert(snag_child_wait(&quiet, 1u, SNAG_WAKE_INVALID, 20) == 0);
+    snag_child_signal(&child, SNAG_CHILD_KILL);
+    assert(WaitForSingleObject(descendant, 1000u) == WAIT_OBJECT_0 && CloseHandle(descendant));
+    assert(snag_child_reap(&child) == 0 && child.exit_code == 0);
+    snag_child_free(&child);
+    snag_environment_entries_free(env);
+    free(executable);
+    free(directory);
 }
 
 static void
@@ -1302,6 +1420,8 @@ test_platform(void)
     test_native_process(true);
     test_native_process_input(false);
     test_native_process_input(true);
+    test_native_process_fanout();
+    test_native_process_descendant();
     test_home_environment();
 #endif
     assert(!snag_environment(NULL) && errno == EINVAL);
