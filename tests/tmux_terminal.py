@@ -2750,7 +2750,8 @@ def run_runtime_history_case(binary, root, provider, environment):
         deadline = time.monotonic() + 5.0
         while True:
             _, log = read_events(terminal.dotdir)
-            if any(history in event["data"]["text"] for event in event_list(log, "irc_snapshot")):
+            if any(event["data"]["text"] == history for event in event_list(log, "irc_event")) and any(
+                    event["data"]["kind"] == "history_ready" for event in event_list(log, "irc_event")):
                 break
             assert time.monotonic() < deadline, provider.failure
             time.sleep(0.02)

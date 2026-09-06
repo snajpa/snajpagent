@@ -1329,6 +1329,21 @@ test_durable_irc_input_watermark(void)
     snag_session_close(&session); snag_session_init(&session);
     assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
     assert(session.irc_received_seq > session.irc_consumed_seq && session.irc_consumed_seq == received);
+    /* A copied session resumes already-admitted but unconsumed input, then a
+     * later admission makes still-pending input visible exactly once. */
+    uint64_t second = session.irc_received_seq;
+    assert(snag_session_commit(&session, "irc_admitted", json_pack("{s:[I]}",
+        "sequences", (json_int_t)second), NULL, error, sizeof(error)) == 0);
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false,
+        NULL, NULL, &projection, error, sizeof(error)) == 0);
+    struct snag_buf serialized;
+    snag_buf_init(&serialized, SNAG_CONTEXT_MAX_REQUEST);
+    assert(snag_json_canonical(projection.create_request, &serialized) == 0);
+    assert(snag_buf_terminate(&serialized) == 0);
+    assert(strstr((char *)serialized.data, "unique missed message"));
+    assert(strstr((char *)serialized.data, "arrived after request froze"));
+    assert(projection.irc_seq == second);
+    snag_buf_free(&serialized);
     snag_context_projection_free(&projection); json_decref(empty);
     snag_session_close(&session); snag_store_close(&store);
 }

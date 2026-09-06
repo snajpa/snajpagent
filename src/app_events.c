@@ -326,7 +326,13 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (append_irc_projection(urgent ? &app->irc_urgent :
                                       &app->irc_background, event) < 0)
         return -1;
-    if (accepted.input) {
+    if (accepted.input && event->historical) {
+        /* Catch-up is background context, but unlike newly arriving ordinary
+         * chat it is available at the existing join-history response boundary. */
+        if (snag_app_commit_event(app, "irc_admitted", json_pack("{s:[I]}",
+                "sequences", (json_int_t)accepted_seq), error, sizeof(error)) < 0)
+            return -1;
+    } else if (accepted.input) {
         struct irc_input_ref ref = {accepted_seq, urgent ? app->irc_urgent.len : app->irc_background.len};
         if (snag_buf_append(urgent ? &app->irc_urgent_refs : &app->irc_background_refs,
                            &ref, sizeof(ref)) < 0) return -1;
