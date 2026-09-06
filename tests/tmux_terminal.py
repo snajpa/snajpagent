@@ -2380,8 +2380,8 @@ def run_runtime_routing_cases(binary, root, provider, environment):
                 handler.close_connection = True
                 return
             if len(requests) == (2 if phase == "retry" else 1):
-                arguments = {"notice": False, "text": marker} if tool == "irc_send" else \
-                    {"topic": marker} if tool == "irc_topic" else {}
+                arguments = {"destination": None, "notice": False, "text": marker} if tool == "irc_send" else \
+                    {"destination": None, "topic": marker} if tool == "irc_topic" else {}
                 body = provider.function_body(sequence, "runtime-route", tool, arguments).encode()
             else:
                 body = provider.response_body(sequence, "runtime routing complete").encode()
@@ -2447,9 +2447,9 @@ def run_runtime_routing_cases(binary, root, provider, environment):
             if tool == "irc_state":
                 assert "no active endpoints" in outputs[0] and "invalid" not in outputs[0]
             elif change != "noop":
-                assert "Not performed: IRC destinations changed" in outputs[0], outputs
+                assert "not performed" in outputs[0], outputs
             else:
-                assert "IRC message sent" in outputs[0], outputs
+                assert "destination 1: queued" in outputs[0], outputs
             _, log = read_events(terminal.dotdir)
             assert not event_list(log, "turn_failed"), log
             public = [event["data"] for event in event_list(log, "irc_event")
@@ -2508,7 +2508,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                 _, log = read_events(case / "state")
                 handle = event_list(log, "tool_finished")[0]["data"]["result"]["handle"]
                 body = provider.functions_body(sequence, [("runtime-mixed", "irc_send",
-                    {"text": "stale-mixed-send", "notice": False}), ("runtime-stdin", "write_stdin", {
+                    {"destination": None, "text": "stale-mixed-send", "notice": False}), ("runtime-stdin", "write_stdin", {
                         "handle": handle, "data": "continue-same-handle\n", "eof": False,
                         "terminate": False, "yield_ms": 1000, "max_output_tokens": None,
                     })]).encode()
@@ -2614,7 +2614,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
             assert "boundary ordinary message" in json.dumps(requests[-1])
             if boundary == "tool":
                 third = json.dumps(requests[2])
-                assert "Not performed: IRC destinations changed" in third
+                assert "not performed" in third
                 assert f"same-process:{pid}:continue-same-handle" in third
                 assert not any(event["data"].get("text") == "stale-mixed-send"
                                for event in event_list(log, "irc_event"))

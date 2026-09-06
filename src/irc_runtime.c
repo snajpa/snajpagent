@@ -632,6 +632,14 @@ snag_irc_configure(struct snag_irc *irc, const struct snag_config *config,
                   const char *workspace, char *error, size_t error_size)
 {
     size_t next;
+    char owned_workspace[SNAG_PATH_MAX_BYTES + 1u];
+
+    /* Removal callbacks commit session state and replace its borrowed strings. */
+    if (!snag_strcpy(owned_workspace, sizeof(owned_workspace), workspace)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    workspace = owned_workspace;
 
     for (size_t i = 0u; i < irc->owner_count; ) {
         struct irc_owner *owner = irc->owners[i];
