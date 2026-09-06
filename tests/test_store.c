@@ -336,6 +336,41 @@ main(void)
         assert(session.next_seq == durable_seq && session.log_end == durable_end);
         text[SNAG_IRC_TEXT_MAX] = '\0';
         assert(snag_json_set_new(event, "text", json_string(text)) == 0);
+        struct snag_irc_event decoded;
+        static const char *const kinds[] = {
+            "connected", "disconnected", "join", "part", "quit", "nick",
+            "message", "notice", "topic", "mode", "history_ready"
+        };
+        for (size_t i = 0u; i < sizeof(kinds) / sizeof(kinds[0]); ++i) {
+            assert(snag_json_set_new(event, "kind", json_string(kinds[i])) == 0);
+            assert(snag_irc_event_read(event, &decoded) == 0);
+            assert(decoded.kind == (enum snag_irc_event_kind)i);
+            assert(decoded.timestamp_ms == 1000u && decoded.local &&
+                   !decoded.op && !decoded.historical);
+            assert(!strcmp(decoded.endpoint, "local") && !strcmp(decoded.room, "#lab") &&
+                   !strcmp(decoded.nick, "agent") && !strcmp(decoded.text, text));
+            json_t *encoded = snag_irc_event_data(&decoded);
+            assert(encoded && json_equal(event, encoded));
+            json_decref(encoded);
+        }
+        static const char *const invalid[] = {
+            "{\"kind\":\"unknown\"}", "{\"endpoint\":\"\"}",
+            "{\"room\":\"bad\\nroom\"}", "{\"nick\":null}",
+            "{\"historical\":1}", "{\"local\":null}", "{\"op\":\"true\"}",
+            "{\"timestamp_ms\":0}", "{\"timestamp_ms\":-1}", "{\"extra\":true}"
+        };
+        for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+            json_t *bad = json_deep_copy(event);
+            json_t *change = json_loadb(invalid[i], strlen(invalid[i]), 0u, NULL);
+            assert(bad && change);
+            void *field = json_object_iter(change);
+            assert(json_object_set(bad, json_object_iter_key(field),
+                                   json_object_iter_value(field)) == 0);
+            assert(snag_irc_event_read(bad, &decoded) < 0);
+            json_decref(change);
+            json_decref(bad);
+        }
+        assert(snag_json_set_new(event, "kind", json_string("message")) == 0);
         assert(snag_session_commit(&session, "irc_event", event, NULL,
                                   error, sizeof(error)) == 0);
         snag_session_close(&session);

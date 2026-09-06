@@ -53,7 +53,6 @@ struct snag_render_record {
     const char *color;
     char *label;
     struct snag_irc_event *irc;
-    enum snag_irc_event_kind irc_kind;
     size_t colored_len;
     size_t displayed;
     size_t source_item;
@@ -2784,7 +2783,6 @@ snag_render_irc_event(struct snag_render *render,
         return -1;
     record->kind = SNAG_RENDER_RECORD_IRC;
     record->source = source;
-    record->irc_kind = event->kind;
     if (!source.len) {
         record->irc = malloc(sizeof(*record->irc));
         if (!record->irc) {
@@ -2804,23 +2802,10 @@ render_irc_record(struct snag_render *render, const struct snag_render_record *r
         return render_irc_event_now(render, record->irc);
     json_t *event = source_event(render, record->source);
     json_t *data = json_object_get(event, "data");
-    struct snag_irc_event irc = {.kind = record->irc_kind};
+    struct snag_irc_event irc;
     int rc = -1;
-    const char *value;
-    if (!event || snag_json_integer_u64(data, "timestamp_ms", &irc.timestamp_ms) < 0)
+    if (!event || snag_irc_event_read(data, &irc) < 0)
         goto out;
-#define IRC_FIELD(member) do { \
-    value = snag_json_string(data, #member); \
-    if (!value || strlen(value) >= sizeof(irc.member)) goto out; \
-    memcpy(irc.member, value, strlen(value) + 1u); \
-} while (0)
-    IRC_FIELD(endpoint);
-    IRC_FIELD(room);
-    IRC_FIELD(nick);
-    IRC_FIELD(text);
-#undef IRC_FIELD
-    irc.historical = json_is_true(json_object_get(data, "historical"));
-    irc.op = json_is_true(json_object_get(data, "op"));
     rc = render_irc_event_now(render, &irc);
 out:
     if (event)

@@ -77,40 +77,6 @@ snag_app_turn_started_data(const struct app_state *app, const char *prompt,
     return data;
 }
 
-static const char *
-irc_kind_name(enum snag_irc_event_kind kind)
-{
-    static const char *const names[] = {
-        "connected", "disconnected", "join", "part", "quit", "nick",
-        "message", "notice", "topic", "mode", "history_ready"
-    };
-
-    return (unsigned int)kind < sizeof(names) / sizeof(names[0]) ?
-           names[kind] : "unknown";
-}
-
-static int
-irc_kind_parse(const char *name, enum snag_irc_event_kind *kind)
-{
-    for (unsigned int i = 0u; i <= (unsigned int)SNAG_IRC_HISTORY_READY; ++i)
-        if (strcmp(name, irc_kind_name((enum snag_irc_event_kind)i)) == 0) {
-            *kind = (enum snag_irc_event_kind)i;
-            return 0;
-        }
-    errno = EINVAL;
-    return -1;
-}
-
-static json_t *
-irc_event_data(const struct snag_irc_event *event)
-{
-    return json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:I}",
-        "endpoint", event->endpoint, "historical", event->historical,
-        "kind", irc_kind_name(event->kind), "local", event->local,
-        "nick", event->nick, "op", event->op, "room", event->room,
-        "text", event->text, "timestamp_ms", (json_int_t)event->timestamp_ms);
-}
-
 static int
 append_pending(struct snag_buf *pending, const char *text, size_t len)
 {
@@ -169,7 +135,7 @@ append_irc_projection(struct snag_buf *pending,
                          SNAG_CONFIG_IRC_ROOM_MAX + SNAG_CONFIG_IRC_NICK_MAX + 256u);
     if (snag_buf_printf(&line,
             "[IRC endpoint=%s room=%s time=%s event=%s sender=%s operator=%s]\n%s\n",
-            event->endpoint, event->room, when, irc_kind_name(event->kind),
+            event->endpoint, event->room, when, snag_irc_kind_name(event->kind),
             event->nick[0] ? event->nick : "server",
             event->op ? "true" : "false", event->text) < 0 ||
         append_pending(pending, (const char *)line.data, line.len) < 0)
@@ -289,7 +255,7 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
         return -1;
     if (snag_app_sync_destinations(app) < 0)
         return -1;
-    if (snag_app_commit_event(app, "irc_event", irc_event_data(event),
+    if (snag_app_commit_event(app, "irc_event", snag_irc_event_data(event),
                              error, sizeof(error)) < 0)
         return -1;
     if (snag_ui_irc_event(&app->ui, event) < 0)
@@ -469,33 +435,13 @@ restore_irc_event(void *opaque, uint64_t seq, const char *type,
 {
     struct app_state *app = opaque;
     struct snag_irc_event event;
-    const char *value;
-    uint64_t timestamp_ms;
-
     (void)seq;
     (void)error;
     (void)error_size;
     if (strcmp(type, "irc_event") != 0)
         return 0;
-    memset(&event, 0, sizeof(event));
-    value = snag_json_string(data, "kind");
-    if (!value || irc_kind_parse(value, &event.kind) < 0 ||
-        snag_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0)
+    if (snag_irc_event_read(data, &event) < 0)
         return -1;
-    event.timestamp_ms = timestamp_ms;
-#define RESTORE_FIELD(member, key) do { \
-    value = snag_json_string(data, key); \
-    if (!value || snprintf(event.member, sizeof(event.member), "%s", value) < 0 || \
-        strlen(value) >= sizeof(event.member)) return -1; \
-} while (0)
-    RESTORE_FIELD(endpoint, "endpoint");
-    RESTORE_FIELD(room, "room");
-    RESTORE_FIELD(nick, "nick");
-    RESTORE_FIELD(text, "text");
-#undef RESTORE_FIELD
-    event.historical = json_is_true(json_object_get(data, "historical"));
-    event.local = json_is_true(json_object_get(data, "local"));
-    event.op = json_is_true(json_object_get(data, "op"));
     return snag_irc_restore_event(app->irc, &event);
 }
 

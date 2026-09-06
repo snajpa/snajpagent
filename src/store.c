@@ -623,33 +623,6 @@ preference_text_valid(const char *value, size_t size)
            snag_utf8_valid((const unsigned char *)value, len, true);
 }
 
-static bool
-irc_field_valid(const char *value, size_t max, bool allow_empty)
-{
-    size_t len;
-
-    if (!value || (!(len = strlen(value)) && !allow_empty) || len > max ||
-        !snag_utf8_valid((const unsigned char *)value, len, true))
-        return false;
-    for (size_t i = 0; i < len; ++i) {
-        unsigned char c = (unsigned char)value[i];
-        if (c < 0x20u || c == 0x7fu)
-            return false;
-    }
-    return true;
-}
-
-static bool
-irc_kind_valid(const char *kind)
-{
-    static const char *const kinds[] = {
-        "connected", "disconnected", "join", "part", "quit", "nick",
-        "message", "notice", "topic", "mode", "history_ready"
-    };
-
-    return string_in(kind, kinds, sizeof(kinds) / sizeof(kinds[0]));
-}
-
 const char *
 snag_goal_status_name(enum snag_goal_status status)
 {
@@ -715,30 +688,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (session->delete_requested) {
         goto invalid;
     } else if (strcmp(type, "irc_event") == 0) {
-        static const char *const keys[] = {
-            "endpoint", "historical", "kind", "local", "nick", "op",
-            "room", "text", "timestamp_ms"
-        };
-        const char *endpoint = snag_json_string(data, "endpoint");
-        const char *kind = snag_json_string(data, "kind");
-        const char *room = snag_json_string(data, "room");
-        const char *nick = snag_json_string(data, "nick");
-        const char *text = snag_json_string(data, "text");
-        json_t *historical = json_object_get(data, "historical");
-        json_t *local = json_object_get(data, "local");
-        json_t *op = json_object_get(data, "op");
-        uint64_t timestamp_ms;
-
-        if (!snag_json_exact_keys(data, keys, sizeof(keys) / sizeof(keys[0])) ||
-            !irc_field_valid(endpoint, SNAG_CONFIG_IRC_ENDPOINT_MAX, false) ||
-            !irc_kind_valid(kind) ||
-            !irc_field_valid(room, SNAG_CONFIG_IRC_ROOM_MAX + 1u, true) ||
-            !irc_field_valid(nick, SNAG_CONFIG_IRC_NICK_MAX, true) ||
-            !irc_field_valid(text, SNAG_IRC_TEXT_MAX, true) ||
-            !json_is_boolean(historical) || !json_is_boolean(local) ||
-            !json_is_boolean(op) ||
-            snag_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 ||
-            timestamp_ms == 0u)
+        struct snag_irc_event event;
+        if (snag_irc_event_read(data, &event) < 0)
             goto invalid;
     } else if (strcmp(type, "irc_snapshot") == 0) {
         static const char *const keys[] = {"reason", "text", "timestamp_ms"};

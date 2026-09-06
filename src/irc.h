@@ -5,6 +5,7 @@
 #include "base.h"
 #include "cli.h"
 #include "config.h"
+#include "snag_jansson.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -65,6 +66,11 @@ struct snag_irc_event {
     bool historical;
     bool local;
 };
+
+const char *snag_irc_kind_name(enum snag_irc_event_kind kind);
+json_t *snag_irc_event_data(const struct snag_irc_event *event);
+/* Durable field validation only; live/replay membership rules remain separate. */
+int snag_irc_event_read(const json_t *data, struct snag_irc_event *event);
 
 typedef int (*snag_irc_event_fn)(void *opaque,
                                 const struct snag_irc_event *event);
