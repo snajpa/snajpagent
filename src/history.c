@@ -184,7 +184,7 @@ history_rewrite(struct snag_history *term, int fd)
     int rc = -1;
 
     snag_buf_init(&encoded, HISTORY_FILE_BYTES);
-    if (ftruncate(fd, 0) < 0 || lseek(fd, 0, SEEK_SET) < 0)
+    if (snag_truncate(fd, 0) < 0 || snag_seek(fd, 0, SEEK_SET) < 0)
         goto out;
     for (size_t i = 0u; i < term->snapshot.count; ++i)
         if (history_encode(&encoded, term->snapshot.items[i]) < 0 ||
@@ -211,7 +211,7 @@ history_load_locked(struct snag_history *term, int fd, bool *damaged)
         return -1;
     snag_buf_init(&file, HISTORY_FILE_BYTES + 1u);
     snag_buf_init(&decoded, SNAG_HISTORY_BYTES + 1u);
-    if (lseek(fd, 0, SEEK_SET) < 0)
+    if (snag_seek(fd, 0, SEEK_SET) < 0)
         goto out;
     while (file.len < (size_t)st.st_size) {
         unsigned char chunk[4096];

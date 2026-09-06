@@ -219,7 +219,7 @@ open_snapshot(struct snag_store *store, struct snag_session *session,
     if (snag_store_verify_private_fd(session->log_fd, false, "event log",
                                     error, error_size) < 0)
         return -1;
-    session->log_end = lseek(session->log_fd, 0, SEEK_END);
+    session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0)
         return -1;
     return snag_store_scan_log(session, SNAG_TAIL_IGNORE, true,

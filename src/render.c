@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "render.h"
 #include "base.h"
+#include "fs.h"
 #include "snajpagent.h"
 
 #include <errno.h>
@@ -3074,8 +3075,8 @@ source_event(struct snag_render *render, struct snag_render_source source)
         size_t want = source.len - text.len;
         if (want > 8192u)
             want = 8192u;
-        ssize_t n = pread(render->history_fd, text.data + text.len, want,
-                          source.offset + (off_t)text.len);
+        ssize_t n = snag_pread(render->history_fd, text.data + text.len, want,
+                          source.offset + (int64_t)text.len);
         if (n < 0 && errno == EINTR)
             continue;
         if (n <= 0 || render_checkpoint(render) < 0)
@@ -3090,7 +3091,7 @@ out:
 
 static int
 render_process_chunks(struct snag_render *render, const json_t *ref,
-                       uint32_t max_output_bytes, off_t result_offset)
+                       uint32_t max_output_bytes, int64_t result_offset)
 {
     const char *handle = snag_json_string(ref, "handle");
     uint64_t start, end, from[2], to[2];
@@ -3110,7 +3111,7 @@ render_process_chunks(struct snag_render *render, const json_t *ref,
     while (start < end && snag_render_enabled(render, SNAG_PRESENT_OUTPUT)) {
         unsigned char input[8192];
         size_t want = end - start > sizeof(input) ? sizeof(input) : (size_t)(end - start);
-        ssize_t n = pread(render->history_fd, input, want, (off_t)start);
+        ssize_t n = snag_pread(render->history_fd, input, want, (int64_t)start);
         if (n < 0 && errno == EINTR)
             continue;
         if (n <= 0 || render_checkpoint(render) < 0)

@@ -33,7 +33,7 @@ const char *snag_verbosity_name(unsigned int level);
 struct snag_render_record;
 
 struct snag_render_source {
-    off_t offset;
+    int64_t offset;
     size_t len;
 };
 

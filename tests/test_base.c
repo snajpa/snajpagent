@@ -335,17 +335,25 @@ test_private_directory(void)
         offset.QuadPart = INT64_C(5368709120);
         assert(DeviceIoControl((HANDLE)_get_osfhandle(file), FSCTL_SET_SPARSE,
                                NULL, 0, NULL, 0, &returned, NULL));
-        assert(SetFilePointerEx((HANDLE)_get_osfhandle(file), offset, NULL, FILE_BEGIN));
-        assert(SetEndOfFile((HANDLE)_get_osfhandle(file)));
+        assert(snag_seek(file, offset.QuadPart, SEEK_SET) == offset.QuadPart);
+        assert(snag_truncate(file, offset.QuadPart) == 0);
         assert(snag_fstat(file, &linked) == 0 && linked.st_size == offset.QuadPart);
         offset.QuadPart = sizeof(bytes);
-        assert(SetFilePointerEx((HANDLE)_get_osfhandle(file), offset, NULL, FILE_BEGIN));
-        assert(SetEndOfFile((HANDLE)_get_osfhandle(file)));
+        assert(snag_truncate(file, offset.QuadPart) == 0);
 #else
-        assert(ftruncate(file, (off_t)INT64_C(5368709120)) == 0);
+        assert(snag_truncate(file, INT64_C(5368709120)) == 0);
         assert(snag_fstat(file, &linked) == 0 && linked.st_size == INT64_C(5368709120));
-        assert(ftruncate(file, sizeof(bytes)) == 0);
+        assert(snag_truncate(file, sizeof(bytes)) == 0);
 #endif
+        assert(snag_seek(file, 2, SEEK_SET) == 2);
+        assert(snag_pread(file, received, sizeof(received), 0) == sizeof(received));
+        assert(!memcmp(bytes, received, sizeof(bytes)) && snag_seek(file, 0, SEEK_CUR) == 2);
+        assert(snag_pread(file, received, 1u, INT64_C(5368709120)) == 0);
+        assert(snag_pread(file, received, 1u, -1) == -1 && errno == EINVAL);
+        assert(snag_truncate(file, -1) == -1 && errno == EINVAL);
+        assert(snag_seek(file, 0, SEEK_CUR) == 2);
+        assert(snag_pread(-1, received, 1u, 0) == -1 && errno == EBADF);
+        assert(snag_truncate(-1, 0) == -1 && errno == EBADF);
         assert(close(file) == 0);
         file = snag_open_read_at(fd, "data", false);
         assert(file >= 0 && read(file, received, sizeof(received)) == sizeof(received));

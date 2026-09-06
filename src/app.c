@@ -388,7 +388,7 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
                      char *error, size_t error_size)
 {
     uint64_t seq;
-    off_t offset = app->session.log_end;
+    int64_t offset = app->session.log_end;
     if (snag_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;

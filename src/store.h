@@ -123,7 +123,7 @@ struct snag_session {
     int dir_fd;
     int log_fd;
     int lock_fd;
-    off_t log_end;
+    int64_t log_end;
     uint64_t next_seq;
     uint64_t turn_count;
     uint64_t last_time_ms;

@@ -635,7 +635,7 @@ read_target_file(int root_fd, struct patch_op *op,
     }
     if (snag_fstat(fd, &op->st) < 0)
         goto out;
-    if (!S_ISREG(op->st.st_mode) || op->st.st_size > (off_t)PATCH_FILE_MAX) {
+    if (!S_ISREG(op->st.st_mode) || op->st.st_size > (int64_t)PATCH_FILE_MAX) {
         snag_errorf(error, error_size,
                   "patch target %s is not a regular file within 16 MiB", op->path);
         errno = EINVAL;

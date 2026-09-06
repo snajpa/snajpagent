@@ -538,6 +538,71 @@ snag_path_slashes(char *path)
             *path = '/';
 }
 
+int64_t
+snag_seek(int fd, int64_t offset, int whence)
+{
+    return _lseeki64(fd, offset, whence);
+}
+
+int
+snag_truncate(int fd, int64_t size)
+{
+    intptr_t handle = _get_osfhandle(fd);
+    FILE_END_OF_FILE_INFORMATION end;
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+
+    if (handle == -1 || size < 0) {
+        errno = handle == -1 ? EBADF : EINVAL;
+        return -1;
+    }
+    end.EndOfFile.QuadPart = size;
+    status = NtSetInformationFile((HANDLE)handle, &io, &end, sizeof(end), FileEndOfFileInformation);
+    return status < 0 ? path_error(RtlNtStatusToDosError(status)) : 0;
+}
+
+ssize_t
+snag_pread(int fd, void *buffer, size_t size, int64_t offset)
+{
+    intptr_t original = _get_osfhandle(fd);
+    FILE_ACCESS_INFORMATION access;
+    UNICODE_STRING empty = {0};
+    OBJECT_ATTRIBUTES attributes = {0};
+    IO_STATUS_BLOCK io;
+    LARGE_INTEGER position;
+    HANDLE handle = NULL;
+    NTSTATUS status;
+    DWORD got = 0, error = ERROR_SUCCESS;
+
+    if (original == -1 || offset < 0 || size > INT_MAX || (!buffer && size)) {
+        errno = original == -1 ? EBADF : EINVAL;
+        return -1;
+    }
+    status = NtQueryInformationFile((HANDLE)original, &io, &access, sizeof(access), FileAccessInformation);
+    if (status < 0)
+        return path_error(RtlNtStatusToDosError(status));
+    if (!(access.AccessFlags & FILE_READ_DATA)) {
+        errno = EBADF;
+        return -1;
+    }
+    attributes.Length = sizeof(attributes);
+    attributes.RootDirectory = (HANDLE)original;
+    attributes.ObjectName = &empty;
+    attributes.Attributes = OBJ_CASE_INSENSITIVE;
+    status = NtCreateFile(&handle, FILE_READ_DATA | SYNCHRONIZE, &attributes, &io, NULL, 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
+        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    if (status < 0)
+        return path_error(RtlNtStatusToDosError(status));
+    position.QuadPart = offset;
+    if (!SetFilePointerEx(handle, position, NULL, FILE_BEGIN) ||
+        !ReadFile(handle, buffer, (DWORD)size, &got, NULL))
+        error = GetLastError();
+    if (!CloseHandle(handle) && !error)
+        error = GetLastError();
+    return error ? path_error(error) : (ssize_t)got;
+}
+
 int
 snag_directory_lock_acquire(int fd, struct snag_directory_lock *lock)
 {
@@ -1393,6 +1458,36 @@ snag_sync_dir(int fd)
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/file.h>
+
+int64_t
+snag_seek(int fd, int64_t offset, int whence)
+{
+    if ((int64_t)(off_t)offset != offset) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return lseek(fd, (off_t)offset, whence);
+}
+
+int
+snag_truncate(int fd, int64_t size)
+{
+    if ((int64_t)(off_t)size != size) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return ftruncate(fd, (off_t)size);
+}
+
+ssize_t
+snag_pread(int fd, void *buffer, size_t size, int64_t offset)
+{
+    if ((int64_t)(off_t)offset != offset) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return pread(fd, buffer, size, (off_t)offset);
+}
 
 int
 snag_directory_lock_acquire(int fd, struct snag_directory_lock *lock)

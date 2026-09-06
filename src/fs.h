@@ -4,7 +4,9 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 #ifdef _WIN32
 typedef struct {
@@ -40,6 +42,9 @@ int snag_open_private_append_at(int dirfd, const char *path, bool create);
 int snag_open_history(const char *path);
 /* Exclusive whole-file lock, released by close. Busy nonblocking locks use EAGAIN. */
 int snag_lock_file(int fd, bool wait);
+int64_t snag_seek(int fd, int64_t offset, int whence);
+int snag_truncate(int fd, int64_t size);
+ssize_t snag_pread(int fd, void *buffer, size_t size, int64_t offset);
 struct snag_directory_lock {
     int fd; /* Initialize to -1; the caller retains descriptor ownership. */
 #ifdef _WIN32

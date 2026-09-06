@@ -12,8 +12,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#define SNAG_LOG_HARD_LIMIT ((off_t)2 * 1024 * 1024 * 1024)
-#define SNAG_LOG_RESERVE ((off_t)32 * 1024 * 1024)
+#define SNAG_LOG_HARD_LIMIT ((int64_t)2 * 1024 * 1024 * 1024)
+#define SNAG_LOG_RESERVE ((int64_t)32 * 1024 * 1024)
 #define SNAG_EVENT_LIMIT UINT64_C(1000000)
 #define SNAG_EVENT_RESERVE UINT64_C(256)
 static int
@@ -269,7 +269,7 @@ snag_store_open_session_files(struct snag_session *session, bool create,
         snag_store_verify_private_fd(session->log_fd, false, "event log",
                           error, error_size) < 0)
         return -1;
-    session->log_end = lseek(session->log_fd, 0, SEEK_END);
+    session->log_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (session->log_end < 0) {
         snag_errorf(error, error_size, "cannot seek event log: %s", strerror(errno));
         return -1;
@@ -283,7 +283,7 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     json_t *event = NULL;
     struct snag_buf line;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
-    off_t actual_end;
+    int64_t actual_end;
     uint64_t seq = session->next_seq;
     int rc = -1;
     snag_buf_init(&line, SNAG_MAX_EVENT_LINE);
@@ -302,12 +302,12 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     if (snag_json_set_new(event, "event_sha256", json_string(digest)) < 0 ||
         snag_json_canonical(event, &line) < 0 || snag_buf_putc(&line, '\n') < 0)
         goto memory_error;
-    if ((off_t)line.len > SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE - session->log_end) {
+    if ((int64_t)line.len > SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE - session->log_end) {
         snag_errorf(error, error_size, "event would consume session closure reserve");
         errno = ENOSPC;
         goto out;
     }
-    actual_end = lseek(session->log_fd, 0, SEEK_END);
+    actual_end = snag_seek(session->log_fd, 0, SEEK_END);
     if (actual_end < 0 || actual_end != session->log_end) {
         snag_errorf(error, error_size, "event log end changed unexpectedly");
         errno = EIO;
@@ -319,7 +319,7 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
                   strerror(errno));
         goto out;
     }
-    session->log_end += (off_t)line.len;
+    session->log_end += (int64_t)line.len;
     session->next_seq++;
     memcpy(session->prev_sha256, digest, sizeof(digest));
     session->last_time_ms = snag_time_ms();
@@ -2077,16 +2077,16 @@ invalid:
 
 static int
 read_event_log(struct snag_session *source, struct snag_session *verifier,
-               off_t boundary, enum snag_tail_policy tail_policy,
+               int64_t boundary, enum snag_tail_policy tail_policy,
                snag_session_event_fn fn, void *opaque,
                const struct snag_process_state *cursor,
-               off_t *complete_end_out, uint64_t *next_seq_out,
+               int64_t *complete_end_out, uint64_t *next_seq_out,
                char *error, size_t error_size)
 {
     struct snag_buf line;
     unsigned char chunk[8192];
-    off_t complete_end = cursor ? (off_t)cursor->log_offset : 0;
-    off_t read_off = complete_end;
+    int64_t complete_end = cursor ? (int64_t)cursor->log_offset : 0;
+    int64_t read_off = complete_end;
     uint64_t seq = cursor ? cursor->log_seq : 1u;
     int rc = -1;
 
@@ -2102,10 +2102,10 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
                 errno = EIO;
                 goto boundary_error;
             }
-            if ((off_t)want > boundary - read_off)
+            if ((int64_t)want > boundary - read_off)
                 want = (size_t)(boundary - read_off);
         }
-        got = pread(source->log_fd, chunk, want, read_off);
+        got = snag_pread(source->log_fd, chunk, want, read_off);
         if (got < 0) {
             if (errno == EINTR)
                 continue;
@@ -2156,7 +2156,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
                 goto out;
             }
             json_decref(event);
-            complete_end = read_off - (off_t)(got - i - 1);
+            complete_end = read_off - (int64_t)(got - i - 1);
             ++seq;
             snag_buf_reset(&line);
         }
@@ -2168,7 +2168,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
         goto out;
     }
     if (line.len && tail_policy == SNAG_TAIL_TRUNCATE &&
-        (ftruncate(source->log_fd, complete_end) < 0 ||
+        (snag_truncate(source->log_fd, complete_end) < 0 ||
          snag_sync_file(source->log_fd) < 0)) {
         snag_errorf(error, error_size,
                    "cannot truncate incomplete log tail: %s",
@@ -2196,7 +2196,7 @@ snag_store_scan_log(struct snag_session *session,
                    enum snag_tail_policy tail_policy, bool allow_active,
                    char *error, size_t error_size)
 {
-    off_t complete_end;
+    int64_t complete_end;
     uint64_t next_seq;
 
     if (read_event_log(session, session, -1, tail_policy, NULL, NULL, NULL,
