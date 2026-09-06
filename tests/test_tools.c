@@ -66,6 +66,8 @@ read_output(void *opaque, const char *handle, unsigned int stream,
     struct snag_buf *source = &output_journal[output_index(handle)].streams[stream];
     assert(from <= to && to <= source->len);
     size_t len = (size_t)(to - from);
+    if (!len)
+        return 0;
     if (len <= out->max)
         return snag_buf_append(out, source->data + from, len);
     size_t head = out->max / 2u, tail = out->max - head;

@@ -1207,7 +1207,11 @@ Files must be regular and non-symlink; discovery does not read their contents.
 The model is given safely quoted paths and reads relevant guidance with normal
 tools, subject to those tools' file and output limits.  An empty override still
 takes precedence.  Per-turn metadata records advertised paths, not content
-hashes or proof of reading.  Set
+hashes or proof of reading.  This replaces the earlier pre-1.0 instruction
+metadata format in place: sessions containing populated old instruction
+metadata cannot be resumed by this build.  Their existing logs are not deleted.
+.PP
+Set
 .B read_agents_md=false
 under
 .B [agent]
