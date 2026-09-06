@@ -734,20 +734,15 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             replace_text(session, &session->workspace, "workspace", new_workspace,
                          SNAG_PATH_MAX_BYTES) < 0)
             goto invalid;
-    } else if (strcmp(type, "session_archived") == 0) {
+    } else if (strcmp(type, "session_archived") == 0 ||
+               strcmp(type, "session_unarchived") == 0) {
         const char *origin = snag_json_string(data, "origin");
+        bool archived = strcmp(type, "session_archived") == 0;
         if (!snag_json_exact_keys(data, "origin") || session->active_turn ||
-            session->process_count != 0u || session->archived ||
+            session->process_count != 0u || session->archived == archived ||
             !origin || strcmp(origin, "user") != 0)
             goto invalid;
-        session->archived = true;
-    } else if (strcmp(type, "session_unarchived") == 0) {
-        const char *origin = snag_json_string(data, "origin");
-        if (!snag_json_exact_keys(data, "origin") || session->active_turn ||
-            session->process_count != 0u || !session->archived ||
-            !origin || strcmp(origin, "user") != 0)
-            goto invalid;
-        session->archived = false;
+        session->archived = archived;
     } else if (strcmp(type, "session_delete_requested") == 0) {
         const char *prefix = snag_json_string(data, "confirmed_id_prefix");
         const char *trash = snag_json_string(data, "trash_name");
@@ -787,98 +782,78 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->goal_locked = false;
         session->goal_revision = 1u;
         session->goal_turn_count = 0u;
-    } else if (strcmp(type, "goal_reworded") == 0) {
-        static const char *const actors[] = {"model", "user"};
+    } else if (strncmp(type, "goal_", 5u) == 0) {
+        const char *action = type + 5u;
         const char *actor = snag_json_string(data, "actor");
         const char *goal_id = snag_json_string(data, "goal_id");
         const char *prompt = snag_json_string(data, "prompt");
-        size_t len;
-        if (!snag_json_exact_keys(data, "actor goal_id prompt") || !snag_goal_unfinished(session->goal_status) ||
-            !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
-            !string_in(actor, actors, sizeof(actors) / sizeof(actors[0])) ||
-            (strcmp(actor, "model") == 0 &&
-             session->goal_status != SNAG_GOAL_ACTIVE) ||
-            (strcmp(actor, "model") == 0 && session->goal_locked) ||
-            !prompt || !*prompt || snag_text_blank(prompt) ||
-            (len = strlen(prompt)) > SNAG_MAX_GOAL_PROMPT ||
-            !snag_utf8_valid((const unsigned char *)prompt, len, true) ||
-            strcmp(prompt, session->goal_prompt) == 0 ||
-            replace_text(session, &session->goal_prompt, "goal_prompt", prompt,
-                         SNAG_MAX_GOAL_PROMPT) < 0)
-            goto invalid;
-        ++session->goal_revision;
-        if (strcmp(actor, "user") == 0 &&
-            replace_text(session, &session->last_user, "last_user", prompt,
-                         SNAG_MAX_GOAL_PROMPT) < 0)
-            return -1;
-    } else if (strcmp(type, "goal_lock_changed") == 0) {
-        const char *goal_id = snag_json_string(data, "goal_id");
-        json_t *locked = json_object_get(data, "locked");
-        if (!snag_json_exact_keys(data, "goal_id locked") || !snag_goal_unfinished(session->goal_status) ||
-            !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
-            !json_is_boolean(locked) ||
-            (json_is_true(locked) == session->goal_locked))
-            goto invalid;
-        session->goal_locked = json_is_true(locked);
-    } else if (strcmp(type, "goal_paused") == 0) {
-        static const char *const reasons[] = {
-            "input_closed", "refusal", "session_resumed", "turn_stopped", "user"
-        };
-        const char *goal_id = snag_json_string(data, "goal_id");
         const char *reason = snag_json_string(data, "reason");
-        if (!snag_json_exact_keys(data, "goal_id reason") ||
-            session->goal_status != SNAG_GOAL_ACTIVE ||
-            !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
-            !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])))
-            goto invalid;
-        session->goal_status = SNAG_GOAL_PAUSED;
-    } else if (strcmp(type, "goal_resumed") == 0) {
-        const char *goal_id = snag_json_string(data, "goal_id");
-        if (!snag_json_exact_keys(data, "goal_id") ||
-            (session->goal_status != SNAG_GOAL_PAUSED &&
-             session->goal_status != SNAG_GOAL_BLOCKED) ||
-            !goal_id || strcmp(goal_id, session->goal_id) != 0)
-            goto invalid;
-        json_object_del(session->strings, "goal_blocker");
-        session->goal_blocker = NULL;
-        session->goal_status = SNAG_GOAL_ACTIVE;
-    } else if (strcmp(type, "goal_blocked") == 0) {
-        const char *actor = snag_json_string(data, "actor");
-        const char *goal_id = snag_json_string(data, "goal_id");
-        const char *reason = snag_json_string(data, "reason");
+        bool model = actor && strcmp(actor, "model") == 0;
         size_t len;
-        if (!snag_json_exact_keys(data, "actor goal_id reason") ||
-            session->goal_status != SNAG_GOAL_ACTIVE ||
-            !actor || strcmp(actor, "model") != 0 ||
-            !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
-            !reason || !*reason || snag_text_blank(reason) ||
-            (len = strlen(reason)) > SNAG_MAX_GOAL_BLOCKER ||
-            !snag_utf8_valid((const unsigned char *)reason, len, true) ||
-            replace_text(session, &session->goal_blocker, "goal_blocker", reason,
-                         SNAG_MAX_GOAL_BLOCKER) < 0)
+        enum snag_goal_status status = session->goal_status;
+
+        if (!snag_goal_unfinished(status) || !goal_id ||
+            strcmp(goal_id, session->goal_id) != 0)
             goto invalid;
-        session->goal_status = SNAG_GOAL_BLOCKED;
-    } else if (strcmp(type, "goal_completed") == 0) {
-        static const char *const actors[] = {"model", "user"};
-        const char *actor = snag_json_string(data, "actor");
-        const char *goal_id = snag_json_string(data, "goal_id");
-        if (!snag_json_exact_keys(data, "actor goal_id") || !snag_goal_unfinished(session->goal_status) ||
-            !goal_id || strcmp(goal_id, session->goal_id) != 0 ||
-            !string_in(actor, actors, sizeof(actors) / sizeof(actors[0])) ||
-            (strcmp(actor, "model") == 0 &&
-             (session->goal_status != SNAG_GOAL_ACTIVE || session->process_count)))
+        if (strcmp(action, "reworded") == 0) {
+            if (!snag_json_exact_keys(data, "actor goal_id prompt") ||
+                (!model && (!actor || strcmp(actor, "user"))) ||
+                (model && (status != SNAG_GOAL_ACTIVE || session->goal_locked)) ||
+                !prompt || !*prompt || snag_text_blank(prompt) ||
+                (len = strlen(prompt)) > SNAG_MAX_GOAL_PROMPT ||
+                !snag_utf8_valid((const unsigned char *)prompt, len, true) ||
+                strcmp(prompt, session->goal_prompt) == 0 ||
+                replace_text(session, &session->goal_prompt, "goal_prompt", prompt,
+                             SNAG_MAX_GOAL_PROMPT) < 0)
+                goto invalid;
+            ++session->goal_revision;
+            if (!model && replace_text(session, &session->last_user, "last_user", prompt,
+                                        SNAG_MAX_GOAL_PROMPT) < 0)
+                return -1;
+        } else if (strcmp(action, "lock_changed") == 0) {
+            json_t *locked = json_object_get(data, "locked");
+            if (!snag_json_exact_keys(data, "goal_id locked") ||
+                !json_is_boolean(locked) || json_is_true(locked) == session->goal_locked)
+                goto invalid;
+            session->goal_locked = json_is_true(locked);
+        } else if (strcmp(action, "paused") == 0) {
+            static const char *const reasons[] = {
+                "input_closed", "refusal", "session_resumed", "turn_stopped", "user"
+            };
+            if (!snag_json_exact_keys(data, "goal_id reason") || status != SNAG_GOAL_ACTIVE ||
+                !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])))
+                goto invalid;
+            status = SNAG_GOAL_PAUSED;
+        } else if (strcmp(action, "blocked") == 0) {
+            if (!snag_json_exact_keys(data, "actor goal_id reason") ||
+                status != SNAG_GOAL_ACTIVE || !model ||
+                !reason || !*reason || snag_text_blank(reason) ||
+                (len = strlen(reason)) > SNAG_MAX_GOAL_BLOCKER ||
+                !snag_utf8_valid((const unsigned char *)reason, len, true) ||
+                replace_text(session, &session->goal_blocker, "goal_blocker", reason,
+                             SNAG_MAX_GOAL_BLOCKER) < 0)
+                goto invalid;
+            status = SNAG_GOAL_BLOCKED;
+        } else if (strcmp(action, "completed") == 0) {
+            if (!snag_json_exact_keys(data, "actor goal_id") ||
+                (!model && (!actor || strcmp(actor, "user"))) ||
+                (model && (status != SNAG_GOAL_ACTIVE || session->process_count)))
+                goto invalid;
+            status = SNAG_GOAL_COMPLETED;
+        } else if (strcmp(action, "resumed") == 0 || strcmp(action, "cancelled") == 0) {
+            bool resume = strcmp(action, "resumed") == 0;
+            if (!snag_json_exact_keys(data, "goal_id") || (resume && status == SNAG_GOAL_ACTIVE))
+                goto invalid;
+            status = resume ? SNAG_GOAL_ACTIVE : SNAG_GOAL_CANCELLED;
+        } else {
             goto invalid;
-        json_object_del(session->strings, "goal_blocker");
-        session->goal_blocker = NULL;
-        session->goal_status = SNAG_GOAL_COMPLETED;
-    } else if (strcmp(type, "goal_cancelled") == 0) {
-        const char *goal_id = snag_json_string(data, "goal_id");
-        if (!snag_json_exact_keys(data, "goal_id") || !snag_goal_unfinished(session->goal_status) ||
-            !goal_id || strcmp(goal_id, session->goal_id) != 0)
-            goto invalid;
-        json_object_del(session->strings, "goal_blocker");
-        session->goal_blocker = NULL;
-        session->goal_status = SNAG_GOAL_CANCELLED;
+        }
+        if (status != session->goal_status &&
+            (status == SNAG_GOAL_ACTIVE || !snag_goal_unfinished(status))) {
+            json_object_del(session->strings, "goal_blocker");
+            session->goal_blocker = NULL;
+        }
+        session->goal_status = status;
     } else if (strcmp(type, "compaction_started") == 0) {
         static const char *const methods[] = {
             "exact", "unknown", "anchored_upper_bound", "statistical_upper_estimate", "qualified_upper_bound"
