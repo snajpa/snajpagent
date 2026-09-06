@@ -495,6 +495,23 @@ snag_term_host_capable(void)
            GetConsoleMode((HANDLE)_get_osfhandle(2), &mode);
 }
 
+int
+snag_term_output_mode(struct snag_term_host *host, bool active)
+{
+    for (size_t n = 0; n < 2u; ++n) {
+        size_t i = active ? n : 1u - n;
+        DWORD mode = host->output_mode[i];
+        if (active)
+            mode |= ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT |
+                    ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+        if (host->output_console[i] && !SetConsoleMode(host->output_console[i], mode)) {
+            errno = EIO;
+            return -1;
+        }
+    }
+    return 0;
+}
+
 unsigned int
 snag_term_host_columns(void)
 {
@@ -860,6 +877,14 @@ snag_term_signals_unblock(void)
 #include <pthread.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+
+int
+snag_term_output_mode(struct snag_term_host *host, bool active)
+{
+    (void)host;
+    (void)active;
+    return 0;
+}
 
 void
 snag_shutdown_detach(struct snag_shutdown *saved)

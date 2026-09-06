@@ -522,7 +522,10 @@ main(void)
     assert(config.providers[0].openrouter_referer[0] == '\0');
     assert(config.providers[0].openrouter_title[0] == '\0');
     assert(config.secret_count == 0u);
-    shell = realpath("/bin/sh", NULL);
+    char *default_shell = snag_default_shell();
+    assert(default_shell);
+    shell = snag_realpath(default_shell);
+    free(default_shell);
     assert(shell);
     assert(strcmp(config.shell, shell) == 0);
     free(shell);

@@ -156,6 +156,118 @@ wide_path(const char *path)
 
 static bool private_dacl(PACL dacl, PSID owner);
 
+char *
+snag_default_shell(void)
+{
+    wchar_t directory[32768];
+    DWORD len = GetSystemDirectoryW(directory, 32768u - 9u);
+    if (!len || len >= 32768u - 9u) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    memcpy(directory + len, L"\\cmd.exe", 9u * sizeof(*directory));
+    int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, directory, -1, NULL, 0, NULL, NULL);
+    if (!size) {
+        path_error(GetLastError());
+        return NULL;
+    }
+    char *out = malloc((size_t)size);
+    if (out && !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, directory, -1, out, size, NULL, NULL)) {
+        DWORD error = GetLastError();
+        free(out);
+        path_error(error);
+        return NULL;
+    }
+    return out;
+}
+
+int
+snag_file_executable(const char *path)
+{
+    wchar_t *wide = wide_path(path);
+    if (!wide)
+        return -1;
+    HANDLE file = CreateFileW(wide, FILE_EXECUTE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+    DWORD error = GetLastError();
+    free(wide);
+    if (file == INVALID_HANDLE_VALUE)
+        return path_error(error);
+    (void)CloseHandle(file);
+    return 0;
+}
+
+int
+snag_editor_run(const char *path, bool *success)
+{
+    wchar_t *file = wide_path(path);
+    DWORD editor_len = GetEnvironmentVariableW(L"EDITOR", NULL, 0);
+    int rc = -1;
+    *success = false;
+    if (!file)
+        return -1;
+    if (!editor_len) {
+        free(file);
+        errno = ENOENT;
+        return -1;
+    }
+    size_t capacity = (size_t)editor_len + 2u * wcslen(file) + 5u;
+    if (capacity > 32768u) {
+        free(file);
+        errno = E2BIG;
+        return -1;
+    }
+    wchar_t *command = calloc(capacity, sizeof(*command));
+    if (!command) {
+        free(file);
+        return -1;
+    }
+    DWORD got = GetEnvironmentVariableW(L"EDITOR", command, editor_len);
+    if (!got || got >= editor_len) {
+        errno = EINVAL;
+        goto out;
+    }
+    size_t at = got;
+    command[at++] = L' ';
+    command[at++] = L'"';
+    for (size_t i = 0; file[i];) {
+        size_t slashes = 0;
+        while (file[i] == L'\\') {
+            ++slashes;
+            ++i;
+        }
+        size_t copies = !file[i] || file[i] == L'"' ? 2u * slashes : slashes;
+        while (copies--)
+            command[at++] = L'\\';
+        if (file[i] == L'"')
+            command[at++] = L'\\';
+        if (file[i])
+            command[at++] = file[i++];
+    }
+    command[at++] = L'"';
+    command[at] = 0;
+    STARTUPINFOW startup = {.cb = sizeof(startup)};
+    PROCESS_INFORMATION child;
+    if (!CreateProcessW(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child)) {
+        path_error(GetLastError());
+        goto out;
+    }
+    (void)CloseHandle(child.hThread);
+    DWORD status;
+    if (WaitForSingleObject(child.hProcess, INFINITE) != WAIT_OBJECT_0 ||
+        !GetExitCodeProcess(child.hProcess, &status))
+        path_error(GetLastError());
+    else {
+        *success = status == 0;
+        rc = 0;
+    }
+    (void)CloseHandle(child.hProcess);
+out:
+    free(command);
+    free(file);
+    return rc;
+}
+
 struct nt_path {
     wchar_t *wide;
     UNICODE_STRING name;
@@ -1572,6 +1684,48 @@ snag_fsync(int fd)
 #include <signal.h>
 #include <langinfo.h>
 #include <strings.h>
+#include <sys/wait.h>
+
+char *
+snag_default_shell(void)
+{
+    return strdup("/bin/sh");
+}
+
+int
+snag_file_executable(const char *path)
+{
+    return access(path, X_OK);
+}
+
+int
+snag_editor_run(const char *path, bool *success)
+{
+    const char *editor = getenv("EDITOR");
+    *success = false;
+    if (!editor || !*editor) {
+        errno = ENOENT;
+        return -1;
+    }
+    pid_t child = fork(), got;
+    int status;
+    if (child == 0) {
+        sigset_t signals;
+        sigemptyset(&signals);
+        (void)sigprocmask(SIG_SETMASK, &signals, NULL);
+        execl("/bin/sh", "sh", "-c", "exec $EDITOR \"$1\"", "snajpagent-editor", path, (char *)NULL);
+        _exit(127);
+    }
+    if (child < 0)
+        return -1;
+    do {
+        got = waitpid(child, &status, 0);
+    } while (got < 0 && errno == EINTR);
+    if (got != child)
+        return -1;
+    *success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return 0;
+}
 
 int
 snag_isatty(int fd)

@@ -546,6 +546,8 @@ snag_term_external_begin(struct snag_term *term,
     if (term->raw && snag_term_input_restore(&term->host, true) < 0)
         goto fail;
     term->raw = false;
+    if (snag_term_output_mode(&term->host, false) < 0)
+        goto fail;
     return 0;
 fail:
     snag_errorf(error, error_size, "cannot release terminal for editor: %s",
@@ -565,6 +567,8 @@ snag_term_external_end(struct snag_term *term,
     }
     sigint_pending = 0;
     sigwinch_pending = 0;
+    if (snag_term_output_mode(&term->host, true) < 0)
+        goto fail;
     update_size(term);
     if (term->capable && set_raw(term) < 0)
         goto fail;

@@ -123,7 +123,7 @@ snag_config_init(struct snag_config *config)
     config->prompt_spinner_per_second = 8u;
     memcpy(config->irc.listen, "localhost:6667", 15u);
     config->irc.history_lines = 200u;
-    config->shell = snag_strdup_checked("/bin/sh", SNAG_CONFIG_PATH_MAX);
+    config->shell = snag_default_shell();
     config->default_yield_ms = 10000u;
     config->max_parallel_commands = 4u;
     config->default_timeout_ms = 0u;
@@ -1122,7 +1122,7 @@ validate_shell(struct snag_config *config, char *error, size_t error_size)
     if (!resolved)
         goto invalid;
     if (strlen(resolved) > SNAG_CONFIG_PATH_MAX || snag_stat(resolved, &st) < 0 ||
-        !S_ISREG(st.st_mode) || access(resolved, X_OK) < 0) {
+        !S_ISREG(st.st_mode) || snag_file_executable(resolved) < 0) {
         free(resolved);
         goto invalid;
     }

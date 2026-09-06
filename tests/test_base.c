@@ -42,6 +42,62 @@ test_shutdown_signal(int number)
 }
 
 #ifdef _WIN32
+static int
+editor_test_child(void)
+{
+    const WCHAR *command = GetCommandLineW();
+    const WCHAR *end = wcsrchr(command, L'"'), *start;
+    assert(end && !end[1]);
+    start = end;
+    while (start > command && start[-1] != L'"')
+        --start;
+    assert(start > command);
+    size_t len = (size_t)(end - start);
+    WCHAR *path = calloc(len + 1u, sizeof(*path));
+    assert(path);
+    memcpy(path, start, len * sizeof(*path));
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(path);
+    assert(file != INVALID_HANDLE_VALUE);
+    DWORD written;
+    assert(WriteFile(file, "edited", 6u, &written, NULL) && written == 6u && CloseHandle(file));
+    return 0;
+}
+
+static void
+test_native_editor(void)
+{
+    WCHAR temp[MAX_PATH], original[MAX_PATH], path[MAX_PATH], program[32768], editor[32768];
+    DWORD old_len = GetEnvironmentVariableW(L"EDITOR", NULL, 0);
+    WCHAR *old = old_len ? calloc(old_len, sizeof(*old)) : NULL;
+    if (old_len)
+        assert(old && GetEnvironmentVariableW(L"EDITOR", old, old_len) < old_len);
+    assert(GetTempPathW(MAX_PATH, temp) && GetTempFileNameW(temp, L"edt", 0, original));
+    assert(swprintf(path, MAX_PATH, L"%ls - \x4e2d & %%.ini", original) > 0);
+    assert(MoveFileW(original, path));
+    char utf8[MAX_PATH * 4u];
+    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1, utf8, sizeof(utf8), NULL, NULL));
+    assert(GetModuleFileNameW(NULL, program, 32768u));
+    assert(swprintf(editor, 32768u, L"\"%ls\" --editor-test-child", program) > 0);
+    assert(SetEnvironmentVariableW(L"EDITOR", editor));
+    bool success;
+    assert(snag_editor_run(utf8, &success) == 0 && success);
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    char data[6];
+    DWORD got;
+    assert(file != INVALID_HANDLE_VALUE && ReadFile(file, data, sizeof(data), &got, NULL));
+    assert(got == sizeof(data) && !memcmp(data, "edited", sizeof(data)) && CloseHandle(file));
+    assert(swprintf(editor, 32768u, L"\"%ls\" --editor-test-fail", program) > 0);
+    assert(SetEnvironmentVariableW(L"EDITOR", editor));
+    assert(snag_editor_run(utf8, &success) == 0 && !success);
+    assert(SetEnvironmentVariableW(L"EDITOR", NULL));
+    assert(snag_editor_run(utf8, &success) < 0 && errno == ENOENT);
+    assert(SetEnvironmentVariableW(L"EDITOR", old));
+    free(old);
+    assert(DeleteFileW(path));
+}
+
 static void
 check_windows_permission_copy(int fd, const wchar_t *source)
 {
@@ -888,6 +944,11 @@ test_input_mode(void)
         DWORD flags;
         assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) &&
                (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING));
+        assert(snag_term_output_mode(&output_host, false) == 0);
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) && changed_mode == original_mode);
+        assert(snag_term_output_mode(&output_host, true) == 0);
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) &&
+               (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING));
         assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &flags) &&
                !(flags & HANDLE_FLAG_INHERIT));
 #else
@@ -902,6 +963,7 @@ test_input_mode(void)
     if (!snag_isatty(0))
         return;
 #ifdef _WIN32
+    test_native_editor();
     test_hidden_console();
     test_console_output();
 #endif
@@ -1035,6 +1097,9 @@ test_input_mode(void)
 static void
 test_platform(void)
 {
+    char *shell = snag_default_shell();
+    assert(shell && snag_file_executable(shell) == 0);
+    free(shell);
     struct snag_shutdown shutdown;
 #ifndef _WIN32
     struct sigaction before_shutdown, after_shutdown;
@@ -1394,6 +1459,10 @@ int
 main(int argc, char **argv)
 {
 #ifdef _WIN32
+    if (argc == 3 && !strcmp(argv[1], "--editor-test-child"))
+        return editor_test_child();
+    if (argc == 3 && !strcmp(argv[1], "--editor-test-fail"))
+        return 7;
     if (argc == 1) {
         WCHAR program[32768], command[32768];
         DWORD size = GetModuleFileNameW(NULL, program, 32768u);

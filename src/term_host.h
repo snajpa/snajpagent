@@ -83,6 +83,7 @@ enum {
 /* Bitmask above, zero timeout, or -1 error; wake-only does not consume input. */
 int snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms);
 int snag_term_output_open(struct snag_term_host *host, int fd);
+int snag_term_output_mode(struct snag_term_host *host, bool active);
 int snag_term_output_write(struct snag_term_host *host, int fd,
                            const void *text, size_t len, bool input,
                            int (*checkpoint)(void *), void *opaque);

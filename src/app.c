@@ -26,7 +26,6 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -1794,12 +1793,10 @@ out:
 }
 
 static int
-run_config_editor(struct app_state *app, int *status,
+run_config_editor(struct app_state *app, bool *success,
                   char *error, size_t error_size)
 {
     const char *editor = getenv("EDITOR");
-    pid_t child;
-    pid_t got;
 
     if (!editor || !*editor) {
         snag_errorf(error, error_size, "$EDITOR is not set");
@@ -1808,29 +1805,13 @@ run_config_editor(struct app_state *app, int *status,
     }
     if (snag_ui_external(&app->ui, true, error, error_size) < 0)
         return -1;
-    child = fork();
-    if (child == 0) {
-        sigset_t signals;
-        sigemptyset(&signals);
-        (void)sigprocmask(SIG_SETMASK, &signals, NULL);
-        execl("/bin/sh", "sh", "-c", "exec $EDITOR \"$1\"",
-              "snajpagent-editor", app->config_path, (char *)NULL);
-        _exit(127);
-    }
-    if (child < 0) {
-        snag_errorf(error, error_size, "cannot start $EDITOR: %s",
-                  strerror(errno));
-        (void)snag_ui_external(&app->ui, false, NULL, 0u);
-        return -1;
-    }
-    do {
-        got = waitpid(child, status, 0);
-    } while (got < 0 && errno == EINTR);
+    int rc = snag_editor_run(app->config_path, success);
+    int saved = errno;
     if (snag_ui_external(&app->ui, false, error, error_size) < 0)
         return -1;
-    if (got != child) {
-        snag_errorf(error, error_size, "cannot wait for $EDITOR: %s",
-                  strerror(errno));
+    if (rc < 0) {
+        errno = saved;
+        snag_errorf(error, error_size, "cannot run $EDITOR: %s", strerror(errno));
         return -1;
     }
     return 0;
@@ -1842,7 +1823,7 @@ change_config(struct app_state *app, bool active)
     struct config_snapshot before;
     struct config_snapshot after;
     char error[256] = {0};
-    int editor_status = 0;
+    bool editor_success = false;
     int rc;
 
     if (active)
@@ -1850,7 +1831,7 @@ change_config(struct app_state *app, bool active)
     if (snapshot_config(app->config_path, &before,
                         error, sizeof(error)) < 0)
         return app_error(app, error);
-    rc = run_config_editor(app, &editor_status, error, sizeof(error));
+    rc = run_config_editor(app, &editor_success, error, sizeof(error));
     if (rc != 0)
         return rc < 0 ? -1 : app_error(app, error);
     error[0] = '\0';
@@ -1858,7 +1839,7 @@ change_config(struct app_state *app, bool active)
                         error, sizeof(error)) < 0)
         return app_error(app, error);
     if (same_config_snapshot(&before, &after)) {
-        if (!WIFEXITED(editor_status) || WEXITSTATUS(editor_status) != 0)
+        if (!editor_success)
             return app_error(app, "$EDITOR exited unsuccessfully; configuration unchanged");
         return app_hostf(app, "configuration unchanged: %s", app->config_path);
     }
@@ -1869,7 +1850,7 @@ change_config(struct app_state *app, bool active)
                                   "configuration reload failed");
         return rc < 0 || render_rc < 0 ? -1 : 0;
     }
-    if (!WIFEXITED(editor_status) || WEXITSTATUS(editor_status) != 0) {
+    if (!editor_success) {
         if (app_warning(app,
                 "$EDITOR exited unsuccessfully after changing the configuration") < 0)
             return -1;
