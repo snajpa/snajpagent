@@ -700,7 +700,6 @@ snag_model_cache_best_effort(const json_t *model, const char *fallback)
     return fallback;
 }
 
-
 const json_t *
 snag_model_metadata(const struct snag_model_cache *cache,
                      const struct snag_provider_config *provider, const char *model)

@@ -2763,6 +2763,36 @@ silent_turn_data(const char *turn_id, const char *response_id,
         "response_id", response_id, "turn_id", turn_id);
 }
 
+/* These return the command exit status, after the durable transition. A null
+ * cause means the caller is before a response and must not close processes. */
+static int
+finish_turn_failure(struct app_state *app, const char *turn_id,
+                    const char *cause, const char *class_name,
+                    const char *message, char *error, size_t error_size)
+{
+    int rc = cause ? fail_turn(app, turn_id, cause, class_name, message,
+                               error, error_size) :
+        commit_event(app, "turn_failed",
+                     snag_app_turn_failed_data(turn_id, class_name, message),
+                     error, error_size);
+
+    (void)app_error(app, rc < 0 ? error : message);
+    return rc < 0 ? 3 : 4;
+}
+
+static int
+finish_user_interrupt(struct app_state *app, const char *turn_id,
+                      char *error, size_t error_size)
+{
+    if (interrupt_turn(app, turn_id, "user_interrupt", true, "user", "cancelled",
+                       error, error_size) < 0) {
+        (void)app_error(app, error[0] ? error : "interruption could not be persisted");
+        return 3;
+    }
+    (void)app_warning(app, "turn interrupted");
+    return app->execute ? 6 : 1;
+}
+
 static int
 run_turn(struct app_state *app, const char *prompt,
          const struct snag_queued_turn *queued, bool goal_turn, bool read_only)
@@ -2887,18 +2917,9 @@ run_turn(struct app_state *app, const char *prompt,
             snag_app_request_build(app, steering, cycle, &credential,
                                    provider_source_hash, &projection,
                                    &count_method, &request_body, error, sizeof(error)) < 0) {
-            if (commit_event(app, "turn_failed",
-                             snag_app_turn_failed_data(turn_id, "context",
-                                 error[0] ? error :
-                                 "response context projection failed"),
-                             error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-            } else {
-                (void)app_error(app, error[0] ? error :
-                                "response context projection failed");
-                result = 4;
-            }
+            result = finish_turn_failure(app, turn_id, NULL, "context",
+                error[0] ? error : "response context projection failed",
+                error, sizeof(error));
             goto out;
         }
         provider_rc = snag_app_provider_count(app, projection.count_request, &credential,
@@ -2910,31 +2931,12 @@ run_turn(struct app_state *app, const char *prompt,
             continue;
         }
         if (provider_rc == 2 && app->interrupt_requested) {
-            if (interrupt_turn(app, turn_id, "user_interrupt", true,
-                               "user", "cancelled",
-                               error, sizeof(error)) < 0) {
-                (void)app_error(app, error[0] ? error :
-                                "interruption could not be persisted");
-                result = 3;
-            } else {
-                (void)app_warning(app, "turn interrupted");
-                result = app->execute ? 6 : 1;
-            }
+            result = finish_user_interrupt(app, turn_id, error, sizeof(error));
             goto out;
         }
         if (provider_rc != 0 && provider_rc != SNAG_APP_COUNT_SKIPPED) {
-            if (commit_event(app, "turn_failed",
-                             snag_app_turn_failed_data(turn_id, "provider",
-                                 error[0] ? error :
-                                 "input-token count failed"),
-                             error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-            } else {
-                (void)app_error(app, error[0] ? error :
-                                "input-token count failed");
-                result = 4;
-            }
+            result = finish_turn_failure(app, turn_id, NULL, "provider",
+                error[0] ? error : "input-token count failed", error, sizeof(error));
             goto out;
         }
         if (app->irc_urgent.len) {
@@ -2959,15 +2961,8 @@ run_turn(struct app_state *app, const char *prompt,
                         "context compaction repeated an over-budget request",
                     (unsigned long long)projection.input_tokens_bound, count_method,
                     (unsigned long long)app->turn_capacity.hard_input_tokens);
-                if (commit_event(app, "turn_failed",
-                        snag_app_turn_failed_data(turn_id, "context", failure),
-                        error, sizeof(error)) < 0) {
-                    (void)app_error(app, error);
-                    result = 3;
-                } else {
-                    (void)app_error(app, failure);
-                    result = 4;
-                }
+                result = finish_turn_failure(app, turn_id, NULL, "context",
+                                              failure, error, sizeof(error));
                 goto out;
             }
             if (over_hard)
@@ -2982,35 +2977,14 @@ run_turn(struct app_state *app, const char *prompt,
                 continue;
             }
             if (compact_rc == 2 && app->interrupt_requested) {
-                if (close_active_process_for_turn(app, turn_id,
-                        "user_interrupt", true, error, sizeof(error)) < 0 ||
-                    commit_event(app, "turn_interrupted",
-                        snag_app_turn_interrupted_data(turn_id, "user",
-                                                      "cancelled"),
-                        error, sizeof(error)) < 0) {
-                    (void)app_error(app, error[0] ? error :
-                                    "interruption could not be persisted");
-                    result = 3;
-                } else {
-                    (void)app_warning(app, "turn interrupted");
-                    result = app->execute ? 6 : 1;
-                }
+                result = finish_user_interrupt(app, turn_id, error, sizeof(error));
                 goto out;
             }
             if (compact_rc != 0) {
-                if (commit_event(app, "turn_failed",
-                                 snag_app_turn_failed_data(turn_id,
-                                     over_hard ? "context" : "provider",
-                                     error[0] ? error :
-                                     "pre-response compaction failed"),
-                                 error, sizeof(error)) < 0) {
-                    (void)app_error(app, error);
-                    result = 3;
-                } else {
-                    (void)app_error(app, error[0] ? error :
-                                    "pre-response compaction failed");
-                    result = 4;
-                }
+                result = finish_turn_failure(app, turn_id, NULL,
+                    over_hard ? "context" : "provider",
+                    error[0] ? error : "pre-response compaction failed",
+                    error, sizeof(error));
                 goto out;
             }
             if (compacted) {
@@ -3024,15 +2998,8 @@ run_turn(struct app_state *app, const char *prompt,
             strcmp(rejected_request_hash, projection.request_sha256) == 0) {
             static const char failure[] =
                 "capacity recovery produced an identical provider request";
-            if (commit_event(app, "turn_failed",
-                    snag_app_turn_failed_data(turn_id, "context", failure),
-                    error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-            } else {
-                (void)app_error(app, failure);
-                result = 4;
-            }
+            result = finish_turn_failure(app, turn_id, NULL, "context",
+                                          failure, error, sizeof(error));
             goto out;
         }
         if (commit_event(app, "response_started",
@@ -3126,17 +3093,13 @@ run_turn(struct app_state *app, const char *prompt,
                 commit_event(app, "response_interrupted",
                     snag_app_response_interrupted_data(turn_id, response_id, cycle,
                                               "user", "cancelled", partial),
-                    error, sizeof(error)) < 0 ||
-                interrupt_turn(app, turn_id, "user_interrupt", true,
-                               "user", "cancelled",
-                               error, sizeof(error)) < 0) {
+                    error, sizeof(error)) < 0) {
                 (void)app_error(app, error[0] ? error :
                                 "interruption could not be persisted");
                 result = 3;
                 goto out;
             }
-            (void)app_warning(app, "turn interrupted");
-            result = app->execute ? 6 : 1;
+            result = finish_user_interrupt(app, turn_id, error, sizeof(error));
             goto out;
         }
         bool cyber_clarification = provider_failure.output_correction ==
@@ -3264,20 +3227,8 @@ run_turn(struct app_state *app, const char *prompt,
                             continue;
                         }
                         if (recovery_rc == 2 && app->interrupt_requested) {
-                            if (close_active_process_for_turn(app, turn_id,
-                                    "user_interrupt", true,
-                                    error, sizeof(error)) < 0 ||
-                                commit_event(app, "turn_interrupted",
-                                    snag_app_turn_interrupted_data(
-                                        turn_id, "user", "cancelled"),
-                                    error, sizeof(error)) < 0) {
-                                (void)app_error(app, error[0] ? error :
-                                    "interruption could not be persisted");
-                                result = 3;
-                            } else {
-                                (void)app_warning(app, "turn interrupted");
-                                result = app->execute ? 6 : 1;
-                            }
+                            result = finish_user_interrupt(app, turn_id,
+                                                            error, sizeof(error));
                             goto out;
                         }
                         break;
@@ -3290,15 +3241,8 @@ run_turn(struct app_state *app, const char *prompt,
                         "context capacity rejection could not be reduced%s%.*s",
                         error[0] ? ": " : "", 190,
                         error[0] ? error : "");
-                    if (commit_event(app, "turn_failed",
-                            snag_app_turn_failed_data(turn_id, "context", failure),
-                            error, sizeof(error)) < 0) {
-                        (void)app_error(app, error);
-                        result = 3;
-                    } else {
-                        (void)app_error(app, failure);
-                        result = 4;
-                    }
+                    result = finish_turn_failure(app, turn_id, NULL, "context",
+                                                  failure, error, sizeof(error));
                     goto out;
                 }
             }
@@ -3526,27 +3470,15 @@ run_turn(struct app_state *app, const char *prompt,
         {
             const char *message = decision.message ? decision.message :
                 "provider response was not actionable";
-            if (fail_turn(app, turn_id, "protocol_failure",
-                          "protocol", message, error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-                goto out;
-            }
-            (void)app_error(app, message);
-            result = 4;
+            result = finish_turn_failure(app, turn_id, "protocol_failure",
+                                          "protocol", message, error, sizeof(error));
             goto out;
         }
     }
     {
         static const char message[] = "response-cycle counter exhausted";
-        if (fail_turn(app, turn_id, "internal_failure",
-                      "resource", message, error, sizeof(error)) < 0) {
-            (void)app_error(app, error);
-            result = 3;
-            goto out;
-        }
-        (void)app_error(app, message);
-        result = 4;
+        result = finish_turn_failure(app, turn_id, "internal_failure",
+                                      "resource", message, error, sizeof(error));
     }
 out:
     snag_app_response_cycle_release(app, &graph, &steering,
