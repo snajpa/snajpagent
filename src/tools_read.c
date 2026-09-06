@@ -77,6 +77,8 @@ open_path(const char *workspace, const char *path)
     char *copy, *part, *save = NULL;
     struct snag_buf full;
     int fd = -1;
+    int *ancestors = NULL;
+    size_t count = 0;
     bool absolute = snag_path_root_len(path) != 0u;
 
     snag_buf_init(&full, 8192u);
@@ -85,6 +87,9 @@ open_path(const char *workspace, const char *path)
         snag_buf_terminate(&full) < 0)
         goto out;
     copy = (char *)full.data;
+    ancestors = malloc((full.len + 1u) * sizeof(*ancestors));
+    if (!ancestors)
+        goto out;
     snag_path_slashes(copy);
     size_t root = snag_path_root_len(copy);
     if (!root) {
@@ -93,15 +98,39 @@ open_path(const char *workspace, const char *path)
     }
     char first = copy[root];
     copy[root] = '\0';
-    fd = snag_open_read(copy, true);
+    int root_fd = snag_open_read(copy, true);
     copy[root] = first;
-    for (part = strtok_r(copy + root, "/", &save); fd >= 0 && part;
+    if (root_fd < 0)
+        goto out;
+    ancestors[count++] = root_fd;
+    for (part = strtok_r(copy + root, "/", &save); part;
          part = strtok_r(NULL, "/", &save)) {
-        int next = open_entry(fd, part);
-        close(fd);
-        fd = next;
+        if (!strcmp(part, ".") || !strcmp(part, "..")) {
+            snag_file_info info;
+            if (snag_fstat(ancestors[count - 1u], &info) < 0)
+                goto out;
+            if (!S_ISDIR(info.st_mode)) {
+                errno = ENOTDIR;
+                goto out;
+            }
+            if (part[1] == '.' && count > 1u)
+                (void)close(ancestors[--count]);
+        } else {
+            int next = open_entry(ancestors[count - 1u], part);
+            if (next < 0)
+                goto out;
+            ancestors[count++] = next;
+        }
     }
+    fd = ancestors[--count];
 out:
+    {
+        int saved = errno;
+        while (count)
+            (void)close(ancestors[--count]);
+        free(ancestors);
+        errno = saved;
+    }
     snag_buf_free(&full);
     return fd;
 }

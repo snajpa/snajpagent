@@ -71,8 +71,27 @@ test_native_read_results(void)
         true, "1:Alpha\n2:\xce\xb2" "eta\n3:\xf0\x9f\x98\x80\n", NULL);
     check_native_read(root, "read_file", "{\"path\":\"text\",\"start_line\":2,\"end_line\":2}",
         true, "2:\xce\xb2" "eta\n", NULL);
+    assert(snag_mkdir_private_at(dir, "sub") == 0);
+    check_native_read(root, "read_file", "{\"path\":\"./sub/../text\",\"start_line\":1,\"end_line\":1}",
+        true, "1:Alpha\n", NULL);
+    check_native_read(root, "read_file", "{\"path\":\"text/.\",\"start_line\":null,\"end_line\":null}",
+        false, "Cannot open", NULL);
+    assert(snag_unlink_at(dir, "sub", true) == 0);
     check_native_read(root, "list_files", "{\"path\":\".\",\"recursive\":true,\"offset\":null,\"limit\":null}",
         true, "./text\tfile", NULL);
+    char *root_path = snag_strdup_checked(root, SNAG_PATH_MAX_BYTES);
+    assert(root_path);
+    root_path[snag_path_root_len(root_path)] = '\0';
+    char *above = snag_path_join(root_path, "../..");
+    json_t *listing = json_pack("{s:s,s:b,s:n,s:i}", "path", above,
+                                "recursive", 0, "offset", "limit", 1);
+    char *listing_text = listing ? json_dumps(listing, JSON_COMPACT) : NULL;
+    assert(above && listing_text);
+    check_native_read(root, "list_files", listing_text, true, "next_offset=", NULL);
+    free(listing_text);
+    json_decref(listing);
+    free(above);
+    free(root_path);
     check_native_read(root, "grep", "{\"path\":\".\",\"pattern\":\"^.$\",\"recursive\":true,\"ignore_case\":false,\"literal\":false,\"offset\":null,\"limit\":null}",
         true, "./text:3:\xf0\x9f\x98\x80", NULL);
     check_native_read(root, "grep", "{\"path\":\"text\",\"pattern\":\"[\",\"recursive\":false,\"ignore_case\":false,\"literal\":false,\"offset\":null,\"limit\":null}",
