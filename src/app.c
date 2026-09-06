@@ -3657,6 +3657,7 @@ snag_app_dotdir(const char *override, char *error, size_t error_size)
     free(home);
     if (!path)
         return NULL;
+    snag_path_slashes(path);
     len = strlen(path);
     size_t root_len = snag_path_root_len(path);
     while (len > (root_len ? root_len : 1u) && path[len - 1u] == '/')

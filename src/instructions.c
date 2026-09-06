@@ -147,6 +147,8 @@ config_instruction_root(char *error, size_t error_size)
     char *base;
     char *root;
 
+    if (xdg)
+        snag_path_slashes(xdg);
     if (xdg && *xdg) {
         if (!snag_path_root_len(xdg)) {
             free(xdg);

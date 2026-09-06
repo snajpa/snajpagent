@@ -1008,6 +1008,8 @@ snag_config_path(const char *explicit_path, const char *dotdir,
             return NULL;
         }
         result = snag_strdup_checked(explicit_path, SNAG_CONFIG_PATH_MAX);
+        if (result)
+            snag_path_slashes(result);
         if (!result)
             snag_errorf(error, error_size, "configuration path is unavailable");
         return result;

@@ -107,6 +107,7 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
         }
         if (snag_buf_terminate(&path) < 0)
             goto invalid;
+        snag_path_slashes((char *)path.data);
         source.path = (char *)path.data;
         path.data = NULL;
     }
