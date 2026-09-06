@@ -36,7 +36,7 @@ LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
 COMMON_SRC = src/base.c src/platform.c src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
-HEADERS = src/snajpagent.h src/base.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h
+HEADERS = src/snajpagent.h src/base.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/term_host.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h
 DEPFLAGS = -MMD -MP
 FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store $(FIXTURE_BIN)
@@ -163,7 +163,7 @@ tests/test_model_cache: src/base.c src/platform.c src/config.c src/secret_source
 		tests/test_model_cache.c $(LDLIBS)
 
 tests/test_render: src/base.c src/platform.c src/json.c src/history.c src/term.c src/render.c src/render_prepare.c tests/test_render.c \
-		src/base.h src/json.h src/term.h src/render.h src/snajpagent.h
+		src/base.h src/json.h src/term.h src/term_host.h src/render.h src/snajpagent.h
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ src/base.c src/platform.c src/json.c src/history.c src/term.c src/render.c src/render_prepare.c tests/test_render.c $(LDLIBS)
 

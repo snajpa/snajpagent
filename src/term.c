@@ -491,7 +491,7 @@ update_size(struct snag_term *term)
 static int
 set_raw(struct snag_term *term)
 {
-    struct termios raw = term->saved;
+    struct termios raw = term->host.input_mode;
 
     raw.c_iflag &= (tcflag_t)~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
     raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | IEXTEN | ISIG);
@@ -513,7 +513,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
         snag_errorf(error, error_size, "terminal already open: %s", strerror(errno));
         return -1;
     }
-    if (tcgetattr(STDIN_FILENO, &term->saved) < 0) {
+    if (tcgetattr(STDIN_FILENO, &term->host.input_mode) < 0) {
         snag_errorf(error, error_size, "cannot read terminal attributes: %s", strerror(errno));
         return -1;
     }
@@ -526,10 +526,10 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     memset(&action, 0, sizeof(action));
     action.sa_handler = mark_sigint;
     sigemptyset(&action.sa_mask);
-    if (sigaction(SIGINT, &action, &term->saved_sigint) < 0) {
+    if (sigaction(SIGINT, &action, &term->host.sigint) < 0) {
         int saved_errno = errno;
         if (term->raw)
-            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
+            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode);
         term->raw = false;
         errno = saved_errno;
         snag_errorf(error, error_size, "cannot install terminal interrupt handler: %s", strerror(errno));
@@ -539,11 +539,11 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     memset(&action, 0, sizeof(action));
     action.sa_handler = mark_sigwinch;
     sigemptyset(&action.sa_mask);
-    if (sigaction(SIGWINCH, &action, &term->saved_sigwinch) < 0) {
+    if (sigaction(SIGWINCH, &action, &term->host.sigwinch) < 0) {
         int saved_errno = errno;
         if (term->raw)
-            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
-        (void)sigaction(SIGINT, &term->saved_sigint, NULL);
+            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode);
+        (void)sigaction(SIGINT, &term->host.sigint, NULL);
         term->raw = false;
         term->sigint_installed = false;
         errno = saved_errno;
@@ -578,9 +578,9 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     output_owner = term;
     if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
         int saved_errno = errno;
-        (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
-        (void)sigaction(SIGINT, &term->saved_sigint, NULL);
-        (void)sigaction(SIGWINCH, &term->saved_sigwinch, NULL);
+        (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode);
+        (void)sigaction(SIGINT, &term->host.sigint, NULL);
+        (void)sigaction(SIGWINCH, &term->host.sigwinch, NULL);
         term->opened = false;
         term->raw = false;
         term->sigint_installed = false;
@@ -609,7 +609,7 @@ snag_term_external_begin(struct snag_term *term,
         snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
         goto fail;
     term->bracketed_paste = false;
-    if (term->raw && tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved) < 0)
+    if (term->raw && tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode) < 0)
         goto fail;
     term->raw = false;
     return 0;
@@ -2078,7 +2078,7 @@ suspend_terminal(struct snag_term *term)
         return -1;
     term->bracketed_paste = false;
     if (tcflush(STDIN_FILENO, TCIFLUSH) < 0 ||
-        tcsetattr(STDIN_FILENO, TCSANOW, &term->saved) < 0)
+        tcsetattr(STDIN_FILENO, TCSANOW, &term->host.input_mode) < 0)
         return -1;
     term->raw = false;
     if (raise(SIGSTOP) < 0)
@@ -2616,12 +2616,12 @@ snag_term_close(struct snag_term *term)
         if (term->bracketed_paste)
             (void)snag_term_write(STDERR_FILENO, "\033[?2004l", 8u);
         if (term->raw)
-            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->saved);
+            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode);
     }
     if (term->sigwinch_installed)
-        (void)sigaction(SIGWINCH, &term->saved_sigwinch, NULL);
+        (void)sigaction(SIGWINCH, &term->host.sigwinch, NULL);
     if (term->sigint_installed)
-        (void)sigaction(SIGINT, &term->saved_sigint, NULL);
+        (void)sigaction(SIGINT, &term->host.sigint, NULL);
     history_clear(term);
     free(term->search_original);
     free(term->nicks);

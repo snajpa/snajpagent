@@ -5,12 +5,12 @@
 #include "base.h"
 #include "history.h"
 #include "irc.h"
+#include "term_host.h"
 
 #include <stdbool.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <termios.h>
 #include <time.h>
 
 #define SNAG_TERM_SPINNER_COUNT 3u
@@ -59,9 +59,7 @@ struct snag_term {
     void *input_opaque;
     int output_fd[2];
     bool input_only, cancel_pending;
-    struct termios saved;
-    struct sigaction saved_sigint;
-    struct sigaction saved_sigwinch;
+    struct snag_term_host host;
     struct snag_buf draft;
     struct snag_buf search_label;
     struct snag_buf search_query;
