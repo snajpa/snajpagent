@@ -229,8 +229,9 @@ commands, configuration, tools, files, limits, failures and security.
 .SH BUILDING AND INSTALLING
 Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
 libcurl and Jansson development files.  These instructions describe the
-normal POSIX build.  Native Windows support is in progress, not a complete
-qualified agent release; see DEPENDENCIES.md for its supported foundations.
+normal POSIX build.  An experimental native Windows x86-64 package is also
+available; see the standalone target below and DEPENDENCIES.md for its
+current qualification scope.
 Plain
 .B make
 builds only for the host, with size optimization and stripping.  ELF production
@@ -307,9 +308,17 @@ under
 .PP
 The macOS cross-builds are experimental: cross-built and inspected, not yet
 runtime-qualified on macOS.  No Developer ID signing or notarization is implied.
-Windows currently has dependency/platform foundations, not a complete agent
-or a public production target.  Cross-compilation alone does not establish
-runtime support.
+Cross-compilation alone does not establish runtime support.
+.TP
+.B make prod-windows-x86_64
+Build the experimental native Windows x64 executable using pinned Nix
+dependencies.  Copy
+.I build/matrix/windows-x86_64/bin/snajpagent.exe
+to Windows.  Application libraries and CA roots are included; Nix and
+third-party runtime DLLs are not needed there.  Optional matching symbols
+are in the adjacent .debug directory.  Runtime qualification is limited
+to tested modern Windows guests; older Windows and other architectures
+remain in progress.  Plain make still builds only the host platform.
 .PP
 See the repository's DEPENDENCIES.md for static dependency licenses, embedded
 trust, corresponding-source obligations and platform qualification details.
@@ -1419,6 +1428,7 @@ No notes layout, recursive Markdown scan, or memory service is required.
 .TP
 .B HOME
 Builds the default dotdir and fallback global-instruction path.
+Native Windows uses USERPROFILE when HOME is absent or empty.
 .TP
 .B XDG_CONFIG_HOME
 Selects the global-instruction directory.  It must be absolute.
@@ -1444,11 +1454,15 @@ hostname verification remain enabled.  Keep this file trusted and current.
 .B TERM
 Enables terminal capabilities and color detection.
 .TP
-.BR LC_CTYPE , " LANG"
-Must select a UTF-8 locale.
+.BR LC_ALL , " LC_CTYPE" , " LANG"
+On POSIX, select a UTF-8 locale using normal locale precedence.
+Native Windows uses explicit UTF-8 conversions and does not require a
+UTF-8 CRT locale.
 .TP
 .B PATH
-Used to resolve the executable path printed in a resume command.
+On POSIX, used to resolve an executable invoked without a slash for the
+printed resume command.  Native Windows obtains the running executable
+from the operating system instead.
 .TP
 .I "api_key = ${ENV_NAME}"
 An explicit environment credential source must contain a nonempty value
