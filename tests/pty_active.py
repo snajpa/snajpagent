@@ -1872,10 +1872,13 @@ def test_resume_preserves_inactive_and_queued_goal_states():
         child.send(b"ping\t")
         child.wait(b"next " + PROMPT + b"ping")
         session_id = new_session(before)
+        child.send(b"\x04")
+        child.wait(RESUME_HEADER, timeout=4.0)
+        command = child.finish()
     finally:
         child.kill()
     original = events(session_id)
-    resumed = Child(["--resume", session_id])
+    resumed = Child.from_command(command)
     try:
         restored = resumed.wait(b": active")
         paused_queue = resumed.wait(b"queued future turns are paused", start=restored)
