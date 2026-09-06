@@ -4379,8 +4379,14 @@ def test_goal_orderly_quit_resume():
                 signum = signal.SIGTERM if mode == "sigterm" else signal.SIGHUP
                 os.kill(child.pid, signum)
                 expected = 128 + signum
+            elif mode == "five-ctrl-c":
+                # A turn-only Ctrl-C deliberately pauses first; a later exit
+                # must preserve that pause, not turn it back into an active goal.
+                child.send(b"\x03")
+                child.wait(b"goal paused after the turn stopped")
+                child.send(b"\x03" * 4)
             else:
-                child.send(b"\x03" * 5 if mode == "five-ctrl-c" else b"\x04")
+                child.send(b"\x04")
             child.wait(RESUME_HEADER, timeout=4.0)
             command = child.finish(expected=expected)
         finally:
@@ -4388,18 +4394,33 @@ def test_goal_orderly_quit_resume():
         stopped = events(session_id)
         goal = one(stopped, "goal_started")["data"]
         assert one(stopped, "goal_lock_changed")["data"]["locked"]
-        assert not [e for e in stopped if e["type"] in ("goal_paused", "goal_resumed", "goal_completed")]
+        assert not [e for e in stopped if e["type"] in ("goal_resumed", "goal_completed")]
+        if mode == "five-ctrl-c":
+            assert one(stopped, "goal_paused")["data"]["reason"] == "turn_stopped"
+        else:
+            assert not [e for e in stopped if e["type"] == "goal_paused"]
         one(stopped, "turn_interrupted")
         resumed = Child.from_command(command)
         try:
+            if mode == "five-ctrl-c":
+                restored = resumed.wait(f"goal {goal['goal_id'][:8]}: paused · wording locked".encode())
+                resumed.wait_idle_prompt(start=restored)
+                resumed.exit_now()
+                assert events(session_id) == stopped
+                print("explicit Ctrl-C pause then quit/resume: ok", flush=True)
+                continue
             restored = resumed.wait(f"goal {goal['goal_id'][:8]}: active · wording locked".encode())
             resumed.wait(b"slow goal", start=restored)
             deadline = time.monotonic() + 8.0
-            while not any(e["type"] == "goal_completed" for e in events(session_id)):
+            while not any(e["type"] == "turn_completed" for e in events(session_id)[len(stopped):]):
                 assert time.monotonic() < deadline, bytes(resumed.buf)
                 resumed.read_once(0.05)
             if mode == "host":
-                resumed.wait(chat_prompt("goalop"), start=restored)
+                # goal_completed is a tool event; wait for the enclosing turn
+                # and a fresh idle prompt before issuing an idle-only /exit.
+                resumed.send(b"/rollout\r")
+                switched = resumed.wait("── rollout ──".encode(), start=restored)
+                resumed.wait_idle_prompt(start=switched)
                 resumed.exit_now()
             else:
                 done = resumed.wait(b"goal done", start=restored)

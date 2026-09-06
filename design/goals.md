@@ -144,8 +144,9 @@ When a model turn ends:
    the current turn pauses the goal. An ordinary terminal tool result remains
    available to the model to handle within that turn. A single Ctrl-C turn
    interruption also pauses the goal. Quitting the process (Ctrl-D/EOF,
-   five-Ctrl-C exit, SIGHUP or SIGTERM) interrupts the turn and preserves the
-   current goal state; it is not a goal pause.
+   SIGHUP or SIGTERM) interrupts the turn and preserves the current goal state;
+   it is not a goal pause. A Ctrl-C interruption already processed before a
+   subsequent exit keeps its recorded pause.
 6. Opening a session restores the saved goal state unchanged after any
    interrupted-turn recovery. An active goal continues; paused, blocked,
    completed and cancelled goals keep their recorded states. Resume creates
