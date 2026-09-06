@@ -24,28 +24,105 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/configure-pages@v6
       - name: Install manual formatter
-        run: sudo apt-get update && sudo apt-get install -y groff
+        run: sudo apt-get update && sudo apt-get install -y mandoc
       - name: Format the user manual
         run: |
-          groff -Thtml -man snajpagent.1 > www/manual.html
+          mandoc -Thtml -O fragment snajpagent.1 > "$RUNNER_TEMP/manual.html"
           python3 - <<'PYTHON'
           from pathlib import Path
-          import re
-          path = Path("www/manual.html")
-          text = path.read_text()
-          text = re.sub(r"<style.*?</style>", "", text, flags=re.S)
-          text = text.replace('<html>', '<html lang="en">')
-          text = text.replace("</head>",
-              '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-              '<link rel="stylesheet" href="style.css">\n</head>')
-          text = text.replace("<body>",
-              '<body class="manual">\n<nav aria-label="Project">'
-              '<a href="index.html">snajpagent</a> · '
-              '<a href="downloads.html">Downloads</a> · '
-              '<a href="https://github.com/snajpa/snajpagent#readme">README</a> · '
-              '<a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">Manual source</a>'
-              '</nav>')
-          path.write_text(text)
+          import os
+          import xml.etree.ElementTree as ET
+
+          fragment = Path(os.environ["RUNNER_TEMP"], "manual.html").read_text()
+          manual = ET.fromstring("<div>" + fragment + "</div>").find("div[@class='manual-text']")
+          manual.tag = "main"
+          manual.set("id", "reference")
+          manual.set("tabindex", "-1")
+          # The man NAME line supplies the web introduction, not a second content source.
+          name = manual.find("section")
+          intro = ET.tostring(name.find("p"), encoding="unicode", method="html")
+          manual.remove(name)
+          contents = ET.Element("ul")
+          # Old published fragments whose headings were renamed during the reorganization.
+          legacy = {"Getting started": "USING SNAJPAGENT",
+                    "Editing keys": "INTERACTIVE INPUT", "Views and prompt": "DISPLAY",
+                    "Routing, identity and history": "IRC MODE"}
+          for section in manual.findall("section"):
+              heading = section.find("h1")
+              label = " ".join("".join(heading.itertext()).split())
+              item = ET.SubElement(contents, "li")
+              subheads = section.findall("section/h2")
+              parent = item
+              if subheads:
+                  details = ET.SubElement(item, "details")
+                  parent = ET.SubElement(details, "summary")
+              ET.SubElement(parent, "a", href="#" + heading.get("id")).text = label.capitalize() if label.isupper() else label
+              if subheads:
+                  children = ET.SubElement(details, "ul")
+                  for subhead in subheads:
+                      child = ET.SubElement(children, "li")
+                      ET.SubElement(child, "a", href="#" + subhead.get("id")).text = " ".join("".join(subhead.itertext()).split())
+              for title in [heading] + subheads:
+                  label = " ".join("".join(title.itertext()).split())
+                  # Keep the former groff section URLs as well as mandoc's entry permalinks.
+                  for alias in sorted({label.upper(), legacy.get(label, label.upper())}):
+                      if alias != title.get("id"):
+                          ET.SubElement(title, "a", name=alias, **{"class": "anchor-alias", "aria-hidden": "true"})
+                  title.tag = "h2" if title is heading else "h3"
+                  if label.isupper():
+                      title.find("a").text = label.capitalize()
+              ET.SubElement(heading, "a", href="#contents", **{"class": "toc-return", "aria-label": "Back to contents"}).text = "↑"
+
+          # mandoc links ordinary terms but skips leading-slash command names.
+          ids = {node.get("id") for node in manual.iter()}
+          for term in manual.iter("dt"):
+              text = "".join(term.itertext()).strip()
+              if term.get("id") or not text.startswith("/"):
+                  continue
+              name = text.split()[0].rstrip(",")
+              anchor, suffix = name, 1
+              while anchor in ids:
+                  suffix += 1
+                  anchor = name + "-" + str(suffix)
+              ids.add(anchor)
+              term.set("id", anchor)
+              link = ET.Element("a", href="#" + anchor, **{"class": "permalink"})
+              link.text, term.text = term.text, None
+              link.extend(list(term))
+              term[:] = [link]
+
+          body = ET.tostring(manual, encoding="unicode", method="html")
+          outline = ET.tostring(contents, encoding="unicode", method="html")
+          Path("www/manual.html").write_text("""<!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <meta name="description" content="snajpagent user manual: commands, configuration, native IRC, tools and troubleshooting.">
+          <title>snajpagent(1) — user manual</title>
+          <link rel="stylesheet" href="style.css">
+          <link rel="canonical" href="https://agent.snajpa.net/manual.html">
+          </head>
+          <body class="manual">
+          <a class="skip-link" href="#reference">Skip to reference</a>
+          <header class="manual-header" id="NAME">
+          <nav aria-label="Project"><a href="index.html">snajpagent</a> ·
+          <a href="downloads.html">Downloads</a> ·
+          <a href="https://github.com/snajpa/snajpagent#readme">README</a> ·
+          <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">Manual source</a></nav>
+          <h1>snajpagent(1)</h1>
+          """ + intro + """
+          </header>
+          <div class="manual-layout">
+          <nav class="manual-toc" aria-labelledby="contents">
+          <h2 id="contents" tabindex="-1">Contents</h2>
+          """ + outline + "</nav>" + body + """
+          </div>
+          <footer><a href="#contents">Contents</a> · <code>man snajpagent</code> ·
+          <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a></footer>
+          </body>
+          </html>
+          """)
           PYTHON
       - uses: actions/upload-pages-artifact@v5
         with:

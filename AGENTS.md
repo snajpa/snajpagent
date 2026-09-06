@@ -48,6 +48,9 @@ code, not targets. They are unrelated to runtime context limits.
 
 Render the affected manual text with `groff -Tutf8 -man snajpagent.1` and check
 its examples and links before shipping documentation changes. The existing Pages
-workflow formats that same file as `manual.html`; do not hand-edit or check in
-a second generated manual. Screenshots must be real program captures with
+workflow formats that same file with mandoc as `manual.html`; do not hand-edit
+or check in a second generated manual. Keep the source outline task-oriented,
+preserve the full reference, and derive web contents from its headings. Check
+reading hierarchy, code/definition layout and keyboard navigation, not only
+page overflow. Screenshots must be real program captures with
 correct status fields and current rendering, never synthesized or recolored.

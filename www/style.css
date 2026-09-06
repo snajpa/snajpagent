@@ -79,13 +79,83 @@ footer {
   padding-top: 1rem;
 }
 
-/* groff uses tables and inline margins for layout, not tabular data. */
-.manual { max-width: 90ch; overflow-wrap: anywhere; }
-.manual h1 { text-align: left; }
-.manual p { max-width: none; margin: 0.6rem 0 !important; }
-.manual table, .manual tbody, .manual tr, .manual td {
-  display: block;
-  width: auto;
+/* The hosted manual uses mandoc's semantic sections, lists and code blocks. */
+.manual {
+  max-width: calc(76ch + 19rem);
+  font-family: system-ui, sans-serif;
+  line-height: 1.6;
 }
-.manual td:empty { display: none; }
-.manual h3 { margin-top: 2rem; }
+.manual-header { margin-bottom: 2.5rem; }
+.manual-header h1 { margin-top: 1.5rem; font-family: ui-monospace, monospace; }
+.manual-header p { color: var(--dim); }
+.manual-layout { display: grid; grid-template-columns: 16rem minmax(0, 1fr); gap: 3rem; }
+.manual-toc {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  padding-right: 1rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.manual-toc h2 { margin: 0 0 0.75rem; font-size: 1rem; border: 0; padding: 0; }
+.manual-toc ul { list-style: none; padding: 0; margin: 0; }
+.manual-toc li { margin: 0.45rem 0; }
+.manual-toc details ul { margin: 0.5rem 0 0.75rem 0.8rem; padding-left: 0.8rem; border-left: 1px solid var(--rule); }
+.manual-toc summary { cursor: pointer; }
+.manual-toc a { text-decoration: none; }
+.manual-toc a:hover { text-decoration: underline; }
+.manual-text { max-width: 76ch; min-width: 0; overflow-wrap: anywhere; }
+.manual-text h2 { margin-top: 3.5rem; font-size: 1.65rem; }
+.manual-text > section:first-child > h2 { margin-top: 0; }
+.manual-text > section:first-child p { font-family: ui-monospace, monospace; font-size: 0.9rem; line-height: 1.8; }
+.manual-text h3 { margin: 2rem 0 0.8rem; font-size: 1.15rem; line-height: 1.4; }
+.manual-text p { max-width: none; margin: 0.8rem 0; }
+.manual-text section { scroll-margin-top: 1rem; }
+.manual-text h2, .manual-text h3, .manual-text dt { position: relative; scroll-margin-top: 1rem; }
+.manual-text .permalink { color: inherit; text-decoration: none; }
+.manual-text .permalink:hover { text-decoration: underline; }
+.manual-text :target { outline: 2px solid var(--link); outline-offset: 4px; }
+.anchor-alias { position: absolute; top: 0; scroll-margin-top: 1rem; }
+.manual-text .anchor-alias:target { outline: none; }
+.manual-text .toc-return { margin-left: 0.65rem; font-size: 0.85rem; font-weight: normal; text-decoration: none; }
+.manual-text dl { margin: 1rem 0; }
+.manual-text dt { margin-top: 1.5rem; font-weight: 600; }
+.manual-text dd { margin: 0.35rem 0 1rem 1rem; }
+.manual-text dt, .manual-text b, .manual-text code, .manual-text pre {
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: 0.9em;
+}
+.manual-text dt b, .manual-text pre b { font-size: inherit; }
+.manual-text pre {
+  line-height: 1.6;
+  padding: 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.2rem;
+  background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+  white-space: pre;
+  overflow-x: auto;
+}
+.manual-text .RS { margin-left: 1rem; }
+.skip-link { position: absolute; left: -10000px; }
+.skip-link:focus { position: static; }
+@media (max-width: 64rem) {
+  .manual-layout { display: block; }
+  .manual-toc { position: static; max-height: none; padding: 0 0 2rem; }
+  .manual-toc > ul { columns: 2; column-gap: 1.5rem; }
+  .manual-toc > ul > li { break-inside: avoid; }
+  .manual-text { max-width: 76ch; }
+}
+@media (max-width: 25rem) {
+  .manual-text dd { margin-left: 0.5rem; }
+}
+@media print {
+  .manual { max-width: none; padding: 0; color: #000; background: #fff; }
+  .manual-layout { display: block; }
+  .manual-toc, .manual-header nav, .toc-return, .skip-link, .manual footer { display: none; }
+  .manual-text { max-width: none; }
+  .manual-text h2, .manual-text h3, .manual-text dt { break-after: avoid; }
+  .manual-text pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .manual-text a { color: inherit; }
+}

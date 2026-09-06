@@ -46,7 +46,8 @@ maintain up to 16 outgoing
 IRC connections.  Agents and channel operators share the room; the runtime
 owns joining, history, and reconnection.  Startup flags and runtime slash
 commands control this native networking without changing session identity.
-.SH GETTING STARTED
+.SH "Getting started"
+.SS Provider setup
 On a fresh interactive launch without configuration or existing environment
 credentials, choose ChatGPT/Codex, OpenRouter, OpenAI, or a custom provider.
 Complete device login or enter a masked API key (blank selects an environment
@@ -88,7 +89,6 @@ snajpagent
 Enter submits a turn.  Type
 .B /help
 for commands and keys.
-.SH USING SNAJPAGENT
 .SS Start a task
 After installation and provider setup, start snajpagent in the project directory
 you want to change.  This directory is the workspace.  The model is the AI
@@ -151,7 +151,7 @@ Use
 .B /next
 while idle to restart it.  This starts the oldest item and allows the rest
 to drain.  Queued prompts take precedence over automatic goal continuation.
-See PROVIDER FAILURES for the new-input/retry handoff case.
+See Provider failures for the new-input/retry handoff case.
 .SS Complete names with Tab
 Command completion starts with a slash at the beginning of the draft.
 Type
@@ -220,7 +220,17 @@ Waiting prompts still need
 .B /next
 and cannot be bypassed by automatic goal work.  Resume restores recorded
 context, not commands that ended when the old process exited.
-.SS Work together through native IRC
+.SS Read this reference
+Use
+.B man snajpagent
+for the installed reference.  From a checkout,
+.B man -l ./snajpagent.1
+opens the same source.  The hosted edition is
+.IR https://agent.snajpa.net/manual.html .
+The website and README introduce workflows; the sections below define all
+options, commands, configuration, tools, files, limits, failures and security.
+.SH "Native IRC"
+.SS Host and join a room
 IRC is the built-in chat protocol.  Each session has an operator nickname
 (yours) and a model nickname.  In separate terminals, start a host and client:
 .PP
@@ -253,147 +263,72 @@ select either view directly.  Runtime
 and
 .B /connect
 change network roles without restarting or switching the current view.
-.SS Read this reference
-Use
-.B man snajpagent
-for the installed reference.  From a checkout,
-.B man -l ./snajpagent.1
-opens the same source.  The hosted edition is
-.IR https://agent.snajpa.net/manual.html .
-The website and README introduce workflows; the sections below define all
-options, commands, configuration, tools, files, limits, failures and security.
-.SH BUILDING AND INSTALLING
-.SS Binary releases
-Release availability and platform compatibility are listed at
-.IR https://agent.snajpa.net/downloads.html .
-Every new version, including patch releases and prereleases, ships all
-implemented production targets listed by the Makefile's PROD_TARGETS.
-Additional implemented targets join subsequent releases; unfinished ports
-are not claimed as available.  Experimental builds are labeled with their
-actual testing scope, not silently omitted.  See RELEASE.md in the source
-tree for the publication policy.
+.SS Routing, identity and history
+Listener mode creates one room.  Its default name is the hostname and its initial
+topic is the server agent's absolute launch workspace.  snajpagent clients join
+the advertised room automatically.
 .PP
-Each release provides platform-specific executable downloads, SHA256SUMS,
-source/build and license material, the manual, and separate matching symbols.
-Verify the downloaded executable against the release checksum before use.
-On Unix, rename it to snajpagent and make it executable with chmod +x;
-on Windows retain the .exe extension.  Debug symbols are not required to run.
-Until the first binary release is published, use the source builds below.
-.SS Source builds
-Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
-libcurl and Jansson development files.  These instructions describe the
-normal POSIX build.  An experimental native Windows x86-64 package is also
-available; see the standalone target below and DEPENDENCIES.md for its
-current qualification scope.
-Plain
-.B make
-builds only for the host, with size optimization and stripping.  ELF production
-packaging needs strip and objcopy; macOS needs strip and dsymutil.
-The build version uses the latest reachable Git tag; untagged commits add their
-short revision, and modified checkouts add a -dirty suffix.
-META defines the product name only.  A tagged Git history is required; portable
-build targets pass the same derived identity into their isolated source build.
-.TP
-.B make DEBUG=1
-Build unstripped debug code with frame pointers.  Both profiles keep the same
-features and runtime checks.  Switching profiles does not require cleaning;
-do not run different profiles concurrently in one worktree.
-.TP
-.B make install
-Build and install production under
-.IR /usr/local ,
-with executable mode 0755 and manual mode 0644.  Use
-.B make DEBUG=1 install
-for a deliberate debug installation.
-.B PREFIX
-changes the prefix;
-.B MANPREFIX
-defaults to $(PREFIX)/share/man.
-.B DESTDIR
-stages both paths without installing on the host.
-.TP
-.B make help
-List targets and overrides without building or contacting a provider.
-.TP
-.B make check
-Run existing local tests and source checks.  Tests need Python 3 and Perl;
-tmux enables the terminal integration tests.
+The local operator and ordinary IRC clients receive channel mode
+.BR +o ;
+the model nick does not.  Current channel operators may change the topic.
+Only direct mentions of the model nick are urgent; ordinary messages from
+local or channel operators remain background context.
+Urgent input is coalesced and admitted at the earliest safe boundary;
+generation reaches a safe stream boundary and commands are handed back alive.
 .PP
-Explicit CC, CPPFLAGS, CFLAGS and LDFLAGS replace their profile defaults;
-required identity and thread flags remain.  Production defaults to
-.B -Os
-and debug to
-.BR -Og .
-Neither default adds host-specific instruction sets or mandatory LTO.
-STRIP, OBJCOPY and DSYMUTIL override packaging tools.
+Other messages, joins, leaves, mode changes, and topic changes enter model
+context when convenient and do not force a reply.  First join and successful
+compaction inject bounded room history.  The runtime reconnects outgoing links
+without model babysitting.
 .PP
-Production retains matching symbols beside the build executable:
-.I debug-snajpagent
-on ELF or
-.I snajpagent.dSYM
-on macOS.  They are not installed or needed to run the program.  Keep them
-for diagnosing that exact binary; a later debug rebuild is not a substitute.
-.SS Standalone builds
-Native POSIX defaults select 64-bit file offsets, including on 32-bit libc
-builds.  Preserve _FILE_OFFSET_BITS=64 when replacing CPPFLAGS; it does not
-enlarge the process address space or establish old-kernel compatibility.
+Implicit outgoing nicks form zero-based sequences:
+.BR agent0 ,
+.BR agent1 ,
+and so on, with the same rule for the operator's default.  When an explicit
+preferred nick is already present, the client handles the server's normal
+.B 433
+reply by appending
+.BR 1 ,
+.BR 2 ,
+and so on until registration succeeds.  The accepted nick is retained across
+reconnects.
 .PP
-These explicit targets use the pinned Nix recipes and can download/build
-dependencies.  They do not replace the normal host executable or start VMs.
-Independent targets can run together with
-.BR "make -jN" .
-.TP
-.BR "make prod-linux-x86_64" , " make prod-linux-aarch64"
-Build a static-PIE Linux executable with embedded CA data.  Copy
-.I build/matrix/linux-ARCH/bin/snajpagent
-to the destination; Nix and third-party runtime libraries are not required
-there.  Optional matching symbols are in the adjacent
-.I .debug/
-directory.  These target modern Linux with x86-64 or ARMv8-A baselines;
-older-kernel compatibility requires separate qualification.
-.TP
-.BR "make prod-macos-arm64" , " make prod-macos-x86_64"
-Cross-build a macOS 11+ executable with static application libraries and CA
-data; only the OS libSystem remains dynamic.  Output is
-.IR build/matrix/macos-ARCH/bin/snajpagent ,
-with an adjacent matching dSYM.
-.TP
-.B make prod-macos-universal
-Combine both Mac slices into a native Mach-O universal executable and dSYM
-under
-.IR build/matrix/macos-universal/bin/ .
+The terminal starts in the timestamped
+.B chat
+view.  Model text and tools belong to the
+.B rollout
+view regardless of verbosity.  Chat input goes to the selected room as the
+local operator.  Multiple destinations receive short source/prompt labels;
+a hosted room counts once regardless of how many clients joined it.
+Explicit numbered sends and broadcasts also work from rollout, but ordinary
+rollout input stays local:
+while idle it starts a model turn, and during active work it steers that turn at
+the next safe boundary.  It never emits an IRC message.  Incoming room traffic
+is not automatically bridged between servers.  Model response text remains local;
+.B irc_send
+is the only model-authored path to a room message or notice.  If a
+local-operator mention turn reaches a terminal response without a successful
+.B irc_send
+message, the model receives one reminder.  Notices do not satisfy that reply
+requirement.  Other room traffic never forces a reply.
 .PP
-The macOS cross-builds are experimental: cross-built and inspected, not yet
-runtime-qualified on macOS.  No Developer ID signing or notarization is implied.
-ARM64 has a linker-generated ad-hoc signature; the Intel slice is unsigned.
-Cross-compilation alone does not establish runtime support.
-.TP
-.B make \-jN prod-matrix
-Build all currently implemented standalone production targets: Linux
-x86-64/AArch64, macOS ARM64/Intel/universal, and Windows x86-64/ARM64.
-Legacy and other planned ports remain unfinished.
-Targets use separate build/matrix outputs and shared immutable Nix inputs;
-each recipe permits one Nix job and core.  SDK availability does not silently
-remove targets.  Use make \-k \-jN prod-matrix to continue independent targets
-after a failure; the command still fails and preserves successful outputs.
-Reruns reuse completed Nix builds.  DEBUG=1 is rejected.
-This does not install, replace the native executable, boot VMs, or contact a
-model.  Cross-build success does not establish runtime qualification.
-.TP
-.BR "make prod-windows-x86_64" , " make prod-windows-arm64"
-Build the experimental native Windows x64 or ARM64 executable using pinned Nix
-dependencies.  Copy
-.I build/matrix/windows-ARCH/bin/snajpagent.exe
-to Windows.  Application libraries and CA roots are included; Nix and
-third-party runtime DLLs are not needed there.  Optional matching symbols
-are in the adjacent .debug directory.  Runtime qualification is limited
-to tested modern Windows PE guests (x64 build 26100, ARM64 build 28000);
-full desktop and older Windows
-remain in progress.  Plain make still builds only the host platform.
+The accepted per-server nick drives mentions, echo suppression, and model
+instructions.  Live IRC nick changes retain op status and produce room
+notifications.  Chat uses the selected destination's accepted operator nick.
+There is no local slash command for changing
+nicks; standard IRC clients can use
+.BR NICK .
 .PP
-See the repository's DEPENDENCIES.md for static dependency licenses, embedded
-trust, corresponding-source obligations and platform qualification details.
-.SH OPTIONS
+Nicks are at most 30 bytes and local model/operator preferences must differ
+under IRC case folding.  Room names are at most 50 bytes excluding
+.BR # .
+The server implements registration, join/part, messages/notices, topic,
+names/who, nick and mode changes, liveness, and bounded history, not the entire
+IRC protocol.  snajpagent clients expect its advertised single-room behavior.
+.PP
+The built-in IRC subset has no TLS or authentication.  A non-loopback listener
+is suitable only for a trusted network or a separately secured tunnel.
+.SH "Options"
 .TP
 .BR \-s " [" endpoint "]", " \-\-listen" [= endpoint ]
 Host the built-in IRC server in this foreground process and select its
@@ -549,7 +484,8 @@ or
 .IR [IPv6]:port .
 The default port is 6667.  In networked mode initial chat text must follow
 .BR \-\- .
-.SH INTERACTIVE INPUT
+.SH "Terminal"
+.SS Editing keys
 .TP
 .B Enter
 Submit while idle.  In rollout during model generation, interrupt the response
@@ -654,7 +590,7 @@ accept up to 256 KiB.  The queue holds up to 128 pending turns within 16 MiB;
 up to 32 steering items may be pending in a turn.  Interactive EOF interrupts
 active work and exits, preserving the saved goal state.  Queued turns wait
 for explicit continuation on resume.  The session remains resumable.
-.SH DISPLAY
+.SS Views and prompt
 Startup without network roles opens rollout; startup with roles opens chat. Empty Tab,
 .BR /chat ,
 and
@@ -783,7 +719,7 @@ and its Markdown styles are unchanged.  This display rule
 applies to live and retained chat; it does not change mention admission or
 turn history into fresh instructions.  Color-disabled output has no escapes.
 .PP
-.SH COMMANDS
+.SH "Commands"
 Commands normally occupy a single submitted line.
 .BR /ro ,
 numbered sends and
@@ -817,7 +753,7 @@ other providers use
 .BR /v1/models .
 There is no automatic catalog refresh or protocol fallback.  Failure leaves
 the previous cache intact.  Idle only.  See
-.BR "MODEL SELECTION AND CONTEXT" .
+.BR "Model selection and context" .
 .TP
 .BR /model " " number ", " /model " #" number
 Select an exact displayed provider/model/effort row.
@@ -1000,7 +936,8 @@ removal.  With a sole destination the same syntax remains valid.
 Broadcast once to the destinations present at submission.  This does not
 enable a persistent broadcast mode.  A later connection does not receive it.
 An unavailable destination is reported locally; messages are not redirected.
-.SH MODEL SELECTION AND CONTEXT
+.SH "Models and providers"
+.SS Model selection and context
 The provider, model, and effort are session preferences.  A typed selector
 without a provider stays on the currently selected provider.  An omitted
 effort uses configuration.  The value
@@ -1037,7 +974,7 @@ once to Responses summarization when its native endpoint is unavailable;
 other native failures remain errors.  Manual
 .B /compact
 is idle only.  Compaction changes model context, not the append-only local log.
-.SH LOGIN
+.SS Login
 Common options such as
 .BR --dotdir ,
 .BR --config ,
@@ -1080,7 +1017,7 @@ are not modified; other provider logins remain intact.
 Automatic setup never consumes piped task input or runs for execution, resume,
 session listing, or a missing explicitly specified configuration.  Invalid
 existing configuration is an error, not an invitation to overwrite it.
-.SH CONFIGURATION
+.SH "Configuration"
 The file is UTF-8 INI syntax.  Lines beginning with
 .B #
 or
@@ -1518,121 +1455,8 @@ An expired cursor reports a retention gap and replays the available newer tail.
 New clients receive one bounded initial history.  Interrupted delivery is
 recovered from the client's session until a model response consumes it.
 
-.SH FILES
-.TP
-.I $HOME/.snajpagent/config.ini
-Default configuration.
-.TP
-.I $HOME/.snajpagent/auth/PROVIDER.json
-Private credentials bound to provider, endpoint, and auth method.  Files must
-be user-owned regular files with no group/other permissions.  Per-provider
-locks coordinate refresh rotation and atomic replacement across processes.
-Do not share or commit these files.  An alternate dotdir has independent logins.
-.TP
-.I $HOME/.snajpagent/models.json
-Atomically replaced versioned provider/model registry containing advertised
-token capacities, counting capabilities and observed context ceilings.  Refresh only with
-.BR /model\ cache .
-.TP
-.I $HOME/.snajpagent/prompt_history
-Shared plaintext interactive prompt history.  It stores the newest 100 decoded
-entries within 4 MiB as private mode 0600, one escaped physical line per
-submission.  Another
-.B --dotdir
-selects another history file.
-.TP
-.I $HOME/.snajpagent/sessions/SESSION/events.jsonl
-Append-only durable session log.
-.TP
-.I $HOME/.snajpagent/sessions/SESSION/lock
-Live session lock.
-.TP
-.I $HOME/.snajpagent/trash/
-Private deletion staging.
-.TP
-.I $XDG_CONFIG_HOME/snajpagent/AGENTS.override.md
-.TQ
-.I $XDG_CONFIG_HOME/snajpagent/AGENTS.md
-Optional global instructions.  If
-.B XDG_CONFIG_HOME
-is unset, use
-.IR $HOME/.config .
-.PP
-Project instructions are discovered from the repository root through the
-workspace.  In each directory,
-.B AGENTS.override.md
-takes precedence over
-.BR AGENTS.md .
-Outside a repository, only the workspace directory is searched.  Global
-instructions precede project instructions, followed by explicit
-.B \-d
-entry points.  The combined set is limited to 16 distinct canonical paths.
-Files must be regular and non-symlink; discovery does not read their contents.
-The model is given safely quoted paths and reads relevant guidance with normal
-tools, subject to those tools' file and output limits.  An empty override still
-takes precedence.  Per-turn metadata records advertised paths, not content
-hashes or proof of reading.  This replaces the earlier pre-1.0 instruction
-metadata format in place: sessions containing populated old instruction
-metadata cannot be resumed by this build.  Their existing logs are not deleted.
-.PP
-Set
-.B read_agents_md=false
-under
-.B [agent]
-to disable both global and project discovery, but not explicit
-.B \-d
-roots.  The default working-document search location is the session workspace.
-Useful notes retain findings, decisions, scoped corrections and unfinished work;
-they are not a second goal controller.  Verify changeable facts when resuming,
-keep proposals distinct from approval, and preserve local scope on each host.
-No notes layout, recursive Markdown scan, or memory service is required.
-.SH ENVIRONMENT
-.TP
-.B HOME
-Builds the default dotdir and fallback global-instruction path.
-Native Windows uses USERPROFILE when HOME is absent or empty.
-.TP
-.B XDG_CONFIG_HOME
-Selects the global-instruction directory.  It must be absolute.
-.TP
-.B EDITOR
-Command used by
-.BR /config .
-.TP
-.B USER
-Supplies the default operator nick when valid and distinct.
-.TP
-.B NO_COLOR
-Disables color in
-.B auto
-mode when present.
-.TP
-.B SSL_CERT_FILE
-A nonempty value selects a CA file for provider, login and refresh HTTPS
-connections, including HTTPS proxies.  It replaces the standalone build's
-embedded CA data, or the native build's default CA file.  Certificate and
-hostname verification remain enabled.  Keep this file trusted and current.
-.TP
-.B TERM
-Enables terminal capabilities and color detection.
-.TP
-.BR LC_ALL , " LC_CTYPE" , " LANG"
-On POSIX, select a UTF-8 locale using normal locale precedence.
-Native Windows uses explicit UTF-8 conversions and does not require a
-UTF-8 CRT locale.
-.TP
-.B PATH
-On POSIX, used to resolve an executable invoked without a slash for the
-printed resume command.  Native Windows obtains the running executable
-from the operating system instead.
-.TP
-.I "api_key = ${ENV_NAME}"
-An explicit environment credential source must contain a nonempty value
-of 1 through 16384 ASCII bytes without whitespace or controls.
-.TP
-.I "secret = ${ENV_NAME}"
-Names an additional value hidden from tool children and redacted from output.
-.SH AUTOMATION AND INTEGRATION
+.SH "Scripting and tools"
+.SS Automation and integration
 Use
 .B \-e
 for scripts.  It runs the supplied turn and any explicitly requested goal
@@ -1753,7 +1577,42 @@ neither.  Wording locks prevent model rewording, not completion or blocking.
 .PP
 IRC is the network integration.  The event log is durable internal state, not
 a stable external API while snajpagent remains pre-1.0.
-.SH TOOL REFERENCE
+.SS Signals
+.TP
+.B SIGINT
+Interactive Ctrl-C follows the composer rules above.  Outside that handler it
+requests graceful shutdown.
+.TP
+.BR SIGHUP , " SIGTERM"
+Request graceful shutdown, terminal restoration, IRC closure, and a resume
+hint.  Exit status is 128 plus the signal number.
+.TP
+.B SIGTSTP
+Ctrl-Z restores the terminal before suspension and redraws after continuation.
+.TP
+.B SIGPIPE
+Ignored; write failures are handled as errors.
+.SS Exit status
+.TP
+.B 0
+Success or normal interactive exit.
+.TP
+.B 2
+Command-line, configuration, locale, credential, prompt, or selection error.
+.TP
+.B 3
+Durable state, local runtime, or IRC failure.
+.TP
+.B 4
+One-shot provider, protocol, context, or tool-cycle failure.
+.TP
+.B 6
+Terminal/output failure or one-shot interruption that cannot return to a prompt.
+.TP
+.B 128+N
+Graceful exit after signal
+.IR N .
+.SS Tool reference
 These are model-callable tools, not slash commands to type into the composer.
 The advertised functions depend on turn mode, goal state and networking.
 Arguments use strict JSON objects: all declared fields are present, with
@@ -1910,100 +1769,8 @@ follows the operator's selected room.  Text and topic are bounded UTF-8;
 topic is at most 280 bytes with no newline.  Successful send acceptance is not
 proof that every remote participant received it.  Runtime joining, history and
 reconnection are not model-managed tools.
-.SH IRC MODE
-Listener mode creates one room.  Its default name is the hostname and its initial
-topic is the server agent's absolute launch workspace.  snajpagent clients join
-the advertised room automatically.
-.PP
-The local operator and ordinary IRC clients receive channel mode
-.BR +o ;
-the model nick does not.  Current channel operators may change the topic.
-Only direct mentions of the model nick are urgent; ordinary messages from
-local or channel operators remain background context.
-Urgent input is coalesced and admitted at the earliest safe boundary;
-generation reaches a safe stream boundary and commands are handed back alive.
-.PP
-Other messages, joins, leaves, mode changes, and topic changes enter model
-context when convenient and do not force a reply.  First join and successful
-compaction inject bounded room history.  The runtime reconnects outgoing links
-without model babysitting.
-.PP
-Implicit outgoing nicks form zero-based sequences:
-.BR agent0 ,
-.BR agent1 ,
-and so on, with the same rule for the operator's default.  When an explicit
-preferred nick is already present, the client handles the server's normal
-.B 433
-reply by appending
-.BR 1 ,
-.BR 2 ,
-and so on until registration succeeds.  The accepted nick is retained across
-reconnects.
-.PP
-The terminal starts in the timestamped
-.B chat
-view.  Model text and tools belong to the
-.B rollout
-view regardless of verbosity.  Chat input goes to the selected room as the
-local operator.  Multiple destinations receive short source/prompt labels;
-a hosted room counts once regardless of how many clients joined it.
-Explicit numbered sends and broadcasts also work from rollout, but ordinary
-rollout input stays local:
-while idle it starts a model turn, and during active work it steers that turn at
-the next safe boundary.  It never emits an IRC message.  Incoming room traffic
-is not automatically bridged between servers.  Model response text remains local;
-.B irc_send
-is the only model-authored path to a room message or notice.  If a
-local-operator mention turn reaches a terminal response without a successful
-.B irc_send
-message, the model receives one reminder.  Notices do not satisfy that reply
-requirement.  Other room traffic never forces a reply.
-.PP
-The accepted per-server nick drives mentions, echo suppression, and model
-instructions.  Live IRC nick changes retain op status and produce room
-notifications.  Chat uses the selected destination's accepted operator nick.
-There is no local slash command for changing
-nicks; standard IRC clients can use
-.BR NICK .
-.PP
-Nicks are at most 30 bytes and local model/operator preferences must differ
-under IRC case folding.  Room names are at most 50 bytes excluding
-.BR # .
-The server implements registration, join/part, messages/notices, topic,
-names/who, nick and mode changes, liveness, and bounded history, not the entire
-IRC protocol.  snajpagent clients expect its advertised single-room behavior.
-.PP
-The built-in IRC subset has no TLS or authentication.  A non-loopback listener
-is suitable only for a trusted network or a separately secured tunnel.
-.SH PROVIDER FAILURES
-Transient transport, HTTP rate-limit/server, and structured Responses stream
-failures receive at most two retries of the same request, with bounded backoff
-and cancellation available during the wait.  Earlier turn/tool work is not
-replayed.  Additional live chat, steering or queued input prevents further
-retries, including during backoff.  Steering keeps its immediate handoff;
-background chat and queued turns retain their normal admission rules, without
-interrupting a healthy response.  When new input stops retrying a failed
-response, armed queued turns proceed automatically, without an extra
-.BR /next .
-View/status controls alone do not veto retries.
-Stream retries stop once output or tool activity has been observed;
-malformed or ambiguous partial records are not automatically replayed.
-.PP
-Policy, access, quota and unknown structured failures are not transient retries.
-For a pre-output
-.B cyber_policy
-rejection, the model instead receives up to three durable clarification
-instructions per turn.  The original task remains intact: the instruction asks
-for accurate restatement of ambiguous phrasing with purpose, actions, targets
-and authorization unchanged, and operator clarification where needed.  New input
-or observed output/activity prevents another automatic clarification.  A fourth
-rejection ends the turn.  There is no provider switch or concealed task scope.
-.PP
-Rollout shows one concise "provider clarification N/3" notice at every verbosity
-level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details.
-Error codes, not message wording, determine eligibility.  A failed stream never
-becomes a successful response merely because the connection closed.
-.SH SESSION DURABILITY
+.SH "Sessions and files"
+.SS Session durability
 New sessions remain in memory until the first prompt or goal is submitted.
 Exiting before then creates no saved session, needs no deletion, and prints no
 resume hint. Startup activity and selection changes are retained if a prompt
@@ -2048,67 +1815,122 @@ and model-input handling are unchanged.
 .PP
 SIGKILL, power loss, and fatal process corruption cannot guarantee cleanup or a
 printed resume command.  Already synced events remain available.
-.SH SIGNALS
+.SS Files
 .TP
-.B SIGINT
-Interactive Ctrl-C follows the composer rules above.  Outside that handler it
-requests graceful shutdown.
+.I $HOME/.snajpagent/config.ini
+Default configuration.
 .TP
-.BR SIGHUP , " SIGTERM"
-Request graceful shutdown, terminal restoration, IRC closure, and a resume
-hint.  Exit status is 128 plus the signal number.
+.I $HOME/.snajpagent/auth/PROVIDER.json
+Private credentials bound to provider, endpoint, and auth method.  Files must
+be user-owned regular files with no group/other permissions.  Per-provider
+locks coordinate refresh rotation and atomic replacement across processes.
+Do not share or commit these files.  An alternate dotdir has independent logins.
 .TP
-.B SIGTSTP
-Ctrl-Z restores the terminal before suspension and redraws after continuation.
+.I $HOME/.snajpagent/models.json
+Atomically replaced versioned provider/model registry containing advertised
+token capacities, counting capabilities and observed context ceilings.  Refresh only with
+.BR /model\ cache .
 .TP
-.B SIGPIPE
-Ignored; write failures are handled as errors.
-.SH EXIT STATUS
+.I $HOME/.snajpagent/prompt_history
+Shared plaintext interactive prompt history.  It stores the newest 100 decoded
+entries within 4 MiB as private mode 0600, one escaped physical line per
+submission.  Another
+.B --dotdir
+selects another history file.
 .TP
-.B 0
-Success or normal interactive exit.
+.I $HOME/.snajpagent/sessions/SESSION/events.jsonl
+Append-only durable session log.
 .TP
-.B 2
-Command-line, configuration, locale, credential, prompt, or selection error.
+.I $HOME/.snajpagent/sessions/SESSION/lock
+Live session lock.
 .TP
-.B 3
-Durable state, local runtime, or IRC failure.
+.I $HOME/.snajpagent/trash/
+Private deletion staging.
 .TP
-.B 4
-One-shot provider, protocol, context, or tool-cycle failure.
-.TP
-.B 6
-Terminal/output failure or one-shot interruption that cannot return to a prompt.
-.TP
-.B 128+N
-Graceful exit after signal
-.IR N .
-.SH EXAMPLES
-Start an interactive session in the current directory:
+.I $XDG_CONFIG_HOME/snajpagent/AGENTS.override.md
+.TQ
+.I $XDG_CONFIG_HOME/snajpagent/AGENTS.md
+Optional global instructions.  If
+.B XDG_CONFIG_HOME
+is unset, use
+.IR $HOME/.config .
 .PP
-.nf
-snajpagent
-.fi
+Project instructions are discovered from the repository root through the
+workspace.  In each directory,
+.B AGENTS.override.md
+takes precedence over
+.BR AGENTS.md .
+Outside a repository, only the workspace directory is searched.  Global
+instructions precede project instructions, followed by explicit
+.B \-d
+entry points.  The combined set is limited to 16 distinct canonical paths.
+Files must be regular and non-symlink; discovery does not read their contents.
+The model is given safely quoted paths and reads relevant guidance with normal
+tools, subject to those tools' file and output limits.  An empty override still
+takes precedence.  Per-turn metadata records advertised paths, not content
+hashes or proof of reading.  This replaces the earlier pre-1.0 instruction
+metadata format in place: sessions containing populated old instruction
+metadata cannot be resumed by this build.  Their existing logs are not deleted.
 .PP
-Execute a task from a script:
-.PP
-.nf
-printf '%s\en' 'run the tests and summarize failures' | snajpagent -e
-.fi
-.PP
-Resume the newest active session:
-.PP
-.nf
-snajpagent --resume --last
-.fi
-.PP
-Host a room and connect another agent:
-.PP
-.nf
-snajpagent -s localhost:6667 -n builder -o alice -r work
-snajpagent -c localhost:6667 -n reviewer -o bob
-.fi
-.SH TROUBLESHOOTING
+Set
+.B read_agents_md=false
+under
+.B [agent]
+to disable both global and project discovery, but not explicit
+.B \-d
+roots.  The default working-document search location is the session workspace.
+Useful notes retain findings, decisions, scoped corrections and unfinished work;
+they are not a second goal controller.  Verify changeable facts when resuming,
+keep proposals distinct from approval, and preserve local scope on each host.
+No notes layout, recursive Markdown scan, or memory service is required.
+.SS Environment
+.TP
+.B HOME
+Builds the default dotdir and fallback global-instruction path.
+Native Windows uses USERPROFILE when HOME is absent or empty.
+.TP
+.B XDG_CONFIG_HOME
+Selects the global-instruction directory.  It must be absolute.
+.TP
+.B EDITOR
+Command used by
+.BR /config .
+.TP
+.B USER
+Supplies the default operator nick when valid and distinct.
+.TP
+.B NO_COLOR
+Disables color in
+.B auto
+mode when present.
+.TP
+.B SSL_CERT_FILE
+A nonempty value selects a CA file for provider, login and refresh HTTPS
+connections, including HTTPS proxies.  It replaces the standalone build's
+embedded CA data, or the native build's default CA file.  Certificate and
+hostname verification remain enabled.  Keep this file trusted and current.
+.TP
+.B TERM
+Enables terminal capabilities and color detection.
+.TP
+.BR LC_ALL , " LC_CTYPE" , " LANG"
+On POSIX, select a UTF-8 locale using normal locale precedence.
+Native Windows uses explicit UTF-8 conversions and does not require a
+UTF-8 CRT locale.
+.TP
+.B PATH
+On POSIX, used to resolve an executable invoked without a slash for the
+printed resume command.  Native Windows obtains the running executable
+from the operating system instead.
+.TP
+.I "api_key = ${ENV_NAME}"
+An explicit environment credential source must contain a nonempty value
+of 1 through 16384 ASCII bytes without whitespace or controls.
+.TP
+.I "secret = ${ENV_NAME}"
+Names an additional value hidden from tool children and redacted from output.
+.SH "Troubleshooting"
+.SS Common problems
 .TP
 .B The prompt shows ?% for context.
 Usage and capacity are different facts.  A comparable request bound exists,
@@ -2211,7 +2033,191 @@ A live session cannot be resumed concurrently.  Do not delete its lock to start
 a second owner.  Pre-1.0 internal formats can change; preserve older logs and
 use a compatible binary to inspect them rather than rewriting or deleting
 unknown data.  Archive/deletion of a session does not erase shared prompt history.
-.SH SECURITY
+.SS Provider failures
+Transient transport, HTTP rate-limit/server, and structured Responses stream
+failures receive at most two retries of the same request, with bounded backoff
+and cancellation available during the wait.  Earlier turn/tool work is not
+replayed.  Additional live chat, steering or queued input prevents further
+retries, including during backoff.  Steering keeps its immediate handoff;
+background chat and queued turns retain their normal admission rules, without
+interrupting a healthy response.  When new input stops retrying a failed
+response, armed queued turns proceed automatically, without an extra
+.BR /next .
+View/status controls alone do not veto retries.
+Stream retries stop once output or tool activity has been observed;
+malformed or ambiguous partial records are not automatically replayed.
+.PP
+Policy, access, quota and unknown structured failures are not transient retries.
+For a pre-output
+.B cyber_policy
+rejection, the model instead receives up to three durable clarification
+instructions per turn.  The original task remains intact: the instruction asks
+for accurate restatement of ambiguous phrasing with purpose, actions, targets
+and authorization unchanged, and operator clarification where needed.  New input
+or observed output/activity prevents another automatic clarification.  A fourth
+rejection ends the turn.  There is no provider switch or concealed task scope.
+.PP
+Rollout shows one concise "provider clarification N/3" notice at every verbosity
+level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details.
+Error codes, not message wording, determine eligibility.  A failed stream never
+becomes a successful response merely because the connection closed.
+.SH "Building and installing"
+.SS Binary releases
+Release availability and platform compatibility are listed at
+.IR https://agent.snajpa.net/downloads.html .
+Every new version, including patch releases and prereleases, ships all
+implemented production targets listed by the Makefile's PROD_TARGETS.
+Additional implemented targets join subsequent releases; unfinished ports
+are not claimed as available.  Experimental builds are labeled with their
+actual testing scope, not silently omitted.  See RELEASE.md in the source
+tree for the publication policy.
+.PP
+Each release provides platform-specific executable downloads, SHA256SUMS,
+source/build and license material, the manual, and separate matching symbols.
+Verify the downloaded executable against the release checksum before use.
+On Unix, rename it to snajpagent and make it executable with chmod +x;
+on Windows retain the .exe extension.  Debug symbols are not required to run.
+Until the first binary release is published, use the source builds below.
+.SS Source builds
+Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
+libcurl and Jansson development files.  These instructions describe the
+normal POSIX build.  An experimental native Windows x86-64 package is also
+available; see the standalone target below and DEPENDENCIES.md for its
+current qualification scope.
+Plain
+.B make
+builds only for the host, with size optimization and stripping.  ELF production
+packaging needs strip and objcopy; macOS needs strip and dsymutil.
+The build version uses the latest reachable Git tag; untagged commits add their
+short revision, and modified checkouts add a -dirty suffix.
+META defines the product name only.  A tagged Git history is required; portable
+build targets pass the same derived identity into their isolated source build.
+.TP
+.B make DEBUG=1
+Build unstripped debug code with frame pointers.  Both profiles keep the same
+features and runtime checks.  Switching profiles does not require cleaning;
+do not run different profiles concurrently in one worktree.
+.TP
+.B make install
+Build and install production under
+.IR /usr/local ,
+with executable mode 0755 and manual mode 0644.  Use
+.B make DEBUG=1 install
+for a deliberate debug installation.
+.B PREFIX
+changes the prefix;
+.B MANPREFIX
+defaults to $(PREFIX)/share/man.
+.B DESTDIR
+stages both paths without installing on the host.
+.TP
+.B make help
+List targets and overrides without building or contacting a provider.
+.TP
+.B make check
+Run existing local tests and source checks.  Tests need Python 3 and Perl;
+tmux enables the terminal integration tests.
+.PP
+Explicit CC, CPPFLAGS, CFLAGS and LDFLAGS replace their profile defaults;
+required identity and thread flags remain.  Production defaults to
+.B -Os
+and debug to
+.BR -Og .
+Neither default adds host-specific instruction sets or mandatory LTO.
+STRIP, OBJCOPY and DSYMUTIL override packaging tools.
+.PP
+Production retains matching symbols beside the build executable:
+.I debug-snajpagent
+on ELF or
+.I snajpagent.dSYM
+on macOS.  They are not installed or needed to run the program.  Keep them
+for diagnosing that exact binary; a later debug rebuild is not a substitute.
+.SS Standalone builds
+Native POSIX defaults select 64-bit file offsets, including on 32-bit libc
+builds.  Preserve _FILE_OFFSET_BITS=64 when replacing CPPFLAGS; it does not
+enlarge the process address space or establish old-kernel compatibility.
+.PP
+These explicit targets use the pinned Nix recipes and can download/build
+dependencies.  They do not replace the normal host executable or start VMs.
+Independent targets can run together with
+.BR "make -jN" .
+.TP
+.BR "make prod-linux-x86_64" , " make prod-linux-aarch64"
+Build a static-PIE Linux executable with embedded CA data.  Copy
+.I build/matrix/linux-ARCH/bin/snajpagent
+to the destination; Nix and third-party runtime libraries are not required
+there.  Optional matching symbols are in the adjacent
+.I .debug/
+directory.  These target modern Linux with x86-64 or ARMv8-A baselines;
+older-kernel compatibility requires separate qualification.
+.TP
+.BR "make prod-macos-arm64" , " make prod-macos-x86_64"
+Cross-build a macOS 11+ executable with static application libraries and CA
+data; only the OS libSystem remains dynamic.  Output is
+.IR build/matrix/macos-ARCH/bin/snajpagent ,
+with an adjacent matching dSYM.
+.TP
+.B make prod-macos-universal
+Combine both Mac slices into a native Mach-O universal executable and dSYM
+under
+.IR build/matrix/macos-universal/bin/ .
+.PP
+The macOS cross-builds are experimental: cross-built and inspected, not yet
+runtime-qualified on macOS.  No Developer ID signing or notarization is implied.
+ARM64 has a linker-generated ad-hoc signature; the Intel slice is unsigned.
+Cross-compilation alone does not establish runtime support.
+.TP
+.B make \-jN prod-matrix
+Build all currently implemented standalone production targets: Linux
+x86-64/AArch64, macOS ARM64/Intel/universal, and Windows x86-64/ARM64.
+Legacy and other planned ports remain unfinished.
+Targets use separate build/matrix outputs and shared immutable Nix inputs;
+each recipe permits one Nix job and core.  SDK availability does not silently
+remove targets.  Use make \-k \-jN prod-matrix to continue independent targets
+after a failure; the command still fails and preserves successful outputs.
+Reruns reuse completed Nix builds.  DEBUG=1 is rejected.
+This does not install, replace the native executable, boot VMs, or contact a
+model.  Cross-build success does not establish runtime qualification.
+.TP
+.BR "make prod-windows-x86_64" , " make prod-windows-arm64"
+Build the experimental native Windows x64 or ARM64 executable using pinned Nix
+dependencies.  Copy
+.I build/matrix/windows-ARCH/bin/snajpagent.exe
+to Windows.  Application libraries and CA roots are included; Nix and
+third-party runtime DLLs are not needed there.  Optional matching symbols
+are in the adjacent .debug directory.  Runtime qualification is limited
+to tested modern Windows PE guests (x64 build 26100, ARM64 build 28000);
+full desktop and older Windows
+remain in progress.  Plain make still builds only the host platform.
+.PP
+See the repository's DEPENDENCIES.md for static dependency licenses, embedded
+trust, corresponding-source obligations and platform qualification details.
+.SH "Examples"
+Start an interactive session in the current directory:
+.PP
+.nf
+snajpagent
+.fi
+.PP
+Execute a task from a script:
+.PP
+.nf
+printf '%s\en' 'run the tests and summarize failures' | snajpagent -e
+.fi
+.PP
+Resume the newest active session:
+.PP
+.nf
+snajpagent --resume --last
+.fi
+.PP
+Host a room and connect another agent:
+.PP
+.nf
+snajpagent -s localhost:6667 -n builder -o alice -r work
+snajpagent -c localhost:6667 -n reviewer -o bob
+.fi
+.SH "Security"
 The model and its tools act with the user's local authority.  Run in a suitable
 workspace, inspect configuration, and protect the dotdir.  There is no command
 approval sandbox.  snajpagent requires
@@ -2235,14 +2241,14 @@ trusted or independently secured.
 .PP
 Verbosity 5 exposes prompts, source, tool output, and model content.  Review
 terminal capture before sharing it.
-.SH SEE ALSO
+.SH "See also"
 .BR sh (1),
 .BR tmux (1)
 .PP
 Project documentation:
 .br
 .I https://github.com/snajpa/snajpagent
-.SH LICENSE
+.SH "License"
 GPL-2.0-only.  See
 .B COPYING
 and
