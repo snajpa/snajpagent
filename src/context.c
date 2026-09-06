@@ -700,23 +700,34 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         struct snag_irc_event event;
         if (snag_irc_event_read(data, &event) < 0) return -1;
         if (!event.input) return 0;
-        if (builder->active_turn && !event.urgent && !event.historical) {
-            if (!builder->deferred_irc) builder->deferred_irc = json_array();
-            if (!builder->deferred_irc || json_array_append(builder->deferred_irc, (json_t *)data) < 0)
-                return -1;
-            if (!builder->deferred_irc_seq) builder->deferred_irc_seq = seq;
-            return 0;
-        }
-        return summarized ? 0 : append_room_event(builder, data);
+        if (!builder->deferred_irc) builder->deferred_irc = json_array();
+        if (!builder->deferred_irc || json_array_append_new(builder->deferred_irc,
+            json_pack("{s:I,s:O}", "seq", (json_int_t)seq, "event", (json_t *)data)) < 0)
+            return -1;
+        if (!builder->deferred_irc_seq) builder->deferred_irc_seq = seq;
+        return 0;
     }
-    if (!strcmp(type, "turn_completed") || !strcmp(type, "turn_completed_silent") ||
-        !strcmp(type, "turn_failed") || !strcmp(type, "turn_interrupted")) {
-        for (size_t i = 0u; !summarized && i < json_array_size(builder->deferred_irc); ++i)
-            if (append_room_event(builder, json_array_get(builder->deferred_irc, i)) < 0)
-                return -1;
-        json_decref(builder->deferred_irc);
-        builder->deferred_irc = NULL;
-        builder->deferred_irc_seq = 0u;
+    if (!strcmp(type, "irc_admitted")) {
+        const json_t *sequences = json_object_get(data, "sequences");
+        for (size_t i = 0u; i < json_array_size(sequences); ++i) {
+            json_int_t wanted = json_integer_value(json_array_get(sequences, i));
+            size_t j;
+            bool found = false;
+            for (j = 0u; j < json_array_size(builder->deferred_irc); ++j) {
+                json_t *pending = json_array_get(builder->deferred_irc, j);
+                if (json_integer_value(json_object_get(pending, "seq")) == wanted) {
+                    if (!summarized && append_room_event(builder, json_object_get(pending, "event")) < 0)
+                        return -1;
+                    if (json_array_remove(builder->deferred_irc, j) < 0) return -1;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return -1;
+        }
+        builder->deferred_irc_seq = (uint64_t)json_integer_value(json_object_get(
+            json_array_get(builder->deferred_irc, 0u), "seq"));
+        return 0;
     }
     if (builder->session && seq <= builder->session->compact_seq) {
         /* A compact source may end between complete groups inside an older

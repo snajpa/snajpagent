@@ -45,6 +45,7 @@ struct app_state {
     struct snag_irc_route irc_turn_replies;
     bool irc_destinations_ready;
     struct snag_buf irc_urgent;
+    struct snag_buf irc_urgent_refs, irc_background_refs;
     struct snag_buf irc_background;
     struct snag_instruction_set turn_instructions;
     struct snag_model_cache model_cache;

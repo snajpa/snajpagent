@@ -20,12 +20,12 @@ snag_irc_kind_name(enum snag_irc_event_kind kind)
 json_t *
 snag_irc_event_data(const struct snag_irc_event *event)
 {
-    return json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:I,s:s,s:I,s:b,s:b}",
+    return json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:I,s:s,s:I,s:b}",
         "endpoint", event->endpoint, "historical", event->historical,
         "kind", snag_irc_kind_name(event->kind), "local", event->local,
         "nick", event->nick, "op", event->op, "room", event->room,
         "text", event->text, "timestamp_ms", (json_int_t)event->timestamp_ms,
-        "stream", event->stream, "sequence", (json_int_t)event->sequence, "input", event->input, "urgent", event->urgent);
+        "stream", event->stream, "sequence", (json_int_t)event->sequence, "input", event->input);
 }
 
 static bool
@@ -47,7 +47,7 @@ snag_irc_event_read(const json_t *data, struct snag_irc_event *event)
 {
     static const char *const keys[] = {
         "endpoint", "historical", "kind", "local", "nick", "op",
-        "room", "text", "timestamp_ms", "stream", "sequence", "input", "urgent"
+        "room", "text", "timestamp_ms", "stream", "sequence", "input"
     };
     const char *kind = snag_json_string(data, "kind");
 
@@ -67,15 +67,13 @@ snag_irc_event_read(const json_t *data, struct snag_irc_event *event)
         (event->stream[0] && !snag_hex_is_lower(event->stream, SNAG_ID_HEX_LEN)) ||
         snag_json_integer_u64(data, "sequence", &event->sequence) < 0 ||
         (!!event->sequence != !!event->stream[0]) ||
-        !json_is_boolean(json_object_get(data, "input")) ||
-        !json_is_boolean(json_object_get(data, "urgent")))
+        !json_is_boolean(json_object_get(data, "input")))
         goto invalid;
     for (unsigned int i = 0u; i <= (unsigned int)SNAG_IRC_HISTORY_READY; ++i) {
         if (strcmp(kind, snag_irc_kind_name((enum snag_irc_event_kind)i)) != 0)
             continue;
         event->kind = (enum snag_irc_event_kind)i;
         event->historical = json_is_true(json_object_get(data, "historical"));
-        event->urgent = json_is_true(json_object_get(data, "urgent"));
         event->input = json_is_true(json_object_get(data, "input"));
         event->local = json_is_true(json_object_get(data, "local"));
         event->op = json_is_true(json_object_get(data, "op"));

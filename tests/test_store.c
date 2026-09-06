@@ -315,7 +315,6 @@ main(void)
         assert(snag_json_set_new(event, "stream", json_string("")) == 0);
         assert(snag_json_set_new(event, "sequence", json_integer(0)) == 0);
         assert(snag_json_set_new(event, "input", json_false()) == 0);
-        assert(snag_json_set_new(event, "urgent", json_false()) == 0);
         oversized = json_deep_copy(event);
         assert(oversized);
         durable_seq = session.next_seq;

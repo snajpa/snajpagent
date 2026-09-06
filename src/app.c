@@ -4065,6 +4065,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     int rc = 3;
     memset(&app, 0, sizeof(app));
     snag_buf_init(&app.irc_urgent, SNAG_MAX_IRC_SNAPSHOT);
+    snag_buf_init(&app.irc_urgent_refs, SNAG_MAX_IRC_SNAPSHOT);
+    snag_buf_init(&app.irc_background_refs, SNAG_MAX_IRC_SNAPSHOT);
     snag_buf_init(&app.irc_background, SNAG_MAX_IRC_SNAPSHOT);
     snag_config_init(&config);
     snag_instructions_init(&app.turn_instructions);
@@ -4332,6 +4334,8 @@ out:
     snag_ui_free(&app.ui);
     (void)capture_shutdown_signal(&app);
     snag_buf_free(&app.irc_urgent);
+    snag_buf_free(&app.irc_urgent_refs);
+    snag_buf_free(&app.irc_background_refs);
     snag_buf_free(&app.irc_background);
     free(config_path);
     free(dotdir);

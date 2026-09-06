@@ -1304,6 +1304,8 @@ test_durable_irc_input_watermark(void)
     assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
     assert(session.irc_received_seq == received && !session.irc_consumed_seq);
     const char *turn = "22222222222222222222222222222222", *response = "33333333333333333333333333333333";
+    assert(snag_session_commit(&session, "irc_admitted", json_pack("{s:[I]}",
+        "sequences", (json_int_t)received), NULL, error, sizeof(error)) == 0);
     assert(snag_session_commit(&session, "turn_started", turn_started(turn, 1u,
         "inspect pending room input", path, json_array()), NULL, error, sizeof(error)) == 0);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,

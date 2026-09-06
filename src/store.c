@@ -692,6 +692,19 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (event.input)
             session->irc_received_seq = seq;
+    } else if (strcmp(type, "irc_admitted") == 0) {
+        static const char *const keys[] = {"sequences"};
+        const json_t *items = json_object_get(data, "sequences");
+        uint64_t previous = 0u;
+        if (!snag_json_exact_keys(data, keys, 1u) || !json_is_array(items) || !json_array_size(items))
+            goto invalid;
+        for (size_t i = 0u; i < json_array_size(items); ++i) {
+            json_t *item = json_array_get(items, i);
+            if (!json_is_integer(item) || json_integer_value(item) <= 0 ||
+                (uint64_t)json_integer_value(item) <= previous || (uint64_t)json_integer_value(item) >= seq)
+                goto invalid;
+            previous = (uint64_t)json_integer_value(item);
+        }
     } else if (strcmp(type, "irc_snapshot") == 0) {
         static const char *const keys[] = {"reason", "text", "timestamp_ms"};
         const char *reason = snag_json_string(data, "reason");

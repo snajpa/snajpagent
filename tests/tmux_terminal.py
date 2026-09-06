@@ -2368,7 +2368,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 received = [e["data"] for e in event_list(log, "irc_event")]
                 for marker in mentions:
                     matches = [e for e in received if e["text"] == marker]
-                    assert len(matches) == 1 and matches[0]["urgent"]
+                    assert len(matches) == 1 and not matches[0]["historical"]
                     identity = f"id={matches[0]['stream']}:{matches[0]['sequence']} "
                     assert sum(identity in text for text in admitted) == 1
                 assert len(requests) == expected, "received input was admitted as duplicate work"
