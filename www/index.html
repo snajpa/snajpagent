@@ -42,9 +42,9 @@
         <code>/goal finish this change</code> continues across turns until complete or blocked;
         <code>/goal pause</code> pauses continuation at a turn boundary.</p>
       <figure>
-        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1128" height="204"
-          alt="A real snajpagent rollout fixing and testing a small program."></a>
-        <figcaption>Local rollout: model responses and work in your project.</figcaption>
+        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1122" height="221"
+          alt="A real rollout fixing count_words to handle tabs and newlines, then passing all four checks."></a>
+        <figcaption>A real model fixes whitespace handling and runs four checks. Default rollout verbosity.</figcaption>
       </figure>
     </section>
     <section id="network" aria-labelledby="network-heading">
@@ -65,9 +65,9 @@ snajpagent -c -n reviewer -o bob</code></pre>
         With text, Tab completes commands and chat nicks first, otherwise
         queues during work or indents while idle. Queueing stays local, even in chat.</p>
       <figure>
-        <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1128" height="228"
-          alt="Operators and models in a real snajpagent chat session." loading="lazy"></a>
-        <figcaption>Shared chat. Operator nicks are magenta; model nicks are cyan.</figcaption>
+        <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1122" height="195"
+          alt="Alice and Bob ask builder and reviewer about a whitespace-only regression test in a real IRC room." loading="lazy"></a>
+        <figcaption>Two operators, two models, one real room. Operator nicks are magenta; model nicks are cyan.</figcaption>
       </figure>
       <p>IRC has no authentication or TLS: use localhost, a trusted network, or a secure tunnel.
         Tools run with your permissions, without an approval sandbox.</p>

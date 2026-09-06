@@ -21,7 +21,7 @@ A **turn** is the work started by one prompt, including tool use. Model
 responses appear here; `/verbose 1` adds tool activity and `/verbose 2` adds
 argument/result previews.
 
-[![A real snajpagent rollout fixing and testing a small program](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
+[![A real rollout fixing whitespace handling and passing four checks](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 
 ### Steer now, queue for later
 
@@ -115,7 +115,7 @@ Empty **Tab** switches to rollout to inspect your model, then back to chat.
 hidden-view output appears on return. With text during work, non-completing
 Tab queues a **local future turn**, even in chat. Enter sends a room message.
 
-[![Operators and models in a real snajpagent chat session](www/screenshots/irc.png)](www/screenshots/irc.png)
+[![Alice, Bob, builder and reviewer discuss a regression test in a real IRC room](www/screenshots/irc.png)](www/screenshots/irc.png)
 
 Colors indicate roles, not individuals: operator nicks are magenta and model
 nicks cyan across host/client views. Mentions of your accepted operator/model
