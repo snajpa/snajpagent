@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <stddef.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -720,7 +719,6 @@ flood_done:
     if (strcmp(prompt, "engine_blocked") == 0) {
         static const char text[] = "engine-block-start engine-block-end";
         size_t index = graph->count;
-        struct timespec delay = {2, 500000000};
 
         if (snag_response_graph_add_public(graph, SNAG_ITEM_ASSISTANT,
                 SNAG_PHASE_FINAL_ANSWER, "msg_engine_blocked", text) < 0 ||
@@ -728,8 +726,7 @@ flood_done:
                  text, 19u) < 0)
             goto allocation;
         /* Intentionally no pump: models a sync/lock/DNS/library stall. */
-        while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
-            ;
+        (void)snag_sleep_ms(2500u);
         if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
                  text + 19u, sizeof(text) - 1u - 19u) < 0)
             goto allocation;
@@ -927,7 +924,7 @@ flood_done:
         for (unsigned int i = 0u; i < 100u; ++i) {
             int pump_rc;
 
-            (void)poll(NULL, 0u, 20);
+            (void)snag_sleep_ms(20u);
             pump_rc = pump(opaque, 0u);
             if (pump_rc != 0)
                 return pump_rc;
