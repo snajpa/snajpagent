@@ -23,21 +23,18 @@ static json_t *
 change_data(const char *old_key, const char *old_value,
             const char *new_key, const char *new_value)
 {
-    json_t *data = json_object();
+    json_t *data = json_pack("{s:s,s:s}",
+        old_key, old_value, new_key, new_value);
     assert(data);
-    assert(snag_json_set_new(data, old_key, json_string(old_value)) == 0);
-    assert(snag_json_set_new(data, new_key, json_string(new_value)) == 0);
     return data;
 }
 
 static json_t *
 delete_data(const char *prefix, const char *trash_name)
 {
-    json_t *data = json_object();
+    json_t *data = json_pack("{s:s,s:s}",
+        "confirmed_id_prefix", prefix, "trash_name", trash_name);
     assert(data);
-    assert(snag_json_set_new(data, "confirmed_id_prefix",
-                            json_string(prefix)) == 0);
-    assert(snag_json_set_new(data, "trash_name", json_string(trash_name)) == 0);
     return data;
 }
 
@@ -86,45 +83,36 @@ turn_started_data(const struct snag_session *session, const char *turn_id)
 static json_t *
 queued_data(const char *turn_id, const char *queue_id, const char *text)
 {
-    json_t *data = json_object();
-
+    json_t *data = json_pack("{s:s,s:b,s:s,s:s}",
+        "queue_id", queue_id, "read_only", 0, "text", text, "while_turn_id", turn_id);
     assert(data);
-    assert(snag_json_set_new(data, "queue_id", json_string(queue_id)) == 0);
-    assert(snag_json_set_new(data, "read_only", json_false()) == 0);
-    assert(snag_json_set_new(data, "text", json_string(text)) == 0);
-    assert(snag_json_set_new(data, "while_turn_id", json_string(turn_id)) == 0);
     return data;
 }
 
 static json_t *
 edited_data(const char *queue_id, const char *text)
 {
-    json_t *data = json_object();
-
+    json_t *data = json_pack("{s:s,s:b,s:s}",
+        "queue_id", queue_id, "read_only", 0, "text", text);
     assert(data);
-    assert(snag_json_set_new(data, "queue_id", json_string(queue_id)) == 0);
-    assert(snag_json_set_new(data, "read_only", json_false()) == 0);
-    assert(snag_json_set_new(data, "text", json_string(text)) == 0);
     return data;
 }
 
 static json_t *
 goal_started_data(const char *goal_id, const char *prompt)
 {
-    json_t *data = json_object();
+    json_t *data = json_pack("{s:s,s:s}",
+        "goal_id", goal_id, "prompt", prompt);
     assert(data);
-    assert(snag_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
-    assert(snag_json_set_new(data, "prompt", json_string(prompt)) == 0);
     return data;
 }
 
 static json_t *
 goal_actor_data(const char *goal_id, const char *actor)
 {
-    json_t *data = json_object();
+    json_t *data = json_pack("{s:s,s:s}",
+        "actor", actor, "goal_id", goal_id);
     assert(data);
-    assert(snag_json_set_new(data, "actor", json_string(actor)) == 0);
-    assert(snag_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
     return data;
 }
 
@@ -140,10 +128,9 @@ goal_reworded_data(const char *goal_id, const char *actor,
 static json_t *
 goal_lock_data(const char *goal_id, bool locked)
 {
-    json_t *data = json_object();
+    json_t *data = json_pack("{s:s,s:b}",
+        "goal_id", goal_id, "locked", locked);
     assert(data);
-    assert(snag_json_set_new(data, "goal_id", json_string(goal_id)) == 0);
-    assert(snag_json_set_new(data, "locked", json_boolean(locked)) == 0);
     return data;
 }
 
@@ -191,11 +178,9 @@ compaction_started_data(const struct snag_session *session,
 static json_t *
 compaction_interrupted_data(const char *compact_id, const char *reason)
 {
-    json_t *data = json_object();
-
+    json_t *data = json_pack("{s:s,s:s}",
+        "compact_id", compact_id, "reason", reason);
     assert(data);
-    assert(snag_json_set_new(data, "compact_id", json_string(compact_id)) == 0);
-    assert(snag_json_set_new(data, "reason", json_string(reason)) == 0);
     return data;
 }
 

@@ -70,11 +70,10 @@ kill_child_group(pid_t pid, int signo)
         (void)kill(pid, signo);
 }
 
-static int
+static void
 exec_child(const char *shell, const char *command, const char *workdir,
            int stdin_rd, int stdout_wr, int stderr_wr, char **env)
 {
-    (void)setpgid(0, 0);
     if (chdir(workdir) < 0)
         _exit(125);
     if (dup2(stdin_rd, STDIN_FILENO) < 0 ||
@@ -140,23 +139,14 @@ open_pty_pair(int *master_fd, int *slave_fd,
     return openpty(master_fd, slave_fd, NULL, NULL, &ws);
 }
 
-static int
+static void
 exec_pty_child(const char *shell, const char *command, const char *workdir,
                int slave_fd, char **env)
 {
     if (setsid() < 0)
         _exit(125);
     (void)ioctl(slave_fd, TIOCSCTTY, 0);
-    if (chdir(workdir) < 0)
-        _exit(125);
-    if (dup2(slave_fd, STDIN_FILENO) < 0 ||
-        dup2(slave_fd, STDOUT_FILENO) < 0 ||
-        dup2(slave_fd, STDERR_FILENO) < 0)
-        _exit(125);
-    for (int fd = 3; fd < 256; ++fd)
-        (void)close(fd);
-    execle(shell, shell, "-c", command, (char *)NULL, env);
-    _exit(errno == ENOENT ? 127 : 126);
+    exec_child(shell, command, workdir, slave_fd, slave_fd, slave_fd, env);
 }
 #else
 static void
@@ -225,6 +215,7 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
             close_if_open(&pipes[0][0]);
             close_if_open(&pipes[1][0]);
             close_if_open(&pipes[2][1]);
+            (void)setpgid(0, 0);
             exec_child(shell, command, directory, pipes[2][0], pipes[0][1], pipes[1][1], environment);
         }
     }

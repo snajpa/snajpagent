@@ -1503,6 +1503,7 @@ markdown_table_render(struct snag_render *render)
         render->public_column = 0u;
     }
     md->prose = false;
+    size_t row = 0u;
     if (grid) {
         if (markdown_table_rule(render, "┌", "┬", "┐", widths,
                                 header_count, true) < 0 ||
@@ -1511,35 +1512,24 @@ markdown_table_render(struct snag_render *render)
             markdown_table_rule(render, "├", "┼", "┤", widths,
                                 header_count, true) < 0)
             return -1;
-        offset = body_offset;
-        while (markdown_table_next_line(text, md->table.len, &offset, &line,
-                                        &line_len)) {
-            struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
-            size_t count;
+    } else if (markdown_text(render, "┌─ table\n", strlen("┌─ table\n")) < 0) {
+        return -1;
+    }
+    offset = body_offset;
+    while (markdown_table_next_line(text, md->table.len, &offset, &line,
+                                    &line_len)) {
+        struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
+        size_t count;
 
-            if (render_checkpoint(render) < 0 ||
-                !markdown_table_cells(line, line_len, cells, &count) ||
-                markdown_table_grid_row(render, cells, count, widths,
+        if (render_checkpoint(render) < 0 ||
+            !markdown_table_cells(line, line_len, cells, &count))
+            return -1;
+        if (grid) {
+            if (markdown_table_grid_row(render, cells, count, widths,
                                         alignment, header_count, false) < 0)
                 return -1;
-        }
-        if (markdown_table_rule(render, "└", "┴", "┘", widths,
-                                header_count, ended_lf) < 0)
-            return -1;
-    } else {
-        size_t row = 0u;
-
-        if (markdown_text(render, "┌─ table\n", strlen("┌─ table\n")) < 0)
-            return -1;
-        offset = body_offset;
-        while (markdown_table_next_line(text, md->table.len, &offset, &line,
-                                        &line_len)) {
-            struct markdown_table_cell cells[MARKDOWN_TABLE_COLUMNS];
-            size_t count;
-
-            if (render_checkpoint(render) < 0 ||
-                !markdown_table_cells(line, line_len, cells, &count) ||
-                markdown_text(render, "├─ row\n", strlen("├─ row\n")) < 0)
+        } else {
+            if (markdown_text(render, "├─ row\n", strlen("├─ row\n")) < 0)
                 return -1;
             for (size_t i = 0u; i < header_count; ++i) {
                 struct markdown_table_cell empty = {0};
@@ -1553,8 +1543,14 @@ markdown_table_render(struct snag_render *render)
                     markdown_text(render, "\n", 1u) < 0)
                     return -1;
             }
-            ++row;
         }
+        ++row;
+    }
+    if (grid) {
+        if (markdown_table_rule(render, "└", "┴", "┘", widths,
+                                header_count, ended_lf) < 0)
+            return -1;
+    } else {
         if (!row) {
             for (size_t i = 0u; i < header_count; ++i)
                 if (markdown_text(render, "│ ", strlen("│ ")) < 0 ||

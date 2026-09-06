@@ -1341,6 +1341,13 @@ test_markdown_tables(void)
                                   28u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, narrow) == 0);
 
+    assert(capture_markdown_width("| Name |\n| --- |\n", true, true, SNAG_COLOR_NEVER,
+                                  9u, output, sizeof(output), NULL) > 0u);
+    assert(strcmp(output, "┌─ table\n│ Name\n└─\n") == 0);
+    assert(capture_markdown_width("| Name |\n| --- |", true, true, SNAG_COLOR_NEVER,
+                                  9u, output, sizeof(output), NULL) > 0u);
+    assert(strcmp(output, "┌─ table\n│ Name\n└─") == 0);
+
     assert(capture_markdown(malformed, true, true, SNAG_COLOR_NEVER,
                             output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, "• | Name | State |\n| -- | nope |\nafter\n") == 0);

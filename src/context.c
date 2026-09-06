@@ -99,18 +99,16 @@ static char *
 canonical_string(const json_t *value, size_t max)
 {
     struct snag_buf encoded;
-    char *copy = NULL;
 
     snag_buf_init(&encoded, max);
     if (snag_json_canonical(value, &encoded) == 0) {
-        copy = malloc(encoded.len + 1u);
-        if (copy) {
-            memcpy(copy, encoded.data, encoded.len);
-            copy[encoded.len] = '\0';
-        }
+        if (encoded.max < SIZE_MAX)
+            ++encoded.max; /* The terminator is outside the canonical byte bound. */
+        if (snag_buf_terminate(&encoded) == 0)
+            return (char *)encoded.data;
     }
     snag_buf_free(&encoded);
-    return copy;
+    return NULL;
 }
 
 static int
@@ -561,7 +559,6 @@ static int
 compact_complete_boundary(struct context_builder *builder, uint64_t seq,
                           char *error, size_t error_size)
 {
-    struct snag_buf encoded;
     size_t count, source_bytes;
 
     if (!builder->compact_budget) {
@@ -570,17 +567,14 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
         builder->compact_best_request_count = json_array_size(builder->request_input);
         return 0;
     }
-    snag_buf_init(&encoded, SNAG_CONTEXT_MAX_COMPACT);
-    if (snag_json_canonical(builder->request_input, &encoded) < 0) {
-        int saved = errno;
-        snag_buf_free(&encoded);
-        if (saved == EOVERFLOW && builder->compact_best_known)
+    if (snag_json_digest_bounded(builder->request_input, SNAG_CONTEXT_MAX_COMPACT,
+                                NULL, &source_bytes) < 0) {
+        if (errno == EOVERFLOW && builder->compact_best_known)
             goto trim;
         snag_errorf(error, error_size, "cannot encode complete compaction group within 12 MiB");
         return -1;
     }
-    source_bytes = encoded.len;
-    if (encoded.len <= builder->compact_budget ||
+    if (source_bytes <= builder->compact_budget ||
          (!builder->compact_best_known &&
           builder->compact_allow_oversized_first) ||
          (builder->compact_allow_oversized_first && builder->compact_best_known &&
@@ -589,10 +583,8 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
         builder->compact_best_seq = seq;
         builder->compact_best_request_count =
             json_array_size(builder->request_input);
-        snag_buf_free(&encoded);
         return 0;
     }
-    snag_buf_free(&encoded);
     if (!builder->compact_best_known) {
         snag_errorf(error, error_size,
                   "oldest complete response/tool group through event %llu is %zu bytes, above compaction source budget %llu bytes; use exact counting/a larger model or reduce irreducible input",
@@ -1446,9 +1438,6 @@ snag_context_compact_output_valid(const json_t *output,
                                      size_t *output_bytes,
                                      char *error, size_t error_size)
 {
-    struct snag_buf encoded;
-    int rc = -1;
-
     if (output_hash)
         output_hash[0] = '\0';
     if (output_bytes)
@@ -1468,18 +1457,11 @@ snag_context_compact_output_valid(const json_t *output,
             return -1;
         }
     }
-    snag_buf_init(&encoded, SNAG_CONTEXT_MAX_COMPACT);
-    if (snag_json_canonical(output, &encoded) == 0) {
-        if (output_hash)
-            snag_sha256_hex(encoded.data, encoded.len, output_hash);
-        if (output_bytes)
-            *output_bytes = encoded.len;
-        rc = 0;
-    } else {
-        snag_errorf(error, error_size, "compact output exceeds 12 MiB");
-    }
-    snag_buf_free(&encoded);
-    return rc;
+    if (snag_json_digest_bounded(output, SNAG_CONTEXT_MAX_COMPACT,
+                                output_hash, output_bytes) == 0)
+        return 0;
+    snag_errorf(error, error_size, "compact output exceeds 12 MiB");
+    return -1;
 }
 
 int

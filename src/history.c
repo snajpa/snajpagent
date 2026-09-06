@@ -343,7 +343,6 @@ close_memory:
     errno = saved;
 memory:
     history_note_warning(term);
-    if (history_memory_add(term, text, NULL) < 0)
-        return -1;
+    (void)history_memory_add(term, text, NULL);
     return -1;
 }

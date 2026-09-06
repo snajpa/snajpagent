@@ -124,36 +124,18 @@ item_free(struct snag_response_item *item)
 static int
 account_last_item(struct snag_response_graph *graph)
 {
-    struct snag_buf encoded;
     json_t *value;
-    size_t total;
+    size_t bytes, total;
     int rc;
 
     value = item_json(&graph->items[graph->count - 1u]);
     if (!value)
         return -1;
-    snag_buf_init(&encoded, SNAG_MAX_RESPONSE_GRAPH);
-    rc = snag_json_canonical(value, &encoded);
+    rc = snag_json_digest_bounded(value, SNAG_MAX_RESPONSE_GRAPH, NULL, &bytes);
     json_decref(value);
-    if (rc < 0) {
-        snag_buf_free(&encoded);
-        errno = EOVERFLOW;
-        return -1;
-    }
-    if (graph->count == 1u) {
-        if (!snag_size_add(encoded.len, 2u, &total)) {
-            snag_buf_free(&encoded);
-            errno = EOVERFLOW;
-            return -1;
-        }
-    } else if (!snag_size_add(graph->encoded_bytes, encoded.len, &total) ||
-               !snag_size_add(total, 1u, &total)) {
-        snag_buf_free(&encoded);
-        errno = EOVERFLOW;
-        return -1;
-    }
-    snag_buf_free(&encoded);
-    if (total > SNAG_MAX_RESPONSE_GRAPH) {
+    if (rc < 0 || !snag_size_add(bytes, graph->count == 1u ? 2u : 1u, &total) ||
+        (graph->count > 1u && !snag_size_add(graph->encoded_bytes, total, &total)) ||
+        total > SNAG_MAX_RESPONSE_GRAPH) {
         errno = EOVERFLOW;
         return -1;
     }
@@ -386,14 +368,8 @@ tool_name_valid(const char *name)
 static bool
 arguments_bounded(const json_t *arguments)
 {
-    struct snag_buf encoded;
-    int rc;
-    if (!json_is_object(arguments))
-        return false;
-    snag_buf_init(&encoded, SNAG_MAX_TOOL_ARGUMENTS);
-    rc = snag_json_canonical(arguments, &encoded);
-    snag_buf_free(&encoded);
-    return rc == 0;
+    return json_is_object(arguments) &&
+           snag_json_digest_bounded(arguments, SNAG_MAX_TOOL_ARGUMENTS, NULL, NULL) == 0;
 }
 
 static int
@@ -504,7 +480,6 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
     bool have_speech = false;
     size_t calls = 0;
     size_t bad_index = 0;
-    struct snag_buf encoded;
 
     memset(decision, 0, sizeof(*decision));
     if (!graph->provider_response_id || graph->count > SNAG_MAX_RESPONSE_ITEMS) {
@@ -559,13 +534,11 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
         errno = EOVERFLOW;
         return -1;
     }
-    snag_buf_init(&encoded, SNAG_MAX_RESPONSE_GRAPH);
     {
         json_t *items = snag_response_graph_json(graph);
-        int rc = items ? snag_json_canonical(items, &encoded) : -1;
+        int rc = items ? snag_json_digest_bounded(items, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) : -1;
         if (items)
             json_decref(items);
-        snag_buf_free(&encoded);
         if (rc < 0) {
             snag_errorf(error, error_size, "response graph exceeds 8 MiB");
             errno = EOVERFLOW;

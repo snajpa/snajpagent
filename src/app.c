@@ -81,36 +81,20 @@ remember_input(struct app_state *app, const char *text)
     history_warning(app);
 }
 static int
-app_hostf(struct app_state *app, const char *fmt, ...)
+app_textf(struct app_state *app, enum snag_ui_operation operation, const char *fmt, ...)
 {
     struct snag_buf text;
     va_list ap;
     int rc;
 
-    snag_buf_init(&text, 4u * 1024u * 1024u);
-    va_start(ap, fmt);
-    rc = snag_buf_vprintf(&text, fmt, ap);
-    va_end(ap);
-    if (rc == 0)
-        rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
-    snag_buf_free(&text);
-    return rc;
-}
-static int
-app_runtimef(struct app_state *app, const char *fmt, ...)
-{
-    struct snag_buf text;
-    va_list ap;
-    int rc;
-
-    if (!snag_ui_enabled(&app->ui, SNAG_PRESENT_DEBUG))
+    if (operation == SNAG_UI_RUNTIME && !snag_ui_enabled(&app->ui, SNAG_PRESENT_DEBUG))
         return 0;
     snag_buf_init(&text, 4u * 1024u * 1024u);
     va_start(ap, fmt);
     rc = snag_buf_vprintf(&text, fmt, ap);
     va_end(ap);
     if (rc == 0)
-        rc = snag_ui_text(&app->ui, SNAG_UI_RUNTIME, (const char *)text.data);
+        rc = snag_ui_text(&app->ui, operation, (const char *)text.data);
     snag_buf_free(&text);
     return rc;
 }
@@ -960,10 +944,7 @@ render_status(struct app_state *app)
         "queue: %zu%s\n"
         "verbosity: %u\n"
         "context: source=%s",
-        id ? id : (char [9]){app->session.id[0], app->session.id[1],
-                             app->session.id[2], app->session.id[3],
-                             app->session.id[4], app->session.id[5],
-                             app->session.id[6], app->session.id[7], '\0'},
+        id,
         app->session.active_turn ? "active" : "idle",
         app->session.active_read_only ? "read-only query" : "normal",
         next_provider(app) ? next_provider(app)->name : "<missing>",
@@ -1110,7 +1091,7 @@ static int
 show_setting(struct app_state *app, const char *name, const char *value,
              bool staged)
 {
-    return app_hostf(app, "%s for next turn: %s%s", name, value,
+    return app_textf(app, SNAG_UI_HOST, "%s for next turn: %s%s", name, value,
                      staged ? " (staged once)" : "");
 }
 static int
@@ -1408,14 +1389,14 @@ commit_model_selection(struct app_state *app,
         (void)snprintf(app->config->reasoning_effort,
                        sizeof(app->config->reasoning_effort), "%s", effort);
     }
-    rc = app_hostf(app, "model for next turn: %s / %s / %s",
+    rc = app_textf(app, SNAG_UI_HOST, "model for next turn: %s / %s / %s",
                    provider->name, model, effort);
     if (rc < 0)
         return rc;
     if (!known_in_cache && app_warning(app,
             "model is not known in the model cache; the configured provider will still be used") < 0)
         return -1;
-    return save ? app_hostf(app, "configuration saved: %s", app->config_path) : 0;
+    return save ? app_textf(app, SNAG_UI_HOST, "configuration saved: %s", app->config_path) : 0;
 }
 static int
 select_cached_model(struct app_state *app, const char *value, bool save)
@@ -1841,7 +1822,7 @@ change_config(struct app_state *app, bool active)
     if (same_config_snapshot(&before, &after)) {
         if (!editor_success)
             return app_error(app, "$EDITOR exited unsuccessfully; configuration unchanged");
-        return app_hostf(app, "configuration unchanged: %s", app->config_path);
+        return app_textf(app, SNAG_UI_HOST, "configuration unchanged: %s", app->config_path);
     }
     error[0] = '\0';
     rc = reload_config(app, error, sizeof(error));
@@ -1855,7 +1836,7 @@ change_config(struct app_state *app, bool active)
                 "$EDITOR exited unsuccessfully after changing the configuration") < 0)
             return -1;
     }
-    return app_hostf(app, "configuration reloaded: %s", app->config_path);
+    return app_textf(app, SNAG_UI_HOST, "configuration reloaded: %s", app->config_path);
 }
 
 static int
@@ -1934,17 +1915,17 @@ network_command(struct app_state *app, const char *line, bool *handled)
         return app_error(app, "usage: /server [start [ENDPOINT]|stop], /connect [ENDPOINT], /disconnect [ENDPOINT]");
     if (server) {
         if (count == 1u)
-            return app_hostf(app, config->listen_explicit ?
+            return app_textf(app, SNAG_UI_HOST, config->listen_explicit ?
                 "hosting %s" : "hosting is off; use /server start [ENDPOINT]", config->listen);
         if (count == 2u && strcmp(words[1], "stop") == 0) {
             if (!config->listen_explicit)
-                return app_hostf(app, "hosting is already off; outgoing connections unchanged");
+                return app_textf(app, SNAG_UI_HOST, "hosting is already off; outgoing connections unchanged");
             config->listen_explicit = false;
         } else if (count >= 2u && strcmp(words[1], "start") == 0) {
             endpoint = count == 3u ? words[2] : "localhost:6667";
             if (config->listen_explicit) {
                 if (snag_irc_endpoint_equal(config->listen, endpoint))
-                    return app_hostf(app, "already hosting %s", config->listen);
+                    return app_textf(app, SNAG_UI_HOST, "already hosting %s", config->listen);
                 return app_error(app, "already hosting another endpoint; use /server stop first");
             }
             if (!snag_strcpy(config->listen, sizeof(config->listen), endpoint))
@@ -1956,10 +1937,10 @@ network_command(struct app_state *app, const char *line, bool *handled)
     } else if (connect) {
         endpoint = count == 2u ? words[1] : "localhost:6667";
         if (config->listen_explicit && snag_irc_endpoint_equal(config->listen, endpoint))
-            return app_hostf(app, "already hosting %s; no self-connection needed", endpoint);
+            return app_textf(app, SNAG_UI_HOST, "already hosting %s; no self-connection needed", endpoint);
         for (size_t i = 0u; i < config->client_count; ++i)
             if (snag_irc_endpoint_equal(config->clients[i], endpoint))
-                return app_hostf(app, "outgoing connection already configured: %s", endpoint);
+                return app_textf(app, SNAG_UI_HOST, "outgoing connection already configured: %s", endpoint);
         if (config->client_count == SNAG_CONFIG_IRC_CLIENT_MAX)
             return app_error(app, "at most 16 outgoing connections are supported");
         if (!snag_strcpy(config->clients[config->client_count],
@@ -1970,7 +1951,7 @@ network_command(struct app_state *app, const char *line, bool *handled)
         size_t index;
 
         if (!config->client_count)
-            return app_hostf(app, "no outgoing connections; hosting unchanged");
+            return app_textf(app, SNAG_UI_HOST, "no outgoing connections; hosting unchanged");
         if (count == 1u) {
             config->client_count = 0u;
             memset(config->clients, 0, sizeof(config->clients));
@@ -1979,7 +1960,7 @@ network_command(struct app_state *app, const char *line, bool *handled)
                 if (snag_irc_endpoint_equal(config->clients[index], words[1]))
                     break;
             if (index == config->client_count)
-                return app_hostf(app, "outgoing endpoint is not configured: %s", words[1]);
+                return app_textf(app, SNAG_UI_HOST, "outgoing endpoint is not configured: %s", words[1]);
             memmove(config->clients + index, config->clients + index + 1u,
                     (--config->client_count - index) * sizeof(config->clients[0]));
             memset(config->clients[config->client_count], 0, sizeof(config->clients[0]));
@@ -1989,11 +1970,11 @@ network_command(struct app_state *app, const char *line, bool *handled)
     if (rc != 0)
         return rc < 0 ? -1 : app_error(app, error);
     if (connect)
-        return app_hostf(app, "outgoing connection added; /status shows connection state; /chat opens public chat");
+        return app_textf(app, SNAG_UI_HOST, "outgoing connection added; /status shows connection state; /chat opens public chat");
     if (disconnect)
-        return app_hostf(app, "outgoing connection%s removed; hosting unchanged",
+        return app_textf(app, SNAG_UI_HOST, "outgoing connection%s removed; hosting unchanged",
                           count == 1u ? "s" : "");
-    return app_hostf(app, config->listen_explicit ?
+    return app_textf(app, SNAG_UI_HOST, config->listen_explicit ?
         "hosting started on %s; /chat opens public chat" :
         "hosting stopped; outgoing connections unchanged", config->listen);
 }
@@ -2080,7 +2061,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
 
         *prompt_ready = rc == 0;
         if (rc == 0 && !app->networked)
-            rc = app_hostf(app, "chat is offline; use /connect or /server start");
+            rc = app_textf(app, SNAG_UI_HOST, "chat is offline; use /connect or /server start");
         return rc;
     }
     if (strcmp(line, "/rollout") == 0) {
@@ -2880,7 +2861,7 @@ run_turn(struct app_state *app, const char *prompt,
         goto out;
     }
     consume_staged_settings(app);
-    if (app_runtimef(app,
+    if (app_textf(app, SNAG_UI_RUNTIME,
             "turn › %s started%s · model=%s · effort=%s · workspace=%s",
             turn_id, read_only ? " (read-only)" : "", app->turn_model,
             app->turn_effort, app->session.workspace) < 0) {
@@ -3019,7 +3000,7 @@ run_turn(struct app_state *app, const char *prompt,
         }
         json_decref(projection.count_request);
         projection.count_request = NULL;
-        if (app_runtimef(app,
+        if (app_textf(app, SNAG_UI_RUNTIME,
                 "response › %s started · turn=%s · cycle=%u · model=%s · profile=%s",
                 response_id, turn_id, cycle, app->turn_model,
                 SNAJPAGENT_PROFILE_ID) < 0) {
@@ -3330,7 +3311,7 @@ run_turn(struct app_state *app, const char *prompt,
                          graph.usage.reasoning_tokens);
             usage_number(total_tokens, graph.usage.total_known,
                          graph.usage.total_tokens);
-            if (app_runtimef(app,
+            if (app_textf(app, SNAG_UI_RUNTIME,
                     "response › %s completed · provider=%s · outcome=%s · items=%zu · duration=%llums · tokens=%s/%s/%s/%s",
                     response_id, graph.provider_response_id,
                     graph_outcome_name(decision.outcome), graph.count,
@@ -3422,7 +3403,7 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             app->last_turn_refused = decision.outcome == SNAG_GRAPH_REFUSAL;
-            if (app_runtimef(app,
+            if (app_textf(app, SNAG_UI_RUNTIME,
                     "turn › %s completed · response=%s · item=%s",
                     turn_id, response_id, final->local_item_id) < 0) {
                 (void)app_error(app, "turn runtime facts could not be rendered");

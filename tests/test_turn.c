@@ -108,14 +108,10 @@ test_native_read_results(void)
 static json_t *
 args(void)
 {
-    json_t *o = json_object();
+    json_t *o = json_pack("{s:s,s:b,s:n,s:i,s:s,s:i}",
+        "command", "true", "pty", 0, "stdin", "timeout_ms", 1000, "workdir", "/tmp",
+        "yield_ms", 1000);
     assert(o);
-    assert(snag_json_set_new(o, "command", json_string("true")) == 0);
-    assert(snag_json_set_new(o, "pty", json_false()) == 0);
-    assert(snag_json_set_new(o, "stdin", json_null()) == 0);
-    assert(snag_json_set_new(o, "timeout_ms", json_integer(1000)) == 0);
-    assert(snag_json_set_new(o, "workdir", json_string("/tmp")) == 0);
-    assert(snag_json_set_new(o, "yield_ms", json_integer(1000)) == 0);
     return o;
 }
 
@@ -203,6 +199,7 @@ main(void)
         assert(snag_json_canonical(encoded, &a) == 0);
         assert(snag_json_canonical(roundtrip, &b) == 0);
         assert(a.len == b.len && memcmp(a.data, b.data, a.len) == 0);
+        assert(graph.encoded_bytes == a.len && copy.encoded_bytes == b.len);
         assert(json_object_set_new(json_object_get(json_array_get(roundtrip, 1u),
             "arguments"), "command", json_string("changed")) == 0);
         assert(json_equal(copy.items[1].arguments, graph.items[1].arguments));
