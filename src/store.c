@@ -415,6 +415,17 @@ common_event_valid(json_t *event, struct snag_session *session, uint64_t seq,
     *data_out = json_object_get(event, "data");
     return true;
 }
+bool
+snag_input_observation_matches(const struct snag_input_observation *value,
+    const char *provider, const char *model, const char *effort,
+    const char *source_sha256, const char *compact_id)
+{
+    return value->valid && !strcmp(value->provider, provider) &&
+        !strcmp(value->model, model) && !strcmp(value->effort, effort) &&
+        !strcmp(value->provider_source_sha256, source_sha256) &&
+        !strcmp(value->compact_id, compact_id);
+}
+
 static void
 clear_response_state(struct snag_session *session)
 {
@@ -422,14 +433,7 @@ clear_response_state(struct snag_session *session)
     session->response_complete = false;
     session->response_terminal = SNAG_RESPONSE_TERMINAL_NONE;
     session->active_response_id[0] = '\0';
-    session->active_response_model_input_sha256[0] = '\0';
-    session->active_response_request_input_sha256[0] = '\0';
-    session->active_response_request_sha256[0] = '\0';
-    session->active_response_provider_source_sha256[0] = '\0';
-    session->active_response_model_input_bytes = 0u;
-    session->active_response_request_input_bytes = 0u;
-    session->active_response_request_input_count = 0u;
-    session->active_response_requested_output_tokens = 0u;
+    memset(&session->active_accounting, 0, sizeof(session->active_accounting));
     session->final_item_id[0] = '\0';
     session->final_response_id[0] = '\0';
     session->pending_call_count = 0;
@@ -669,19 +673,8 @@ snag_goal_unfinished(enum snag_goal_status status)
 static void
 context_meter_set(struct snag_session *session, uint64_t tokens)
 {
-    memcpy(session->context_meter_provider, session->active_turn_provider,
-           sizeof(session->context_meter_provider));
-    memcpy(session->context_meter_model, session->active_turn_model,
-           sizeof(session->context_meter_model));
-    memcpy(session->context_meter_effort, session->active_turn_effort,
-           sizeof(session->context_meter_effort));
-    memcpy(session->context_meter_compact_id, session->active_response_compact_id,
-           sizeof(session->context_meter_compact_id));
-    memcpy(session->context_meter_provider_source_sha256,
-           session->active_response_provider_source_sha256,
-           sizeof(session->context_meter_provider_source_sha256));
-    session->context_meter_input_tokens = tokens;
-    session->context_meter_valid = true;
+    session->context_meter = session->active_accounting;
+    session->context_meter.input_tokens = tokens;
 }
 
 static int
@@ -1490,22 +1483,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
               requested_output_tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX)) ||
             !profile || strcmp(profile, SNAJPAGENT_PROFILE_ID) != 0 ||
             (strcmp(method, "anchored_upper_bound") == 0 ?
-                (!session->usage_anchor_valid ||
+                (!snag_input_observation_matches(&session->usage_anchor,
+                    provider, model, effort, provider_source_sha256, session->compact_id) ||
                  !snag_json_string(data, "baseline_sha256") ||
                  !snag_hex_is_lower(snag_json_string(data, "baseline_sha256"),
                                    SNAG_SHA256_HEX_LEN) ||
                  strcmp(snag_json_string(data, "baseline_sha256"),
-                        session->usage_anchor_model_input_sha256) != 0 ||
-                 strcmp(session->usage_anchor_provider,
-                        session->active_turn_provider) != 0 ||
-                 strcmp(session->usage_anchor_model,
-                        session->active_turn_model) != 0 ||
-                 strcmp(session->usage_anchor_effort,
-                        session->active_turn_effort) != 0 ||
-                 strcmp(session->usage_anchor_provider_source_sha256,
-                        provider_source_sha256) != 0 ||
-                 strcmp(session->usage_anchor_compact_id,
-                        session->compact_id) != 0) :
+                        session->usage_anchor.model_input_sha256) != 0) :
                 !json_is_null(json_object_get(data, "baseline_sha256"))) ||
             (session->compact_id[0] == '\0' ?
              !json_is_null(json_object_get(data, "compact_id")) :
@@ -1520,7 +1504,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_integer_u64(data, "input_tokens_bound", &token_bound) < 0 ||
             (strcmp(method, "unknown") == 0 && token_bound != 0u) ||
             (strcmp(method, "anchored_upper_bound") == 0 &&
-             token_bound < session->usage_anchor_input_tokens) ||
+             token_bound < session->usage_anchor.input_tokens) ||
             snag_json_integer_u64(data, "model_input_bytes",
                                  &model_input_bytes) < 0 ||
             model_input_bytes == 0u ||
@@ -1532,9 +1516,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             request_input_count > SNAG_EVENT_LIMIT ||
             (strcmp(method, "anchored_upper_bound") == 0 &&
              (request_input_bytes <
-                  session->usage_anchor_request_input_bytes ||
+                  session->usage_anchor.request_input_bytes ||
               request_input_count <
-                  session->usage_anchor_request_input_count)) ||
+                  session->usage_anchor.request_input_count)) ||
             snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
             cycle != (uint64_t)session->active_cycle + 1u ||
             cycle > UINT_MAX)
@@ -1549,23 +1533,32 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         clear_pending_steering(session);
         memcpy(session->active_response_id, response_id,
                sizeof(session->active_response_id));
-        memcpy(session->active_response_model_input_sha256, input_hash,
-               sizeof(session->active_response_model_input_sha256));
-        memcpy(session->active_response_request_input_sha256,
+        memcpy(session->active_accounting.model_input_sha256, input_hash,
+               sizeof(session->active_accounting.model_input_sha256));
+        memcpy(session->active_accounting.request_input_sha256,
                request_input_hash,
-               sizeof(session->active_response_request_input_sha256));
-        memcpy(session->active_response_request_sha256, request_hash,
-               sizeof(session->active_response_request_sha256));
-        memcpy(session->active_response_provider_source_sha256,
+               sizeof(session->active_accounting.request_input_sha256));
+        memcpy(session->active_accounting.request_sha256, request_hash,
+               sizeof(session->active_accounting.request_sha256));
+        memcpy(session->active_accounting.provider_source_sha256,
                provider_source_sha256,
-               sizeof(session->active_response_provider_source_sha256));
-        session->active_response_model_input_bytes = model_input_bytes;
-        session->active_response_request_input_bytes = request_input_bytes;
-        session->active_response_request_input_count = request_input_count;
-        session->active_response_requested_output_tokens =
+               sizeof(session->active_accounting.provider_source_sha256));
+        session->active_accounting.model_input_bytes = model_input_bytes;
+        session->active_accounting.request_input_bytes = request_input_bytes;
+        session->active_accounting.request_input_count = request_input_count;
+        session->active_accounting.requested_output_tokens =
             requested_output_tokens;
-        memcpy(session->active_response_compact_id, session->compact_id,
-               sizeof(session->active_response_compact_id));
+        memcpy(session->active_accounting.provider,
+               session->active_turn_provider,
+               sizeof(session->active_accounting.provider));
+        memcpy(session->active_accounting.model, session->active_turn_model,
+               sizeof(session->active_accounting.model));
+        memcpy(session->active_accounting.effort, session->active_turn_effort,
+               sizeof(session->active_accounting.effort));
+        memcpy(session->active_accounting.compact_id, session->compact_id,
+               sizeof(session->active_accounting.compact_id));
+        session->active_accounting.input_tokens = token_bound;
+        session->active_accounting.valid = true;
         if (strcmp(method, "exact") == 0)
             context_meter_set(session, token_bound);
         session->active_cycle = (unsigned int)cycle;
@@ -1604,7 +1597,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !request_hash || !snag_hex_is_lower(request_hash,
                                                 SNAG_SHA256_HEX_LEN) ||
             strcmp(request_hash,
-                   session->active_response_request_sha256) != 0 ||
+                   session->active_accounting.request_sha256) != 0 ||
             (!json_is_null(context_limit) &&
              (snag_json_integer_u64(data, "context_limit_tokens",
                                    &context_limit_tokens) < 0 ||
@@ -1625,7 +1618,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         expected_ceiling = snag_capacity_safety_ceiling(
             context_limit_tokens, requested_input_tokens,
-            session->active_response_requested_output_tokens);
+            session->active_accounting.requested_output_tokens);
         expected_ceiling_known = expected_ceiling != 0u;
         if (expected_ceiling_known != !json_is_null(observed_ceiling) ||
             (expected_ceiling_known && expected_ceiling != recorded_ceiling))
@@ -1766,32 +1759,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         }
         if (graph.usage.input_known) {
-            memcpy(session->usage_anchor_provider,
-                   session->active_turn_provider,
-                   sizeof(session->usage_anchor_provider));
-            memcpy(session->usage_anchor_model, session->active_turn_model,
-                   sizeof(session->usage_anchor_model));
-            memcpy(session->usage_anchor_effort, session->active_turn_effort,
-                   sizeof(session->usage_anchor_effort));
-            memcpy(session->usage_anchor_compact_id, session->compact_id,
-                   sizeof(session->usage_anchor_compact_id));
-            memcpy(session->usage_anchor_provider_source_sha256,
-                   session->active_response_provider_source_sha256,
-                   sizeof(session->usage_anchor_provider_source_sha256));
-            memcpy(session->usage_anchor_model_input_sha256,
-                   session->active_response_model_input_sha256,
-                   sizeof(session->usage_anchor_model_input_sha256));
-            memcpy(session->usage_anchor_request_input_sha256,
-                   session->active_response_request_input_sha256,
-                   sizeof(session->usage_anchor_request_input_sha256));
-            session->usage_anchor_model_input_bytes =
-                session->active_response_model_input_bytes;
-            session->usage_anchor_request_input_bytes =
-                session->active_response_request_input_bytes;
-            session->usage_anchor_request_input_count =
-                session->active_response_request_input_count;
-            session->usage_anchor_input_tokens = graph.usage.input_tokens;
-            session->usage_anchor_valid = true;
+            session->usage_anchor = session->active_accounting;
+            /* An already-started compaction may finish during the response.
+             * The durable anchor follows completion-time lineage, not the meter. */
+            memcpy(session->usage_anchor.compact_id, session->compact_id,
+                   sizeof(session->usage_anchor.compact_id));
+            session->usage_anchor.input_tokens = graph.usage.input_tokens;
             context_meter_set(session, graph.usage.input_tokens);
         }
         session->response_open = false;

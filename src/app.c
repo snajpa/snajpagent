@@ -393,14 +393,14 @@ snag_app_measured_input(struct app_state *app, uint64_t *tokens)
     char hash[SNAG_SHA256_HEX_LEN + 1u];
 
     provider_capacity_source_sha256(app->turn_provider, app->turn_model, hash);
-    if (!s->context_meter_valid ||
-        strcmp(s->context_meter_provider, app->turn_provider->name) ||
-        strcmp(s->context_meter_model, app->turn_model) ||
-        strcmp(s->context_meter_effort, app->turn_effort) ||
-        strcmp(s->context_meter_compact_id, s->compact_id) ||
-        strcmp(s->context_meter_provider_source_sha256, hash))
+    if (!s->context_meter.valid ||
+        strcmp(s->context_meter.provider, app->turn_provider->name) ||
+        strcmp(s->context_meter.model, app->turn_model) ||
+        strcmp(s->context_meter.effort, app->turn_effort) ||
+        strcmp(s->context_meter.compact_id, s->compact_id) ||
+        strcmp(s->context_meter.provider_source_sha256, hash))
         return false;
-    *tokens = s->context_meter_input_tokens;
+    *tokens = s->context_meter.input_tokens;
     return true;
 }
 
@@ -438,22 +438,16 @@ format_context_meter(struct app_state *app, bool active,
         capacity = &resolved;
     }
     provider_capacity_source_sha256(provider, model, provider_source_hash);
-    if (!app->session.context_meter_valid ||
-        strcmp(app->session.context_meter_provider, provider->name) != 0 ||
-        strcmp(app->session.context_meter_model, model) != 0 ||
-        strcmp(app->session.context_meter_effort, effort) != 0 ||
-        strcmp(app->session.context_meter_provider_source_sha256,
-               provider_source_hash) != 0 ||
-        strcmp(app->session.context_meter_compact_id,
-               app->session.compact_id) != 0) {
-        memcpy(meter, "?", sizeof("?"));
+    if (!snag_input_observation_matches(&app->session.context_meter,
+            provider->name, model, effort, provider_source_hash, app->session.compact_id)) {
+        memcpy(meter, "?", sizeof("0%"));
         return 0;
     }
     if (!capacity->hard_input_known) {
         memcpy(meter, "?", sizeof("?"));
         return 0;
     }
-    used = app->session.context_meter_input_tokens;
+    used = app->session.context_meter.input_tokens;
     hard = capacity->hard_input_tokens;
     if (used >= hard) {
         percent = 100u;
@@ -1077,13 +1071,13 @@ render_status(struct app_state *app)
             capacity.count_capability == SNAG_COUNT_UNSUPPORTED ? "unsupported" :
             "unknown") < 0)
         goto out;
-    if (app->session.context_meter_valid) {
+    if (app->session.context_meter.valid) {
         if (snag_buf_printf(&text,
                 "\nobserved usage: input=%llu tokens · provider=%s · model=%s · effort=%s",
-                (unsigned long long)app->session.context_meter_input_tokens,
-                app->session.context_meter_provider,
-                app->session.context_meter_model,
-                app->session.context_meter_effort) < 0)
+                (unsigned long long)app->session.context_meter.input_tokens,
+                app->session.context_meter.provider,
+                app->session.context_meter.model,
+                app->session.context_meter.effort) < 0)
             goto out;
     } else if (snag_buf_append(&text, "\nobserved usage: unknown",
                               strlen("\nobserved usage: unknown")) < 0) {

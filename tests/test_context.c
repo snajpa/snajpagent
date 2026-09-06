@@ -607,6 +607,40 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     snag_session_close(&session);
 }
 
+static void
+test_accounting_lineage(struct snag_store *store, const char *workspace)
+{
+    const char *turn = "01010101010101010101010101010101";
+    const char *response = "02020202020202020202020202020202";
+    const char *compact = "03030303030303030303030303030303";
+    const char *source = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    char error[256] = {0}, output_hash[65];
+    struct snag_session session;
+    json_t *output = compact_output_fixture();
+    assert(snag_json_digest(output, output_hash) == 0);
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, workspace, "default",
+        SNAJPAGENT_MODEL, "default", error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "compaction_started",
+        compaction_started_data(&session, compact, "manual", 1u, source, source, 1u),
+        NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "turn_started",
+        turn_started(turn, 1u, "lineage", workspace, NULL), NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "response_started",
+        response_started(turn, response, NULL), NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "compaction_completed",
+        compaction_completed_data(compact, source, output_hash, source, 1u, 1u, output),
+        NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "response_completed",
+        response_completed(turn, response, "done"), NULL, error, sizeof(error)) == 0);
+    assert(!session.context_meter.compact_id[0] && !session.active_accounting.compact_id[0]);
+    assert(!strcmp(session.usage_anchor.compact_id, compact));
+    assert(session.context_meter.input_tokens == 1000u);
+    assert(session.usage_anchor.input_tokens == 10u);
+    snag_session_close(&session);
+    json_decref(output);
+}
+
 static int
 array_has_string(json_t *array, const char *value)
 {
@@ -1152,7 +1186,7 @@ test_context_meter_usage(void)
         }
         assert(snag_session_commit(&session, "response_started", data,
                                    NULL, error, sizeof(error)) == 0);
-        assert(session.context_meter_input_tokens == (i ? measured[i - 1u] : bounds[0]));
+        assert(session.context_meter.input_tokens == (i ? measured[i - 1u] : bounds[0]));
         data = response_completed(turn, response, "answer");
         assert(json_object_set_new(data, "usage",
                     json_pack("{s:o,s:n,s:n,s:n}", "input_tokens",
@@ -1160,16 +1194,16 @@ test_context_meter_usage(void)
                         "output_tokens", "reasoning_tokens", "total_tokens")) == 0);
         assert(snag_session_commit(&session, "response_completed", data,
                                    NULL, error, sizeof(error)) == 0);
-        assert(session.context_meter_input_tokens == measured[i]);
+        assert(session.context_meter.input_tokens == measured[i]);
         assert(snag_session_commit(&session, "turn_completed",
                     turn_completed(turn, response), NULL, error, sizeof(error)) == 0);
         snag_session_close(&session);
         assert(snag_session_open(&store, &session, session_id,
                                  error, sizeof(error)) == 0);
-        assert(session.context_meter_valid);
-        assert(session.context_meter_input_tokens == measured[i]);
-        assert(!strcmp(session.context_meter_provider, "default"));
-        assert(!session.context_meter_compact_id[0]);
+        assert(session.context_meter.valid);
+        assert(session.context_meter.input_tokens == measured[i]);
+        assert(!strcmp(session.context_meter.provider, "default"));
+        assert(!session.context_meter.compact_id[0]);
     }
     snag_session_close(&session);
     snag_store_close(&store);
@@ -1288,6 +1322,7 @@ main(void)
     test_input_time_and_recovery(&store, workspace);
     test_compact_groups(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
+    test_accounting_lineage(&store, workspace);
     assert(snag_session_create(&store, &session, workspace, "default",
                               SNAJPAGENT_MODEL, "default",
                               error, sizeof(error)) == 0);
@@ -1306,23 +1341,23 @@ main(void)
     assert(snag_session_commit(&session, "response_started",
                               response_started(turn1, resp1, NULL),
                               NULL, error, sizeof(error)) == 0);
-    assert(session.active_response_model_input_bytes == 4000u);
-    assert(session.active_response_request_input_bytes == 3000u);
-    assert(session.active_response_request_input_count == 1u);
-    assert(session.context_meter_valid);
-    assert(session.context_meter_input_tokens == 1000u);
-    assert(strcmp(session.context_meter_provider, "default") == 0);
-    assert(strcmp(session.context_meter_model, SNAJPAGENT_MODEL) == 0);
-    assert(strcmp(session.context_meter_effort, "medium") == 0);
-    assert(session.context_meter_compact_id[0] == '\0');
-    assert(strcmp(session.context_meter_provider_source_sha256,
+    assert(session.active_accounting.model_input_bytes == 4000u);
+    assert(session.active_accounting.request_input_bytes == 3000u);
+    assert(session.active_accounting.request_input_count == 1u);
+    assert(session.context_meter.valid);
+    assert(session.context_meter.input_tokens == 1000u);
+    assert(strcmp(session.context_meter.provider, "default") == 0);
+    assert(strcmp(session.context_meter.model, SNAJPAGENT_MODEL) == 0);
+    assert(strcmp(session.context_meter.effort, "medium") == 0);
+    assert(session.context_meter.compact_id[0] == '\0');
+    assert(strcmp(session.context_meter.provider_source_sha256,
                   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff") == 0);
     assert(snag_session_commit(&session, "response_completed",
                               response_completed(turn1, resp1, "pong"),
                               NULL, error, sizeof(error)) == 0);
-    assert(session.usage_anchor_model_input_bytes == 4000u);
-    assert(session.usage_anchor_request_input_bytes == 3000u);
-    assert(session.usage_anchor_request_input_count == 1u);
+    assert(session.usage_anchor.model_input_bytes == 4000u);
+    assert(session.usage_anchor.request_input_bytes == 3000u);
+    assert(session.usage_anchor.request_input_count == 1u);
     assert(snag_session_commit(&session, "turn_completed",
                               turn_completed(turn1, resp1),
                               NULL, error, sizeof(error)) == 0);

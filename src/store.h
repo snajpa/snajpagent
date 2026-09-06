@@ -73,6 +73,29 @@ struct snag_store {
     int trash_fd;
 };
 
+/* Independent request-time and completed-usage observations share a value
+ * representation, not a lifetime. A valid observation may contain zero tokens. */
+struct snag_input_observation {
+    char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
+    char model[SNAG_MODEL_MAX_BYTES];
+    char effort[SNAG_EFFORT_MAX_BYTES];
+    char compact_id[SNAG_ID_HEX_LEN + 1u];
+    char provider_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
+    char model_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
+    char request_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
+    char request_sha256[SNAG_SHA256_HEX_LEN + 1u];
+    uint64_t model_input_bytes;
+    uint64_t request_input_bytes;
+    uint64_t request_input_count;
+    uint64_t input_tokens;
+    uint64_t requested_output_tokens;
+    bool valid;
+};
+
+bool snag_input_observation_matches(const struct snag_input_observation *,
+    const char *provider, const char *model, const char *effort,
+    const char *source_sha256, const char *compact_id);
+
 struct snag_session {
     char id[SNAG_ID_HEX_LEN + 1u];
     char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
@@ -80,6 +103,7 @@ struct snag_session {
     char active_response_id[SNAG_ID_HEX_LEN + 1u];
     char final_item_id[SNAG_ID_HEX_LEN + 1u];
     char final_response_id[SNAG_ID_HEX_LEN + 1u];
+    struct snag_input_observation active_accounting, usage_anchor, context_meter;
     struct snag_process_state processes[SNAG_MAX_PROCESSES];
     size_t process_count;
     uint64_t irc_received_seq, irc_consumed_seq, response_irc_seq;
@@ -94,24 +118,6 @@ struct snag_session {
     char active_turn_model[SNAG_MODEL_MAX_BYTES];
     char active_turn_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char active_turn_effort[SNAG_EFFORT_MAX_BYTES];
-    char active_response_model_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char active_response_request_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char active_response_request_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char active_response_compact_id[SNAG_ID_HEX_LEN + 1u];
-    /* Legacy anchor metadata is retained solely to validate old journal events. */
-    char active_response_provider_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char usage_anchor_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
-    char usage_anchor_model[SNAG_MODEL_MAX_BYTES];
-    char usage_anchor_effort[SNAG_EFFORT_MAX_BYTES];
-    char usage_anchor_compact_id[SNAG_ID_HEX_LEN + 1u];
-    char usage_anchor_provider_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char usage_anchor_model_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char usage_anchor_request_input_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char context_meter_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
-    char context_meter_model[SNAG_MODEL_MAX_BYTES];
-    char context_meter_effort[SNAG_EFFORT_MAX_BYTES];
-    char context_meter_compact_id[SNAG_ID_HEX_LEN + 1u];
-    char context_meter_provider_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char capacity_ceiling_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char capacity_ceiling_model[SNAG_MODEL_MAX_BYTES];
     char capacity_ceiling_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
@@ -135,16 +141,7 @@ struct snag_session {
     uint64_t last_time_ms;
     uint64_t compact_seq;
     uint64_t active_compact_source_seq;
-    uint64_t active_response_model_input_bytes;
-    uint64_t active_response_request_input_bytes;
-    uint64_t active_response_request_input_count;
-    uint64_t usage_anchor_model_input_bytes;
-    uint64_t usage_anchor_request_input_bytes;
-    uint64_t usage_anchor_request_input_count;
-    uint64_t usage_anchor_input_tokens;
-    uint64_t context_meter_input_tokens;
     uint64_t capacity_ceiling_input_tokens;
-    uint64_t active_response_requested_output_tokens;
     uint64_t input_received_ms, input_first_context_ms;
     uint64_t recovery_count;
     uint64_t goal_revision;
@@ -176,8 +173,6 @@ struct snag_session {
     enum snag_response_terminal response_terminal;
     enum snag_goal_status goal_status;
     bool goal_locked;
-    bool usage_anchor_valid;
-    bool context_meter_valid;
     bool capacity_ceiling_valid;
 };
 
