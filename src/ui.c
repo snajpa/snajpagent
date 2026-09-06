@@ -6,7 +6,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <pthread.h>
-#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,7 +83,7 @@ struct ui_action {
 struct snag_ui_runtime {
     struct ui_queue commands, actions;
     pthread_t thread, engine;
-    sigset_t saved_mask;
+    struct snag_signal_mask saved_mask;
     atomic_int fatal;
     atomic_bool exit_requested, cancel;
     atomic_uint steering_pending;
@@ -629,7 +628,6 @@ presentation_main(void *opaque)
 {
     struct snag_ui_runtime *runtime = opaque;
     struct snag_ui_display display = {.runtime = runtime};
-    sigset_t signals;
     uint64_t sequence = 0u;
 
     snag_term_init(&display.term);
@@ -638,10 +636,7 @@ presentation_main(void *opaque)
     snag_render_init(&display.render, 0u);
     display.render.checkpoint = render_input_checkpoint;
     display.render.checkpoint_opaque = &display;
-    sigemptyset(&signals);
-    sigaddset(&signals, SIGINT);
-    sigaddset(&signals, SIGWINCH);
-    (void)pthread_sigmask(SIG_UNBLOCK, &signals, NULL);
+    (void)snag_term_signals_unblock();
     for (;;) {
         struct ui_message *message;
         drain_wake(&runtime->commands);
@@ -743,7 +738,6 @@ int
 snag_ui_init(struct snag_ui *ui)
 {
     struct snag_ui_runtime *runtime;
-    sigset_t signals;
     int rc;
     memset(ui, 0, sizeof(*ui));
     runtime = calloc(1u, sizeof(*runtime));
@@ -762,17 +756,12 @@ snag_ui_init(struct snag_ui *ui)
         goto fail;
     if (queue_open(&runtime->actions) < 0)
         goto commands;
-    sigemptyset(&signals);
-    sigaddset(&signals, SIGINT);
-    sigaddset(&signals, SIGWINCH);
-    rc = pthread_sigmask(SIG_BLOCK, &signals, &runtime->saved_mask);
-    if (rc != 0) {
-        errno = rc;
+    if (snag_term_signals_block(&runtime->saved_mask) < 0) {
         goto actions;
     }
     rc = pthread_create(&runtime->thread, NULL, presentation_main, runtime);
     if (rc != 0) {
-        (void)pthread_sigmask(SIG_SETMASK, &runtime->saved_mask, NULL);
+        (void)snag_term_signals_restore(&runtime->saved_mask);
         errno = rc;
         goto actions;
     }
@@ -804,7 +793,7 @@ snag_ui_free(struct snag_ui *ui)
     }
     snag_wakeup_close(runtime->actions.wake);
     snag_wakeup_close(runtime->commands.wake);
-    (void)pthread_sigmask(SIG_SETMASK, &runtime->saved_mask, NULL);
+    (void)snag_term_signals_restore(&runtime->saved_mask);
     free(runtime);
     ui->runtime = NULL;
     snag_history_free(&ui->history);

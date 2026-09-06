@@ -3,6 +3,7 @@
 #include "fs.h"
 #include "wake.h"
 #include "net.h"
+#include "term_host.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -27,6 +28,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <pthread.h>
 #endif
 
 #ifdef _WIN32
@@ -621,6 +623,20 @@ test_realpath(void)
 static void
 test_platform(void)
 {
+    struct snag_signal_mask saved;
+    assert(snag_term_signals_block(&saved) == 0);
+#ifndef _WIN32
+    sigset_t current;
+    assert(pthread_sigmask(SIG_SETMASK, NULL, &current) == 0);
+    assert(sigismember(&current, SIGINT) && sigismember(&current, SIGWINCH));
+#endif
+    assert(snag_term_signals_unblock() == 0);
+    assert(snag_term_signals_restore(&saved) == 0);
+#ifndef _WIN32
+    assert(pthread_sigmask(SIG_SETMASK, NULL, &current) == 0);
+    assert(sigismember(&current, SIGINT) == sigismember(&saved.native, SIGINT));
+    assert(sigismember(&current, SIGWINCH) == sigismember(&saved.native, SIGWINCH));
+#endif
     unsigned char random[32], again[32];
     uint64_t before = snag_monotonic_ms();
     uint64_t wall = snag_time_ms();
