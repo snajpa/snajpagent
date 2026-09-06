@@ -46,11 +46,15 @@ strip_resume() {
         "$1" >"$1.without-resume"
 }
 
-set +e
-LC_ALL=C $bin -l >"$root/locale.out" 2>"$root/locale.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
+expect_exit() {
+    expected_exit=$1
+    shift
+    actual_exit=0
+    "$@" || actual_exit=$?
+    [ "$actual_exit" -eq "$expected_exit" ]
+}
+
+LC_ALL=C expect_exit 2 $bin -l >"$root/locale.out" 2>"$root/locale.err"
 grep -q 'UTF-8 locale is required' "$root/locale.err"
 export LC_ALL=C.utf8
 
@@ -137,32 +141,20 @@ for args in \
     '-s -n worker -o WORKER' \
     '-c localhost -c localhost:6667 -n worker' \
     '-s -n worker initial'; do
-    set +e
     # These arguments contain no quoting-sensitive values.
-    $bin $args >"$root/network-invalid.out" 2>"$root/network-invalid.err"
-    status=$?
-    set -e
-    [ "$status" -eq 2 ]
+    expect_exit 2 $bin $args >"$root/network-invalid.out" 2>"$root/network-invalid.err"
     [ ! -s "$root/network-invalid.out" ]
 done
 grep -q 'networked initial chat text must follow --' \
     "$root/network-invalid.err"
 
-set +e
-$bin -e --model-nick=worker --operator-nick alice -- ping \
+expect_exit 2 $bin -e --model-nick=worker --operator-nick alice -- ping \
     >"$root/network-long.out" 2>"$root/network-long.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
 grep -q -- '-e cannot be combined with network options' "$root/network-long.err"
 
 for option in --name --operator-name; do
-    set +e
-    $bin "$option" stale -l >"$root/old-nick-option.out" \
+    expect_exit 2 $bin "$option" stale -l >"$root/old-nick-option.out" \
         2>"$root/old-nick-option.err"
-    status=$?
-    set -e
-    [ "$status" -eq 2 ]
     grep -q "unknown option $option" "$root/old-nick-option.err"
 done
 
@@ -172,12 +164,8 @@ cat >"$root/network-config.ini" <<'EOF'
 listen = localhost:6667
 model_nick = worker
 EOF
-set +e
-$bin --config "$root/network-config.ini" initial >"$root/network-config.out" \
+expect_exit 2 $bin --config "$root/network-config.ini" initial >"$root/network-config.out" \
     2>"$root/network-config.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
 grep -q 'networked initial chat text must follow --' \
     "$root/network-config.err"
 
@@ -190,55 +178,31 @@ listen = localhost:6667
 model_nick = worker
 operator_nick = WORKER
 EOF
-set +e
-$bin --config "$root/color-network-error.ini" \
+expect_exit 2 $bin --config "$root/color-network-error.ini" \
     >"$root/color-network-error.out" 2>"$root/color-network-error.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
 LC_ALL=C grep -q "$(printf '\033')" "$root/color-network-error.err"
 
-set +e
-$bin --no-color -s -n worker -o WORKER \
+expect_exit 2 $bin --no-color -s -n worker -o WORKER \
     >"$root/no-color-error.out" 2>"$root/no-color-error.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
 ! LC_ALL=C grep -q "$(printf '\033')" "$root/no-color-error.err"
 
-set +e
-$bin --color -s -n worker -o WORKER \
+expect_exit 2 $bin --color -s -n worker -o WORKER \
     >"$root/color-error.out" 2>"$root/color-error.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
 LC_ALL=C grep -q "$(printf '\033')" "$root/color-error.err"
 
-set +e
-$bin --color=rainbow >"$root/bad-color.out" 2>"$root/bad-color.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
+expect_exit 2 $bin --color=rainbow >"$root/bad-color.out" 2>"$root/bad-color.err"
 grep -q 'accepts auto, always, or never' "$root/bad-color.err"
 
 for args in '--markdown --markdown' '--no-markdown --no-markdown' \
             '--markdown --no-markdown'; do
-    set +e
     # These arguments contain no quoting-sensitive values.
-    $bin $args -l >"$root/bad-markdown.out" 2>"$root/bad-markdown.err"
-    status=$?
-    set -e
-    [ "$status" -eq 2 ]
+    expect_exit 2 $bin $args -l >"$root/bad-markdown.out" 2>"$root/bad-markdown.err"
     grep -q 'duplicate --.*markdown option' "$root/bad-markdown.err"
 done
 
 for option in --client= --listen=; do
-    set +e
-    $bin "$option" -n worker >"$root/empty-endpoint.out" \
+    expect_exit 2 $bin "$option" -n worker >"$root/empty-endpoint.out" \
         2>"$root/empty-endpoint.err"
-    status=$?
-    set -e
-    [ "$status" -eq 2 ]
     grep -q 'requires a nonempty endpoint' "$root/empty-endpoint.err"
 done
 
@@ -273,11 +237,7 @@ events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 turn = next(event["data"] for event in events if event["type"] == "turn_started")
 assert turn["text"] == "ping" and turn["read_only"] is True
 PY
-set +e
-$bin --dotdir "$root/ro-empty" -e -- '/ro   ' >"$root/ro-empty.out" 2>"$root/ro-empty.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
+expect_exit 2 $bin --dotdir "$root/ro-empty" -e -- '/ro   ' >"$root/ro-empty.out" 2>"$root/ro-empty.err"
 
 goal_dotdir="$root/model-goal-state"
 out=$($bin --dotdir "$goal_dotdir" -e -- \
@@ -298,11 +258,7 @@ assert [event["data"]["input_kind"] for event in turns] == ["direct", "goal"]
 assert len(completed) == 1 and completed[0]["data"]["actor"] == "model"
 PY
 
-set +e
-$bin -e </dev/null >"$root/empty-stdin.out" 2>"$root/empty-stdin.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
+expect_exit 2 $bin -e </dev/null >"$root/empty-stdin.out" 2>"$root/empty-stdin.err"
 [ ! -s "$root/empty-stdin.out" ]
 grep -q 'stdin prompt is empty' "$root/empty-stdin.err"
 
@@ -378,11 +334,7 @@ only_resume "$root/err"
 $bin -l >"$root/list" 2>"$root/err"
 grep -q "^$(printf %.8s "$id").*2" "$root/list"
 
-set +e
-$bin -e -- empty >"$root/empty.out" 2>"$root/empty.err"
-status=$?
-set -e
-[ "$status" -eq 4 ]
+expect_exit 4 $bin -e -- empty >"$root/empty.out" 2>"$root/empty.err"
 [ ! -s "$root/empty.out" ]
 grep -q 'provider completed without a final answer' "$root/empty.err"
 [ "$(resume_count "$root/empty.err")" -eq 1 ]
@@ -396,11 +348,7 @@ $bin -e -- utf8 >"$root/utf8.out" 2>"$root/utf8.err"
 strip_resume "$root/utf8.err"
 only_resume "$root/utf8.err"
 
-set +e
-$bin -e -- crash >"$root/crash.out" 2>"$root/crash.err"
-crash_status=$?
-set -e
-[ "$crash_status" -eq 99 ]
+expect_exit 99 $bin -e -- crash >"$root/crash.out" 2>"$root/crash.err"
 [ ! -s "$root/crash.out" ]
 crash_id=$(grep -rl '"text":"crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
 $bin -e --resume "$crash_id" -- ping >"$root/crash-recovered.out" 2>"$root/crash-recovered.err"
@@ -498,11 +446,7 @@ PY
 done
 
 for prompt in managed_final_violation; do
-    set +e
-    $bin -e -- "$prompt" >"$root/$prompt.out" 2>"$root/$prompt.err"
-    status=$?
-    set -e
-    [ "$status" -eq 0 ]
+    expect_exit 0 $bin -e -- "$prompt" >"$root/$prompt.out" 2>"$root/$prompt.err"
     [ "$(cat "$root/$prompt.out")" = "managed process recovered" ]
     grep -q 'Unsettled commands remain' \
         "$root/$prompt.err"
@@ -585,11 +529,7 @@ if $bin -e -vvvvvvv -- ping >"$root/seven.out" 2>"$root/seven.err"; then
 fi
 [ ! -s "$root/seven.out" ]
 
-set +e
-$bin -e -- final_plus_call >"$root/conflict.out" 2>"$root/conflict.err"
-status=$?
-set -e
-[ "$status" -eq 4 ]
+expect_exit 4 $bin -e -- final_plus_call >"$root/conflict.out" 2>"$root/conflict.err"
 [ ! -s "$root/conflict.out" ]
 grep -q 'terminal answer with tool calls' "$root/conflict.err"
 conflict_log=$(grep -rl 'protocol_conflict' "$dotdir/sessions" | head -n 1)
@@ -598,11 +538,7 @@ grep -q '"status":"not_run"' "$conflict_log"
 [ "$(grep -c '"type":"turn_recovery"' "$conflict_log")" -eq 3 ]
 [ "$(grep -c '"type":"turn_failed"' "$conflict_log")" -eq 1 ]
 
-set +e
-$bin -e -- tool_crash >"$root/tool-crash.out" 2>"$root/tool-crash.err"
-status=$?
-set -e
-[ "$status" -eq 98 ]
+expect_exit 98 $bin -e -- tool_crash >"$root/tool-crash.out" 2>"$root/tool-crash.err"
 tool_crash_id=$(grep -rl '"text":"tool_crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
 out=$($bin -e --resume "$tool_crash_id" -- ping 2>"$root/tool-recovery.err")
 [ "$out" = pong ]
@@ -651,11 +587,7 @@ verbosity = 1
 verbosity = 2
 EOF
 before=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d | wc -l)
-set +e
-$bin --config "$root/bad-config.ini" -e -- ping >"$root/bad-config.out" 2>"$root/bad-config.err"
-status=$?
-set -e
-[ "$status" -eq 2 ]
+expect_exit 2 $bin --config "$root/bad-config.ini" -e -- ping >"$root/bad-config.out" 2>"$root/bad-config.err"
 [ ! -s "$root/bad-config.out" ]
 grep -q 'invalid configuration at line 2' "$root/bad-config.err"
 [ "$(resume_count "$root/bad-config.err")" -eq 0 ]
@@ -1050,11 +982,7 @@ exact_token_count = true
 [model-limit openai/gpt-5.5-2026-04-23]
 max_input_tokens = 1
 EOF
-set +e
-$bin --dotdir "$hard_state" --config "$root/hard-budget.ini" -e -- ping >"$root/hard-budget.out" 2>"$root/hard-budget.err"
-hard_status=$?
-set -e
-[ "$hard_status" -eq 4 ]
+expect_exit 4 $bin --dotdir "$hard_state" --config "$root/hard-budget.ini" -e -- ping >"$root/hard-budget.out" 2>"$root/hard-budget.err"
 hard_id=$(find "$hard_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 python3 - "$hard_state/sessions/$hard_id/events.jsonl" <<'PY'
 import json
@@ -1142,11 +1070,7 @@ printf '[agent]\nmax_turn_retries=0\n[provider openai]\n' > "$second_state/confi
 chmod 600 "$second_state/config.ini"
 $bin --dotdir "$second_state" -e -- ping >/dev/null 2>"$root/second-first.err"
 second_id=$(find "$second_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-set +e
-$bin --dotdir "$second_state" -e --resume "$second_id" -- capacity_recovery_twice >"$root/second.out" 2>"$root/second.err"
-second_status=$?
-set -e
-[ "$second_status" -eq 4 ]
+expect_exit 4 $bin --dotdir "$second_state" -e --resume "$second_id" -- capacity_recovery_twice >"$root/second.out" 2>"$root/second.err"
 python3 - "$second_state/sessions/$second_id/events.jsonl" <<'PY'
 import json
 import sys
