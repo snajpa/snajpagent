@@ -2250,10 +2250,13 @@ main(void)
         assert(strstr(snag_json_string(restored, "content"), "finish compacted work"));
         json_t *requests[] = {projection.create_request, projection.count_request};
         for (size_t i = 0u; i < 2u; ++i) {
-            char *encoded = json_dumps(requests[i], JSON_COMPACT);
-            assert(encoded && strstr(encoded, "finish compacted work"));
-            assert(strstr(encoded, "automatic continuation is stopped"));
-            free(encoded);
+            struct snag_buf encoded;
+            snag_buf_init(&encoded, SNAG_CONTEXT_MAX_REQUEST);
+            assert(snag_json_canonical(requests[i], &encoded) == 0);
+            assert(snag_buf_terminate(&encoded) == 0);
+            assert(strstr((const char *)encoded.data, "finish compacted work"));
+            assert(strstr((const char *)encoded.data, "automatic continuation is stopped"));
+            snag_buf_free(&encoded);
         }
     }
 
