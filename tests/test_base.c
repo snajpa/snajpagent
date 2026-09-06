@@ -43,6 +43,63 @@ test_shutdown_signal(int number)
 }
 
 #ifdef _WIN32
+static void
+test_cmd_argument_probe(void)
+{
+    WCHAR program[32768], copy[MAX_PATH], temp[MAX_PATH];
+    assert(GetModuleFileNameW(NULL, program, 32768u));
+    char id[SNAG_ID_HEX_LEN + 1u];
+    assert(snag_random_id(id) == 0 && GetTempPathW(MAX_PATH, temp));
+    assert(swprintf(copy, MAX_PATH, L"%lsquote-%hs %%PATH%% & \x4e2d.exe", temp, id) > 0);
+    assert(CopyFileW(program, copy, TRUE));
+    assert(SetFileAttributesW(copy, FILE_ATTRIBUTE_NORMAL));
+    char *shell = snag_default_shell();
+    wchar_t *exe = snag_utf8_to_wide(shell);
+    char *program_utf8 = snag_wide_to_utf8(copy);
+    assert(exe && program_utf8);
+    assert(SetEnvironmentVariableW(L"PATH^", L"unexpected-expansion"));
+    const char *cases[] = {"", "plain", "a%PATH% & b!x!^<c>", "spaces and (parens)",
+                           "embedded \" quote", "C:\\tail\\", "quote\\\"after",
+                           "\xe4\xb8\xad \xf0\x9f\x98\x80", "literal %snpct% !snbang!"};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char marked[512];
+        assert(snprintf(marked, sizeof(marked), "x%s", cases[i]) > 0);
+        wchar_t *expected = snag_utf8_to_wide(marked);
+        assert(expected && SetEnvironmentVariableW(L"SNAJPAGENT_QUOTE_EXPECT", expected));
+        free(expected);
+        struct snag_buf inner, outer;
+        snag_buf_init(&inner, 32768u);
+        snag_buf_init(&outer, 32768u);
+        assert(snag_command_argument(&inner, program_utf8) == 0);
+        assert(snag_buf_append(&inner, " --quote-probe", 14u) == 0);
+        assert(snag_command_argument(&inner, cases[i]) == 0 && snag_command_finish(&inner) == 0 &&
+               snag_buf_terminate(&inner) == 0);
+        assert(snag_buf_printf(&outer, "\"%s\" /d /v:off /s /c \"%s\"", shell, inner.data) == 0);
+        assert(snag_buf_terminate(&outer) == 0);
+        wchar_t *command = snag_utf8_to_wide((char *)outer.data);
+        STARTUPINFOW startup = {.cb = sizeof(startup)};
+        PROCESS_INFORMATION child;
+        assert(command && CreateProcessW(exe, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child));
+        assert(CloseHandle(child.hThread));
+        assert(WaitForSingleObject(child.hProcess, 5000u) == WAIT_OBJECT_0);
+        DWORD code;
+        assert(GetExitCodeProcess(child.hProcess, &code) && CloseHandle(child.hProcess));
+        if (code) {
+            (void)fprintf(stderr, "cmd quote case=%zu status=%lu command=%s\n", i, (unsigned long)code, outer.data);
+            abort();
+        }
+        free(command);
+        snag_buf_free(&inner);
+        snag_buf_free(&outer);
+    }
+    assert(SetEnvironmentVariableW(L"SNAJPAGENT_QUOTE_EXPECT", NULL));
+    assert(SetEnvironmentVariableW(L"PATH^", NULL));
+    free(program_utf8);
+    assert(DeleteFileW(copy));
+    free(shell);
+    free(exe);
+}
+
 static int
 native_process_child(const char *mode)
 {
@@ -1419,6 +1476,7 @@ static void
 test_platform(void)
 {
 #ifdef _WIN32
+    test_cmd_argument_probe();
     test_native_process(false);
     test_native_process(true);
     test_native_process_input(false);
@@ -1792,10 +1850,19 @@ test_irc_target_parse(void)
     }
 }
 
-int
-main(int argc, char **argv)
+static int
+run_base(int argc, char **argv)
 {
 #ifdef _WIN32
+    if (argc == 3 && !strcmp(argv[1], "--quote-probe")) {
+        char *expected = snag_environment("SNAJPAGENT_QUOTE_EXPECT");
+        if (!expected || strcmp(argv[2], expected + 1u)) {
+            (void)fprintf(stderr, "quote actual=[%s] expected=[%s]\n", argv[2], expected ? expected : "missing");
+            return 1;
+        }
+        free(expected);
+        return 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "-c"))
         return native_process_child(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "--editor-test-child"))
@@ -1881,3 +1948,21 @@ main(int argc, char **argv)
     puts("test_base: ok");
     return 0;
 }
+
+#ifdef _WIN32
+int
+wmain(int argc, wchar_t **wide)
+{
+    char **argv = snag_wide_arguments(argc, wide);
+    assert(argv);
+    int rc = run_base(argc, argv);
+    snag_arguments_free(argv);
+    return rc;
+}
+#else
+int
+main(int argc, char **argv)
+{
+    return run_base(argc, argv);
+}
+#endif

@@ -41,6 +41,9 @@ int snag_buf_putc(struct snag_buf *buf, unsigned char c);
 int snag_buf_vprintf(struct snag_buf *buf, const char *fmt, va_list ap);
 int snag_buf_printf(struct snag_buf *buf, const char *fmt, ...);
 int snag_buf_terminate(struct snag_buf *buf);
+int snag_command_argument(struct snag_buf *command, const char *argument);
+int snag_command_finish(struct snag_buf *command);
+const char *snag_command_shell_note(void);
 
 void snag_errorf(char *error, size_t size, const char *fmt, ...);
 

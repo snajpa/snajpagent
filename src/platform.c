@@ -344,6 +344,112 @@ snag_program_path(const char *program)
     return out;
 }
 
+static int
+cmd_byte(struct snag_buf *out, unsigned char c)
+{
+    if (c == '%')
+        return snag_buf_append(out, "!snpct!", 7u);
+    if (c == '!')
+        return snag_buf_append(out, "!snbang!", 8u);
+    if (c == '^')
+        return snag_buf_append(out, "!sncaret!", 9u);
+    if (strchr("()%!^\"<>&|", c) && snag_buf_putc(out, '^') < 0)
+        return -1;
+    return snag_buf_putc(out, c);
+}
+
+const char *
+snag_command_shell_note(void)
+{
+    return " (cmd.exe, delayed expansion off)";
+}
+
+int
+snag_command_argument(struct snag_buf *command, const char *argument)
+{
+    const unsigned char *p = (const unsigned char *)argument;
+    bool executable = command->len == 0;
+    if (strchr(argument, '\r') || strchr(argument, '\n')) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (executable) {
+        if (strchr(argument, '"')) {
+            errno = EINVAL;
+            return -1;
+        }
+        if (snag_buf_putc(command, '"') < 0)
+            return -1;
+        for (; *p; ++p) {
+            int rc = *p == '%' || *p == '!' || *p == '^' ? cmd_byte(command, *p) : snag_buf_putc(command, *p);
+            if (rc < 0)
+                return -1;
+        }
+        return snag_buf_putc(command, '"');
+    }
+    if (snag_buf_putc(command, ' ') < 0 || cmd_byte(command, '"') < 0)
+        return -1;
+    while (*p) {
+        size_t slashes = 0;
+        while (*p == '\\') {
+            ++slashes;
+            ++p;
+        }
+        size_t count = !*p || *p == '"' ? 2u * slashes : slashes;
+        while (count--)
+            if (snag_buf_putc(command, '\\') < 0)
+                return -1;
+        if (*p == '"' && snag_buf_putc(command, '\\') < 0)
+            return -1;
+        if (*p && cmd_byte(command, *p++) < 0)
+            return -1;
+    }
+    return cmd_byte(command, '"');
+}
+
+int
+snag_command_finish(struct snag_buf *command)
+{
+    struct snag_buf script, result;
+    snag_buf_init(&script, command->max);
+    snag_buf_init(&result, command->max);
+    char *shell = snag_default_shell();
+    int rc = -1;
+    if (!shell)
+        goto out;
+    if (strpbrk(shell, "%!\r\n\"")) {
+        errno = EINVAL;
+        goto out;
+    }
+    if (snag_buf_printf(&script, "set \"snpct=%%\"&set \"snbang=^!\"&set sncaret=^^&") < 0 ||
+        snag_buf_append(&script, command->data, command->len) < 0 ||
+        snag_buf_printf(&result, "\"%s\" /d /v:on /s /c ^\"", shell) < 0)
+        goto out;
+    for (size_t i = 0; i < script.len; ++i) {
+        unsigned char c = script.data[i];
+        if (c == '!') {
+            if (snag_buf_append(&result, "^!", 2u) < 0)
+                goto out;
+        } else {
+            if (strchr("()% ^\"<>&|", c) && snag_buf_putc(&result, '^') < 0)
+                goto out;
+            if (snag_buf_putc(&result, c) < 0)
+                goto out;
+        }
+    }
+    if (snag_buf_append(&result, "^\"", 2u) < 0)
+        goto out;
+    snag_buf_free(command);
+    *command = result;
+    memset(&result, 0, sizeof(result));
+    rc = 0;
+out:
+    free(shell);
+    snag_buf_free(&script);
+    snag_buf_free(&result);
+    return rc;
+}
+
 int
 snag_hostname(char *out, size_t size)
 {
@@ -1867,6 +1973,47 @@ snag_fsync(int fd)
 #include <langinfo.h>
 #include <strings.h>
 #include <sys/wait.h>
+
+const char *
+snag_command_shell_note(void)
+{
+    return "";
+}
+
+int
+snag_command_finish(struct snag_buf *command)
+{
+    (void)command;
+    return 0;
+}
+
+int
+snag_command_argument(struct snag_buf *command, const char *argument)
+{
+    const unsigned char *p = (const unsigned char *)argument;
+
+    if (command->len && snag_buf_putc(command, ' ') < 0)
+        return -1;
+    if (snag_buf_putc(command, '\'') < 0)
+        return -1;
+    while (*p) {
+        if (*p == '\'') {
+            if (snag_buf_append(command, "'\\''", 4u) < 0)
+                return -1;
+        } else if (*p == '\n' || (*p >= 0x20u && *p <= 0x7eu)) {
+            if (snag_buf_putc(command, *p) < 0)
+                return -1;
+        } else {
+            if (snag_buf_putc(command, '\'') < 0 ||
+                snag_buf_printf(command, "\"$(printf '\\%03o')\"",
+                               (unsigned int)*p) < 0 ||
+                snag_buf_putc(command, '\'') < 0)
+                return -1;
+        }
+        ++p;
+    }
+    return snag_buf_putc(command, '\'');
+}
 
 char *
 snag_program_path(const char *program)

@@ -3266,7 +3266,8 @@ snag_render_resume_hint(const struct snag_render *render, const char *command,
                        size_t command_len)
 {
     static const char header[] =
-        "• You can resume this session with the following command:";
+        "• You can resume this session with the following command";
+    const char *note = snag_command_shell_note();
     struct snag_buf block;
     size_t max = command_len;
     bool colored;
@@ -3276,7 +3277,8 @@ snag_render_resume_hint(const struct snag_render *render, const char *command,
         errno = EINVAL;
         return -1;
     }
-    if (!snag_size_add(max, sizeof(header) + 1u, &max)) {
+    if (!snag_size_add(max, sizeof(header) + 2u, &max) ||
+        !snag_size_add(max, strlen(note), &max)) {
         errno = EOVERFLOW;
         return -1;
     }
@@ -3292,7 +3294,8 @@ snag_render_resume_hint(const struct snag_render *render, const char *command,
         snag_buf_append(&block, COLOR_LIFECYCLE,
                        sizeof(COLOR_LIFECYCLE) - 1u) < 0)
         goto out;
-    if (snag_buf_append(&block, header, sizeof(header) - 1u) < 0)
+    if (snag_buf_append(&block, header, sizeof(header) - 1u) < 0 ||
+        snag_buf_append(&block, note, strlen(note)) < 0 || snag_buf_putc(&block, ':') < 0)
         goto out;
     if (colored &&
         snag_buf_append(&block, COLOR_RESET, sizeof(COLOR_RESET) - 1u) < 0)

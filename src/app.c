@@ -3596,39 +3596,11 @@ append_command_literal(struct snag_buf *command, const char *word)
 }
 
 static int
-append_command_argument(struct snag_buf *command, const char *argument)
-{
-    const unsigned char *p = (const unsigned char *)argument;
-
-    if (command->len && snag_buf_putc(command, ' ') < 0)
-        return -1;
-    if (snag_buf_putc(command, '\'') < 0)
-        return -1;
-    while (*p) {
-        if (*p == '\'') {
-            if (snag_buf_append(command, "'\\''", 4u) < 0)
-                return -1;
-        } else if (*p == '\n' || (*p >= 0x20u && *p <= 0x7eu)) {
-            if (snag_buf_putc(command, *p) < 0)
-                return -1;
-        } else {
-            if (snag_buf_putc(command, '\'') < 0 ||
-                snag_buf_printf(command, "\"$(printf '\\%03o')\"",
-                               (unsigned int)*p) < 0 ||
-                snag_buf_putc(command, '\'') < 0)
-                return -1;
-        }
-        ++p;
-    }
-    return snag_buf_putc(command, '\'');
-}
-
-static int
 append_command_option(struct snag_buf *command, const char *option,
                       const char *argument)
 {
     return append_command_literal(command, option) < 0 ||
-           append_command_argument(command, argument) < 0 ? -1 : 0;
+           snag_command_argument(command, argument) < 0 ? -1 : 0;
 }
 
 static int
@@ -3642,7 +3614,7 @@ build_resume_command(const struct app_state *app, const char *program,
 
     if (!resolved)
         return -1;
-    if (append_command_argument(command, resolved) < 0 ||
+    if (snag_command_argument(command, resolved) < 0 ||
         append_command_option(command, "--dotdir", dotdir) < 0)
         goto out;
     if (cli->config_path &&
@@ -3709,7 +3681,7 @@ build_resume_command(const struct app_state *app, const char *program,
         append_command_option(command, "--room-name", config->irc.room_name) < 0)
         goto out;
     if (append_command_literal(command, "--resume") < 0 ||
-        append_command_argument(command, app->session.id) < 0)
+        snag_command_argument(command, app->session.id) < 0)
         goto out;
     rc = 0;
 out:
@@ -3726,7 +3698,8 @@ write_resume_command(struct app_state *app, const char *program,
     if (!dotdir || !app->session.id[0] || app->session.delete_requested)
         return;
     snag_buf_init(&command, RESUME_COMMAND_MAX);
-    if (build_resume_command(app, program, dotdir, &command) == 0)
+    if (build_resume_command(app, program, dotdir, &command) == 0 &&
+        snag_command_finish(&command) == 0 && snag_buf_terminate(&command) == 0)
         (void)snag_ui_resume_hint(&app->ui, (char *)command.data,
                                      command.len);
     snag_buf_free(&command);
