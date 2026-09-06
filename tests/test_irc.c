@@ -837,6 +837,17 @@ pump_pair(struct snag_irc *server, struct snag_irc *client,
 }
 
 static void
+wait_pair_event(struct snag_irc *server, struct snag_irc *client,
+                const struct capture *capture, enum snag_irc_event_kind kind,
+                unsigned int count)
+{
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    while (capture->events[kind] < count && snag_monotonic_ms() < deadline)
+        pump_pair(server, client, 1u);
+    assert(capture->events[kind] == count);
+}
+
+static void
 test_client_reconnect(void)
 {
     struct snag_config server_config;
@@ -912,7 +923,7 @@ test_client_reconnect(void)
 
     messages = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, true, SNAG_IRC_MESSAGE, payload, error, sizeof(error)) == 0);
-    pump_pair(server, client, 20u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(client_capture.events[SNAG_IRC_MESSAGE] == messages + 1u);
     assert(strcmp(server_capture.last_message.text, payload) == 0);
     assert(strcmp(server_capture.last_message.nick, "remoteagent") == 0);
@@ -931,8 +942,9 @@ test_client_reconnect(void)
     assert(strcmp(client_capture.last_message.nick, "remoteagent") == 0);
     assert(strcmp(client_capture.last_message.text, payload) == 0);
 
+    unsigned int received = client_capture.events[SNAG_IRC_NOTICE];
     assert(send_all(client, true, SNAG_IRC_NOTICE, payload, error, sizeof(error)) == 0);
-    pump_pair(server, client, 20u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_NOTICE, received + 1u);
     assert(strcmp(server_capture.last_notice.text, payload) == 0);
     assert(strcmp(client_capture.last_notice.text, payload) == 0);
 
@@ -941,8 +953,9 @@ test_client_reconnect(void)
     server_capture.message_text[0] = '\0';
     client_capture.message_text[0] = '\0';
     messages = server_capture.events[SNAG_IRC_MESSAGE];
+    received = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(server, true, SNAG_IRC_MESSAGE, long_text, error, sizeof(error)) == 0);
-    pump_pair(server, client, 20u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, received + 2u);
     assert(server_capture.events[SNAG_IRC_MESSAGE] == messages + 2u);
     assert(strcmp(client_capture.last_message.text, "remaining artifact gaps") == 0);
     assert(strcmp(server_capture.message_text, long_text) == 0);
@@ -952,15 +965,17 @@ test_client_reconnect(void)
     memcpy(long_text + SNAG_IRC_TEXT_MAX - 1u, "\xf0\x9f\x8c\x99" "end", 8u);
     server_capture.message_text[0] = '\0';
     client_capture.message_text[0] = '\0';
+    received = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, true, SNAG_IRC_MESSAGE, long_text, error, sizeof(error)) == 0);
-    pump_pair(server, client, 20u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, received + 2u);
     assert(strcmp(server_capture.last_message.text, "\xf0\x9f\x8c\x99" "end") == 0);
     assert(strcmp(server_capture.message_text, long_text) == 0);
     assert(strcmp(client_capture.message_text, long_text) == 0);
 
+    received = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, false, SNAG_IRC_MESSAGE, "remote hello",
                                  error, sizeof(error)) == 0);
-    pump_pair(server, client, 20u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, received + 1u);
     assert(strcmp(server_capture.last_message.nick, "remoteop") == 0);
     assert(server_capture.last_message.op);
 
@@ -1175,15 +1190,17 @@ test_client_nick_collision(void)
     assert(strcmp(snag_irc_operator_nick(client), "operator2") == 0);
     assert(client_capture.events[SNAG_IRC_NICK] == 0u);
 
+    messages = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, false, SNAG_IRC_MESSAGE, "operator alias",
                                  error, sizeof(error)) == 0);
-    pump_pair(server, client, 20u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(strcmp(client_capture.last_message.nick, "operator2") == 0);
     assert(strcmp(server_capture.last_message.nick, "operator2") == 0);
     assert(strcmp(server_capture.last_message.text, "operator alias") == 0);
+    messages = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, true, SNAG_IRC_MESSAGE, "agent alias",
                               error, sizeof(error)) == 0);
-    pump_pair(server, client, 20u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(strcmp(client_capture.last_message.nick, "agent2") == 0);
     assert(strcmp(server_capture.last_message.nick, "agent2") == 0);
     assert(strcmp(server_capture.last_message.text, "agent alias") == 0);
@@ -1191,7 +1208,7 @@ test_client_nick_collision(void)
     messages = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(server, true, SNAG_IRC_MESSAGE, "preferred nick is remote",
                               error, sizeof(error)) == 0);
-    pump_pair(server, client, 20u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(client_capture.events[SNAG_IRC_MESSAGE] == messages + 1u);
     assert(strcmp(client_capture.last_message.nick, "agent") == 0);
     assert(strcmp(client_capture.last_message.text,
@@ -1215,13 +1232,15 @@ test_client_nick_collision(void)
     next_server = open_server(&server_config, &next_capture);
     pump_pair(next_server, client, 800u);
     assert(client_capture.events[SNAG_IRC_CONNECTED] == 2u);
+    messages = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, false, SNAG_IRC_MESSAGE, "stable operator alias",
                                  error, sizeof(error)) == 0);
-    pump_pair(next_server, client, 20u);
+    wait_pair_event(next_server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(strcmp(next_capture.last_message.nick, "operator2") == 0);
+    messages = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, true, SNAG_IRC_MESSAGE, "stable agent alias",
                               error, sizeof(error)) == 0);
-    pump_pair(next_server, client, 20u);
+    wait_pair_event(next_server, client, &client_capture, SNAG_IRC_MESSAGE, messages + 1u);
     assert(strcmp(next_capture.last_message.nick, "agent2") == 0);
 
     snag_irc_close(client);
