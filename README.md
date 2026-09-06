@@ -138,6 +138,12 @@ results without replaying completed tools or duplicating the original prompt.
 It does not resume a paused queue. Resuming a session restores context, not
 operating-system processes that ended when the old foreground process exited.
 
+On Windows, the printed command targets a normal `cmd.exe` prompt with delayed
+expansion off (the default), as its header states. Paste it there, not into
+PowerShell or a batch file. The command uses a scoped child interpreter to keep
+literal `%`, `!`, quotes and other path characters intact without changing your
+shell's environment.
+
 ### Models, context, and read-only work
 
 `/status` explains the current state, model selection, queue, context budget,
@@ -164,12 +170,6 @@ turn has native listing, reading, searching, and provider-hosted web search,
 not the normal command, goal, or IRC tools. During active work, queue it with
 `/queue /ro QUERY`. This is a tool restriction, not a confidentiality sandbox:
 readable local files remain accessible, and normal session history is recorded.
-
-On Windows, the printed command targets a normal `cmd.exe` prompt with delayed
-expansion off (the default), as its header states. Paste it there, not into
-PowerShell or a batch file. The command uses a scoped child interpreter to keep
-literal `%`, `!`, quotes and other path characters intact without changing your
-shell's environment.
 
 ## 2. Work together over the network
 

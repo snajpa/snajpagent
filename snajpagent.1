@@ -1842,6 +1842,12 @@ and
 for absent roles, so reused config defaults cannot resurrect removed endpoints.
 Temporary connection outages do not remove desired roles from the command.
 .PP
+On experimental native Windows, the resume header names a normal cmd.exe
+prompt with delayed expansion off.  Paste the printed command there, not into
+PowerShell or a batch file.  A scoped child interpreter preserves literal
+percent signs, exclamation marks, quotes and other argument characters without
+changing the caller's environment.  On POSIX, use a POSIX-compatible shell.
+.PP
 Resume preserves the saved goal state: active goals continue, while paused,
 blocked, completed and cancelled goals keep their recorded states.  No goal
 pause or resume transition is added merely by reopening the session.
