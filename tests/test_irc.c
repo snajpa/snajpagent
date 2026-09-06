@@ -204,33 +204,45 @@ drain(snag_socket fd, char *out, size_t size)
 }
 
 static void
+wait_wire(struct snag_irc *server, snag_socket fd, char *wire, size_t wire_size,
+          const char *expected)
+{
+    size_t used = 0;
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    for (;;) {
+        tick(server, 1u);
+        used += drain(fd, wire + used, wire_size - used);
+        if (strstr(wire, expected))
+            break;
+        if (used + 1u == wire_size || snag_monotonic_ms() >= deadline) {
+            (void)fprintf(stderr, "missing IRC reply %s in: %s\n", expected, wire);
+            abort();
+        }
+        snag_socket_event ready = {fd, SNAG_NET_READ, 0};
+        assert(snag_socket_poll(&ready, 1u, 20) >= 0);
+    }
+}
+
+static void
+drain_ready(struct snag_irc *runtime, snag_socket fd, char *wire, size_t size)
+{
+    send_text(fd, "PING :snajpagent-test-barrier\r\n");
+    wait_wire(runtime, fd, wire, size, " :snajpagent-test-barrier\r\n");
+}
+
+static void
 register_peer(struct snag_irc *server, snag_socket fd, const char *nick,
               bool agent, char *wire, size_t wire_size)
 {
     char input[1024u];
     int n = snprintf(input, sizeof(input),
         "CAP LS 302\r\nCAP REQ :batch server-time draft/chathistory%s\r\n"
-        "CAP END\r\nNICK %s\r\nUSER %s 0 * :%s\r\nJOIN #lab\r\n"
-        "PING :snajpagent-registration-ready\r\n",
+        "CAP END\r\nNICK %s\r\nUSER %s 0 * :%s\r\nJOIN #lab\r\n",
         agent ? " " SNAJPAGENT_NAME "/agent" : "", nick, nick,
         agent ? SNAJPAGENT_NAME " agent" : "human");
-
     assert(n > 0 && (size_t)n < sizeof(input));
     send_text(fd, input);
-    size_t used = 0;
-    uint64_t deadline = snag_monotonic_ms() + 1000u;
-    for (;;) {
-        tick(server, 1u);
-        used += drain(fd, wire + used, wire_size - used);
-        if (strstr(wire, " :snajpagent-registration-ready\r\n"))
-            break;
-        if (used + 1u == wire_size || snag_monotonic_ms() >= deadline) {
-            (void)fprintf(stderr, "registration did not finish for %s: %s\n", nick, wire);
-            abort();
-        }
-        snag_socket_event ready = {fd, SNAG_NET_READ, 0};
-        assert(snag_socket_poll(&ready, 1u, 20) >= 0);
-    }
+    drain_ready(server, fd, wire, wire_size);
 }
 
 static void
@@ -376,7 +388,7 @@ test_runtime_roles(void)
     register_peer(runtime, human, "human", false, wire, sizeof(wire));
     assert(snag_irc_send_operator(runtime, "shared-before-stop", error, sizeof(error)) == 0);
     tick(runtime, 3u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(runtime, human, wire, sizeof(wire));
     assert(strstr(wire, "shared-before-stop"));
     assert(capture.events[SNAG_IRC_MESSAGE] == 2u);
     snag_irc_destinations(runtime, &destinations);
@@ -393,7 +405,7 @@ test_runtime_roles(void)
         "host-only", &state, error, sizeof(error)) == 0);
     tick(runtime, 3u);
     tick(upstream, 3u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(runtime, human, wire, sizeof(wire));
     assert(strstr(wire, "host-only"));
     assert(!strstr(upstream_capture.message_text, "host-only"));
     route.targets[0] = destinations.items[0].target;
@@ -401,7 +413,7 @@ test_runtime_roles(void)
         "upstream-only", NULL, error, sizeof(error)) == 0);
     tick(runtime, 3u);
     tick(upstream, 3u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(runtime, human, wire, sizeof(wire));
     assert(!strstr(wire, "upstream-only"));
     assert(strstr(upstream_capture.message_text, "upstream-only"));
     assert(strcmp(capture.last_message.endpoint, other) == 0);
@@ -650,18 +662,18 @@ test_server(void)
 
     send_text(human, "PING :token-123\r\nMODE #lab +o agent\r\n");
     tick(server, 10u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(server, human, wire, sizeof(wire));
     assert(strstr(wire, "PONG") && strstr(wire, "token-123"));
     assert(strstr(wire, "MODE #lab +o agent") != NULL);
     assert(snag_irc_set_agent_topic(server, "agent topic",
                                    error, sizeof(error)) == 0);
     tick(server, 5u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(server, human, wire, sizeof(wire));
     assert(strstr(wire, "TOPIC #lab :agent topic") != NULL);
 
     send_text(human, "PRIVMSG #lab :hello \00304red\r\nNAMES #lab\r\nWHO #lab\r\n");
     tick(server, 10u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(server, human, wire, sizeof(wire));
     assert(strcmp(capture.last_message.nick, "human") == 0);
     assert(strcmp(capture.last_message.text, "hello red") == 0);
     assert(capture.last_message.op);
@@ -673,7 +685,7 @@ test_server(void)
                      "NICK agent\r\nPRIVMSG #lab :renamed speech\r\n"
                      "TOPIC #lab :agent topic\r\n");
     tick(server, 10u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(server, human, wire, sizeof(wire));
     assert(capture.events[SNAG_IRC_NICK] == 2u);
     assert(strcmp(capture.last_nick.nick, "renamed") == 0);
     assert(strcmp(capture.last_nick.text, "RENAMED") == 0);
@@ -685,7 +697,7 @@ test_server(void)
     assert(capture.last_message.op);
     send_text(human, "PART #lab\r\nNICK away\r\nJOIN #lab\r\n");
     tick(server, 10u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(server, human, wire, sizeof(wire));
     assert(strstr(wire, " NICK :away\r\n"));
     assert(strstr(wire, " 366 away #lab "));
     assert(capture.events[SNAG_IRC_NICK] == 2u);
@@ -738,7 +750,7 @@ test_server(void)
     assert(snag_irc_send_agent(server, "history marker",
                               error, sizeof(error)) == 0);
     tick(server, 5u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(server, human, wire, sizeof(wire));
     history = connect_local(port, false);
     register_peer(server, history, "reader", false, wire, sizeof(wire));
     assert(strstr(wire, "BATCH +") != NULL);
@@ -758,7 +770,7 @@ test_server(void)
     assert(snag_socket_close(bad) == 0);
     send_text(human, "PING :still-alive\r\n");
     tick(server, 5u);
-    (void)drain(human, wire, sizeof(wire));
+    drain_ready(server, human, wire, sizeof(wire));
     assert(strstr(wire, "still-alive") != NULL);
 
     slow = connect_local(port, true);
@@ -1233,7 +1245,7 @@ test_client_events(void)
     for (size_t i = 0u; i < 2u; ++i) {
         const char *nick;
 
-        assert(drain(peers[i], wire, sizeof(wire)) != 0u);
+        drain_ready(client, peers[i], wire, sizeof(wire));
         nick = strstr(wire, "NICK remoteop\r\n") ? "remoteop" : "remoteagent";
         if (strcmp(nick, "remoteop") == 0)
             operator_fd = peers[i];
@@ -1262,7 +1274,7 @@ test_client_events(void)
         char joined[1024u];
         int n;
 
-        assert(drain(peers[i], wire, sizeof(wire)) != 0u);
+        drain_ready(client, peers[i], wire, sizeof(wire));
         assert(strstr(wire, "JOIN #lab\r\n"));
         nick = peers[i] == operator_fd ? "remoteop" : "remoteagent";
         n = snprintf(joined, sizeof(joined),
