@@ -224,7 +224,7 @@ acquire_login(const struct snag_cli *cli, struct snag_provider_config *provider,
             if (read_line("Use the existing stored login? [Y/n]: ", key, sizeof(key),
                            false, false, error, error_size) < 0)
                 return -1;
-            if (!*key || strcmp(key, "Y") == 0 || strcmp(key, "y") == 0)
+            if (!*key || snag_string_in(key, "Y y"))
                 return 0;
         }
         snag_auth_clear(tokens);
@@ -278,7 +278,7 @@ choose_model(const struct snag_cli *cli, const struct snag_config *config,
     if (read_line("Fetch this provider's model list now? [Y/n]: ", answer,
                    sizeof(answer), false, false, error, error_size) < 0)
         goto out;
-    if (!*answer || strcmp(answer, "y") == 0 || strcmp(answer, "Y") == 0) {
+    if (!*answer || snag_string_in(answer, "y Y")) {
         tokens->credential.root_fd = -1; /* Uncommitted credentials. */
         if (snag_provider_models_list((struct snag_provider_connection){
             config, provider, &tokens->credential, NULL,

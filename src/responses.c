@@ -596,8 +596,7 @@ function_snapshot(struct snag_responses_stream *stream, size_t output_index,
 
     if (!id || !call_id || !name || !arguments || !status ||
         (complete ? strcmp(status, "completed") != 0 :
-                    (strcmp(status, "in_progress") != 0 &&
-                     strcmp(status, "completed") != 0)))
+                    (!snag_string_in(status, "in_progress completed"))))
         return stream_fail(stream, EPROTO, "invalid function call snapshot");
     item = output_index < stream->item_count ?
            find_item(stream, output_index, id, SNAG_WIRE_ITEM_FUNCTION_CALL) :
@@ -884,10 +883,7 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
     if (strcmp(type, "response.created") == 0)
         return handle_response_created(stream, root);
     /* Only lifecycle notices prove no output or hosted-tool activity. */
-    if (strcmp(type, "response.queued") != 0 &&
-        strcmp(type, "response.in_progress") != 0 &&
-        strcmp(type, "response.failed") != 0 &&
-        strcmp(type, "response.incomplete") != 0 && strcmp(type, "error") != 0)
+    if (!snag_string_in(type, "response.queued response.in_progress response.failed response.incomplete error"))
         stream->retry_unsafe = true;
     if (strcmp(type, "response.output_item.added") == 0)
         return handle_output_item(stream, root, false);
@@ -911,9 +907,7 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
         return handle_arguments(stream, root, true);
     if (strcmp(type, "response.completed") == 0)
         return handle_response_completed(stream, root);
-    if (strcmp(type, "response.failed") == 0 ||
-        strcmp(type, "response.incomplete") == 0 ||
-        strcmp(type, "error") == 0)
+    if (snag_string_in(type, "response.failed response.incomplete error"))
         return handle_provider_failure(stream, root, type);
     if (strncmp(type, "response.", sizeof("response.") - 1u) == 0)
         return 0;

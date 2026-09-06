@@ -490,14 +490,8 @@ snag_process_output_decode(const json_t *data, struct snag_buf *bytes)
 static bool
 process_close_status(const char *status)
 {
-    return status &&
-           (strcmp(status, "succeeded") == 0 ||
-            strcmp(status, "failed") == 0 ||
-            strcmp(status, "signaled") == 0 ||
-            strcmp(status, "timed_out") == 0 ||
-            strcmp(status, "cancelled") == 0 ||
-            strcmp(status, "outcome_unknown") == 0 ||
-            strcmp(status, "io_failed") == 0);
+    return snag_string_in(status,
+        "succeeded failed signaled timed_out cancelled outcome_unknown io_failed");
 }
 
 static int
@@ -579,17 +573,6 @@ consume_oldest_queue(struct snag_session *session)
            sizeof(session->pending_queue[0]));
     session->pending_queue_bytes -= len;
     return 0;
-}
-
-static bool
-string_in(const char *value, const char *const *choices, size_t count)
-{
-    if (!value)
-        return false;
-    for (size_t i = 0; i < count; ++i)
-        if (strcmp(value, choices[i]) == 0)
-            return true;
-    return false;
 }
 
 static bool
@@ -694,10 +677,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         uint64_t timestamp_ms;
 
         if (!snag_json_exact_keys(data, "reason text timestamp_ms") || !reason ||
-            (strcmp(reason, "join") != 0 &&
-             strcmp(reason, "nick") != 0 &&
-             strcmp(reason, "topology") != 0 &&
-             strcmp(reason, "compaction") != 0) ||
+            (!snag_string_in(reason, "join nick topology compaction")) ||
             !text || !*text || strlen(text) > SNAG_MAX_IRC_SNAPSHOT ||
             !snag_utf8_valid((const unsigned char *)text, strlen(text), true) ||
             snag_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 ||
@@ -717,8 +697,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             replace_text(session, &session->workspace, "workspace", new_workspace,
                          SNAG_PATH_MAX_BYTES) < 0)
             goto invalid;
-    } else if (strcmp(type, "session_archived") == 0 ||
-               strcmp(type, "session_unarchived") == 0) {
+    } else if (snag_string_in(type, "session_archived session_unarchived")) {
         const char *origin = snag_json_string(data, "origin");
         bool archived = strcmp(type, "session_archived") == 0;
         if (!snag_json_exact_keys(data, "origin") || session->active_turn ||
@@ -800,11 +779,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 goto invalid;
             session->goal_locked = json_is_true(locked);
         } else if (strcmp(action, "paused") == 0) {
-            static const char *const reasons[] = {
-                "input_closed", "refusal", "session_resumed", "turn_stopped", "user"
-            };
+            static const char reasons[] =
+                "input_closed refusal session_resumed turn_stopped user";
             if (!snag_json_exact_keys(data, "goal_id reason") || status != SNAG_GOAL_ACTIVE ||
-                !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])))
+                !snag_string_in(reason, reasons))
                 goto invalid;
             status = SNAG_GOAL_PAUSED;
         } else if (strcmp(action, "blocked") == 0) {
@@ -823,7 +801,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 (model && (status != SNAG_GOAL_ACTIVE || session->process_count)))
                 goto invalid;
             status = SNAG_GOAL_COMPLETED;
-        } else if (strcmp(action, "resumed") == 0 || strcmp(action, "cancelled") == 0) {
+        } else if (snag_string_in(action, "resumed cancelled")) {
             bool resume = strcmp(action, "resumed") == 0;
             if (!snag_json_exact_keys(data, "goal_id") || (resume && status == SNAG_GOAL_ACTIVE))
                 goto invalid;
@@ -838,12 +816,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
         session->goal_status = status;
     } else if (strcmp(type, "compaction_started") == 0) {
-        static const char *const methods[] = {
-            "exact", "unknown", "anchored_upper_bound", "statistical_upper_estimate", "qualified_upper_bound"
-        };
-        static const char *const reasons[] = {
-            "manual", "proactive", "hard_budget", "provider_rejection"
-        };
+        static const char methods[] =
+            "exact unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
+        static const char reasons[] =
+            "manual proactive hard_budget provider_rejection";
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *predecessor = snag_json_string(data, "predecessor_compact_id");
         const char *reason = snag_json_string(data, "reason");
@@ -871,8 +847,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->active_compact_id[0] != '\0' ||
             !compact_id || !snag_hex_is_lower(compact_id, SNAG_ID_HEX_LEN) ||
             strcmp(compact_id, session->id) == 0 ||
-            !string_in(method, methods, sizeof(methods) / sizeof(methods[0])) ||
-            !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])) ||
+            !snag_string_in(method, methods) ||
+            !snag_string_in(reason, reasons) ||
             !source_hash || !snag_hex_is_lower(source_hash, SNAG_SHA256_HEX_LEN) ||
             !request_hash || !snag_hex_is_lower(request_hash, SNAG_SHA256_HEX_LEN) ||
             !count_hash || !snag_hex_is_lower(count_hash, SNAG_SHA256_HEX_LEN) ||
@@ -897,23 +873,21 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                sizeof(session->active_compact_source_sha256));
         session->active_compact_source_seq = source_seq;
     } else if (strcmp(type, "compaction_interrupted") == 0) {
-        static const char *const reasons[] = {"steering", "user", "endpoint_unavailable", "context_rejected", "error"};
+        static const char reasons[] = "steering user endpoint_unavailable context_rejected error";
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *reason = snag_json_string(data, "reason");
 
         if (!snag_json_exact_keys(data, "compact_id reason") ||
             session->active_compact_id[0] == '\0' || !compact_id ||
             strcmp(compact_id, session->active_compact_id) != 0 ||
-            !string_in(reason, reasons,
-                       sizeof(reasons) / sizeof(reasons[0])))
+            !snag_string_in(reason, reasons))
             goto invalid;
         session->active_compact_id[0] = '\0';
         session->active_compact_source_sha256[0] = '\0';
         session->active_compact_source_seq = 0u;
     } else if (strcmp(type, "compaction_completed") == 0) {
-        static const char *const methods[] = {
-            "exact", "unknown", "statistical_upper_estimate", "qualified_upper_bound"
-        };
+        static const char methods[] =
+            "exact unknown statistical_upper_estimate qualified_upper_bound";
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *method = snag_json_string(data, "count_method");
         const char *output_method = snag_json_string(data, "output_count_method");
@@ -932,8 +906,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256") ||
             session->active_compact_id[0] == '\0' ||
             !compact_id || strcmp(compact_id, session->active_compact_id) != 0 ||
-            !string_in(method, methods, sizeof(methods) / sizeof(methods[0])) ||
-            !string_in(output_method, methods, sizeof(methods) / sizeof(methods[0])) ||
+            !snag_string_in(method, methods) ||
+            !snag_string_in(output_method, methods) ||
             !output_count_hash ||
             !snag_hex_is_lower(output_count_hash, SNAG_SHA256_HEX_LEN) ||
             !source_hash || strcmp(source_hash, session->active_compact_source_sha256) != 0 ||
@@ -994,8 +968,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_strcpy(session->default_effort,
                         sizeof(session->default_effort), new_effort))
             goto invalid;
-    } else if (strcmp(type, "steering_added") == 0 ||
-               strcmp(type, "irc_reply_reminder") == 0) {
+    } else if (snag_string_in(type, "steering_added irc_reply_reminder")) {
         const char *steering_id = snag_json_string(data, "steering_id");
         const char *text = snag_json_string(data, "text");
         const char *turn_id = snag_json_string(data, "turn_id");
@@ -1338,10 +1311,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !state_allows_start || !response_id ||
             !snag_hex_is_lower(response_id, SNAG_ID_HEX_LEN) || !turn_id ||
             strcmp(turn_id, session->active_turn_id) != 0 || !method ||
-            (strcmp(method, "exact") != 0 && strcmp(method, "unknown") != 0 &&
-             strcmp(method, "anchored_upper_bound") != 0 &&
-             strcmp(method, "statistical_upper_estimate") != 0 &&
-             strcmp(method, "qualified_upper_bound") != 0) ||
+            (!snag_string_in(method, "exact unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound")) ||
             !capability || strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
             !model || strcmp(model, session->active_turn_model) != 0 ||
             !provider || strcmp(provider, session->active_turn_provider) != 0 ||
@@ -1350,11 +1320,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                               SNAG_SHA256_HEX_LEN) ||
             !effort || strcmp(effort, session->active_turn_effort) != 0 ||
             (!capacity_source ||
-             (strcmp(capacity_source, "unknown") != 0 &&
-              strcmp(capacity_source, "advertised") != 0 &&
-              strcmp(capacity_source, "configured") != 0 &&
-              strcmp(capacity_source, "observed") != 0 &&
-              strcmp(capacity_source, "stale-catalog-ignored") != 0)) ||
+             (!snag_string_in(capacity_source, "unknown advertised configured observed stale-catalog-ignored"))) ||
             (!json_is_true(json_object_get(data, "source_bound")) &&
              !json_is_false(json_object_get(data, "source_bound"))) ||
             (!json_is_null(json_object_get(data, "hard_input_tokens")) &&
@@ -1560,14 +1526,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         else
             session->output_correction_used = true;
     } else if (strcmp(type, "response_interrupted") == 0) {
-        static const char *const origins[] = {"user", "steering", "recovery", "output"};
-        static const char *const reasons[] = {"cancelled", "steered", "process_lost", "output_lost"};
+        static const char origins[] = "user steering recovery output";
+        static const char reasons[] = "cancelled steered process_lost output_lost";
         const char *origin = snag_json_string(data, "origin");
         const char *reason = snag_json_string(data, "reason");
         json_t *partial = json_object_get(data, "partial_public");
         if (!snag_json_exact_keys(data, "cycle origin partial_public reason response_id turn_id") || !current_response(session, data) ||
-            !string_in(origin, origins, sizeof(origins) / sizeof(origins[0])) ||
-            !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])) ||
+            !snag_string_in(origin, origins) ||
+            !snag_string_in(reason, reasons) ||
             ((strcmp(origin, "steering") == 0) !=
              (strcmp(reason, "steered") == 0)) ||
             (strcmp(origin, "steering") == 0 &&
@@ -1579,9 +1545,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->response_terminal = strcmp(origin, "steering") == 0 ?
             SNAG_RESPONSE_TERMINAL_STEERED : SNAG_RESPONSE_TERMINAL_INTERRUPTED;
     } else if (strcmp(type, "response_failed") == 0) {
-        static const char *const classes[] = {
-            "context", "provider", "protocol", "resource", "output", "internal"
-        };
+        static const char classes[] =
+            "context provider protocol resource output internal";
         const char *class_name = snag_json_string(data, "class");
         const char *message = snag_json_string(data, "message");
         json_t *partial = json_object_get(data, "partial_public");
@@ -1589,7 +1554,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!snag_json_exact_keys(data,
             "class cycle message partial_public response_id retry_count "
             "turn_id") || !current_response(session, data) ||
-            !string_in(class_name, classes, sizeof(classes) / sizeof(classes[0])) ||
+            !snag_string_in(class_name, classes) ||
             !message || strlen(message) > 8192u ||
             snag_partial_public_validate(partial, error, error_size) < 0 ||
             snag_json_integer_u64(data, "retry_count", &retry_count) < 0 ||
@@ -1748,10 +1713,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_tool_result_valid(result) < 0 || !status)
             goto invalid;
         if (call->started) {
-            if (strcmp(status, "not_run") == 0 || strcmp(status, "denied") == 0)
+            if (snag_string_in(status, "not_run denied"))
                 goto invalid;
-        } else if (strcmp(status, "not_run") != 0 &&
-                   strcmp(status, "denied") != 0) {
+        } else if (!snag_string_in(status, "not_run denied")) {
             goto invalid;
         }
         struct snag_process_state *process = snag_session_process(session, call->process_handle);
@@ -1816,10 +1780,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (rc < 0)
             goto invalid;
     } else if (strcmp(type, "process_closed") == 0) {
-        static const char *const causes[] = {
-            "user_interrupt", "provider_failure", "protocol_failure",
-            "tool_failure", "output_failure", "internal_failure"
-        };
+        static const char causes[] =
+            "user_interrupt provider_failure protocol_failure tool_failure output_failure "
+            "internal_failure";
         const char *cause = snag_json_string(data, "cause");
         const char *handle = snag_json_string(data, "handle");
         const char *turn_id = snag_json_string(data, "turn_id");
@@ -1832,7 +1795,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             !handle || !snag_hex_is_lower(handle, SNAG_ID_HEX_LEN) ||
             !process ||
-            !string_in(cause, causes, sizeof(causes) / sizeof(causes[0])) ||
+            !snag_string_in(cause, causes) ||
             snag_tool_result_valid(result) < 0 ||
             !process_close_status(status))
             goto invalid;
@@ -1854,9 +1817,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         clear_turn_state(session);
     } else if (strcmp(type, "turn_completed_silent") == 0) {
-        static const char *const reasons[] = {
-            "room_update_quiet", "reply_reminder_exhausted"
-        };
+        static const char reasons[] =
+            "room_update_quiet reply_reminder_exhausted";
         const char *turn_id = snag_json_string(data, "turn_id");
         const char *response_id = snag_json_string(data, "response_id");
         const char *reason = snag_json_string(data, "reason");
@@ -1867,8 +1829,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             !response_id || strcmp(response_id,
                                    session->active_response_id) != 0 ||
-            !string_in(reason, reasons,
-                       sizeof(reasons) / sizeof(reasons[0])) ||
+            !snag_string_in(reason, reasons) ||
             (strcmp(reason, "reply_reminder_exhausted") == 0 &&
              !session->irc_reply_reminded) ||
             session->process_count != 0u ||
@@ -1877,10 +1838,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         clear_turn_state(session);
     } else if (strcmp(type, "turn_interrupted") == 0) {
-        static const char *const origins[] = {"user", "recovery", "output"};
-        static const char *const reasons[] = {
-            "cancelled", "process_lost", "output_lost", "session_recovered"
-        };
+        static const char origins[] = "user recovery output";
+        static const char reasons[] =
+            "cancelled process_lost output_lost session_recovered";
         const char *turn_id = snag_json_string(data, "turn_id");
         const char *origin = snag_json_string(data, "origin");
         const char *reason = snag_json_string(data, "reason");
@@ -1889,16 +1849,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->response_open ||
             (session->response_complete && !all_pending_finished(session)) ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
-            !string_in(origin, origins, sizeof(origins) / sizeof(origins[0])) ||
-            !string_in(reason, reasons, sizeof(reasons) / sizeof(reasons[0])))
+            !snag_string_in(origin, origins) ||
+            !snag_string_in(reason, reasons))
             goto invalid;
         clear_turn_state(session);
         clear_pending_steering(session);
     } else if (strcmp(type, "turn_failed") == 0) {
-        static const char *const classes[] = {
-            "context", "provider", "protocol", "tool", "persistence",
-            "resource", "output", "internal"
-        };
+        static const char classes[] =
+            "context provider protocol tool persistence resource output internal";
         const char *turn_id = snag_json_string(data, "turn_id");
         const char *class_name = snag_json_string(data, "class");
         const char *message = snag_json_string(data, "message");
@@ -1907,7 +1865,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->response_open ||
             (session->response_complete && !all_pending_finished(session)) ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
-            !string_in(class_name, classes, sizeof(classes) / sizeof(classes[0])) ||
+            !snag_string_in(class_name, classes) ||
             !message || strlen(message) > 8192u)
             goto invalid;
         session->last_turn_failed = true;

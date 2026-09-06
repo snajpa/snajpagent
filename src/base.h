@@ -128,6 +128,8 @@ int snag_mkdir_private(const char *path);
 int snag_mkdir_private_at(int dirfd, const char *path);
 int snag_create_private_at(int dirfd, const char *path, bool exclusive);
 bool snag_strcpy(char *dst, size_t size, const char *src);
+/* Exact membership in a space-separated list of nonempty words. */
+bool snag_string_in(const char *value, const char *choices);
 char *snag_join_words(char *const *words, size_t count, size_t max);
 
 struct snag_sha256 {

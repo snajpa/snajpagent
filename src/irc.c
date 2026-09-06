@@ -1601,8 +1601,7 @@ server_dispatch(struct snag_irc_core *irc, struct irc_conn *peer, char *line)
         }
         return 0;
     }
-    if (strcmp(message.command, "PRIVMSG") == 0 ||
-        strcmp(message.command, "NOTICE") == 0) {
+    if (snag_string_in(message.command, "PRIVMSG NOTICE")) {
         if (message.param_count < 2u)
             return 0;
         return server_chat(irc, peer,
@@ -1614,8 +1613,7 @@ server_dispatch(struct snag_irc_core *irc, struct irc_conn *peer, char *line)
         return server_topic(irc, peer, &message);
     if (strcmp(message.command, "MODE") == 0)
         return server_mode(irc, peer, &message);
-    if ((strcmp(message.command, "NAMES") == 0 ||
-         strcmp(message.command, "WHO") == 0) && !peer->registered)
+    if ((snag_string_in(message.command, "NAMES WHO")) && !peer->registered)
         return queue_line(peer, ":%s 451 * :You have not registered",
                           irc->server_name);
     if (strcmp(message.command, "NAMES") == 0)
@@ -1904,8 +1902,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             }
         return 0;
     }
-    if (strcmp(message.command, "376") == 0 ||
-        strcmp(message.command, "422") == 0) {
+    if (snag_string_in(message.command, "376 422")) {
         if (!link->room[0])
             return 1;
         struct irc_cursor *cursor = find_cursor(irc, link->endpoint, link->room, false);
@@ -2088,8 +2085,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
                          message.params[1], member && member->op,
                          timestamp_ms);
     }
-    if ((strcmp(message.command, "PRIVMSG") == 0 ||
-         strcmp(message.command, "NOTICE") == 0) && sender &&
+    if ((snag_string_in(message.command, "PRIVMSG NOTICE")) && sender &&
         message.param_count >= 2u && link->joined && link->room[0] &&
         irc_casecmp(message.params[0], link->room) == 0) {
         struct irc_member *member;
@@ -2108,9 +2104,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
     }
     if (strcmp(message.command, "433") == 0 && !link->registered)
         return link_retry_nick(link);
-    if (strcmp(message.command, "ERROR") == 0 ||
-        strcmp(message.command, "403") == 0 ||
-        strcmp(message.command, "404") == 0)
+    if (snag_string_in(message.command, "ERROR 403 404"))
         return 1;
     return 0;
 }

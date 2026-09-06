@@ -2832,6 +2832,16 @@ run_base(int argc, char **argv)
     assert(snag_fail(failure, sizeof(failure), EIO, "%s", "too long a message") == -1);
     assert(errno == EIO && strcmp(failure, "too lon") == 0);
     assert(snag_fail(NULL, 0u, EOVERFLOW, "unretained") == -1 && errno == EOVERFLOW);
+    assert(snag_string_in("alpha", "alpha beta"));
+    assert(snag_string_in("beta", "alpha beta"));
+    assert(snag_string_in("β", " alpha  β "));
+    assert(!snag_string_in(NULL, "alpha"));
+    assert(!snag_string_in("", "alpha"));
+    assert(!snag_string_in("alpha", ""));
+    assert(!snag_string_in("Alpha", "alpha beta"));
+    assert(!snag_string_in("alph", "alpha beta"));
+    assert(!snag_string_in("alpha beta", "alpha beta"));
+    assert(!snag_string_in(" ", "  "));
     assert(snag_irc_nick_mentioned("@ALICE: hi", "alice"));
     assert(snag_irc_nick_mentioned("{op}: hi", "[OP]"));
     assert(snag_irc_nick_mentioned("hello alice", "alice"));

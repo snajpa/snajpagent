@@ -112,9 +112,7 @@ accounting_valid(const json_t *model)
     const char *state = snag_json_string(model, "count_capability");
 
     return state &&
-           (strcmp(state, "unknown") == 0 ||
-            strcmp(state, "supported") == 0 ||
-            strcmp(state, "unsupported") == 0) &&
+           (snag_string_in(state, "unknown supported unsupported")) &&
            snag_json_integer_u64(model, "observed_hard_input_tokens",
                                 &hard) == 0 &&
            snag_json_integer_u64(model, "observed_input_tokens",
@@ -184,8 +182,7 @@ providers_valid(const json_t *providers, bool cached)
                           SNAG_CONFIG_URL_MAX) ||
             !cache_string(json_object_get(provider, "protocol"), 6u) ||
             !(protocol = snag_json_string(provider, "protocol")) ||
-            (strcmp(protocol, "codex") != 0 &&
-             strcmp(protocol, "openai") != 0) ||
+            (!snag_string_in(protocol, "codex openai")) ||
             !(name = snag_json_string(provider, "name")) ||
             !json_is_array((models = json_object_get(provider, "models"))) ||
             json_array_size(models) >
@@ -850,7 +847,7 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
     bool catalog_used = false;
 
     if (!config || !provider || !model || !*model || !protocol || !capacity ||
-        (strcmp(protocol, "codex") != 0 && strcmp(protocol, "openai") != 0)) {
+        (!snag_string_in(protocol, "codex openai"))) {
         return snag_fail(error, error_size, EINVAL, "invalid model capacity selection");
     }
     memset(capacity, 0, sizeof(*capacity));

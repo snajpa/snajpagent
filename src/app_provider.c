@@ -210,8 +210,7 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
         return SNAG_PROVIDER_UNSUPPORTED;
     }
     if (app && app->session.last_user &&
-        (strcmp(app->session.last_user, "compaction_steer") == 0 ||
-         strcmp(app->session.last_user, "capacity_recovery_steer") == 0))
+        (snag_string_in(app->session.last_user, "compaction_steer capacity_recovery_steer")))
         for (unsigned int i = 0u; i < 100u; ++i) {
             int pump_rc = snag_app_active_input_pump(app, 20u);
 
@@ -245,8 +244,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
         memset(failure, 0, sizeof(*failure));
     if (retry_count)
         *retry_count = 0u;
-    if (((strcmp(prompt, "capacity_recovery") == 0 ||
-          strcmp(prompt, "capacity_recovery_steer") == 0) &&
+    if (((snag_string_in(prompt, "capacity_recovery capacity_recovery_steer")) &&
          !fixture_capacity_rejected_once) ||
         strcmp(prompt, "capacity_recovery_twice") == 0) {
         fixture_capacity_rejected_once = true;
@@ -384,13 +382,10 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     }
 
     if (call && call->name &&
-        (strcmp(call->name, "create_goal") == 0 ||
-         strcmp(call->name, "update_goal") == 0))
+        (snag_string_in(call->name, "create_goal update_goal")))
         return snag_app_goal_tool(app, call, result, error, error_size);
     if (call && call->name &&
-        (strcmp(call->name, "irc_send") == 0 ||
-         strcmp(call->name, "irc_topic") == 0 ||
-         strcmp(call->name, "irc_state") == 0)) {
+        (snag_string_in(call->name, "irc_send irc_topic irc_state"))) {
         const char *failure = NULL;
 
         if (!app->request_networked)
@@ -421,7 +416,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         return rc < 0 || !*result ? -1 : 0;
     }
     if (call && call->name &&
-        (strcmp(call->name, "irc_send") == 0 || strcmp(call->name, "irc_topic") == 0)) {
+        (snag_string_in(call->name, "irc_send irc_topic"))) {
         bool topic = strcmp(call->name, "irc_topic") == 0;
         const char *text = snag_json_string(call->arguments, topic ? "topic" : "text");
         json_t *notice_value = json_object_get(call->arguments, "notice");

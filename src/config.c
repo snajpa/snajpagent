@@ -190,11 +190,11 @@ parse_u32(const char *text, uint32_t min, uint32_t max, uint32_t *out)
 static int
 parse_bool(const char *text, bool *out)
 {
-    if (strcmp(text, "true") == 0 || strcmp(text, "1") == 0) {
+    if (snag_string_in(text, "true 1")) {
         *out = true;
         return 0;
     }
-    if (strcmp(text, "false") == 0 || strcmp(text, "0") == 0) {
+    if (snag_string_in(text, "false 0")) {
         *out = false;
         return 0;
     }
@@ -1349,9 +1349,7 @@ replace_provider_settings(const struct snag_buf *input, struct snag_buf *output,
             if (selected && equal) {
                 *equal = '\0';
                 s = trim(s);
-                replaced = strcmp(s, "auth") == 0 || strcmp(s, "base_url") == 0 ||
-                    strcmp(s, "api_key") == 0 || strcmp(s, "native_compaction") == 0 ||
-                    strcmp(s, "parallel_tool_calls") == 0;
+                replaced = snag_string_in(s, "auth base_url api_key native_compaction parallel_tool_calls");
             }
             if (!replaced && snag_buf_append(output, input->data + at,
                     end - at + (end < input->len ? 1u : 0u)) < 0)

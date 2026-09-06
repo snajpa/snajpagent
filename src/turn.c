@@ -27,9 +27,7 @@ snag_prompt_parse(const char *text, bool *read_only)
 bool
 snag_read_only_tool(const char *name)
 {
-    return name && (strcmp(name, "list_files") == 0 ||
-                    strcmp(name, "read_file") == 0 ||
-                    strcmp(name, "grep") == 0);
+    return snag_string_in(name, "list_files read_file grep");
 }
 
 const char *
@@ -241,14 +239,9 @@ snag_response_graph_set_provider_id(struct snag_response_graph *graph,
 static bool
 tool_name_valid(const char *name)
 {
-    return snag_read_only_tool(name) || (name && (strcmp(name, "exec_command") == 0 ||
-                    strcmp(name, "write_stdin") == 0 ||
-                    strcmp(name, "apply_patch") == 0 ||
-                    strcmp(name, "create_goal") == 0 ||
-                    strcmp(name, "update_goal") == 0 ||
-                    strcmp(name, "irc_send") == 0 ||
-                    strcmp(name, "irc_state") == 0 ||
-                    strcmp(name, "irc_topic") == 0));
+    return snag_read_only_tool(name) || snag_string_in(name,
+        "exec_command write_stdin apply_patch create_goal update_goal irc_send irc_state "
+        "irc_topic");
 }
 
 static bool
@@ -614,7 +607,7 @@ tool_excerpt_valid(const json_t *excerpt)
         snag_json_integer_u64(excerpt, "original_bytes", &original) < 0 ||
         snag_json_integer_u64(excerpt, "retained_bytes", &retained_bytes) < 0)
         return -1;
-    if (strcmp(encoding, "utf8") != 0 && strcmp(encoding, "base64") != 0)
+    if (!snag_string_in(encoding, "utf8 base64"))
         return -1;
     if (strcmp(encoding, "utf8") == 0 && strlen(retained) != retained_bytes)
         return -1;
@@ -626,21 +619,11 @@ tool_excerpt_valid(const json_t *excerpt)
 static bool
 reason_is_not_run(const char *reason)
 {
-    return reason && (strcmp(reason, "protocol_conflict") == 0 ||
-                      strcmp(reason, "read_only") == 0 ||
-                      strcmp(reason, "process_limit") == 0 ||
-                      strcmp(reason, "batch_yield") == 0 ||
-                      strcmp(reason, "operator_yield") == 0 ||
-                      strcmp(reason, "process_busy") == 0 ||
-                      strcmp(reason, "stdin_busy") == 0 ||
-                      strcmp(reason, "stdin_closed") == 0 ||
-                      strcmp(reason, "invalid_arguments") == 0 ||
-                      strcmp(reason, "managed_process_conflict") == 0 ||
-                      strcmp(reason, "managed_process_handle_mismatch") == 0 ||
-                      strcmp(reason, "recovery_unstarted") == 0 ||
-                      strcmp(reason, "superseded_by_steering") == 0 ||
-                      strcmp(reason, "turn_cancelled") == 0 ||
-                      strcmp(reason, "process_interaction_required") == 0);
+    return snag_string_in(reason,
+        "protocol_conflict read_only process_limit batch_yield operator_yield process_busy stdin_busy "
+        "stdin_closed invalid_arguments managed_process_conflict "
+        "managed_process_handle_mismatch recovery_unstarted superseded_by_steering "
+        "turn_cancelled process_interaction_required");
 }
 
 int
@@ -712,8 +695,7 @@ snag_tool_result_valid(const json_t *result)
     if (strcmp(status, "not_run") == 0)
         return reason_is_not_run(reason) && json_is_null(handle) ? 0 : -1;
     if (strcmp(status, "outcome_unknown") == 0)
-        return reason && (strcmp(reason, "owner_lost") == 0 ||
-                          strcmp(reason, "unreaped_after_sigkill") == 0) &&
+        return reason && (snag_string_in(reason, "owner_lost unreaped_after_sigkill")) &&
                json_is_null(handle) ? 0 : -1;
     if (strcmp(status, "denied") == 0)
         return reason && strcmp(reason, "user_denied") == 0 &&
@@ -725,23 +707,17 @@ snag_tool_result_valid(const json_t *result)
         return json_is_string(handle) &&
                snag_hex_is_lower(json_string_value(handle), SNAG_ID_HEX_LEN) &&
                (json_is_null(reason_value) ||
-                (reason && (strcmp(reason, "timeout_handoff") == 0 ||
-                            strcmp(reason, "wait_timeout") == 0 ||
-                            strcmp(reason, "operator_yield") == 0 ||
-                            strcmp(reason, "batch_yield") == 0 ||
-                            strcmp(reason, "steering_handoff") == 0))) ? 0 : -1;
+                snag_string_in(reason, "timeout_handoff wait_timeout operator_yield batch_yield steering_handoff")) ? 0 : -1;
     if (!json_is_null(handle) ||
         (!json_is_null(reason_value) &&
          !(reason && strcmp(reason, "output_drain_timeout") == 0 &&
            (!strcmp(status, "succeeded") || !strcmp(status, "failed") || !strcmp(status, "signaled")))))
         return -1;
-    if (strcmp(status, "succeeded") == 0 || strcmp(status, "failed") == 0)
+    if (snag_string_in(status, "succeeded failed"))
         return json_is_integer(exit_value) && json_is_null(signal_value) ? 0 : -1;
     if (strcmp(status, "signaled") == 0)
         return json_is_null(exit_value) && json_is_integer(signal_value) ? 0 : -1;
-    if (strcmp(status, "timed_out") == 0 ||
-        strcmp(status, "patch_rejected") == 0 ||
-        strcmp(status, "io_failed") == 0)
+    if (snag_string_in(status, "timed_out patch_rejected io_failed"))
         return 0;
     return -1;
 }

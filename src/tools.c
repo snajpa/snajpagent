@@ -260,7 +260,7 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
     char *out = NULL;
 
     struct snag_buf text = {.max = SIZE_MAX};
-    if (strcmp(status, "succeeded") == 0 || strcmp(status, "failed") == 0) {
+    if (snag_string_in(status, "succeeded failed")) {
         if (snag_buf_printf(&text, "Process exited with code %lld.\n", (long long)exit_code) < 0)
             goto done;
     } else if (strcmp(status, "signaled") == 0) {
@@ -1073,8 +1073,7 @@ snag_tools_attach_output_limit(const struct snag_response_item *call,
 
     if (!call || !call->name || !config || !result ||
         json_object_get(result, "max_output_tokens") ||
-        (strcmp(call->name, "exec_command") != 0 &&
-         strcmp(call->name, "write_stdin") != 0))
+        (!snag_string_in(call->name, "exec_command write_stdin")))
         return 0;
     if (!command_output_limit(call->arguments, config->max_output_tokens,
                               &max_output_tokens))

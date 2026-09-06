@@ -14,15 +14,13 @@
 static bool
 count_method_valid(const char *method)
 {
-    return method && (!strcmp(method, "exact") || !strcmp(method, "unknown"));
+    return snag_string_in(method, "exact unknown");
 }
 
 static bool
 active_reason(const char *reason)
 {
-    return reason && (strcmp(reason, "proactive") == 0 ||
-                      strcmp(reason, "hard_budget") == 0 ||
-                      strcmp(reason, "provider_rejection") == 0);
+    return snag_string_in(reason, "proactive hard_budget provider_rejection");
 }
 
 static json_t *

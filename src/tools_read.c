@@ -308,7 +308,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
         errno = 0;
         entry = snag_directory_next(dir);
         if (!entry) { rc = errno ? -1 : 0; break; }
-        if (strcmp(entry, ".") == 0 || strcmp(entry, "..") == 0)
+        if (snag_string_in(entry, ". .."))
             continue;
         if (++q->entries > RO_ENTRIES) {
             q->problem = "Directory entry limit reached; narrow the path.";

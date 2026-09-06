@@ -3251,8 +3251,7 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
         render->irc_source = source;
         return 0;
     }
-    if (strcmp(type, "response_completed") == 0 ||
-        strcmp(type, "response_interrupted") == 0 || strcmp(type, "response_failed") == 0) {
+    if (snag_string_in(type, "response_completed response_interrupted response_failed")) {
         json_t *event = NULL;
         int rc = 0;
         for (struct snag_render_record *record = render->view_head[SNAG_RENDER_ROLLOUT];
@@ -3315,8 +3314,7 @@ snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
         notice = "Goal resumed";
     else if (strcmp(type, "goal_blocked") == 0)
         notice = "Goal blocked by model";
-    else if (strcmp(type, "goal_completed") == 0 ||
-             strcmp(type, "goal_cancelled") == 0)
+    else if (snag_string_in(type, "goal_completed goal_cancelled"))
         notice = "Goal cleared";
     bool debug = snag_render_enabled(render, SNAG_PRESENT_DEBUG);
     if (!notice && !debug)

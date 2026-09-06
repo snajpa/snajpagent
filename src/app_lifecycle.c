@@ -440,7 +440,7 @@ goal_simple_command(struct app_state *app, const char *command)
             app->queue_armed = true;
         return 0;
     }
-    if (strcmp(command, "lock") == 0 || strcmp(command, "unlock") == 0) {
+    if (snag_string_in(command, "lock unlock")) {
         bool locked = strcmp(command, "lock") == 0;
         if (!snag_goal_unfinished(app->session.goal_status))
             return goal_error(app, "no unfinished goal can be locked or unlocked");

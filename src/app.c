@@ -349,9 +349,7 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
     if (snag_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;
-    if (strcmp(type, "steering_added") == 0 ||
-        strcmp(type, "future_turn_queued") == 0 ||
-        strcmp(type, "future_turn_edited") == 0)
+    if (snag_string_in(type, "steering_added future_turn_queued future_turn_edited"))
         ++app->input_generation;
     struct snag_render_source source = {offset, (size_t)(app->session.log_end - offset)};
     if ((!app->session.pending_log &&
@@ -806,7 +804,7 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
     size_t number = 0u;
 
     *handled = true;
-    if (strcmp(line, "/queue") == 0 || strcmp(line, "/q") == 0) {
+    if (snag_string_in(line, "/queue /q")) {
         argument = "";
     } else if (strncmp(line, "/queue ", 7u) == 0) {
         argument = line + 7u;
@@ -2073,7 +2071,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return change_effort(app, line + 8u, active);
     if (strcmp(line, "/goal") == 0 || strncmp(line, "/goal ", 6u) == 0)
         return snag_app_goal_command(app, line, active);
-    if (strcmp(line, "/names") == 0 || strcmp(line, "/topic") == 0) {
+    if (snag_string_in(line, "/names /topic")) {
         int rc;
 
         struct snag_buf state = {.max = SNAG_MAX_IRC_SNAPSHOT};

@@ -300,6 +300,23 @@ snag_buf_terminate(struct snag_buf *buf)
 }
 
 bool
+snag_string_in(const char *value, const char *choices)
+{
+    size_t len = value ? strlen(value) : 0u;
+    if (!len)
+        return false;
+    while (*choices) {
+        size_t word = strcspn(choices, " ");
+        if (word == len && !memcmp(value, choices, len))
+            return true;
+        choices += word;
+        if (*choices)
+            ++choices;
+    }
+    return false;
+}
+
+bool
 snag_text_blank(const char *text)
 {
     for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
