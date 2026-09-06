@@ -21,6 +21,12 @@ override CFLAGS += -pthread
 override LDFLAGS += -pthread
 
 BIN = $(NAME)
+HOST_OS := $(shell uname -s)
+ifeq ($(HOST_OS),Darwin)
+DEBUG_SYMBOLS = $(BIN).dSYM
+else
+DEBUG_SYMBOLS = $(BIN).debug
+endif
 EVIDENCE_DIR ?= build/release-evidence/current-host
 RELEASE_PLATFORMS ?= linux-x86_64 linux-aarch64 macos-x86_64 macos-arm64
 RELEASE_EVIDENCE_DIRS ?=
@@ -42,7 +48,22 @@ all: $(BIN)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CURL_CFLAGS) $(CFLAGS) $(DEPFLAGS) -Isrc -c $< -o $@
 
 $(BIN): $(COMMON_OBJ) src/main.o
-	$(CC) $(LDFLAGS) -o $@ $(COMMON_OBJ) src/main.o $(LDLIBS) $(CURL_LIBS)
+	@set -e; stage=$$(mktemp -d build/.link.XXXXXX); \
+	trap 'rm -rf "$$stage"' 0 1 2 3 15; \
+	$(CC) $(LDFLAGS) -o "$$stage/$(BIN)" $(COMMON_OBJ) src/main.o $(LDLIBS) $(CURL_LIBS); \
+	if test '$(DEBUG)' = 0; then \
+		if test '$(HOST_OS)' = Darwin; then \
+			$(DSYMUTIL) "$$stage/$(BIN)" -o "$$stage/$(DEBUG_SYMBOLS)"; \
+			$(STRIP) -S -x "$$stage/$(BIN)"; \
+		else \
+			$(OBJCOPY) --only-keep-debug "$$stage/$(BIN)" "$$stage/$(DEBUG_SYMBOLS)"; \
+			$(STRIP) --strip-all "$$stage/$(BIN)"; \
+			$(OBJCOPY) --add-gnu-debuglink="$$stage/$(DEBUG_SYMBOLS)" "$$stage/$(BIN)"; \
+		fi; \
+		rm -rf '$(DEBUG_SYMBOLS)'; \
+		mv "$$stage/$(DEBUG_SYMBOLS)" '$(DEBUG_SYMBOLS)'; \
+	fi; \
+	mv "$$stage/$(BIN)" '$@'
 
 $(COMMON_OBJ) src/main.o $(TEST_BIN): $(BUILD_INPUTS)
 
@@ -52,6 +73,11 @@ $(BUILD_INPUTS): FORCE
 	trap 'rm -f "$$tmp"' 0 1 2 3 15; \
 	{ \
 		printf '%s\n' 'CC=$(CC)'; \
+		printf '%s\n' 'DEBUG=$(DEBUG)'; \
+		printf '%s\n' 'HOST_OS=$(HOST_OS)'; \
+		printf '%s\n' 'STRIP=$(STRIP)'; \
+		printf '%s\n' 'OBJCOPY=$(OBJCOPY)'; \
+		printf '%s\n' 'DSYMUTIL=$(DSYMUTIL)'; \
 		printf '%s\n' 'CPPFLAGS=$(CPPFLAGS)'; \
 		printf '%s\n' 'JANSSON_CFLAGS=$(JANSSON_CFLAGS)'; \
 		printf '%s\n' 'CURL_CFLAGS=$(CURL_CFLAGS)'; \
@@ -63,10 +89,13 @@ $(BUILD_INPUTS): FORCE
 		cksum Makefile config.mk META; \
 	} >"$$tmp"; \
 	if test -r '$@' && cmp -s "$$tmp" '$@'; then \
-		:; \
+		if test '$(DEBUG)' = 0 && test ! -e '$(DEBUG_SYMBOLS)'; then \
+			rm -f $(BIN); \
+			touch '$@'; \
+		fi; \
 	else \
 		rm -f $(BIN) $(COMMON_OBJ) src/main.o $(TEST_BIN); \
-		rm -rf tests/.fixture-obj; \
+		rm -rf tests/.fixture-obj $(BIN).debug $(BIN).dSYM; \
 		mv -f "$$tmp" '$@'; \
 	fi
 
@@ -199,7 +228,7 @@ depclosurecheck: $(BIN)
 sanitizercheck:
 	$(MAKE) clean
 	ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
-		$(MAKE) check CFLAGS='-std=c11 -O1 -g -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
+		$(MAKE) DEBUG=1 check CFLAGS='-std=c11 -O1 -g -Wall -Wextra -Wpedantic -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
 
 releasecheck:
 	$(MAKE) check
@@ -303,7 +332,31 @@ sizecheck:
 
 clean:
 	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN)
-	rm -rf tests/.fixture-obj build
+	rm -rf tests/.fixture-obj build $(BIN).debug $(BIN).dSYM
+
+help:
+	@printf '%s\n' \
+		'make                  Host-native production build (default DEBUG=0)' \
+		'make DEBUG=1          Debug build: -Og, symbols, frame pointers, no stripping' \
+		'make -jN              Parallel host build; no cross-builds or VMs' \
+		'make install          Build/install production by default' \
+		'make DEBUG=1 install  Deliberately build/install debug instead' \
+		'make check            Unit, CLI, terminal (if tmux exists), source/dependency checks' \
+		'make sanitizercheck   Clean and run unstripped ASan/UBSan checks' \
+		'make tmuxcheck        Local fixture and production IRC terminal tests; needs tmux' \
+		'make releasecheck     GCC/default, available Clang, and sanitizer checks' \
+		'make stylecheck depscheck portabilitycheck depclosurecheck sizecheck' \
+		'                      Focused source, portability, dependency and size checks' \
+		'make clean            Remove local build/test outputs and debug symbols' \
+		'make help             Show this help only; no build, tests or network' \
+		'' \
+		'Overrides: DEBUG=0|1 CC=... CPPFLAGS=... CFLAGS=... LDFLAGS=...' \
+		'           PREFIX=/usr/local DESTDIR=... STRIP=... OBJCOPY=... DSYMUTIL=...' \
+		'Explicit compiler flags replace profile defaults; thread flags stay required.' \
+		'Production symbols: $(DEBUG_SYMBOLS) beside the binary; not needed to run it.' \
+		'Keep matching production symbols for crashes; DEBUG=1 is a different build.' \
+		'Live targets (livecheck, terminallivecheck, releaseevidence) use network/' \
+		'credentials and may incur provider charges; never part of make or help.'
 
 install: $(BIN) $(BIN).1
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
@@ -315,6 +368,6 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install FORCE
+.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d

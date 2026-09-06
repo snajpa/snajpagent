@@ -1,5 +1,7 @@
 # Build outputs
 /snajpagent
+/snajpagent.debug
+/snajpagent.dSYM/
 /src/*.d
 /src/*.o
 /tests/.fixture-obj/

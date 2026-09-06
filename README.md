@@ -24,6 +24,21 @@ sudo make install
 Installation adds the binary and `snajpagent(1)` under `/usr/local` by default.
 You can also run `./snajpagent` directly from the build directory.
 
+Plain `make` builds optimized, stripped **production for the host platform**;
+`make DEBUG=1` selects an unstripped debug build with frame pointers. Switch
+profiles without cleaning. `make install` selects production unless you also
+pass `DEBUG=1`. `make -jN` parallelizes compilation; it does not start foreign
+builds or VMs. `make help` lists targets and overrides without building.
+
+Production keeps matching symbols beside the executable: `snajpagent.debug`
+on ELF systems, `snajpagent.dSYM` on macOS. Retain these for debugging that
+exact production binary; they are not installed or required at runtime.
+Production packaging needs `strip` and `objcopy` on ELF, or `strip` and
+`dsymutil` on macOS; debug builds need neither. Override the tools with
+`STRIP=...`, `OBJCOPY=...`, `DSYMUTIL=...`. Explicit `CFLAGS`/`LDFLAGS` replace
+profile defaults (required thread flags remain). Both profiles retain the
+same functionality and runtime checks; debug selection is not a feature mode.
+
 ## Choose a provider
 
 Start `snajpagent` in your project. Without configuration or an existing API
