@@ -350,7 +350,6 @@ out:
 static int
 lock_cache(struct snag_store *store, char *error, size_t error_size)
 {
-    struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
     int fd;
     int saved;
 
@@ -364,7 +363,7 @@ lock_cache(struct snag_store *store, char *error, size_t error_size)
     if (snag_store_verify_private_fd(fd, false, "model cache lock",
                                     error, error_size) < 0)
         goto fail;
-    if (fcntl(fd, F_SETLKW, &lock) < 0) {
+    if (snag_lock_file(fd, true) < 0) {
         snag_errorf(error, error_size, "cannot lock model cache: %s",
                   strerror(errno));
         goto fail;

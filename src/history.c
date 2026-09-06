@@ -98,12 +98,7 @@ history_memory_add(struct snag_history *term, const char *text, bool *dropped)
 static int
 history_lock(int fd)
 {
-    struct flock lock;
-
-    memset(&lock, 0, sizeof(lock));
-    lock.l_type = F_WRLCK;
-    lock.l_whence = SEEK_SET;
-    while (fcntl(fd, F_SETLKW, &lock) < 0)
+    while (snag_lock_file(fd, true) < 0)
         if (errno != EINTR)
             return -1;
     return 0;

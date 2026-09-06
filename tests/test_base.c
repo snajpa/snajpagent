@@ -16,10 +16,12 @@
 #include <aclapi.h>
 #include <fcntl.h>
 #include <io.h>
+#include <process.h>
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #endif
 
 #ifdef _WIN32
@@ -105,6 +107,70 @@ test_windows_privacy(void)
     free(user);
 }
 #endif
+
+#ifdef _WIN32
+struct lock_waiter {
+    int fd;
+    HANDLE ready;
+};
+
+static unsigned int __stdcall
+wait_for_lock(void *opaque)
+{
+    struct lock_waiter *waiter = opaque;
+
+    assert(snag_lock_file(waiter->fd, false) < 0 && errno == EAGAIN);
+    assert(SetEvent(waiter->ready));
+    assert(snag_lock_file(waiter->fd, true) == 0);
+    assert(close(waiter->fd) == 0);
+    return 0u;
+}
+#endif
+
+static void
+test_file_lock(int dirfd)
+{
+    int fd = snag_create_private_at(dirfd, "lock-test", true);
+
+    assert(fd >= 0 && snag_lock_file(fd, false) == 0);
+#ifdef _WIN32
+    struct lock_waiter waiter = {
+        .fd = snag_create_private_at(dirfd, "lock-test", false),
+        .ready = CreateEventW(NULL, TRUE, FALSE, NULL)
+    };
+    assert(waiter.fd >= 0 && waiter.ready);
+    HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, wait_for_lock, &waiter, 0, NULL);
+    DWORD status;
+    assert(thread && WaitForSingleObject(waiter.ready, 5000u) == WAIT_OBJECT_0);
+    assert(WaitForSingleObject(thread, 100u) == WAIT_TIMEOUT);
+    assert(close(fd) == 0);
+    assert(WaitForSingleObject(thread, 5000u) == WAIT_OBJECT_0);
+    assert(GetExitCodeThread(thread, &status) && status == 0u);
+    assert(CloseHandle(thread) && CloseHandle(waiter.ready));
+#else
+    int ready[2], status;
+    char byte;
+    assert(pipe(ready) == 0);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        assert(close(ready[0]) == 0 && close(fd) == 0);
+        fd = snag_create_private_at(dirfd, "lock-test", false);
+        assert(fd >= 0 && snag_lock_file(fd, false) < 0 && errno == EAGAIN);
+        assert(write(ready[1], "r", 1u) == 1);
+        assert(snag_lock_file(fd, true) == 0 && close(fd) == 0);
+        _exit(0);
+    }
+    assert(close(ready[1]) == 0 && read(ready[0], &byte, 1u) == 1 && byte == 'r');
+    assert(waitpid(child, &status, WNOHANG) == 0);
+    assert(close(fd) == 0 && close(ready[0]) == 0);
+    assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#endif
+    fd = snag_create_private_at(dirfd, "lock-test", false);
+    assert(fd >= 0 && snag_lock_file(fd, true) == 0 && close(fd) == 0);
+    assert(snag_unlink_at(dirfd, "lock-test", false) == 0);
+    assert(snag_lock_file(-1, false) < 0 && errno == EBADF);
+}
 
 static void
 test_private_directory(void)
@@ -275,6 +341,7 @@ test_private_directory(void)
     renamed = malloc(strlen(root) + 9u);
     assert(renamed);
     (void)sprintf(renamed, "%s-renamed", root);
+    test_file_lock(fd);
     assert(rename(root, renamed) == 0);
     assert(snag_fstat(fd, &path_info) == 0 && path_info.st_ino == root_info.st_ino);
     {

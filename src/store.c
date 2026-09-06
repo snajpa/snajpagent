@@ -243,7 +243,6 @@ snag_session_close(struct snag_session *session)
 static int
 lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
 {
-    struct flock lock;
     int flags = O_RDWR | O_CREAT;
     int fd;
 #ifdef O_CLOEXEC
@@ -262,10 +261,7 @@ lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
         (void)close(fd);
         return -1;
     }
-    memset(&lock, 0, sizeof(lock));
-    lock.l_type = F_WRLCK;
-    lock.l_whence = SEEK_SET;
-    if (fcntl(fd, F_SETLK, &lock) < 0) {
+    if (snag_lock_file(fd, false) < 0) {
         snag_errorf(error, error_size, errno == EACCES || errno == EAGAIN ?
                   "session is already open" : "cannot lock session: %s",
                   strerror(errno));

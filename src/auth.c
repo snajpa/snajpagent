@@ -132,7 +132,6 @@ static int
 lock_provider(int dir, const char *name, snag_auth_pump_fn pump, void *opaque)
 {
     char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
-    struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
     int fd;
     uint64_t deadline = snag_monotonic_ms() + 30000u;
 
@@ -142,7 +141,7 @@ lock_provider(int dir, const char *name, snag_auth_pump_fn pump, void *opaque)
         return -1;
     if (private_fd(fd, false) < 0)
         goto fail;
-    while (fcntl(fd, F_SETLK, &lock) < 0) {
+    while (snag_lock_file(fd, false) < 0) {
         if (errno != EACCES && errno != EAGAIN && errno != EINTR)
             goto fail;
         if (snag_monotonic_ms() >= deadline) {

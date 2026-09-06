@@ -445,6 +445,27 @@ snag_open_private_dir_at(int dirfd, const char *path)
     return open_read(dirfd, path, true, true, true);
 }
 
+int
+snag_lock_file(int fd, bool wait)
+{
+    intptr_t handle = _get_osfhandle(fd);
+    OVERLAPPED offset = {0};
+
+    if (handle == -1) {
+        errno = EBADF;
+        return -1;
+    }
+    if (LockFileEx((HANDLE)handle, LOCKFILE_EXCLUSIVE_LOCK |
+                   (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY), 0, MAXDWORD, MAXDWORD, &offset))
+        return 0;
+    DWORD error = GetLastError();
+    if (error == ERROR_LOCK_VIOLATION) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return path_error(error);
+}
+
 void
 snag_path_slashes(char *path)
 {
@@ -1100,6 +1121,17 @@ int
 snag_open_private_dir_at(int dirfd, const char *path)
 {
     return open_read(dirfd, path, true);
+}
+
+int
+snag_lock_file(int fd, bool wait)
+{
+    struct flock lock = {.l_type = F_WRLCK, .l_whence = SEEK_SET};
+    int rc = fcntl(fd, wait ? F_SETLKW : F_SETLK, &lock);
+
+    if (rc < 0 && errno == EACCES)
+        errno = EAGAIN;
+    return rc;
 }
 
 void
