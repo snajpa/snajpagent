@@ -312,21 +312,11 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
         errno = EACCES;
         goto out;
     }
-    for (;;) {
-        unsigned char chunk[8192];
-        ssize_t got = read(fd, chunk, sizeof(chunk));
-        if (got < 0) {
-            if (errno == EINTR)
-                continue;
-            snag_errorf(error, error_size, "cannot read model cache: %s", strerror(errno));
-            goto out;
-        }
-        if (got == 0)
-            break;
-        if (snag_buf_append(&data, chunk, (size_t)got) < 0) {
-            snag_errorf(error, error_size, "model cache exceeds 8 MiB");
-            goto out;
-        }
+    int read_rc = snag_buf_read(&data, fd);
+    if (read_rc < 0) {
+        snag_errorf(error, error_size, read_rc == -2 ? "model cache exceeds 8 MiB" :
+                    "cannot read model cache: %s", strerror(errno));
+        goto out;
     }
     rc = decode_cache(data.data, data.len, cache, error, error_size);
 out:

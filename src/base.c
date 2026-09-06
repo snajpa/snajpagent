@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 bool
 snag_verbosity_command(const char *text, size_t len)
@@ -178,6 +179,21 @@ snag_buf_init(struct snag_buf *buf, size_t max)
 {
     memset(buf, 0, sizeof(*buf));
     buf->max = max;
+}
+
+int
+snag_buf_read(struct snag_buf *buf, int fd)
+{
+    unsigned char bytes[8192];
+    for (;;) {
+        ssize_t got = read(fd, bytes, sizeof(bytes));
+        if (got < 0 && errno == EINTR)
+            continue;
+        if (got <= 0)
+            return got < 0 ? -1 : 0;
+        if (snag_buf_append(buf, bytes, (size_t)got) < 0)
+            return -2;
+    }
 }
 
 void

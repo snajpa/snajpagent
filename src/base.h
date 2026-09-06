@@ -49,6 +49,8 @@ int snag_buf_terminate(struct snag_buf *buf);
 int snag_command_argument(struct snag_buf *command, const char *argument);
 int snag_command_finish(struct snag_buf *command);
 const char *snag_command_shell_note(void);
+/* Append through EOF, without closing or terminating: -1 read, -2 buffer error. */
+int snag_buf_read(struct snag_buf *buf, int fd);
 
 void snag_errorf(char *error, size_t size, const char *fmt, ...);
 int snag_fail(char *error, size_t size, int code, const char *fmt, ...);

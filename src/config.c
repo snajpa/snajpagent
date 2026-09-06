@@ -992,22 +992,11 @@ read_config(const char *path, bool require_file, struct snag_buf *text,
                         privacy.effective_owner && privacy.private_access;
         errno = saved;
     }
-    for (;;) {
-        unsigned char chunk[4096];
-        ssize_t got = read(fd, chunk, sizeof(chunk));
-        if (got < 0) {
-            if (errno == EINTR)
-                continue;
-            snag_errorf(error, error_size, "cannot read configuration: %s",
-                      strerror(errno));
-            goto out;
-        }
-        if (got == 0)
-            break;
-        if (snag_buf_append(text, chunk, (size_t)got) < 0) {
-            snag_errorf(error, error_size, "configuration exceeds 64 KiB");
-            goto out;
-        }
+    int read_rc = snag_buf_read(text, fd);
+    if (read_rc < 0) {
+        snag_errorf(error, error_size, read_rc == -2 ? "configuration exceeds 64 KiB" :
+                    "cannot read configuration: %s", strerror(errno));
+        goto out;
     }
     if (!snag_utf8_valid(text->data, text->len, true)) {
         snag_errorf(error, error_size,

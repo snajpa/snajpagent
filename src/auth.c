@@ -169,16 +169,8 @@ read_tokens(int dir, const struct snag_provider_config *provider,
     if (private_fd(fd, false) < 0 || snag_fstat(fd, &st) < 0 ||
         st.st_size < 1 || (uint64_t)st.st_size > AUTH_FILE_MAX)
         goto out;
-    for (;;) {
-        char chunk[4096];
-        ssize_t n = read(fd, chunk, sizeof(chunk));
-        if (n < 0 && errno == EINTR)
-            continue;
-        if (n < 0 || (n > 0 && snag_buf_append(&text, chunk, (size_t)n) < 0))
-            goto out;
-        if (!n)
-            break;
-    }
+    if (snag_buf_read(&text, fd) < 0)
+        goto out;
     value = snag_json_load_strict(text.data, text.len, AUTH_FILE_MAX,
                                 error, sizeof(error));
     kind = snag_json_string(value, "kind");

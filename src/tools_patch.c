@@ -458,26 +458,12 @@ static int
 read_fd_all(int fd, char **out, size_t *out_len)
 {
     struct snag_buf buf;
-    unsigned char tmp[8192];
     int rc = -1;
 
     *out = NULL;
     *out_len = 0;
     snag_buf_init(&buf, PATCH_FILE_MAX + 1u);
-    for (;;) {
-        ssize_t n = read(fd, tmp, sizeof(tmp));
-        if (n > 0) {
-            if (snag_buf_append(&buf, tmp, (size_t)n) < 0)
-                goto out_free;
-            continue;
-        }
-        if (n == 0)
-            break;
-        if (errno == EINTR)
-            continue;
-        goto out_free;
-    }
-    if (snag_buf_terminate(&buf) < 0)
+    if (snag_buf_read(&buf, fd) < 0 || snag_buf_terminate(&buf) < 0)
         goto out_free;
     *out = (char *)buf.data;
     *out_len = buf.len;
