@@ -140,14 +140,6 @@ enum queue_command_kind {
     QUEUE_COMMAND_POP
 };
 
-json_t *snag_app_preference_changed_data(const char *old_key,
-                                        const char *old_value,
-                                        const char *new_key,
-                                        const char *new_value);
-json_t *snag_app_model_selection_changed_data(
-    const char *old_provider, const char *new_provider,
-    const char *old_model, const char *new_model,
-    const char *old_effort, const char *new_effort);
 json_t *snag_app_turn_started_data(const struct app_state *app,
                                   const char *prompt,
                                   const char *turn_id,
@@ -180,24 +172,12 @@ json_t *snag_app_response_completed_data(const char *turn_id,
                                         const char *response_id,
                                         unsigned int cycle,
                                         const struct snag_response_graph *graph);
-json_t *snag_app_response_output_correction_data(
-                                        const char *turn_id,
-                                        const char *response_id,
-                                        unsigned int cycle,
-                                        const char *correction_id,
-                                        const char *text,
-                                        json_t *partial_public);
 json_t *snag_app_turn_completed_data(const char *turn_id,
                                     const char *response_id,
                                     const char *item_id);
 json_t *snag_app_steering_added_data(const char *turn_id,
                                     const char *steering_id,
                                     const char *text);
-json_t *snag_app_future_turn_queued_data(const char *turn_id,
-                                        const char *queue_id,
-                                        const char *text, bool read_only);
-json_t *snag_app_future_turn_edited_data(const char *queue_id,
-                                        const char *text, bool read_only);
 json_t *snag_app_future_turn_cancelled_data(const struct snag_session *session,
                                            const bool remove[SNAG_MAX_PENDING_TURNS]);
 json_t *snag_app_response_interrupted_data(const char *turn_id,
@@ -209,27 +189,9 @@ json_t *snag_app_response_interrupted_data(const char *turn_id,
 json_t *snag_app_turn_interrupted_data(const char *turn_id,
                                       const char *origin,
                                       const char *reason);
-json_t *snag_app_response_failed_data(const char *turn_id,
-                                     const char *response_id,
-                                     unsigned int cycle,
-                                     const char *class_name,
-                                     const char *message,
-                                     json_t *partial_public,
-                                     unsigned int retry_count);
 json_t *snag_app_turn_failed_data(const char *turn_id,
                                  const char *class_name,
                                  const char *message);
-json_t *snag_app_tool_started_data(const char *turn_id,
-                                  const char *call_id,
-                                  const char *action_sha256,
-                                  const char *workspace);
-json_t *snag_app_tool_finished_data(const char *turn_id,
-                                   const char *call_id,
-                                   json_t *result);
-json_t *snag_app_process_closed_data(const char *turn_id,
-                                    const char *handle,
-                                    const char *cause,
-                                    json_t *result);
 int snag_app_compact_idle_command(struct app_state *app, const char *reason,
                                  char *error, size_t error_size);
 int snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,

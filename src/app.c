@@ -710,7 +710,8 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
     }
     if ((strcmp(queued->text, text) != 0 || queued->read_only != read_only) &&
         commit_event(app, "future_turn_edited",
-                     snag_app_future_turn_edited_data(queued->queue_id, text, read_only),
+                     json_pack("{s:b,s:s,s:s}", "read_only", read_only,
+                               "queue_id", queued->queue_id, "text", text),
                      error, error_size) < 0) {
         if (set_input_prompt(app, active) == 0)
             (void)snag_ui_restore_draft(&app->ui, original);
@@ -766,8 +767,9 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
         return -1;
     }
     if (commit_event(app, "future_turn_queued",
-                     snag_app_future_turn_queued_data(app->session.active_turn_id,
-                                             queue_id, queued_text, read_only),
+                     json_pack("{s:b,s:s,s:s,s:s}", "read_only", read_only,
+                         "queue_id", queue_id, "text", queued_text,
+                         "while_turn_id", app->session.active_turn_id),
                      error, error_size) < 0)
         return -1;
     if (snag_ui_submitted(&app->ui, "queued (/next or /q c) › ", text, false) < 0) {
@@ -1382,8 +1384,11 @@ record_model_selection(struct app_state *app,
         strcmp(app->session.default_effort, effort) == 0)
         return 0;
     return commit_event(app, "model_selection_changed",
-        snag_app_model_selection_changed_data(app->session.default_provider, provider,
-            app->session.default_model, model, app->session.default_effort, effort),
+        json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+            "new_effort", effort, "new_model", model, "new_provider", provider,
+            "old_effort", app->session.default_effort,
+            "old_model", app->session.default_model,
+            "old_provider", app->session.default_provider),
         error, error_size);
 }
 
@@ -2370,7 +2375,9 @@ commit_pending_result(struct app_state *app, const char *turn_id,
                       const char *call_id, json_t *result,
                       char *error, size_t error_size)
 {
-    json_t *data = snag_app_tool_finished_data(turn_id, call_id, result);
+    json_t *data = json_pack("{s:s,s:O,s:s}",
+        "call_id", call_id, "result", result, "turn_id", turn_id);
+    json_decref(result);
     if (!data) {
         snag_errorf(error, error_size, "cannot allocate tool completion event");
         return -1;
@@ -2424,9 +2431,10 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
                                     error, error_size) < 0)
             return -1;
 #endif
-        if (commit_event(app, "process_closed",
-                snag_app_process_closed_data(turn_id, handle, cause, result),
-                error, error_size) < 0)
+        json_t *data = json_pack("{s:s,s:s,s:O,s:s}",
+            "cause", cause, "handle", handle, "result", result, "turn_id", turn_id);
+        json_decref(result);
+        if (commit_event(app, "process_closed", data, error, error_size) < 0)
             return -1;
         snag_tools_collected(handle);
     }
@@ -2470,8 +2478,13 @@ fail_response(struct app_state *app, const char *turn_id,
               unsigned int retry_count, const char *cause,
               char *error, size_t error_size)
 {
-    json_t *data = snag_app_response_failed_data(
-        turn_id, response_id, cycle, class_name, message, partial, retry_count);
+    if (!partial)
+        partial = json_array();
+    json_t *data = json_pack("{s:s,s:I,s:s,s:O,s:s,s:I,s:s}",
+        "class", class_name, "cycle", (json_int_t)cycle, "message", message,
+        "partial_public", partial, "response_id", response_id,
+        "retry_count", (json_int_t)retry_count, "turn_id", turn_id);
+    json_decref(partial);
 
     if (!data) {
         snag_errorf(error, error_size, "cannot allocate response failure event");
@@ -2727,7 +2740,9 @@ execute_calls(struct app_state *app, const char *turn_id,
             char digest[SNAG_SHA256_HEX_LEN + 1u];
             if (snag_tool_action_digest(call, app->session.workspace, digest) < 0 ||
                 commit_event(app, "tool_started",
-                    snag_app_tool_started_data(turn_id, call->call_id, digest, app->session.workspace),
+                    json_pack("{s:s,s:s,s:s,s:s}", "action_sha256", digest,
+                        "call_id", call->call_id, "resolved_workdir", app->session.workspace,
+                        "turn_id", turn_id),
                     error, error_size) < 0)
                 return -1;
             calls[i].started = true;
@@ -3304,12 +3319,14 @@ run_turn(struct app_state *app, const char *prompt,
                     partial = NULL;
                 else
                     partial = snag_app_partial_public_json(app);
-                if (!partial ||
-                    commit_event(app, "response_output_correction",
-                        snag_app_response_output_correction_data(
-                            turn_id, response_id, cycle, correction_id,
-                            correction, partial),
-                        error, sizeof(error)) < 0) {
+                json_t *data = partial ? json_pack("{s:s,s:I,s:O,s:s,s:s,s:s}",
+                    "correction_id", correction_id, "cycle", (json_int_t)cycle,
+                    "partial_public", partial, "response_id", response_id,
+                    "text", correction, "turn_id", turn_id) : NULL;
+                int correction_rc = partial ? commit_event(app,
+                    "response_output_correction", data, error, sizeof(error)) : -1;
+                json_decref(partial);
+                if (correction_rc < 0) {
                     (void)app_error(app, error[0] ? error :
                         "assistant output correction could not be persisted");
                     result = 3;
@@ -4483,10 +4500,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         if (relocated_workspace &&
             strcmp(relocated_workspace, app.session.workspace) != 0 &&
             commit_event(&app, "workspace_changed",
-                         snag_app_preference_changed_data("old_workspace",
-                                                app.session.workspace,
-                                                "new_workspace",
-                                                relocated_workspace),
+                         json_pack("{s:s,s:s}", "new_workspace", relocated_workspace,
+                                   "old_workspace", app.session.workspace),
                          error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
             rc = 3;

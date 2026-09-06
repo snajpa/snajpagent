@@ -13,25 +13,6 @@
 #include <string.h>
 #include <time.h>
 
-json_t *
-snag_app_preference_changed_data(const char *old_key, const char *old_value,
-                        const char *new_key, const char *new_value)
-{
-    return json_pack("{s:s,s:s}", new_key, new_value, old_key, old_value);
-}
-
-json_t *
-snag_app_model_selection_changed_data(
-    const char *old_provider, const char *new_provider,
-    const char *old_model, const char *new_model,
-    const char *old_effort, const char *new_effort)
-{
-    return json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
-        "new_effort", new_effort, "new_model", new_model,
-        "new_provider", new_provider, "old_effort", old_effort,
-        "old_model", old_model, "old_provider", old_provider);
-}
-
 static json_t *
 turn_config(const struct app_state *app)
 {
@@ -745,22 +726,6 @@ snag_app_response_completed_data(const char *turn_id, const char *response_id,
 }
 
 json_t *
-snag_app_response_output_correction_data(const char *turn_id,
-                                        const char *response_id,
-                                        unsigned int cycle,
-                                        const char *correction_id,
-                                        const char *text,
-                                        json_t *partial_public)
-{
-    json_t *data = json_pack("{s:s,s:I,s:O,s:s,s:s,s:s}",
-        "correction_id", correction_id, "cycle", (json_int_t)cycle,
-        "partial_public", partial_public, "response_id", response_id,
-        "text", text, "turn_id", turn_id);
-    json_decref(partial_public);
-    return data;
-}
-
-json_t *
 snag_app_turn_completed_data(const char *turn_id, const char *response_id,
                     const char *item_id)
 {
@@ -774,22 +739,6 @@ snag_app_steering_added_data(const char *turn_id, const char *steering_id,
 {
     return json_pack("{s:s,s:s,s:s}", "steering_id", steering_id,
         "text", text, "turn_id", turn_id);
-}
-
-json_t *
-snag_app_future_turn_queued_data(const char *turn_id, const char *queue_id,
-                        const char *text, bool read_only)
-{
-    return json_pack("{s:b,s:s,s:s,s:s}", "read_only", read_only,
-        "queue_id", queue_id, "text", text, "while_turn_id", turn_id);
-}
-
-json_t *
-snag_app_future_turn_edited_data(const char *queue_id, const char *text,
-                               bool read_only)
-{
-    return json_pack("{s:b,s:s,s:s}", "read_only", read_only,
-        "queue_id", queue_id, "text", text);
 }
 
 json_t *
@@ -846,33 +795,10 @@ snag_app_turn_interrupted_data(const char *turn_id, const char *origin, const ch
 }
 
 json_t *
-snag_app_response_failed_data(const char *turn_id, const char *response_id,
-                     unsigned int cycle, const char *class_name,
-                     const char *message, json_t *partial_public,
-                     unsigned int retry_count)
-{
-    json_t *partial = partial_public ? partial_public : json_array();
-    json_t *data = json_pack("{s:s,s:I,s:s,s:O,s:s,s:I,s:s}",
-        "class", class_name, "cycle", (json_int_t)cycle, "message", message,
-        "partial_public", partial, "response_id", response_id,
-        "retry_count", (json_int_t)retry_count, "turn_id", turn_id);
-    json_decref(partial);
-    return data;
-}
-
-json_t *
 snag_app_turn_failed_data(const char *turn_id, const char *class_name, const char *message)
 {
     return json_pack("{s:s,s:s,s:s}", "class", class_name,
         "message", message, "turn_id", turn_id);
-}
-
-json_t *
-snag_app_tool_started_data(const char *turn_id, const char *call_id,
-                  const char *action_sha256, const char *workspace)
-{
-    return json_pack("{s:s,s:s,s:s,s:s}", "action_sha256", action_sha256,
-        "call_id", call_id, "resolved_workdir", workspace, "turn_id", turn_id);
 }
 
 int
@@ -973,24 +899,4 @@ snag_app_tool_read(void *opaque, const char *handle, unsigned int stream,
                                       &read, error, sizeof(error)) < 0)
         return -1;
     return read.seen == to - from ? 0 : -1;
-}
-
-/* Takes ownership of result, including on failure. */
-json_t *
-snag_app_tool_finished_data(const char *turn_id, const char *call_id, json_t *result)
-{
-    json_t *data = json_pack("{s:s,s:O,s:s}",
-        "call_id", call_id, "result", result, "turn_id", turn_id);
-    json_decref(result);
-    return data;
-}
-/* Takes ownership of result, including on failure. */
-json_t *
-snag_app_process_closed_data(const char *turn_id, const char *handle,
-                            const char *cause, json_t *result)
-{
-    json_t *data = json_pack("{s:s,s:s,s:O,s:s}",
-        "cause", cause, "handle", handle, "result", result, "turn_id", turn_id);
-    json_decref(result);
-    return data;
 }
