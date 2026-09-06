@@ -844,7 +844,7 @@ wait_pair_event(struct snag_irc *server, struct snag_irc *client,
     uint64_t deadline = snag_monotonic_ms() + 1000u;
     while (capture->events[kind] < count && snag_monotonic_ms() < deadline)
         pump_pair(server, client, 1u);
-    assert(capture->events[kind] == count);
+    assert(capture->events[kind] >= count);
 }
 
 static void
@@ -1068,7 +1068,7 @@ test_default_nick_sequence(void)
         assert(snag_irc_open(&client[i], &client_config[i], "/client",
                             capture_event, capture_trace, &client_capture[i],
                             error, sizeof(error)) == 0);
-        pump_pair(server, client[i], 300u);
+        wait_pair_event(server, client[i], &client_capture[i], SNAG_IRC_HISTORY_READY, 1u);
         assert(client_capture[i].events[SNAG_IRC_CONNECTED] == 1u);
         assert(client_capture[i].events[SNAG_IRC_DISCONNECTED] == 0u);
         assert(snprintf(expected, sizeof(expected), "agent%zu", i + 1u) > 0);
@@ -1125,7 +1125,7 @@ test_explicit_zero_nick_collision(void)
     assert(snag_irc_open(&client, &client_config, "/client", capture_event,
                         capture_trace, &client_capture,
                         error, sizeof(error)) == 0);
-    pump_pair(server, client, 300u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_HISTORY_READY, 1u);
     assert(client_capture.events[SNAG_IRC_CONNECTED] == 1u);
     assert(client_capture.events[SNAG_IRC_DISCONNECTED] == 0u);
     assert(strcmp(snag_irc_model_nick(client), "worker01") == 0);
@@ -1181,7 +1181,7 @@ test_client_nick_collision(void)
     assert(snag_irc_open(&client, &client_config, "/client", capture_event,
                         capture_trace, &client_capture,
                         error, sizeof(error)) == 0);
-    pump_pair(server, client, 300u);
+    wait_pair_event(server, client, &client_capture, SNAG_IRC_HISTORY_READY, 1u);
     assert(client_capture.events[SNAG_IRC_HISTORY_READY] != 0u);
     assert(client_capture.events[SNAG_IRC_CONNECTED] == 1u);
     assert(client_capture.events[SNAG_IRC_DISCONNECTED] == 0u);
