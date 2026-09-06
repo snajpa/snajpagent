@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs }:
+{ pkgs, windows ? pkgs.pkgsCross.mingwW64 }:
 let
-  windows = pkgs.pkgsCross.mingwW64;
-  threads = windows.windows.mcfgthreads.overrideAttrs (old: {
+  arch = if windows.stdenv.hostPlatform.isAarch64 then "arm64" else "x86_64";
+  threads = if windows.stdenv.cc.isClang then windows.windows.pthreads else windows.windows.mcfgthreads.overrideAttrs (old: {
     pname = "mcfgthread-static";
     mesonFlags = (old.mesonFlags or []) ++ [ "-Ddefault_library=static" ];
   });
   cmakeLibrary = package: flags: dependencies:
     windows.stdenv.mkDerivation {
-      pname = "${package.pname}-windows-x86_64-static";
+      pname = "${package.pname}-windows-${arch}-static";
       inherit (package) version src;
       patches = package.patches or [];
       nativeBuildInputs = [ pkgs.cmake pkgs.ninja windows.buildPackages.pkg-config
@@ -32,7 +32,7 @@ let
     };
   autotoolsLibrary = package: flags: dependencies:
     windows.stdenv.mkDerivation {
-      pname = "${package.pname}-windows-x86_64-static";
+      pname = "${package.pname}-windows-${arch}-static";
       inherit (package) version src;
       patches = package.patches or [];
       nativeBuildInputs = [ windows.buildPackages.pkg-config pkgs.perl pkgs.texinfo ];
@@ -112,7 +112,7 @@ let
 in {
   inherit windows threads jansson tls curl networkLibraries regex;
   application = { source, packageName, version, revision }: windows.stdenv.mkDerivation {
-    pname = "${packageName}-windows-x86_64";
+    pname = "${packageName}-windows-${arch}";
     inherit version;
     src = source;
     outputs = [ "out" "debug" ];
