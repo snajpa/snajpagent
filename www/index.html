@@ -4,84 +4,93 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A fast, lightweight, networked coding agent for power users.">
-  <title>snajpagent</title>
+  <meta name="description" content="A fast, lightweight, networked coding agent. Learn rollout, steering and queued turns, then work together through native IRC chat.">
+  <title>snajpagent — rollout and native networking</title>
+  <link rel="canonical" href="https://agent.snajpa.net/">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <h1>snajpagent</h1>
-    <p>A fast, lightweight, networked coding agent for power users.
-      Built for autonomous development and integration with other software.</p>
-    <nav aria-label="Project">
-      <a href="https://github.com/snajpa/snajpagent">source</a>
-      <a href="#install">install</a>
-      <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">manual</a>
+    <p class="intro">A fast, lightweight, networked coding agent for your terminal.</p>
+    <p>Work with a model in your project. Steer it while it runs.
+      Bring people and agents together through native IRC chat.</p>
+    <nav aria-label="Start here">
+      <a href="#rollout">1. Rollout</a> · <a href="#network">2. Network</a> ·
+      <a href="#install">Install</a> · <a href="https://github.com/snajpa/snajpagent">Source</a> ·
+      <a href="https://github.com/snajpa/snajpagent#readme">README</a>
     </nav>
-    <figure>
-      <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1128" height="228"
-        alt="Timestamped IRC conversation between operators and a coding agent."></a>
-      <figcaption>Agents and operators in one IRC room. No windowed TUI.</figcaption>
-    </figure>
   </header>
   <main>
-    <section id="networked">
-      <h2>networked</h2>
-      <p>Run a server and a client in separate terminals:</p>
+    <section id="rollout" aria-labelledby="rollout-heading">
+      <h2 id="rollout-heading">1. Work in rollout</h2>
+      <p>Start <code>snajpagent</code> in your project, describe a change, and press Enter.
+        <strong>Rollout</strong> is your local working view. A <strong>turn</strong> is the work
+        started by one prompt, including tool use. Model responses appear here;
+        <code>/verbose 1</code> adds tool activity.</p>
+      <p>While a turn runs:</p>
+      <ul>
+        <li><strong>Enter steers now:</strong> “Keep the public API unchanged.”</li>
+        <li><strong>Tab queues later:</strong> “Then add a regression test.”</li>
+      </ul>
+      <p>Tab tries completion first. Queued prompts do not enter the current turn;
+        after it finishes, they run oldest first. The rollout prompt shows the pending count.
+        <code>/queue</code> lists them; <code>/queue 2 edit</code> revises one.</p>
+      <p>Interrupted or failed work leaves the queue paused. After session resume,
+        queued turns also wait: use <code>/next</code> while idle.</p>
+      <p>Ctrl-J adds a newline. Ctrl-C clears a draft; with an empty draft it interrupts work.
+        <code>/goal finish this change</code> continues across turns until complete or blocked;
+        <code>/goal pause</code> pauses continuation at a turn boundary.</p>
+      <figure>
+        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1128" height="204"
+          alt="A real snajpagent rollout fixing and testing a small program."></a>
+        <figcaption>Local rollout: model responses and work in your project.</figcaption>
+      </figure>
+    </section>
+    <section id="network" aria-labelledby="network-heading">
+      <h2 id="network-heading">2. Work together over the network</h2>
+      <p>Each session has an operator and model nick. They share a room, while each
+        session keeps its own workspace, tools, and rollout. In separate terminals:</p>
       <pre><code>snajpagent -s -n builder -o alice -r work
 snajpagent -c -n reviewer -o bob</code></pre>
-      <p>Both default to localhost:6667. Mention an agent to steer its work.
-        Models choose what to send. Other output stays in local rollout;
-        history and reconnects are automatic.</p>
-      <p>Start plain and add networking later with <code>/server start</code>
-        or <code>/connect</code>. Chat is public; rollout is local.</p>
-      <p>IRC has no authentication or TLS. Use a trusted network or secure tunnel.</p>
+      <p>The first hosts <code>#work</code>; the second joins at <code>localhost:6667</code>.
+        <code>-n</code> names the model; <code>-o</code> names its operator.</p>
+      <p><strong>Chat</strong> is the shared conversation. Enter sends to the room;
+        mention <code>@builder</code> to ask that model to work or steer it.
+        Models explicitly publish through <code>irc_send</code>;
+        other output stays local unless they choose to share it.</p>
+      <p><strong>Empty Tab switches chat ↔ rollout</strong>, even offline.
+        <code>/chat</code> and <code>/rollout</code> select either view.
+        Switching does not stop work; returning displays buffered output.
+        With text, Tab completes commands and chat nicks first, otherwise
+        queues during work or indents while idle. Queueing stays local, even in chat.</p>
+      <figure>
+        <a href="screenshots/irc.png"><img src="screenshots/irc.png" width="1128" height="228"
+          alt="Operators and models in a real snajpagent chat session." loading="lazy"></a>
+        <figcaption>Shared chat. Operator nicks are magenta; model nicks are cyan.</figcaption>
+      </figure>
+      <p>IRC has no authentication or TLS: use localhost, a trusted network, or a secure tunnel.
+        Tools run with your permissions, without an approval sandbox.</p>
     </section>
-    <section id="install">
-      <h2>install</h2>
-      <p>You need a C11/POSIX environment with pthreads, GNU make, libcurl, and Jansson.</p>
-      <p>Production builds also use strip and objcopy on Linux, or strip and
-        dsymutil on macOS. <code>make help</code> describes other build targets.</p>
+    <section id="install" aria-labelledby="install-heading">
+      <h2 id="install-heading">Install</h2>
+      <p>Build with C11/POSIX, pthreads, GNU make, libcurl, and Jansson.
+        See <a href="https://github.com/snajpa/snajpagent#install-and-choose-a-provider">README</a>
+        for platform dependencies.</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
 make
 sudo make install
-install -d -m 700 "$HOME/.snajpagent"</code></pre>
-      <p>A fresh interactive launch without configuration or credentials offers setup.
-        For manual setup, save this as
-        <code>$HOME/.snajpagent/config.ini</code> with a model your provider supports:</p>
-      <pre><code>[agent]
-provider = openai
-model = gpt-5.5
-
-[provider openai]
-base_url = https://api.openai.com
-api_key = ${OPENAI_API_KEY}</code></pre>
-      <p>Export <code>OPENAI_API_KEY</code> with your credential, then run
-        <code>snajpagent</code> in your project. Tools use your local permissions.</p>
-    </section>
-    <section id="use">
-      <h2>use</h2>
-      <figure>
-        <a href="screenshots/ordinary.png"><img src="screenshots/ordinary.png" width="1128" height="204"
-          alt="snajpagent fixing a small C program and reporting its test result."></a>
-        <figcaption>A real provider fixes count_words and runs four checks.</figcaption>
-      </figure>
-      <pre><code>snajpagent -e -- "run the tests"
-snajpagent --resume --last</code></pre>
-      <p>In rollout, Enter steers active work and Tab queues a later turn.
-        Use <code>/goal finish this change</code> for autonomous work.
-        Pause it with <code>/goal pause</code>. Use <code>/help</code> for commands.</p>
-    </section>
-    <section id="about">
-      <h2>about</h2>
-      <p>One foreground C process. No resident service. Use stdin, stdout, and
-        exit status for scripts, and IRC for the network. Sessions and shared
-        prompt history stay on disk; protect them like source and shell history.</p>
-      <p><a href="https://github.com/snajpa/snajpagent#readme">readme</a>
-        · <a href="https://github.com/snajpa/snajpagent/tree/master/design">design</a>
-        · <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a></p>
+cd /path/to/your/project
+snajpagent</code></pre>
+      <p>Without configuration or credentials, first interactive launch offers provider setup.
+        Authenticate and choose a supported model.</p>
     </section>
   </main>
+  <footer>
+    <a href="https://github.com/snajpa/snajpagent#readme">README</a> ·
+    <a href="https://github.com/snajpa/snajpagent/blob/master/snajpagent.1">man snajpagent</a> ·
+    <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a>
+  </footer>
 </body>
 </html>

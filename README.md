@@ -2,14 +2,137 @@
 
 # snajpagent
 
-snajpagent is a fast, lightweight, networked coding agent for power users.
-It is built for autonomous development and integration with other software.
+snajpagent is a fast, lightweight, networked coding agent for your terminal.
+Work with a model in your project, steer it while it runs, and connect people
+and agents through native IRC chat. Each session has its own workspace,
+tools, and local working view.
 
-[![snajpagent fixing and testing a small C program](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
+[Website](https://agent.snajpa.net) · [Install](#install-and-choose-a-provider) · [Manual](snajpagent.1)
 
-## Install
+## 1. Work in rollout
 
-You need a C11/POSIX environment with pthreads, GNU make, libcurl, and Jansson.
+```sh
+cd /path/to/your/project
+snajpagent
+```
+
+Describe a change and press Enter. **Rollout** is your local working view.
+A **turn** is the work started by one prompt, including tool use. Model
+responses appear here; `/verbose 1` adds tool activity and `/verbose 2` adds
+argument/result previews.
+
+[![A real snajpagent rollout fixing and testing a small program](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
+
+### Steer now, queue for later
+
+Typing during work opens a draft without submitting it.
+
+- **Enter while idle:** start a turn.
+- **Enter during rollout work:** steer the current turn. “Keep the public API
+  unchanged” interrupts the model's response and continues from delivered text
+  with your correction. An already-running command stays alive, not killed.
+- **Tab during work, with text:** queue a separate turn, unless completing
+  text. “Then add a regression test” waits outside the current model cycle;
+  it neither interrupts nor changes the current task.
+
+Queued turns run automatically, oldest first, after current work finishes.
+They are sequential turns in one session, not parallel jobs. `(N)` in the
+default rollout prompt counts pending turns, excluding the running turn.
+
+```text
+/queue                 list pending turns
+/queue 2 edit          revise item 2 in the composer
+/queue 2 delete        remove item 2
+/queue pop             remove the newest item
+/queue clear           remove all pending items
+```
+
+Failure or interruption pauses the queue. Retained turns also wait after
+session resume. Inspect them, then use `/next` while idle to resume execution.
+Opening a queue editor holds draining until the edit ends.
+
+### What Tab does
+
+In an ordinary composer:
+
+1. **Empty draft:** switch chat ↔ rollout, including during work or offline.
+   Switching does not submit anything or stop work.
+2. **Completable text:** complete slash commands, numeric destinations and,
+   in chat, `@nick`. Ambiguous matches fill their common prefix; another Tab
+   lists choices. Completion never sends or queues text.
+3. **Other text:** queue a turn while active; insert spaces while idle.
+
+Ctrl-J inserts a newline. Up/Down recall prompts; Ctrl-R searches history.
+Ctrl-C clears a draft; with an empty draft it interrupts work.
+Ctrl-D on an empty draft exits. `/help` lists commands and keys.
+
+### Goals and resuming
+
+A completed ordinary turn returns control to you. A **goal** continues across
+turns until complete or blocked:
+
+```text
+/goal fix the reconnect bug and validate the change
+/goal pause
+/goal resume
+```
+
+Pause takes effect at a turn boundary. Queued operator turns run before the
+next automatic goal turn.
+
+Normal exit prints a resume command; `snajpagent --resume --last` reopens the
+last session for your workspace. Resume preserves saved goal state: active
+goals continue; paused, blocked, or finished goals stay that way. Retained
+queues wait for `/next` and take precedence over automatic goal continuation.
+After failure, `/retry` continues from retained context and tool results,
+without replaying completed tools or resuming a paused queue.
+
+## 2. Work together over the network
+
+snajpagent is both an IRC server and client. Each session has an operator nick
+and a model nick. Chat is shared; workspaces and tools stay local. A room is
+neither a shared filesystem nor a broadcast of every tool call.
+
+Run these in separate terminals, from the projects each model should work in:
+
+```sh
+snajpagent -s -n builder -o alice -r work
+snajpagent -c -n reviewer -o bob
+```
+
+The first hosts `#work`; the second joins at `localhost:6667`.
+`-n` names the model; `-o` names its operator. `/names` shows accepted nicks.
+
+Networked startup opens **chat**. Enter sends publicly to the selected room.
+`@builder fix the parser's empty-input case` addresses that model. During work,
+a new mention steers at a safe response/tool boundary without truncating
+current generation. Unaddressed conversation remains background context.
+Models publish chosen messages through `irc_send`; other output stays local
+unless they choose to share it.
+
+Empty **Tab** switches to rollout to inspect your model, then back to chat.
+`/chat` and `/rollout` select a view directly. Work and connections continue;
+hidden-view output appears on return. With text during work, non-completing
+Tab queues a **local future turn**, even in chat. Enter sends a room message.
+
+[![Operators and models in a real snajpagent chat session](www/screenshots/irc.png)](www/screenshots/irc.png)
+
+Colors indicate roles, not individuals: operator nicks are magenta and model
+nicks cyan across host/client views. Mentions of your accepted operator/model
+nick highlight timestamps and ordinary text, without overriding sender colors
+or rendered Markdown styles. Exact hues depend on the terminal palette.
+
+`/server start` and `/connect ENDPOINT` manage networking without restarting
+work. Multiple rooms have numeric destinations: `/2` selects one, `/2 TEXT`
+sends there once, `/all TEXT` broadcasts. History and reconnection are automatic.
+
+IRC has no authentication or TLS: use localhost, a trusted network, or a
+secure tunnel. Tools run with your permissions, without an approval sandbox.
+Protect credentials, configuration, session logs, and prompt history.
+
+## Install and choose a provider
+
+Build with C11/POSIX, pthreads, GNU make, libcurl, and Jansson:
 
 ```sh
 git clone https://github.com/snajpa/snajpagent.git
@@ -18,171 +141,32 @@ make
 sudo make install
 ```
 
-Installation adds the binary and `snajpagent(1)` under `/usr/local` by default.
+Installation adds the binary and manual under `/usr/local`. Production also
+needs `strip` and `objcopy` on Linux, or `strip` and `dsymutil` on macOS.
+`make DEBUG=1` builds for debugging; `make help` lists overrides and standalone
+targets. See [dependency notes](DEPENDENCIES.md) for portability.
 
-`make` builds stripped host-native production; `make DEBUG=1` keeps debug symbols.
-Use `make help` for targets and overrides. Production needs `strip` and `objcopy`
-on Linux, or `strip` and `dsymutil` on macOS. Optional Nix targets build standalone
-Linux executables and experimental macOS variants. See the [manual](snajpagent.1)
-for commands and [dependency notes](DEPENDENCIES.md) for portability and licenses.
+Without configuration or credentials, first interactive launch offers provider
+setup. Authenticate and select a supported model. Private configuration and
+credentials live under `$HOME/.snajpagent`. `/config` opens configuration;
+`/model PROVIDER/MODEL/EFFORT` changes model settings. The manual covers
+providers, login, and manual configuration.
 
-## Choose a provider
+## Guidance and scripts
 
-Start `snajpagent` in your project. Without configuration or an existing API
-credential, the first interactive launch offers setup for ChatGPT/Codex,
-OpenRouter, OpenAI, or a Responses-compatible service.
-Choose a provider, authenticate, and select a model it supports.
-Configuration and private credentials live under `$HOME/.snajpagent`.
-
-For manual configuration, create that directory with mode `0700` and save this
-as `config.ini`, using an exported `OPENAI_API_KEY` and an available model:
-
-```ini
-[agent]
-provider = openai
-model = gpt-5.5
-
-[provider openai]
-base_url = https://api.openai.com
-api_key = ${OPENAI_API_KEY}
-```
-
-Providers have local names. `--provider NAME` selects one at startup;
-`/model PROVIDER/MODEL/EFFORT` changes it in a session.
-The [manual](snajpagent.1) covers login, file-backed secrets, model aliases,
-and per-model limits. `/config` opens the configuration through `$EDITOR`.
-
-## Work
-
-```sh
-cd /path/to/project
-snajpagent
-```
-
-Describe the change and press Enter. In rollout, Enter during active work
-steers the model; Tab queues the draft for a later turn. Ctrl-J inserts a
-newline. Up/Down recall prompts, and Ctrl-R searches their history.
-
-Ctrl-C clears the draft. With an empty draft it interrupts active work.
-Ctrl-D on an empty draft exits immediately; five consecutive Ctrl-C presses
-within two seconds also exit. `/help` lists commands and keys.
-
-Use `/ro QUERY` for a read-only turn. It can inspect files and use supported
-provider-hosted search, but cannot run commands or change files. During active
-work, queue it with Tab or `/queue /ro QUERY`.
-
-For autonomous work, enter a goal:
-
-```text
-/goal fix the failing tests and verify the change
-```
-
-The agent continues across turns. `/goal pause` stops automatic continuation
-after the current turn; `/goal resume` continues it. Queued prompts run first.
-Session resume restores and shows the saved goal without needing `/goal` or
-re-entering its wording. Paused/blocked goals remain available to the model as
-context without restarting automatic work.
-`/status` shows the goal, queue, model, and connection state.
-
-The model can keep independent commands running while doing other work.
-Command timeouts hand execution back alive, not cancelled.
-
-`/model cache` downloads configured providers' catalogs. `/model` lists the
-cache; `/model NUMBER` selects a row. Add `save` to persist the selection.
-`/effort LEVEL` changes reasoning effort while idle. The rollout prompt shows
-`(N)` before `›` or `»` when N future prompts are queued; an empty queue adds
-no space. Custom prompt templates can include `{queue}` for the same badge.
-
-Rollout shows the model's conversation. Add `-v` for compact tool activity,
-`-vv` for previews, or `-vvv` for full retained arguments and results.
-Higher levels are diagnostics. `/verbose N` changes the level immediately.
-During a turn, Enter or Tab applies it locally to subsequent output, without
-steering the model or replaying earlier detail.
-Color and terminal Markdown are automatic; disable them with `--no-color`
-and `--no-markdown`.
-
-### Working documents
-
-The model starts looking for working notes in the workspace (startup directory,
-or `-C DIR`). snajpagent advertises applicable `AGENTS.md` paths, not their full
-contents; the model reads relevant guidance and follows its pointers with tools.
-Add other local documentation roots with repeatable `-d DIR`:
-
-```sh
-snajpagent -d /path/to/project-notes -d /path/to/device-notes
-```
-
-Each extra root needs `AGENTS.md` (or `AGENTS.override.md`). Relative `-d` paths
-use the launch directory, independently of `-C`. Duplicate paths are collapsed.
-Roots are invocation-local; the printed resume command includes them.
-
-For example, point `AGENTS.md` at your existing maintenance notes, then ask:
-“Fix the reconnect bug; retain what you learn in those notes.” The model can
-record the established cause, remaining work and useful references. If you
-correct a mistaken assumption, it should repair that account so a later run
-can read it, check current facts and continue without repeating the research.
-No particular notes filename or directory layout is required. Small and
-read-only tasks should not generate documentation chores. Notes do not grant
-permission, control goals, or automatically synchronize between devices.
-
-## Resume or script
-
-Normal exit prints the exact command to resume your session. You can also use:
-
-```sh
-snajpagent -l
-snajpagent --resume --last
-```
-
-Resume preserves each goal's saved state: active goals continue, and paused,
-blocked or finished goals stay that way. Retained queued turns still wait for
-`/next`. Replayed history ends with `── history replayed ──`; chat timestamps
-have no per-message `history` label.
-After a turn fails, use `/retry` to continue it from retained context and tool
-results. Read-only mode is preserved; starting another turn clears the retry.
-
-For scripts, supply a prompt as arguments or through stdin:
+snajpagent advertises applicable `AGENTS.md` paths; the model reads relevant
+files and follows their pointers. Ordinary project notes retain findings, not
+permissions. `-d DIR` adds documentation roots, each with `AGENTS.md` or
+`AGENTS.override.md`. Small tasks need not create documentation chores.
 
 ```sh
 snajpagent -e -- "run the tests and summarize failures"
 printf '%s\n' 'review the current diff' | snajpagent -e
 ```
 
-One-shot model text goes to stdout; diagnostics and the resume hint go to
-stderr. Redirected text has no terminal color or Markdown presentation.
+One-shot model text goes to stdout; diagnostics go to stderr.
+`/ro QUERY` selects a read-only turn without command execution.
 
-## Share a room
-
-Run these in separate terminals, each in its own working project:
-
-```sh
-snajpagent -s -n builder -o alice -r work
-snajpagent -c -n reviewer -o bob
-```
-
-Both default to `localhost:6667`. A server owns one room; clients join it
-automatically. Its initial topic is the server's workspace path.
-`/topic TEXT` changes the selected room's topic when you have op status.
-
-Chat is public. Only mentions of the model's accepted nick steer active work;
-ordinary conversation remains background context. The model posts through
-`irc_send`; its other output stays in local rollout. Empty Tab switches views,
-or use `/chat` and `/rollout`. Tab completes slash commands and numeric destinations;
-in chat it also completes `@nick`. A unique match adds a separating space.
-For ambiguous matches, Tab fills the common prefix and a second Tab lists choices.
-
-You can start networking later with `/server start` or `/connect ENDPOINT`,
-even during a turn. Multiple connections are supported: `/names` lists their
-numbers, `/2` selects one, `/2 TEXT` sends there once, and `/all TEXT` broadcasts
-once. History and reconnects are automatic. There is no windowed TUI.
-
-Tools act with your local permissions; there is no command approval sandbox.
-Protect configuration, session logs, and prompt history. IRC has no authentication
-or TLS: keep it local or use a trusted network or secure tunnel.
-
-## Reference
-
-Read `man snajpagent` or the [source manual](snajpagent.1) for the complete interface.
-[Design notes](design/architecture.md) explain the implementation.
-`make check` runs the [tests](tests/); it needs Python 3 and Perl, with tmux for terminal checks.
-The license is [GPL-2.0-only](COPYING); see [LICENSE_SCOPE](LICENSE_SCOPE).
+Read `man snajpagent` or the [source manual](snajpagent.1) for the complete
+interface. [Design notes](design/architecture.md) explain the implementation.
+Licensed [GPL-2.0-only](COPYING); see [LICENSE_SCOPE](LICENSE_SCOPE).
