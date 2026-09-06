@@ -2,6 +2,8 @@
 #ifndef SNAJPAGENT_CLI_H
 #define SNAJPAGENT_CLI_H
 
+#include "config.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -62,6 +64,9 @@ struct snag_cli {
 };
 
 void snag_cli_init(struct snag_cli *cli);
+enum snag_color_mode snag_cli_color(const struct snag_cli *cli,
+                                    enum snag_color_mode fallback);
+bool snag_cli_markdown(const struct snag_cli *cli, bool fallback);
 void snag_cli_free(struct snag_cli *cli);
 int snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
                   char *error, size_t error_size);

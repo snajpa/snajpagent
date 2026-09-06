@@ -353,6 +353,7 @@ provider_endpoint_url(const struct snag_provider_config *provider,
                       char *buffer, size_t buffer_size, const char **url,
                       char *error, size_t error_size)
 {
+    const char *base;
     const char *append_path;
     size_t base_len;
     int written;
@@ -362,48 +363,32 @@ provider_endpoint_url(const struct snag_provider_config *provider,
         errno = EINVAL;
         return -1;
     }
+    base = provider->base_url;
+#if defined(SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS) || defined(SNAJPAGENT_TEST_FIXTURE)
+    {
+        const char *override = getenv("SNAJPAGENT_TEST_OPENAI_BASE");
+        if (override && *override)
+            base = override;
+    }
+#endif
     append_path = path;
     if (provider->auth == SNAG_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
         append_path = path + 3u;
-    base_len = strlen(provider->base_url);
-    while (base_len && provider->base_url[base_len - 1u] == '/')
+    base_len = strlen(base);
+    while (base_len && base[base_len - 1u] == '/')
         --base_len;
     if (base_len >= 3u &&
-        memcmp(provider->base_url + base_len - 3u, "/v1", 3u) == 0 &&
+        memcmp(base + base_len - 3u, "/v1", 3u) == 0 &&
         strncmp(path, "/v1/", 4u) == 0)
         append_path = path + 3u;
     written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len,
-                       provider->base_url, append_path);
+                       base, append_path);
     if (written <= 0 || (size_t)written >= buffer_size) {
         snag_errorf(error, error_size, "provider endpoint is too long");
         errno = ENAMETOOLONG;
         return -1;
     }
     *url = buffer;
-#if defined(SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS) || defined(SNAJPAGENT_TEST_FIXTURE)
-    {
-        const char *base = getenv("SNAJPAGENT_TEST_OPENAI_BASE");
-        if (!base || !*base)
-            return 0;
-        append_path = path;
-        if (provider->auth == SNAG_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
-            append_path = path + 3u;
-        base_len = strlen(base);
-        while (base_len && base[base_len - 1u] == '/')
-            --base_len;
-        if (base_len >= 3u && memcmp(base + base_len - 3u, "/v1", 3u) == 0 &&
-            strncmp(path, "/v1/", 4u) == 0)
-            append_path = path + 3u;
-        written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len,
-                           base, append_path);
-        if (written <= 0 || (size_t)written >= buffer_size) {
-            snag_errorf(error, error_size, "test provider endpoint is too long");
-            errno = ENAMETOOLONG;
-            return -1;
-        }
-        *url = buffer;
-    }
-#endif
     return 0;
 }
 

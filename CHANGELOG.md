@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Share CLI/config presentation precedence, durable model/effort selection,
+  fixed-shape JSON construction and provider endpoint joining. Keep one-turn
+  overrides and owned secret snapshots; retain replay of earlier effort events.
+  Update remaining positive/negative provider fixtures to named sections.
+
 - Use one cyan local composer/echo style in every view and connection state.
   Remove the obsolete prompt painter and terminal/render network-style state;
   retain public role colors. Make PTY setup independent and check goal completion

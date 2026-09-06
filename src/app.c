@@ -1394,16 +1394,16 @@ trim_selector_part(char *part)
 }
 static int
 record_model_selection(struct app_state *app,
-                        const struct snag_provider_config *provider,
+                        const char *provider,
                         const char *model, const char *effort,
                         char *error, size_t error_size)
 {
-    if (strcmp(app->session.default_provider, provider->name) == 0 &&
+    if (strcmp(app->session.default_provider, provider) == 0 &&
         strcmp(app->session.default_model, model) == 0 &&
         strcmp(app->session.default_effort, effort) == 0)
         return 0;
     return commit_event(app, "model_selection_changed",
-        snag_app_model_selection_changed_data(app->session.default_provider, provider->name,
+        snag_app_model_selection_changed_data(app->session.default_provider, provider,
             app->session.default_model, model, app->session.default_effort, effort),
         error, error_size);
 }
@@ -1427,7 +1427,7 @@ commit_model_selection(struct app_state *app,
         if (save_rc < 0)
             return app_error(app, error[0] ? error : "model settings could not be written to configuration");
     }
-    if (record_model_selection(app, provider, model, effort, error, sizeof(error)) < 0) {
+    if (record_model_selection(app, provider->name, model, effort, error, sizeof(error)) < 0) {
         (void)app_error(app, error[0] ? error : "model selection could not be saved");
         return -1;
     }
@@ -1683,30 +1683,6 @@ same_config_snapshot(const struct config_snapshot *left,
            (!left->exists || strcmp(left->sha256, right->sha256) == 0);
 }
 
-static enum snag_color_mode
-configured_color(const struct app_state *app,
-                 const struct snag_config *config)
-{
-    if (app->cli->color == SNAG_CLI_COLOR_AUTO)
-        return SNAG_COLOR_AUTO;
-    if (app->cli->color == SNAG_CLI_COLOR_ALWAYS)
-        return SNAG_COLOR_ALWAYS;
-    if (app->cli->color == SNAG_CLI_COLOR_NEVER)
-        return SNAG_COLOR_NEVER;
-    return config->color;
-}
-
-static bool
-configured_markdown(const struct app_state *app,
-                    const struct snag_config *config)
-{
-    if (app->cli->markdown == SNAG_CLI_MARKDOWN_ENABLED)
-        return true;
-    if (app->cli->markdown == SNAG_CLI_MARKDOWN_DISABLED)
-        return false;
-    return config->markdown;
-}
-
 static bool
 irc_config_equal(const struct snag_config *left,
                  const struct snag_config *right)
@@ -1841,9 +1817,8 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     app->turn_provider = snag_config_provider(app->config, selected_provider);
     app->turn_model = app->session.default_model;
     app->staged_provider = NULL;
-    snag_ui_color(&app->ui, configured_color(app, app->config));
-    snag_ui_markdown(&app->ui,
-                            configured_markdown(app, app->config));
+    snag_ui_color(&app->ui, snag_cli_color(app->cli, app->config->color));
+    snag_ui_markdown(&app->ui, snag_cli_markdown(app->cli, app->config->markdown));
     snag_ui_model_nick(&app->ui,
                              app->networked ?
                                  app->config->irc.model_nick : NULL);
@@ -1943,7 +1918,7 @@ change_config(struct app_state *app, bool active)
 static int
 change_effort(struct app_state *app, const char *value, bool active)
 {
-    char error[256];
+    char error[256] = {0};
     char *copy = NULL;
     char *effort = NULL;
     if (!value)
@@ -1959,20 +1934,13 @@ change_effort(struct app_state *app, const char *value, bool active)
         return app_error(app,
             "effort exceeds the supported structural bounds");
     }
-    app->staged_effort = NULL;
-    if (strcmp(effort, app->session.default_effort) != 0) {
-        error[0] = '\0';
-        if (commit_event(app, "effort_changed",
-                snag_app_preference_changed_data("old_effort",
-                                        app->session.default_effort,
-                                        "new_effort", effort),
-                error, sizeof(error)) < 0) {
-            (void)app_error(app, error[0] ? error :
-                            "effort preference could not be saved");
-            free(copy);
-            return -1;
-        }
+    if (record_model_selection(app, app->session.default_provider,
+            app->session.default_model, effort, error, sizeof(error)) < 0) {
+        (void)app_error(app, error[0] ? error : "effort preference could not be saved");
+        free(copy);
+        return -1;
     }
+    app->staged_effort = NULL;
     free(copy);
     return show_setting(app, "effort", app->session.default_effort, false);
 }
@@ -4285,10 +4253,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (snag_ui_init(&app.ui) < 0)
         return 3;
     atomic_store(&shutdown_ui, &app.ui);
-    snag_ui_color(&app.ui,
-        cli->color == SNAG_CLI_COLOR_NEVER ? SNAG_COLOR_NEVER :
-        cli->color == SNAG_CLI_COLOR_ALWAYS ? SNAG_COLOR_ALWAYS :
-                                              SNAG_COLOR_AUTO);
+    snag_ui_color(&app.ui, snag_cli_color(cli, SNAG_COLOR_AUTO));
     app.cli = cli;
     app.config = &config;
     snag_tools_journal(snag_app_tool_output, snag_app_tool_read, &app);
@@ -4344,19 +4309,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     }
     app.config_path = config_path;
     app.irc_file_config = config.irc;
-    {
-        enum snag_color_mode color = config.color;
-        if (cli->color == SNAG_CLI_COLOR_AUTO)
-            color = SNAG_COLOR_AUTO;
-        else if (cli->color == SNAG_CLI_COLOR_ALWAYS)
-            color = SNAG_COLOR_ALWAYS;
-        else if (cli->color == SNAG_CLI_COLOR_NEVER)
-            color = SNAG_COLOR_NEVER;
-        snag_ui_color(&app.ui, color);
-    }
-    snag_ui_markdown(&app.ui,
-        cli->markdown == SNAG_CLI_MARKDOWN_ENABLED ? true :
-        cli->markdown == SNAG_CLI_MARKDOWN_DISABLED ? false : config.markdown);
+    snag_ui_color(&app.ui, snag_cli_color(cli, config.color));
+    snag_ui_markdown(&app.ui, snag_cli_markdown(cli, config.markdown));
     if (!cli->execute && !cli->list &&
         snag_irc_apply_cli(&config, cli, error, sizeof(error)) < 0) {
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
@@ -4482,7 +4436,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             goto out;
         }
         if (cli->provider &&
-            record_model_selection(&app, resume_provider, resume_model,
+            record_model_selection(&app, resume_provider->name, resume_model,
                 cli->effort ? cli->effort : app.session.default_effort,
                 error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);

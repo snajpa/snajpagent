@@ -104,7 +104,7 @@ test_batch_settings(const char *path)
         struct snag_config config;
         char text[128], error[256] = {0};
         int n = snprintf(text, sizeof(text), "[tool]\nmax_parallel_commands=%s\n"
-                         "[provider]\nparallel_tool_calls=false\n", values[i]);
+                         "[provider openai]\nparallel_tool_calls=false\n", values[i]);
         write_bytes(path, text, (size_t)n);
         snag_config_init(&config);
         bool valid = i >= 1u && i <= 3u;

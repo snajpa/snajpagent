@@ -87,26 +87,13 @@ snag_app_partial_public_json(const struct app_state *app)
         goto fail;
     for (size_t i = 0; i < app->partial_count; ++i) {
         const struct partial_public_item *partial = &app->partial[i];
-        json_t *item;
-
-        item = json_object();
-        if (!item ||
-            snag_json_set_new(item, "kind",
-                             json_string(snag_item_kind_name(partial->kind))) < 0 ||
-            snag_json_set_new(item, "local_item_id",
-                             json_string(partial->local_item_id)) < 0 ||
-            snag_json_set_new(item, "phase",
-                             json_string(snag_item_phase_name(partial->phase))) < 0 ||
-            snag_json_set_new(item, "provider_item_id",
-                             json_string(partial->provider_item_id)) < 0 ||
-            snag_json_set_new(item, "text",
-                             json_stringn((const char *)partial->text.data,
-                                          partial->text.len)) < 0) {
-            if (item)
-                json_decref(item);
-            goto fail;
-        }
-        if (json_array_append_new(array, item) < 0)
+        json_t *item = json_pack("{s:s,s:s,s:s,s:s,s:s%}",
+            "kind", snag_item_kind_name(partial->kind),
+            "local_item_id", partial->local_item_id,
+            "phase", snag_item_phase_name(partial->phase),
+            "provider_item_id", partial->provider_item_id,
+            "text", (const char *)partial->text.data, partial->text.len);
+        if (!item || json_array_append_new(array, item) < 0)
             goto fail;
     }
     return array;

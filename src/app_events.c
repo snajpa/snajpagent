@@ -519,18 +519,10 @@ snag_app_steering_snapshot(const struct snag_session *session)
     if (!array)
         return NULL;
     for (size_t i = 0; i < session->pending_steering_count; ++i) {
-        json_t *item = json_object();
-        if (!item ||
-            snag_json_set_new(item, "id",
-                             json_string(session->pending_steering[i].steering_id)) < 0 ||
-            snag_json_set_new(item, "text",
-                             json_string(session->pending_steering[i].text)) < 0) {
-            if (item)
-                json_decref(item);
-            json_decref(array);
-            return NULL;
-        }
-        if (json_array_append_new(array, item) < 0) {
+        json_t *item = json_pack("{s:s,s:s}",
+            "id", session->pending_steering[i].steering_id,
+            "text", session->pending_steering[i].text);
+        if (!item || json_array_append_new(array, item) < 0) {
             json_decref(array);
             return NULL;
         }

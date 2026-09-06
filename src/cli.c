@@ -18,6 +18,25 @@ snag_cli_init(struct snag_cli *cli)
     cli->markdown = SNAG_CLI_MARKDOWN_UNSET;
 }
 
+enum snag_color_mode
+snag_cli_color(const struct snag_cli *cli, enum snag_color_mode fallback)
+{
+    switch (cli->color) {
+    case SNAG_CLI_COLOR_AUTO: return SNAG_COLOR_AUTO;
+    case SNAG_CLI_COLOR_ALWAYS: return SNAG_COLOR_ALWAYS;
+    case SNAG_CLI_COLOR_NEVER: return SNAG_COLOR_NEVER;
+    case SNAG_CLI_COLOR_UNSET: return fallback;
+    }
+    return fallback;
+}
+
+bool
+snag_cli_markdown(const struct snag_cli *cli, bool fallback)
+{
+    return cli->markdown == SNAG_CLI_MARKDOWN_ENABLED ? true :
+           cli->markdown == SNAG_CLI_MARKDOWN_DISABLED ? false : fallback;
+}
+
 void
 snag_cli_free(struct snag_cli *cli)
 {

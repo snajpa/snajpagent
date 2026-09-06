@@ -21,14 +21,8 @@ main(int argc, char **argv)
     snag_cli_init(&cli);
     if (snag_cli_parse(&cli, argc, argv, error, sizeof(error)) < 0) {
         struct snag_render render;
-        enum snag_color_mode color = SNAG_COLOR_AUTO;
-
-        if (cli.color == SNAG_CLI_COLOR_ALWAYS)
-            color = SNAG_COLOR_ALWAYS;
-        else if (cli.color == SNAG_CLI_COLOR_NEVER)
-            color = SNAG_COLOR_NEVER;
         snag_render_init(&render, 0u);
-        snag_render_set_color(&render, color);
+        snag_render_set_color(&render, snag_cli_color(&cli, SNAG_COLOR_AUTO));
         (void)snag_render_error_ctx(&render, error);
         snag_cli_usage(STDERR_FILENO);
         snag_cli_free(&cli);

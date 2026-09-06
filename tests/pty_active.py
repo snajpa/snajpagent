@@ -1800,9 +1800,11 @@ def test_preferences_and_verbosity():
     child.exit_cleanly(terminal_end)
 
     log = events(new_session(before))
-    effort = one(log, "effort_changed")
+    effort = one(log, "model_selection_changed")
     turn = one(log, "turn_started")
     assert effort["data"] == {
+        "old_provider": "openai", "new_provider": "openai",
+        "old_model": DEFAULT_MODEL, "new_model": DEFAULT_MODEL,
         "old_effort": "default", "new_effort": "quantum"
     }
     assert turn["data"]["config"]["effort"] == "quantum"
@@ -2803,12 +2805,16 @@ def test_config_and_cli_model_passthrough():
         b"model: vendor/future-model (staged once)", start=start
     )
     resumed.wait(PROMPT.rstrip(), start=end)
+    for _ in range(2):  # Repeating /effort is a durable no-op, not a model reset.
+        resumed.send(b"/effort quantum\r")
+        end = resumed.wait(b"effort for next turn: quantum", start=end)
+        resumed.wait(PROMPT.rstrip(), start=end)
     resumed.send(b"ping\r")
     resumed.wait("»".encode(),
                  start=end)
     answer_end = resumed.wait(b"pong", start=end)
     idle_end = resumed.wait(
-        b"    0% openai/openai/gpt-5.6/medium \xe2\x80\xba ", start=answer_end
+        b"    0% openai/openai/gpt-5.6/quantum \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -2818,7 +2824,10 @@ def test_config_and_cli_model_passthrough():
     resumed_turns = [event for event in events(session_id)
                      if event["type"] == "turn_started"]
     assert resumed_turns[-1]["data"]["config"]["model"] == "vendor/future-model"
-    assert resumed_turns[-1]["data"]["config"]["effort"] == "custom-effort"
+    assert resumed_turns[-1]["data"]["config"]["effort"] == "quantum"
+    selection = one(events(session_id), "model_selection_changed")["data"]
+    assert selection["old_model"] == selection["new_model"] == "openai/gpt-5.6"
+    assert selection["old_effort"] == "default" and selection["new_effort"] == "quantum"
 
 
 def test_exit_resume_matrix():
@@ -2939,7 +2948,7 @@ def test_runtime_network_commands():
     outgoing = f"127.0.0.1:{upstream.getsockname()[1]}"
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "runtime.ini"
     config.write_text(
-        "[provider]\napi_key_env = OPENAI_API_KEY\n[irc]\n"
+        "[provider openai]\napi_key = ${OPENAI_API_KEY}\n[irc]\n"
         f"listen = {endpoint}\nclient = {outgoing}\n", encoding="utf-8")
     before = session_ids()
     child = Child(["--no-color", "--config", str(config), "--no-listen", "--no-client",

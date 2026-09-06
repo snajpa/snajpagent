@@ -627,17 +627,17 @@ cases = [
     "[tool]\nmax_output_tokens=4000000001\n",
     "[tool]\nmax_output_tokens=1\nmax_output_tokens=2\n",
     "[tool]\nsecret_env=A,A\n",
-    "[provider]\nbase_url=ftp://example.test\n",
-    "[provider]\nbase_url=https://example.test/a?b\n",
-    "[provider]\napi_key_env=BAD-NAME\n",
-    "[provider]\nexact_token_count=maybe\n",
-    "[provider]\nnative_compaction=yes\n",
+    "[provider openai]\nbase_url=ftp://example.test\n",
+    "[provider openai]\nbase_url=https://example.test/a?b\n",
+    "[provider openai]\napi_key=${BAD-NAME}\n",
+    "[provider openai]\nexact_token_count=maybe\n",
+    "[provider openai]\nnative_compaction=yes\n",
     "[agent]\nmax_goal_prompt_bytes=0\n",
     "[agent]\nmax_goal_prompt_bytes=1048577\n",
     "[agent]\nread_agents_md=maybe\n",
     "[agent]\nread_agents_md=true\nread_agents_md=false\n",
     "[agent]\nprovider=missing\n[provider present]\n",
-    "[provider]\nopenrouter_title=\n",
+    "[provider openai]\nopenrouter_title=\n",
     "[provider duplicate]\n[provider duplicate]\n",
     "[provider paid]\n[model-limit paid/model]\n",
     "[model-limit missing/model]\nmax_input_tokens=1\n",
@@ -705,7 +705,7 @@ events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 turns = [event["data"]["config"] for event in events
          if event["type"] == "turn_started"]
 assert [turn["effort"] for turn in turns] == ["medium", "low", "medium"]
-assert not any(event["type"] == "effort_changed"
+assert not any(event["type"] in ("effort_changed", "model_selection_changed")
                for event in events)
 PY
 
