@@ -710,8 +710,7 @@ test_server(void)
     send_text(human, "NICK renamed\r\nNICK renamed\r\nNICK RENAMED\r\n"
                      "NICK agent\r\nPRIVMSG #lab :renamed speech\r\n"
                      "TOPIC #lab :agent topic\r\n");
-    tick(server, 10u);
-    drain_ready(server, human, wire, sizeof(wire));
+    wait_wire(server, human, wire, sizeof(wire), " :renamed speech\r\n");
     assert(capture.events[SNAG_IRC_NICK] == 2u);
     assert(strcmp(capture.last_nick.nick, "renamed") == 0);
     assert(strcmp(capture.last_nick.text, "RENAMED") == 0);
