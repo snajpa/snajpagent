@@ -220,7 +220,9 @@ int snag_session_complete_delete(struct snag_store *store,
                                 struct snag_session *session,
                                 char *error, size_t error_size);
 
-typedef int (*snag_session_event_fn)(void *opaque, uint64_t seq, uint64_t time_ms,
+/* Full replay supplies validated post-event state; cursor scans supply NULL. */
+typedef int (*snag_session_event_fn)(void *opaque, const struct snag_session *state,
+                                   uint64_t seq,
                                     const char *type, const json_t *data,
                                     char *error, size_t error_size);
 int snag_session_each_event(struct snag_session *session,

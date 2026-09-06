@@ -31,6 +31,30 @@ change_data(const char *old_key, const char *old_value,
     return data;
 }
 
+static int
+check_replay(void *opaque, const struct snag_session *state, uint64_t seq,
+             const char *type, const json_t *data, char *error, size_t error_size)
+{
+    const struct snag_session *source = opaque;
+    (void)error;
+    (void)error_size;
+    assert(state && state != source && state->log_fd == -1);
+    assert(state->next_seq == seq + 1u);
+    assert(state->log_end > 0 && state->log_end <= source->log_end);
+    assert(strcmp(state->id, source->id) == 0);
+    if (!strcmp(type, "turn_started")) {
+        assert(state->active_turn);
+        assert(strcmp(state->active_turn_id, snag_json_string(data, "turn_id")) == 0);
+    }
+    if (seq + 1u == source->next_seq) {
+        assert(state->log_end == source->log_end);
+        assert(strcmp(state->prev_sha256, source->prev_sha256) == 0);
+        assert(state->pending_queue_count == source->pending_queue_count);
+        assert(state->pending_queue_bytes == source->pending_queue_bytes);
+    }
+    return 0;
+}
+
 static json_t *
 delete_data(const char *prefix, const char *trash_name)
 {
@@ -200,10 +224,10 @@ read_file(const char *path, char *buf, size_t size)
 }
 
 static int
-count_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, const json_t *data,
+count_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type, const json_t *data,
             char *error, size_t error_size)
 {
-    (void)time_ms;
+    (void)state;
     size_t *count = opaque;
     (void)type;
     (void)data;
@@ -693,6 +717,18 @@ main(void)
         assert(session.pending_queue[1].seq == second_seq);
         assert(session.pending_queue_bytes ==
                strlen("first") + strlen("second edited"));
+        struct snag_session before = session;
+        assert(snag_session_each_event(&session, check_replay, &session,
+                                      error, sizeof(error)) == 0);
+        assert(memcmp(&session, &before, sizeof(session)) == 0);
+        ++session.log_end;
+        ++session.next_seq;
+        before = session;
+        assert(snag_session_each_event(&session, check_replay, &session,
+                                      error, sizeof(error)) < 0);
+        assert(memcmp(&session, &before, sizeof(session)) == 0);
+        --session.log_end;
+        --session.next_seq;
         snag_session_close(&session);
 
         snag_session_init(&session);

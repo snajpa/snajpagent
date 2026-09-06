@@ -2178,14 +2178,22 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             }
             if (!common_event_valid(event, verifier, seq, &type, &data,
                                     error, error_size) ||
-                (fn ? fn(opaque, seq, verifier->last_time_ms, type, data, error, error_size) :
-                      apply_event(verifier, type, data, seq,
-                                  error, error_size)) < 0) {
+                (!cursor && apply_event(verifier, type, data, seq,
+                                        error, error_size) < 0)) {
                 json_decref(event);
                 goto out;
             }
-            json_decref(event);
             complete_end = read_off - (int64_t)(got - i - 1);
+            if (fn) {
+                verifier->log_end = complete_end;
+                verifier->next_seq = seq + 1u;
+                if (fn(opaque, cursor ? NULL : verifier, seq, type, data,
+                       error, error_size) < 0) {
+                    json_decref(event);
+                    goto out;
+                }
+            }
+            json_decref(event);
             ++seq;
             snag_buf_reset(&line);
         }
@@ -2255,9 +2263,11 @@ snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
     }
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
-    return read_event_log(session, &verifier, session->log_end,
-                          SNAG_TAIL_REJECT, fn, opaque, NULL, NULL, NULL,
-                          error, error_size);
+    int rc = read_event_log(session, &verifier, session->log_end,
+                           SNAG_TAIL_REJECT, fn, opaque, NULL, NULL, NULL,
+                           error, error_size);
+    snag_session_close(&verifier);
+    return rc;
 }
 
 int
