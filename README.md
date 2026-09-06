@@ -88,6 +88,12 @@ Quitting the process interrupts its turn without pausing its goal.
 After failure, `/retry` continues from retained context and tool results,
 without replaying completed tools or resuming a paused queue.
 
+On Windows, the printed command targets a normal `cmd.exe` prompt with delayed
+expansion off (the default), as its header states. Paste it there, not into
+PowerShell or a batch file. The command uses a scoped child interpreter to keep
+literal `%`, `!`, quotes and other path characters intact without changing your
+shell's environment.
+
 ## 2. Work together over the network
 
 snajpagent is both an IRC server and client. Each session has an operator nick
