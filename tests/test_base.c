@@ -33,6 +33,14 @@
 #include <pthread.h>
 #endif
 
+static atomic_int shutdown_signal_seen;
+
+static void
+test_shutdown_signal(int number)
+{
+    atomic_store(&shutdown_signal_seen, number);
+}
+
 #ifdef _WIN32
 static void
 check_windows_permission_copy(int fd, const wchar_t *source)
@@ -635,6 +643,74 @@ cancel_console_output(void *opaque)
     return -1;
 }
 
+static unsigned int __stdcall
+interrupt_hidden_console(void *opaque)
+{
+    (void)opaque;
+    assert(snag_sleep_ms(40u) == 0);
+    assert(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0));
+    return 0;
+}
+
+static void
+test_hidden_console(void)
+{
+    HANDLE input = (HANDLE)_get_osfhandle(0);
+    struct snag_term_host host = {0};
+    DWORD mode, written;
+    assert(snag_term_input_capture(&host) == 0);
+    assert(snag_term_input_hidden(&host) == 0);
+    assert(GetConsoleMode(input, &mode) && !(mode & ENABLE_ECHO_INPUT) && (mode & ENABLE_LINE_INPUT));
+    const WCHAR chars[] = {0x4e2du, 0xd83du, 0xde00u, L'\r'};
+    INPUT_RECORD keys[4] = {0};
+    for (size_t i = 0; i < 4u; ++i) {
+        keys[i].EventType = KEY_EVENT;
+        keys[i].Event.KeyEvent.bKeyDown = TRUE;
+        keys[i].Event.KeyEvent.wRepeatCount = 1;
+        keys[i].Event.KeyEvent.uChar.UnicodeChar = chars[i];
+    }
+    keys[3].Event.KeyEvent.wVirtualKeyCode = VK_RETURN;
+    assert(WriteConsoleInputW(input, keys, 4u, &written) && written == 4u);
+    const char expected[] = "\xe4\xb8\xad\xf0\x9f\x98\x80\n";
+    size_t used = 0;
+    while (used < sizeof(expected) - 1u) {
+        char bytes[4];
+        assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, 0) & SNAG_TERM_WAIT_INPUT);
+        ssize_t n = snag_term_input_read(&host, bytes, sizeof(bytes));
+        if (n < 0 && errno == EAGAIN)
+            continue;
+        assert(n > 0 && (size_t)n <= sizeof(expected) - 1u - used);
+        assert(!memcmp(bytes, expected + used, (size_t)n));
+        used += (size_t)n;
+    }
+    assert(snag_term_input_restore(&host, true) == 0);
+    assert(GetConsoleMode(input, &mode) && mode == host.input_mode);
+    /* A following prompt must not receive a leftover CRLF as an empty line. */
+    memset(&host, 0, sizeof(host));
+    keys[0].Event.KeyEvent.uChar.UnicodeChar = L'x';
+    assert(WriteConsoleInputW(input, keys, 1u, &written) && written == 1u);
+    assert(WriteConsoleInputW(input, keys + 3u, 1u, &written) && written == 1u);
+    char bytes[4];
+    assert(snag_term_input_read(&host, bytes, sizeof(bytes)) == 1 && bytes[0] == 'x');
+    assert(snag_term_input_read(&host, bytes, sizeof(bytes)) < 0 && errno == EAGAIN);
+    assert(snag_term_input_read(&host, bytes, sizeof(bytes)) == 1 && bytes[0] == '\n');
+    assert(FlushConsoleInputBuffer(input));
+    struct snag_shutdown shutdown;
+    atomic_store(&shutdown_signal_seen, 0);
+    assert(snag_shutdown_install(&shutdown, test_shutdown_signal, false) == 0);
+    assert(snag_term_input_capture(&host) == 0 && snag_term_input_hidden(&host) == 0);
+    HANDLE interrupter = (HANDLE)_beginthreadex(NULL, 0, interrupt_hidden_console, NULL, 0, NULL);
+    assert(interrupter);
+    uint64_t cancel_start = snag_monotonic_ms();
+    ssize_t n = snag_term_input_read(&host, bytes, sizeof(bytes));
+    uint64_t cancel_elapsed = snag_monotonic_ms() - cancel_start;
+    assert(snag_term_input_restore(&host, true) == 0);
+    assert(WaitForSingleObject(interrupter, 1000u) == WAIT_OBJECT_0 && CloseHandle(interrupter));
+    snag_shutdown_detach(&shutdown);
+    snag_shutdown_finish(&shutdown);
+    assert(n <= 0 && atomic_load(&shutdown_signal_seen) == SIGINT && cancel_elapsed < 1000u);
+}
+
 static void
 test_console_output(void)
 {
@@ -821,6 +897,7 @@ test_input_mode(void)
     if (!snag_isatty(0))
         return;
 #ifdef _WIN32
+    test_hidden_console();
     test_console_output();
 #endif
     struct snag_term_host host = {0};
@@ -846,7 +923,7 @@ test_input_mode(void)
     while (!atomic_load(&console_interrupts) && snag_monotonic_ms() < deadline)
         assert(snag_sleep_ms(1u) == 0);
     assert(atomic_load(&console_interrupts) == 1u);
-    assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, 1000) == SNAG_TERM_WAIT_INPUT);
+    assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, 1000) == SNAG_TERM_WAIT_WAKE);
     char ignored[4];
     assert(snag_term_input_read(&host, ignored, sizeof(ignored)) < 0 && errno == EAGAIN);
 #else
@@ -944,6 +1021,22 @@ test_input_mode(void)
 static void
 test_platform(void)
 {
+    struct snag_shutdown shutdown;
+#ifndef _WIN32
+    struct sigaction before_shutdown, after_shutdown;
+    assert(sigaction(SIGTERM, NULL, &before_shutdown) == 0);
+#endif
+    assert(snag_shutdown_install(&shutdown, test_shutdown_signal, true) == 0);
+    assert(raise(SIGTERM) == 0 && atomic_load(&shutdown_signal_seen) == SIGTERM);
+#ifndef _WIN32
+    assert(raise(SIGHUP) == 0 && atomic_load(&shutdown_signal_seen) == SIGHUP);
+#endif
+    snag_shutdown_detach(&shutdown);
+    snag_shutdown_finish(&shutdown);
+#ifndef _WIN32
+    assert(sigaction(SIGTERM, NULL, &after_shutdown) == 0 &&
+           before_shutdown.sa_handler == after_shutdown.sa_handler);
+#endif
     struct snag_signal_mask saved;
     assert(snag_term_signals_block(&saved) == 0);
 #ifndef _WIN32

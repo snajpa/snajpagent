@@ -18,6 +18,176 @@
 #include <io.h>
 #include <process.h>
 
+static SRWLOCK console_read_lock = SRWLOCK_INIT;
+static HANDLE console_reader;
+static atomic_bool console_read_cancelled;
+
+static void
+cancel_console_read(void)
+{
+    atomic_store(&console_read_cancelled, true);
+    for (;;) {
+        AcquireSRWLockShared(&console_read_lock);
+        bool active = console_reader != NULL;
+        BOOL sent = active && CancelSynchronousIo(console_reader);
+        DWORD error = GetLastError();
+        ReleaseSRWLockShared(&console_read_lock);
+        if (!active || sent || error != ERROR_NOT_FOUND)
+            break;
+        /* The reader either starts its I/O or observes the cancellation flag. */
+        Sleep(1u);
+    }
+}
+
+static BOOL
+read_console(WCHAR *wide, DWORD size, DWORD *got)
+{
+    AcquireSRWLockExclusive(&console_read_lock);
+    if (console_reader) {
+        ReleaseSRWLockExclusive(&console_read_lock);
+        SetLastError(ERROR_BUSY);
+        return FALSE;
+    }
+    if (atomic_exchange(&console_read_cancelled, false)) {
+        ReleaseSRWLockExclusive(&console_read_lock);
+        SetLastError(ERROR_OPERATION_ABORTED);
+        return FALSE;
+    }
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                          &console_reader, THREAD_TERMINATE, FALSE, 0)) {
+        ReleaseSRWLockExclusive(&console_read_lock);
+        return FALSE;
+    }
+    ReleaseSRWLockExclusive(&console_read_lock);
+    BOOL ok = FALSE;
+    DWORD error = ERROR_OPERATION_ABORTED;
+    if (!atomic_load(&console_read_cancelled)) {
+        ok = ReadConsoleW((HANDLE)_get_osfhandle(0), wide, size, got, NULL);
+        error = GetLastError();
+    }
+    AcquireSRWLockExclusive(&console_read_lock);
+    (void)CloseHandle(console_reader);
+    console_reader = NULL;
+    if (atomic_exchange(&console_read_cancelled, false)) {
+        ok = FALSE;
+        error = ERROR_OPERATION_ABORTED;
+    }
+    ReleaseSRWLockExclusive(&console_read_lock);
+    SetLastError(error);
+    return ok;
+}
+
+static SRWLOCK shutdown_lock = SRWLOCK_INIT;
+static struct snag_shutdown *shutdown_owner;
+
+static void
+shutdown_signal(int number)
+{
+    AcquireSRWLockShared(&shutdown_lock);
+    if (shutdown_owner)
+        shutdown_owner->handler(number);
+    ReleaseSRWLockShared(&shutdown_lock);
+    cancel_console_read();
+}
+
+static BOOL WINAPI
+shutdown_control(DWORD event)
+{
+    bool closing = event == CTRL_CLOSE_EVENT || event == CTRL_LOGOFF_EVENT || event == CTRL_SHUTDOWN_EVENT;
+    if (!closing && event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT)
+        return FALSE;
+    HANDLE done = NULL;
+    AcquireSRWLockShared(&shutdown_lock);
+    bool owned = shutdown_owner != NULL;
+    if (owned) {
+        shutdown_owner->handler(closing ? SIGTERM : SIGINT);
+        if (closing)
+            (void)DuplicateHandle(GetCurrentProcess(), shutdown_owner->done,
+                                  GetCurrentProcess(), &done, SYNCHRONIZE, FALSE, 0);
+    }
+    ReleaseSRWLockShared(&shutdown_lock);
+    if (owned)
+        cancel_console_read();
+    if (done) {
+        /* Windows grants only a bounded console-close cleanup interval. */
+        (void)WaitForSingleObject(done, 4000u);
+        (void)CloseHandle(done);
+    }
+    return owned;
+}
+
+void
+snag_shutdown_detach(struct snag_shutdown *saved)
+{
+    if (saved->console) {
+        (void)SetConsoleCtrlHandler(shutdown_control, FALSE);
+        saved->console = false;
+    }
+    AcquireSRWLockExclusive(&shutdown_lock);
+    if (shutdown_owner == saved)
+        shutdown_owner = NULL;
+    ReleaseSRWLockExclusive(&shutdown_lock);
+    const int numbers[] = {SIGINT, SIGTERM};
+    while (saved->count) {
+        --saved->count;
+        (void)signal(numbers[saved->count], saved->saved[saved->count]);
+    }
+}
+
+void
+snag_shutdown_finish(struct snag_shutdown *saved)
+{
+    snag_shutdown_detach(saved);
+    if (saved->done) {
+        (void)SetEvent(saved->done);
+        (void)CloseHandle(saved->done);
+        saved->done = NULL;
+    }
+}
+
+int
+snag_shutdown_install(struct snag_shutdown *saved, void (*handler)(int), bool hangup)
+{
+    (void)hangup;
+    memset(saved, 0, sizeof(*saved));
+    if (!handler) {
+        errno = EINVAL;
+        return -1;
+    }
+    saved->done = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!saved->done) {
+        errno = EIO;
+        return -1;
+    }
+    AcquireSRWLockExclusive(&shutdown_lock);
+    bool busy = shutdown_owner != NULL;
+    if (!busy) {
+        saved->handler = handler;
+        shutdown_owner = saved;
+    }
+    ReleaseSRWLockExclusive(&shutdown_lock);
+    if (busy) {
+        snag_shutdown_finish(saved);
+        errno = EBUSY;
+        return -1;
+    }
+    const int numbers[] = {SIGINT, SIGTERM};
+    for (size_t i = 0; i < 2u; ++i) {
+        saved->saved[i] = signal(numbers[i], shutdown_signal);
+        if (saved->saved[i] == SIG_ERR)
+            goto fail;
+        ++saved->count;
+    }
+    if (!SetConsoleCtrlHandler(shutdown_control, TRUE))
+        goto fail;
+    saved->console = true;
+    return 0;
+fail:
+    snag_shutdown_finish(saved);
+    errno = EIO;
+    return -1;
+}
+
 bool
 snag_term_can_suspend(void)
 {
@@ -194,20 +364,24 @@ snag_term_output_write(struct snag_term_host *host, int fd,
 }
 
 static _Atomic(void (*)(int)) console_interrupt;
+static SRWLOCK console_control_lock = SRWLOCK_INIT;
+static HANDLE console_control_event;
 
 static BOOL WINAPI
 console_control(DWORD event)
 {
     if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT)
         return FALSE;
+    AcquireSRWLockShared(&console_control_lock);
     void (*interrupt)(int) = atomic_load(&console_interrupt);
-    if (!interrupt)
+    if (!interrupt) {
+        ReleaseSRWLockShared(&console_control_lock);
         return FALSE;
+    }
     interrupt(SIGINT);
-    /* Wake the input wait without injecting a second Ctrl-C keystroke. */
-    INPUT_RECORD record = {.EventType = FOCUS_EVENT};
-    DWORD written;
-    (void)WriteConsoleInputW(GetStdHandle(STD_INPUT_HANDLE), &record, 1u, &written);
+    cancel_console_read();
+    (void)SetEvent(console_control_event);
+    ReleaseSRWLockShared(&console_control_lock);
     return TRUE;
 }
 
@@ -215,34 +389,53 @@ int
 snag_term_controls_install(struct snag_term_host *host,
                            void (*interrupt)(int), void (*resize)(int))
 {
-    (void)host;
     (void)resize;
-    void (*absent)(int) = NULL;
-    if (!interrupt || !atomic_compare_exchange_strong(&console_interrupt, &absent, interrupt)) {
-        errno = interrupt ? EBUSY : EINVAL;
-        return -1;
-    }
-    if (!SetConsoleCtrlHandler(console_control, TRUE)) {
-        atomic_store(&console_interrupt, NULL);
+    HANDLE event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (!event) {
         errno = EIO;
         return -1;
     }
+    AcquireSRWLockExclusive(&console_control_lock);
+    void (*absent)(int) = NULL;
+    if (!interrupt || !atomic_compare_exchange_strong(&console_interrupt, &absent, interrupt)) {
+        ReleaseSRWLockExclusive(&console_control_lock);
+        (void)CloseHandle(event);
+        errno = interrupt ? EBUSY : EINVAL;
+        return -1;
+    }
+    console_control_event = event;
+    host->control_event = event;
+    if (!SetConsoleCtrlHandler(console_control, TRUE)) {
+        atomic_store(&console_interrupt, NULL);
+        console_control_event = host->control_event = NULL;
+        ReleaseSRWLockExclusive(&console_control_lock);
+        (void)CloseHandle(event);
+        errno = EIO;
+        return -1;
+    }
+    ReleaseSRWLockExclusive(&console_control_lock);
     return 0;
 }
 
 void
 snag_term_controls_restore(struct snag_term_host *host)
 {
-    (void)host;
     (void)SetConsoleCtrlHandler(console_control, FALSE);
+    AcquireSRWLockExclusive(&console_control_lock);
     atomic_store(&console_interrupt, NULL);
+    console_control_event = NULL;
+    if (host->control_event)
+        (void)CloseHandle(host->control_event);
+    host->control_event = NULL;
+    ReleaseSRWLockExclusive(&console_control_lock);
 }
 
 static void
 reset_input(struct snag_term_host *host)
 {
+    atomic_store(&console_read_cancelled, false);
     host->input_high = 0;
-    host->input_skip_lf = false;
+    host->input_cooked_pending = false;
     host->input_count = host->input_next = 0;
     host->input_key_len = host->input_key_at = host->input_repeats = 0;
     host->input_resized = false;
@@ -328,6 +521,16 @@ snag_term_input_raw(struct snag_term_host *host)
         return -1;
     }
     host->raw_input = true;
+    return 0;
+}
+
+int
+snag_term_input_hidden(struct snag_term_host *host)
+{
+    if (!SetConsoleMode((HANDLE)_get_osfhandle(0), host->input_mode & ~ENABLE_ECHO_INPUT)) {
+        errno = EIO;
+        return -1;
+    }
     return 0;
 }
 
@@ -495,15 +698,16 @@ snag_term_input_resized(struct snag_term_host *host)
 int
 snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
 {
-    HANDLE handles[2] = {(HANDLE)_get_osfhandle(0), NULL};
+    HANDLE handles[3] = {(HANDLE)_get_osfhandle(0), NULL, NULL};
     DWORD count = 1;
+    DWORD wake_index = MAXDWORD;
     int rc, error = 0;
 
     if (timeout_ms < -1) {
         errno = EINVAL;
         return -1;
     }
-    if (host->input_next < host->input_count ||
+    if (host->input_cooked_pending || host->input_next < host->input_count ||
         (host->input_key_len && host->input_repeats))
         return SNAG_TERM_WAIT_INPUT;
     if (wake != SNAG_WAKE_INVALID) {
@@ -516,16 +720,19 @@ snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout
             return snag_socket_error(error);
         }
         count = 2;
+        wake_index = 1;
     }
+    if (host->control_event)
+        handles[count++] = host->control_event;
     DWORD ready = WaitForMultipleObjects(count, handles, FALSE,
                                          timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms);
     rc = ready == WAIT_OBJECT_0 ? SNAG_TERM_WAIT_INPUT :
-         ready == WAIT_OBJECT_0 + 1u && count == 2u ? SNAG_TERM_WAIT_WAKE :
+         ready > WAIT_OBJECT_0 && ready < WAIT_OBJECT_0 + count ? SNAG_TERM_WAIT_WAKE :
          ready == WAIT_TIMEOUT ? 0 : -1;
-    if (count == 2u) {
+    if (wake_index != MAXDWORD) {
         if (WSAEventSelect(wake, NULL, 0) < 0)
             error = WSAGetLastError();
-        (void)WSACloseEvent(handles[1]);
+        (void)WSACloseEvent(handles[wake_index]);
     }
     if (error)
         return snag_socket_error(error);
@@ -542,7 +749,7 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
     WCHAR wide[257];
     size_t prefix = host->input_high ? 1u : 0u;
 
-    if (!buffer || size < 4u || size > INT_MAX) {
+    if (!buffer || !size || size > INT_MAX) {
         errno = EINVAL;
         return -1;
     }
@@ -555,6 +762,10 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
         errno = error == ERROR_NO_DATA ? EAGAIN : error == ERROR_INVALID_HANDLE ? EBADF : EIO;
         return -1;
     }
+    if (size < 4u) {
+        errno = EINVAL;
+        return -1;
+    }
     if (!(mode & ENABLE_LINE_INPUT))
         return read_keys(host, input, buffer, size);
     size_t capacity = (size - prefix) / 3u;
@@ -562,12 +773,14 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
         capacity = 256u;
     if (prefix)
         wide[0] = host->input_high;
-    if (!ReadConsoleW(input, wide + prefix, (DWORD)capacity, &got, NULL)) {
-        errno = EIO;
+    if (!read_console(wide + prefix, (DWORD)capacity, &got)) {
+        errno = GetLastError() == ERROR_OPERATION_ABORTED ? EINTR : EIO;
         return -1;
     }
     if (!got)
         return 0;
+    /* ReadConsoleW owns a completed line even after the record queue empties. */
+    host->input_cooked_pending = wide[got + prefix - 1u] != L'\n';
     size_t count = got + prefix;
     host->input_high = 0;
     if (wide[count - 1u] >= 0xd800u && wide[count - 1u] <= 0xdbffu)
@@ -575,15 +788,9 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
     size_t used = 0;
     for (size_t i = 0; i < count; ++i) {
         WCHAR c = wide[i];
-        if (mode & ENABLE_LINE_INPUT) {
-            if (c == L'\n' && host->input_skip_lf) {
-                host->input_skip_lf = false;
-                continue;
-            }
-            host->input_skip_lf = c == L'\r';
-            if (c == L'\r')
-                c = L'\n';
-        }
+        /* Consume the complete cooked CRLF before returning a line ending. */
+        if (c == L'\r')
+            continue;
         wide[used++] = c;
     }
     if (!used) {
@@ -622,6 +829,44 @@ snag_term_signals_unblock(void)
 #include <pthread.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+
+void
+snag_shutdown_detach(struct snag_shutdown *saved)
+{
+    /* Retain the original POSIX handler lifetime through final cleanup. */
+    (void)saved;
+}
+
+void
+snag_shutdown_finish(struct snag_shutdown *saved)
+{
+    while (saved->count) {
+        --saved->count;
+        (void)sigaction(saved->numbers[saved->count], &saved->saved[saved->count], NULL);
+    }
+}
+
+int
+snag_shutdown_install(struct snag_shutdown *saved, void (*handler)(int), bool hangup)
+{
+    struct sigaction action = {0};
+    memset(saved, 0, sizeof(*saved));
+    saved->numbers[0] = SIGINT;
+    saved->numbers[1] = hangup ? SIGHUP : SIGTERM;
+    saved->numbers[2] = SIGTERM;
+    action.sa_handler = handler;
+    sigemptyset(&action.sa_mask);
+    for (unsigned int i = 0; i < (hangup ? 3u : 2u); ++i) {
+        if (sigaction(saved->numbers[i], &action, &saved->saved[i]) < 0) {
+            int error = errno;
+            snag_shutdown_finish(saved);
+            errno = error;
+            return -1;
+        }
+        ++saved->count;
+    }
+    return 0;
+}
 
 bool
 snag_term_can_suspend(void)
@@ -761,6 +1006,14 @@ snag_term_input_flush(struct snag_term_host *host)
 {
     (void)host;
     return tcflush(STDIN_FILENO, TCIFLUSH);
+}
+
+int
+snag_term_input_hidden(struct snag_term_host *host)
+{
+    struct termios hidden = host->input_mode;
+    hidden.c_lflag &= (tcflag_t)~ECHO;
+    return tcsetattr(STDIN_FILENO, TCSAFLUSH, &hidden);
 }
 
 ssize_t

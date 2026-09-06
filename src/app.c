@@ -32,15 +32,6 @@
 
 #define RESUME_COMMAND_MAX (4u * 1024u * 1024u)
 
-struct app_signal_handlers {
-    struct sigaction saved_sigint;
-    struct sigaction saved_sighup;
-    struct sigaction saved_sigterm;
-    bool sigint_installed;
-    bool sighup_installed;
-    bool sigterm_installed;
-};
-
 static atomic_int pending_shutdown_signal;
 static _Atomic(struct snag_ui *) shutdown_ui;
 
@@ -53,43 +44,6 @@ mark_shutdown_signal(int signal_number)
                                          &expected, signal_number);
     snag_ui_signal(atomic_load(&shutdown_ui));
     errno = saved;
-}
-
-static void
-restore_shutdown_handlers(struct app_signal_handlers *handlers)
-{
-    if (handlers->sigterm_installed)
-        (void)sigaction(SIGTERM, &handlers->saved_sigterm, NULL);
-    if (handlers->sighup_installed)
-        (void)sigaction(SIGHUP, &handlers->saved_sighup, NULL);
-    if (handlers->sigint_installed)
-        (void)sigaction(SIGINT, &handlers->saved_sigint, NULL);
-    memset(handlers, 0, sizeof(*handlers));
-}
-
-static int
-install_shutdown_handlers(struct app_signal_handlers *handlers)
-{
-    struct sigaction action;
-
-    memset(handlers, 0, sizeof(*handlers));
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = mark_shutdown_signal;
-    sigemptyset(&action.sa_mask);
-    pending_shutdown_signal = 0;
-    if (sigaction(SIGINT, &action, &handlers->saved_sigint) < 0)
-        return -1;
-    handlers->sigint_installed = true;
-    if (sigaction(SIGHUP, &action, &handlers->saved_sighup) < 0)
-        goto fail;
-    handlers->sighup_installed = true;
-    if (sigaction(SIGTERM, &action, &handlers->saved_sigterm) < 0)
-        goto fail;
-    handlers->sigterm_installed = true;
-    return 0;
-fail:
-    restore_shutdown_handlers(handlers);
-    return -1;
 }
 
 static bool
@@ -4281,7 +4235,7 @@ int
 snag_app_run(const struct snag_cli *cli, const char *program)
 {
     struct app_state app;
-    struct app_signal_handlers signal_handlers;
+    struct snag_shutdown signal_handlers;
     struct snag_config config;
     char error[256];
     char *dotdir = NULL;
@@ -4310,7 +4264,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     snag_tools_journal(snag_app_tool_output, snag_app_tool_read, &app);
     app.config_allow_create = cli->config_path == NULL;
     app.execute = cli->execute;
-    if (install_shutdown_handlers(&signal_handlers) < 0) {
+    pending_shutdown_signal = 0;
+    if (snag_shutdown_install(&signal_handlers, mark_shutdown_signal, true) < 0) {
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                                    "cannot install shutdown signal handlers");
         rc = 2;
@@ -4562,13 +4517,13 @@ out:
     (void)snag_ui_text(&app.ui, SNAG_UI_CLOSE, NULL);
     snag_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);
+    if (signal_handlers_installed)
+        snag_shutdown_detach(&signal_handlers);
     atomic_store(&shutdown_ui, NULL);
     snag_tools_shutdown();
     snag_tools_journal(NULL, NULL, NULL);
     snag_ui_free(&app.ui);
     (void)capture_shutdown_signal(&app);
-    if (signal_handlers_installed)
-        restore_shutdown_handlers(&signal_handlers);
     snag_buf_free(&app.irc_urgent);
     snag_buf_free(&app.irc_background);
     free(config_path);
@@ -4580,6 +4535,8 @@ out:
     snag_session_close(&app.session);
     snag_store_close(&app.store);
     snag_config_free(&config);
+    if (signal_handlers_installed)
+        snag_shutdown_finish(&signal_handlers);
     if (app.shutdown_signal > 0 && app.shutdown_signal < 128)
         rc = 128 + app.shutdown_signal;
     return rc;

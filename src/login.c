@@ -8,18 +8,19 @@
 #include "json.h"
 #include "provider.h"
 #include "store.h"
+#include "term_host.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <termios.h>
 #include <unistd.h>
 
-static volatile sig_atomic_t cancelled;
+static atomic_bool cancelled;
 
 static void
 cancel_login(int signo)
@@ -41,7 +42,8 @@ static int
 read_line(const char *prompt, char *out, size_t size, bool secret,
            bool from_stdin, char *error, size_t error_size)
 {
-    struct termios before, hidden;
+    struct snag_term_host host = {0};
+    bool terminal = snag_isatty(STDIN_FILENO);
     bool changed = false;
     size_t used = 0u;
     int rc = -1;
@@ -51,43 +53,51 @@ read_line(const char *prompt, char *out, size_t size, bool secret,
         snag_errorf(error, error_size, "login needs a terminal; use a named provider and --with-api-key for stdin credentials");
         return -1;
     }
-    if (secret && snag_isatty(STDIN_FILENO)) {
-        if (tcgetattr(STDIN_FILENO, &before) < 0)
+    if (secret && terminal) {
+        if (snag_term_input_capture(&host) < 0)
             goto out;
-        hidden = before;
-        hidden.c_lflag &= (tcflag_t)~ECHO;
-        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &hidden) < 0)
+        if (snag_term_input_hidden(&host) < 0)
             goto out;
         changed = true;
     }
     if (!from_stdin)
         (void)fprintf(stderr, "%s", prompt);
     for (;;) {
-        char c;
+        char bytes[4];
         ssize_t n;
         if (cancelled)
             goto out;
-        n = read(STDIN_FILENO, &c, 1u);
-        if (n < 0 && errno == EINTR)
+        n = snag_term_input_read(&host, bytes, terminal ? sizeof(bytes) : 1u);
+        if (n < 0 && (errno == EINTR || errno == EAGAIN))
             continue;
         if (n < 0 || (!n && !used))
             goto out;
-        if (!n || c == '\n') {
+        if (!n) {
             if (used && out[used - 1u] == '\r')
                 --used;
             out[used] = '\0';
             rc = 0;
             break;
         }
-        if (!c || used + 1u >= size) {
-            snag_errorf(error, error_size, "login input is invalid or too long");
-            goto out;
+        for (ssize_t i = 0; i < n; ++i) {
+            char c = bytes[i];
+            if (c == '\n') {
+                if (used && out[used - 1u] == '\r')
+                    --used;
+                out[used] = '\0';
+                rc = 0;
+                goto out;
+            }
+            if (!c || used + 1u >= size) {
+                snag_errorf(error, error_size, "login input is invalid or too long");
+                goto out;
+            }
+            out[used++] = c;
         }
-        out[used++] = c;
     }
 out:
     if (changed) {
-        (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &before);
+        (void)snag_term_input_restore(&host, true);
         (void)fprintf(stderr, "\n");
     }
     if (rc < 0) {
@@ -352,7 +362,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     struct snag_store store;
     struct snag_provider_config provider = {0};
     struct snag_auth_tokens tokens, previous;
-    struct sigaction action, old_int, old_term;
+    struct snag_shutdown shutdown;
     snag_file_info st;
     char error[256] = {0}, rollback_error[256] = {0};
     char model[SNAG_CONFIG_MODEL_MAX] = {0};
@@ -394,7 +404,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         config.provider_count = 0u;
     }
     if (cli->auth_command == SNAG_CLI_LOGIN_STATUS || cli->auth_command == SNAG_CLI_LOGOUT) {
-        root_fd = open(dotdir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        root_fd = snag_open_read(dotdir, true);
         if (root_fd < 0 && errno != ENOENT)
             goto out;
         if (cli->auth_command == SNAG_CLI_LOGIN_STATUS) {
@@ -417,16 +427,9 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         }
         goto out;
     }
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = cancel_login;
-    sigemptyset(&action.sa_mask);
     cancelled = 0;
-    if (sigaction(SIGINT, &action, &old_int) < 0)
+    if (snag_shutdown_install(&shutdown, cancel_login, false) < 0)
         goto out;
-    if (sigaction(SIGTERM, &action, &old_term) < 0) {
-        (void)sigaction(SIGINT, &old_int, NULL);
-        goto out;
-    }
     signals = true;
     if (choose_provider(cli, &config, &provider, &existing, error, sizeof(error)) < 0)
         goto out;
@@ -434,7 +437,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         snag_errorf(error, sizeof(error), "first noninteractive login needs -m MODEL before login");
         goto out;
     }
-    root_fd = open(dotdir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    root_fd = snag_open_read(dotdir, true);
     if (root_fd < 0 && errno != ENOENT)
         goto out;
     if (acquire_login(cli, &provider, path, root_fd, &tokens, error, sizeof(error)) < 0)
@@ -469,10 +472,8 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     if (setup)
         *handled = false;
 out:
-    if (signals) {
-        (void)sigaction(SIGINT, &old_int, NULL);
-        (void)sigaction(SIGTERM, &old_term, NULL);
-    }
+    if (signals)
+        snag_shutdown_detach(&shutdown);
     if (root_fd >= 0)
         (void)close(root_fd);
     snag_store_close(&store);
@@ -481,6 +482,8 @@ out:
     snag_auth_clear(&tokens);
     snag_auth_clear(&previous);
     free(path);
+    if (signals)
+        snag_shutdown_finish(&shutdown);
     free(dotdir);
     if (rc != 0) {
         *handled = true;
