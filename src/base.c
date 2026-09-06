@@ -2,14 +2,11 @@
 #include "base.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <unistd.h>
 
 bool
 snag_verbosity_command(const char *text, size_t len)
@@ -128,14 +125,6 @@ snag_key_ref_compare(const void *left, const void *right)
     int cmp = memcmp(a->name, b->name, n);
 
     return cmp ? cmp : (a->len > b->len) - (a->len < b->len);
-}
-
-int
-snag_fd_cloexec(int fd)
-{
-    int flags = fcntl(fd, F_GETFD);
-
-    return flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0 ? -1 : 0;
 }
 
 bool
@@ -327,102 +316,11 @@ int
 snag_random_id(char out[SNAG_ID_HEX_LEN + 1u])
 {
     unsigned char raw[16];
-    size_t done = 0;
-    int fd;
 
-    fd = open("/dev/urandom", O_RDONLY
-#ifdef O_CLOEXEC
-        | O_CLOEXEC
-#endif
-#ifdef O_NOFOLLOW
-        | O_NOFOLLOW
-#endif
-    );
-    if (fd < 0)
-        return -1;
-    while (done < sizeof(raw)) {
-        ssize_t n = read(fd, raw + done, sizeof(raw) - done);
-        if (n > 0) {
-            done += (size_t)n;
-            continue;
-        }
-        if (n < 0 && errno == EINTR)
-            continue;
-        (void)close(fd);
-        errno = n == 0 ? EIO : errno;
-        return -1;
-    }
-    if (close(fd) < 0)
+    if (snag_random_bytes(raw, sizeof(raw)) < 0)
         return -1;
     hex_encode(raw, sizeof(raw), out);
     return 0;
-}
-
-uint64_t
-snag_time_ms(void)
-{
-    struct timespec ts;
-
-    if (clock_gettime(CLOCK_REALTIME, &ts) < 0)
-        return 0;
-    if ((uint64_t)ts.tv_sec > UINT64_MAX / 1000u)
-        return UINT64_MAX;
-    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
-}
-
-uint64_t
-snag_monotonic_ms(void)
-{
-    struct timespec now;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
-        return 0u;
-    return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
-}
-
-int
-snag_write_full(int fd, const void *data, size_t len)
-{
-    const unsigned char *p = data;
-    size_t done = 0;
-
-    while (done < len) {
-        ssize_t n = write(fd, p + done, len - done);
-        if (n > 0) {
-            done += (size_t)n;
-            continue;
-        }
-        if (n < 0 && errno == EINTR)
-            continue;
-        if (n == 0)
-            errno = EIO;
-        return -1;
-    }
-    return 0;
-}
-
-int
-snag_sync_file(int fd)
-{
-#if defined(__APPLE__)
-    return fsync(fd);
-#else
-    if (fdatasync(fd) == 0)
-        return 0;
-    if (errno != EINVAL && errno != ENOSYS)
-        return -1;
-    return fsync(fd);
-#endif
-}
-
-int
-snag_sync_dir(int fd)
-{
-    if (fsync(fd) == 0)
-        return 0;
-    if (errno == EINVAL || errno == ENOTSUP || errno == EROFS)
-        return 1;
-    return -1;
 }
 
 bool

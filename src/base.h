@@ -59,6 +59,7 @@ enum snag_irc_target_command {
 enum snag_irc_target_command snag_irc_target_parse(const char *text, size_t len,
                                                 uint32_t *id, size_t *body);
 int snag_random_id(char out[SNAG_ID_HEX_LEN + 1u]);
+int snag_random_bytes(unsigned char *out, size_t len);
 uint64_t snag_time_ms(void);
 uint64_t snag_monotonic_ms(void);
 int snag_write_full(int fd, const void *data, size_t len);

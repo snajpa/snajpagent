@@ -6,6 +6,60 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <io.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+static void
+test_platform(void)
+{
+    unsigned char random[32], again[32];
+    uint64_t before = snag_monotonic_ms();
+    uint64_t wall = snag_time_ms();
+    time_t seconds = time(NULL);
+    FILE *file = tmpfile();
+    char content[4] = {0};
+    int fd;
+
+    assert(seconds > 0 && wall / 1000u <= (uint64_t)seconds);
+    assert(wall / 1000u + 1u >= (uint64_t)seconds);
+    assert(snag_random_bytes(NULL, 0u) == 0);
+    assert(snag_random_bytes(random, sizeof(random)) == 0);
+    assert(snag_random_bytes(again, sizeof(again)) == 0);
+    assert(memcmp(random, again, sizeof(random)) != 0);
+    assert(snag_monotonic_ms() >= before);
+    assert(file);
+    fd = fileno(file);
+    assert(snag_fd_cloexec(fd) == 0);
+#ifdef _WIN32
+    DWORD flags;
+    assert(GetHandleInformation((HANDLE)_get_osfhandle(fd), &flags));
+    assert(!(flags & HANDLE_FLAG_INHERIT));
+#else
+    assert(fcntl(fd, F_GETFD) & FD_CLOEXEC);
+#endif
+    assert(snag_write_full(fd, NULL, 0u) == 0);
+    assert(snag_write_full(fd, "abc", 3u) == 0);
+    assert(snag_sync_file(fd) == 0);
+    rewind(file);
+    assert(fread(content, 1u, 3u, file) == 3u);
+    assert(strcmp(content, "abc") == 0);
+    assert(fclose(file) == 0);
+    errno = 0;
+    assert(snag_fd_cloexec(-1) == -1 && errno == EBADF);
+    errno = 0;
+    assert(snag_write_full(-1, "x", 1u) == -1 && errno == EBADF);
+    errno = 0;
+    assert(snag_sync_file(-1) == -1 && errno == EBADF);
+    errno = 0;
+    assert(snag_sync_dir(-1) == -1 && errno == EBADF);
+}
 
 static void
 test_path_join(void)
@@ -111,6 +165,7 @@ main(void)
     snag_buf_free(&buf);
     test_irc_target_parse();
     test_path_join();
+    test_platform();
     puts("test_base: ok");
     return 0;
 }
