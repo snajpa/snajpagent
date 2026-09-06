@@ -160,6 +160,7 @@ struct snag_session {
     bool response_complete;
     bool irc_reply_reminded;
     bool output_correction_used;
+    unsigned int cyber_clarifications;
     enum snag_response_terminal response_terminal;
     enum snag_goal_status goal_status;
     bool goal_locked;

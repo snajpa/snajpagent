@@ -2818,7 +2818,6 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
                 if mode == "queue":
                     queued = event_list(events, "future_turn_queued")
                     assert any(e["data"]["text"] == marker for e in queued)
-                    terminal.submit("/next")
                     terminal.wait("retry input complete")
                     wait_irc_idle([terminal])
                 assert any(marker in json.dumps(request) for request in requests[1:]), (mode, requests)
@@ -2830,6 +2829,140 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
                     assert not event_list(events, "response_failed")
             terminal.exit()
             print(f"tmux_terminal provider retry input {mode}: ok", flush=True)
+        finally:
+            release.set()
+            if peer is not None:
+                peer.close()
+            terminal.close()
+            provider.runtime_handler = None
+
+
+def run_provider_clarification_cases(binary, root, provider, environment):
+    cases = [("success", level) for level in range(7)]
+    cases += [(mode, 0) for mode in ("exhausted", "steer", "chat", "queue", "partial", "prior")]
+    for mode, level in cases:
+        case = root / f"clarify-{mode}-{level}"
+        workspace = case / "work"
+        workspace.mkdir(mode=0o700, parents=True)
+        (workspace / "input.txt").write_text("ordinary application data\n")
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        endpoint = f"127.0.0.1:{free_loopback_port()}"
+        arrived, release = threading.Event(), threading.Event()
+        requests = []
+        fresh = "clarification-fresh-" + mode
+        original = "clarify-original: improve the local file reader"
+
+        def respond(handler, request, sequence):
+            active = requests or provider.latest_user(request) == original
+            if active:
+                requests.append(request)
+            attempt = len(requests) - (1 if mode == "prior" else 0)
+            changed = fresh in json.dumps(request)
+            fail = active and not changed and (mode != "prior" or len(requests) > 1) and (
+                mode == "exhausted" or attempt <= 3)
+            if fail and attempt == 2 and mode in ("steer", "chat", "queue"):
+                arrived.set()
+                assert release.wait(10.0), "new clarification input did not arrive"
+            if mode == "prior" and active and len(requests) == 1:
+                body = provider.function_body(sequence, "prior-read", "read_file", {
+                    "path": "input.txt", "start_line": 1, "end_line": 1})
+            elif fail:
+                body = ""
+                if mode == "partial":
+                    body = provider.response_body(sequence, "already delivered")
+                    body = body[:body.index("event: response.completed")]
+                body += provider.event("response.failed", {"type": "response.failed",
+                    "response": {"error": {"code": "cyber_policy", "message": "fixture scope rejection"}}})
+            else:
+                body = provider.response_body(sequence, "accurate scope clarified")
+            encoded = body.encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(encoded)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            try:
+                handler.wfile.write(encoded)
+            except (BrokenPipeError, ConnectionResetError):
+                if not (mode == "steer" and attempt == 2 and release.is_set()):
+                    raise
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "term", binary, workspace, case / "state", config,
+            140, 28, args=["-v"] * level + ["-s", endpoint, "-n", "clarifybot", "-o", "clarifyop", "-r", "lab"],
+            environment=environment)
+        peer = None
+        try:
+            terminal.wait(f"clarifyop@{MACHINE_HOSTNAME} :")
+            peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
+            peer.sendall(b"NICK clarifypeer\r\nUSER clarifypeer 0 * :human\r\nJOIN #lab\r\n")
+            terminal.wait("clarifypeer joined")
+            wait_irc_idle([terminal])
+            terminal.submit("/rollout")
+            terminal.wait("host-model/medium ›")
+            terminal.submit(original)
+            if mode in ("steer", "chat", "queue"):
+                assert arrived.wait(5.0)
+                terminal.wait("provider clarification 1/3")
+                if mode == "chat":
+                    peer.sendall(f"PRIVMSG #lab :{fresh}\r\n".encode())
+                    wanted = "irc_event"
+                else:
+                    terminal.submit(("/queue " if mode == "queue" else "") + fresh)
+                    wanted = "future_turn_queued" if mode == "queue" else "steering_added"
+                deadline = time.monotonic() + 5.0
+                while True:
+                    _, events = read_events(terminal.dotdir)
+                    if any(e["data"].get("text") == fresh for e in event_list(events, wanted)):
+                        break
+                    assert time.monotonic() < deadline, "new input was not retained"
+                    time.sleep(0.02)
+                release.set()
+            terminal.wait("fixture scope rejection" if mode in ("partial", "exhausted") else
+                          "provider clarification 1/3")
+            wait_irc_idle([terminal])
+            if mode == "queue":
+                terminal.wait("accurate scope clarified")
+                wait_irc_idle([terminal])
+            _, events = read_events(terminal.dotdir)
+            corrections = event_list(events, "response_output_correction")
+            count = 0 if mode == "partial" else 1 if mode in ("steer", "chat", "queue") else 3
+            assert len(corrections) == count, (mode, len(corrections))
+            relevant = requests[1:] if mode == "prior" else requests
+            if mode in ("success", "exhausted", "prior"):
+                assert len(relevant) == 4, (mode, len(relevant))
+                for attempt, request in enumerate(relevant):
+                    assert any(item.get("role") == "user" and item.get("content") == original
+                               for item in request["input"]), "original task was rewritten"
+                    notes = [item["content"] for item in request["input"]
+                             if item.get("role") == "developer" and
+                             item.get("content", "").startswith("The provider rejected the preceding")]
+                    assert len(notes) == attempt, (mode, attempt, notes)
+                    assert all("preserving its purpose, actions, targets, and authorization" in note and
+                               "Do not conceal security-relevant details" in note for note in notes)
+            elif mode == "partial":
+                assert len(relevant) == 1
+            else:
+                assert len(relevant) == 3, (mode, len(relevant))
+                assert fresh in json.dumps(relevant[-1]), "new input did not reach model"
+            if mode == "prior":
+                assert len(event_list(events, "tool_started")) == 1, "earlier tool was replayed"
+            screen = terminal.capture(join_wrapped=True)
+            for attempt in range(1, count + 1):
+                assert screen.count(f"provider clarification {attempt}/3 after cyber_policy") == 1, screen
+            assert "provider clarification 4/3" not in screen
+            if level < 4:
+                assert "response_output_correction" not in screen
+            if level < 5:
+                assert "The provider rejected the preceding" not in screen
+            terminal.exit()
+            # Reopen durable state through the ordinary session listing path.
+            replay = subprocess.run([binary, "--dotdir", str(terminal.dotdir), "-l"],
+                                    capture_output=True, text=True, env={**os.environ, **environment})
+            assert replay.returncode == 0, replay.stderr
+            print(f"tmux_terminal provider clarification {mode}/{level}: ok", flush=True)
         finally:
             release.set()
             if peer is not None:
@@ -2858,6 +2991,7 @@ def run_irc_case(binary, root):
     terminals = {}
     try:
         run_provider_retry_input_cases(binary, root, provider, environment)
+        run_provider_clarification_cases(binary, root, provider, environment)
         run_runtime_networking_cases(binary, root, provider, environment)
         run_runtime_routing_cases(binary, root, provider, environment)
         run_runtime_boundary_cases(binary, root, provider, environment)

@@ -1342,6 +1342,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->active_cycle = 0;
         session->irc_reply_reminded = false;
         session->output_correction_used = false;
+        session->cyber_clarifications = 0u;
         clear_response_state(session);
         if (!goal && ((!session->first_user &&
              replace_text(&session->first_user, text, SNAG_MAX_DIRECT_PROMPT) < 0) ||
@@ -1625,9 +1626,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         json_t *partial = json_object_get(data, "partial_public");
         uint64_t cycle;
         size_t len;
+        bool cyber = text && strcmp(text, SNAG_CYBER_CLARIFICATION) == 0;
 
         if (!snag_json_exact_keys(data, keys, 6u) || !session->response_open ||
-            session->output_correction_used ||
+            (cyber ? session->cyber_clarifications >= SNAG_CYBER_CLARIFICATIONS_MAX :
+                     session->output_correction_used) ||
             !correction_id ||
             !snag_hex_is_lower(correction_id, SNAG_ID_HEX_LEN) ||
             pending_user_id_exists(session, correction_id) ||
@@ -1635,9 +1638,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             strcmp(response_id, session->active_response_id) != 0 ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
             !text ||
-            (strcmp(text, SNAG_EMPTY_OUTPUT_CORRECTION) != 0 &&
+            (!cyber && strcmp(text, SNAG_EMPTY_OUTPUT_CORRECTION) != 0 &&
              strcmp(text, SNAG_OVERSIZED_OUTPUT_CORRECTION) != 0) ||
             snag_partial_public_validate(partial, error, error_size) < 0 ||
+            (cyber && json_array_size(partial) != 0u) ||
             snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
             cycle != session->active_cycle ||
             session->pending_steering_count >= SNAG_MAX_STEERING_PER_TURN ||
@@ -1648,7 +1652,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (add_pending_steering(session, correction_id, text, len, seq) < 0)
             return -1;
         clear_response_state(session);
-        session->output_correction_used = true;
+        if (cyber)
+            ++session->cyber_clarifications;
+        else
+            session->output_correction_used = true;
     } else if (strcmp(type, "response_interrupted") == 0) {
         static const char *const keys[] = {
             "cycle", "origin", "partial_public", "reason", "response_id",

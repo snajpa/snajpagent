@@ -5,9 +5,12 @@
 ## Unreleased
 
 - Retry transient structured provider failures and safely truncated streams in
-  the existing bounded request loop. Do not retry policy/access/quota failures,
-  unknown codes, partial output or tool activity. New chat, steering and queued
-  input veto further retries; incomplete SSE cannot report success.
+  the existing bounded request loop. Access/quota failures, unknown codes,
+  partial output and tool activity are not replayed. A pre-output cyber-policy
+  rejection gets up to three explicit, scope-preserving clarification chances
+  instead of blind retries. New chat, steering and queued input veto further
+  retries; rollout shows concise progress at every verbosity. Incomplete SSE
+  cannot report success.
 
 - Remove the unused environment-only credential reader and room-name getter;
   credential boundary tests now exercise the production secret-source resolver.

@@ -97,7 +97,9 @@ int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, s
 
 enum {
     /* Provider pump results already use 1 and 2. */
-    SNAG_APP_COUNT_SKIPPED = 3
+    SNAG_APP_COUNT_SKIPPED = 3,
+    /* Failed request yielded to new input; do not pause armed future turns. */
+    SNAG_APP_INPUT_READY = 7
 };
 
 int snag_app_sync_destinations(struct app_state *app);

@@ -97,8 +97,21 @@ known transient failures at most twice, never policy/access/quota or unknown
 structured errors. Before replay it checks output/activity observations and
 fresh input, resets the decoder, and keeps the request bytes unchanged. New
 live chat or queued input suppresses retries without steering healthy responses;
-direct steering retains its normal interruption path. No whole-turn replay or
-provider switching is involved. A pre-output
+direct steering retains its normal interruption path. A failed response yielding
+to new input remains durably failed, but does not pause the armed future-turn
+queue; the next queued input is sent automatically. No whole-turn replay or
+provider switching is involved.
+
+A pre-output `cyber_policy` rejection can receive three model-facing
+clarifications per turn through the existing `response_output_correction`
+transition. Its independent counter is replayed from those exact correction
+records; empty/oversized output retains its separate one-correction bound.
+Original task context is preserved. The fixed developer instruction asks for
+accurate scope-preserving restatement, never concealed details or bypassing
+restrictions; uncertain scope should be clarified with the operator. New input
+and observed output/activity veto automatic clarification. Rollout progress is
+compact at every verbosity; the established debug/protocol ladder adds details.
+A pre-output
 `context_length_exceeded` closes the open response with the durable
 `response_capacity_rejected` transition. Trustworthy context-limit or
 requested-input detail lowers a durable in-session safety ceiling and updates

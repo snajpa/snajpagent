@@ -36,11 +36,21 @@ struct snag_process_state {
     "You tried to send an empty assistant message. Send nonempty text or take another action."
 #define SNAG_OVERSIZED_OUTPUT_CORRECTION \
     "You tried to send an oversized assistant message. Send a shorter message or take another action."
+#define SNAG_CYBER_CLARIFICATIONS_MAX 3u
+#define SNAG_CYBER_CLARIFICATION \
+    "The provider rejected the preceding request or response with cyber_policy " \
+    "(possible cybersecurity risk); it did not return the rejected wording. " \
+    "Review the actual task for ambiguous phrasing and restate it clearly and " \
+    "accurately, preserving its purpose, actions, targets, and authorization. " \
+    "Do not conceal security-relevant details or bypass restrictions. " \
+    "Continue only with permitted work; if scope or authorization is unclear, " \
+    "ask the operator to clarify."
 
 enum snag_output_correction {
     SNAG_OUTPUT_CORRECTION_NONE,
     SNAG_OUTPUT_CORRECTION_EMPTY,
-    SNAG_OUTPUT_CORRECTION_OVERSIZED
+    SNAG_OUTPUT_CORRECTION_OVERSIZED,
+    SNAG_OUTPUT_CORRECTION_CYBER_POLICY
 };
 
 /* These are semantic response items, not a provider plug-in interface. */

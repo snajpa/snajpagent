@@ -3193,18 +3193,22 @@ run_turn(struct app_state *app, const char *prompt,
             result = app->execute ? 6 : 1;
             goto out;
         }
+        bool cyber_clarification = provider_failure.output_correction ==
+                                   SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
         if (provider_failure.output_correction !=
-                SNAG_OUTPUT_CORRECTION_NONE && !app->stream_failed) {
+                SNAG_OUTPUT_CORRECTION_NONE && !app->stream_failed &&
+            (!cyber_clarification || app->session.cyber_clarifications <
+                                     SNAG_CYBER_CLARIFICATIONS_MAX)) {
             static const char repeated[] =
                 "assistant output remained invalid after one model-facing correction";
-            const char *correction =
+            const char *correction = cyber_clarification ? SNAG_CYBER_CLARIFICATION :
                 provider_failure.output_correction ==
                     SNAG_OUTPUT_CORRECTION_EMPTY ?
                     SNAG_EMPTY_OUTPUT_CORRECTION :
                     SNAG_OVERSIZED_OUTPUT_CORRECTION;
             char correction_id[SNAG_ID_HEX_LEN + 1u];
 
-            if (app->session.output_correction_used) {
+            if (!cyber_clarification && app->session.output_correction_used) {
                 app->stream_failed = true;
                 app->stream_errno = EPROTO;
                 (void)snprintf(app->stream_error,
@@ -3227,6 +3231,16 @@ run_turn(struct app_state *app, const char *prompt,
                     result = 3;
                     goto out;
                 }
+                if (cyber_clarification) {
+                    char notice[128];
+                    snprintf(notice, sizeof(notice),
+                        "provider clarification %u/%u after cyber_policy; preserving original task scope",
+                        app->session.cyber_clarifications, SNAG_CYBER_CLARIFICATIONS_MAX);
+                    if (app_warning(app, notice) < 0) {
+                        result = 6;
+                        goto out;
+                    }
+                }
                 continue;
             }
         }
@@ -3234,6 +3248,7 @@ run_turn(struct app_state *app, const char *prompt,
             bool capacity_failure = provider_rc < 0 &&
                 snag_provider_failure_is_capacity(&provider_failure);
             bool replay_safe = capacity_failure && !app->stream_failed &&
+                !provider_failure.new_input &&
                 app->partial_count == 0u && graph.count == 0u &&
                 !app->stream_item_seen;
             const char *class_name = app->stream_failed ?
@@ -3359,7 +3374,8 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             (void)app_error(app, failure);
-            result = exit_status;
+            result = !app->stream_failed && provider_failure.new_input ?
+                     SNAG_APP_INPUT_READY : exit_status;
             goto out;
         }
         if (!app->execute) {
@@ -3948,7 +3964,7 @@ run_queued_chain(struct app_state *app)
         const struct snag_queued_turn *queued = &app->session.pending_queue[0];
         int turn_rc = run_tracked_turn(app, queued->text, queued, false,
                                        queued->read_only);
-        if (turn_rc != 0) {
+        if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) {
             app->queue_armed = false;
             return turn_rc;
         }
@@ -3978,7 +3994,7 @@ run_ready_chains(struct app_state *app)
             if (prompt) {
                 turn_rc = run_tracked_turn(app, prompt, NULL, false, false);
                 free(prompt);
-                if (turn_rc != 0)
+                if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY)
                     return turn_rc;
                 continue;
             }
@@ -3986,7 +4002,7 @@ run_ready_chains(struct app_state *app)
         if (app->queue_armed && !app->queue_edit_id[0] &&
             app->session.pending_queue_count != 0u) {
             turn_rc = run_queued_chain(app);
-            if (turn_rc != 0)
+            if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY)
                 return turn_rc;
             continue;
         }
@@ -3994,7 +4010,7 @@ run_ready_chains(struct app_state *app)
             app->session.goal_status == SNAG_GOAL_ACTIVE) {
             turn_rc = run_tracked_turn(app, SNAG_GOAL_CONTINUATION_TEXT,
                                       NULL, true, false);
-            if (turn_rc != 0)
+            if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY)
                 return turn_rc;
             continue;
         }
@@ -4031,7 +4047,7 @@ interactive_loop(struct app_state *app, const char *initial)
                 free(irc_prompt);
                 if (turn_rc == 3 || turn_rc == 6)
                     return turn_rc;
-                if (turn_rc == 0 &&
+                if ((turn_rc == 0 || turn_rc == SNAG_APP_INPUT_READY) &&
                     (app->queue_armed || app->goal_armed)) {
                     int chain_rc = run_ready_chains(app);
                     if (chain_rc == 3 || chain_rc == 6)
@@ -4207,7 +4223,7 @@ interactive_loop(struct app_state *app, const char *initial)
                     free(owned);
                     return turn_rc;
                 }
-                if (turn_rc == 0 &&
+                if ((turn_rc == 0 || turn_rc == SNAG_APP_INPUT_READY) &&
                     (app->queue_armed || app->goal_armed)) {
                     int chain_rc = run_ready_chains(app);
                     if (chain_rc == 3 || chain_rc == 6) {

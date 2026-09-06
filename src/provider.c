@@ -1825,6 +1825,11 @@ out:
         else
             *failure = ctx.provider_failure;
         failure->output_correction = ctx.stream.output_correction;
+        if (rc < 0 && strcmp(failure->code, "cyber_policy") == 0 &&
+            !ctx.stream.retry_unsafe && !ctx.stream.terminal &&
+            !ctx.body_failed && !process_controls(&ctx) && !ctx.new_input)
+            failure->output_correction = SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
+        failure->new_input = ctx.new_input;
         redact_diagnostic(&ctx.secrets, failure->message, sizeof(failure->message));
     }
     if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
