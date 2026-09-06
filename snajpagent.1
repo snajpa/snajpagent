@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: GPL-2.0-only
-.TH SNAJPAGENT 1 "September 2026" "snajpagent 0.98" "User Commands"
+.TH SNAJPAGENT 1 "September 2026" "snajpagent" "User Commands"
 .SH NAME
 snajpagent \- fast, lightweight, networked coding agent
 .SH SYNOPSIS
@@ -94,6 +94,10 @@ libcurl and Jansson development files.  Plain
 .B make
 builds only for the host, with size optimization and stripping.  ELF production
 packaging needs strip and objcopy; macOS needs strip and dsymutil.
+The build version uses the latest reachable Git tag; untagged commits add their
+short revision, and modified checkouts add a -dirty suffix.
+META defines the product name only.  A tagged Git history is required; portable
+build targets pass the same derived identity into their isolated source build.
 .TP
 .B make DEBUG=1
 Build unstripped debug code with frame pointers.  Both profiles keep the same
@@ -1178,6 +1182,19 @@ is optional.
 .TP
 .B history_lines
 Server and snapshot history, 1 through 1000.  Default: 200.
+.PP
+snajpagent peers negotiate incremental reconnect history using durable stream
+IDs and event sequences.  Reopening the same server session preserves its IDs;
+new server sessions have a new stream.  A client's saved cursor requests only
+missing events.  Duplicate events are not appended, displayed or introduced as
+new model input.  Current topic, membership and accepted nicknames still refresh.
+An expired cursor reports a retention gap and replays the available newer tail.
+New clients receive one bounded initial history.  Interrupted delivery is
+recovered from the client's session until a model response consumes it.
+.PP
+Ordinary chat agent nicknames are blue; operator nicknames are cyan.  A mention
+of a local operator or model highlights the timestamp, sender and message
+separator in magenta, leaving plain and Markdown message bodies unchanged.
 .SH FILES
 .TP
 .I $HOME/.snajpagent/config.ini

@@ -2344,7 +2344,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 assert not event_list(log, "turn_completed")
                 release.set()
                 deadline = time.monotonic() + 10.0
-                expected = 4 if view == "burst" else 3
+                expected = 3
                 while len(requests) < expected:
                     assert time.monotonic() < deadline, (len(requests), terminal.capture())
                     time.sleep(0.02)
@@ -2362,8 +2362,15 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 assert "irc_send" not in {tool.get("name") for tool in requests[1]["tools"]}
                 _, log = read_events(terminal.dotdir)
                 admitted = [event["data"]["text"] for event in event_list(log, "steering_added")]
-                assert len(admitted) == (2 if view == "burst" else 1)
-                assert all(sum(marker in text for text in admitted) == 1 for marker in mentions)
+                # ID references coalesce even the large burst in one steering
+                # record; full payloads remain unique in the request above.
+                assert len(admitted) == 1
+                received = [e["data"] for e in event_list(log, "irc_event")]
+                for marker in mentions:
+                    matches = [e for e in received if e["text"] == marker]
+                    assert len(matches) == 1 and matches[0]["urgent"]
+                    identity = f"id={matches[0]['stream']}:{matches[0]['sequence']} "
+                    assert sum(identity in text for text in admitted) == 1
                 assert len(requests) == expected, "received input was admitted as duplicate work"
                 if view == "chat":
                     assert "runtime completion" not in terminal.capture(), "private response leaked into offline chat"

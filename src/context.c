@@ -702,7 +702,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         if (!event.input) return 0;
         if (builder->active_turn && !event.urgent && !event.historical) {
             if (!builder->deferred_irc) builder->deferred_irc = json_array();
-            if (!builder->deferred_irc || json_array_append(builder->deferred_irc, data) < 0)
+            if (!builder->deferred_irc || json_array_append(builder->deferred_irc, (json_t *)data) < 0)
                 return -1;
             if (!builder->deferred_irc_seq) builder->deferred_irc_seq = seq;
             return 0;

@@ -408,8 +408,8 @@ no background fills and no true-color assumptions. Nicks and symbols carry
 the meaning even without color. Model nicks, operator nicks, local prompts,
 room events, tool activity, success, warning, error, durable events, protocol,
 and transport diagnostics have stable roles. Red is reserved for errors,
-yellow for warnings/activity, cyan for agent and prompt identity,
-magenta for operator identity, and dim/default text for metadata. Every viewer
+yellow for warnings/activity, blue for chat agents, cyan for chat operators
+and local prompts, magenta for mention headers, and dim/default text for metadata. Every viewer
 uses the same sender-role colors, whether hosting or connected as a client.
 Locality, nick changes and history replay do not change a sender's palette.
 Attributes are always reset at field boundaries so user/model text cannot
@@ -522,8 +522,10 @@ Removing a destination clears its outstanding local-operator reply obligation.
 On successful room join/reconnect, the topic and member nicks are admitted as
 a state-only snapshot. Identified live/replayed event payloads are projected
 once from their durable records; scheduling references do not copy their text.
-The received-event watermark of a frozen request is recorded with its response,
-and only successful completion advances consumption. Resume schedules durable
+Ordinary live background chat still waits until the active turn ends; mention
+and historical catch-up timing is unchanged. The received-event watermark of a
+frozen request cannot cross withheld background input, and only successful
+completion advances consumption. Resume schedules durable
 input still awaiting consumption, even if its socket or original batch is gone.
 If a
 snapshot would make the active context cross its normal compaction threshold,
