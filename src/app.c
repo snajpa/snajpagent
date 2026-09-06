@@ -1113,7 +1113,7 @@ static int
 render_help(struct app_state *app)
 {
     static const char keys[] =
-        "Chat Enter broadcast to enabled destinations (mention to steer) · "
+        "Chat Enter sends to selected destination (mention to steer) · "
         "Rollout Enter private submit/add to active turn · "
         "Empty Tab switch view · Tab complete/indent/queue (chat: @nick) · "
         "Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";

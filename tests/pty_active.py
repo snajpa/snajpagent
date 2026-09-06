@@ -1892,7 +1892,7 @@ def test_command_name_completion():
     child.wait(b"Empty Tab switch view", start=help_end)
     child.wait(b"Tab complete/indent/queue", start=help_end)
     child.drain()
-    assert b"Chat Enter broadcast to enabled destinations (mention to steer)" in child.buf[end:]
+    assert b"Chat Enter sends to selected destination (mention to steer)" in child.buf[end:]
     child.wait(PROMPT.rstrip(), start=help_end)
 
     start = len(child.buf)
@@ -1911,11 +1911,11 @@ def test_command_name_completion():
         (b"/go", b"/goal"),
         (b"/v", b"/verbose"),
         (b"/q", b"/queue"),
-        (b"/n", b"/next"),
-        (b"/a", b"/archive"),
+        (b"/ne", b"/next"),
+        (b"/ar", b"/archive"),
         (b"/com", b"/compact"),
-        (b"/con", b"/config"),
-        (b"/d", b"/delete"),
+        (b"/conf", b"/config"),
+        (b"/de", b"/delete"),
         (b"/ex", b"/exit"),
     ):
         start = len(child.buf)
