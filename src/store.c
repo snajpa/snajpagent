@@ -62,7 +62,7 @@ snag_store_verify_private_fd(int fd, bool directory, const char *name,
     return 0;
 }
 static int
-ensure_directory(const char *path, mode_t mode, bool require_private,
+ensure_directory(const char *path, bool require_private,
                  char *error, size_t error_size)
 {
     struct stat st;
@@ -72,7 +72,7 @@ ensure_directory(const char *path, mode_t mode, bool require_private,
                       strerror(errno));
             return -1;
         }
-        if (mkdir(path, mode) < 0) {
+        if (snag_mkdir_private(path) < 0) {
             snag_errorf(error, error_size, "cannot create %s: %s", path,
                       strerror(errno));
             return -1;
@@ -102,11 +102,11 @@ mkdir_parents(const char *path, char *error, size_t error_size)
     char *p;
     if (!copy)
         return -1;
-    for (p = copy + 1; *p; ++p) {
+    for (p = copy + snag_path_root_len(path); *p; ++p) {
         if (*p != '/')
             continue;
         *p = '\0';
-        if (ensure_directory(copy, 0700, false, error, error_size) < 0) {
+        if (ensure_directory(copy, false, error, error_size) < 0) {
             free(copy);
             return -1;
         }
@@ -152,7 +152,7 @@ snag_store_open(struct snag_store *store, const char *dotdir,
     store->root_path = snag_strdup_checked(dotdir, SNAG_PATH_MAX_BYTES);
     if (!store->root_path ||
         mkdir_parents(store->root_path, error, error_size) < 0 ||
-        ensure_directory(store->root_path, 0700, true, error, error_size) < 0)
+        ensure_directory(store->root_path, true, error, error_size) < 0)
         goto out;
     store->root_fd = open_dir_path(store->root_path);
     if (store->root_fd < 0)
@@ -163,8 +163,8 @@ snag_store_open(struct snag_store *store, const char *dotdir,
     sessions = snag_path_join(store->root_path, "sessions");
     trash = snag_path_join(store->root_path, "trash");
     if (!sessions || !trash ||
-        ensure_directory(sessions, 0700, true, error, error_size) < 0 ||
-        ensure_directory(trash, 0700, true, error, error_size) < 0)
+        ensure_directory(sessions, true, error, error_size) < 0 ||
+        ensure_directory(trash, true, error, error_size) < 0)
         goto out;
     store->sessions_fd = open_dir_path(sessions);
     store->trash_fd = open_dir_path(trash);
@@ -2415,7 +2415,7 @@ snag_session_create(struct snag_store *store, struct snag_session *session,
             snag_errorf(error, error_size, "cryptographic session id generation failed");
             goto out;
         }
-        if (mkdirat(store->sessions_fd, session->id, 0700) == 0) {
+        if (snag_mkdir_private_at(store->sessions_fd, session->id) == 0) {
             created = 1;
             break;
         }

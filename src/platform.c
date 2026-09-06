@@ -11,6 +11,7 @@
 #include <windows.h>
 #include <aclapi.h>
 #include <wincrypt.h>
+#include <winternl.h>
 #include <io.h>
 #include <uniwidth.h>
 #include <wchar.h>
@@ -21,6 +22,8 @@ path_error(DWORD error)
     switch (error) {
     case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND:
         errno = ENOENT; break;
+    case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS:
+        errno = EEXIST; break;
     case ERROR_ACCESS_DENIED: case ERROR_PRIVILEGE_NOT_HELD:
         errno = EACCES; break;
     case ERROR_INVALID_HANDLE:
@@ -64,6 +67,159 @@ token_user(HANDLE token)
         return NULL;
     }
     return user;
+}
+
+static wchar_t *
+wide_path(const char *path)
+{
+    wchar_t *wide;
+    size_t len;
+    int chars;
+
+    if (!path) {
+        errno = EINVAL;
+        return NULL;
+    }
+    len = strlen(path);
+    if (len > SNAG_PATH_MAX_BYTES) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    if (!snag_utf8_valid((const unsigned char *)path, len, true)) {
+        errno = EILSEQ;
+        return NULL;
+    }
+    chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (!chars) {
+        path_error(GetLastError());
+        return NULL;
+    }
+    wide = malloc((size_t)chars * sizeof(*wide));
+    if (wide && !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, chars)) {
+        DWORD error = GetLastError();
+        free(wide);
+        path_error(error);
+        return NULL;
+    }
+    return wide;
+}
+
+static int
+mkdir_private(int dirfd, const char *path, bool relative)
+{
+    HANDLE token = NULL, created = NULL, parent = NULL;
+    TOKEN_USER *user = NULL;
+    SECURITY_DESCRIPTOR descriptor;
+    PACL acl = NULL;
+    UNICODE_STRING name = {0};
+    OBJECT_ATTRIBUTES attributes = {0};
+    IO_STATUS_BLOCK io = {0};
+    wchar_t *wide = wide_path(path);
+    DWORD acl_size, close_error = 0;
+    bool allocated_name = false;
+    NTSTATUS status;
+    int rc = -1, error;
+
+    if (!wide)
+        return -1;
+    if (!*wide) {
+        errno = ENOENT;
+        goto out;
+    }
+    if (relative && !snag_path_root_len(path)) {
+        BY_HANDLE_FILE_INFORMATION info;
+        intptr_t handle = _get_osfhandle(dirfd);
+        if (handle == -1) {
+            errno = EBADF;
+            goto out;
+        }
+        parent = (HANDLE)handle;
+        if (!GetFileInformationByHandle(parent, &info))
+            goto native_error;
+        if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            errno = ENOTDIR;
+            goto out;
+        }
+        if (*wide == L'/' || *wide == L'\\') {
+            errno = EINVAL;
+            goto out;
+        }
+        for (wchar_t *p = wide; *p; ++p)
+            if (*p == L'/')
+                *p = L'\\';
+        name.Buffer = wide;
+        name.Length = (USHORT)(wcslen(wide) * sizeof(*wide));
+        name.MaximumLength = name.Length + sizeof(*wide);
+    } else {
+        if (!(BOOLEAN)RtlDosPathNameToNtPathName_U(wide, &name, NULL, NULL)) {
+            errno = EINVAL;
+            goto out;
+        }
+        allocated_name = true;
+    }
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token)) {
+        if (GetLastError() != ERROR_NO_TOKEN ||
+            !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+            goto native_error;
+    }
+    if (!(user = token_user(token)))
+        goto out;
+    acl_size = (DWORD)(sizeof(ACL) + offsetof(ACCESS_ALLOWED_ACE, SidStart)) +
+               GetLengthSid(user->User.Sid);
+    acl = malloc(acl_size);
+    if (!acl)
+        goto out;
+    if (!InitializeAcl(acl, acl_size, ACL_REVISION) ||
+        !AddAccessAllowedAceEx(acl, ACL_REVISION, CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+                               FILE_ALL_ACCESS, user->User.Sid) ||
+        !InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorOwner(&descriptor, user->User.Sid, FALSE) ||
+        !SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE) ||
+        !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED))
+        goto native_error;
+    attributes.Length = sizeof(attributes);
+    attributes.RootDirectory = parent;
+    attributes.ObjectName = &name;
+    attributes.Attributes = OBJ_CASE_INSENSITIVE;
+    attributes.SecurityDescriptor = &descriptor;
+    status = NtCreateFile(&created, FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+                          &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          FILE_CREATE, FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+                          NULL, 0);
+    if (status < 0) {
+        path_error(RtlNtStatusToDosError(status));
+        goto out;
+    }
+    rc = 0;
+    goto out;
+native_error:
+    path_error(GetLastError());
+out:
+    error = errno;
+    if (created && !CloseHandle(created))
+        close_error = GetLastError();
+    if (token && !CloseHandle(token) && !close_error)
+        close_error = GetLastError();
+    if (allocated_name)
+        RtlFreeUnicodeString(&name);
+    free(user);
+    free(acl);
+    free(wide);
+    errno = error;
+    return rc == 0 && close_error ? path_error(close_error) : rc;
+}
+
+int
+snag_mkdir_private(const char *path)
+{
+    return mkdir_private(-1, path, false);
+}
+
+int
+snag_mkdir_private_at(int dirfd, const char *path)
+{
+    return mkdir_private(dirfd, path, true);
 }
 
 static bool
@@ -187,36 +343,15 @@ char *
 snag_realpath(const char *path)
 {
     HANDLE handle = INVALID_HANDLE_VALUE;
-    wchar_t *wide = NULL, *final = NULL;
+    wchar_t *wide = wide_path(path), *final = NULL;
     const wchar_t *body;
     char *result = NULL;
-    size_t len, prefix = 0u;
+    size_t prefix = 0u;
     DWORD capacity, got;
-    int chars, bytes, error;
+    int bytes, error;
 
-    if (!path) {
-        errno = EINVAL;
-        return NULL;
-    }
-    len = strlen(path);
-    if (len > SNAG_PATH_MAX_BYTES) {
-        errno = ENAMETOOLONG;
-        return NULL;
-    }
-    if (!snag_utf8_valid((const unsigned char *)path, len, true)) {
-        errno = EILSEQ;
-        return NULL;
-    }
-    chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
-    if (!chars) {
-        path_error(GetLastError());
-        return NULL;
-    }
-    wide = malloc((size_t)chars * sizeof(*wide));
     if (!wide)
         return NULL;
-    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, chars))
-        goto native_error;
     handle = CreateFileW(wide, FILE_READ_ATTRIBUTES,
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                          NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
@@ -447,6 +582,18 @@ snag_sync_dir(int fd)
 #include <unistd.h>
 #include <wchar.h>
 #include <sys/stat.h>
+
+int
+snag_mkdir_private(const char *path)
+{
+    return mkdir(path, 0700);
+}
+
+int
+snag_mkdir_private_at(int dirfd, const char *path)
+{
+    return mkdirat(dirfd, path, 0700);
+}
 
 int
 snag_fd_privacy(int fd, struct snag_file_privacy *out)

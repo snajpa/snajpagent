@@ -112,7 +112,7 @@ auth_dir(int root_fd, bool create)
     if (private_fd(root_fd, true) < 0)
         return -1;
     if (create) {
-        if (mkdirat(root_fd, "auth", 0700) == 0) {
+        if (snag_mkdir_private_at(root_fd, "auth") == 0) {
             if (snag_sync_dir(root_fd) < 0)
                 return -1;
         } else if (errno != EEXIST) {
