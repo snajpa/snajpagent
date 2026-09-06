@@ -211,7 +211,24 @@ chat, messages to another room, and commands used before registration or join
 are rejected without disturbing other clients.
 
 The server supports IRCv3 `batch`, `server-time`, and a bounded channel-history
-capability. On join it sends the current topic, member nicks and modes,
+capability. snajpagent peers also negotiate `snajpagent/catchup`: each retained
+room event has a stable random stream ID and monotonically increasing sequence.
+Live and replay delivery carry the same ID, timestamp, kind and role metadata.
+The server restores its stream/sequence from the session log, and publishes
+events to the wire only after durable engine acceptance, without blocking
+socket servicing on that acceptance. A new server session uses a new stream.
+
+On reconnect the client sends `SAJCATCHUP ROOM STREAM SEQUENCE` before JOIN,
+using its last durably accepted position. Only newer retained events follow.
+Duplicate IDs are dropped before new journal/cache/UI/model admission. Clients
+reconstruct cursors and pending model delivery from their session; receipt is
+not confused with successful response consumption. Interrupted catch-up retries
+from accepted state without losing input that has not reached a model request.
+If retention no longer covers the cursor, replay reports a gap and sends the
+available newer events. A different stream receives a fresh bounded initial
+history. No timestamp/text deduplication or pre-1.0 schema compatibility exists.
+
+On join it sends the current topic, member nicks and modes,
 followed by up to `history_lines` cached room events in one history batch. A
 client without batch support receives the same bounded history as server
 notices. The cache contains timestamped chat, joins, parts, quits, nick
@@ -399,7 +416,9 @@ Attributes are always reset at field boundaries so user/model text cannot
 inherit them.
 Messages and notices mentioning the local operator's or model's currently
 accepted nick for their room highlight only the timestamp and sender nick in
-bold magenta. The destination label, separator and entire message body keep
+bold magenta, including the `›` (or notice `-`) separator. Ordinary chat agent
+nicks use blue and operator nicks cyan; neither duplicates the mention palette.
+The destination label and entire message body keep
 their normal appearance, including plain text, wrapped lines and rendered
 Markdown (bold, emphasis, headings, quotes, code, links and table headers).
 Matching uses IRC case folding and nick boundaries,
@@ -500,8 +519,13 @@ strand pending input. Topology and nick snapshots contain current state only,
 so runtime changes cannot sneak background history into an urgent request.
 Removing a destination clears its outstanding local-operator reply obligation.
 
-On the first successful room join, the received topic, member nicks and server
-history are immediately admitted together as a user-role room snapshot. If a
+On successful room join/reconnect, the topic and member nicks are admitted as
+a state-only snapshot. Identified live/replayed event payloads are projected
+once from their durable records; scheduling references do not copy their text.
+The received-event watermark of a frozen request is recorded with its response,
+and only successful completion advances consumption. Resume schedules durable
+input still awaiting consumption, even if its socket or original batch is gone.
+If a
 snapshot would make the active context cross its normal compaction threshold,
 normal compaction runs first and the fresh bounded snapshot is admitted
 afterward.

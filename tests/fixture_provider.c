@@ -260,8 +260,8 @@ managed_prompt(const char *prompt)
            strcmp(prompt, "managed_multiple_violation") == 0;
 }
 
-int
-snag_fixture_response(const char *prompt, const json_t *steering,
+static int
+fixture_response(const char *prompt, const json_t *steering,
                      const char *workspace, unsigned int cycle,
                      const char *goal_prompt, uint64_t goal_turn_count,
                      snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
@@ -1187,4 +1187,66 @@ allocation:
     if (error_size)
         (void)snprintf(error, error_size, "fixture allocation failed");
     return -1;
+}
+
+/* Resolve scheduler references against the actual provider request. Fixture
+ * response scripts operate on logical input; wire tests also inspect raw IDs. */
+static int
+fixture_input(struct snag_buf *out, const char *text, const json_t *request)
+{
+    if (!strstr(text, "[IRC update id="))
+        return snag_buf_append(out, text, strlen(text));
+    for (const char *p = text; (p = strstr(p, "[IRC update id=")) != NULL;) {
+        p += 15u;
+        const char *end = strchr(p, ' ');
+        if (!end) return -1;
+        char marker[96u];
+        if (snprintf(marker, sizeof(marker), " id=%.*s]", (int)(end - p), p) < 0) return -1;
+        const json_t *input = json_object_get(request, "input");
+        bool found = false;
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            const char *content = snag_json_string(json_array_get(input, i), "content");
+            if (content && strstr(content, marker)) {
+                if (snag_buf_append(out, content, strlen(content)) < 0) return -1;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return -1;
+        p = end;
+    }
+    return 0;
+}
+
+int
+snag_fixture_response(const char *prompt, const json_t *steering, const json_t *request,
+                     const char *workspace, unsigned int cycle,
+                     const char *goal_prompt, uint64_t goal_turn_count,
+                     snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
+                     struct snag_response_graph *graph, struct snag_provider_failure *failure,
+                     char *error, size_t error_size)
+{
+    struct snag_buf resolved;
+    snag_buf_init(&resolved, SNAG_MAX_IRC_SNAPSHOT);
+    json_t *expanded = json_deep_copy(steering);
+    int rc = -1;
+    if (!expanded || fixture_input(&resolved, prompt, request) < 0 || snag_buf_terminate(&resolved) < 0)
+        goto out;
+    for (size_t i = 0u; i < json_array_size(expanded); ++i) {
+        json_t *item = json_array_get(expanded, i);
+        const char *text = snag_json_string(item, "text");
+        if (text && strstr(text, "[IRC update id=")) {
+            struct snag_buf body;
+            snag_buf_init(&body, SNAG_MAX_IRC_SNAPSHOT);
+            int result = fixture_input(&body, text, request);
+            if (result == 0 && snag_buf_terminate(&body) == 0)
+                result = json_object_set_new(item, "text", json_string((char *)body.data));
+            snag_buf_free(&body);
+            if (result < 0) goto out;
+        }
+    }
+    rc = fixture_response((char *)resolved.data, expanded, workspace, cycle,
+                           goal_prompt, goal_turn_count, emit, pump, opaque, graph, failure, error, error_size);
+out:
+    json_decref(expanded); snag_buf_free(&resolved); return rc;
 }

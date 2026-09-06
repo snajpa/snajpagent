@@ -128,6 +128,8 @@ class FakeResponses:
         for item in reversed(request.get("input", [])):
             if item.get("role") == "user" and isinstance(item.get("content"), str):
                 content = item["content"]
+                if content.startswith("[IRC endpoint=") and " id=" in content:
+                    continue  # Supplemental durable event, not a new scheduler turn.
                 ids = re.findall(r"\[IRC update id=([^ ]+)", content)
                 if ids:
                     # Resolve the production scheduler's references to its
@@ -1879,8 +1881,11 @@ def validate_irc_events(dotdir):
         raise AssertionError("operator topic change was not durably attributed")
     turns = event_list(events, "turn_started")
     for marker in ("integration one from oneop", "integration two from twoop"):
-        matching = [event for event in turns if marker in event["data"]["text"]]
-        if len(matching) != 1 or "operator=true" not in matching[0]["data"]["text"]:
+        originals = [event for event in messages if marker in event["data"]["text"]]
+        assert len(originals) == 1 and originals[0]["data"]["input"] and originals[0]["data"]["op"]
+        identity = f"{originals[0]['data']['stream']}:{originals[0]['data']['sequence']}"
+        matching = [event for event in turns if f"id={identity} " in event["data"]["text"]]
+        if len(matching) != 1:
             raise AssertionError(f"operator input was not admitted once: {marker!r}")
     failures = event_list(events, "turn_failed")
     if failures:
@@ -1954,7 +1959,7 @@ def validate_irc_styles(terminal, own):
         for nick in nicks
     ]
     for nick, color, role in expected:
-        if nick == own:
+        if nick == own or nick == "@" + own.replace("bot", "op"):
             color, role = 35, "mention magenta"
         pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} ({nick}) "
         assert foreground_at(styled, pattern) == color, f"{nick} missing {role}:\n{styled}"
@@ -3295,6 +3300,109 @@ def run_incremental_history_case(binary, root):
         provider.close()
 
 
+def run_interrupted_history_case(binary, root):
+    root.mkdir(mode=0o700, parents=True)
+    (root / "work").mkdir(mode=0o700)
+    provider = FakeResponses()
+    config = root / "config.ini"
+    write_irc_config(config, provider.port, "one-model")
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0)); listener.listen(8); listener.settimeout(8)
+    endpoint = f"127.0.0.1:{listener.getsockname()[1]}"
+    stream = "abcabcabcabcabcabcabcabcabcabcab"
+    cursors, errors, workers, sockets = [], [], [], []
+    finished = threading.Event()
+    requests = []
+    def respond(handler, request, seq):
+        requests.append(request)
+        body = provider.response_body(seq, "history received").encode()
+        handler.send_response(200); handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body))); handler.end_headers()
+        handler.wfile.write(body); handler.close_connection = True
+    provider.runtime_handler = respond
+    def serve(link):
+        try:
+            link.settimeout(8)
+            wire = b""
+            while b"CAP END\r\n" not in wire: wire += link.recv(8192)
+            nick = re.search(rb"NICK (\w+)", wire)[1].decode()
+            link.sendall((f":fake CAP {nick} ACK :batch server-time snajpagent/catchup\r\n"
+                          f":fake 001 {nick} :welcome\r\n:fake 005 {nick} SAJROOM=#lab :supported\r\n"
+                          f":fake 376 {nick} :end\r\n").encode())
+            wire = b""
+            while b"JOIN #lab\r\n" not in wire: wire += link.recv(8192)
+            match = re.search(rb"SAJCATCHUP #lab ([-a-f0-9]+) (\d+)", wire)
+            assert match, wire
+            if nick == "operator": cursors.append((match[1].decode(), int(match[2])))
+            link.sendall((f":{nick}!u@fake JOIN #lab\r\n"
+                          f":fake 353 {nick} = #lab :agent @operator peer\r\n"
+                          f":fake 366 {nick} #lab :end\r\n"
+                          f":fake BATCH +history chathistory #lab {stream} 0\r\n").encode())
+            # The operator-side connection is the transcript owner. The paired
+            # model socket stays alive, proving reconnect scope is independent.
+            if nick != "operator":
+                finished.wait(15); return
+            if len(cursors) == 1:
+                for seq in (1, 2):
+                    link.sendall((f"@saj-id={stream}:{seq};saj-kind=message;saj-op=0;batch=history;time=2026-09-01T12:00:00.000Z "
+                                  f":peer!u@fake PRIVMSG #lab :partial history {seq}\r\n").encode())
+                return  # Lose the socket before its closing BATCH.
+            assert cursors[-1] == (stream, 2), cursors
+            for seq, batch, text in ((2, ";batch=history", "partial history 2"),
+                                     (3, "", "ordinary live during batch"),
+                                     (4, ";batch=history", "@agent historical mention")):
+                link.sendall((f"@saj-id={stream}:{seq};saj-kind=message;saj-op=0{batch};time=2026-09-01T12:00:00.000Z "
+                              f":peer!u@fake PRIVMSG #lab :{text}\r\n").encode())
+            link.sendall(b":fake BATCH -unrelated\r\n:fake BATCH -history\r\n")
+            finished.wait(15)
+        except Exception as exc:
+            errors.append(repr(exc))
+        finally:
+            link.close()
+    def accept():
+        try:
+            for _ in range(3):
+                link, _ = listener.accept(); sockets.append(link)
+                t = threading.Thread(target=serve, args=(link,), daemon=True); workers.append(t); t.start()
+        except Exception as exc: errors.append(repr(exc))
+    acceptor = threading.Thread(target=accept, daemon=True); acceptor.start()
+    terminal = None
+    try:
+        terminal = TmuxTerminal(root / "term", binary, root / "work", root / "state", config,
+            140, 28, args=["-c", endpoint, "-n", "agent", "-o", "operator"],
+            environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+        deadline = time.monotonic() + 12
+        while True:
+            _, events = maybe_events(terminal.dotdir)
+            records = [e['data'] for e in event_list(events, 'irc_event') if e['data']['stream']]
+            if len(records) == 4: break
+            assert time.monotonic() < deadline and not errors, (errors, terminal.capture(), cursors)
+            time.sleep(0.02)
+        assert [e['sequence'] for e in records] == [1, 2, 3, 4]
+        assert [e['historical'] for e in records] == [True, True, False, True]
+        terminal.wait("── history replayed ──")
+        assert terminal.capture().count("partial history 2") == 1
+        deadline = time.monotonic() + 8
+        while not any("@agent historical mention" in json.dumps(r) for r in requests):
+            assert time.monotonic() < deadline, terminal.capture()
+            time.sleep(0.02)
+        assert not event_list(read_events(terminal.dotdir)[1], "steering_added")
+        assert all(sum("partial history 2" in str(i.get('content', '')) for i in r.get('input', [])) <= 1 for r in requests)
+        wait_irc_idle([terminal]); terminal.exit()
+        print("tmux_terminal interrupted history/cursor recovery: ok", flush=True)
+    finally:
+        finished.set()
+        if terminal: terminal.close()
+        listener.close()
+        for link in sockets:
+            try: link.shutdown(socket.SHUT_RDWR)
+            except OSError: pass
+        acceptor.join(1)
+        for t in workers: t.join(1)
+        provider.close()
+    assert not errors, errors
+
+
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
@@ -3317,6 +3425,7 @@ def run_irc_case(binary, root):
         provider.close()
     run_irc_chat_case(binary, root / "chat")
     run_incremental_history_case(binary, root / "catchup")
+    run_interrupted_history_case(binary, root / "interrupted-catchup")
 
 
 def run_irc_chat_case(binary, root):

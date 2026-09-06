@@ -124,10 +124,14 @@ Tab queues a **local future turn**, even in chat. Enter sends a room message.
 
 [![Alice, Bob, builder and reviewer discuss a regression test in a real IRC room](www/screenshots/irc.png)](www/screenshots/irc.png)
 
-Colors indicate roles, not individuals: operator nicks are magenta and model
-nicks cyan across host/client views. Mentions of your accepted operator/model
-nick highlight timestamps and ordinary text, without overriding sender colors
-or rendered Markdown styles. Exact hues depend on the terminal palette.
+Colors indicate roles, not individuals: operator nicks are cyan and model
+nicks blue across host/client views. Mentions of your accepted operator/model
+nick highlight the timestamp, sender nick and `›` in magenta. Message bodies
+and rendered Markdown keep their normal appearance.
+
+Reconnect catches up only on missing room events, using durable IDs and cursors.
+Already-received conversation is not shown or added as new model input again.
+New clients get bounded initial history; gaps beyond server retention are reported.
 
 `/server start` and `/connect ENDPOINT` manage networking without restarting
 work. Multiple rooms have numeric destinations: `/2` selects one, `/2 TEXT`

@@ -315,7 +315,20 @@ def new_session(before):
 def events(session_id):
     path = STATE_ROOT / session_id / "events.jsonl"
     # A live writer may expose a partial final JSON/UTF-8 record.
-    return [json.loads(line) for line in path.read_bytes().split(b"\n")[:-1]]
+    records = [json.loads(line) for line in path.read_bytes().split(b"\n")[:-1]]
+    # Expose logical scheduler input to the existing behavior assertions.
+    # Production reconnect tests independently verify raw journal IDs/payloads.
+    payloads = {}
+    for event in records:
+        data = event["data"]
+        if event["type"] == "irc_event" and data.get("stream"):
+            identity = f"{data['stream']}:{data['sequence']}"
+            payloads[identity] = (f"[IRC endpoint={data['endpoint']} room={data['room']} "
+                f"event={data['kind']} sender={data['nick']} operator={str(data['op']).lower()}]\n{data['text']}\n")
+        elif event["type"] in ("turn_started", "steering_added"):
+            data["text"] = re.sub(r"\[IRC update id=([^ ]+)[^\n]*\n",
+                lambda m: payloads.get(m[1], m[0]), data["text"])
+    return records
 
 
 def one(items, event_type):

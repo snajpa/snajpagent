@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Negotiate incremental IRC catch-up with durable stream/event IDs and client
+  cursors. Reconnect admits only missing events; interrupted delivery is recovered
+  from the session, retention gaps are explicit, and current room state refreshes
+  without reinserting old conversation into model context.
+- Use blue agent/cyan operator chat nicks and extend magenta mention headers
+  through the `›`/notice separator, preserving uncolored message bodies.
+- Derive build versions from the latest reachable Git tag instead of META's
+  fixed VERSION, retaining revision/dirty suffixes between tagged releases.
+
 - Limit mention highlighting to the timestamp and sender nick. Leave message
   bodies, Markdown, wrapped continuations and separators unchanged. Match the
   local operator's or model's accepted room nickname; honor disabled colors.

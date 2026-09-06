@@ -38,7 +38,7 @@ fixture_model_limits(size_t index)
         "max_input_tokens", "max_output_tokens");
 }
 
-int snag_fixture_response(const char *prompt, const json_t *steering,
+int snag_fixture_response(const char *prompt, const json_t *steering, const json_t *request,
                          const char *workspace, unsigned int cycle,
                          const char *goal_prompt, uint64_t goal_turn_count,
                          snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
@@ -329,7 +329,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
             }
         }
     }
-    return snag_fixture_response(prompt, steering, app->session.workspace, cycle,
+    return snag_fixture_response(prompt, steering, create_request, app->session.workspace, cycle,
                                 app->session.goal_prompt,
                                 app->session.goal_turn_count,
                                 snag_app_stream_public, snag_app_active_input_pump,
