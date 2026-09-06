@@ -2690,6 +2690,7 @@ def test_config_editor_reload():
         # nor erase a runtime-added outgoing endpoint. Keep its sockets intact.
         child.send(b"/server stop\r")
         end = child.wait(b"hosting stopped; outgoing connections unchanged", start=end)
+        wait_turn_completed(child, session_id, "endpoint removed")
         upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         upstream.bind(("127.0.0.1", 0))
         upstream.listen(8)
@@ -2700,16 +2701,6 @@ def test_config_editor_reload():
         edited_network = root / "config" / "editor-network-unrelated.ini"
         edited_network.write_text(network.read_text() + "[ui]\ntyping_pause_ms = 26\n", encoding="utf-8")
         try:
-            deadline = time.monotonic() + 8.0
-            while True:
-                log = events(session_id)
-                started = {event["data"]["turn_id"] for event in log if event["type"] == "turn_started"}
-                finished = {event["data"]["turn_id"] for event in log
-                            if event["type"] in ("turn_completed", "turn_completed_silent", "turn_failed")}
-                if started <= finished:
-                    break
-                assert time.monotonic() < deadline
-                child.drain(0.05)
             plan.write_text(str(edited_network), encoding="utf-8")
             child.send(b"/config\r")
             end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
@@ -2735,11 +2726,11 @@ def test_config_editor_reload():
                 assert probe.connect_ex(("127.0.0.1", replacement_port)) == 0
             child.send(b"/disconnect\r")
             end = child.wait(b"outgoing connections removed; hosting unchanged", start=end)
+            wait_turn_completed(child, session_id, f"endpoint={outgoing} ")
         finally:
             for link in links:
                 link.close()
             upstream.close()
-        child.drain(0.3)
         plan.write_text(str(valid_one), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
@@ -4006,7 +3997,7 @@ def test_network_chat_and_managed_mention():
     )
     assert failed_send["data"]["result"]["status"] == "failed"
     assert (failed_send["data"]["result"]["model_text"] ==
-            "irc_send arguments are invalid")
+            "IRC arguments are invalid; select destination and valid text")
 
     zero_turn = next(
         event for event in turns if "network_zero" in event["data"]["text"]
