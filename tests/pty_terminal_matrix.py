@@ -64,25 +64,28 @@ def run_case(term, cols, expect_ansi, expected_text):
 
     def wait(needle, start=0, timeout=8.0):
         end = time.monotonic() + timeout
-        while needle not in buf[start:]:
+        gap = rb"(?:(?:\r{1,2}\n){1,2}(?:[^\n]*?\r\x1b\[2K(?:\x1b\[1A\r\x1b\[2K)*)?\r\x1b\[[12]A(?:\x1b\[\d+C)?)*"
+        pattern = re.compile(gap.join(re.escape(bytes([c])) for c in needle))
+        while True:
+            match = pattern.search(buf, start)
+            if match:
+                return match.end()
             remaining = end - time.monotonic()
             if remaining <= 0 or not read_once(remaining):
                 raise AssertionError(
                     f"{term}/{cols}: timeout waiting for {needle!r}; got {bytes(buf)!r}"
                 )
-        return buf.find(needle, start) + len(needle)
 
     def wait_idle_prompt(start=0, timeout=8.0):
+        pattern = re.compile(rb"(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba")
         end = time.monotonic() + timeout
-        pattern = re.compile(rb"[\r\n]   [0-9]{2}:[0-9]{2}:[0-9]{2}" +
-                             re.escape(accounted_prompt))
-        while (match := pattern.search(buf, start)) is None:
+        while True:
+            match = pattern.search(buf, start)
+            if match:
+                return match.end()
             remaining = end - time.monotonic()
             if remaining <= 0 or not read_once(remaining):
-                raise AssertionError(
-                    f"{term}/{cols}: timeout waiting for idle prompt; got {bytes(buf)!r}"
-                )
-        return match.end()
+                raise AssertionError(f"{term}/{cols}: no idle prompt: {bytes(buf)!r}")
 
     def wait_child(timeout=8.0):
         end = time.monotonic() + timeout

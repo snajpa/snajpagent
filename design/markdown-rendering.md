@@ -30,8 +30,12 @@ coding models:
 - inline code, emphasis, strong emphasis, and strikethrough; and
 - escapes and inline link destinations, which remain visibly attributable.
 
-Each top-level prose paragraph begins with `• `. Consecutive model items and
-Markdown paragraph breaks have one empty terminal row between them. A generated
+Each top-level prose paragraph begins with `• ` and has one empty terminal row
+above and below, including while incomplete. Adjacent paragraphs share one row;
+headings, lists, quotations, fences, tables and prompts respect the same boundary.
+The renderer counts existing terminal newlines and adds only the missing ones.
+Repeated source blank lines at prose boundaries cannot multiply the gap; internal
+code whitespace is preserved. A generated
 soft wrap of prose continues with two spaces, aligned with the first paragraph
 character after `• `. When that wrap would otherwise print a separator space as
 the first character on the new row, that one space is omitted. Explicit
@@ -44,8 +48,15 @@ already delimit each independently framed message, so ordinary prose receives
 no synthetic bullet or continuation indent. Genuine Markdown list items retain
 their list bullets, and all other Markdown constructs remain enabled.
 
-Interactive conversation spacing is a renderer boundary rule rather than a
-prose-parser side effect. Submitted input and the first model block have one
+Conversation-block spacing and prose boundaries share the renderer's physical
+newline accounting. The terminal parks below unfinished prose using its existing
+unfinished-line cursor detour; the next delta restores the exact output endpoint,
+including pending right-margin wrap and combining characters. The composer is
+redrawn immediately and erased before output, including when it contains a draft;
+no WIP prompt snapshots are left in scrollback. This is temporary
+presentation space, not delivered text. No paragraph buffering or transcript
+repaint is needed. Completion/abort commits the shared separator. Independently
+framed IRC chat retains its existing compact timestamp-and-sender layout. Submitted input and the first model block have one
 empty terminal row between them. A completed model block and the following
 input prompt also have one empty row, whether the model ends with
 prose, a heading, an unordered or ordered list, a block quote, fenced code, or

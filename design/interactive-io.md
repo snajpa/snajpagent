@@ -81,11 +81,10 @@ and terminal state, and joins the presentation thread; no thread is detached.
   response events, redirected output, and provider protocol data remain byte
   exact and do not gain presentation newlines. Markdown-enabled and literal
   terminal output use this same wrapping implementation.
-- While a turn is active, the first edit after visible model output starts the
-  configured rollout-active composer on a new terminal line immediately. `»`
-  is U+00BB
-  RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK; the composer does not spell out
-  `steer`.
+- The live composer is displayed immediately, including during model output;
+  on cursor-capable terminals there is no quiet-output delay. The plain-text
+  fallback cannot erase a live composer and never splits output to repaint it. `»` (U+00BB RIGHT-POINTING DOUBLE ANGLE
+  QUOTATION MARK) marks active rollout; the composer does not spell out `steer`.
 - Ordinary character insertion, deletion, and cursor movement update the
   visible composer in place. They do not erase and repaint its unchanged rows;
   status, spinner, search, and history updates use the same retained-frame
@@ -101,23 +100,17 @@ and terminal state, and joins the presentation thread; no thread is detached.
   shared label and frame, without separate offsets or copied frame metadata.
   Timer eligibility comes from the actual template and active slots.
 - Visible model output pauses while the user is editing. Each edit restarts the
-  pause. After the pause expires, the current composer line remains as a
-  readable snapshot and model output resumes on the following line.
-- If editing resumes after more model text, that text is ended on its current
-  line and the updated draft is shown on a new rollout-active prompt line. This
-  cycle can repeat without losing or changing the draft.
-- An automatically revealed spinner prompt is temporary: erasing it restores
-  the streamed output cursor, including the terminal's right-margin wrap state.
-  It does not insert paragraph boundaries or split provider-fragment words.
-  Actual editing commits the separate prompt line as the snapshot described
-  above. Unicode cell widths and terminal reflow determine cursor restoration.
-  Automatic reveal waits for 150 ms without terminal output, so short gaps
-  between provider deltas do not repeatedly show and erase the composer.
-  Typing reveals the composer immediately; this interval does not buffer model
-  text, alter typing-pause configuration, or add a timer thread or setting.
+  configured typing pause, never a delay in prompt display. After that pause,
+  erase the composer before appending output at the retained text endpoint,
+  then immediately paint the current draft below the new output. No WIP prompt
+  or draft snapshot is committed to conversation scrollback; actual submitted
+  input is still recorded. Editing never changes the streamed text endpoint.
+- The counted cursor detour preserves pending right-margin wrap, wide characters
+  and combining marks. One bounded public slice brackets internal parser writes
+  so the composer is repainted once per slice, not per character/checkpoint.
 - `[ui] typing_pause_ms` controls the inactivity pause. It defaults to `500`,
   accepts `0` through `5000`, and applies only to interactive terminal display.
-  A value of `0` retains the line separation but disables the delay.
+  A value of `0` disables the typing pause without changing composer layout.
 
 The pause provides display focus, not a provider-generation guarantee. Input,
 interrupts, and local active-turn commands remain responsive while output is
@@ -171,6 +164,14 @@ block's existing trailing newlines and emits only the missing amount, so a
 paragraph break, prompt redraw, or repeated boundary call cannot accumulate
 extra empty rows. The rule is independent of Markdown presentation type and
 does not alter submitted text, model text, events, or provider traffic.
+
+Rendered prose also has one empty row above and below throughout streaming,
+independent of its neighboring block type. The terminal's existing output detour
+stores a row count: it parks below live prose and resumes at the retained logical
+endpoint on the next delta. A prompt uses that same gap rather than adding one.
+Completion commits the gap; resize and exact-margin restoration reuse the same
+cursor handling. This adds constant-size state, not a paragraph buffer or a
+full-screen repaint.
 
 ## Prompt Identity And Tab
 
@@ -394,7 +395,7 @@ non-steering behavior as `/queue TEXT`.
 ## Acceptance
 
 - Rendering coverage demonstrates word wrapping without changing delivered
-  text. PTY coverage demonstrates newline-separated active-turn snapshots, pause
+  text. PTY coverage demonstrates transient active-turn composers, pause
   reset on continued typing, output resumption after the configured delay, and
   byte-exact persisted text. It also rejects whole-line erase and prompt replay
   during ordinary insertion, deletion, and cursor movement.
@@ -436,7 +437,7 @@ scenario covers:
   stored assistant text;
 - the first active-turn edit, continued editing before the pause expires, provider
   text withheld for the configured interval, model output resumption below a
-  stable draft snapshot, and another edit/resume cycle after more output;
+  one transient draft with no stale snapshots, and another edit/resume cycle;
 - numbered `/q` and `/queue` listing plus edit, delete, clear, and newest-item
   pop, including the `edit N › ` composer and preservation of queue order;
 - prompt, status, model output, and composer redraws without leaked escape

@@ -858,12 +858,29 @@ def wait_normalized(terminal, needle, timeout=1.0):
     raise AssertionError(f"timeout waiting for {needle!r}:\n{screen}")
 
 
-def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None):
-    case = root / f"decode-{width}-{unicode}-{resize}"
+def assert_live_paragraph_gap(terminal, first, last):
+    screen = terminal.capture()
+    lines = screen.splitlines()
+    starts = [i for i, line in enumerate(lines) if first in line]
+    ends = [i for i, line in enumerate(lines) if last in line]
+    if not starts or not ends:
+        raise AssertionError(f"live paragraph missing: {first!r}, {last!r}:\n{screen}")
+    top, bottom = starts[-1], ends[-1]
+    if top == 0 or lines[top - 1].strip():
+        raise AssertionError(f"live paragraph lacks its top gap:\n{screen}")
+    if bottom + 1 >= len(lines) or lines[bottom + 1].strip():
+        raise AssertionError(f"live paragraph lacks its bottom gap:\n{screen}")
+    following = next((i for i in range(bottom + 1, len(lines)) if lines[i].strip()), None)
+    if following is not None and following != bottom + 2:
+        raise AssertionError(f"live paragraph has duplicate bottom spacing:\n{screen}")
+
+
+def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, typing=False):
+    case = root / f"decode-{width}-{unicode}-{resize}-{typing}"
     workspace = case / "workspace"
     workspace.mkdir(mode=0o700, parents=True)
     config = case / "config.ini"
-    write_config(config, False)
+    write_config(config, False, pause_ms=0 if typing else 300)
     dotdir = case / "state"
     terminal = TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, width, 14
@@ -879,9 +896,16 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None):
         _, split_prefix_at = wait_normalized(
             terminal, prefix
         )
+        assert_live_paragraph_gap(terminal, "• Paced", "inter")
+        if typing:
+            terminal.send_text("steer draft")
+            wait_wrapped_fragment(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft")
+            assert_live_paragraph_gap(terminal, "• Paced", "inter")
         if resize:
             time.sleep(0.05)
             terminal.resize(resize, 14)
+            time.sleep(0.02)
+            assert_live_paragraph_gap(terminal, "• Paced", "inter")
         _, split_word_at = wait_normalized(
             terminal, split
         )
@@ -889,6 +913,9 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None):
             raise AssertionError(
                 "a complete split-word prefix was withheld until its suffix"
             )
+        if typing:
+            terminal.send_text(" more")
+            wait_wrapped_fragment(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft more")
         wait_normalized(terminal, "and finish")
         final_screen, final_at = wait_normalized(
             terminal, expected, timeout=0.35
@@ -902,6 +929,14 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None):
         held_screen = terminal.capture(join_wrapped=True)
         if expected not in normalize_space(held_screen):
             raise AssertionError("the visible final fragment was erased")
+        assert_live_paragraph_gap(terminal, "• Paced", "finalword")
+        if typing:
+            screen = terminal.capture(join_wrapped=True)
+            normalized = normalize_space(screen)
+            if normalized.count("steer draft more") != 1 or normalized.count("steer draft") != 1:
+                raise AssertionError(f"stale steer draft in scrollback:\n{screen}")
+            if normalized.count(expected) != 1:
+                raise AssertionError(f"typing split/duplicated live paragraph:\n{screen}")
         if "working…" in held_screen:
             raise AssertionError(
                 "activity interrupted the provider's post-delta pause"
@@ -928,6 +963,8 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None):
             raise AssertionError(
                 "paced text was missing, duplicated, or reordered in tmux history"
             )
+        if typing:
+            terminal.send_key("C-u")
         terminal.exit()
     finally:
         try:
@@ -1139,17 +1176,15 @@ def run_render_case(binary, root):
         if time.monotonic() - pause_started < 1.2:
             raise AssertionError("model output resumed before the typing pause")
         assert_wrapped_order(second, [
-            f"{DEFAULT_ACTIVE_PROMPT} draft plus", "explicit café € line",
+            "explicit café € line", f"{DEFAULT_ACTIVE_PROMPT} draft plus",
         ])
         prompt_pattern = wrapped_fragment_pattern(
             f"{DEFAULT_ACTIVE_PROMPT} draft plus"
         ).pattern
-        if re.search(prompt_pattern + r"\n\nzeta eta theta", second):
-            raise AssertionError(f"output resumed with a spurious blank line:\n{second}")
-        if re.search(prompt_pattern + r"\nzeta eta theta", second) is None:
-            raise AssertionError(f"output did not resume directly below the draft:\n{second}")
-        if re.search(r"(?m)^zeta eta theta$", second) is None:
-            raise AssertionError(f"wrapped prose gained a hanging indent:\n{second}")
+        if len(re.findall(prompt_pattern, second)) != 1:
+            raise AssertionError(f"stale draft prompt in scrollback:\n{second}")
+        if "extraordinary zeta eta theta" not in normalize_space(second):
+            raise AssertionError(f"temporary prompt split the streamed paragraph:\n{second}")
 
         repeat_pause_started = time.monotonic()
         terminal.send_text(" again with long resize text")
@@ -1173,14 +1208,9 @@ def run_render_case(binary, root):
         final = terminal.wait("control:\\x1B[31m", timeout=5.0)
         if time.monotonic() - repeat_pause_started < 1.2:
             raise AssertionError("repeated typing pause ended too early")
-        if f"{exact_margin}\n\nsupercalifragilisticexpialidocious" in final:
-            raise AssertionError(
-                f"exact-margin output resumed after a blank row:\n{final}"
-            )
-        if f"{exact_margin}\nsupercalifragilisticexpialidocious" not in final:
-            raise AssertionError(
-                f"exact-margin output did not resume on the next row:\n{final}"
-            )
+        if final.count(exact_margin) != 1:
+            raise AssertionError(f"draft snapshot scrolled into history:\n{final}")
+        assert_order(final, ["supercalifragilisticexpialidocious", exact_margin])
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
         joined = terminal.capture(join_wrapped=True)
         assert_wrapped_order(
@@ -1188,12 +1218,11 @@ def run_render_case(binary, root):
             [
                 "alpha beta gamma delta-",
                 "extraordinary",
-                f"{DEFAULT_ACTIVE_PROMPT} draft plus",
                 "explicit café € line",
-                exact_margin,
                 "supercalifragilisticexpialidocious0123456789ABCDEFGHIJ",
                 "control:",
                 "\\x1B[31m",
+                "draft plus again with long resize text",
             ],
         )
         if "alpha beta gamma delta-extraordinary" in final:
@@ -1621,6 +1650,7 @@ def run_fixture(binary, workspace, root):
     run_paced_decode_case(binary, root, width=24)
     run_paced_decode_case(binary, root, width=26, unicode=True)
     run_paced_decode_case(binary, root, width=26, unicode=True, resize=25)
+    run_paced_decode_case(binary, root, width=26, unicode=True, resize=25, typing=True)
     run_markdown_case(binary, root)
     run_narrow_markdown_table_case(binary, root)
     run_render_case(binary, root)

@@ -72,7 +72,6 @@ struct snag_term {
     size_t painted_label_len;
     unsigned int painted_columns;
     bool painted_color;
-    uint64_t last_output_ms;
     size_t output_columns;
     size_t output_cell_width;
     char output_cell_style[64u];
@@ -92,6 +91,9 @@ struct snag_term {
     size_t rendered_cursor_col;
     unsigned int columns;
     unsigned int output_depth;
+    unsigned int output_newlines;
+    unsigned int output_gap;
+    unsigned int output_detour;
     bool defer_redraw;
     uint32_t typing_pause_ms;
     uint64_t last_input_ms;
@@ -126,10 +128,8 @@ struct snag_term {
     bool typing_active;
     bool output_seen;
     bool output_ended_lf;
-    bool output_detour;
     bool color;
     bool chat;
-    bool redraw_after_output;
     bool rendered_end_at_margin;
     bool rendered_cursor_pending_wrap;
     bool searching;
@@ -174,7 +174,6 @@ void snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms);
 void snag_term_set_color(struct snag_term *term, bool enabled);
 uint32_t snag_term_typing_pause_remaining(const struct snag_term *term,
                                          uint64_t now_ms);
-bool snag_term_typing_active(const struct snag_term *term);
 int snag_term_note_output(struct snag_term *term, const char *text, size_t len,
                          const char *style);
 unsigned int snag_term_columns(const struct snag_term *term);

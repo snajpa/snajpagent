@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 import os
 import pty
+import re
 import select
 import sys
 import time
@@ -17,7 +18,10 @@ if pid == 0:
 buf = bytearray()
 def read_until(needle: bytes, timeout: float = 5.0) -> None:
     end = time.monotonic() + timeout
-    while needle not in buf:
+    # Screen correctness is asserted by tmux; allow only the live gap detour.
+    gap = rb"(?:(?:\r{1,2}\n){1,2}(?:[^\n]*?\r\x1b\[2K(?:\x1b\[1A\r\x1b\[2K)*)?\r\x1b\[[12]A(?:\x1b\[\d+C)?)*"
+    pattern = re.compile(gap.join(re.escape(bytes([c])) for c in needle))
+    while pattern.search(buf) is None:
         remaining = end - time.monotonic()
         if remaining <= 0:
             raise SystemExit(f"timeout waiting for {needle!r}; got {bytes(buf)!r}")
@@ -38,23 +42,25 @@ read_until(b"pong")
 # terminal event is the unambiguous point at which /exit is an idle command.
 read_until(b"turn_completed synced")
 terminal_end = buf.find(b"turn_completed synced") + len(b"turn_completed synced")
+# The always-visible composer changes active/idle in place. Its leftmost
+# unchanged cells and final space need not be emitted again.
+def idle_at(start):
+    return re.search(rb"(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba", buf[start:])
+
 end = time.monotonic() + 5.0
-while accounted_prompt not in buf[terminal_end:]:
+while not idle_at(terminal_end):
     remaining = end - time.monotonic()
     if remaining <= 0:
         raise SystemExit(f"no idle composer: {bytes(buf)!r}")
     ready, _, _ = select.select([fd], [], [], remaining)
     if ready:
-        chunk = os.read(fd, 65536)
-        if not chunk:
-            raise SystemExit(f"unexpected EOF: {bytes(buf)!r}")
-        buf.extend(chunk)
+        buf.extend(os.read(fd, 65536))
 os.write(fd, b"slow\r")
 read_until(b"working slowly")
 os.write(fd, b"\x03")
 read_until(b"turn interrupted")
 interrupt_end = buf.find(b"turn interrupted") + len(b"turn interrupted")
-while accounted_prompt not in buf[interrupt_end:]:
+while not idle_at(interrupt_end):
     ready, _, _ = select.select([fd], [], [], 5.0)
     if not ready:
         raise SystemExit(f"no post-interrupt prompt: {bytes(buf)!r}")

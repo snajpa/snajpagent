@@ -456,13 +456,13 @@ test_retained_prompt(void)
     assert(snag_term_note_output(&term, "public", 6u, "") == 0);
     assert(snag_term_output_end(&term) == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
-    assert(!term.prompt_visible && term.painted_prompt.len == 0u);
+    assert(term.prompt_visible && term.painted_prompt.len != 0u);
     enum snag_term_action action;
     char *text;
     int input[2], stdin_fd = dup(STDIN_FILENO);
     assert(stdin_fd >= 0 && pipe(input) == 0 && dup2(input[0], STDIN_FILENO) >= 0);
     assert(snag_term_poll(&term, 20, -1, &action, &text) == 0);
-    assert(!term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) == 0u);
+    assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) == 0u);
     term.input[0] = 'x';
     term.input_len = 1u;
     assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
@@ -471,9 +471,9 @@ test_retained_prompt(void)
     assert(snag_term_note_output(&term, "more", 4u, "") == 0);
     assert(snag_term_output_end(&term) == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
-    term.last_output_ms -= 200u;
-    assert(snag_term_poll(&term, 20, -1, &action, &text) == 0);
-    assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(term.prompt_visible);
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+    assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
     assert(snag_term_set_prompt_template(&term, false, "cursor> ", frames, 8u, 0u) == 0);
     assert(snag_term_restore_draft(&term, "unchanged") == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
@@ -842,10 +842,11 @@ capture_wrapped(const char *first, const char *second, unsigned int columns,
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, first, strlen(first), delivered) == 0);
     used = drain_available(capture.fd, out, out_size, used);
-    assert(strcmp(out, first_output) == 0);
+    assert(!markdown || out[0] == '\n');
+    assert(strcmp(out + (markdown ? 1u : 0u), first_output) == 0);
     assert(snag_render_public(&render, second, strlen(second), delivered) == 0);
     used = drain_available(capture.fd, out, out_size, used);
-    assert(strcmp(out, second_output) == 0);
+    assert(strcmp(out + (markdown ? 1u : 0u), second_output) == 0);
     assert(snag_render_public_end(&render) == 0);
     used = capture_close(&capture, out, out_size, used);
     snag_term_close(&term);
@@ -994,7 +995,7 @@ test_model_prompt_boundaries(void)
         const char *rendered;
         bool markdown;
     } cases[] = {
-        { "plain prose", "• plain prose", true },
+        { "plain prose", "\n• plain prose", true },
         { "# heading", "heading", true },
         { "- unordered", "• unordered", true },
         { "7. ordered", "7. ordered", true },
@@ -1002,7 +1003,7 @@ test_model_prompt_boundaries(void)
         { "```c\nint x;\n```", "┌─ c\n│ int x;\n└─", true },
         { "| A |\n| --- |\n| B |",
           "┌───┐\n│ A │\n├───┤\n│ B │\n└───┘", true },
-        { "**inline**", "• inline", true },
+        { "**inline**", "\n• inline", true },
         { "- literal", "- literal", false },
     };
     static const char *const suffixes[] = { "", "\n", "\n\n" };
@@ -1021,6 +1022,129 @@ test_model_prompt_boundaries(void)
             assert(strcmp(output, expected) == 0);
         }
     }
+}
+
+static void
+test_paragraph_spacing(void)
+{
+    static const struct { const char *source, *expected; } cases[] = {
+        { "one\n\n\n\nsecond", "\n• one\n\n• second\n\n" },
+        { "one\ncontinued", "\n• one\ncontinued\n\n" },
+        { "# heading\none\n# next", "heading\n\n• one\n\nnext" },
+        { "- first\n- second\none\n- next",
+          "• first\n• second\n\n• one\n\n• next" },
+        { "1. first\none\n2. next", "1. first\n\n• one\n\n2. next" },
+        { "> first\n> second\none\n> next",
+          "│ first\n│ second\n\n• one\n\n│ next" },
+        { "one\n```c\na\n\n\nb\n```\nsecond",
+          "\n• one\n\n┌─ c\n│ a\n│ \n│ \n│ b\n└─\n\n• second\n\n" },
+        { "one\n| A |\n| --- |\n| B |\nsecond",
+          "\n• one\n\n┌───┐\n│ A │\n├───┤\n│ B │\n└───┘\n\n• second\n\n" },
+        { "one\n \n  \nsecond", "\n• one\n\n• second\n\n" },
+    };
+    char output[4096];
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i)
+        for (unsigned int split = 0u; split < 2u; ++split) {
+            struct snag_buf delivered;
+            snag_buf_init(&delivered, 4096u);
+            assert(capture_markdown(cases[i].source, true, split != 0u,
+                                   SNAG_COLOR_NEVER, output, sizeof(output),
+                                   &delivered) > 0u);
+            assert(strcmp(output, cases[i].expected) == 0);
+            assert(delivered.len == strlen(cases[i].source));
+            assert(memcmp(delivered.data, cases[i].source, delivered.len) == 0);
+            snag_buf_free(&delivered);
+        }
+}
+
+static void
+test_interposed_paragraph_gap(void)
+{
+    char output[2048];
+    struct snag_render render;
+    struct output_capture capture = capture_open(true, true);
+    snag_render_init(&render, 0u);
+    render.stdout_terminal = render.stderr_terminal = true;
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
+    assert(snag_render_public(&render, "first", 5u, NULL) == 0);
+    assert(snag_render_host(&render, "intervening") == 0);
+    assert(snag_render_public(&render, "second", 6u, NULL) == 0);
+    assert(snag_render_input_submitted(&render, "user › ", "steer") == 0);
+    assert(snag_render_public(&render, "third", 5u, NULL) == 0);
+    assert(snag_render_public_end(&render) == 0);
+    snag_render_free(&render);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "\n• first\n\n") == output);
+    assert(strstr(output, "intervening\n\nsecond\n\nuser › steer\n\nthird\n\n"));
+    assert(!strstr(output, "\n\n\n"));
+}
+
+static void
+test_live_paragraph_gap(void)
+{
+    const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
+    const char *parts[] = {"123456789012345678", "🌙", "́", " fragment", "\n", "\n", "\n", "next"};
+    const unsigned int rows[] = {2u, 2u, 2u, 2u, 1u, 0u, 0u, 2u};
+    char output[8192];
+    struct snag_render render;
+    struct snag_term term;
+    struct snag_buf delivered;
+    struct output_capture capture = capture_open(true, true);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+    snag_term_init(&term);
+    term.opened = term.capable = term.active = true;
+    term.columns = 20u;
+    snag_render_init(&render, 0u);
+    render.stdout_terminal = render.stderr_terminal = true;
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    snag_render_attach_term(&render, &term);
+    assert(snag_term_set_prompt_template(&term, true, "input › ", frames, 8u, 0u) == 0);
+    snag_buf_init(&delivered, 1024u);
+    assert(snag_render_input_submitted(&render, "user › ", "question") == 0);
+    assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
+    for (size_t i = 0u; i < sizeof(parts) / sizeof(parts[0]); ++i) {
+        assert(snag_render_public(&render, parts[i], strlen(parts[i]), &delivered) == 0);
+        assert(term.output_detour == rows[i]);
+        assert(term.output_newlines + term.output_detour >= 2u);
+        assert(render.public_item_open && term.prompt_visible);
+        (void)drain_available(capture.fd, output, sizeof(output), 0u);
+        if (i == 0u) {
+            assert(term.output_columns == 20u); /* Exact right margin. */
+            assert(snag_term_set_prompt_template(&term, true, "input › ", frames, 8u, 0u) == 0);
+            assert(term.output_detour == 2u && term.prompt_visible);
+            (void)drain_available(capture.fd, output, sizeof(output), 0u);
+            assert(snag_term_set_prompt_template(&term, true, "input › ", frames, 8u, 0u) == 0);
+            assert(drain_available(capture.fd, output, sizeof(output), 0u) == 0u);
+        }
+    }
+    assert(snag_render_public_abort(&render) == 0);
+    assert(term.output_detour == 0u && term.output_newlines == 2u);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
+    assert(snag_render_before_prompt(&render) == 0);
+    assert(snag_render_before_prompt(&render) == 0);
+    assert(drain_available(capture.fd, output, sizeof(output), 0u) == 0u);
+    assert(snag_buf_terminate(&delivered) == 0);
+    assert(strcmp((char *)delivered.data, "123456789012345678🌙́ fragment\n\n\nnext") == 0);
+    assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
+    assert(snag_render_public(&render, "before edit", 11u, NULL) == 0);
+    assert(snag_term_set_prompt_template(&term, true, "input › ", frames, 8u, 0u) == 0);
+    term.typing_active = true;
+    assert(term.output_detour == 2u);
+    assert(snag_term_restore_draft(&term, "unsent draft") == 0);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
+    assert(snag_render_public(&render, "after edit", 10u, NULL) == 0);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
+    assert(strstr(output, "\033[2K"));
+    assert(!strstr(output, "\n\nafter edit"));
+    assert(term.prompt_visible && term.draft.len == strlen("unsent draft"));
+    assert(term.output_detour == 2u);
+    assert(snag_render_public_end(&render) == 0);
+    snag_buf_free(&delivered);
+    snag_render_free(&render);
+    snag_term_close(&term);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
 }
 
 static void
@@ -1268,7 +1392,7 @@ test_markdown_streaming(void)
     used = drain_available(fds[0], output, sizeof(output), used);
     assert(strcmp(output,
                   "Live café [docs] <https://example.test> and code\n\n"
-                  "• aborted\n\n• literal") == 0);
+                  "• aborted\n\n• literal\n\n") == 0);
     assert(dup2(saved, STDOUT_FILENO) >= 0);
     close(saved);
     while (read(fds[0], output, sizeof(output)) > 0)
@@ -1293,7 +1417,7 @@ test_markdown_tables(void)
         "│ alpha          │             ready             │     7 │\n"
         "│ escaped | pipe │ [docs] <https://example.test> │    42 │\n"
         "└────────────────┴───────────────────────────────┴───────┘\n"
-        "• after table\n";
+        "\n• after table\n\n";
     static const char narrow[] =
         "┌─ table\n"
         "├─ row\n"
@@ -1305,7 +1429,7 @@ test_markdown_tables(void)
         "│ State: [docs] <https://example.test>\n"
         "│ Count: 42\n"
         "└─\n"
-        "• after table\n";
+        "\n• after table\n\n";
     static const char malformed[] =
         "| Name | State |\n"
         "| -- | nope |\n"
@@ -1350,7 +1474,7 @@ test_markdown_tables(void)
 
     assert(capture_markdown(malformed, true, true, SNAG_COLOR_NEVER,
                             output, sizeof(output), NULL) > 0u);
-    assert(strcmp(output, "• | Name | State |\n| -- | nope |\nafter\n") == 0);
+    assert(strcmp(output, "\n• | Name | State |\n| -- | nope |\nafter\n\n") == 0);
     assert(capture_markdown(code_pipe, true, true, SNAG_COLOR_NEVER,
                             output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, code_pipe_rendered) == 0);
@@ -1964,7 +2088,7 @@ main(void)
         "│ old new\n"
         "┌─ c\n│ int main(void) { return 0; }\n└─\n"
         "┌─ text\n│ tilde fence\n└─\n"
-        "• First prose line\ncontinued prose\n\n• second paragraph\n";
+        "\n• First prose line\ncontinued prose\n\n• second paragraph\n\n";
     char output[4096];
     struct snag_render render;
     struct snag_buf delivered;
@@ -1995,12 +2119,15 @@ main(void)
 
     test_input_model_boundaries();
     test_model_prompt_boundaries();
+    test_paragraph_spacing();
+    test_live_paragraph_gap();
+    test_interposed_paragraph_gap();
 
     snag_buf_init(&delivered, 1024u);
     assert(capture_wrapped("alpha beta gamm", "a delta", 20u, true,
                            "• alpha beta gamm", "• alpha beta gamma\n  delta",
                            output, sizeof(output), &delivered) > 0u);
-    assert(strcmp(output, "• alpha beta gamma\n  delta") == 0);
+    assert(strcmp(output, "\n• alpha beta gamma\n  delta\n\n") == 0);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data,
                   "alpha beta gamma delta") == 0);
@@ -2033,8 +2160,8 @@ main(void)
     assert(strstr(output, "\033[0;4;34mhttps://example.test") != NULL);
     assert(strstr(output, "\033[0;34;2mold") != NULL);
     assert(capture_markdown("**", true, true, SNAG_COLOR_NEVER,
-                            output, sizeof(output), NULL) == strlen("• **"));
-    assert(strcmp(output, "• **") == 0);
+                            output, sizeof(output), NULL) == strlen("\n• **\n\n"));
+    assert(strcmp(output, "\n• **\n\n") == 0);
 
     assert(capture_static_markdown(0u, output, sizeof(output)) > 0u);
     assert(count_text(output, "── history replayed ──") == 2u);

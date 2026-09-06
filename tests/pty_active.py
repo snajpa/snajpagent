@@ -23,6 +23,7 @@ BINARY = os.path.abspath(sys.argv[1])
 WORKSPACE = os.path.abspath(sys.argv[2])
 DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
+LIVE_GAP = rb"(?:\r{1,2}\n){1,2}(?:[^\n]*?\r\x1b\[2K(?:\x1b\[1A\r\x1b\[2K)*)?\r\x1b\[[12]A(?:\x1b\[\d+C)?"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
 DEFAULT_IDLE_PROMPT = f" openai/{DEFAULT_MODEL}/medium   0% › ".encode()
@@ -74,16 +75,31 @@ class Child:
 
     def wait(self, needle, start=0, timeout=8.0):
         end = time.monotonic() + timeout
-        while needle not in self.buf[start:]:
+        # Active/idle changes repaint only the changed label span. Full cell
+        # layout and unchanged margins are covered by the renderer/tmux tests.
+        if needle in (DEFAULT_IDLE_PROMPT, DEFAULT_ACCOUNTED_IDLE_PROMPT):
+            return self.wait_idle_prompt(start, timeout)
+        # Live prose can park/resume between fragments; match that exact
+        # reversible detour, not arbitrary escapes, and return a raw offset.
+        gap = b"(?:" + LIVE_GAP + b")*"
+        pattern = re.compile(gap.join(re.escape(bytes([c])) for c in needle))
+        while True:
+            match = pattern.search(self.buf, start)
+            if match:
+                return match.end()
             remaining = end - time.monotonic()
             if remaining <= 0 or not self.read_once(remaining):
                 raise AssertionError(
                     f"timeout waiting for {needle!r}; got {bytes(self.buf)!r}"
                 )
-        return self.buf.find(needle, start) + len(needle)
 
     def wait_idle_prompt(self, start=0, timeout=8.0):
-        pattern = re.compile(rb"(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba")
+        # At a narrow width only the idle marker's row may change. Require
+        # either the full prompt or a cursor-positioned idle-marker repaint.
+        pattern = re.compile(
+            re.escape(DEFAULT_IDLE_PROMPT.rstrip()) + b"|" +
+            re.escape(DEFAULT_ACCOUNTED_IDLE_PROMPT.rstrip()) +
+            rb"|(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba|\r(?:\x1b\[\d+C)?\xe2\x80\xba(?=\r)")
         end = time.monotonic() + timeout
         while True:
             match = pattern.search(self.buf, start)
@@ -528,10 +544,10 @@ def test_prompt_clock_lifetime():
         active_clock = latest_clock()
         assert active_clock != replacement, bytes(child.buf[start:])
         child.send(b"preserved-draft")
-        child.wait(b"status-second-fragment", start=active_end)
-        settled = child.wait(b"@" + active_clock + "   ?% › ".encode(),
-                             start=active_end)
-        child.wait(b"preserved-draft", start=settled)
+        second = child.wait(b"status-second-fragment", start=active_end)
+        child.wait(b"preserved-draft", start=second)
+        # Only the spinner/marker changes; clock and draft stay painted.
+        settled = child.wait(" ›".encode(), start=second)
         assert set(re.findall(pattern, child.buf[active_end:])) == {active_clock}
         child.send(b"\x03")
         child.wait(b"^C\r\n", start=settled)
@@ -714,7 +730,7 @@ def test_split_utf8_steering():
     assert interrupted["data"]["partial_public"] == []
 
 
-def test_typing_pause_and_stream_snapshots():
+def test_typing_pause_and_transient_composer():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
         "typing-pause.ini"
     config.write_text("[provider openai]\n[ui]\ntyping_pause_ms = 300\n", encoding="utf-8")
@@ -3834,8 +3850,9 @@ def test_network_view_routing_and_atomic_catchup():
             wait_turn_completed(child, session_id, f"{trigger}_{item}")
         child.wait(network_idle, start=chat_start)
         child.drain()
-        assert first not in child.buf[chat_start:]
-        assert second not in child.buf[chat_start:]
+        hidden = re.sub(LIVE_GAP, b"", child.buf[chat_start:])
+        assert first not in hidden
+        assert second not in hidden
 
         switch_start = len(child.buf)
         child.send(switch)
@@ -3844,7 +3861,7 @@ def test_network_view_routing_and_atomic_catchup():
         transition = bytes(child.buf[boundary_end:prompt_end])
         prompt_at = transition.find(rollout_idle)
         assert prompt_at >= 0, transition
-        catchup = transition[:prompt_at]
+        catchup = re.sub(LIVE_GAP, b"", transition[:prompt_at])
         assert network_idle not in catchup, catchup
         assert rollout_idle not in catchup, catchup
         assert catchup.count(first) == 1, catchup
@@ -4152,7 +4169,7 @@ def test_network_chat_and_managed_mention():
         child.wait(network_idle, start=backlog_end)
         child.send(b"\t")
         tail_end = child.wait(b"model-output-three", start=chat_end)
-        visible_stream = bytes(child.buf[stream_start:tail_end])
+        visible_stream = re.sub(LIVE_GAP, b"", child.buf[stream_start:tail_end])
         for fragment in (b"model-output-one", b"model-output-two",
                          b"model-output-three"):
             assert visible_stream.count(fragment) == 1, visible_stream
@@ -4714,7 +4731,7 @@ def test_editor_during_blocked_engine(key=b"\r"):
             tsan = "libtsan" in Path(f"/proc/{child.pid}/maps").read_text()
             assert len(list(tasks.iterdir())) == 2 + int(tsan)
         child.drain(0.4)
-        assert b"engine-block-start \n" in child.buf.replace(b"\r", b"")
+        child.wait(b"engine-block-start \r\r\n\r\r\n")
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1
         child.send(b"/verbose 2" + key)
         after = child.wait(b"verbosity: 2 (previews)", start=after, timeout=0.25)
@@ -4818,7 +4835,7 @@ if __name__ == "__main__":
     test_public_index_gap()
     test_public_index_diagnostic()
     test_split_utf8_steering()
-    test_typing_pause_and_stream_snapshots()
+    test_typing_pause_and_transient_composer()
     test_armed_fifo()
     test_queue_prompt_counts()
     test_read_only_queries()

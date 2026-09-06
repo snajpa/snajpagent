@@ -95,6 +95,7 @@ struct snag_render {
     bool public_item_bytes;
     bool public_item_ended_lf;
     unsigned int public_trailing_newlines;
+    unsigned int trailing_newlines;
     unsigned int previous_public_newlines;
     int previous_public_fd;
     bool previous_public_item;

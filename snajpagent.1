@@ -745,8 +745,15 @@ strikethrough, and links are supported.  Pipe tables align as a grid when they
 fit and become labeled rows on narrow terminals.  Redirected and durable text
 retains the model's exact bytes.
 .PP
-Top-level prose paragraphs are bulleted.  Prompts and model blocks have one
-empty row between them; generated prose wraps align below the paragraph text.
+Top-level prose paragraphs are bulleted, with one empty row above and below,
+even while a paragraph is streaming.  Adjacent paragraphs share that row;
+headings, lists, code, tables and prompts use the same paragraph boundary.
+Generated prose wraps align below the paragraph text.  Code-block whitespace
+and the provider's original text are unchanged.  The live prompt is displayed
+immediately on cursor-capable terminals, without waiting for a quiet period.
+Before new output it is erased
+and then redrawn with the unsent draft intact; work-in-progress prompts are not
+left in scrollback.  Submitted input remains in the transcript.
 Timestamped IRC chat messages do not receive the synthetic paragraph bullet;
 genuine Markdown list items retain their structural bullets.
 .PP
