@@ -266,6 +266,9 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     struct snag_irc_event accepted = *event;
     accepted.input = !snag_irc_local_identity(app->irc, event, true) &&
         event->kind != SNAG_IRC_HISTORY_READY && (event->stream[0] || event->historical);
+    accepted.urgent = !event->historical &&
+        (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
+        snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     if (snag_app_commit_event(app, "irc_event", snag_irc_event_data(&accepted),
                              error, sizeof(error)) < 0)
         return -1;

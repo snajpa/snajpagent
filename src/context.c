@@ -22,6 +22,8 @@ struct context_builder {
     json_t *tools;
     json_t *request_input;
     json_t *deferred_steering;
+    json_t *deferred_irc;
+    uint64_t deferred_irc_seq;
     size_t steering_seen;
     char active_turn_id[SNAG_ID_HEX_LEN + 1u];
     char target_turn_id[SNAG_ID_HEX_LEN + 1u];
@@ -673,11 +675,49 @@ steering_matches_snapshot(struct context_builder *builder, const char *id,
 }
 
 static int
+append_room_event(struct context_builder *builder, const json_t *data)
+{
+    struct snag_irc_event event;
+    struct snag_buf text;
+    if (snag_irc_event_read(data, &event) < 0) return -1;
+    snag_buf_init(&text, SNAG_IRC_TEXT_MAX + 2048u);
+    int rc = snag_irc_event_projection(&text, &event);
+    if (rc == 0 && snag_buf_terminate(&text) == 0)
+        rc = append_message(builder, "user", (const char *)text.data);
+    else rc = -1;
+    snag_buf_free(&text);
+    return rc;
+}
+
+static int
 context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
               char *error, size_t error_size)
 {
     struct context_builder *builder = opaque;
 
+    bool summarized = builder->session && seq <= builder->session->compact_seq;
+    if (strcmp(type, "irc_event") == 0) {
+        struct snag_irc_event event;
+        if (snag_irc_event_read(data, &event) < 0) return -1;
+        if (!event.input) return 0;
+        if (builder->active_turn && !event.urgent && !event.historical) {
+            if (!builder->deferred_irc) builder->deferred_irc = json_array();
+            if (!builder->deferred_irc || json_array_append(builder->deferred_irc, data) < 0)
+                return -1;
+            if (!builder->deferred_irc_seq) builder->deferred_irc_seq = seq;
+            return 0;
+        }
+        return summarized ? 0 : append_room_event(builder, data);
+    }
+    if (!strcmp(type, "turn_completed") || !strcmp(type, "turn_completed_silent") ||
+        !strcmp(type, "turn_failed") || !strcmp(type, "turn_interrupted")) {
+        for (size_t i = 0u; !summarized && i < json_array_size(builder->deferred_irc); ++i)
+            if (append_room_event(builder, json_array_get(builder->deferred_irc, i)) < 0)
+                return -1;
+        json_decref(builder->deferred_irc);
+        builder->deferred_irc = NULL;
+        builder->deferred_irc_seq = 0u;
+    }
     if (builder->session && seq <= builder->session->compact_seq) {
         /* A compact source may end between complete groups inside an older
          * turn. Replay its state, but never repeat the summarized messages. */
@@ -718,22 +758,6 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     }
     if (strcmp(type, "compaction_completed") == 0)
         return 0;
-    if (strcmp(type, "irc_event") == 0) {
-        struct snag_irc_event event;
-        struct snag_buf text;
-        if (snag_irc_event_read(data, &event) < 0)
-            return -1;
-        if (!event.input)
-            return 0;
-        snag_buf_init(&text, SNAG_IRC_TEXT_MAX + 2048u);
-        int rc = snag_irc_event_projection(&text, &event);
-        if (rc == 0 && snag_buf_terminate(&text) == 0)
-            rc = append_message(builder, "user", (const char *)text.data);
-        else
-            rc = -1;
-        snag_buf_free(&text);
-        return rc;
-    }
     if (strcmp(type, "irc_snapshot") == 0) {
         const char *text = snag_json_string(data, "text");
         if (!text) {
@@ -1593,6 +1617,7 @@ out:
         json_decref(builder.request_input);
     if (builder.deferred_steering)
         json_decref(builder.deferred_steering);
+    json_decref(builder.deferred_irc);
     return rc;
 }
 
@@ -1754,6 +1779,8 @@ snag_context_build(struct snag_session *session, const char *model,
         session->goal_status == SNAG_GOAL_ACTIVE,
         !snag_goal_unfinished(session->goal_status), builder.networked,
         config, session->active_turn_provider, session->active_read_only);
+    if (builder.deferred_irc_seq && projection->irc_seq >= builder.deferred_irc_seq)
+        projection->irc_seq = builder.deferred_irc_seq - 1u;
     projection->model_input = model_input_object(&builder);
     projection->create_request = create_request_object(&builder);
     projection->count_request = count_request_object(projection->create_request);
@@ -1801,5 +1828,6 @@ out:
         json_decref(builder.request_input);
     if (builder.deferred_steering)
         json_decref(builder.deferred_steering);
+    json_decref(builder.deferred_irc);
     return rc;
 }

@@ -47,6 +47,7 @@ struct irc_owner {
     snag_wake_fd wake[2];
     struct irc_request *request; /* Protected by the mailbox mutex. */
     size_t queued;
+    size_t new_history;
     bool started, stopping, finished;
     bool hosting;
     struct snag_irc_event ack; /* Mailbox-protected latest durable position. */
@@ -329,10 +330,16 @@ drain(struct snag_irc *irc, int timeout_ms)
         }
         pthread_mutex_unlock(&irc->mutex);
         if (record->kind == IRC_EVENT) {
+            if (record->event.kind == SNAG_IRC_HISTORY_READY) {
+                if (!owner->new_history && strncmp(record->event.text, "history gap", 11u))
+                    record->event.text[0] = '\0';
+                owner->new_history = 0u;
+            }
             if (!snag_irc_core_received(irc->history, &record->event)) {
                 if (irc->event_fn)
                     rc = irc->event_fn(irc->opaque, &record->event);
                 if (rc == 0) {
+                    if (record->event.historical) ++owner->new_history;
                     snag_irc_core_remember(irc->history, &record->event);
                     rc = snag_irc_core_accept(irc->history, &record->event);
                 }

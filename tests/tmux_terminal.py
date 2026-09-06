@@ -3207,7 +3207,13 @@ def run_incremental_history_case(binary, root):
 
     try:
         host = launch("host")
+        host.submit("history predating the first client")
+        wait_record(host, "history predating the first client")
+        wait_irc_idle([host])
         client = launch("client")
+        initial = wait_record(client, "history predating the first client")
+        assert len(initial) == 1 and initial[0]["data"]["historical"]
+        observed("history predating the first client")
         wait_irc_idle([host, client])
         host.submit("one original conversation marker")
         wait_record(client, "one original conversation marker")
@@ -3354,6 +3360,11 @@ def run_interrupted_history_case(binary, root):
                 link.sendall((f"@saj-id={stream}:{seq};saj-kind=message;saj-op=0{batch};time=2026-09-01T12:00:00.000Z "
                               f":peer!u@fake PRIVMSG #lab :{text}\r\n").encode())
             link.sendall(b":fake BATCH -unrelated\r\n:fake BATCH -history\r\n")
+            # Overlapping duplicate-only history must not append another UI banner.
+            link.sendall((f":fake BATCH +duplicate chathistory #lab {stream} 0\r\n"
+                f"@saj-id={stream}:4;saj-kind=message;saj-op=0;batch=duplicate;time=2026-09-01T12:00:00.000Z "
+                ":peer!u@fake PRIVMSG #lab :@agent historical mention\r\n"
+                ":fake BATCH -duplicate\r\n").encode())
             finished.wait(15)
         except Exception as exc:
             errors.append(repr(exc))
@@ -3388,7 +3399,9 @@ def run_interrupted_history_case(binary, root):
             time.sleep(0.02)
         assert not event_list(read_events(terminal.dotdir)[1], "steering_added")
         assert all(sum("partial history 2" in str(i.get('content', '')) for i in r.get('input', [])) <= 1 for r in requests)
-        wait_irc_idle([terminal]); terminal.exit()
+        wait_irc_idle([terminal])
+        assert terminal.capture().count("── history replayed ──") == 1
+        terminal.exit()
         print("tmux_terminal interrupted history/cursor recovery: ok", flush=True)
     finally:
         finished.set()
