@@ -2656,7 +2656,7 @@ snag_term_close(struct snag_term *term)
     }
     if (term->controls_installed)
         snag_term_controls_restore(&term->host);
-    snag_term_output_close(&term->host);
+    snag_term_host_close(&term->host);
     history_clear(term);
     free(term->search_original);
     free(term->nicks);

@@ -100,6 +100,7 @@ out:
         (void)snag_term_input_restore(&host, true);
         (void)fprintf(stderr, "\n");
     }
+    snag_term_host_close(&host);
     if (rc < 0) {
         volatile char *p = out;
         for (size_t i = 0; i < size; ++i)

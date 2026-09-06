@@ -682,7 +682,12 @@ test_hidden_console(void)
         assert(n > 0 && (size_t)n <= sizeof(expected) - 1u - used);
         assert(!memcmp(bytes, expected + used, (size_t)n));
         used += (size_t)n;
+        if (host.line_input) {
+            DWORD flags;
+            assert(GetHandleInformation(host.line_input, &flags) && !(flags & HANDLE_FLAG_INHERIT));
+        }
     }
+    assert(!host.line_input);
     assert(snag_term_input_restore(&host, true) == 0);
     assert(GetConsoleMode(input, &mode) && mode == host.input_mode);
     /* A following prompt must not receive a leftover CRLF as an empty line. */
@@ -734,7 +739,7 @@ test_console_output(void)
     assert(sink >= 0);
     assert(snag_term_output_write(&host, sink, "ok", 2u, false, cancel_console_output, &calls) == 0);
     assert(close(sink) == 0);
-    snag_term_output_close(&host);
+    snag_term_host_close(&host);
     assert(!host.writer);
 
     HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
@@ -888,7 +893,7 @@ test_input_mode(void)
 #else
         assert(fcntl(copy, F_GETFD) & FD_CLOEXEC);
 #endif
-        snag_term_output_close(&output_host);
+        snag_term_host_close(&output_host);
 #ifdef _WIN32
         assert(GetConsoleMode((HANDLE)_get_osfhandle(2), &changed_mode) && changed_mode == original_mode);
 #endif

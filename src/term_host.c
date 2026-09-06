@@ -40,7 +40,7 @@ cancel_console_read(void)
 }
 
 static BOOL
-read_console(WCHAR *wide, DWORD size, DWORD *got)
+read_console(HANDLE input, WCHAR *wide, DWORD size, DWORD *got)
 {
     AcquireSRWLockExclusive(&console_read_lock);
     if (console_reader) {
@@ -62,7 +62,7 @@ read_console(WCHAR *wide, DWORD size, DWORD *got)
     BOOL ok = FALSE;
     DWORD error = ERROR_OPERATION_ABORTED;
     if (!atomic_load(&console_read_cancelled)) {
-        ok = ReadConsoleW((HANDLE)_get_osfhandle(0), wide, size, got, NULL);
+        ok = ReadConsoleW(input, wide, size, got, NULL);
         error = GetLastError();
     }
     AcquireSRWLockExclusive(&console_read_lock);
@@ -283,9 +283,13 @@ console_writer(void *opaque)
 }
 
 void
-snag_term_output_close(struct snag_term_host *host)
+snag_term_host_close(struct snag_term_host *host)
 {
     struct snag_console_writer *writer = host->writer;
+    if (host->line_input) {
+        (void)CloseHandle(host->line_input);
+        host->line_input = NULL;
+    }
     /* stdout/stderr can share a console buffer; unwind in reverse order. */
     for (size_t i = 2u; i-- > 0u;)
         if (host->output_console[i]) {
@@ -329,7 +333,7 @@ snag_term_output_write(struct snag_term_host *host, int fd,
         if (host->writer->work && host->writer->done)
             host->writer->thread = (HANDLE)_beginthreadex(NULL, 0, console_writer, host->writer, 0, NULL);
         if (!host->writer->thread) {
-            snag_term_output_close(host);
+            snag_term_host_close(host);
             errno = EIO;
             return -1;
         }
@@ -433,6 +437,10 @@ snag_term_controls_restore(struct snag_term_host *host)
 static void
 reset_input(struct snag_term_host *host)
 {
+    if (host->line_input) {
+        (void)CloseHandle(host->line_input);
+        host->line_input = NULL;
+    }
     atomic_store(&console_read_cancelled, false);
     host->input_high = 0;
     host->input_cooked_pending = false;
@@ -773,14 +781,37 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
         capacity = 256u;
     if (prefix)
         wide[0] = host->input_high;
-    if (!read_console(wide + prefix, (DWORD)capacity, &got)) {
-        errno = GetLastError() == ERROR_OPERATION_ABORTED ? EINTR : EIO;
+    if (!host->line_input) {
+        host->line_input = CreateFileW(L"CONIN$", GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+        if (host->line_input == INVALID_HANDLE_VALUE) {
+            host->line_input = NULL;
+            errno = EIO;
+            return -1;
+        }
+    }
+    if (!read_console(host->line_input, wide + prefix, (DWORD)capacity, &got)) {
+        DWORD error = GetLastError();
+        (void)CloseHandle(host->line_input);
+        host->line_input = NULL;
+        host->input_cooked_pending = false;
+        host->input_high = 0;
+        errno = error == ERROR_OPERATION_ABORTED ? EINTR : EIO;
         return -1;
     }
-    if (!got)
+    if (!got) {
+        (void)CloseHandle(host->line_input);
+        host->line_input = NULL;
+        host->input_cooked_pending = false;
+        host->input_high = 0;
         return 0;
+    }
     /* ReadConsoleW owns a completed line even after the record queue empties. */
     host->input_cooked_pending = wide[got + prefix - 1u] != L'\n';
+    if (!host->input_cooked_pending) {
+        (void)CloseHandle(host->line_input);
+        host->line_input = NULL;
+    }
     size_t count = got + prefix;
     host->input_high = 0;
     if (wide[count - 1u] >= 0xd800u && wide[count - 1u] <= 0xdbffu)
@@ -917,7 +948,7 @@ snag_term_output_write(struct snag_term_host *host, int fd,
 }
 
 void
-snag_term_output_close(struct snag_term_host *host)
+snag_term_host_close(struct snag_term_host *host)
 {
     (void)host;
 }

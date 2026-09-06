@@ -25,6 +25,7 @@ struct snag_term_host {
     bool raw_input;
     unsigned short input_high;
     bool input_cooked_pending;
+    HANDLE line_input;
     INPUT_RECORD input_events[16];
     unsigned int input_count, input_next;
     char input_key[32];
@@ -85,7 +86,7 @@ int snag_term_output_open(struct snag_term_host *host, int fd);
 int snag_term_output_write(struct snag_term_host *host, int fd,
                            const void *text, size_t len, bool input,
                            int (*checkpoint)(void *), void *opaque);
-void snag_term_output_close(struct snag_term_host *host);
+void snag_term_host_close(struct snag_term_host *host);
 bool snag_term_can_suspend(void);
 int snag_term_suspend(void);
 
