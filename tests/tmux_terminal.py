@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -564,6 +565,12 @@ class FakeResponses:
 
 
 class TmuxTerminal:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
     def __init__(self, root, binary, workspace, dotdir, config, cols, rows,
                  args=(), environment=None):
         self.root = root
@@ -735,10 +742,18 @@ class TmuxTerminal:
                 pass
 
 
-def close_fixture_terminal(terminal):
-    terminal.close()
-    if os.path.lexists(terminal.socket):
-        raise AssertionError(f"tmux socket survived cleanup: {terminal.socket}")
+@contextmanager
+def fixture_terminal(terminal, screen_path):
+    try:
+        yield terminal
+    finally:
+        try:
+            screen = terminal.last_screen or terminal.capture()
+            screen_path.write_text(screen, encoding="utf-8")
+        finally:
+            terminal.close()
+            if os.path.lexists(terminal.socket):
+                raise AssertionError(f"tmux socket survived cleanup: {terminal.socket}")
 
 
 def write_config(path, read_agents, pause_ms=300, markdown=None):
@@ -806,10 +821,9 @@ def run_status_case(binary, root):
     config = case / "config.ini"
     write_config(config, False)
     dotdir = case / "state"
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, 40, 14
-    )
-    try:
+    ), case / "screen.txt") as terminal:
         idle = terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         assert re.search(r"(?m)^   [0-9]{2}:[0-9]{2}:[0-9]{2}" +
                          re.escape(DEFAULT_IDLE_PROMPT), idle), idle
@@ -835,12 +849,6 @@ def run_status_case(binary, root):
         if len(completed) != 1 or completed[0]["data"]["items"][0]["text"] != expected:
             raise AssertionError("status scenario changed durable assistant text")
         terminal.exit()
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def wait_normalized(terminal, needle, timeout=1.0):
@@ -887,23 +895,21 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
     config = case / "config.ini"
     write_config(config, False, pause_ms=0 if typing else 300)
     dotdir = case / "state"
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, width, 14
-    )
-    def prose_pattern(fragment):
-        return re.compile(r"(?:\n  )?".join(r"\s+" if c == " " else re.escape(c)
-                                            for c in fragment))
+    ), case / "screen.txt") as terminal:
+        def prose_pattern(fragment):
+            return re.compile(r"(?:\n  )?".join(r"\s+" if c == " " else re.escape(c)
+                                                for c in fragment))
 
-    def wait_prose(fragment, timeout=1.0):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            screen = terminal.capture(join_wrapped=True)
-            if prose_pattern(fragment).search(screen):
-                return screen, time.monotonic()
-            time.sleep(0.01)
-        raise AssertionError(f"missing paced prose {fragment!r}:\n{screen}")
-
-    try:
+        def wait_prose(fragment, timeout=1.0):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                screen = terminal.capture(join_wrapped=True)
+                if prose_pattern(fragment).search(screen):
+                    return screen, time.monotonic()
+                time.sleep(0.01)
+            raise AssertionError(f"missing paced prose {fragment!r}:\n{screen}")
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit("terminal_paced_unicode" if unicode else "terminal_paced_decode")
         prefix = "Paced tokens form inter" + ("🌙" if unicode else "")
@@ -978,12 +984,6 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
         if typing:
             terminal.send_key("C-u")
         terminal.exit()
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def run_markdown_case(binary, root):
@@ -1000,11 +1000,10 @@ def run_markdown_case(binary, root):
         config = case / "config.ini"
         write_config(config, False, markdown=configured)
         dotdir = case / "state"
-        terminal = TmuxTerminal(
+        with fixture_terminal(TmuxTerminal(
             case / "terminal", binary, workspace, dotdir, config, 64, 16,
             args=args,
-        )
-        try:
+        ), case / "screen.txt") as terminal:
             terminal.wait(DEFAULT_IDLE_PROMPT)
             terminal.submit("terminal_markdown")
             if rendered:
@@ -1098,12 +1097,6 @@ def run_markdown_case(binary, root):
             if any(len(line) > terminal.cols for line in terminal.capture().splitlines()):
                 raise AssertionError("Markdown rendering exceeded the tmux width")
             terminal.exit()
-        finally:
-            try:
-                screen = terminal.last_screen or terminal.capture()
-                (case / "screen.txt").write_text(screen, encoding="utf-8")
-            finally:
-                close_fixture_terminal(terminal)
 
 
 def run_narrow_markdown_table_case(binary, root):
@@ -1113,11 +1106,10 @@ def run_narrow_markdown_table_case(binary, root):
     config = case / "config.ini"
     write_config(config, False, markdown=True)
     dotdir = case / "state"
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, 22, 24,
         args=("--color=never",),
-    )
-    try:
+    ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit("terminal_markdown")
         terminal.wait("┌─ table", timeout=3.0, join_wrapped=True)
@@ -1135,12 +1127,6 @@ def run_narrow_markdown_table_case(binary, root):
         if any(len(line) > terminal.cols for line in terminal.capture().splitlines()):
             raise AssertionError("narrow Markdown table exceeded terminal width")
         terminal.exit()
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def run_render_case(binary, root):
@@ -1153,10 +1139,9 @@ def run_render_case(binary, root):
     config = case / "config.ini"
     write_config(config, True, pause_ms=1500)
     dotdir = case / "state"
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, 32, 18
-    )
-    try:
+    ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit("terminal_render")
         terminal.wait("alpha beta gamma delta-")
@@ -1278,12 +1263,6 @@ def run_render_case(binary, root):
         if len(interrupted) != 1 or interrupted[0]["data"]["origin"] != "steering":
             raise AssertionError("rendered steering did not interrupt the response")
         terminal.exit()
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def queue_listing(screen, number, text):
@@ -1330,10 +1309,9 @@ def run_queue_case(binary, root):
     config = case / "config.ini"
     write_config(config, False, pause_ms=150)
     dotdir = case / "state"
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, 48, 20
-    )
-    try:
+    ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit("queue_slow")
         terminal.wait("working slowly")
@@ -1440,12 +1418,6 @@ def run_queue_case(binary, root):
         turn = event_list(events, "turn_started")
         if len(turn) != 1 or turn[0]["data"]["instructions"] != []:
             raise AssertionError("disabled AGENTS.md discovery was not honored")
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def run_tool_spinner_delay_case(binary, root):
@@ -1505,10 +1477,9 @@ def run_tool_case(binary, root):
     config = case / "config.ini"
     write_config(config, False)
     dotdir = case / "state"
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, 52, 18
-    )
-    try:
+    ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("/verbose 3")
         terminal.wait("verbosity: 3")
@@ -1527,12 +1498,6 @@ def run_tool_case(binary, root):
                 "fixture command succeeded"):
             raise AssertionError("tool display changed the model-visible result")
         terminal.exit()
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def wait_idle_prompt_at_bottom(terminal, prompt, timeout=5.0):
@@ -1558,10 +1523,9 @@ def run_retained_composer_case(binary, root):
     write_config(config, False)
     with config.open("a", encoding="utf-8") as output:
         output.write("prompt = {chat:p>}{rollout-idle:p>}{rollout-active:p>}\n")
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, case / "state", config, 24, 18,
-    )
-    try:
+    ), case / "screen.txt") as terminal:
         terminal.wait("p>")
         draft = "first-row-unchanged second-row-unchanged third-row"
         terminal.send_text(draft)
@@ -1611,12 +1575,6 @@ def run_retained_composer_case(binary, root):
         wait_normalized(terminal, "p> " + "a" * 20 + "Z", timeout=5.0)
         terminal.send_key("C-u")
         terminal.exit()
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def run_punctuation_case(binary, root):
@@ -2036,11 +1994,10 @@ def run_lifecycle_case(binary, root):
     config = case / "config.ini"
     write_config(config, False)
     dotdir = case / "state"
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, 60, 18,
         args=("--color=always",),
-    )
-    try:
+    ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("/goal slow goal")
         terminal.wait("• Goal set")
@@ -2092,12 +2049,6 @@ def run_lifecycle_case(binary, root):
                 len(event_list(events, "compaction_completed")) != 1:
             raise AssertionError("lifecycle presentation changed durable events")
         terminal.exit()
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def run_bullet_class_case(binary, root):
@@ -2227,11 +2178,10 @@ def run_model_catalog_case(binary, root, provider, environment):
     workspace.mkdir(mode=0o700, parents=True)
     config = case / "config.ini"
     write_catalog_config(config, provider.port)
-    terminal = TmuxTerminal(
+    with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, case / "state", config,
         100, 24, environment=environment,
-    )
-    try:
+    ), case / "screen.txt") as terminal:
         terminal.wait(" ordinary/uncached-start/low   0% ›")
         terminal.submit("/verbose 6")
         terminal.wait("verbosity: 6")
@@ -2305,16 +2255,6 @@ def run_model_catalog_case(binary, root, provider, environment):
                 cache_path.stat().st_ino != old_inode):
             raise AssertionError("failed mixed refresh replaced the complete cache")
         terminal.exit()
-    finally:
-        try:
-            screen = terminal.last_screen or terminal.capture()
-            (case / "screen.txt").write_text(screen, encoding="utf-8")
-        finally:
-            terminal.close()
-            if os.path.lexists(terminal.socket):
-                raise AssertionError(
-                    f"tmux socket survived cleanup: {terminal.socket}"
-                )
 
 
 def wait_current_prompt(terminal, operator, timeout=10.0):
@@ -2768,10 +2708,9 @@ def run_multi_tool_cases(binary, root, provider, environment):
             text = text.replace("[provider fake]\n", "[provider fake]\nparallel_tool_calls = false\n")
         config.write_text(text + "[tool]\nmax_parallel_commands = " +
                           ("1" if mode in ("serial", "single-serial") else "2" if mode in ("steer", "cancel") else "4") + "\n", encoding="utf-8")
-        terminal = TmuxTerminal(case / "terminal", binary, workspace,
+        with TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
-                                args=("-vvv" if mode == "full-output" else "-v",), environment=environment)
-        try:
+                                args=("-vvv" if mode == "full-output" else "-v",), environment=environment) as terminal:
             terminal.wait("host-model/medium   0% ›")
             terminal.submit("multi-tools " + mode)
             if mode in ("steer", "cancel"):
@@ -2814,8 +2753,6 @@ def run_multi_tool_cases(binary, root, provider, environment):
                 assert len({event["data"]["handle"] for event in chunks}) == 2
             terminal.exit()
             print(f"tmux_terminal multi-tool {mode}: ok", flush=True)
-        finally:
-            terminal.close()
         if provider.failure:
             raise provider.failure
 
@@ -2834,10 +2771,9 @@ def run_output_cap_cases(binary, root, provider, environment):
                           (f"max_output_tokens = {configured}\n"
                            if configured else ""), encoding="utf-8")
         ceiling = configured or 6000
-        terminal = TmuxTerminal(case / "terminal", binary, workspace,
+        with TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
-                                args=("-v",), environment=environment)
-        try:
+                                args=("-v",), environment=environment) as terminal:
             terminal.wait("host-model/medium   0% ›")
             terminal.submit(f"tool-cap {ceiling} {json.dumps(selected)}")
             terminal.wait("tool cap confirmed")
@@ -2849,8 +2785,6 @@ def run_output_cap_cases(binary, root, provider, environment):
             assert result["stdout"]["original_bytes"] == 8000
             terminal.exit()
             print(f"tmux_terminal output cap {name}: ok", flush=True)
-        finally:
-            terminal.close()
 
 
 def run_ctrl_d_cases(binary, root, provider, environment):
