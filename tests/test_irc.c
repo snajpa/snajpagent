@@ -135,6 +135,7 @@ connect_local(unsigned short port, bool slow)
     snag_socket fd = snag_socket_open(AF_INET, SOCK_STREAM, 0);
 
     assert(fd != SNAG_SOCKET_INVALID);
+    snag_socket_nodelay(fd);
     if (slow) {
         int size = 1024;
         assert(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&size, sizeof(size)) == 0);
