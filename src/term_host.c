@@ -9,7 +9,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <io.h>
-#include <fcntl.h>
 
 bool
 snag_term_host_capable(void)
@@ -35,14 +34,9 @@ snag_term_input_capture(struct snag_term_host *host)
         errno = ENOTTY;
         return -1;
     }
-    host->input_codepage = GetConsoleCP();
-    host->binary_input = false;
+    host->raw_input = false;
     host->input_high = 0;
     host->input_skip_lf = false;
-    if (!host->input_codepage) {
-        errno = EIO;
-        return -1;
-    }
     return 0;
 }
 
@@ -50,21 +44,15 @@ int
 snag_term_input_raw(struct snag_term_host *host)
 {
     DWORD mode = host->input_mode;
-    if (host->binary_input)
+    if (host->raw_input)
         return 0;
-    int old = _setmode(0, _O_BINARY);
-    if (old < 0)
-        return -1;
     mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_QUICK_EDIT_MODE);
     mode |= ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
-    if (!SetConsoleCP(CP_UTF8) || !SetConsoleMode((HANDLE)_get_osfhandle(0), mode)) {
-        (void)SetConsoleCP(host->input_codepage);
-        (void)_setmode(0, old);
+    if (!SetConsoleMode((HANDLE)_get_osfhandle(0), mode)) {
         errno = ENOTSUP;
         return -1;
     }
-    host->input_crt_mode = old;
-    host->binary_input = true;
+    host->raw_input = true;
     return 0;
 }
 
@@ -87,14 +75,8 @@ snag_term_input_restore(struct snag_term_host *host, bool flush)
     host->input_skip_lf = false;
     if (!SetConsoleMode((HANDLE)_get_osfhandle(0), host->input_mode))
         rc = -1;
-    if (host->binary_input) {
-        if (!SetConsoleCP(host->input_codepage))
-            rc = -1;
-        if (_setmode(0, host->input_crt_mode) < 0)
-            rc = -1;
-        if (rc == 0)
-            host->binary_input = false;
-    }
+    if (rc == 0)
+        host->raw_input = false;
     if (rc < 0)
         errno = EIO;
     return rc;
@@ -112,8 +94,15 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
         errno = EINVAL;
         return -1;
     }
-    if (!GetConsoleMode(input, &mode))
-        return _read(0, buffer, (unsigned int)size);
+    if (!GetConsoleMode(input, &mode)) {
+        if (ReadFile(input, buffer, (DWORD)size, &got, NULL))
+            return (ssize_t)got;
+        DWORD error = GetLastError();
+        if (error == ERROR_BROKEN_PIPE)
+            return 0;
+        errno = error == ERROR_NO_DATA ? EAGAIN : error == ERROR_INVALID_HANDLE ? EBADF : EIO;
+        return -1;
+    }
     size_t capacity = (size - prefix) / 3u;
     if (capacity > 256u)
         capacity = 256u;

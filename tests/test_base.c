@@ -302,17 +302,6 @@ test_private_directory(void)
         FILE_FLAG_BACKUP_SEMANTICS, NULL);
     assert(handle != INVALID_HANDLE_VALUE);
     fd = _open_osfhandle((intptr_t)handle, _O_RDONLY | _O_BINARY);
-    HANDLE flush_handle = CreateFileW(wide, GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_WRITE_THROUGH, NULL);
-    if (flush_handle == INVALID_HANDLE_VALUE) {
-        (void)fprintf(stderr, "directory write-open error=%lu\n", GetLastError());
-    } else {
-        BOOL flushed = FlushFileBuffers(flush_handle);
-        (void)fprintf(stderr, "directory write-flush ok=%d error=%lu\n",
-                       flushed != 0, flushed ? 0ul : GetLastError());
-        assert(CloseHandle(flush_handle));
-    }
 #else
     const char *temp = getenv("TMPDIR");
     char *pattern = snag_path_join(temp ? temp : "/tmp", "snag-private-dir-XXXXXX");
@@ -638,6 +627,9 @@ test_input_mode(void)
     if (!isatty(0))
         return;
     struct snag_term_host host = {0};
+#ifdef _WIN32
+    UINT codepage = GetConsoleCP();
+#endif
     assert(snag_term_input_capture(&host) == 0);
     assert(snag_term_input_raw(&host) == 0);
 #ifdef _WIN32
@@ -645,7 +637,7 @@ test_input_mode(void)
     assert(GetConsoleMode((HANDLE)_get_osfhandle(0), &mode));
     assert(!(mode & (ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT)));
     assert(mode & ENABLE_VIRTUAL_TERMINAL_INPUT);
-    assert(GetConsoleCP() == CP_UTF8);
+    assert(GetConsoleCP() == codepage);
 #else
     struct termios raw;
     assert(tcgetattr(0, &raw) == 0 && !(raw.c_lflag & (ECHO | ICANON | ISIG)));
@@ -682,13 +674,19 @@ test_input_mode(void)
         assert(snag_term_input_restore(&host, true) == 0);
         abort();
     }
+    assert(WriteConsoleInputW(input, keys + 1u, 1u, &written) && written == 1u);
+    assert(snag_term_input_read(&host, received, sizeof(received)) < 0 && errno == EAGAIN);
+    assert(WriteConsoleInputW(input, keys + 2u, 1u, &written) && written == 1u);
+    assert(snag_term_input_read(&host, received, sizeof(received)) == 4);
+    assert(!memcmp(received, expected + 3u, 4u));
+    assert(WriteConsoleInputW(input, keys + 1u, 1u, &written) && written == 1u);
+    assert(snag_term_input_read(&host, received, sizeof(received)) < 0 && errno == EAGAIN);
+    assert(snag_term_input_flush(&host) == 0 && host.input_high == 0);
 #endif
     assert(snag_term_input_restore(&host, false) == 0);
 #ifdef _WIN32
     assert(GetConsoleMode((HANDLE)_get_osfhandle(0), &mode) && mode == host.input_mode);
-    assert(GetConsoleCP() == host.input_codepage);
-    int crt = _setmode(0, _O_BINARY);
-    assert(crt == host.input_crt_mode && _setmode(0, crt) >= 0);
+    assert(GetConsoleCP() == codepage);
 #else
     struct termios restored;
     assert(tcgetattr(0, &restored) == 0 && restored.c_lflag == host.input_mode.c_lflag &&

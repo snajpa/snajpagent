@@ -9,9 +9,7 @@
 struct snag_signal_mask { unsigned char unused; };
 struct snag_term_host {
     unsigned long input_mode;
-    unsigned int input_codepage;
-    int input_crt_mode;
-    bool binary_input;
+    bool raw_input;
     unsigned short input_high;
     bool input_skip_lf;
     unsigned long output_mode[2];
