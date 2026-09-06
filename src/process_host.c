@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <process.h>
 
 /* Dynamically detected API; keep the rest of the import floor independent. */
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
@@ -23,7 +24,7 @@ struct child_pipe {
 };
 
 struct snag_child_windows {
-    HANDLE process, job, console;
+    HANDLE process, job, console, console_closer;
     DWORD pid;
     struct child_pipe pipe[3];
     void (WINAPI *console_close)(HANDLE);
@@ -175,7 +176,10 @@ snag_child_free(struct snag_child *child)
     child->pty = false;
     for (unsigned int i = 0; i < 3u; ++i)
         snag_child_close_stream(child, i);
-    if (native->console)
+    if (native->console_closer) {
+        (void)WaitForSingleObject(native->console_closer, INFINITE);
+        (void)CloseHandle(native->console_closer);
+    } else if (native->console)
         native->console_close(native->console);
     if (native->job)
         (void)CloseHandle(native->job);
@@ -355,9 +359,36 @@ out:
     return rc;
 }
 
+static unsigned int __stdcall
+close_console(void *opaque)
+{
+    struct snag_child_windows *native = opaque;
+    native->console_close(native->console);
+    return 0;
+}
+
+static int
+finish_console(struct snag_child_windows *native)
+{
+    if (!native->console || native->console_release || native->console_closer)
+        return 0;
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info;
+    if (!QueryInformationJobObject(native->job, JobObjectBasicAccountingInformation, &info, sizeof(info), NULL))
+        return child_error(GetLastError());
+    if (!info.ActiveProcesses) {
+        /* Older ClosePseudoConsole may block until this owner drains output. */
+        native->console_closer = (HANDLE)_beginthreadex(NULL, 0, close_console, native, 0, NULL);
+        if (!native->console_closer)
+            return -1;
+    }
+    return 0;
+}
+
 int
 snag_child_exited(struct snag_child *child)
 {
+    if (finish_console(child->native) < 0)
+        return -1;
     DWORD rc = WaitForSingleObject(child->native->process, 0);
     return rc == WAIT_OBJECT_0 ? 1 : rc == WAIT_TIMEOUT ? 0 : child_error(GetLastError());
 }
@@ -377,7 +408,7 @@ void
 snag_child_resize(struct snag_child *child)
 {
     struct snag_child_windows *native = child->native;
-    if (!native || !native->console)
+    if (!native || !native->console || native->console_closer)
         return;
     COORD size = console_dimensions();
     if ((size.X != native->dimensions.X || size.Y != native->dimensions.Y) &&
@@ -452,6 +483,10 @@ snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake
         for (size_t i = 0; i < count; ++i) {
             struct snag_child_event *event = &events[i];
             struct snag_child_windows *native = event->child->native;
+            if (finish_console(native) < 0) {
+                rc = -1;
+                goto done;
+            }
             event->revents = 0;
             for (unsigned int direction = 0; direction < 2u; ++direction) {
                 unsigned int flag = direction ? SNAG_CHILD_WRITE : SNAG_CHILD_READ;
@@ -500,6 +535,7 @@ snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake
             group = offset ? 0 : 1;
         }
     }
+done:
     if (wake_event) {
         int error = errno;
         if (WSAEventSelect(wake, NULL, 0) < 0 && rc >= 0)
