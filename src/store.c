@@ -2366,7 +2366,7 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
 static char *
 canonical_workspace(const char *workspace, char *error, size_t error_size)
 {
-    char *resolved = realpath(workspace, NULL);
+    char *resolved = snag_realpath(workspace);
     struct stat st;
 
     if (!resolved) {

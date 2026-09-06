@@ -3631,7 +3631,7 @@ static char *
 resolve_workspace_path(const char *path, const char *label,
                        char *error, size_t error_size)
 {
-    char *resolved = realpath(path, NULL);
+    char *resolved = snag_realpath(path);
     struct stat st;
     if (!resolved) {
         snag_errorf(error, error_size, "cannot resolve %s workspace %s: %s",
@@ -3713,7 +3713,7 @@ resolved_program_path(const char *program)
         program = SNAJPAGENT_NAME;
     program_len = strlen(program);
     if (strchr(program, '/')) {
-        char *resolved = realpath(program, NULL);
+        char *resolved = snag_realpath(program);
 
         if (resolved && strlen(resolved) <= SNAG_PATH_MAX_BYTES &&
             snag_utf8_valid((const unsigned char *)resolved,
@@ -3745,7 +3745,7 @@ resolved_program_path(const char *program)
                     memcpy(candidate + actual_dir_len + 1u, program,
                            program_len + 1u);
                     resolved = access(candidate, X_OK) == 0 ?
-                               realpath(candidate, NULL) : NULL;
+                               snag_realpath(candidate) : NULL;
                     free(candidate);
                     if (resolved && strlen(resolved) <= SNAG_PATH_MAX_BYTES &&
                         snag_utf8_valid((const unsigned char *)resolved,

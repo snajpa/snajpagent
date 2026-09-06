@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <wchar.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -15,6 +16,45 @@
 #include <fcntl.h>
 #include <unistd.h>
 #endif
+
+static void
+test_realpath(void)
+{
+    char *path = snag_realpath(".");
+    char *again;
+
+    assert(path && snag_path_root_len(path));
+#ifdef _WIN32
+    assert(!strchr(path, '\\'));
+#endif
+    again = snag_realpath(path);
+    assert(again && strcmp(path, again) == 0);
+    free(again);
+    free(path);
+    errno = 0;
+    assert(!snag_realpath(NULL) && errno == EINVAL);
+    errno = 0;
+    assert(!snag_realpath("") && errno == ENOENT);
+#ifdef _WIN32
+    wchar_t temp[MAX_PATH], source[MAX_PATH], target[MAX_PATH + 16];
+    char input[MAX_PATH * 4u + 64u];
+    DWORD count = GetTempPathW(MAX_PATH, temp);
+    assert(count && count < MAX_PATH);
+    assert(GetTempFileNameW(temp, L"snp", 0, source));
+    assert(swprintf(target, sizeof(target) / sizeof(target[0]),
+                    L"%ls-\u03b1-\U0001f600", source) > 0);
+    assert(MoveFileW(source, target));
+    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, target, -1,
+                               input, sizeof(input), NULL, NULL));
+    path = snag_realpath(input);
+    assert(path && strstr(path, "-\xce\xb1-\xf0\x9f\x98\x80"));
+    assert(snag_utf8_valid((const unsigned char *)path, strlen(path), true));
+    assert(DeleteFileW(target));
+    free(path);
+    errno = 0;
+    assert(!snag_realpath(input) && errno == ENOENT);
+#endif
+}
 
 static void
 test_platform(void)
@@ -201,6 +241,7 @@ main(void)
     test_irc_target_parse();
     test_path_join();
     test_platform();
+    test_realpath();
     puts("test_base: ok");
     return 0;
 }

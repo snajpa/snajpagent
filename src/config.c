@@ -1115,7 +1115,7 @@ validate_shell(struct snag_config *config, char *error, size_t error_size)
     struct stat st;
     if (!snag_path_root_len(config->shell))
         goto invalid;
-    resolved = realpath(config->shell, NULL);
+    resolved = snag_realpath(config->shell);
     if (!resolved)
         goto invalid;
     if (strlen(resolved) > SNAG_CONFIG_PATH_MAX || stat(resolved, &st) < 0 ||

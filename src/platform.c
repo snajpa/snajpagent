@@ -3,6 +3,8 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -10,6 +12,142 @@
 #include <wincrypt.h>
 #include <io.h>
 #include <uniwidth.h>
+#include <wchar.h>
+
+static int
+path_error(DWORD error)
+{
+    switch (error) {
+    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND:
+        errno = ENOENT; break;
+    case ERROR_ACCESS_DENIED: case ERROR_PRIVILEGE_NOT_HELD:
+        errno = EACCES; break;
+    case ERROR_INVALID_HANDLE:
+        errno = EBADF; break;
+    case ERROR_NOT_ENOUGH_MEMORY: case ERROR_OUTOFMEMORY:
+        errno = ENOMEM; break;
+    case ERROR_FILENAME_EXCED_RANGE:
+        errno = ENAMETOOLONG; break;
+    case ERROR_NO_UNICODE_TRANSLATION:
+        errno = EILSEQ; break;
+    case ERROR_DIRECTORY:
+        errno = ENOTDIR; break;
+    case ERROR_CANT_RESOLVE_FILENAME:
+        errno = ELOOP; break;
+    case ERROR_INVALID_NAME: case ERROR_INVALID_PARAMETER:
+        errno = EINVAL; break;
+    default:
+        errno = EIO; break;
+    }
+    return -1;
+}
+
+char *
+snag_realpath(const char *path)
+{
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    wchar_t *wide = NULL, *final = NULL;
+    const wchar_t *body;
+    char *result = NULL;
+    size_t len, prefix = 0u;
+    DWORD capacity, got;
+    int chars, bytes, error;
+
+    if (!path) {
+        errno = EINVAL;
+        return NULL;
+    }
+    len = strlen(path);
+    if (len > SNAG_PATH_MAX_BYTES) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    if (!snag_utf8_valid((const unsigned char *)path, len, true)) {
+        errno = EILSEQ;
+        return NULL;
+    }
+    chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (!chars) {
+        path_error(GetLastError());
+        return NULL;
+    }
+    wide = malloc((size_t)chars * sizeof(*wide));
+    if (!wide)
+        return NULL;
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, chars))
+        goto native_error;
+    handle = CreateFileW(wide, FILE_READ_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (handle == INVALID_HANDLE_VALUE)
+        goto native_error;
+    capacity = GetFinalPathNameByHandleW(handle, NULL, 0, FILE_NAME_NORMALIZED);
+    if (!capacity)
+        goto native_error;
+    if (capacity > SNAG_PATH_MAX_BYTES + 9u) {
+        errno = ENAMETOOLONG;
+        goto out;
+    }
+    final = malloc(((size_t)capacity + 1u) * sizeof(*final));
+    if (!final)
+        goto out;
+    got = GetFinalPathNameByHandleW(handle, final, capacity + 1u, FILE_NAME_NORMALIZED);
+    if (!got)
+        goto native_error;
+    if (got > capacity) {
+        errno = ENAMETOOLONG;
+        goto out;
+    }
+    body = final;
+    if (wcsncmp(body, L"\\\\?\\UNC\\", 8u) == 0) {
+        body += 8u;
+        prefix = 2u;
+    } else if (wcsncmp(body, L"\\\\?\\", 4u) == 0) {
+        body += 4u;
+    }
+    bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, body, -1,
+                                NULL, 0, NULL, NULL);
+    if (!bytes)
+        goto native_error;
+    if ((size_t)bytes + prefix > SNAG_PATH_MAX_BYTES + 1u) {
+        errno = ENAMETOOLONG;
+        goto out;
+    }
+    result = malloc((size_t)bytes + prefix);
+    if (!result)
+        goto out;
+    if (prefix)
+        result[0] = result[1] = '/';
+    if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, body, -1,
+                             result + prefix, bytes, NULL, NULL)) {
+        free(result);
+        result = NULL;
+        goto native_error;
+    }
+    for (char *p = result; *p; ++p)
+        if (*p == '\\')
+            *p = '/';
+    if (!snag_path_root_len(result)) {
+        free(result);
+        result = NULL;
+        errno = EIO;
+    }
+    goto out;
+native_error:
+    path_error(GetLastError());
+out:
+    error = errno;
+    if (handle != INVALID_HANDLE_VALUE && !CloseHandle(handle) && result) {
+        free(result);
+        result = NULL;
+        path_error(GetLastError());
+        error = errno;
+    }
+    free(final);
+    free(wide);
+    errno = error;
+    return result;
+}
 
 static bool
 path_separator(unsigned char c)
@@ -164,6 +302,16 @@ snag_sync_dir(int fd)
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
+
+char *
+snag_realpath(const char *path)
+{
+    if (!path) {
+        errno = EINVAL;
+        return NULL;
+    }
+    return realpath(path, NULL);
+}
 
 size_t
 snag_path_root_len(const char *path)

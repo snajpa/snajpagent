@@ -52,7 +52,7 @@ append_source(struct snag_instruction_set *set, const char *path,
         errno = EOVERFLOW;
         return -1;
     }
-    canonical = realpath(path, NULL);
+    canonical = snag_realpath(path);
     if (!canonical || strlen(canonical) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)canonical, strlen(canonical), true)) {
         free(canonical);
@@ -356,7 +356,7 @@ snag_instructions_discover(struct snag_instruction_set *set,
                   strerror(errno));
         goto out;
     }
-    canonical_workspace = realpath(workspace, NULL);
+    canonical_workspace = snag_realpath(workspace);
     if (!canonical_workspace || strlen(canonical_workspace) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)canonical_workspace,
                         strlen(canonical_workspace), true) ||
