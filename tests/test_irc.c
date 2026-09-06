@@ -262,8 +262,11 @@ open_server(struct snag_config *config, struct capture *capture)
 
     memset(&cli, 0, sizeof(cli));
     assert(snag_irc_apply_cli(config, &cli, error, sizeof(error)) == 0);
-    assert(snag_irc_open(&server, config, "/workspace", capture_event,
-                        capture_trace, capture, error, sizeof(error)) == 0);
+    if (snag_irc_open(&server, config, "/workspace", capture_event,
+                      capture_trace, capture, error, sizeof(error)) < 0) {
+        (void)fprintf(stderr, "IRC server open: errno=%d %s\n", errno, error);
+        abort();
+    }
     return server;
 }
 
