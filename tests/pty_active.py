@@ -4392,7 +4392,7 @@ def test_stalled_output_consumes_input():
             after = child.wait(b"row-0000")
             # Stop draining until the terminal fills. Input must still be consumed.
             time.sleep(0.15)
-            child.send(b"/verbose 0\rpinx\x7fg")
+            child.send(b"/co\t\t\x15/verbose 0\rpinx\x7fg")
             deadline = time.monotonic() + 0.25
             while True:
                 pending = struct.unpack("i", fcntl.ioctl(slave, termios.FIONREAD,
@@ -4404,6 +4404,8 @@ def test_stalled_output_consumes_input():
             child.wait(b"verbosity: 0 (conversation)", start=after)
             end = child.wait(b"flood-end", start=after)
             child.wait_idle_prompt(start=end)
+            child.wait(b"/compact", start=after)
+            child.wait(b"/config", start=after)
             child.send(b"\r")
             end = child.wait(b"pong", start=end)
             child.exit_cleanly(end)

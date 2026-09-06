@@ -1361,7 +1361,6 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
         snag_term_write(STDERR_FILENO, out.data, out.len) < 0)
         goto out;
     snag_buf_free(&term->painted_prompt);
-    snag_buf_free(&term->completion_output);
     term->painted_prompt = *frame;
     memset(frame, 0, sizeof(*frame));
     term->painted_label_len = label;
