@@ -1810,7 +1810,9 @@ def test_saved_goal_restored_without_lookup():
     original = events(session_id)
     goal_id = one(original, "goal_started")["data"]["goal_id"]
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "goal-resume.ini"
-    config.write_text("[ui]\nresume_history_turns = 0\n", encoding="utf-8")
+    config.write_text("[ui]\nresume_history_turns = 0\n"
+                      "[provider openai]\nbase_url = http://127.0.0.1:1/v1\n"
+                      "api_key = fixture-only\n", encoding="utf-8")
     for selector in ([session_id], ["--last"]):
         resumed = Child(["--config", str(config), "--resume", *selector])
         try:
