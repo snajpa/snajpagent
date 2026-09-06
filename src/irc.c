@@ -1,19 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "irc_internal.h"
 #include "snajpagent.h"
+#include "net.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/tcp.h>
-#include <poll.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -51,7 +46,7 @@ struct irc_replay_member {
 
 struct irc_conn {
     struct snag_irc_core *owner;
-    int fd;
+    snag_socket fd;
     struct snag_buf output;
     struct snag_buf pending;
     size_t output_offset;
@@ -95,7 +90,7 @@ struct irc_message {
 
 struct snag_irc_core {
     uint64_t route_revision;
-    int listener;
+    snag_socket listener;
     bool hosting;
     char listen[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char server_name[SNAG_CONFIG_IRC_NICK_MAX + 1u];
@@ -124,19 +119,6 @@ struct snag_irc_core {
 
 static size_t utf8_chunk(const char *text, size_t len, size_t max);
 static size_t chat_chunk(const char *text, size_t len);
-static int set_nonblocking(int fd);
-
-static int
-configure_stream(int fd)
-{
-    int one = 1;
-
-    if (set_nonblocking(fd) < 0)
-        return -1;
-    (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-    return 0;
-}
-
 static int
 sanitize_text(char *dst, size_t size, const char *src)
 {
@@ -564,21 +546,7 @@ snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
     return 0;
 }
 
-static int
-set_nonblocking(int fd)
-{
-    int flags = fcntl(fd, F_GETFL, 0);
-    int fd_flags;
-
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-        return -1;
-    fd_flags = fcntl(fd, F_GETFD, 0);
-    if (fd_flags < 0 || fcntl(fd, F_SETFD, fd_flags | FD_CLOEXEC) < 0)
-        return -1;
-    return 0;
-}
-
-static int
+static snag_socket
 open_listener(const char *endpoint, char *error, size_t error_size)
 {
     struct addrinfo hints;
@@ -586,9 +554,8 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     struct addrinfo *it;
     char host[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
     char port[6u];
-    int fd = -1;
+    snag_socket fd = SNAG_SOCKET_INVALID;
     int saved = EADDRNOTAVAIL;
-    int one = 1;
     int gai;
 
     if (split_endpoint(endpoint, host, sizeof(host), port, sizeof(port)) < 0) {
@@ -607,24 +574,23 @@ open_listener(const char *endpoint, char *error, size_t error_size)
         return -1;
     }
     for (it = addresses; it; it = it->ai_next) {
-        fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
-        if (fd < 0) {
+        fd = snag_socket_open(it->ai_family, it->ai_socktype, it->ai_protocol);
+        if (fd == SNAG_SOCKET_INVALID) {
             saved = errno;
             continue;
         }
-        (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-        if (set_nonblocking(fd) == 0 &&
-            bind(fd, it->ai_addr, it->ai_addrlen) == 0 &&
-            listen(fd, 32) == 0)
+        if (snag_socket_reuse(fd) == 0 &&
+            snag_socket_bind(fd, it->ai_addr, it->ai_addrlen) == 0 &&
+            snag_socket_listen(fd, 32) == 0)
             break;
         saved = errno;
-        (void)close(fd);
-        fd = -1;
+        (void)snag_socket_close(fd);
+        fd = SNAG_SOCKET_INVALID;
         if (saved == EADDRINUSE)
             break;
     }
     freeaddrinfo(addresses);
-    if (fd < 0) {
+    if (fd == SNAG_SOCKET_INVALID) {
         snag_errorf(error, error_size, "cannot listen on IRC endpoint %s: %s",
                   endpoint, strerror(saved));
         errno = saved;
@@ -637,7 +603,7 @@ conn_init(struct irc_conn *conn, struct snag_irc_core *owner)
 {
     memset(conn, 0, sizeof(*conn));
     conn->owner = owner;
-    conn->fd = -1;
+    conn->fd = SNAG_SOCKET_INVALID;
     snag_buf_init(&conn->output, IRC_OUTPUT_MAX);
     snag_buf_init(&conn->pending, IRC_PENDING_MAX);
 }
@@ -645,12 +611,12 @@ conn_init(struct irc_conn *conn, struct snag_irc_core *owner)
 static void
 conn_release(struct irc_conn *conn)
 {
-    if (conn->fd >= 0)
-        (void)close(conn->fd);
+    if (conn->fd != SNAG_SOCKET_INVALID)
+        (void)snag_socket_close(conn->fd);
     snag_buf_free(&conn->output);
     snag_buf_free(&conn->pending);
     memset(conn, 0, sizeof(*conn));
-    conn->fd = -1;
+    conn->fd = SNAG_SOCKET_INVALID;
 }
 
 static int
@@ -695,9 +661,9 @@ static int
 flush_conn(struct irc_conn *conn)
 {
     while (conn->output_offset < conn->output.len) {
-        ssize_t written = send(conn->fd,
+        ssize_t written = snag_socket_send(conn->fd,
             conn->output.data + conn->output_offset,
-            conn->output.len - conn->output_offset, 0);
+            conn->output.len - conn->output_offset);
 
         if (written > 0) {
             conn->output_offset += (size_t)written;
@@ -1614,15 +1580,11 @@ start_link(struct snag_irc_core *irc, struct irc_conn *link)
     }
     for (it = addresses; it; it = it->ai_next) {
         int rc;
-        link->fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
-        if (link->fd < 0)
+        link->fd = snag_socket_open(it->ai_family, it->ai_socktype, it->ai_protocol);
+        if (link->fd == SNAG_SOCKET_INVALID)
             continue;
-        if (configure_stream(link->fd) < 0) {
-            (void)close(link->fd);
-            link->fd = -1;
-            continue;
-        }
-        rc = connect(link->fd, it->ai_addr, it->ai_addrlen);
+        snag_socket_nodelay(link->fd);
+        rc = snag_socket_connect(link->fd, it->ai_addr, it->ai_addrlen);
         if (rc == 0) {
             freeaddrinfo(addresses);
             return client_handshake(irc, link);
@@ -1632,8 +1594,8 @@ start_link(struct snag_irc_core *irc, struct irc_conn *link)
             freeaddrinfo(addresses);
             return 0;
         }
-        (void)close(link->fd);
-        link->fd = -1;
+        (void)snag_socket_close(link->fd);
+        link->fd = SNAG_SOCKET_INVALID;
     }
     freeaddrinfo(addresses);
     return 1;
@@ -1980,9 +1942,9 @@ link_disconnect(struct snag_irc_core *irc, struct irc_conn *link,
 {
     struct snag_irc_event event;
 
-    if (link->fd >= 0)
-        (void)close(link->fd);
-    link->fd = -1;
+    if (link->fd != SNAG_SOCKET_INVALID)
+        (void)snag_socket_close(link->fd);
+    link->fd = SNAG_SOCKET_INVALID;
     link->connecting = false;
     link->registered = false;
     link->joined = false;
@@ -2011,7 +1973,7 @@ read_conn(struct snag_irc_core *irc, struct irc_conn *conn)
 
         if (!available)
             return 1;
-        got = recv(conn->fd, conn->input + conn->input_len, available, 0);
+        got = snag_socket_recv(conn->fd, conn->input + conn->input_len, available);
         if (got > 0) {
             conn->input_len += (size_t)got;
         } else if (got == 0) {
@@ -2064,10 +2026,10 @@ static int
 accept_peers(struct snag_irc_core *irc)
 {
     for (unsigned int batch = 0u; batch < 8u; ++batch) {
-        int fd = accept(irc->listener, NULL, NULL);
+        snag_socket fd = snag_socket_accept(irc->listener);
         struct irc_conn *peer = NULL;
 
-        if (fd < 0) {
+        if (fd == SNAG_SOCKET_INVALID) {
             if (errno == EINTR)
                 continue;
             return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
@@ -2077,12 +2039,13 @@ accept_peers(struct snag_irc_core *irc)
                 peer = &irc->peers[i];
                 break;
             }
-        if (!peer || configure_stream(fd) < 0) {
-            (void)close(fd);
+        if (!peer) {
+            (void)snag_socket_close(fd);
             continue;
         }
         conn_init(peer, irc);
         peer->fd = fd;
+        snag_socket_nodelay(fd);
         peer->used = true;
     }
     return 0;
@@ -2091,13 +2054,7 @@ accept_peers(struct snag_irc_core *irc)
 static int
 complete_link_connect(struct snag_irc_core *irc, struct irc_conn *link)
 {
-    int socket_error = 0;
-    socklen_t size = sizeof(socket_error);
-
-    if (getsockopt(link->fd, SOL_SOCKET, SO_ERROR, &socket_error, &size) < 0 ||
-        socket_error != 0) {
-        if (socket_error)
-            errno = socket_error;
+    if (snag_socket_connected(link->fd) < 0) {
         return 1;
     }
     return client_handshake(irc, link);
@@ -2112,7 +2069,7 @@ start_due_links(struct snag_irc_core *irc)
         struct irc_conn *link = &irc->links[i];
         int rc;
 
-        if (link->fd >= 0 || now < link->retry_at_ms)
+        if (link->fd != SNAG_SOCKET_INVALID || now < link->retry_at_ms)
             continue;
         rc = start_link(irc, link);
         if (rc < 0)
@@ -2181,7 +2138,11 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
     irc = calloc(1u, sizeof(*irc));
     if (!irc)
         return -1;
-    irc->listener = -1;
+    if (snag_network_init() < 0) {
+        free(irc);
+        return -1;
+    }
+    irc->listener = SNAG_SOCKET_INVALID;
     irc->hosting = config->irc.listen_explicit;
     irc->event_fn = event_fn;
     irc->trace_fn = trace_fn;
@@ -2221,7 +2182,7 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
         goto fail;
     }
     for (size_t i = 0; irc->peers && i < IRC_SERVER_PEERS; ++i)
-        irc->peers[i].fd = -1;
+        irc->peers[i].fd = SNAG_SOCKET_INVALID;
     for (size_t i = 0; i < config->irc.client_count; ++i) {
         if (config->irc.listen_explicit &&
             snag_irc_endpoint_equal(config->irc.clients[i], config->irc.listen))
@@ -2243,7 +2204,7 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
     }
     if (network && irc->hosting) {
         irc->listener = open_listener(irc->listen, error, error_size);
-        if (irc->listener < 0)
+        if (irc->listener == SNAG_SOCKET_INVALID)
             goto fail;
     }
     *out = irc;
@@ -2260,8 +2221,8 @@ snag_irc_core_close(struct snag_irc_core *irc)
 {
     if (!irc)
         return;
-    if (irc->listener >= 0)
-        (void)close(irc->listener);
+    if (irc->listener != SNAG_SOCKET_INVALID)
+        (void)snag_socket_close(irc->listener);
     for (size_t i = 0; irc->peers && i < IRC_SERVER_PEERS; ++i)
         if (irc->peers[i].used)
             conn_release(&irc->peers[i]);
@@ -2271,6 +2232,7 @@ snag_irc_core_close(struct snag_irc_core *irc)
     free(irc->replay_members);
     free(irc->peers);
     free(irc->links);
+    snag_network_free();
     free(irc);
 }
 
@@ -2313,9 +2275,9 @@ int
 snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_fd,
              char *error, size_t error_size)
 {
-    struct pollfd fds[2u + IRC_SERVER_PEERS + SNAG_CONFIG_IRC_CLIENT_MAX * 2u];
+    snag_socket_event fds[2u + IRC_SERVER_PEERS + SNAG_CONFIG_IRC_CLIENT_MAX * 2u];
     struct irc_conn *owners[sizeof(fds) / sizeof(fds[0])];
-    nfds_t count = 1u;
+    size_t count = 1u;
     int polled;
 
     if (!irc) {
@@ -2329,32 +2291,32 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
         const struct irc_conn *link = &irc->links[i];
         int retry;
 
-        if (link->fd >= 0)
+        if (link->fd != SNAG_SOCKET_INVALID)
             continue;
         retry = link->retry_at_ms > now ? (int)(link->retry_at_ms - now) : 0;
         if (timeout_ms < 0 || retry < timeout_ms)
             timeout_ms = retry;
     }
-    fds[0] = (struct pollfd){wake_fd, POLLIN, 0};
-    if (irc->listener >= 0) {
+    fds[0] = (snag_socket_event){wake_fd, SNAG_NET_READ, 0};
+    if (irc->listener != SNAG_SOCKET_INVALID) {
         fds[count].fd = irc->listener;
-        fds[count].events = POLLIN;
+        fds[count].events = SNAG_NET_READ;
         fds[count].revents = 0;
         owners[count++] = NULL;
     }
     for (size_t i = 0; irc->peers && i < IRC_SERVER_PEERS; ++i) {
         struct irc_conn *peer = &irc->peers[i];
-        if (!peer->used || peer->fd < 0)
+        if (!peer->used || peer->fd == SNAG_SOCKET_INVALID)
             continue;
         fds[count].fd = peer->fd;
-        fds[count].events = POLLIN |
-            (peer->output_offset < peer->output.len ? POLLOUT : 0);
+        fds[count].events = SNAG_NET_READ |
+            (peer->output_offset < peer->output.len ? SNAG_NET_WRITE : 0);
         fds[count].revents = 0;
         owners[count++] = peer;
     }
     for (size_t i = 0; i < irc->link_count; ++i) {
         struct irc_conn *link = &irc->links[i];
-        if (link->fd < 0)
+        if (link->fd == SNAG_SOCKET_INVALID)
             continue;
         if (link->joined && !link->output.len && link->pending.len &&
             link_flush_pending(link) < 0) {
@@ -2364,18 +2326,18 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
             continue;
         }
         fds[count].fd = link->fd;
-        fds[count].events = POLLIN |
+        fds[count].events = SNAG_NET_READ |
             (link->connecting || link->output_offset < link->output.len ?
-             POLLOUT : 0);
+             SNAG_NET_WRITE : 0);
         fds[count].revents = 0;
         owners[count++] = link;
     }
     do {
-        polled = poll(fds, count, timeout_ms);
+        polled = snag_socket_poll(fds, count, timeout_ms);
     } while (polled < 0 && errno == EINTR);
     if (polled < 0)
         goto fail;
-    for (nfds_t i = 1u; i < count; ++i) {
+    for (size_t i = 1u; i < count; ++i) {
         struct irc_conn *conn = owners[i];
         int rc = 0;
 
@@ -2387,7 +2349,7 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
             continue;
         }
         if (conn->outgoing && conn->connecting &&
-            (fds[i].revents & (POLLOUT | POLLERR | POLLHUP))) {
+            (fds[i].revents & (SNAG_NET_WRITE | SNAG_NET_ERROR | SNAG_NET_HUP))) {
             rc = complete_link_connect(irc, conn);
             if (rc < 0)
                 goto fail;
@@ -2396,7 +2358,7 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
                 continue;
             }
         }
-        if (conn->fd >= 0 && (fds[i].revents & POLLIN))
+        if (conn->fd != SNAG_SOCKET_INVALID && (fds[i].revents & SNAG_NET_READ))
             rc = read_conn(irc, conn);
         if (rc < 0) {
             if (irc->callback_failed)
@@ -2409,14 +2371,14 @@ snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_
                 goto fail;
             continue;
         }
-        if (rc > 0 || (fds[i].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+        if (rc > 0 || (fds[i].revents & (SNAG_NET_ERROR | SNAG_NET_HUP | SNAG_NET_INVALID))) {
             if (conn->outgoing)
                 link_disconnect(irc, conn, "connection closed; retrying");
             else
                 server_drop_peer(irc, conn, "connection closed");
             continue;
         }
-        if (conn->fd >= 0 && conn->output_offset < conn->output.len &&
+        if (conn->fd != SNAG_SOCKET_INVALID && conn->output_offset < conn->output.len &&
             flush_conn(conn) < 0) {
             if (conn->outgoing)
                 link_disconnect(irc, conn, "write failed; retrying");
@@ -2446,7 +2408,7 @@ utf8_chunk(const char *text, size_t len, size_t max)
 static bool
 role_is_op(const struct snag_irc_core *irc, enum link_role role)
 {
-    if (irc->listener >= 0 &&
+    if (irc->listener != SNAG_SOCKET_INVALID &&
         (role == LINK_AGENT ? irc->agent_op : irc->operator_op))
         return true;
     for (size_t i = 0u; i < irc->link_count; ++i)
@@ -2475,7 +2437,7 @@ send_chat_line(struct snag_irc_core *irc, const char *nick, enum link_role role,
 {
     char clean[SNAG_IRC_TEXT_MAX + 1u];
     struct snag_irc_event event;
-    const char *room = irc->listener >= 0 ? irc->room : "";
+    const char *room = irc->listener != SNAG_SOCKET_INVALID ? irc->room : "";
 
     if (!len || len > SNAG_IRC_TEXT_MAX)
         return 0;
@@ -2488,7 +2450,7 @@ send_chat_line(struct snag_irc_core *irc, const char *nick, enum link_role role,
     }
     if (!clean[0])
         return 0;
-    if (irc->listener >= 0 &&
+    if (irc->listener != SNAG_SOCKET_INVALID &&
         server_broadcast(irc, ":%s!local@%s %s %s :%s", nick,
                          irc->server_name,
                          kind == SNAG_IRC_NOTICE ? "NOTICE" : "PRIVMSG",
@@ -2594,7 +2556,7 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
         snag_errorf(error, error_size, "IRC topic is invalid or too long");
         return -1;
     }
-    if (irc->listener >= 0 &&
+    if (irc->listener != SNAG_SOCKET_INVALID &&
         (role == LINK_AGENT ? irc->agent_op : irc->operator_op)) {
         memcpy(irc->topic, clean, strlen(clean) + 1u);
         if (server_broadcast(irc, ":%s!local@%s TOPIC %s :%s",

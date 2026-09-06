@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "irc_internal.h"
 #include "wake.h"
+#include "fs.h"
 
 #include <errno.h>
 #include <pthread.h>

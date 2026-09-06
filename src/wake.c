@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "wake.h"
 #include "base.h"
+#include "net.h"
 
 #include <errno.h>
 
@@ -8,22 +9,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <windows.h>
-
-static int
-socket_error(int code)
-{
-    switch (code) {
-    case WSAEWOULDBLOCK: errno = EAGAIN; break;
-    case WSAEINTR: errno = EINTR; break;
-    case WSAEINVAL: errno = EINVAL; break;
-    case WSAENOTSOCK: errno = EBADF; break;
-    case WSAEMFILE: errno = EMFILE; break;
-    case WSAENOBUFS: errno = ENOMEM; break;
-    case WSAEACCES: errno = EACCES; break;
-    default: errno = EIO; break;
-    }
-    return -1;
-}
 
 void
 snag_wakeup_close(snag_wake_fd pair[2])
@@ -37,23 +22,21 @@ snag_wakeup_close(snag_wake_fd pair[2])
         pair[i] = SNAG_WAKE_INVALID;
     }
     if (owned)
-        (void)WSACleanup();
+        snag_network_free();
     errno = saved;
 }
 
 int
 snag_wakeup_create(snag_wake_fd pair[2])
 {
-    WSADATA data;
     SOCKET listener = INVALID_SOCKET, writer = INVALID_SOCKET, reader = INVALID_SOCKET;
     struct sockaddr_in address = {0}, peer = {0}, local = {0};
     int size = sizeof(address), yes = 1, error;
     unsigned long nonblocking = 1;
 
     pair[0] = pair[1] = SNAG_WAKE_INVALID;
-    error = WSAStartup(MAKEWORD(2, 2), &data);
-    if (error)
-        return socket_error(error);
+    if (snag_network_init() < 0)
+        return -1;
     listener = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
     writer = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
     if (listener == INVALID_SOCKET || writer == INVALID_SOCKET)
@@ -99,8 +82,8 @@ fail:
         (void)closesocket(writer);
     if (reader != INVALID_SOCKET)
         (void)closesocket(reader);
-    (void)WSACleanup();
-    return socket_error(error);
+    snag_network_free();
+    return snag_socket_error(error);
 }
 
 void
@@ -140,7 +123,7 @@ snag_wakeup_wait(snag_wake_fd reader, int timeout_ms)
     timeout.tv_sec = timeout_ms / 1000;
     timeout.tv_usec = (timeout_ms % 1000) * 1000;
     int rc = select(0, &ready, NULL, NULL, timeout_ms < 0 ? NULL : &timeout);
-    return rc < 0 ? socket_error(WSAGetLastError()) : rc;
+    return rc < 0 ? snag_socket_error(WSAGetLastError()) : rc;
 }
 #else
 #include <fcntl.h>

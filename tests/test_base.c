@@ -2,6 +2,7 @@
 #include "base.h"
 #include "fs.h"
 #include "wake.h"
+#include "net.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -739,6 +740,69 @@ test_wakeup(void)
 }
 
 static void
+test_sockets(void)
+{
+    struct sockaddr_in address = {0};
+#ifdef _WIN32
+    int address_size = sizeof(address);
+#else
+    socklen_t address_size = sizeof(address);
+#endif
+    assert(snag_network_init() == 0);
+    snag_socket listener = snag_socket_open(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(listener != SNAG_SOCKET_INVALID);
+    assert(snag_socket_reuse(listener) == 0);
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    assert(snag_socket_bind(listener, (struct sockaddr *)&address, sizeof(address)) == 0);
+    assert(getsockname(listener, (struct sockaddr *)&address, &address_size) == 0);
+    assert(snag_socket_listen(listener, 2) == 0);
+    snag_socket occupied = snag_socket_open(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(occupied != SNAG_SOCKET_INVALID && snag_socket_reuse(occupied) == 0);
+    assert(snag_socket_bind(occupied, (struct sockaddr *)&address, sizeof(address)) < 0);
+    assert(errno == EADDRINUSE || errno == EACCES);
+    assert(snag_socket_close(occupied) == 0);
+    assert(snag_socket_accept(listener) == SNAG_SOCKET_INVALID &&
+           (errno == EAGAIN || errno == EWOULDBLOCK));
+    snag_socket client = snag_socket_open(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(client != SNAG_SOCKET_INVALID);
+    int rc = snag_socket_connect(client, (struct sockaddr *)&address, sizeof(address));
+    assert(rc == 0 || (rc < 0 && errno == EINPROGRESS));
+    snag_socket_event ready = {listener, SNAG_NET_READ, 0};
+    assert(snag_socket_poll(&ready, 1u, 1000) == 1 && (ready.revents & SNAG_NET_READ));
+    snag_socket server = snag_socket_accept(listener);
+    assert(server != SNAG_SOCKET_INVALID);
+    ready = (snag_socket_event){client, SNAG_NET_WRITE, 0};
+    assert(snag_socket_poll(&ready, 1u, 1000) == 1 && snag_socket_connected(client) == 0);
+    snag_socket_nodelay(client);
+    const char bytes[] = {'a', '\r', '\n', '\0'};
+    char received[sizeof(bytes)];
+    assert(snag_socket_recv(server, received, sizeof(received)) < 0 &&
+           (errno == EAGAIN || errno == EWOULDBLOCK));
+    assert(snag_socket_send(client, bytes, sizeof(bytes)) == sizeof(bytes));
+    size_t total = 0;
+    while (total < sizeof(bytes)) {
+        ready = (snag_socket_event){server, SNAG_NET_READ, 0};
+        assert(snag_socket_poll(&ready, 1u, 1000) == 1);
+        ssize_t got = snag_socket_recv(server, received + total, sizeof(received) - total);
+        assert(got > 0);
+        total += (size_t)got;
+    }
+    assert(!memcmp(bytes, received, sizeof(bytes)));
+    snag_socket_event many[80];
+    for (size_t i = 0; i < 80u; ++i)
+        many[i] = (snag_socket_event){SNAG_SOCKET_INVALID, SNAG_NET_READ, 0};
+    many[79] = (snag_socket_event){client, SNAG_NET_WRITE, 0};
+    assert(snag_socket_poll(many, 80u, 1000) == 1 && (many[79].revents & SNAG_NET_WRITE));
+    assert(snag_socket_close(client) == 0);
+    ready = (snag_socket_event){server, SNAG_NET_READ, 0};
+    assert(snag_socket_poll(&ready, 1u, 1000) == 1);
+    assert(snag_socket_recv(server, received, sizeof(received)) == 0);
+    assert(snag_socket_close(server) == 0 && snag_socket_close(listener) == 0);
+    snag_network_free();
+}
+
+static void
 test_regex(void)
 {
     static const struct {
@@ -920,6 +984,7 @@ main(void)
     test_private_directory();
     test_regex();
     test_wakeup();
+    test_sockets();
 #ifdef _WIN32
     test_windows_privacy();
 #endif
