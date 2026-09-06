@@ -467,11 +467,17 @@ test_runtime_roles(void)
     tick(upstream, 3u);
     assert(upstream_capture.events[SNAG_IRC_JOIN] == joins);
     assert(send_all(runtime, false, SNAG_IRC_MESSAGE, "after-host-stop", error, sizeof(error)) == 0);
-    tick(upstream, 3u);
+    route_deadline = snag_monotonic_ms() + 1000u;
+    while (!strstr(upstream_capture.message_text, "after-host-stop") &&
+           snag_monotonic_ms() < route_deadline)
+        tick(upstream, 1u);
     assert(strstr(upstream_capture.message_text, "after-host-stop"));
     assert(snag_irc_send_route(runtime, &frozen, false, SNAG_IRC_MESSAGE,
         "partial-to-survivor", NULL, error, sizeof(error)) == 2);
-    tick(upstream, 3u);
+    route_deadline = snag_monotonic_ms() + 1000u;
+    while (!strstr(upstream_capture.message_text, "partial-to-survivor") &&
+           snag_monotonic_ms() < route_deadline)
+        tick(upstream, 1u);
     assert(strstr(upstream_capture.message_text, "partial-to-survivor"));
 
     config.irc.client_count = 0u;
