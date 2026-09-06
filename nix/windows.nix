@@ -2,7 +2,12 @@
 { pkgs, windows ? pkgs.pkgsCross.mingwW64 }:
 let
   arch = if windows.stdenv.hostPlatform.isAarch64 then "arm64" else "x86_64";
-  threads = if windows.stdenv.cc.isClang then windows.windows.pthreads else windows.windows.mcfgthreads.overrideAttrs (old: {
+  pthreads = if windows.stdenv.cc.isClang then windows.windows.pthreads.overrideAttrs (old: {
+    makeFlags = (old.makeFlags or []) ++ [
+      "RCFLAGS=-I${windows.windows.mingw_w64_headers}/include"
+    ];
+  }) else windows.windows.pthreads;
+  threads = if windows.stdenv.cc.isClang then pthreads else windows.windows.mcfgthreads.overrideAttrs (old: {
     pname = "mcfgthread-static";
     mesonFlags = (old.mesonFlags or []) ++ [ "-Ddefault_library=static" ];
   });
@@ -55,13 +60,13 @@ let
     "-DUSE_SHARED_MBEDTLS_LIBRARY=OFF"
     "-DUSE_STATIC_MBEDTLS_LIBRARY=ON"
     "-DGEN_FILES=OFF"
-  ] [ windows.windows.pthreads ]).overrideAttrs (_: {
+  ] [ pthreads ]).overrideAttrs (_: {
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
     '';
     postInstall = ''
-      printf '\nLibs.private: -L${windows.windows.pthreads}/lib -lpthread -lbcrypt\n' \
+      printf '\nLibs.private: -L${pthreads}/lib -lpthread -lbcrypt\n' \
         >> "$out/lib/pkgconfig/mbedcrypto.pc"
     '';
   });
@@ -92,7 +97,7 @@ let
     "--disable-doc" "--with-libiconv-prefix=${iconv}"
     "--with-libunistring-prefix=${unistring}"
   ] [ iconv unistring ];
-  networkLibraries = [ tls windows.windows.pthreads zlib brotli zstd cares nghttp2
+  networkLibraries = [ tls pthreads zlib brotli zstd cares nghttp2
                        iconv unistring idn2 ];
   curl = cmakeLibrary windows.curlMinimal [
     "-DBUILD_STATIC_LIBS=ON" "-DBUILD_CURL_EXE=OFF" "-DCURL_BUILD_EVERYTHING=OFF"
