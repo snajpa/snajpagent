@@ -6,7 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct emitted {
+struct parsed_stream {
+    struct snag_response_graph graph;
+    char error[256];
     struct snag_buf text;
     size_t calls;
     size_t last_index;
@@ -15,12 +17,29 @@ struct emitted {
     char last_provider_id[64];
 };
 
+static struct parsed_stream
+parsed_new(size_t max)
+{
+    struct parsed_stream parsed = {0};
+
+    snag_response_graph_init(&parsed.graph);
+    snag_buf_init(&parsed.text, max);
+    return parsed;
+}
+
+static void
+parsed_free(struct parsed_stream *parsed)
+{
+    snag_buf_free(&parsed->text);
+    snag_response_graph_free(&parsed->graph);
+}
+
 static int
 capture_emit(void *opaque, size_t output_index, enum snag_item_kind kind,
              enum snag_item_phase phase, const char *provider_item_id,
              const char *text, size_t len)
 {
-    struct emitted *emitted = opaque;
+    struct parsed_stream *emitted = opaque;
 
     ++emitted->calls;
     emitted->last_index = output_index;
@@ -34,12 +53,13 @@ capture_emit(void *opaque, size_t output_index, enum snag_item_kind kind,
 }
 
 static int
-parse_stream(const char *wire, size_t chunk, struct snag_response_graph *graph,
-             struct emitted *emitted, char *error, size_t error_size)
+parse_stream(const char *wire, size_t chunk, struct parsed_stream *emitted)
 {
     struct snag_responses_stream responses;
     struct snag_sse_parser sse;
     size_t len = strlen(wire);
+    char *error = emitted->error;
+    size_t error_size = sizeof(emitted->error);
     int rc = 0;
 
     snag_responses_stream_init(&responses, capture_emit, emitted);
@@ -52,7 +72,7 @@ parse_stream(const char *wire, size_t chunk, struct snag_response_graph *graph,
     if (rc == 0)
         rc = snag_sse_finish(&sse, error, error_size);
     if (rc == 0)
-        rc = snag_responses_stream_finish(&responses, graph,
+        rc = snag_responses_stream_finish(&responses, &emitted->graph,
                                           error, error_size);
     else if (responses.failed)
         (void)snprintf(error, error_size, "%s",
@@ -85,29 +105,22 @@ test_deltas_survive_empty_terminal_output(void)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ping\",\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"total_tokens\":16,\"output_tokens_details\":{\"reasoning_tokens\":2}},\"output\":[]}}\n\n"
         "data: [DONE]\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(SNAG_MAX_PUBLIC_ITEM + 1u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, SNAG_MAX_PUBLIC_ITEM + 1u);
-    assert(parse_stream(wire, 1u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 1u);
-    assert(strcmp(graph.provider_response_id, "resp_ping") == 0);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "haha") == 0);
+    assert(parse_stream(wire, 1u, &emitted) == 0);
+    assert(emitted.graph.count == 1u);
+    assert(strcmp(emitted.graph.provider_response_id, "resp_ping") == 0);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "haha") == 0);
     assert(emitted.calls == 2u);
     assert(emitted.text.len == 4u);
     assert(memcmp(emitted.text.data, "haha", 4u) == 0);
-    assert(graph.usage.input_known && graph.usage.input_tokens == 12u);
-    assert(graph.usage.output_known && graph.usage.output_tokens == 4u);
-    assert(graph.usage.reasoning_known && graph.usage.reasoning_tokens == 2u);
-    assert(graph.usage.total_known && graph.usage.total_tokens == 16u);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    assert(emitted.graph.usage.input_known && emitted.graph.usage.input_tokens == 12u);
+    assert(emitted.graph.usage.output_known && emitted.graph.usage.output_tokens == 4u);
+    assert(emitted.graph.usage.reasoning_known && emitted.graph.usage.reasoning_tokens == 2u);
+    assert(emitted.graph.usage.total_known && emitted.graph.usage.total_tokens == 16u);
+    parsed_free(&emitted);
 }
 
 static void
@@ -116,27 +129,20 @@ test_terminal_snapshot_can_supply_unseen_items(void)
     static const char wire[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_snapshot\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_snapshot\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_comment\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"Working. \",\"annotations\":[]},{\"type\":\"output_text\",\"text\":\"Done.\",\"annotations\":[]}]},{\"id\":\"msg_final\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\",\"annotations\":[]}]}]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    if (parse_stream(wire, 17u, &graph, &emitted,
-                     error, sizeof(error)) != 0) {
-        fprintf(stderr, "snapshot parse: %s\n", error);
+    if (parse_stream(wire, 17u, &emitted) != 0) {
+        fprintf(stderr, "snapshot parse: %s\n", emitted.error);
         assert(0);
     }
-    assert(graph.count == 2u);
-    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_COMMENTARY);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "Working. Done.") == 0);
-    assert(snag_response_graph_item(&graph, 1).phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(snag_response_graph_item(&graph, 1).text, "answer") == 0);
+    assert(emitted.graph.count == 2u);
+    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_COMMENTARY);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "Working. Done.") == 0);
+    assert(snag_response_graph_item(&emitted.graph, 1).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 1).text, "answer") == 0);
     assert(emitted.last_index == 1u);
     assert(emitted.last_phase == SNAG_PHASE_FINAL_ANSWER);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -161,22 +167,15 @@ test_empty_public_items_get_specific_correction(void)
     const char *const wires[] = {streamed, snapshot, refusal, no_content};
 
     for (size_t i = 0; i < sizeof(wires) / sizeof(wires[0]); ++i) {
-        struct snag_response_graph graph;
-        struct emitted emitted;
-        char error[256] = {0};
+        struct parsed_stream emitted = parsed_new(1024u);
 
-        snag_response_graph_init(&graph);
-        memset(&emitted, 0, sizeof(emitted));
-        snag_buf_init(&emitted.text, 1024u);
-        assert(parse_stream(wires[i], 1u, &graph, &emitted,
-                            error, sizeof(error)) == 1);
-        assert(strcmp(error, SNAG_EMPTY_OUTPUT_CORRECTION) == 0);
-        assert(graph.count == 0u);
-        assert(graph.provider_response_id == NULL);
+        assert(parse_stream(wires[i], 1u, &emitted) == 1);
+        assert(strcmp(emitted.error, SNAG_EMPTY_OUTPUT_CORRECTION) == 0);
+        assert(emitted.graph.count == 0u);
+        assert(emitted.graph.provider_response_id == NULL);
         assert(emitted.calls == 0u);
         assert(emitted.text.len == 0u);
-        snag_buf_free(&emitted.text);
-        snag_response_graph_free(&graph);
+        parsed_free(&emitted);
     }
 }
 
@@ -195,10 +194,8 @@ test_oversized_public_items_get_specific_correction(void)
     memset(delta, 'x', delta_len);
     delta[delta_len] = '\0';
     for (size_t kind = 0; kind < 2u; ++kind) {
-        struct snag_response_graph graph;
-        struct emitted emitted;
+        struct parsed_stream emitted = parsed_new(SNAG_MAX_PUBLIC_ITEM);
         struct snag_buf wire;
-        char error[256] = {0};
 
         snag_buf_init(&wire, SNAG_MAX_RESPONSE_GRAPH);
         assert(snag_buf_printf(&wire,
@@ -212,17 +209,12 @@ test_oversized_public_items_get_specific_correction(void)
                 "data: {\"type\":\"%s\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"%s\":\"%s\"}\n\n",
                 event_types[kind], delta_keys[kind], delta) == 0);
         assert(snag_buf_terminate(&wire) == 0);
-        snag_response_graph_init(&graph);
-        memset(&emitted, 0, sizeof(emitted));
-        snag_buf_init(&emitted.text, SNAG_MAX_PUBLIC_ITEM);
-        assert(parse_stream((const char *)wire.data, 8191u, &graph, &emitted,
-                            error, sizeof(error)) < 0);
-        assert(strcmp(error, SNAG_OVERSIZED_OUTPUT_CORRECTION) == 0);
-        assert(graph.count == 0u);
+        assert(parse_stream((const char *)wire.data, 8191u, &emitted) < 0);
+        assert(strcmp(emitted.error, SNAG_OVERSIZED_OUTPUT_CORRECTION) == 0);
+        assert(emitted.graph.count == 0u);
         assert(emitted.calls == 2u);
         assert(emitted.text.len == 2u * delta_len);
-        snag_buf_free(&emitted.text);
-        snag_response_graph_free(&graph);
+        parsed_free(&emitted);
         snag_buf_free(&wire);
     }
     free(delta);
@@ -240,20 +232,13 @@ test_structured_keepalives_do_not_end_response(void)
         "data: {\"type\":\"keepalive\",\"time_ms\":123}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 7u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(strcmp(graph.provider_response_id, "resp_keepalive") == 0);
-    assert(graph.count == 0u);
+    assert(parse_stream(wire, 7u, &emitted) == 0);
+    assert(strcmp(emitted.graph.provider_response_id, "resp_keepalive") == 0);
+    assert(emitted.graph.count == 0u);
     assert(emitted.calls == 0u);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -284,23 +269,16 @@ test_unused_response_events_are_ignored(void)
         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}]}}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_citation\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 11u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 1u);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "Source.") == 0);
+    assert(parse_stream(wire, 11u, &emitted) == 0);
+    assert(emitted.graph.count == 1u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "Source.") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.text.len == 7u);
     assert(memcmp(emitted.text.data, "Source.", 7u) == 0);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -309,20 +287,13 @@ test_terminal_snapshot_ignores_unused_text_metadata(void)
     static const char wire[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_file\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_file\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_file\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"See file.\",\"annotations\":{\"unused\":true},\"logprobs\":\"unused\"}]}]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 13u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 1u);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "See file.") == 0);
+    assert(parse_stream(wire, 13u, &emitted) == 0);
+    assert(emitted.graph.count == 1u);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "See file.") == 0);
     assert(emitted.calls == 1u);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -345,10 +316,8 @@ test_unused_annotation_shapes_are_ignored(void)
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n";
 
     for (size_t i = 0; i < sizeof(bad_suffixes) / sizeof(bad_suffixes[0]); ++i) {
-        struct snag_response_graph graph;
-        struct emitted emitted;
+        struct parsed_stream emitted = parsed_new(1024u);
         struct snag_buf wire;
-        char error[256] = {0};
 
         snag_buf_init(&wire, 8192u);
         assert(snag_buf_append(&wire, prefix, strlen(prefix)) == 0);
@@ -356,15 +325,10 @@ test_unused_annotation_shapes_are_ignored(void)
                               strlen(bad_suffixes[i])) == 0);
         assert(snag_buf_append(&wire, finish, strlen(finish)) == 0);
         assert(snag_buf_terminate(&wire) == 0);
-        snag_response_graph_init(&graph);
-        memset(&emitted, 0, sizeof(emitted));
-        snag_buf_init(&emitted.text, 1024u);
-        assert(parse_stream((char *)wire.data, 7u, &graph, &emitted,
-                            error, sizeof(error)) == 0);
-        assert(graph.count == 1u);
-        assert(strcmp(snag_response_graph_item(&graph, 0).text, "x") == 0);
-        snag_buf_free(&emitted.text);
-        snag_response_graph_free(&graph);
+        assert(parse_stream((char *)wire.data, 7u, &emitted) == 0);
+        assert(emitted.graph.count == 1u);
+        assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "x") == 0);
+        parsed_free(&emitted);
         snag_buf_free(&wire);
     }
 }
@@ -387,30 +351,23 @@ test_phase_absent_text_becomes_visible_final(void)
         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"pong\",\"annotations\":[]}]}}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_pong\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    if (parse_stream(wire, 9u, &graph, &emitted,
-                     error, sizeof(error)) != 0) {
-        fprintf(stderr, "phase-absent text parse: %s\n", error);
+    if (parse_stream(wire, 9u, &emitted) != 0) {
+        fprintf(stderr, "phase-absent text parse: %s\n", emitted.error);
         assert(0);
     }
-    assert(graph.count == 1u);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(snag_response_graph_item(&graph, 0).provider_item_id, "msg_pong") == 0);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "pong") == 0);
+    assert(emitted.graph.count == 1u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).provider_item_id, "msg_pong") == 0);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "pong") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_phase == SNAG_PHASE_COMMENTARY);
     assert(strcmp(emitted.last_provider_id, "msg_pong") == 0);
     assert(emitted.text.len == 4u);
     assert(memcmp(emitted.text.data, "pong", 4u) == 0);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -428,26 +385,19 @@ test_phase_absent_text_before_tool_stays_commentary(void)
         "event: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_2\",\"output_index\":1,\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n"
         "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"fc_2\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_2\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}}\n\n"
         "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_call_text\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    if (parse_stream(wire, 23u, &graph, &emitted,
-                     error, sizeof(error)) != 0) {
-        fprintf(stderr, "phase-absent text+tool parse: %s\n", error);
+    if (parse_stream(wire, 23u, &emitted) != 0) {
+        fprintf(stderr, "phase-absent text+tool parse: %s\n", emitted.error);
         assert(0);
     }
-    assert(graph.count == 2u);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_COMMENTARY);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "Checking.") == 0);
-    assert(snag_response_graph_item(&graph, 1).kind == SNAG_ITEM_TOOL_CALL);
-    assert(strcmp(snag_response_graph_item(&graph, 1).provider_call_id, "call_2") == 0);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    assert(emitted.graph.count == 2u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_COMMENTARY);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "Checking.") == 0);
+    assert(snag_response_graph_item(&emitted.graph, 1).kind == SNAG_ITEM_TOOL_CALL);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 1).provider_call_id, "call_2") == 0);
+    parsed_free(&emitted);
 }
 
 static void
@@ -472,28 +422,21 @@ test_empty_reasoning_item_is_internal_only(void)
         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 19u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 1u);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(snag_response_graph_item(&graph, 0).provider_item_id,
+    assert(parse_stream(wire, 19u, &emitted) == 0);
+    assert(emitted.graph.count == 1u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).provider_item_id,
                   "msg_after_reasoning") == 0);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "ok") == 0);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "ok") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_index == 1u);
     assert(strcmp(emitted.last_provider_id, "msg_after_reasoning") == 0);
     assert(emitted.text.len == 2u);
     assert(memcmp(emitted.text.data, "ok", 2u) == 0);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -524,27 +467,20 @@ test_web_search_item_is_internal_only(void)
         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_web\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 23u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 1u);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(snag_response_graph_item(&graph, 0).provider_item_id, "msg_after_web") == 0);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "done") == 0);
+    assert(parse_stream(wire, 23u, &emitted) == 0);
+    assert(emitted.graph.count == 1u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).provider_item_id, "msg_after_web") == 0);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "done") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_index == 1u);
     assert(strcmp(emitted.last_provider_id, "msg_after_web") == 0);
     assert(emitted.text.len == 4u);
     assert(memcmp(emitted.text.data, "done", 4u) == 0);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -562,22 +498,15 @@ test_future_items_and_content_are_inert(void)
         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"text\":\"visible\"}\n\n"
         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"future_content_result\"},{\"type\":\"output_text\",\"text\":\"visible\"}]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_inert\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 17u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 1u);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "visible") == 0);
+    assert(parse_stream(wire, 17u, &emitted) == 0);
+    assert(emitted.graph.count == 1u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "visible") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_index == 1u);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -586,19 +515,12 @@ test_inert_only_response_has_empty_graph(void)
     static const char wire[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":\"completed\",\"output\":[{\"type\":\"future_action\",\"name\":\"exec_command\",\"arguments\":{}},{\"id\":\"msg_empty\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"future_content\",\"text\":\"hidden\"}]}]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 19u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 0u);
+    assert(parse_stream(wire, 19u, &emitted) == 0);
+    assert(emitted.graph.count == 0u);
     assert(emitted.calls == 0u);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -612,24 +534,17 @@ test_function_call_arguments(void)
         "event: response.function_call_arguments.done\ndata: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_1\",\"output_index\":0,\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\"}\n\n"
         "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"call_1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\"}}\n\n"
         "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_call\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 31u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 1u);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_TOOL_CALL);
-    assert(strcmp(snag_response_graph_item(&graph, 0).provider_call_id, "call_1") == 0);
-    assert(strcmp(snag_response_graph_item(&graph, 0).name, "exec_command") == 0);
-    assert(strcmp(snag_json_string(snag_response_graph_item(&graph, 0).arguments, "command"),
+    assert(parse_stream(wire, 31u, &emitted) == 0);
+    assert(emitted.graph.count == 1u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_TOOL_CALL);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).provider_call_id, "call_1") == 0);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).name, "exec_command") == 0);
+    assert(strcmp(snag_json_string(snag_response_graph_item(&emitted.graph, 0).arguments, "command"),
                   "printf hi") == 0);
     assert(emitted.calls == 0u);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -638,21 +553,14 @@ test_refusal(void)
     static const char wire[] =
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_refuse\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_refuse\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_refuse\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"I cannot do that.\"}]}]}}\n\n";
-    struct snag_response_graph graph;
-    struct emitted emitted;
-    char error[256] = {0};
+    struct parsed_stream emitted = parsed_new(1024u);
 
-    snag_response_graph_init(&graph);
-    memset(&emitted, 0, sizeof(emitted));
-    snag_buf_init(&emitted.text, 1024u);
-    assert(parse_stream(wire, 0u, &graph, &emitted,
-                        error, sizeof(error)) == 0);
-    assert(graph.count == 1u);
-    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_REFUSAL);
-    assert(strcmp(snag_response_graph_item(&graph, 0).text, "I cannot do that.") == 0);
+    assert(parse_stream(wire, 0u, &emitted) == 0);
+    assert(emitted.graph.count == 1u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_REFUSAL);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "I cannot do that.") == 0);
     assert(emitted.last_kind == SNAG_ITEM_REFUSAL);
-    snag_buf_free(&emitted.text);
-    snag_response_graph_free(&graph);
+    parsed_free(&emitted);
 }
 
 static void
@@ -664,15 +572,11 @@ test_invalid_call_after_public_item(void)
     };
 
     for (size_t i = 0; i < sizeof(calls) / sizeof(calls[0]); ++i) {
-        struct snag_response_graph graph;
-        struct emitted emitted = {0};
+        struct parsed_stream emitted = parsed_new(1024u);
         struct snag_buf wire;
-        char error[256] = {0};
 
-        snag_response_graph_init(&graph);
-        assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT,
+        assert(snag_response_graph_add_public(&emitted.graph, SNAG_ITEM_ASSISTANT,
             SNAG_PHASE_FINAL_ANSWER, "retained", "previous graph") == 0);
-        snag_buf_init(&emitted.text, 1024u);
         snag_buf_init(&wire, 4096u);
         assert(snag_buf_printf(&wire,
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
@@ -683,15 +587,13 @@ test_invalid_call_after_public_item(void)
         assert(snag_buf_terminate(&wire) == 0);
         /* Finalization must reject the whole staged graph, even after a
          * successful public item. Already emitted text cannot be withdrawn. */
-        assert(parse_stream((char *)wire.data, 7u, &graph, &emitted,
-                            error, sizeof(error)) < 0);
-        assert(strstr(error, "function"));
+        assert(parse_stream((char *)wire.data, 7u, &emitted) < 0);
+        assert(strstr(emitted.error, "function"));
         assert(emitted.text.len == 7u);
-        assert(graph.count == 1u);
-        assert(strcmp(snag_response_graph_item(&graph, 0).text, "previous graph") == 0);
+        assert(emitted.graph.count == 1u);
+        assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "previous graph") == 0);
         snag_buf_free(&wire);
-        snag_buf_free(&emitted.text);
-        snag_response_graph_free(&graph);
+        parsed_free(&emitted);
     }
 }
 
@@ -715,19 +617,12 @@ test_protocol_conflicts_fail_closed(void)
     };
 
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
-        struct snag_response_graph graph;
-        struct emitted emitted;
-        char error[256] = {0};
+        struct parsed_stream emitted = parsed_new(1024u);
 
-        snag_response_graph_init(&graph);
-        memset(&emitted, 0, sizeof(emitted));
-        snag_buf_init(&emitted.text, 1024u);
-        assert(parse_stream(bad[i], 7u, &graph, &emitted,
-                            error, sizeof(error)) < 0);
-        assert(error[0]);
-        assert(graph.count == 0u);
-        snag_buf_free(&emitted.text);
-        snag_response_graph_free(&graph);
+        assert(parse_stream(bad[i], 7u, &emitted) < 0);
+        assert(emitted.error[0]);
+        assert(emitted.graph.count == 0u);
+        parsed_free(&emitted);
     }
 }
 
