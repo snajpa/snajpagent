@@ -88,6 +88,86 @@ snajpagent
 Enter submits a turn.  Type
 .B /help
 for commands and keys.
+.SH BUILDING AND INSTALLING
+Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
+libcurl and Jansson development files.  Plain
+.B make
+builds only for the host, with size optimization and stripping.  ELF production
+packaging needs strip and objcopy; macOS needs strip and dsymutil.
+.TP
+.B make DEBUG=1
+Build unstripped debug code with frame pointers.  Both profiles keep the same
+features and runtime checks.  Switching profiles does not require cleaning;
+do not run different profiles concurrently in one worktree.
+.TP
+.B make install
+Build and install production under
+.IR /usr/local ,
+with executable mode 0755 and manual mode 0644.  Use
+.B make DEBUG=1 install
+for a deliberate debug installation.
+.B PREFIX
+changes the prefix;
+.B MANPREFIX
+defaults to $(PREFIX)/share/man.
+.B DESTDIR
+stages both paths without installing on the host.
+.TP
+.B make help
+List targets and overrides without building or contacting a provider.
+.TP
+.B make check
+Run existing local tests and source checks.  Tests need Python 3 and Perl;
+tmux enables the terminal integration tests.
+.PP
+Explicit CC, CPPFLAGS, CFLAGS and LDFLAGS replace their profile defaults;
+required identity and thread flags remain.  Production defaults to
+.B -Os
+and debug to
+.BR -Og .
+Neither default adds host-specific instruction sets or mandatory LTO.
+STRIP, OBJCOPY and DSYMUTIL override packaging tools.
+.PP
+Production retains matching symbols beside the build executable:
+.I snajpagent.debug
+on ELF or
+.I snajpagent.dSYM
+on macOS.  They are not installed or needed to run the program.  Keep them
+for diagnosing that exact binary; a later debug rebuild is not a substitute.
+.SS Standalone builds
+These explicit targets use the pinned Nix recipes and can download/build
+dependencies.  They do not replace the normal host executable or start VMs.
+Independent targets can run together with
+.BR "make -jN" .
+.TP
+.BR "make prod-linux-x86_64" , " make prod-linux-aarch64"
+Build a static-PIE Linux executable with embedded CA data.  Copy
+.I build/matrix/linux-ARCH/bin/snajpagent
+to the destination; Nix and third-party runtime libraries are not required
+there.  Optional matching symbols are in the adjacent
+.I .debug/
+directory.  These target modern Linux with x86-64 or ARMv8-A baselines;
+older-kernel compatibility requires separate qualification.
+.TP
+.BR "make prod-macos-arm64" , " make prod-macos-x86_64"
+Cross-build a macOS 11+ executable with static application libraries and CA
+data; only the OS libSystem remains dynamic.  Output is
+.IR build/matrix/macos-ARCH/bin/snajpagent ,
+with an adjacent matching dSYM.
+.TP
+.B make prod-macos-universal
+Combine both Mac slices into a native Mach-O universal executable and dSYM
+under
+.IR build/matrix/macos-universal/bin/ .
+.PP
+The macOS cross-builds are experimental: cross-built and inspected, not yet
+runtime-qualified on macOS.  No Developer ID signing or notarization is implied.
+Windows currently has dependency/platform foundations, not a complete agent
+or a public production target.  Cross-compilation alone does not establish
+runtime support.
+.PP
+See the repository's DEPENDENCIES.md for static dependency licenses, embedded
+trust, corresponding-source obligations and platform qualification details.
 .SH OPTIONS
 .TP
 .BR \-s " [" endpoint "]", " \-\-listen" [= endpoint ]
@@ -1129,6 +1209,12 @@ Supplies the default operator nick when valid and distinct.
 Disables color in
 .B auto
 mode when present.
+.TP
+.B SSL_CERT_FILE
+A nonempty value selects a CA file for provider, login and refresh HTTPS
+connections, including HTTPS proxies.  It replaces the standalone build's
+embedded CA data, or the native build's default CA file.  Certificate and
+hostname verification remain enabled.  Keep this file trusted and current.
 .TP
 .B TERM
 Enables terminal capabilities and color detection.

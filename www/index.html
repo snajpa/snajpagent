@@ -40,12 +40,15 @@ snajpagent -c -n reviewer -o bob</code></pre>
     <section id="install">
       <h2>install</h2>
       <p>You need a C11/POSIX environment with pthreads, GNU make, libcurl, and Jansson.</p>
+      <p>Production builds also use strip and objcopy on Linux, or strip and
+        dsymutil on macOS. <code>make help</code> describes other build targets.</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
 make
 sudo make install
 install -d -m 700 "$HOME/.snajpagent"</code></pre>
-      <p>First launch offers provider setup. For manual setup, save this as
+      <p>A fresh interactive launch without configuration or credentials offers setup.
+        For manual setup, save this as
         <code>$HOME/.snajpagent/config.ini</code> with a model your provider supports:</p>
       <pre><code>[agent]
 provider = openai

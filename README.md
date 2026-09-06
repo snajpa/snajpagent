@@ -7,9 +7,6 @@ It is built for autonomous development and integration with other software.
 
 [![snajpagent fixing and testing a small C program](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 
-One foreground C process runs coding tools and keeps resumable sessions.
-Work locally or bring agents and operators together through IRC.
-
 ## Install
 
 You need a C11/POSIX environment with pthreads, GNU make, libcurl, and Jansson.
@@ -22,54 +19,12 @@ sudo make install
 ```
 
 Installation adds the binary and `snajpagent(1)` under `/usr/local` by default.
-You can also run `./snajpagent` directly from the build directory.
 
-Plain `make` builds optimized, stripped **production for the host platform**;
-`make DEBUG=1` selects an unstripped debug build with frame pointers. Switch
-profiles without cleaning. `make install` selects production unless you also
-pass `DEBUG=1`. `make -jN` parallelizes compilation; it does not start foreign
-builds or VMs. `make help` lists targets and overrides without building.
-
-Production defaults to size optimization (`-Os`), with runtime checks and
-unwind information retained. Debug defaults to `-Og`; explicit compiler flags
-can select another optimization level. Neither profile enables host-specific
-instruction sets or makes LTO tooling mandatory.
-
-For a self-contained Linux x86-64 or ARM64 executable, use
-`make prod-linux-x86_64` or `make prod-linux-aarch64`.
-These explicit targets need Nix on the build host and may download/build their
-pinned dependencies. Copy `build/matrix/linux-ARCH/bin/snajpagent` to the
-destination; it needs no third-party libraries or certificate sidecar there.
-Matching optional symbols are under `build/matrix/linux-ARCH/bin/.debug/`.
-Both use static PIE and conservative architecture baselines (x86-64 or ARMv8-A),
-not the build host's instruction set. Independent targets can build together
-with `make -j2 prod-linux-x86_64 prod-linux-aarch64`.
-The first implementation targets modern Linux; older-kernel qualification is
-separate. See [dependencies](DEPENDENCIES.md) for embedded trust, license/source
-obligations and the `SSL_CERT_FILE` override. Plain `make` remains host-only.
-
-`make prod-macos-arm64` or `make prod-macos-x86_64` cross-builds a small macOS
-11+ ARM64 or Intel executable using
-pinned LLVM and the Apple SDK. Application libraries and CA data are static;
-only the OS's `libSystem` remains dynamic. Copy
-`build/matrix/macos-ARCH/bin/snajpagent`; the adjacent optional `.dSYM` matches
-it. **Experimental: cross-built and inspected, not yet runtime-qualified on
-macOS.** No Apple signing identity or notarization is implied.
-
-`make -j2 prod-macos-universal` builds the two Mac slices in parallel, then
-combines them into `build/matrix/macos-universal/bin/snajpagent` with a matching
-two-architecture dSYM. It is a native Mach-O universal file: no launcher,
-startup download, or payload extraction is needed. Standalone slices remain
-available; the same experimental macOS runtime qualification applies.
-
-Production keeps matching symbols beside the executable: `snajpagent.debug`
-on ELF systems, `snajpagent.dSYM` on macOS. Retain these for debugging that
-exact production binary; they are not installed or required at runtime.
-Production packaging needs `strip` and `objcopy` on ELF, or `strip` and
-`dsymutil` on macOS; debug builds need neither. Override the tools with
-`STRIP=...`, `OBJCOPY=...`, `DSYMUTIL=...`. Explicit `CFLAGS`/`LDFLAGS` replace
-profile defaults (required thread flags remain). Both profiles retain the
-same functionality and runtime checks; debug selection is not a feature mode.
+`make` builds stripped host-native production; `make DEBUG=1` keeps debug symbols.
+Use `make help` for targets and overrides. Production needs `strip` and `objcopy`
+on Linux, or `strip` and `dsymutil` on macOS. Optional Nix targets build standalone
+Linux executables and experimental macOS variants. See the [manual](snajpagent.1)
+for commands and [dependency notes](DEPENDENCIES.md) for portability and licenses.
 
 ## Choose a provider
 
@@ -127,8 +82,7 @@ after the current turn; `/goal resume` continues it. Queued prompts run first.
 `/status` shows the goal, queue, model, and connection state.
 
 The model can keep independent commands running while doing other work.
-Command timeouts hand execution back alive, not cancelled. You still control
-the session through the same prompt.
+Command timeouts hand execution back alive, not cancelled.
 
 `/model cache` downloads configured providers' catalogs. `/model` lists the
 cache; `/model NUMBER` selects a row. Add `save` to persist the selection.
@@ -150,7 +104,6 @@ snajpagent --resume --last
 ```
 
 Resume pauses goals and queued turns. Use `/goal resume` or `/next` when ready.
-`--dotdir DIR` selects another private state directory.
 
 For scripts, supply a prompt as arguments or through stdin:
 
