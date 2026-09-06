@@ -3012,7 +3012,7 @@ def test_runtime_network_commands():
         end = child.wait(b"chat is offline")
         child.wait(chat_prompt("runtimeop"), start=end)
         child.send(b"keep-unsent-draft\r")
-        end = child.wait(b"no active IRC destinations")
+        end = child.wait(b"no IRC destination selected; use /names")
         child.wait(b"keep-unsent-draft", start=end)
         assert not [event for event in events(session_id) if event["type"] == "turn_started"]
         child.send(b"\x15/rollout\r")
