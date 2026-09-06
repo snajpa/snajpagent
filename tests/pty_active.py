@@ -1824,7 +1824,7 @@ def test_queue_mutation_commands():
     child.wait(b"next " + PROMPT + b"fourth")
     child.send(b"\x03")
     interrupted_end = child.wait(b"turn interrupted")
-    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=interrupted_end)
+    child.wait(b"/medium (2) \xe2\x80\xba ", start=interrupted_end)
 
     child.send(b"/queue 1 edit\r")
     edit_start = child.wait("edit 1 › ".encode(), start=interrupted_end)
@@ -1840,6 +1840,7 @@ def test_queue_mutation_commands():
     session_id = new_session(before)
     resumed = Child(["--resume", session_id])
     resumed.wait(b"2 queued paused")
+    resumed.wait(b"/medium (2) \xe2\x80\xba ")
     resumed.wait(PROMPT.rstrip())
     start = len(resumed.buf)
     resumed.send(b"/q\r")
