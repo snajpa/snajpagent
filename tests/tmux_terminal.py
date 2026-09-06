@@ -1968,7 +1968,7 @@ def validate_irc_styles(terminal):
             pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} › ({nick}) heard"
             assert foreground_at(styled, pattern) is None
             pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} (›) {nick} heard"
-            assert foreground_at(styled, pattern) == (35 if nick == own else None)
+            assert foreground_at(styled, pattern) is None
 
 
 def run_destination_case(binary, root, provider, environment):
