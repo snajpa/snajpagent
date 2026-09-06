@@ -9,6 +9,21 @@
 #include <string.h>
 #include <locale.h>
 
+void
+snag_environment_entries_free(char **entries)
+{
+    if (!entries)
+        return;
+    for (size_t i = 0; entries[i]; ++i) {
+        size_t size = strlen(entries[i]);
+        volatile char *p = entries[i];
+        for (size_t j = 0; j < size; ++j)
+            p[j] = 0;
+        free(entries[i]);
+    }
+    free(entries);
+}
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -119,8 +134,8 @@ token_user(HANDLE token)
     return user;
 }
 
-static wchar_t *
-wide_path(const char *path)
+wchar_t *
+snag_utf8_to_wide(const char *path)
 {
     wchar_t *wide;
     size_t len;
@@ -131,8 +146,8 @@ wide_path(const char *path)
         return NULL;
     }
     len = strlen(path);
-    if (len > SNAG_PATH_MAX_BYTES) {
-        errno = ENAMETOOLONG;
+    if (len > INT_MAX) {
+        errno = E2BIG;
         return NULL;
     }
     if (!snag_utf8_valid((const unsigned char *)path, len, true)) {
@@ -154,10 +169,20 @@ wide_path(const char *path)
     return wide;
 }
 
+static wchar_t *
+wide_path(const char *path)
+{
+    if (path && strlen(path) > SNAG_PATH_MAX_BYTES) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    return snag_utf8_to_wide(path);
+}
+
 static bool private_dacl(PACL dacl, PSID owner);
 
-static char *
-utf8_string(const wchar_t *wide)
+char *
+snag_wide_to_utf8(const wchar_t *wide)
 {
     int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, NULL, 0, NULL, NULL);
     if (!size) {
@@ -195,7 +220,7 @@ snag_wide_arguments(int argc, wchar_t **wide)
     if (!out)
         return NULL;
     for (int i = 0; i < argc; ++i) {
-        if (!wide[i] || !(out[i] = utf8_string(wide[i]))) {
+        if (!wide[i] || !(out[i] = snag_wide_to_utf8(wide[i]))) {
             snag_arguments_free(out);
             return NULL;
         }
@@ -236,7 +261,7 @@ snag_environment(const char *name)
     free(key);
     char *out = NULL;
     if (got < size && got)
-        out = utf8_string(value);
+        out = snag_wide_to_utf8(value);
     else
         errno = EAGAIN; /* The environment changed between the size and read. */
     volatile wchar_t *wipe = value;
@@ -261,6 +286,35 @@ snag_home_directory(void)
     return path;
 }
 
+bool
+snag_environment_prefix(const char *entry, const char *prefix)
+{
+    return _strnicmp(entry, prefix, strlen(prefix)) == 0;
+}
+
+char **
+snag_environment_entries(void)
+{
+    wchar_t *block = GetEnvironmentStringsW();
+    if (!block) {
+        path_error(GetLastError());
+        return NULL;
+    }
+    size_t count = 0, at = 0;
+    for (const wchar_t *p = block; *p; p += wcslen(p) + 1u)
+        ++count;
+    char **entries = calloc(count + 1u, sizeof(*entries));
+    if (entries)
+        for (const wchar_t *p = block; *p; p += wcslen(p) + 1u)
+            if (!(entries[at++] = snag_wide_to_utf8(p))) {
+                snag_environment_entries_free(entries);
+                entries = NULL;
+                break;
+            }
+    (void)FreeEnvironmentStringsW(block);
+    return entries;
+}
+
 char *
 snag_default_shell(void)
 {
@@ -271,7 +325,7 @@ snag_default_shell(void)
         return NULL;
     }
     memcpy(directory + len, L"\\cmd.exe", 9u * sizeof(*directory));
-    return utf8_string(directory);
+    return snag_wide_to_utf8(directory);
 }
 
 int
@@ -1817,6 +1871,30 @@ char *
 snag_home_directory(void)
 {
     return snag_environment("HOME");
+}
+
+bool
+snag_environment_prefix(const char *entry, const char *prefix)
+{
+    return strncmp(entry, prefix, strlen(prefix)) == 0;
+}
+
+char **
+snag_environment_entries(void)
+{
+    extern char **environ;
+    size_t count = 0;
+    while (environ[count])
+        ++count;
+    char **entries = calloc(count + 1u, sizeof(*entries));
+    if (!entries)
+        return NULL;
+    for (size_t i = 0; i < count; ++i)
+        if (!(entries[i] = strdup(environ[i]))) {
+            snag_environment_entries_free(entries);
+            return NULL;
+        }
+    return entries;
 }
 
 char *

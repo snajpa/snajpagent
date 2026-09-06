@@ -8,7 +8,8 @@
 
 struct snag_child {
     bool pty, reaped;
-    int exit_code, signal_number;
+    int64_t exit_code;
+    int signal_number;
 #ifdef _WIN32
     struct snag_child_windows *native;
 #else

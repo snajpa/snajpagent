@@ -113,7 +113,7 @@ $(FIXTURE_BIN): $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS)
 	done; \
 	$(CC) $(LDFLAGS) -o $@ $$objs $(LDLIBS) $(CURL_LIBS)
 
-tests/test_base: $(PLATFORM_SRC) tests/test_base.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h
+tests/test_base: $(PLATFORM_SRC) src/process_host.c tests/test_base.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/process_host.h
 
 tests/test_config: $(PLATFORM_SRC) src/config.c src/secret_source.c tests/test_config.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h
 

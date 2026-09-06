@@ -56,7 +56,13 @@ int snag_hostname(char *out, size_t size);
 /* Owned UTF-8 copies; absent environment variables return NULL/ENOENT. */
 char *snag_environment(const char *name);
 char *snag_home_directory(void);
+char **snag_environment_entries(void);
+void snag_environment_entries_free(char **entries);
+bool snag_environment_prefix(const char *entry, const char *prefix);
 #ifdef _WIN32
+/* Explicit UTF-8/UTF-16 conversion; caller owns the result. */
+wchar_t *snag_utf8_to_wide(const char *text);
+char *snag_wide_to_utf8(const wchar_t *text);
 char **snag_wide_arguments(int argc, wchar_t **wide);
 void snag_arguments_free(char **argv);
 #endif

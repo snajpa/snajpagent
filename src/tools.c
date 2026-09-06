@@ -33,8 +33,6 @@
 #define SNAG_TOOL_CLOSE_GRACE_MS 2000u
 #define SNAG_TOOL_REDACTOR_MAX (8192u + SNAG_WIRE_SECRET_MAX)
 
-extern char **environ;
-
 struct capture_stream {
     struct snag_buf data;
     uint64_t bytes;
@@ -347,7 +345,7 @@ append_stream_text(struct snag_buf *out, const char *label,
 }
 
 static char *
-model_text_for(const char *status, const char *reason, int exit_code,
+model_text_for(const char *status, const char *reason, int64_t exit_code,
                int signal_number,
                const struct capture_stream *stdout_stream,
                const struct capture_stream *stderr_stream)
@@ -357,7 +355,7 @@ model_text_for(const char *status, const char *reason, int exit_code,
 
     snag_buf_init(&text, SIZE_MAX);
     if (strcmp(status, "succeeded") == 0 || strcmp(status, "failed") == 0) {
-        if (snag_buf_printf(&text, "Process exited with code %d.\n", exit_code) < 0)
+        if (snag_buf_printf(&text, "Process exited with code %lld.\n", (long long)exit_code) < 0)
             goto done;
     } else if (strcmp(status, "signaled") == 0) {
         if (snag_buf_printf(&text, "Process was terminated by signal %d.\n",
@@ -398,7 +396,7 @@ done:
 }
 
 static json_t *
-result_json(const char *status, const char *reason, int exit_code,
+result_json(const char *status, const char *reason, int64_t exit_code,
             int signal_number, uint64_t duration_ms, const char *handle,
             const struct capture_stream *stdout_stream,
             const struct capture_stream *stderr_stream)
@@ -430,7 +428,7 @@ static bool
 env_name_matches(const char *entry, const char *name)
 {
     size_t len = strlen(name);
-    return strncmp(entry, name, len) == 0 && entry[len] == '=';
+    return snag_environment_prefix(entry, name) && entry[len] == '=';
 }
 
 static bool
@@ -472,7 +470,7 @@ remove_env_entry(const char *entry, const struct snag_config *config)
     for (size_t i = 0; i < sizeof(proxy_names) / sizeof(proxy_names[0]); ++i)
         if (env_name_matches(entry, proxy_names[i]) && proxy_with_userinfo(entry))
             return true;
-    if (strncmp(entry, "SNAJPAGENT_", 11u) == 0)
+    if (snag_environment_prefix(entry, "SNAJPAGENT_"))
         return true;
     return false;
 }
@@ -480,18 +478,20 @@ remove_env_entry(const char *entry, const struct snag_config *config)
 static char **
 filtered_environment(const struct snag_config *config)
 {
-    size_t count = 0;
     size_t kept = 0;
-    char **env;
-
-    while (environ[count])
-        ++count;
-    env = calloc(count + 1u, sizeof(*env));
+    char **env = snag_environment_entries();
     if (!env)
         return NULL;
-    for (size_t i = 0; i < count; ++i)
-        if (!remove_env_entry(environ[i], config))
-            env[kept++] = environ[i];
+    for (size_t i = 0; env[i]; ++i)
+        if (!remove_env_entry(env[i], config))
+            env[kept++] = env[i];
+        else {
+            size_t size = strlen(env[i]);
+            volatile char *p = env[i];
+            for (size_t j = 0; j < size; ++j)
+                p[j] = 0;
+            free(env[i]);
+        }
     env[kept] = NULL;
     return env;
 }
@@ -836,7 +836,8 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result,
     struct managed_process *proc = find_process(handle);
     struct capture_stream streams[2] = {0};
     const char *status = "running";
-    int exit_code = -1, signal_number = -1, rc = -1;
+    int64_t exit_code = -1;
+    int signal_number = -1, rc = -1;
     if (!proc || !journal_read) {
         snag_errorf(error, error_size, "command handle or output journal unavailable");
         return -1;
@@ -973,13 +974,13 @@ start_command(const char *handle, const char *command, const char *workdir,
         output->capture.stream = s;
         redactor_init(&output->redactor, &output->capture, &proc->secrets.wire);
     }
-    free(env);
+    snag_environment_entries_free(env);
     env = NULL;
     return 0;
 
 out:
     managed_release(proc);
-    free(env);
+    snag_environment_entries_free(env);
     return -1;
 }
 

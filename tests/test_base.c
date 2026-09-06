@@ -4,6 +4,7 @@
 #include "wake.h"
 #include "net.h"
 #include "term_host.h"
+#include "process_host.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -42,6 +43,56 @@ test_shutdown_signal(int number)
 }
 
 #ifdef _WIN32
+static void
+test_native_process(void)
+{
+    char *shell = snag_default_shell();
+    char **env = snag_environment_entries();
+    char *directory = snag_realpath(".");
+    struct snag_child child;
+    snag_child_init(&child);
+    assert(shell && env && directory);
+    assert(snag_child_spawn(&child, shell, "echo native-out&echo native-err 1>&2&exit /b 7",
+                            directory, env, false) == 0);
+    snag_child_close_stream(&child, 2u);
+    bool open[2] = {true, true};
+    struct snag_buf output[2];
+    snag_buf_init(&output[0], 4096u);
+    snag_buf_init(&output[1], 4096u);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    while (open[0] || open[1] || snag_child_exited(&child) == 0) {
+        assert(snag_monotonic_ms() < deadline);
+        struct snag_child_event events[2];
+        size_t count = 0;
+        for (unsigned int i = 0; i < 2u; ++i)
+            if (open[i])
+                events[count++] = (struct snag_child_event){&child, i, SNAG_CHILD_READ, 0};
+        assert(snag_child_wait(events, count, SNAG_WAKE_INVALID, 20) >= 0);
+        for (size_t i = 0; i < count; ++i)
+            if (events[i].revents) {
+                char bytes[4096];
+                unsigned int stream = events[i].stream;
+                ssize_t n = snag_child_read(&child, stream, bytes, sizeof(bytes));
+                assert(n >= 0);
+                if (!n) {
+                    open[stream] = false;
+                    snag_child_close_stream(&child, stream);
+                } else
+                    assert(snag_buf_append(&output[stream], bytes, (size_t)n) == 0);
+            }
+    }
+    assert(snag_child_reap(&child) == 0 && child.exit_code == 7);
+    for (size_t i = 0; i < 2u; ++i)
+        assert(snag_buf_terminate(&output[i]) == 0);
+    assert(strstr((char *)output[0].data, "native-out") && strstr((char *)output[1].data, "native-err"));
+    snag_child_free(&child);
+    snag_buf_free(&output[0]);
+    snag_buf_free(&output[1]);
+    free(shell);
+    free(directory);
+    snag_environment_entries_free(env);
+}
+
 static void
 test_home_environment(void)
 {
@@ -1148,6 +1199,7 @@ static void
 test_platform(void)
 {
 #ifdef _WIN32
+    test_native_process();
     test_home_environment();
 #endif
     assert(!snag_environment(NULL) && errno == EINVAL);
