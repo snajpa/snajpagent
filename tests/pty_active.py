@@ -3498,7 +3498,8 @@ def test_network_view_routing_and_atomic_catchup():
         assert "── rollout ──".encode() not in same_view, same_view
         assert tab_first not in same_view, same_view
         assert tab_second not in same_view, same_view
-        assert same_view.count(rollout_idle) == 1, same_view
+        assert same_view.count(rollout_idle + b"/rollout\r\n") == 1, same_view
+        assert same_view.count(rollout_idle) == 2, same_view  # Echo plus one idle prompt.
 
         chat_start = len(child.buf)
         child.send(b"\t")
