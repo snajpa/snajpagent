@@ -920,113 +920,73 @@ write_temp_file(int parent_fd, const struct snag_buf *bytes,
 }
 
 static int
-install_add(int root_fd, const struct patch_op *op,
-            char *error, size_t error_size)
+install_op(int root_fd, const struct patch_op *op,
+           char *error, size_t error_size)
 {
     char leaf[SNAG_NAME_MAX_BYTES + 1u];
-    char temp[SNAG_NAME_MAX_BYTES + 1u];
+    char temp[SNAG_NAME_MAX_BYTES + 1u] = {0};
+    const char *kind = op->type == OP_ADD ? "add" :
+                       op->type == OP_UPDATE ? "update" : "delete";
+    const char *failure = "changed before install";
     snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
-    int rc = -1;
-    int saved;
+    int rc = -1, saved;
 
     if (parent_fd < 0)
         return -1;
-    if (snag_lstat_at(parent_fd, leaf, &st) == 0) {
-        snag_errorf(error, error_size, "add target %s appeared before install", op->path);
-        errno = EEXIST;
-        goto out;
-    }
-    if (errno != ENOENT)
-        goto out;
-    if (write_temp_file(parent_fd, &op->new_bytes, NULL, temp) < 0) {
-        snag_errorf(error, error_size, "add target %s could not be staged", op->path);
-        goto out;
-    }
-    if (snag_link_at(parent_fd, temp, parent_fd, leaf) < 0) {
-        saved = errno;
-        (void)snag_unlink_at(parent_fd, temp, false);
-        errno = saved;
-        snag_errorf(error, error_size, "add target %s could not be installed", op->path);
-        goto out;
-    }
-    if (snag_unlink_at(parent_fd, temp, false) < 0 || snag_sync_dir(parent_fd) < 0) {
-        snag_errorf(error, error_size, "add target %s directory sync failed", op->path);
-        goto out;
-    }
-    rc = 0;
-out:
-    close(parent_fd);
-    return rc;
-}
-
-static int
-install_update(int root_fd, const struct patch_op *op,
-               char *error, size_t error_size)
-{
-    char leaf[SNAG_NAME_MAX_BYTES + 1u];
-    char temp[SNAG_NAME_MAX_BYTES + 1u];
-    int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
-    int rc = -1;
-    int saved;
-
-    if (parent_fd < 0)
-        return -1;
-    if (!unchanged_target(parent_fd, leaf, op)) {
-        snag_errorf(error, error_size, "update target %s changed before install", op->path);
+    if (op->type == OP_ADD) {
+        if (snag_lstat_at(parent_fd, leaf, &st) == 0) {
+            failure = "appeared before install";
+            errno = EEXIST;
+            goto fail;
+        }
+        if (errno != ENOENT)
+            goto out;
+    } else if (op->type == OP_UPDATE ? !unchanged_target(parent_fd, leaf, op) :
+               (snag_lstat_at(parent_fd, leaf, &st) < 0 || !same_identity(&op->st, &st))) {
         errno = ESTALE;
-        goto out;
+        goto fail;
     }
-    if (write_temp_file(parent_fd, &op->new_bytes, &op->permissions, temp) < 0) {
-        snag_errorf(error, error_size, "update target %s could not be staged", op->path);
-        goto out;
-    }
-    if (!unchanged_target(parent_fd, leaf, op)) {
-        saved = errno;
-        (void)snag_unlink_at(parent_fd, temp, false);
-        errno = saved ? saved : ESTALE;
-        snag_errorf(error, error_size, "update target %s changed before rename", op->path);
-        goto out;
-    }
-    if (snag_rename_at(parent_fd, temp, parent_fd, leaf) < 0) {
-        saved = errno;
-        (void)snag_unlink_at(parent_fd, temp, false);
-        errno = saved;
-        snag_errorf(error, error_size, "update target %s could not be installed", op->path);
-        goto out;
-    }
-    if (snag_sync_dir(parent_fd) < 0) {
-        snag_errorf(error, error_size, "update target %s directory sync failed", op->path);
-        goto out;
-    }
-    rc = 0;
-out:
-    close(parent_fd);
-    return rc;
-}
-
-static int
-install_delete(int root_fd, const struct patch_op *op,
-               char *error, size_t error_size)
-{
-    char leaf[SNAG_NAME_MAX_BYTES + 1u];
-    snag_file_info st;
-    int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
-    int rc = -1;
-
-    if (parent_fd < 0)
-        return -1;
-    if (snag_lstat_at(parent_fd, leaf, &st) < 0 ||
-        !same_identity(&op->st, &st)) {
-        snag_errorf(error, error_size, "delete target %s changed before install", op->path);
-        errno = ESTALE;
-        goto out;
-    }
-    if (snag_unlink_at(parent_fd, leaf, false) < 0 || snag_sync_dir(parent_fd) < 0) {
-        snag_errorf(error, error_size, "delete target %s could not be removed", op->path);
-        goto out;
+    if (op->type == OP_DELETE) {
+        failure = "could not be removed";
+        if (snag_unlink_at(parent_fd, leaf, false) < 0 ||
+            snag_sync_dir(parent_fd) < 0)
+            goto fail;
+    } else {
+        failure = "could not be staged";
+        if (write_temp_file(parent_fd, &op->new_bytes,
+                             op->type == OP_UPDATE ? &op->permissions : NULL, temp) < 0) {
+            temp[0] = '\0'; /* The stage writer owns cleanup on failure. */
+            goto fail;
+        }
+        if (op->type == OP_UPDATE && !unchanged_target(parent_fd, leaf, op)) {
+            failure = "changed before rename";
+            if (!errno)
+                errno = ESTALE;
+            goto fail;
+        }
+        failure = "could not be installed";
+        if ((op->type == OP_ADD ?
+             snag_link_at(parent_fd, temp, parent_fd, leaf) :
+             snag_rename_at(parent_fd, temp, parent_fd, leaf)) < 0)
+            goto fail;
+        failure = "directory sync failed";
+        if (op->type == OP_ADD && snag_unlink_at(parent_fd, temp, false) < 0) {
+            temp[0] = '\0'; /* Preserve the failed-unlink result, without retry. */
+            goto fail;
+        }
+        temp[0] = '\0';
+        if (snag_sync_dir(parent_fd) < 0)
+            goto fail;
     }
     rc = 0;
+    goto out;
+fail:
+    saved = errno;
+    if (temp[0])
+        (void)snag_unlink_at(parent_fd, temp, false);
+    errno = saved;
+    snag_errorf(error, error_size, "%s target %s %s", kind, op->path, failure);
 out:
     close(parent_fd);
     return rc;
@@ -1053,15 +1013,8 @@ install_patch(struct patch_set *set, int root_fd,
         order[i] = &set->ops[i];
     qsort(order, set->count, sizeof(*order), op_compare);
     for (size_t i = 0; i < set->count; ++i) {
-        if (order[i]->type == OP_ADD) {
-            if (install_add(root_fd, order[i], error, error_size) < 0)
-                goto out;
-        } else if (order[i]->type == OP_UPDATE) {
-            if (install_update(root_fd, order[i], error, error_size) < 0)
-                goto out;
-        } else if (install_delete(root_fd, order[i], error, error_size) < 0) {
+        if (install_op(root_fd, order[i], error, error_size) < 0)
             goto out;
-        }
     }
     rc = 0;
 out:
