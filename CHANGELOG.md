@@ -13,9 +13,10 @@
 - Derive build versions from the latest reachable Git tag instead of META's
   fixed VERSION, retaining revision/dirty suffixes between tagged releases.
 
-- Limit mention highlighting to the timestamp and sender nick. Leave message
-  bodies, Markdown, wrapped continuations and separators unchanged. Match the
-  local operator's or model's accepted room nickname; honor disabled colors.
+- Limit mention highlighting to the timestamp, sender nick and header separator.
+  Leave message bodies, Markdown and wrapped continuations unchanged. Match the
+  local operator's or model's accepted room nickname, excluding the sender's own
+  nick with IRC case folding; honor disabled colors.
 
 - Preserve active goals across orderly process exit, including Ctrl-D/EOF
   and shutdown signals. Closing the process no longer saves

@@ -1948,7 +1948,7 @@ def foreground_at(styled, pattern):
     return colors[match.start(1)]
 
 
-def validate_irc_styles(terminal, own):
+def validate_irc_styles(terminal):
     styled = terminal.capture_styled()
     expected = [
         (nick, color, role)
@@ -1959,14 +1959,12 @@ def validate_irc_styles(terminal, own):
         for nick in nicks
     ]
     for nick, color, role in expected:
-        if nick == own or nick == "@" + own.replace("bot", "op"):
-            color, role = 35, "mention magenta"
         pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} ({nick}) "
         assert foreground_at(styled, pattern) == color, f"{nick} missing {role}:\n{styled}"
         if not nick.startswith("@"):
-            # Self-mentions highlight timestamps and sender nicks, never the body.
+            # Self-mentions retain ordinary colors in every viewer.
             pattern = rf"(?m)^(\d{{2}}:\d{{2}}:\d{{2}}) {nick} "
-            assert foreground_at(styled, pattern) == (35 if nick == own else None)
+            assert foreground_at(styled, pattern) is None
             pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} › ({nick}) heard"
             assert foreground_at(styled, pattern) is None
             pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} {nick} (›) {nick} heard"
@@ -3556,8 +3554,8 @@ def run_irc_chat_case(binary, root):
             if screen.count("@twoop set topic · shared integration topic") != 1:
                 raise AssertionError(f"{name} did not render the topic change once")
             validate_irc_events(terminal.dotdir)
-        for name, _model, own, _operator, _args in specs:
-            validate_irc_styles(terminals[name], own)
+        for terminal in ordered:
+            validate_irc_styles(terminal)
 
         for marker in (first, second):
             requests = provider.matching_requests(marker)
@@ -3654,12 +3652,14 @@ def run_irc_chat_case(binary, root):
                     terminal.wait(ending)
                     styled = terminal.capture_styled()
                     # Only the addressed viewer highlights this message's
-                    # timestamp and sender; its entire body remains unchanged.
+                    # timestamp, sender and separator; its body stays unchanged.
                     assert foreground_at(styled, r"(highlight start)") is None, styled
                     assert foreground_at(styled, r"(code)") == 33, styled
                     prefix = r"(?m)^\d{2}:\d{2}:\d{2} (highlightpeer) › @" + target.upper()
                     assert foreground_at(styled, prefix) == (35 if name == viewer else 34), styled
                     prefix = r"(?m)^(\d{2}:\d{2}:\d{2}) highlightpeer › @" + target.upper()
+                    assert foreground_at(styled, prefix) == (35 if name == viewer else None), styled
+                    prefix = r"(?m)^\d{2}:\d{2}:\d{2} highlightpeer (›) @" + target.upper()
                     assert foreground_at(styled, prefix) == (35 if name == viewer else None), styled
                     assert foreground_at(styled, f"({ending})") is None, styled
                 wait_irc_idle(ordered)

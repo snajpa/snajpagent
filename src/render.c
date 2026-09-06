@@ -2668,8 +2668,10 @@ render_irc_event_now(struct snag_render *render,
                 origin = &destinations->items[i];
         highlight = origin &&
             (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
-            (snag_irc_nick_mentioned(event->text, origin->operator) ||
-             snag_irc_nick_mentioned(event->text, origin->model));
+            ((!snag_irc_nick_mentioned(event->nick, origin->operator) &&
+              snag_irc_nick_mentioned(event->text, origin->operator)) ||
+             (!snag_irc_nick_mentioned(event->nick, origin->model) &&
+              snag_irc_nick_mentioned(event->text, origin->model)));
         if (origin && destinations->count > 1u)
             (void)snprintf(source, sizeof(source), "[%u] ", origin->target.id);
         else if (!origin && strcmp(event->endpoint, "local") != 0)
@@ -2703,11 +2705,12 @@ render_irc_event_now(struct snag_render *render,
         if (n < 0 || (size_t)n >= sizeof(prefix) ||
             irc_piece(render, prefix, true) < 0)
             goto out;
-        if (colored && irc_piece(render, highlight ? COLOR_OPERATOR : COLOR_RESET, false) < 0)
+        if (colored && !highlight && irc_piece(render, COLOR_RESET, false) < 0)
             goto out;
         if (irc_piece(render,
-                event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0 ||
-            (colored && irc_piece(render, COLOR_RESET, false) < 0))
+                event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0)
+            goto out;
+        if (colored && highlight && irc_piece(render, COLOR_RESET, false) < 0)
             goto out;
         markdown_body = event->kind == SNAG_IRC_MESSAGE && render->markdown &&
                         render->stderr_terminal && !event->op;

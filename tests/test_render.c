@@ -1442,24 +1442,33 @@ static void
 test_local_mention_highlight(void)
 {
     static const struct {
-        const char *text, *nick, *room;
+        const char *text, *nick, *room, *sender;
         enum snag_irc_event_kind kind;
         bool op, highlight;
     } cases[] = {
-        {"@ALICE **bold** `code` tail", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
-        {"alice: plain tail", "alice", "#room", SNAG_IRC_MESSAGE, true, true},
-        {"@alice notice tail", "alice", "#room", SNAG_IRC_NOTICE, false, true},
-        {"malice alice2 alice-other éalice aliceé", "alice", "#room", SNAG_IRC_MESSAGE, false, false},
-        {"@bob wrong destination", "alice", "#room", SNAG_IRC_MESSAGE, false, false},
-        {"@alice wrong room", "alice", "#other", SNAG_IRC_MESSAGE, false, false},
-        {"@alice old alias", "alice2", "#room", SNAG_IRC_MESSAGE, false, false},
-        {"@alice2 accepted alias", "alice2", "#room", SNAG_IRC_MESSAGE, false, true},
-        {"@alice topic", "alice", "#room", SNAG_IRC_TOPIC, false, false},
-        {"unregistered nick", "", "#room", SNAG_IRC_MESSAGE, false, false},
-        {"@local-other also addressed", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
-        {"# @alice heading", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
-        {"> @alice quote", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
-        {"@alice *italic* ~~strike~~ [link](https://example.test)", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
+        {"@ALICE **bold** `code` tail", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
+        {"alice: plain tail", "alice", "#room", "peer", SNAG_IRC_MESSAGE, true, true},
+        {"@alice notice tail", "alice", "#room", "peer", SNAG_IRC_NOTICE, false, true},
+        {"malice alice2 alice-other éalice aliceé", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, false},
+        {"@bob wrong destination", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, false},
+        {"@alice wrong room", "alice", "#other", "peer", SNAG_IRC_MESSAGE, false, false},
+        {"@alice old alias", "alice2", "#room", "peer", SNAG_IRC_MESSAGE, false, false},
+        {"@alice2 accepted alias", "alice2", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
+        {"@alice topic", "alice", "#room", "peer", SNAG_IRC_TOPIC, false, false},
+        {"unregistered nick", "", "#room", "peer", SNAG_IRC_MESSAGE, false, false},
+        {"@local-other also addressed", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
+        {"# @alice heading", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
+        {"> @alice quote", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
+        {"@alice *italic* ~~strike~~ [link](https://example.test)", "alice", "#room", "peer", SNAG_IRC_MESSAGE, false, true},
+        {"@alice self", "alice", "#room", "alice", SNAG_IRC_MESSAGE, false, false},
+        {"@alice self operator", "alice", "#room", "ALICE", SNAG_IRC_MESSAGE, true, false},
+        {"@alice self notice", "alice", "#room", "Alice", SNAG_IRC_NOTICE, false, false},
+        {"@{ALICE} self folded", "[alice]", "#room", "{Alice}", SNAG_IRC_MESSAGE, false, false},
+        {"@alice2 self alias", "alice2", "#room", "ALICE2", SNAG_IRC_MESSAGE, false, false},
+        {"@alice not self", "alice", "#room", "alice2", SNAG_IRC_MESSAGE, false, true},
+        {"@alice and @local-other", "alice", "#room", "alice", SNAG_IRC_MESSAGE, false, true},
+        {"@alice and @local-other", "alice", "#room", "local-other", SNAG_IRC_MESSAGE, true, true},
+        {"@local-other self", "alice", "#room", "local-other", SNAG_IRC_MESSAGE, false, false},
     };
     for (unsigned int flags = 0u; flags < 16u; ++flags) {
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
@@ -1492,6 +1501,7 @@ test_local_mention_highlight(void)
             if (flags & 2u)
                 assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
             strcpy(event.room, cases[i].room);
+            strcpy(event.nick, cases[i].sender);
             strcpy(event.text, cases[i].text);
             event.kind = cases[i].kind;
             event.op = cases[i].op;
@@ -1514,14 +1524,19 @@ test_local_mention_highlight(void)
                 assert(strstr(output, strcmp(cases[i].room, "#room") == 0 ?
                               "\033[2m[1] " : "\033[2m[server #other] "));
                 if (cases[i].kind == SNAG_IRC_MESSAGE || cases[i].kind == SNAG_IRC_NOTICE) {
-                    const char *body = strstr(output, "peer ");
+                    char nick[128u], boundary[32u];
+                    const char *separator = cases[i].kind == SNAG_IRC_NOTICE ? "- " : "› ";
+                    snprintf(nick, sizeof(nick), "%s ", cases[i].sender);
+                    const char *body = strstr(output, nick);
                     assert(body);
-                    const char *separator = strstr(body, cases[i].kind == SNAG_IRC_NOTICE ? "- " : "› ");
-                    assert(separator);
-                    const char *message = separator + (cases[i].kind == SNAG_IRC_NOTICE ? 2u : 4u);
-                    assert(!strncmp(message, "\033[0m", 4u));
-                    assert(!strstr(message, "35m"));
-                    assert((strstr(output, "\033[1;35mpeer ") != NULL) ==
+                    body += strlen(nick);
+                    snprintf(boundary, sizeof(boundary), "%s%s%s",
+                             cases[i].highlight ? "" : "\033[0m", separator,
+                             cases[i].highlight ? "\033[0m" : "");
+                    assert(strncmp(body, boundary, strlen(boundary)) == 0);
+                    assert(!strstr(body, "35m"));
+                    snprintf(nick, sizeof(nick), "\033[1;35m%s ", cases[i].sender);
+                    assert((strstr(output, nick) != NULL) ==
                            (!cases[i].op && cases[i].highlight &&
                             cases[i].kind == SNAG_IRC_MESSAGE));
                 }
