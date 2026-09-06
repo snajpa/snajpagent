@@ -36,7 +36,7 @@ let
   packageName = metaValue "NAME";
   version = if buildVersion != null then buildVersion else
     "${metaValue "VERSION"}-${source.dirtyShortRev or source.shortRev}";
-in assert buildRevision == null || buildRevision == revision; {
+in assert buildRevision == null || buildRevision == revision; rec {
   inherit pkgs static tls curl;
   macos-arm64 = (import ./macos.nix {
     inherit pkgs;
@@ -48,6 +48,21 @@ in assert buildRevision == null || buildRevision == revision; {
     sourcePkgs = static;
     arch = "x86_64";
   }).application { inherit source packageName version revision; };
+  macos-universal = pkgs.runCommand "${packageName}-macos-universal-${version}" {
+    nativeBuildInputs = [ pkgs.llvmPackages_21.llvm ];
+    outputs = [ "out" "debug" ];
+  } ''
+    mkdir -p "$out/bin" "$debug/${packageName}.dSYM/Contents/Resources/DWARF"
+    llvm-lipo -create ${macos-arm64}/bin/${packageName} \
+      ${macos-x86_64}/bin/${packageName} -output "$out/bin/${packageName}"
+    cp ${macos-arm64.debug}/${packageName}.dSYM/Contents/Info.plist \
+      "$debug/${packageName}.dSYM/Contents/Info.plist"
+    llvm-lipo -create \
+      ${macos-arm64.debug}/${packageName}.dSYM/Contents/Resources/DWARF/${packageName} \
+      ${macos-x86_64.debug}/${packageName}.dSYM/Contents/Resources/DWARF/${packageName} \
+      -output "$debug/${packageName}.dSYM/Contents/Resources/DWARF/${packageName}"
+    ln -s "$debug/${packageName}.dSYM" "$out/bin/${packageName}.dSYM"
+  '';
   linux-x86_64 = musl.stdenv.mkDerivation {
     pname = packageName;
     inherit version;

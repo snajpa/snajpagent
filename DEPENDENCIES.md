@@ -77,6 +77,13 @@ UUID. This is not Developer ID signing, notarization, or runtime qualification:
 the initial targets are explicitly experimental until actual macOS tests
 pass. No separately installed third-party shared libraries are introduced.
 
+`make -jN prod-macos-universal` uses independent slice prerequisites and
+`llvm-lipo` to combine the executables and their dSYM DWARF payloads. The
+per-slice code signatures remain intact: thinning the combined executable
+must reproduce each original payload byte-for-byte. The combined dSYM must
+retain both original UUIDs. This coalescing is packaging, not proof of runtime
+compatibility, signing identity or notarization.
+
 `src/snag_jansson.h` is the only Jansson include surface in first-party C code. It
 prefers a system `<jansson.h>` when one is available. Some minimal qualification
 roots carry `libjansson.so.4` without the development header; for those roots the

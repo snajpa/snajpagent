@@ -52,6 +52,12 @@ only the OS's `libSystem` remains dynamic. Copy
 it. **Experimental: cross-built and inspected, not yet runtime-qualified on
 macOS.** No Apple signing identity or notarization is implied.
 
+`make -j2 prod-macos-universal` builds the two Mac slices in parallel, then
+combines them into `build/matrix/macos-universal/bin/snajpagent` with a matching
+two-architecture dSYM. It is a native Mach-O universal file: no launcher,
+startup download, or payload extraction is needed. Standalone slices remain
+available; the same experimental macOS runtime qualification applies.
+
 Production keeps matching symbols beside the executable: `snajpagent.debug`
 on ELF systems, `snajpagent.dSYM` on macOS. Retain these for debugging that
 exact production binary; they are not installed or required at runtime.
