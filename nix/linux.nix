@@ -28,7 +28,7 @@ in {
     inherit version;
     src = source;
     outputs = [ "out" "debug" ];
-    nativeBuildInputs = [ pkgs.pkg-config ];
+    nativeBuildInputs = [ musl.buildPackages.pkg-config ];
     buildInputs = [ static.jansson curl ];
     enableParallelBuilding = true;
     dontStrip = true;
@@ -43,10 +43,10 @@ in {
         'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
         'CFLAGS=-std=c11 -Os -g -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=-static-pie -flto -Wl,--gc-sections'
-        "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
-        "LDLIBS=$(pkg-config --static --libs jansson)"
-        "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-        "CURL_LIBS=$(pkg-config --static --libs libcurl)"
+        "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
+        "LDLIBS=$($PKG_CONFIG --static --libs jansson)"
+        "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
+        "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
       )
     '';
     installPhase = ''
