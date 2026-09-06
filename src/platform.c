@@ -9,6 +9,15 @@
 #include <windows.h>
 #include <wincrypt.h>
 #include <io.h>
+#include <uniwidth.h>
+
+int
+snag_char_width(uint32_t cp)
+{
+    if (cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu))
+        return -1;
+    return uc_width(cp, "UTF-8");
+}
 
 int
 snag_fd_cloexec(int fd)
@@ -119,6 +128,13 @@ snag_sync_dir(int fd)
 #include <fcntl.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
+
+int
+snag_char_width(uint32_t cp)
+{
+    return cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;
+}
 
 int
 snag_fd_cloexec(int fd)

@@ -15,7 +15,6 @@
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
-#include <wchar.h>
 
 static atomic_uint sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
@@ -107,7 +106,7 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
                 return -1;
             width = (int)(out->len - before);
         } else {
-            int w = cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;
+            int w = snag_char_width(cp);
             if (w < 0) {
                 if (append_escape(out, cp) < 0)
                     return -1;
@@ -154,7 +153,7 @@ snag_term_text_width(const char *value, size_t len)
             cp = text[i];
             n = 1u;
         }
-        w = cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;
+        w = snag_char_width(cp);
         if (cp == '\t')
             amount = 4u - (width % 4u);
         else if (cp < 0x20u || cp == 0x7fu ||
@@ -413,7 +412,7 @@ snag_term_note_output(struct snag_term *term, const char *text, size_t len,
     for (size_t i = 0u; i < safe.len;) {
         uint32_t cp;
         size_t n = snag_utf8_decode(safe.data + i, safe.len - i, &cp);
-        int width = cp == '\n' ? 0 : wcwidth((wchar_t)cp);
+        int width = cp == '\n' ? 0 : snag_char_width(cp);
 
         if (cp == '\n') {
             term->output_columns = 0u;
@@ -1039,7 +1038,7 @@ prompt_row(const struct snag_buf *frame, size_t start, unsigned int columns)
     while (row.end < frame->len) {
         uint32_t cp;
         size_t n = snag_utf8_decode(frame->data + row.end, frame->len - row.end, &cp);
-        int width = wcwidth((wchar_t)cp);
+        int width = snag_char_width(cp);
 
         if (cp == '\r') {
             row.next = row.end + 2u; /* append_safe emits CRLF. */
@@ -1128,7 +1127,7 @@ prompt_cell_end(const unsigned char *data, size_t start, size_t end)
 
     while (pos < end) {
         size_t n = snag_utf8_decode(data + pos, end - pos, &cp);
-        if (wcwidth((wchar_t)cp) != 0)
+        if (snag_char_width(cp) != 0)
             break;
         pos += n;
     }
@@ -1143,7 +1142,7 @@ prompt_cell_start(const unsigned char *data, size_t start, size_t end)
 
     while (pos > start) {
         (void)snag_utf8_decode(data + pos, end - pos, &cp);
-        if (wcwidth((wchar_t)cp) != 0)
+        if (snag_char_width(cp) != 0)
             break;
         pos = previous_cp(data, pos);
     }
@@ -2476,7 +2475,7 @@ consume_resize(struct snag_term *term)
         uint32_t cp;
         size_t n = snag_utf8_decode(term->output_line.data + i,
                                 term->output_line.len - i, &cp);
-        int width = wcwidth((wchar_t)cp);
+        int width = snag_char_width(cp);
 
         if (width > 0)
             output_column_add(term, (size_t)width);

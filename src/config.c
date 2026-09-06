@@ -14,7 +14,6 @@
 #include <sys/file.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <wchar.h>
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -235,16 +234,8 @@ parse_token_count(const char *text, enum snag_token_count_mode *out)
     return 0;
 }
 
-static size_t
-utf8_char_len(const unsigned char *s, size_t len)
-{
-    size_t n = s[0] < 0x80u ? 1u : s[0] < 0xe0u ? 2u :
-               s[0] < 0xf0u ? 3u : 4u;
-    return n <= len && snag_utf8_valid(s, n, true) ? n : 0u;
-}
-
 static bool
-unsafe_prompt_cp(wchar_t cp)
+unsafe_prompt_cp(uint32_t cp)
 {
     return cp == 0x00ad || cp == 0x061c || cp == 0x200b ||
            cp == 0x200e || cp == 0x200f ||
@@ -265,25 +256,21 @@ parse_spinner(char dst[SNAG_CONFIG_SPINNER_MAX], const char *value)
     --len;
     pos = value[1] == '\\' && value[2] == '0' ? 3u : 1u;
     if (pos == 1u) {
-        size_t n = utf8_char_len((const unsigned char *)value + 1u, len - 1u);
-        mbstate_t state = {0};
-        wchar_t cp;
+        uint32_t cp;
+        size_t n = snag_utf8_decode((const unsigned char *)value + 1u, len - 1u, &cp);
 
-        if (!n || mbrtowc(&cp, value + 1u, n, &state) != n ||
-            wcwidth(cp) != 1 || unsafe_prompt_cp(cp))
+        if (!n || snag_char_width(cp) != 1 || unsafe_prompt_cp(cp))
             goto invalid;
         pos += n;
     }
     while (pos < len) {
-        size_t n = utf8_char_len((const unsigned char *)value + pos, len - pos);
-        mbstate_t state = {0};
-        wchar_t cp;
+        uint32_t cp;
+        size_t n = snag_utf8_decode((const unsigned char *)value + pos, len - pos, &cp);
 
         if (!n || ++frames > SNAG_CONFIG_SPINNER_FRAMES_MAX ||
-            mbrtowc(&cp, value + pos, n, &state) != n || wcwidth(cp) != 1 ||
+            snag_char_width(cp) != 1 ||
             unsafe_prompt_cp(cp) || (previous != SIZE_MAX &&
-            n == utf8_char_len((const unsigned char *)value + previous,
-                               len - previous) &&
+            n == pos - previous &&
             memcmp(value + previous, value + pos, n) == 0))
             goto invalid;
         previous = pos;

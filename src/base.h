@@ -49,6 +49,7 @@ int snag_key_ref_compare(const void *left, const void *right);
 int snag_fd_cloexec(int fd);
 size_t snag_utf8_decode(const unsigned char *text, size_t len, uint32_t *out);
 bool snag_utf8_valid(const unsigned char *s, size_t len, bool reject_nul);
+int snag_char_width(uint32_t cp);
 bool snag_text_blank(const char *text);
 unsigned char snag_irc_fold(unsigned char c);
 bool snag_irc_nick_char(unsigned char c);

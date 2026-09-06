@@ -84,6 +84,31 @@ must reproduce each original payload byte-for-byte. The combined dSYM must
 retain both original UUIDs. This coalescing is packaging, not proof of runtime
 compatibility, signing identity or notarization.
 
+## Windows foundations (not a complete agent port)
+
+`nix/windows.nix` builds static x86-64 Windows Jansson, Mbed TLS, compression,
+c-ares, HTTP/2 and GNU Unicode/IDN libraries using the same pinned nixpkgs
+sources. It takes the `pkgs` exported by `nix/portable.nix`. The compile API
+baseline is Windows 7; actual execution so far is in Windows PE
+10.0.26100.6584 from Microsoft's 25H2 evaluation media. A version macro does
+not establish an older-OS runtime pass. There is no `prod-windows-*` target
+yet: filesystem/ACL, process, console and socket integration remains open.
+
+The existing base/SSE/JSON/wire/Responses/retry tests and upstream Mbed TLS
+self-tests run there without third-party runtime DLLs. An upstream curl CLI
+was built only to check the static dependency closure and reported HTTP/2,
+IDN, asynchronous DNS, TLS and gzip/Brotli/Zstd. It is not a shipped helper,
+an external `/ro` tool, or proof of complete provider transport.
+
+`src/platform.c` owns the native clock/entropy/descriptor primitives and
+Unicode scalar width. Existing POSIX builds retain libc width behavior;
+Windows uses the already statically linked libunistring so supplementary
+characters are not truncated to 16-bit `wchar_t`. Keep the upstream license
+notices and corresponding source, including the MinGW thread runtime's
+GCC runtime exception. Older Windows still needs genuine thread/crypto/API
+fallbacks and qualification; a DLL import archive renamed to `.a` is never
+a self-contained static dependency.
+
 `src/snag_jansson.h` is the only Jansson include surface in first-party C code. It
 prefers a system `<jansson.h>` when one is available. Some minimal qualification
 roots carry `libjansson.so.4` without the development header; for those roots the

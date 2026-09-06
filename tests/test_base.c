@@ -34,6 +34,16 @@ test_platform(void)
     assert(snag_random_bytes(again, sizeof(again)) == 0);
     assert(memcmp(random, again, sizeof(random)) != 0);
     assert(snag_monotonic_ms() >= before);
+    assert(snag_char_width('A') == 1);
+    assert(snag_char_width('\n') == -1);
+    assert(snag_char_width(0u) == 0);
+    assert(snag_char_width(0xd800u) == -1);
+    assert(snag_char_width(0x110000u) == -1);
+#ifdef _WIN32
+    assert(snag_char_width(0x0301u) == 0);
+    assert(snag_char_width(0x4e2du) == 2);
+    assert(snag_char_width(0x1f600u) == 2);
+#endif
     assert(file);
     fd = fileno(file);
     assert(snag_fd_cloexec(fd) == 0);

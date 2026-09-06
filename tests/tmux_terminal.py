@@ -55,10 +55,11 @@ def read_events(dotdir):
     if len(paths) != 1:
         raise AssertionError(f"expected one session log, got {paths!r}")
     events = []
-    with paths[0].open(encoding="utf-8") as source:
-        for line in source:
-            if line.strip():
-                events.append(json.loads(line))
+    # A live writer can expose part of its final JSON/UTF-8 record. Frame
+    # complete records before decoding, and still reject malformed full lines.
+    for line in paths[0].read_bytes().split(b"\n")[:-1]:
+        if line.strip():
+            events.append(json.loads(line))
     return paths[0], events
 
 
@@ -68,7 +69,7 @@ def maybe_events(dotdir):
         return None, []
     try:
         return read_events(dotdir)
-    except (json.JSONDecodeError, OSError):
+    except OSError:
         return paths[0], []
 
 
