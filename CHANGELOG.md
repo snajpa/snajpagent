@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Remove the unused environment-only credential reader and room-name getter;
+  credential boundary tests now exercise the production secret-source resolver.
+
 - Share bounded path joining and patch-result construction without merging
   operation-specific filesystem checks. Consolidate resize/suspend tests onto
   the existing PTY runner; replace stale implementation-status history and

@@ -90,18 +90,21 @@ test_sources(void)
 int
 main(void)
 {
+    struct snag_secret_source source = {0};
     struct snag_credential credential;
     char error[256];
     char *large = malloc(SNAG_CREDENTIAL_MAX + 2u);
 
     assert(large);
+    assert(snag_secret_source_parse(&source, "${OPENAI_API_KEY}", NULL,
+                                    error, sizeof(error)) == 0);
     assert(unsetenv("OPENAI_API_KEY") == 0);
-    assert(snag_credential_read(&credential, NULL, error, sizeof(error)) < 0);
-    assert(errno == ENOENT);
+    assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) < 0);
+    assert(errno == EINVAL);
     assert(credential.len == 0u);
 
     assert(setenv("OPENAI_API_KEY", "sk-test", 1) == 0);
-    assert(snag_credential_read(&credential, NULL, error, sizeof(error)) == 0);
+    assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) == 0);
     assert(credential.len == 7u);
     assert(strcmp(credential.value, "sk-test") == 0);
     snag_credential_clear(&credential);
@@ -110,29 +113,33 @@ main(void)
     assert(credential.len == 0u && credential.root_fd == -1);
 
     assert(setenv("OPENAI_API_KEY", "bad key", 1) == 0);
-    assert(snag_credential_read(&credential, NULL, error, sizeof(error)) < 0);
+    assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) < 0);
     assert(errno == EINVAL);
 
     assert(setenv("CUSTOM_API_KEY", "custom-secret", 1) == 0);
-    assert(snag_credential_read(&credential, "CUSTOM_API_KEY",
-                               error, sizeof(error)) == 0);
+    assert(snag_secret_source_parse(&source, "${CUSTOM_API_KEY}", NULL,
+                                    error, sizeof(error)) == 0);
+    assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) == 0);
     assert(credential.len == strlen("custom-secret"));
     assert(strcmp(credential.value, "custom-secret") == 0);
     snag_credential_clear(&credential);
 
     memset(large, 'x', SNAG_CREDENTIAL_MAX);
+    assert(snag_secret_source_parse(&source, "${OPENAI_API_KEY}", NULL,
+                                    error, sizeof(error)) == 0);
     large[SNAG_CREDENTIAL_MAX] = '\0';
     assert(setenv("OPENAI_API_KEY", large, 1) == 0);
-    assert(snag_credential_read(&credential, NULL, error, sizeof(error)) == 0);
+    assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) == 0);
     snag_credential_clear(&credential);
 
     large[SNAG_CREDENTIAL_MAX] = 'x';
     large[SNAG_CREDENTIAL_MAX + 1u] = '\0';
     assert(setenv("OPENAI_API_KEY", large, 1) == 0);
-    assert(snag_credential_read(&credential, NULL, error, sizeof(error)) < 0);
+    assert(snag_credential_resolve(&credential, &source, error, sizeof(error)) < 0);
     assert(errno == EINVAL);
 
     free(large);
+    snag_secret_source_free(&source);
     assert(unsetenv("OPENAI_API_KEY") == 0);
     assert(unsetenv("CUSTOM_API_KEY") == 0);
     test_sources();

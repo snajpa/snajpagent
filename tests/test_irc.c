@@ -610,7 +610,6 @@ test_server(void)
     assert(snprintf(config.irc.clients[0], sizeof(config.irc.clients[0]),
                     "%s", config.irc.listen) > 0);
     server = open_server(&config, &capture);
-    assert(strcmp(snag_irc_room_name(server), "#lab") == 0);
     assert(snag_irc_mentions_agent(server, config.irc.listen, "AGENT: please"));
     assert(!snag_irc_mentions_agent(server, config.irc.listen,
                                    "otheragent: no"));

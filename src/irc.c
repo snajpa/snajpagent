@@ -2981,12 +2981,6 @@ snag_irc_core_operator_nick(const struct snag_irc_core *irc)
         irc->links[1].accepted_nick : irc->operator_nick;
 }
 
-const char *
-snag_irc_core_room_name(const struct snag_irc_core *irc)
-{
-    return irc ? irc->room : NULL;
-}
-
 bool
 snag_irc_nick_mentioned(const char *text, const char *nick)
 {

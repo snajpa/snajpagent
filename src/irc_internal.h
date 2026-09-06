@@ -47,6 +47,5 @@ int snag_irc_core_replay_hosted_history(const struct snag_irc_core *irc,
                                        snag_irc_event_fn render, void *opaque);
 const char *snag_irc_core_model_nick(const struct snag_irc_core *irc);
 const char *snag_irc_core_operator_nick(const struct snag_irc_core *irc);
-const char *snag_irc_core_room_name(const struct snag_irc_core *irc);
 
 #endif

@@ -16,9 +16,6 @@ struct snag_credential {
     int root_fd;
 };
 
-int snag_credential_read(struct snag_credential *credential,
-                        const char *env_name,
-                        char *error, size_t error_size);
 void snag_credential_clear(struct snag_credential *credential);
 int snag_credential_resolve(struct snag_credential *credential,
                             const struct snag_secret_source *source,

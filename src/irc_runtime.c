@@ -1025,12 +1025,6 @@ snag_irc_operator_nick(const struct snag_irc *irc)
         snag_irc_core_operator_nick(irc->history);
 }
 
-const char *
-snag_irc_room_name(const struct snag_irc *irc)
-{
-    return snag_irc_core_room_name(irc ? irc->history : NULL);
-}
-
 bool
 snag_irc_identity_changed(struct snag_irc *irc)
 {

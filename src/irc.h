@@ -133,7 +133,6 @@ int snag_irc_replay_hosted_history(const struct snag_irc *irc,
 /* Hosted identity, or the first configured server's last accepted identity. */
 const char *snag_irc_model_nick(const struct snag_irc *irc);
 const char *snag_irc_operator_nick(const struct snag_irc *irc);
-const char *snag_irc_room_name(const struct snag_irc *irc);
 /* Consumes an admitted primary-identity change, including during command waits. */
 bool snag_irc_identity_changed(struct snag_irc *irc);
 /* Returns 1 with changed newline-separated membership, 0 unchanged, -1 on error. */
