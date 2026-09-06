@@ -120,9 +120,11 @@ snag_realpath(const char *path)
         result[0] = result[1] = '/';
     if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, body, -1,
                              result + prefix, bytes, NULL, NULL)) {
+        DWORD native_error = GetLastError();
         free(result);
         result = NULL;
-        goto native_error;
+        path_error(native_error);
+        goto out;
     }
     for (char *p = result; *p; ++p)
         if (*p == '\\')
@@ -138,9 +140,10 @@ native_error:
 out:
     error = errno;
     if (handle != INVALID_HANDLE_VALUE && !CloseHandle(handle) && result) {
+        DWORD native_error = GetLastError();
         free(result);
         result = NULL;
-        path_error(GetLastError());
+        path_error(native_error);
         error = errno;
     }
     free(final);
