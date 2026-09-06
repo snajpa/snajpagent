@@ -842,8 +842,12 @@ wait_pair_event(struct snag_irc *server, struct snag_irc *client,
                 unsigned int count)
 {
     uint64_t deadline = snag_monotonic_ms() + 1000u;
-    while (capture->events[kind] < count && snag_monotonic_ms() < deadline)
-        pump_pair(server, client, 1u);
+    while (capture->events[kind] < count && snag_monotonic_ms() < deadline) {
+        if (server)
+            pump_pair(server, client, 1u);
+        else
+            tick(client, 1u);
+    }
     assert(capture->events[kind] >= count);
 }
 
@@ -1331,7 +1335,7 @@ test_client_events(void)
         assert(n > 0 && (size_t)n < sizeof(joined));
         send_text(peers[i], joined);
     }
-    tick(client, 20u);
+    wait_pair_event(NULL, client, &capture, SNAG_IRC_HISTORY_READY, 1u);
     assert(operator_fd != SNAG_SOCKET_INVALID);
     {
         struct snag_irc_destinations first, next;
@@ -1343,19 +1347,22 @@ test_client_events(void)
         assert(strstr(first.items[0].nicks, "peer\n"));
         snag_irc_destinations(client, &next);
         assert(!memcmp(&first, &next, sizeof(first)));
+        unsigned int nicks = capture.events[SNAG_IRC_NICK];
         send_text(operator_fd, ":peer!u@fake NICK :renamed\r\n");
-        tick(client, 10u);
+        wait_pair_event(NULL, client, &capture, SNAG_IRC_NICK, nicks + 1u);
         snag_irc_destinations(client, &next);
         assert(next.count == 1u);
         assert(!strstr(next.items[0].nicks, "peer\n"));
         assert(strstr(next.items[0].nicks, "renamed\n"));
+        unsigned int parts = capture.events[SNAG_IRC_PART];
         send_text(operator_fd, ":renamed!u@fake PART #lab :bye\r\n");
-        tick(client, 10u);
+        wait_pair_event(NULL, client, &capture, SNAG_IRC_PART, parts + 1u);
         snag_irc_destinations(client, &next);
         assert(next.count == 1u);
         assert(!strstr(next.items[0].nicks, "renamed\n"));
+        unsigned int joins = capture.events[SNAG_IRC_JOIN];
         send_text(operator_fd, ":peer!u@fake JOIN #lab\r\n");
-        tick(client, 10u);
+        wait_pair_event(NULL, client, &capture, SNAG_IRC_JOIN, joins + 1u);
     }
     {
         unsigned int before = capture.events[SNAG_IRC_MESSAGE];
@@ -1366,7 +1373,7 @@ test_client_events(void)
         assert(capture.events[SNAG_IRC_MESSAGE] == before);
         send_text(operator_fd,
             ":peer!u@fake PRIVMSG #lab :remoteagent: room accepted\r\n");
-        tick(client, 10u);
+        wait_pair_event(NULL, client, &capture, SNAG_IRC_MESSAGE, before + 1u);
         assert(capture.events[SNAG_IRC_MESSAGE] == before + 1u);
         assert(strcmp(capture.last_message.text,
                       "remoteagent: room accepted") == 0);
@@ -1390,7 +1397,7 @@ test_client_events(void)
             ":remoteop!u@fake NICK :operator7\r\n"
             ":operator7!u@fake NICK :Operator7\r\n"
             ":peer!u@fake NICK :friend\r\n");
-        tick(client, 10u);
+        wait_pair_event(NULL, client, &capture, SNAG_IRC_NICK, 5u);
         assert(capture.events[SNAG_IRC_NICK] == 5u);
         assert(capture.events[SNAG_IRC_MESSAGE] == messages);
         assert(capture.events[SNAG_IRC_DISCONNECTED] == 0u);
@@ -1410,11 +1417,12 @@ test_client_events(void)
         snag_buf_free(&snapshot);
         assert(send_all(client, false, SNAG_IRC_TOPIC, "renamed topic",
                                           error, sizeof(error)) == 0);
+        unsigned int modes = capture.events[SNAG_IRC_MODE];
         send_text(operator_fd,
             ":friend!u@fake MODE #lab -o Operator7\r\n"
             ":friend!u@fake MODE #lab +o agent7\r\n");
         send_text(agent_fd, ":friend!u@fake MODE #lab +o agent7\r\n");
-        tick(client, 10u);
+        wait_pair_event(NULL, client, &capture, SNAG_IRC_MODE, modes + 2u);
         assert(send_all(client, false, SNAG_IRC_TOPIC, "not op",
                                           error, sizeof(error)) == 1);
         assert(send_all(client, true, SNAG_IRC_TOPIC, "agent op",
@@ -1423,7 +1431,7 @@ test_client_events(void)
             ":remoteagent!u@fake JOIN #lab\r\n"
             ":remoteagent!u@fake PRIVMSG #lab :old nick is someone else\r\n"
             ":friend!u@fake PART #lab :bye\r\n");
-        tick(client, 10u);
+        wait_pair_event(NULL, client, &capture, SNAG_IRC_MESSAGE, messages + 1u);
         assert(capture.events[SNAG_IRC_MESSAGE] == messages + 1u);
         assert(strcmp(capture.last_message.nick, "remoteagent") == 0);
         assert(send_all(client, false, SNAG_IRC_MESSAGE, "local renamed op",
