@@ -1143,8 +1143,8 @@ validate_shell(struct snag_config *config, char *error, size_t error_size)
         free(resolved);
         goto invalid;
     }
-    free(config->shell);
-    config->shell = resolved;
+    /* Preserve symlink-selected shell personalities (for example BusyBox sh). */
+    free(resolved);
     return 0;
 invalid:
     snag_errorf(error, error_size,

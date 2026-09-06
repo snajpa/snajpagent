@@ -547,14 +547,25 @@ main(void)
     assert(config.providers[0].openrouter_referer[0] == '\0');
     assert(config.providers[0].openrouter_title[0] == '\0');
     assert(config.secret_count == 0u);
-    char *default_shell = snag_default_shell();
-    assert(default_shell);
-    shell = snag_realpath(default_shell);
-    free(default_shell);
+    shell = snag_default_shell();
     assert(shell);
     assert(strcmp(config.shell, shell) == 0);
     free(shell);
     snag_config_free(&config);
+
+    /* Resolution validates the target, but must not replace a shell alias. */
+    assert(snprintf(link_path, sizeof(link_path), "%s/shell-alias", temp) > 0);
+    assert(symlink("/bin/sh", link_path) == 0);
+    assert(snprintf(path, sizeof(path), "%s/shell.ini", temp) > 0);
+    char shell_config[8192];
+    int shell_len = snprintf(shell_config, sizeof(shell_config), "[tool]\nshell = %s\n", link_path);
+    assert(shell_len > 0 && (size_t)shell_len < sizeof(shell_config));
+    write_bytes(path, shell_config, (size_t)shell_len);
+    snag_config_init(&config);
+    assert(snag_config_load(&config, path, dotdir, error, sizeof(error)) == 0);
+    assert(strcmp(config.shell, link_path) == 0);
+    snag_config_free(&config);
+    assert(unlink(path) == 0 && unlink(link_path) == 0);
 
     assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
     write_bytes(path, valid, sizeof(valid) - 1u);

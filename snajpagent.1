@@ -1376,6 +1376,9 @@ Default on POSIX:
 .BR /bin/sh .
 Experimental native Windows builds use the system cmd.exe path.  Commands
 must use the configured shell's syntax; changing shells does not translate them.
+The target must resolve to an executable regular file, but its configured
+path is preserved so symlink-selected shell behavior (such as BusyBox sh)
+is retained.
 .TP
 .B default_yield_ms
 Default initial yield interval, 0 through 600000.  Default: 10000.
