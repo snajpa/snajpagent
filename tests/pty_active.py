@@ -740,8 +740,9 @@ def test_typing_pause_and_transient_composer():
     child.send(b"typing_stream\r")
     first_end = child.wait(b"model-output-one")
 
+    edit_start = len(child.buf)
     child.send(b"a")
-    child.wait(DEFAULT_ACTIVE_PROMPT + b"a", start=first_end)
+    child.wait(b"a", start=edit_start)
     time.sleep(0.1)
     edit_start = len(child.buf)
     child.send(b"b")
@@ -762,7 +763,8 @@ def test_typing_pause_and_transient_composer():
     assert b"model-output-three" not in child.buf[quiet_start:]
     third_end = child.wait(b"model-output-three", start=quiet_start)
     assert time.monotonic() - third_start >= 0.20
-    child.wait(PROMPT + b"abc", start=third_end)
+    child.wait(b"abc", start=third_end)
+    child.wait_idle_prompt(start=third_end)
     child.drain(0.05)
     clear_draft_incrementally(child)
     child.send(b"/exit\r")
@@ -788,7 +790,8 @@ def test_armed_fifo():
     child.send(b"retained-draft")
     child.wait(b"slow complete")
     answer_end = child.wait(b"pong")
-    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT + b"retained-draft", start=answer_end)
+    child.wait(b"retained-draft", start=answer_end)
+    child.wait_idle_prompt(start=answer_end)
     child.send(b"\x15")
     child.exit_cleanly(answer_end)
 
