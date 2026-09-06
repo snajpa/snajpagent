@@ -70,7 +70,7 @@ struct snag_term {
     struct snag_buf painted_prompt;
     size_t painted_label_len;
     unsigned int painted_columns;
-    unsigned int painted_style;
+    bool painted_color;
     uint64_t last_output_ms;
     size_t output_columns;
     size_t output_cell_width;
@@ -129,7 +129,6 @@ struct snag_term {
     bool output_ended_lf;
     bool output_detour;
     bool color;
-    bool networked;
     bool chat;
     bool redraw_after_output;
     bool rendered_end_at_margin;
@@ -175,7 +174,7 @@ int snag_term_history_set(struct snag_term *term,
                          struct snag_history_snapshot *snapshot, bool refresh);
 int snag_term_restore_draft(struct snag_term *term, const char *text);
 void snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms);
-void snag_term_set_color(struct snag_term *term, bool enabled, bool networked);
+void snag_term_set_color(struct snag_term *term, bool enabled);
 uint32_t snag_term_typing_pause_remaining(const struct snag_term *term,
                                          uint64_t now_ms);
 bool snag_term_typing_active(const struct snag_term *term);

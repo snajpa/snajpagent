@@ -359,12 +359,11 @@ snag_term_destination_route(const struct snag_term *term, const char *text,
 }
 
 void
-snag_term_set_color(struct snag_term *term, bool enabled, bool networked)
+snag_term_set_color(struct snag_term *term, bool enabled)
 {
     if (!term)
         return;
     term->color = enabled;
-    term->networked = networked;
 }
 
 uint32_t
@@ -1163,14 +1162,12 @@ same_prompt_cell(const struct snag_term *term, const struct snag_buf *next,
 {
     size_t old_color = colored_prefix(term->painted_label_len, a, ae);
     size_t new_color = colored_prefix(label, b, be);
-    unsigned int style = term->color ? term->networked ? 2u : 1u : 0u;
 
-    if (!term->painted_style)
+    if (!term->painted_color)
         old_color = 0u;
-    if (!style)
+    if (!term->color)
         new_color = 0u;
     return ae - a == be - b && old_color == new_color &&
-           (!new_color || term->painted_style == style) &&
            memcmp(term->painted_prompt.data + a, next->data + b, be - b) == 0;
 }
 
@@ -1198,7 +1195,7 @@ prompt_span(struct snag_buf *out, const struct snag_term *term,
     size_t colored = term->color ? colored_prefix(label, start, end) : 0u;
 
     if (colored &&
-        (snag_buf_append(out, term->networked ? "\033[1;35m" : "\033[1;36m", 7u) < 0 ||
+        (snag_buf_append(out, "\033[1;36m", 7u) < 0 ||
          snag_buf_append(out, frame->data + start, colored) < 0 ||
          snag_buf_append(out, "\033[0m", 4u) < 0))
         return -1;
@@ -1367,7 +1364,7 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
     memset(frame, 0, sizeof(*frame));
     term->painted_label_len = label;
     term->painted_columns = term->columns;
-    term->painted_style = term->color ? term->networked ? 2u : 1u : 0u;
+    term->painted_color = term->color;
     term->rendered_rows = end_row + 1u;
     term->rendered_cursor_row = cursor_row;
     term->rendered_cursor_col = cursor_col;
@@ -1418,7 +1415,7 @@ redraw(struct snag_term *term)
             return 0;
         if ((term->color &&
              snag_term_write(STDERR_FILENO,
-                             term->networked ? "\033[1;35m" : "\033[1;36m", 7u) < 0) ||
+                             "\033[1;36m", 7u) < 0) ||
             snag_term_write_safe(STDERR_FILENO, label, label_len) < 0 ||
             (term->color && snag_term_write(STDERR_FILENO, "\033[0m", 4u) < 0) ||
             (term->draft.len &&

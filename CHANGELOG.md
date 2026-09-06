@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Use one cyan local composer/echo style in every view and connection state.
+  Remove the obsolete prompt painter and terminal/render network-style state;
+  retain public role colors. Make PTY setup independent and check goal completion
+  durably instead of requiring uninterrupted terminal chunks.
+
 - Select IRC destinations with `/N`, send once with `/N TEXT`, or explicitly
   broadcast with `/all TEXT`. Scope ordinary chat, topic changes, completion
   and model tools to their destinations; keep stable numbers and reject stale

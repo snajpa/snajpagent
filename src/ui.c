@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 enum ui_kind {
-    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NETWORKED, UI_NICKS, UI_DESTINATIONS, UI_SELECT, UI_ROUTE, UI_COMMANDS, UI_PAUSE,
+    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_MODEL_NICK, UI_NICKS, UI_DESTINATIONS, UI_SELECT, UI_ROUTE, UI_COMMANDS, UI_PAUSE,
     UI_OPEN, UI_EXTERNAL, UI_PROMPT, UI_SPINNERS, UI_DRAFT,
     UI_VIEW, UI_SUBMITTED, UI_PUBLIC_BEGIN, UI_PUBLIC, UI_VALIDATE,
     UI_ORIENTATION, UI_HISTORY, UI_IRC, UI_DURABLE, UI_EVENT,
@@ -336,10 +336,8 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
     case UI_MARKDOWN:
         snag_render_set_markdown(render, message->data.value != 0u);
         return 0;
-    case UI_NETWORKED:
-        snag_render_set_networked(render, message->data.value != 0u,
-                                message->text);
-        term->chat = render->view == SNAG_RENDER_CHAT;
+    case UI_MODEL_NICK:
+        snag_render_set_model_nick(render, message->text);
         return 0;
     case UI_NICKS:
         free(term->nicks);
@@ -891,11 +889,9 @@ snag_ui_markdown(struct snag_ui *ui, bool enabled)
 }
 
 int
-snag_ui_networked(struct snag_ui *ui, bool enabled, const char *nick)
+snag_ui_model_nick(struct snag_ui *ui, const char *nick)
 {
-    struct ui_message message = {
-        .kind = UI_NETWORKED, .data.value = enabled
-    };
+    struct ui_message message = {.kind = UI_MODEL_NICK};
     return send_message(ui, &message, nick);
 }
 

@@ -387,11 +387,11 @@ test_retained_prompt(void)
     assert(term.rendered_rows == 2u && term.rendered_cursor_col == 10u);
     assert(snag_term_restore_draft(&term, "cafè語 tail") == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
-    snag_term_set_color(&term, true, false);
+    snag_term_set_color(&term, true);
     assert(snag_term_set_prompt_label(&term, true, " 10%> ") == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[1;36m") && !strstr(output, "tail"));
-    snag_term_set_color(&term, false, false);
+    snag_term_set_color(&term, false);
     assert(snag_term_set_prompt_label(&term, true, " 10%> ") == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(!strstr(output, "tail"));
@@ -876,7 +876,6 @@ capture_prompt_boundary(const char *text, bool markdown,
     assert(snag_render_public_end(&render) == 0);
     assert(snag_render_before_prompt(&render) == 0);
     assert(snag_render_before_prompt(&render) == 0);
-    assert(snag_render_prompt(&render, "model/low › ") == 0);
     snag_render_free(&render);
     snag_term_close(&term);
     assert(dup2(saved_stdout, STDOUT_FILENO) >= 0);
@@ -920,7 +919,7 @@ test_model_prompt_boundaries(void)
             assert(snprintf(source, sizeof(source), "%s%s",
                             cases[i].source, suffixes[j]) > 0);
             assert(snprintf(expected, sizeof(expected),
-                            "%s\n\nmodel/low › ", cases[i].rendered) > 0);
+                            "%s\n\n", cases[i].rendered) > 0);
             assert(capture_prompt_boundary(source, cases[i].markdown, output,
                                            sizeof(output)) > 0u);
             assert(strcmp(output, expected) == 0);
@@ -970,7 +969,6 @@ test_input_model_boundaries(void)
             assert(snag_render_public_end(&render) == 0);
             assert(snag_render_before_prompt(&render) == 0);
             assert(snag_render_before_prompt(&render) == 0);
-            assert(snag_render_prompt(&render, "model/low › ") == 0);
             snag_render_free(&render);
             snag_term_close(&term);
             assert(dup2(saved_stdout, STDOUT_FILENO) >= 0);
@@ -984,8 +982,8 @@ test_input_model_boundaries(void)
             close(fds[0]);
             output[used] = '\0';
             assert(strcmp(output, enabled ?
-                          "model/low › question\n\n• answer\n\nmodel/low › " :
-                          "model/low › question\n\nanswer\n\nmodel/low › ") == 0);
+                          "model/low › question\n\n• answer\n\n" :
+                          "model/low › question\n\nanswer\n\n") == 0);
         }
     }
     {
@@ -1040,7 +1038,7 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     snag_render_init(&render, verbosity);
     render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    snag_render_set_networked(&render, true, "agent");
+    snag_render_set_model_nick(&render, "agent");
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     memset(&event, 0, sizeof(event));
     event.kind = SNAG_IRC_MESSAGE;
@@ -1292,7 +1290,7 @@ capture_color(enum snag_color_mode mode, bool networked,
     assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
     close(fds[1]);
     snag_render_init(&render, verbosity);
-    snag_render_set_networked(&render, networked, "agent");
+    snag_render_set_model_nick(&render, "agent");
     if (networked)
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     snag_render_set_color(&render, mode);
@@ -1518,7 +1516,7 @@ test_semantic_history(void)
         assert(snag_buf_terminate(&finish) == 0);
         snag_render_init(&render, 6u);
         snag_render_set_color(&render, SNAG_COLOR_NEVER);
-        snag_render_set_networked(&render, true, "agent");
+        snag_render_set_model_nick(&render, "agent");
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
         struct snag_render_source source = append_event(file, (char *)response.data);
         assert(snag_render_durable(&render, fileno(file), source, "response_completed", 0u, 0u) == 0);
@@ -1627,7 +1625,7 @@ test_append_only_views(unsigned int verbosity)
     close(fds[1]);
     snag_render_init(&render, verbosity);
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    snag_render_set_networked(&render, true, "agent");
+    snag_render_set_model_nick(&render, "agent");
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     render.verbosity = 1u;
     event.kind = SNAG_IRC_MESSAGE;
@@ -1721,7 +1719,7 @@ test_append_only_views(unsigned int verbosity)
     assert(count_text(output, "-agent2 - own-public-notice") == 1u);
     assert(strstr(output, "· topic · /workspace\n") != NULL);
     assert(strstr(output, "· history synchronized\n") != NULL);
-    snag_render_set_networked(&render, false, "agent2");
+    snag_render_set_model_nick(&render, "agent2");
     assert(snag_render_view(&render) == SNAG_RENDER_CHAT);
     assert(snag_render_rollout_begin(&render, STDERR_FILENO, NULL,
                                      SNAG_PRESENT_CONVERSATION) == 0);
@@ -1738,7 +1736,7 @@ test_append_only_views(unsigned int verbosity)
     assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
     used = drain_available(fds[0], output, sizeof(output), used);
     assert(count_text(output, "offline-private") == 1u);
-    snag_render_set_networked(&render, true, "agent2");
+    snag_render_set_model_nick(&render, "agent2");
     assert(snag_render_view(&render) == SNAG_RENDER_ROLLOUT);
     assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     errno = 0;
@@ -1929,6 +1927,9 @@ main(void)
                   "\033[33m→ exec_command\033[0m  {\"command\":\"printf plain\"") != NULL);
     assert(strstr(output, "  timeout: 2500ms\n") != NULL);
     assert(strstr(output, "\033[1;36magent \033[0m› answer") != NULL);
+    assert(capture_color(SNAG_COLOR_ALWAYS, true, 6u, -1, 0u, 0u,
+                         output, sizeof(output)) > 0u);
+    assert(strstr(output, "\033[1;36m› \033[0mplain\n") != NULL);
     assert(capture_color(SNAG_COLOR_NEVER, true, 6u, -1, 0u, 0u,
                          output, sizeof(output)) > 0u);
     assert(strchr(output, '\033') == NULL);

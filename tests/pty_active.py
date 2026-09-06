@@ -823,6 +823,7 @@ def test_compaction_statistical_source():
 
 
 def test_read_only_multiline_compaction_and_chat():
+    Path(WORKSPACE, "ro-input.txt").write_text("native text\nsecond line\n", encoding="utf-8")
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     config = root / "config" / "ro-compaction.ini"
     config.write_text("[provider openai]\nauto_compact_input_tokens = 1\n", encoding="utf-8")
@@ -1589,16 +1590,14 @@ def test_goal_user_terminal_commands_and_unlock():
     child.wait(b"goal wording unlocked for model changes")
     child.send(b"/goal complete\r")
     complete_end = child.wait(GOAL_CLEARED, start=reworded_end)
-    checkpoint_end = child.wait(b"goal checkpoint", start=complete_end)
-    child.wait(PROMPT.rstrip(), start=checkpoint_end)
+    checkpoint_end = child.wait_idle_prompt(start=complete_end)
 
     child.send(b"/goal slow goal\r")
     set_end = child.wait(GOAL_SET, start=checkpoint_end)
     child.wait(b"working on goal", start=set_end)
     child.send(b"/goal cancel\r")
     cancel_end = child.wait(GOAL_CLEARED, start=set_end)
-    checkpoint_end = child.wait(b"goal checkpoint", start=cancel_end)
-    child.exit_cleanly(checkpoint_end)
+    child.exit_cleanly(cancel_end)
 
     log = events(new_session(before))
     completed = one(log, "goal_completed")
@@ -1608,6 +1607,11 @@ def test_goal_user_terminal_commands_and_unlock():
     locks = [item["data"]["locked"] for item in log
              if item["type"] == "goal_lock_changed"]
     assert locks == [True, False]
+    # Feedback may split streamed chunks; completion is a durable assertion.
+    responses = [item for item in log if item["type"] == "response_completed"]
+    assert [item["data"]["items"][-1]["text"] for item in responses] == [
+        "goal checkpoint", "goal checkpoint"
+    ]
 
 
 def test_goal_refusal_failure_block_and_restart_pause():
@@ -2385,6 +2389,9 @@ def test_model_configuration_save():
     child.wait(PROMPT.rstrip())
 
     # Selection without a suffix remains session-only.
+    child.send(b"/model cache\r")
+    cached = child.wait(b"16. second / vendor/future-model / low")
+    child.wait(PROMPT.rstrip(), start=cached)
     child.send(b"/model #9\r")
     end = child.wait(
         b"model for next turn: second / gpt-5.6-luna / high"

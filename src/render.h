@@ -109,7 +109,6 @@ struct snag_render {
     bool markdown_measuring;
     bool markdown_preserve_fence;
     bool markdown_prose_bullets;
-    bool networked;
     enum snag_render_view view;
     char model_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     struct snag_term *term;
@@ -135,8 +134,7 @@ bool snag_render_enabled(const struct snag_render *render,
 void snag_render_free(struct snag_render *render);
 void snag_render_set_color(struct snag_render *render, enum snag_color_mode mode);
 void snag_render_set_markdown(struct snag_render *render, bool enabled);
-void snag_render_set_networked(struct snag_render *render, bool networked,
-                              const char *model_nick);
+void snag_render_set_model_nick(struct snag_render *render, const char *model_nick);
 void snag_render_attach_term(struct snag_render *render, struct snag_term *term);
 enum snag_render_view snag_render_view(const struct snag_render *render);
 int snag_render_set_view(struct snag_render *render, enum snag_render_view view);
@@ -145,7 +143,6 @@ int snag_render_orientation(struct snag_render *render,
                            uint64_t turns, size_t queued, bool resumed);
 int snag_render_history(struct snag_render *render,
                        const char *user, const char *assistant);
-int snag_render_prompt(struct snag_render *render, const char *label);
 int snag_render_submitted(struct snag_render *render, const char *label,
                          const char *text);
 int snag_render_input_submitted(struct snag_render *render, const char *label,

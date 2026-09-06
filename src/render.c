@@ -410,28 +410,23 @@ snag_render_set_color(struct snag_render *render, enum snag_color_mode mode)
     render->color_stderr = !disabled &&
         (mode == SNAG_COLOR_ALWAYS || render->stderr_terminal);
     if (render->term)
-        snag_term_set_color(render->term, render->color_stderr,
-                           render->networked);
+        snag_term_set_color(render->term, render->color_stderr);
 }
 
 void
-snag_render_set_networked(struct snag_render *render, bool networked,
-                         const char *model_nick)
+snag_render_set_model_nick(struct snag_render *render, const char *model_nick)
 {
-    render->networked = networked;
     render->model_nick[0] = '\0';
     if (model_nick)
         (void)snprintf(render->model_nick, sizeof(render->model_nick), "%s",
                        model_nick);
-    if (render->term)
-        snag_term_set_color(render->term, render->color_stderr, networked);
 }
 
 void
 snag_render_attach_term(struct snag_render *render, struct snag_term *term)
 {
     render->term = term;
-    snag_term_set_color(term, render->color_stderr, render->networked);
+    snag_term_set_color(term, render->color_stderr);
 }
 
 int
@@ -501,14 +496,6 @@ snag_render_history(struct snag_render *render,
     return rc;
 }
 
-int
-snag_render_prompt(struct snag_render *render, const char *label)
-{
-    return write_role_block(render, STDERR_FILENO,
-                            render->networked ? COLOR_OPERATOR : COLOR_AGENT,
-                            label, strlen(label), strlen(label), false, false);
-}
-
 static int
 render_submitted(struct snag_render *render, const char *label, const char *text,
                  bool separate)
@@ -556,10 +543,7 @@ render_submitted(struct snag_render *render, const char *label, const char *text
         rc = snag_buf_putc(&line, '\n');
     }
     if (rc == 0)
-        rc = write_role_block(render, STDERR_FILENO,
-                              render->networked &&
-                              render->view == SNAG_RENDER_CHAT ?
-                              COLOR_OPERATOR : COLOR_AGENT,
+        rc = write_role_block(render, STDERR_FILENO, COLOR_AGENT,
                               (char *)line.data, line.len, strlen(label),
                               render->stderr_terminal, true);
     if (rc == 0 && render->stderr_terminal) {

@@ -34,7 +34,7 @@ void snag_ui_free(struct snag_ui *ui);
 int snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text);
 int snag_ui_color(struct snag_ui *ui, enum snag_color_mode mode);
 int snag_ui_markdown(struct snag_ui *ui, bool enabled);
-int snag_ui_networked(struct snag_ui *ui, bool enabled, const char *nick);
+int snag_ui_model_nick(struct snag_ui *ui, const char *nick);
 int snag_ui_nicks(struct snag_ui *ui, const char *nicks);
 int snag_ui_destinations(struct snag_ui *ui,
                           const struct snag_irc_destinations *destinations);
