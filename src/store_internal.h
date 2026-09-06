@@ -16,7 +16,6 @@ enum snag_tail_policy {
     SNAG_TAIL_IGNORE
 };
 
-char *snag_store_path_join(const char *left, const char *right);
 bool snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u]);
 int snag_store_verify_private_fd(int fd, bool directory, const char *name,
                                 char *error, size_t error_size);

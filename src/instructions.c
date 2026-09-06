@@ -19,29 +19,6 @@
 #define O_NOFOLLOW 0
 #endif
 
-static char *
-join_path(const char *left, const char *right)
-{
-    size_t a = strlen(left);
-    size_t b = strlen(right);
-    size_t need;
-    char *path;
-
-    if (!snag_size_add(a, b, &need) || !snag_size_add(need, 2u, &need) ||
-        need > SNAG_PATH_MAX_BYTES + 1u) {
-        errno = EOVERFLOW;
-        return NULL;
-    }
-    path = malloc(need);
-    if (!path)
-        return NULL;
-    if (strcmp(left, "/") == 0)
-        (void)snprintf(path, need, "/%s", right);
-    else
-        (void)snprintf(path, need, "%s/%s", left, right);
-    return path;
-}
-
 void
 snag_instructions_init(struct snag_instruction_set *set)
 {
@@ -195,7 +172,7 @@ try_instruction_dir(struct snag_instruction_set *set, const char *dir,
     static const char *const names[] = {"AGENTS.override.md", "AGENTS.md"};
 
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
-        char *path = join_path(dir, names[i]);
+        char *path = snag_path_join(dir, names[i]);
         bool added = false;
         int rc;
 
@@ -233,11 +210,11 @@ config_instruction_root(char *error, size_t error_size)
             errno = EINVAL;
             return NULL;
         }
-        base = join_path(home, ".config");
+        base = snag_path_join(home, ".config");
     }
     if (!base)
         return NULL;
-    root = join_path(base, SNAJPAGENT_NAME);
+    root = snag_path_join(base, SNAJPAGENT_NAME);
     free(base);
     return root;
 }
@@ -252,7 +229,7 @@ find_project_root(const char *workspace, char **root,
     if (!current)
         return -1;
     for (;;) {
-        char *git = join_path(current, ".git");
+        char *git = snag_path_join(current, ".git");
         struct stat st;
 
         if (!git) {
@@ -331,7 +308,7 @@ walk_project_chain(struct snag_instruction_set *set,
         }
         memcpy(segment, rest, len);
         segment[len] = '\0';
-        next = join_path(current, segment);
+        next = snag_path_join(current, segment);
         if (!next)
             goto fail;
         free(current);

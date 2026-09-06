@@ -4,7 +4,29 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static void
+test_path_join(void)
+{
+    const char *left[] = {"/", "/work", "/work/", ""};
+    const char *expected[] = {"/file", "/work/file", "/work//file", "/file"};
+    for (size_t i = 0u; i < sizeof(left) / sizeof(left[0]); ++i) {
+        char *path = snag_path_join(left[i], "file");
+        assert(path && strcmp(path, expected[i]) == 0);
+        free(path);
+    }
+    char limit[SNAG_PATH_MAX_BYTES];
+    memset(limit, 'x', sizeof(limit));
+    limit[sizeof(limit) - 2u] = '\0';
+    char *path = snag_path_join(limit, "x");
+    assert(path && strlen(path) == SNAG_PATH_MAX_BYTES);
+    free(path);
+    limit[sizeof(limit) - 2u] = 'x';
+    limit[sizeof(limit) - 1u] = '\0';
+    assert(!snag_path_join(limit, "x") && errno == EOVERFLOW);
+}
 
 static void
 test_irc_target_parse(void)
@@ -88,6 +110,7 @@ main(void)
     assert(snag_buf_putc(&buf, 'e') < 0 && errno == EOVERFLOW);
     snag_buf_free(&buf);
     test_irc_target_parse();
+    test_path_join();
     puts("test_base: ok");
     return 0;
 }

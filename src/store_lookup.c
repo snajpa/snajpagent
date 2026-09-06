@@ -139,9 +139,9 @@ open_full_id(struct snag_store *store, struct snag_session *session,
     char *sessions = NULL;
 
     memcpy(session->id, id, SNAG_ID_HEX_LEN + 1u);
-    sessions = snag_store_path_join(store->root_path, "sessions");
+    sessions = snag_path_join(store->root_path, "sessions");
     if (sessions) {
-        session->dir_path = snag_store_path_join(sessions, id);
+        session->dir_path = snag_path_join(sessions, id);
         free(sessions);
     }
     if (!session->dir_path)
@@ -207,9 +207,9 @@ open_snapshot(struct snag_store *store, struct snag_session *session,
     flags |= O_NOFOLLOW;
 #endif
     memcpy(session->id, id, SNAG_ID_HEX_LEN + 1u);
-    sessions = snag_store_path_join(store->root_path, "sessions");
+    sessions = snag_path_join(store->root_path, "sessions");
     if (sessions) {
-        session->dir_path = snag_store_path_join(sessions, id);
+        session->dir_path = snag_path_join(sessions, id);
         free(sessions);
     }
     if (!session->dir_path)

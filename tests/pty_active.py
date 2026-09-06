@@ -165,6 +165,52 @@ class Child:
         os.close(self.fd)
 
 
+def test_resize_and_suspend_preserve_draft():
+    for suspend in (False, True):
+        text = b"suspend draft" if suspend else b"resize draft"
+        before = session_ids()
+        child = Child(["-vvvv"])
+        try:
+            child.wait(DEFAULT_IDLE_PROMPT)
+            child.send(text)
+            typed_end = child.wait(text)
+            if suspend:
+                child.send(b"\x1a")
+                deadline = time.monotonic() + 8.0
+                while True:
+                    got, status = os.waitpid(child.pid, os.WUNTRACED | os.WNOHANG)
+                    if got:
+                        assert os.WIFSTOPPED(status), (status, bytes(child.buf))
+                        break
+                    assert time.monotonic() < deadline, bytes(child.buf)
+                    child.read_once(0.05)
+                start = len(child.buf)
+                os.kill(child.pid, signal.SIGCONT)
+                child.wait(DEFAULT_IDLE_PROMPT, start=start)
+                child.wait(text, start=start)
+            else:
+                start = len(child.buf)
+                fcntl.ioctl(child.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 40, 0, 0))
+                os.kill(child.pid, signal.SIGWINCH)
+                child.wait(DEFAULT_IDLE_PROMPT, start=start)
+            child.send(b"\r")
+            end = child.wait(b"fixture answer", start=typed_end)
+            end = child.wait(b"turn_completed synced", start=end)
+            idle = child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=end)
+            if not suspend:
+                start = len(child.buf)
+                fcntl.ioctl(child.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 10, 0, 0))
+                os.kill(child.pid, signal.SIGWINCH)
+                child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=start)
+            child.exit_now()
+            if not suspend:
+                assert b"\x1b[?2004l" in child.buf[idle:], bytes(child.buf)
+        finally:
+            child.kill()
+        turn = one(events(new_session(before)), "turn_started")
+        assert turn["data"]["text"] == text.decode(), turn
+
+
 class IRCClient:
     def __init__(self, port, nick, agent=False):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=4.0)
@@ -1609,7 +1655,8 @@ def test_goal_user_terminal_commands_and_unlock():
     assert locks == [True, False]
     # Feedback may split streamed chunks; completion is a durable assertion.
     responses = [item for item in log if item["type"] == "response_completed"]
-    assert [item["data"]["items"][-1]["text"] for item in responses] == [
+    assert [part["text"] for item in responses for part in item["data"]["items"]
+            if part["provider_item_id"] == "msg_fixture_goal_checkpoint"] == [
         "goal checkpoint", "goal checkpoint"
     ]
 
@@ -4259,6 +4306,7 @@ def test_stalled_output_consumes_input():
 
 
 if __name__ == "__main__":
+    test_resize_and_suspend_preserve_draft()
     test_compaction_statistical_source()
     test_ctrl_d_exit()
     test_stalled_output_consumes_input()

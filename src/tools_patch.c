@@ -1349,6 +1349,7 @@ snag_tools_apply_patch(const struct snag_response_item *call,
     size_t line_count = 0;
     struct patch_set set = {0};
     struct snag_buf summary;
+    const char *status = "patch_rejected";
     uint64_t started = snag_time_ms();
     int root_fd = -1;
     int rc = -1;
@@ -1368,10 +1369,7 @@ snag_tools_apply_patch(const struct snag_response_item *call,
         snag_errorf(error, error_size, "invalid apply_patch arguments");
         if (snag_buf_printf(&summary, "Patch rejected: invalid apply_patch arguments.\n") < 0)
             goto out;
-        *result = patch_result_buf("patch_rejected", &summary,
-                                   snag_time_ms() - started);
-        rc = *result ? 0 : -1;
-        goto out;
+        goto result;
     }
     if (workdir_valid(workdir, workdir_len, session_workspace,
                       error, error_size) < 0 ||
@@ -1384,43 +1382,34 @@ snag_tools_apply_patch(const struct snag_response_item *call,
         if (snag_buf_printf(&summary, "Patch rejected: %s.\n",
                            error[0] ? error : "invalid patch") < 0)
             goto out;
-        *result = patch_result_buf("patch_rejected", &summary,
-                                   snag_time_ms() - started);
-        rc = *result ? 0 : -1;
-        goto out;
+        goto result;
     }
     root_fd = open(workdir, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
     if (root_fd < 0) {
         snag_errorf(error, error_size, "patch workdir cannot be opened safely");
         if (snag_buf_printf(&summary, "Patch failed during I/O: %s.\n", error) < 0)
             goto out;
-        *result = patch_result_buf("io_failed", &summary,
-                                   snag_time_ms() - started);
-        rc = *result ? 0 : -1;
-        goto out;
+        status = "io_failed";
+        goto result;
     }
     if (validate_and_compute(&set, root_fd, error, error_size) < 0) {
         if (snag_buf_printf(&summary, "Patch rejected: %s.\n",
                            error[0] ? error : "validation failed") < 0)
             goto out;
-        *result = patch_result_buf("patch_rejected", &summary,
-                                   snag_time_ms() - started);
-        rc = *result ? 0 : -1;
-        goto out;
+        goto result;
     }
     if (install_patch(&set, root_fd, error, error_size) < 0) {
         if (snag_buf_printf(&summary, "Patch failed during I/O: %s.\n",
                            error[0] ? error : "installation failed") < 0)
             goto out;
-        *result = patch_result_buf("io_failed", &summary,
-                                   snag_time_ms() - started);
-        rc = *result ? 0 : -1;
-        goto out;
+        status = "io_failed";
+        goto result;
     }
     if (append_summary(&summary, &set) < 0)
         goto out;
-    *result = patch_result_buf("succeeded", &summary,
-                               snag_time_ms() - started);
+    status = "succeeded";
+result:
+    *result = patch_result_buf(status, &summary, snag_time_ms() - started);
     rc = *result ? 0 : -1;
 out:
     if (root_fd >= 0)

@@ -121,7 +121,6 @@ def write_fake_bundle(root: Path, platform_id: str,
                       version: str = "fixture-version") -> Path:
     out = root / platform_id
     source_commands = [
-        command_record("statuscheck"),
         command_record("depscheck"),
         command_record("portabilitycheck"),
         command_record("sizecheck"),
@@ -129,8 +128,6 @@ def write_fake_bundle(root: Path, platform_id: str,
     terminal_commands = [
         command_record("pty_interactive_xterm"),
         command_record("pty_interactive_dumb"),
-        command_record("pty_resize"),
-        command_record("pty_suspend"),
         command_record("pty_terminal_matrix"),
         command_record("pty_active"),
     ]

@@ -95,7 +95,6 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def collect_source_audits(outdir: Path) -> list[dict[str, Any]]:
     commands = [
-        ("statuscheck", ["python3", "./tools/check_status.py"]),
         ("depscheck", ["python3", "./tools/check_deps.py"]),
         ("portabilitycheck", ["python3", "./tools/check_portability.py"]),
         ("sizecheck", ["make", "sizecheck"]),
@@ -139,8 +138,6 @@ def collect_terminal(binary: Path, fixture: Path, outdir: Path) -> dict[str, Any
         tests = [
             ("pty_interactive_xterm", ["python3", str(ROOT / "tests" / "pty_interactive.py"), str(fixture), str(work)], {"TERM": "xterm"}),
             ("pty_interactive_dumb", ["python3", str(ROOT / "tests" / "pty_interactive.py"), str(fixture), str(work)], {"TERM": "dumb"}),
-            ("pty_resize", ["python3", str(ROOT / "tests" / "pty_resize.py"), str(fixture), str(work)], {"TERM": "xterm"}),
-            ("pty_suspend", ["python3", str(ROOT / "tests" / "pty_suspend.py"), str(fixture), str(work)], {"TERM": "xterm"}),
             ("pty_terminal_matrix", ["python3", str(ROOT / "tests" / "pty_terminal_matrix.py"), str(fixture), str(work)], {"TERM": "xterm"}),
             ("pty_active", ["python3", str(ROOT / "tests" / "pty_active.py"), str(fixture), str(work)], {"TERM": "xterm"}),
         ]

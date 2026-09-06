@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Share bounded path joining and patch-result construction without merging
+  operation-specific filesystem checks. Consolidate resize/suspend tests onto
+  the existing PTY runner; replace stale implementation-status history and
+  percentage checking with a short capability/known-boundary summary.
+
 - Share CLI/config presentation precedence, durable model/effort selection,
   fixed-shape JSON construction and provider endpoint joining. Keep one-turn
   overrides and owned secret snapshots; retain replay of earlier effort events.

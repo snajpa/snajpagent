@@ -182,11 +182,7 @@ check: $(TEST_BIN)
 	$(MAKE) portabilitycheck
 	$(MAKE) depclosurecheck
 	$(MAKE) evidencetoolcheck
-	$(MAKE) statuscheck
 	$(MAKE) sizecheck
-
-statuscheck:
-	python3 ./tools/check_status.py
 
 stylecheck:
 	./tools/check_style.sh
@@ -319,6 +315,6 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check statuscheck stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install FORCE
+.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d

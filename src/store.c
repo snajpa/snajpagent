@@ -95,24 +95,6 @@ ensure_directory(const char *path, mode_t mode, bool require_private,
     }
     return 0;
 }
-char *
-snag_store_path_join(const char *left, const char *right)
-{
-    size_t a = strlen(left);
-    size_t b = strlen(right);
-    size_t need;
-    char *path;
-    if (!snag_size_add(a, b, &need) || !snag_size_add(need, 2u, &need) ||
-        need > SNAG_PATH_MAX_BYTES + 1u) {
-        errno = EOVERFLOW;
-        return NULL;
-    }
-    path = malloc(need);
-    if (!path)
-        return NULL;
-    (void)snprintf(path, need, "%s/%s", left, right);
-    return path;
-}
 static int
 mkdir_parents(const char *path, char *error, size_t error_size)
 {
@@ -178,8 +160,8 @@ snag_store_open(struct snag_store *store, const char *dotdir,
     if (snag_store_verify_private_fd(store->root_fd, true, "state root",
                           error, error_size) < 0)
         goto out;
-    sessions = snag_store_path_join(store->root_path, "sessions");
-    trash = snag_store_path_join(store->root_path, "trash");
+    sessions = snag_path_join(store->root_path, "sessions");
+    trash = snag_path_join(store->root_path, "trash");
     if (!sessions || !trash ||
         ensure_directory(sessions, 0700, true, error, error_size) < 0 ||
         ensure_directory(trash, 0700, true, error, error_size) < 0)
@@ -2448,9 +2430,9 @@ snag_session_create(struct snag_store *store, struct snag_session *session,
         errno = EEXIST;
         goto out;
     }
-    dir = snag_store_path_join(store->root_path, "sessions");
+    dir = snag_path_join(store->root_path, "sessions");
     if (dir) {
-        char *full = snag_store_path_join(dir, session->id);
+        char *full = snag_path_join(dir, session->id);
         free(dir);
         dir = full;
     }

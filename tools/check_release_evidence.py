@@ -83,7 +83,7 @@ def validate_source_audit(path: Path) -> None:
     audit = load_json(path)
     require_schema(audit, "snajpagent.source_audit_evidence.v1", "source audit")
     commands_ok(audit.get("commands"), "source audit")
-    required = {"statuscheck", "depscheck", "portabilitycheck", "sizecheck"}
+    required = {"depscheck", "portabilitycheck", "sizecheck"}
     seen = {cmd.get("name") for cmd in audit.get("commands", []) if isinstance(cmd, dict)}
     missing = sorted(required - seen)
     if missing:
@@ -125,7 +125,7 @@ def validate_terminal(path: Path) -> None:
     term = load_json(path)
     require_schema(term, "snajpagent.terminal_evidence.v1", "terminal evidence")
     commands_ok(term.get("commands"), "terminal evidence")
-    required = {"pty_interactive_xterm", "pty_interactive_dumb", "pty_resize", "pty_suspend", "pty_terminal_matrix", "pty_active"}
+    required = {"pty_interactive_xterm", "pty_interactive_dumb", "pty_terminal_matrix", "pty_active"}
     seen = {cmd.get("name") for cmd in term.get("commands", []) if isinstance(cmd, dict)}
     missing = sorted(required - seen)
     if missing:
@@ -154,7 +154,6 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 def write_fake_bundle(root: Path, *, source_ref: str = "source_audit.json",
                       terminal: bool = True, live: bool = True) -> Path:
     source_commands = [
-        command_record("statuscheck"),
         command_record("depscheck"),
         command_record("portabilitycheck"),
         command_record("sizecheck"),
@@ -162,8 +161,6 @@ def write_fake_bundle(root: Path, *, source_ref: str = "source_audit.json",
     terminal_commands = [
         command_record("pty_interactive_xterm"),
         command_record("pty_interactive_dumb"),
-        command_record("pty_resize"),
-        command_record("pty_suspend"),
         command_record("pty_terminal_matrix"),
         command_record("pty_active"),
     ]

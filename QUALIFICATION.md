@@ -19,7 +19,6 @@ The default `make check` path now includes the following machine-checkable gates
 | `make evidencebundle` / `make evidencecheck` | collects and validates a JSON evidence bundle for one concrete host, including source audits, dependency closure, and PTY terminal evidence when a fixture binary is supplied |
 | `make evidencetoolcheck` | exercises the single-bundle and matrix-evidence checkers against generated valid and invalid bundles, including path-escape, missing-record, duplicate-platform, version-mismatch, and extra-platform cases |
 | `make evidencematrixcheck` | validates a supplied final set of external per-platform bundles for required platform coverage, unique platform ids, consistent versioning, terminal evidence, and live-provider evidence |
-| `make statuscheck` | verifies `IMPLEMENTATION_STATUS.md` percentages are internally consistent |
 | `make sizecheck` | enforces preferred/hard line budgets and the 2,000-line per-file review trigger |
 | `tests/test_provider_transport` | exercises the real libcurl create/count/compact transport against a local loopback HTTP server |
 | `tests/pty_*.py` | exercises the interactive terminal composer, live resize, suspend/continue, and TERM/width fallback behavior through a PTY on the current POSIX host |
