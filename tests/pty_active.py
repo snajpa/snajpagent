@@ -122,6 +122,10 @@ class Child:
     def send(self, data):
         os.write(self.fd, data)
 
+    def send_wait(self, data, needle, start=0, timeout=8.0):
+        self.send(data)
+        return self.wait(needle, start=start, timeout=timeout)
+
     def drain(self, duration=0.25):
         end = time.monotonic() + duration
         while time.monotonic() < end:
@@ -202,8 +206,7 @@ def test_resize_and_suspend_preserve_draft():
         before = session_ids()
         with Child(["-vvvv"]) as child:
             child.wait(DEFAULT_IDLE_PROMPT)
-            child.send(text)
-            typed_end = child.wait(text)
+            typed_end = child.send_wait(text, text)
             if suspend:
                 child.send(b"\x1a")
                 deadline = time.monotonic() + 8.0
@@ -223,8 +226,7 @@ def test_resize_and_suspend_preserve_draft():
                 fcntl.ioctl(child.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 40, 0, 0))
                 os.kill(child.pid, signal.SIGWINCH)
                 child.wait(DEFAULT_IDLE_PROMPT, start=start)
-            child.send(b"\r")
-            end = child.wait(b"fixture answer", start=typed_end)
+            end = child.send_wait(b"\r", b"fixture answer", start=typed_end)
             end = child.wait(b"turn_completed synced", start=end)
             idle = child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=end)
             if not suspend:
@@ -396,8 +398,7 @@ def wait_turn_completed(child, session_id, needle, timeout=8.0):
 
 def clear_draft_incrementally(child, prompt=DEFAULT_IDLE_PROMPT):
     start = len(child.buf)
-    child.send(b"\x15")
-    end = child.wait(b"\x1b[K", start=start)
+    end = child.send_wait(b"\x15", b"\x1b[K", start=start)
     edit = bytes(child.buf[start:end])
     assert b"\x1b[2K" not in edit, edit
     assert prompt not in edit, edit
@@ -424,10 +425,8 @@ def test_incremental_prompt_edit_and_utf8_cursor_column():
     with Child([]) as child:
         wait_prompt_painted(child, DEFAULT_IDLE_PROMPT)
         empty_tab_start = len(child.buf)
-        child.send(b"\t")
-        end = child.wait("── chat ──".encode(), start=empty_tab_start)
-        child.send(b"\t")
-        child.wait("── rollout ──".encode(), start=end)
+        end = child.send_wait(b"\t", "── chat ──".encode(), start=empty_tab_start)
+        child.send_wait(b"\t", "── rollout ──".encode(), start=end)
         child.drain()
         start = len(child.buf)
         child.send(b"a")
@@ -451,14 +450,12 @@ def test_incremental_prompt_edit_and_utf8_cursor_column():
 def test_incremental_active_prompt_keeps_status_stable():
     with Child([]) as child:
         child.wait(DEFAULT_IDLE_PROMPT)
-        child.send(b"terminal_status\r")
-        child.wait("»".encode())
+        child.send_wait(b"terminal_status\r", "»".encode())
         phase_start = len(child.buf)
         child.wait("◷".encode(), start=phase_start, timeout=1.0)
 
         start = len(child.buf)
-        child.send(b"a")
-        end = child.wait(b"a", start=start)
+        end = child.send_wait(b"a", b"a", start=start)
         edit = bytes(child.buf[start:end])
         assert b"\x1b[2K" not in edit, edit
         assert b"working\xe2\x80\xa6" not in edit, edit
@@ -521,33 +518,27 @@ def test_prompt_clock_lifetime():
         fcntl.ioctl(child.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 48, 0, 0))
         child.wait(idle + b"clock-draft", start=start)
         start = len(child.buf)
-        child.send(b"\x12")
-        child.wait(b"reverse-i-search", start=start)
+        child.send_wait(b"\x12", b"reverse-i-search", start=start)
         child.drain(1.1)
         start = len(child.buf)
-        child.send(b"\x07")
-        child.wait(idle + b"clock-draft", start=start)
+        child.send_wait(b"\x07", idle + b"clock-draft", start=start)
         # Cancellation retains the old displayed line and captures a new one.
         start = len(child.buf)
-        child.send(b"\x03")
-        cancelled = child.wait(b"^C\r\n", start=start)
+        cancelled = child.send_wait(b"\x03", b"^C\r\n", start=start)
         child.wait("   0% › ".encode(), start=cancelled)
         replacement = latest_clock()
         assert replacement != original, bytes(child.buf[start:])
         child.drain(1.1)
         start = len(child.buf)
-        child.send(b"terminal_status\r")
-        active_end = child.wait("   ?%P» ".encode(), start=start)
+        active_end = child.send_wait(b"terminal_status\r", "   ?%P» ".encode(), start=start)
         active_clock = latest_clock()
         assert active_clock != replacement, bytes(child.buf[start:])
-        child.send(b"preserved-draft")
-        second = child.wait(b"status-second-fragment", start=active_end)
+        second = child.send_wait(b"preserved-draft", b"status-second-fragment", start=active_end)
         child.wait(b"preserved-draft", start=second)
         # Only the spinner/marker changes; clock and draft stay painted.
         settled = child.wait(" ›".encode(), start=second)
         assert set(re.findall(pattern, child.buf[active_end:])) == {active_clock}
-        child.send(b"\x03")
-        child.wait(b"^C\r\n", start=settled)
+        child.send_wait(b"\x03", b"^C\r\n", start=settled)
         child.drain()
         child.exit_now()
         child = None
@@ -579,8 +570,7 @@ def test_initial_unrenderable_prompt_is_rejected_atomically():
 def test_incremental_multiline_delete_clears_old_tail():
     with Child([]) as child:
         child.wait(DEFAULT_IDLE_PROMPT)
-        child.send(b"abcdef\nsecond")
-        child.wait(b"second")
+        child.send_wait(b"abcdef\nsecond", b"second")
         child.drain(0.05)
         child.send(b"\x1b[H" + b"\x1b[C" * 6)
         child.drain(0.05)
@@ -602,8 +592,7 @@ def test_incremental_wrapped_long_prompt_multiline_indent():
     with Child(["-m", model]) as child:
         child.wait(prompt)
         start = len(child.buf)
-        child.send(b"x\n" * 8 + b"z")
-        end = child.wait(b"z", start=start)
+        end = child.send_wait(b"x\n" * 8 + b"z", b"z", start=start)
         edit = bytes(child.buf[start:end])
         assert b"\x1b[2K" not in edit, edit
         assert prompt not in edit, edit
@@ -613,11 +602,9 @@ def test_steering():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"slow\r")
-    child.wait("»".encode())
+    child.send_wait(b"slow\r", "»".encode())
     child.wait(b"working slowly")
-    child.send(b"change course\r")
-    answer_end = child.wait(b"steered: change course")
+    answer_end = child.send_wait(b"change course\r", b"steered: change course")
     child.exit_cleanly(answer_end)
 
     session_id = new_session(before)
@@ -636,11 +623,9 @@ def test_repeated_steering_rearms_composer():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"slow_resteer\r")
-    child.wait(b"working slowly")
+    child.send_wait(b"slow_resteer\r", b"working slowly")
 
-    child.send(b"first steer\r")
-    first_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"first steer")
+    first_ack = child.send_wait(b"first steer\r", DEFAULT_ACTIVE_PROMPT + b"first steer")
     boundary = child.wait(b"first steer\r\n",
                           start=first_ack - len(b"first steer"))
     child.wait(DEFAULT_ACTIVE_PROMPT, start=boundary)
@@ -671,8 +656,7 @@ def test_public_index_gap():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"public_index_gap\r")
-    commentary_end = child.wait(b"Checking hidden work.")
+    commentary_end = child.send_wait(b"public_index_gap\r", b"Checking hidden work.")
     answer_end = child.wait(b"Gap-safe final.", start=commentary_end)
     child.exit_cleanly(answer_end)
 
@@ -689,8 +673,7 @@ def test_public_index_diagnostic():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"public_index_decrease\r")
-    child.wait(b"index one")
+    child.send_wait(b"public_index_decrease\r", b"index one")
     failure_end = child.wait(b"public output indexes did not increase")
     exhausted = child.wait(b"turn failed; try /retry", start=failure_end, timeout=20.0)
     child.exit_cleanly(exhausted)
@@ -720,8 +703,7 @@ def test_split_utf8_steering():
     while not any(e["type"] == "response_started" for e in events(session)):
         assert time.monotonic() < deadline
         child.read_once(0.02)
-    child.send(b"change\r")
-    answer_end = child.wait(b"steered: change")
+    answer_end = child.send_wait(b"change\r", b"steered: change")
     child.exit_cleanly(answer_end)
 
     interrupted = one(events(new_session(before)), "response_interrupted")
@@ -735,16 +717,13 @@ def test_typing_pause_and_transient_composer():
     before = session_ids()
     child = Child(["--config", str(config)])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"typing_stream\r")
-    first_end = child.wait(b"model-output-one")
+    first_end = child.send_wait(b"typing_stream\r", b"model-output-one")
 
     edit_start = len(child.buf)
-    child.send(b"a")
-    child.wait(b"a", start=edit_start)
+    child.send_wait(b"a", b"a", start=edit_start)
     time.sleep(0.1)
     edit_start = len(child.buf)
-    child.send(b"b")
-    child.wait(b"b", start=edit_start)
+    child.send_wait(b"b", b"b", start=edit_start)
     second_start = time.monotonic()
     quiet_start = len(child.buf)
     child.drain(0.15)
@@ -753,8 +732,7 @@ def test_typing_pause_and_transient_composer():
     assert time.monotonic() - second_start >= 0.20
 
     edit_start = len(child.buf)
-    child.send(b"c")
-    child.wait(b"c", start=edit_start)
+    child.send_wait(b"c", b"c", start=edit_start)
     third_start = time.monotonic()
     quiet_start = len(child.buf)
     child.drain(0.15)
@@ -780,13 +758,10 @@ def test_armed_fifo():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"slow\r")
-    child.wait(b"working slowly")
-    child.send(b"ping\t")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"ping")
+    child.send_wait(b"slow\r", b"working slowly")
+    child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
     child.wait(b"/medium   ?% (1) \xc2\xbb ")
-    child.send(b"retained-draft")
-    child.wait(b"slow complete")
+    child.send_wait(b"retained-draft", b"slow complete")
     answer_end = child.wait(b"pong")
     child.wait(b"retained-draft", start=answer_end)
     child.wait_idle_prompt(start=answer_end)
@@ -820,25 +795,20 @@ def test_queue_prompt_counts():
         raise AssertionError(f"queue count {count} did not repaint: {bytes(child.buf)!r}")
     with Child([]) as child:
         child.wait(DEFAULT_IDLE_PROMPT)
-        child.send(b"queue_slow\r")
-        after = child.wait(b"working slowly")
+        after = child.send_wait(b"queue_slow\r", b"working slowly")
         for count in range(1, 11):
             child.send(f"entry-{count}\t".encode())
             after = count_repaint(count, after)
         for command, count in ((b"/queue pop\r", 9), (b"/queue 1 delete\r", 8)):
             child.send(command)
             after = count_repaint(count, after)
-        child.send(b"\t")
-        after = child.wait(b" : ", start=after)
+        after = child.send_wait(b"\t", b" : ", start=after)
         child.drain(0.05)
         assert b"(8)" not in child.buf[after:]
-        child.send(b"\t")
-        after = child.wait(b"/medium   ?% (8) \xc2\xbb ", start=after)
-        child.send(b"/queue clear\r")
-        after = child.wait(b"8 future turns cancelled", start=after)
+        after = child.send_wait(b"\t", b"/medium   ?% (8) \xc2\xbb ", start=after)
+        after = child.send_wait(b"/queue clear\r", b"8 future turns cancelled", start=after)
         after = child.wait("»".encode(), start=after)
-        child.send(b"\x03")
-        after = child.wait(b"turn interrupted", start=after)
+        after = child.send_wait(b"\x03", b"turn interrupted", start=after)
         child.exit_cleanly(after)
 
 
@@ -847,20 +817,15 @@ def test_read_only_queries():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"/ro\r")
-    end = child.wait(b"usage: /ro QUERY")
+    end = child.send_wait(b"/ro\r", b"usage: /ro QUERY")
     child.wait_idle_prompt(start=end)
-    child.send(b"/ro ro_native\r")
-    end = child.wait(b"native complete")
+    end = child.send_wait(b"/ro ro_native\r", b"native complete")
     child.wait_idle_prompt(start=end)
-    child.send(b"/ro ro_denied\r")
-    end = child.wait(b"denied complete")
+    end = child.send_wait(b"/ro ro_denied\r", b"denied complete")
     child.wait_idle_prompt(start=end)
-    child.send(b"ping\r")
-    end = child.wait(b"pong")
+    end = child.send_wait(b"ping\r", b"pong")
     child.wait_idle_prompt(start=end)
-    child.send(b"//ro ping\r")
-    end = child.wait(b"fixture answer", start=end)
+    end = child.send_wait(b"//ro ping\r", b"fixture answer", start=end)
     child.exit_cleanly(end)
     log = events(new_session(before))
     turns = [x["data"] for x in log if x["type"] == "turn_started"]
@@ -878,17 +843,12 @@ def test_read_only_queries():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"slow\r")
-    child.wait(b"working slowly")
-    child.send(b"/ro ping\r")
-    end = child.wait(b"/ro cannot steer an active turn")
+    child.send_wait(b"slow\r", b"working slowly")
+    end = child.send_wait(b"/ro ping\r", b"/ro cannot steer an active turn")
     child.wait(b"/ro ping", start=end)
-    child.send(b"\t")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"/ro ping", start=end)
-    child.send(b"/queue /ro repeat\r")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"/ro repeat", start=end)
-    child.send(b"//ro ping\t")
-    end = child.wait(b"slow complete")
+    child.send_wait(b"\t", b"queued (/next or /q c) " + PROMPT + b"/ro ping", start=end)
+    child.send_wait(b"/queue /ro repeat\r", b"queued (/next or /q c) " + PROMPT + b"/ro repeat", start=end)
+    end = child.send_wait(b"//ro ping\t", b"slow complete")
     end = child.wait(b"pong", start=end)
     end = child.wait(b"haha", start=end)
     end = child.wait(b"fixture answer", start=end)
@@ -903,10 +863,8 @@ def test_read_only_queries():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"/ro slow\r")
-    child.wait(b"working slowly")
-    child.send(b"replacement\r")
-    end = child.wait(b"steered: replacement")
+    child.send_wait(b"/ro slow\r", b"working slowly")
+    end = child.send_wait(b"replacement\r", b"steered: replacement")
     child.exit_cleanly(end)
     log = events(new_session(before))
     assert one(log, "turn_started")["data"]["read_only"] is True
@@ -959,14 +917,12 @@ def test_read_only_multiline_compaction_and_chat():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"ping\r")
-    end = child.wait(b"pong")
+    end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(end)
     sid = new_session(before)
     child = Child(["--config", str(config), "--resume", sid])
     child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
-    child.send(b"/ro ro_native\r")
-    end = child.wait(b"native complete")
+    end = child.send_wait(b"/ro ro_native\r", b"native complete")
     child.exit_cleanly(end)
     log = events(sid)
     assert any(x["type"] == "compaction_completed" for x in log)
@@ -975,15 +931,12 @@ def test_read_only_multiline_compaction_and_chat():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"slow\r")
-    child.wait(b"working slowly")
+    child.send_wait(b"slow\r", b"working slowly")
     child.send(b"\x1b[200~/ro inspect\nmultiline\x1b[201~\r")
     end = child.wait(b"/ro cannot steer an active turn")
     child.wait(b"multiline", start=end)
-    child.send(b"\t")
-    end = child.wait(b"queued (/next or /q c) " + PROMPT, start=end)
-    child.send(b"\x1b[200~/queue /ro another\nquery\x1b[201~\r")
-    child.wait(b"queued (/next or /q c) " + PROMPT, start=end)
+    end = child.send_wait(b"\t", b"queued (/next or /q c) " + PROMPT, start=end)
+    child.send_wait(b"\x1b[200~/queue /ro another\nquery\x1b[201~\r", b"queued (/next or /q c) " + PROMPT, start=end)
     end = child.wait(b"slow complete")
     end = child.wait(b"fixture answer", start=end)
     end = child.wait(b"fixture answer", start=end)
@@ -998,8 +951,7 @@ def test_read_only_multiline_compaction_and_chat():
     child = Child(["--no-color", "-s", f"127.0.0.1:{free_port()}",
                    "-n", "roagent", "-o", "rooperator", "-r", "lab"])
     child.wait(chat_prompt("rooperator"))
-    child.send(b"/ro ro_native\r")
-    end = child.wait(b"native complete")
+    end = child.send_wait(b"/ro ro_native\r", b"native complete")
     child.exit_cleanly(end)
     log = events(new_session(before))
     turn = one(log, "turn_started")["data"]
@@ -1013,18 +965,13 @@ def test_read_only_queue_replay_and_edit():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"queue_slow\r")
-    child.wait(b"working slowly")
-    child.send(b"/ro ping\t")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"/ro ping")
+    child.send_wait(b"queue_slow\r", b"working slowly")
+    child.send_wait(b"/ro ping\t", b"queued (/next or /q c) " + PROMPT + b"/ro ping")
     end = len(child.buf)
-    child.send(b"/queue 1 edit\r")
-    end = child.wait(b"/ro ping", start=end)
-    child.send(b"\x15/ro repeat\r")
-    end = child.wait(b"/ro repeat", start=end)
+    end = child.send_wait(b"/queue 1 edit\r", b"/ro ping", start=end)
+    end = child.send_wait(b"\x15/ro repeat\r", b"/ro repeat", start=end)
     child.wait(f"openai/{DEFAULT_MODEL}/medium".encode(), start=end)
-    child.send(b"\x03")
-    end = child.wait(b"turn interrupted")
+    end = child.send_wait(b"\x03", b"turn interrupted")
     child.exit_cleanly(end)
     sid = new_session(before)
     log = events(sid)
@@ -1032,8 +979,7 @@ def test_read_only_queue_replay_and_edit():
     child = Child(["--resume", sid])
     end = child.wait(b"queued future turns are paused")
     child.wait_idle_prompt(start=end)
-    child.send(b"/goal slow goal\r")
-    end = child.wait(GOAL_SET)
+    end = child.send_wait(b"/goal slow goal\r", GOAL_SET)
     # Existing explicit goal start arms retained FIFO work before the goal.
     end = child.wait(b"haha", start=end)
     end = child.wait(b"goal done", start=end, timeout=10.0)
@@ -1046,20 +992,15 @@ def test_read_only_queue_replay_and_edit():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"/goal slow goal\r")
-    child.wait(b"working on goal")
-    child.send(b"/ro ping\t")
-    end = child.wait(b"queued (/next or /q c) " + PROMPT + b"/ro ping")
-    child.send(b"/queue 1 edit\r")
-    child.wait(b"/ro ping", start=end)
+    child.send_wait(b"/goal slow goal\r", b"working on goal")
+    end = child.send_wait(b"/ro ping\t", b"queued (/next or /q c) " + PROMPT + b"/ro ping")
+    child.send_wait(b"/queue 1 edit\r", b"/ro ping", start=end)
     end = child.wait(b"goal checkpoint")
     child.drain(0.1)
     assert b"goal done" not in child.buf[end:] and b"pong" not in child.buf[end:]
-    child.send(b"\x15/ro repeat\r")
-    end = child.wait(b"/ro repeat", start=end)
+    end = child.send_wait(b"\x15/ro repeat\r", b"/ro repeat", start=end)
     child.wait(f"openai/{DEFAULT_MODEL}/medium".encode(), start=end)
-    child.send(b"/next\r")
-    end = child.wait(b"haha", start=end)
+    end = child.send_wait(b"/next\r", b"haha", start=end)
     end = child.wait(b"goal done", start=end)
     child.exit_cleanly(end)
     log = events(new_session(before))
@@ -1079,8 +1020,7 @@ def test_managed_command_steering_and_tab_queue():
         remaining = deadline - time.monotonic()
         assert remaining > 0, "tool spinner was not shown"
         child.read_once(remaining)
-    child.send(b"terminate it\r")
-    steering_ack = child.wait("» terminate it\r\n".encode())
+    steering_ack = child.send_wait(b"terminate it\r", "» terminate it\r\n".encode())
     child.wait("»".encode(), start=steering_ack)
     answer_end = child.wait(b"managed command steering complete")
     child.exit_cleanly(answer_end)
@@ -1100,10 +1040,8 @@ def test_managed_command_steering_and_tab_queue():
     before = session_ids()
     child = Child(["-v"])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"managed_command_queue\r")
-    child.wait(b"fixture managed queue wait")
-    child.send(b"ping\t")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"ping")
+    child.send_wait(b"managed_command_queue\r", b"fixture managed queue wait")
+    child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
     command_end = child.wait(b"managed command queue complete")
     answer_end = child.wait(b"pong", start=command_end)
     child.exit_cleanly(answer_end)
@@ -1138,17 +1076,14 @@ def test_steering_during_pre_response_compaction():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"context_anchor_chain\r")
-    answer_end = child.wait(b"context anchor complete")
+    answer_end = child.send_wait(b"context_anchor_chain\r", b"context anchor complete")
     child.exit_cleanly(answer_end)
     session_id = new_session(before)
 
     child = Child(["--config", str(config), "--resume", session_id])
     child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
-    child.send(b"compaction_steer\r")
-    child.wait("»".encode())
-    child.send(b"change plan\r")
-    steer_end = child.wait(DEFAULT_ACTIVE_PROMPT + b"change plan")
+    child.send_wait(b"compaction_steer\r", "»".encode())
+    steer_end = child.send_wait(b"change plan\r", DEFAULT_ACTIVE_PROMPT + b"change plan")
     child.wait("»".encode(), start=steer_end)
     answer_end = child.wait(b"fixture answer", start=steer_end)
     child.exit_cleanly(answer_end)
@@ -1180,8 +1115,7 @@ def test_steering_during_capacity_recovery_compaction():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"ping\r")
-    answer_end = child.wait(b"pong")
+    answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
     session_id = new_session(before)
 
@@ -1235,8 +1169,7 @@ def test_steering_during_capacity_recovery_compaction():
 
     resumed = Child(["--resume", session_id])
     prompt_end = resumed.wait(b"\xe2\x80\xba ")
-    resumed.send(b"/status\r")
-    status_end = resumed.wait(b"context: source=observed", start=prompt_end)
+    status_end = resumed.send_wait(b"/status\r", b"context: source=observed", start=prompt_end)
     status_end = resumed.wait(
         b"observed ceiling: hard-input=89999", start=status_end
     )
@@ -1255,8 +1188,7 @@ def test_steering_during_capacity_recovery_compaction():
         "--config", str(mismatch_config), "--resume", session_id
     ])
     prompt_end = mismatched.wait(DEFAULT_IDLE_PROMPT)
-    mismatched.send(b"/status\r")
-    status_end = mismatched.wait(b"context: source=unknown", start=prompt_end)
+    status_end = mismatched.send_wait(b"/status\r", b"context: source=unknown", start=prompt_end)
     status_end = mismatched.wait(
         b"observed ceiling: hard-input=89999", start=status_end
     )
@@ -1280,8 +1212,7 @@ def test_agents_md_config():
     before = session_ids()
     child = Child(["--config", str(enabled_config), "-C", str(workspace)])
     child.wait(PROMPT.rstrip())
-    child.send(b"ping\r")
-    answer_end = child.wait(b"pong")
+    answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
     turn = one(events(new_session(before)), "turn_started")
     instructions = turn["data"]["instructions"]
@@ -1296,8 +1227,7 @@ def test_agents_md_config():
     before = session_ids()
     child = Child(["--config", str(disabled_config), "-C", str(workspace)])
     child.wait(PROMPT.rstrip())
-    child.send(b"ping\r")
-    answer_end = child.wait(b"pong")
+    answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
     turn = one(events(new_session(before)), "turn_started")
     assert turn["data"]["instructions"] == []
@@ -1312,15 +1242,12 @@ def test_agents_md_config():
                "-d", str(docs), "-d" + str(docs / "."), "-d", str(workspace)]
     child = Child(options)
     child.wait(PROMPT.rstrip())
-    child.send(b"ping\r")
-    end = child.wait(b"pong")
+    end = child.send_wait(b"ping\r", b"pong")
     child.wait_idle_prompt(start=end)
-    child.send(b"/compact\r")
-    end = child.wait(COMPACTED, start=end)
+    end = child.send_wait(b"/compact\r", COMPACTED, start=end)
     child.wait_idle_prompt(start=end)
     (workspace / "ro-input.txt").write_text("native docs check\n", encoding="utf-8")
-    child.send(f"/ro ro_native {entry}\r".encode())
-    end = child.wait(b"native complete", start=end)
+    end = child.send_wait(f"/ro ro_native {entry}\r".encode(), b"native complete", start=end)
     child.exit_cleanly(end)
     session = new_session(before)
     results = [e["data"]["result"] for e in events(session) if e["type"] == "tool_finished"]
@@ -1340,15 +1267,12 @@ def test_interrupt():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"slow\r")
-    child.wait(b"working slowly")
-    child.send(b"\x03")
-    interrupted_end = child.wait(b"turn interrupted")
+    child.send_wait(b"slow\r", b"working slowly")
+    interrupted_end = child.send_wait(b"\x03", b"turn interrupted")
     child.drain(0.1)
     assert os.waitpid(child.pid, os.WNOHANG) == (0, 0), bytes(child.buf)
     idle_cancel = len(child.buf)
-    child.send(b"x\x03")
-    child.wait(b"^C\r\n", start=idle_cancel)
+    child.send_wait(b"x\x03", b"^C\r\n", start=idle_cancel)
     child.drain(0.2)
     assert os.waitpid(child.pid, os.WNOHANG) == (0, 0), bytes(child.buf)
     assert bytes(child.buf[idle_cancel:]).count(b"^C\r\n") == 1
@@ -1367,21 +1291,17 @@ def test_active_ctrl_c_clears_draft():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"queue_slow\r")
-    child.wait(b"working slowly")
+    child.send_wait(b"queue_slow\r", b"working slowly")
 
     edit_start = len(child.buf)
-    child.send(b"discard this")
-    child.wait(b"this", start=edit_start)
+    child.send_wait(b"discard this", b"this", start=edit_start)
     clear_start = len(child.buf)
-    child.send(b"\x03")
-    clear_end = child.wait(b"^C\r\n", start=clear_start)
+    clear_end = child.send_wait(b"\x03", b"^C\r\n", start=clear_start)
     cleared = bytes(child.buf[clear_start:clear_end])
     assert b"interrupting" not in cleared
     assert b"\x1b[2K" not in cleared
 
-    child.send(b"replacement\r")
-    answer_end = child.wait(b"steered: replacement", start=clear_end)
+    answer_end = child.send_wait(b"replacement\r", b"steered: replacement", start=clear_end)
     child.exit_cleanly(answer_end)
 
     log = events(new_session(before))
@@ -1397,21 +1317,18 @@ def test_ctrl_c_cancels_partial_editor_states():
         child.wait(DEFAULT_IDLE_PROMPT)
         escape_start = len(child.buf)
         child.send(b"escape-draft\x1b")
-        child.send(b"\x03")
-        escape_end = child.wait(b"^C\r\n", start=escape_start)
+        escape_end = child.send_wait(b"\x03", b"^C\r\n", start=escape_start)
         assert_bytes_in_order(bytes(child.buf[escape_start:escape_end]),
                               b"escape-draft")
         child.wait(DEFAULT_IDLE_PROMPT, start=escape_end)
 
         paste_start = len(child.buf)
         child.send(b"\x1b[200~paste-draft")
-        child.send(b"\x03")
-        paste_end = child.wait(b"^C\r\n", start=paste_start)
+        paste_end = child.send_wait(b"\x03", b"^C\r\n", start=paste_start)
         assert_bytes_in_order(bytes(child.buf[paste_start:paste_end]),
                               b"paste-draft")
         child.wait(DEFAULT_IDLE_PROMPT, start=paste_end)
-        child.send(b"clean-after-cancel\r")
-        child.wait(b"fixture answer", start=paste_end)
+        child.send_wait(b"clean-after-cancel\r", b"fixture answer", start=paste_end)
 
 
 def test_prompt_history_and_reverse_search():
@@ -1428,8 +1345,7 @@ def test_prompt_history_and_reverse_search():
         "history-café-unique".encode(),
     ):
         start = len(first.buf)
-        first.send(entry + b"\r")
-        answer = first.wait(b"fixture answer", start=start)
+        answer = first.send_wait(entry + b"\r", b"fixture answer", start=start)
         first.wait_idle_prompt(start=answer)
     first.exit_cleanly(answer)
 
@@ -1440,14 +1356,12 @@ def test_prompt_history_and_reverse_search():
     second.wait(b"(failed reverse-i-search)`draft-restore':")
     second.send(b"\x07")
     restored = len(second.buf)
-    second.send(b"\r")
-    answer = second.wait(b"fixture answer", start=restored)
+    answer = second.send_wait(b"\r", b"fixture answer", start=restored)
     second.wait_idle_prompt(start=answer)
     second_id = new_session(before_second)
     assert one(events(second_id), "turn_started")["data"]["text"] == "draft-restore"
     cancel = len(second.buf)
-    second.send(b"draft-cancel\x03")
-    cancel_end = second.wait(b"^C\r\n", start=cancel)
+    cancel_end = second.send_wait(b"draft-cancel\x03", b"^C\r\n", start=cancel)
 
     search = len(second.buf)
     second.send(b"\x12history-repeat")
@@ -1457,8 +1371,7 @@ def test_prompt_history_and_reverse_search():
     second.send(b"\x12")
     second.wait(b"old",
                 start=older)
-    second.send(b"\r")
-    answer = second.wait(b"fixture answer", start=search)
+    answer = second.send_wait(b"\r", b"fixture answer", start=search)
     second.wait_idle_prompt(start=answer)
 
     search = len(second.buf)
@@ -1474,28 +1387,22 @@ def test_prompt_history_and_reverse_search():
     second.send(b"\x1b")
     second.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT + "history-café-unique".encode(),
                 start=accepted)
-    second.send(b"\x03")
-    second.wait(b"^C\r\n", start=accepted)
+    second.send_wait(b"\x03", b"^C\r\n", start=accepted)
 
-    second.send(b"/history-invalid-command\r")
-    invalid_end = second.wait(b"unknown slash command")
+    invalid_end = second.send_wait(b"/history-invalid-command\r", b"unknown slash command")
     second.wait_idle_prompt(start=invalid_end)
     second.send(b"\r")
-    second.send(b"history-cancelled-draft\x03")
-    second.wait(b"^C\r\n", start=invalid_end)
-    second.send(b"/delete\r")
-    confirm = second.wait(b"delete is irreversible")
+    second.send_wait(b"history-cancelled-draft\x03", b"^C\r\n", start=invalid_end)
+    confirm = second.send_wait(b"/delete\r", b"delete is irreversible")
     second.wait(PROMPT.rstrip(), start=confirm)
     second.send(b"history-confirmation-excluded\r")
     mismatch = second.wait(b"delete confirmation did not match", start=confirm)
     second.wait_idle_prompt(start=mismatch)
 
-    second.send(b"/delete\r")
-    confirm = second.wait(b"delete is irreversible", start=mismatch)
+    confirm = second.send_wait(b"/delete\r", b"delete is irreversible", start=mismatch)
     second.wait(PROMPT.rstrip(), start=confirm)
     cancel = len(second.buf)
-    second.send(b"confirmation-cancelled-draft\x03")
-    cancel_end = second.wait(b"^C\r\n", start=cancel)
+    cancel_end = second.send_wait(b"confirmation-cancelled-draft\x03", b"^C\r\n", start=cancel)
     prompt_end = second.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=cancel_end)
     cancelled = bytes(second.buf[cancel:prompt_end])
     assert_bytes_in_order(cancelled, b"confirmation-cancelled-draft")
@@ -1531,11 +1438,9 @@ def test_multiline_and_paste():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"line one\nline two\r")
-    first_end = child.wait(b"fixture answer")
+    first_end = child.send_wait(b"line one\nline two\r", b"fixture answer")
     child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=first_end)
-    child.send(b"\x1b[200~ping\x1b[201~\r")
-    answer_end = child.wait(b"pong")
+    answer_end = child.send_wait(b"\x1b[200~ping\x1b[201~\r", b"pong")
     child.exit_cleanly(answer_end)
 
     turns = [item for item in events(new_session(before))
@@ -1547,10 +1452,8 @@ def test_resume_pauses_fifo():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"slow\r")
-    child.wait(b"working slowly")
-    child.send(b"/queue ping\r")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"ping")
+    child.send_wait(b"slow\r", b"working slowly")
+    child.send_wait(b"/queue ping\r", b"queued (/next or /q c) " + PROMPT + b"ping")
     session_id = new_session(before)
     child.kill()
 
@@ -1560,8 +1463,7 @@ def test_resume_pauses_fifo():
     resumed.wait(b"/medium   ?% (1) \xe2\x80\xba ")
     resumed.drain(0.3)
     assert b"pong" not in resumed.buf
-    resumed.send(b"/next\r")
-    answer_end = resumed.wait(b"pong")
+    answer_end = resumed.send_wait(b"/next\r", b"pong")
     resumed.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=answer_end)
     resumed.exit_cleanly(answer_end)
 
@@ -1580,10 +1482,8 @@ def test_goal_quoted_reserved_wording():
     child.send(b"/goal pause after release\r")
     error_end = child.wait(b"reserved /goal command has extra text")
     child.wait(PROMPT.rstrip(), start=error_end)
-    child.send(b'/goal "pause after release"\r')
-    answer_end = child.wait(b"goal done")
-    child.send(b"/goal\r")
-    status_end = child.wait(b": completed", start=answer_end)
+    answer_end = child.send_wait(b'/goal "pause after release"\r', b"goal done")
+    status_end = child.send_wait(b"/goal\r", b": completed", start=answer_end)
     wording_end = child.wait(b"pause after release", start=status_end)
     child.wait(PROMPT.rstrip(), start=wording_end)
     child.exit_now()
@@ -1601,8 +1501,7 @@ def test_goal_automatic_continuation():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal automatic goal\r")
-    checkpoint_end = child.wait(b"goal checkpoint")
+    checkpoint_end = child.send_wait(b"/goal automatic goal\r", b"goal checkpoint")
     answer_end = child.wait(b"goal done", start=checkpoint_end)
     child.exit_cleanly(answer_end)
 
@@ -1619,8 +1518,7 @@ def test_model_created_goal_continuation():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"please create a persistent goal\r")
-    started_end = child.wait(GOAL_SET)
+    started_end = child.send_wait(b"please create a persistent goal\r", GOAL_SET)
     checkpoint_end = child.wait(b"model-created checkpoint", start=started_end)
     cleared_end = child.wait(GOAL_CLEARED, start=checkpoint_end)
     answer_end = child.wait(b"goal done", start=cleared_end)
@@ -1647,8 +1545,7 @@ def test_goal_configured_wording_limit():
     child.send(b"/goal abcde\r")
     error_end = child.wait(b"goal wording must contain 1..4 UTF-8 bytes")
     child.wait(PROMPT.rstrip(), start=error_end)
-    child.send(b"/goal tiny\r")
-    answer_end = child.wait(b"goal done")
+    answer_end = child.send_wait(b"/goal tiny\r", b"goal done")
     child.exit_cleanly(answer_end)
 
     log = events(new_session(before))
@@ -1661,8 +1558,7 @@ def test_goal_model_rewrite_and_lock():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal rewrite goal\r")
-    set_end = child.wait(GOAL_SET)
+    set_end = child.send_wait(b"/goal rewrite goal\r", GOAL_SET)
     rewritten_end = child.wait(GOAL_UPDATED, start=set_end)
     cleared_end = child.wait(GOAL_CLEARED, start=rewritten_end)
     answer_end = child.wait(b"goal done", start=cleared_end)
@@ -1678,8 +1574,7 @@ def test_goal_model_rewrite_and_lock():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal locked goal\r")
-    child.wait(b"preparing goal rewrite")
+    child.send_wait(b"/goal locked goal\r", b"preparing goal rewrite")
     child.send(b"/goal lock\r")
     lock_end = child.wait(b"Goal wording locked against model changes")
     answer_end = child.wait(b"goal done", start=lock_end)
@@ -1694,16 +1589,14 @@ def test_goal_pause_resume_and_queue_priority():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal slow goal\r")
-    child.wait(b"working on goal")
+    child.send_wait(b"/goal slow goal\r", b"working on goal")
     child.send(b"/goal pause\r")
     pause_end = child.wait(b"Goal paused at the current turn boundary")
     checkpoint_end = child.wait(b"goal checkpoint", start=pause_end)
     child.wait(PROMPT.rstrip(), start=checkpoint_end)
     child.drain(0.2)
     assert b"goal done" not in child.buf[checkpoint_end:]
-    child.send(b"/goal resume\r")
-    answer_end = child.wait(b"goal done", start=checkpoint_end)
+    answer_end = child.send_wait(b"/goal resume\r", b"goal done", start=checkpoint_end)
     child.exit_cleanly(answer_end)
     log = events(new_session(before))
     assert one(log, "goal_paused")["data"]["reason"] == "user"
@@ -1714,14 +1607,10 @@ def test_goal_pause_resume_and_queue_priority():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal slow goal\r")
-    child.wait(b"working on goal")
-    child.send(b"ping\t")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"ping")
-    child.send(b"/ro repeat\t")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"/ro repeat")
-    child.send(b"ping\t")
-    checkpoint_end = child.wait(b"goal checkpoint")
+    child.send_wait(b"/goal slow goal\r", b"working on goal")
+    child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
+    child.send_wait(b"/ro repeat\t", b"queued (/next or /q c) " + PROMPT + b"/ro repeat")
+    checkpoint_end = child.send_wait(b"ping\t", b"goal checkpoint")
     pong_end = child.wait(b"pong", start=checkpoint_end)
     pong_end = child.wait(b"haha", start=pong_end)
     pong_end = child.wait(b"pong", start=pong_end)
@@ -1738,25 +1627,19 @@ def test_goal_user_terminal_commands_and_unlock():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal slow goal\r")
-    set_end = child.wait(GOAL_SET)
+    set_end = child.send_wait(b"/goal slow goal\r", GOAL_SET)
     child.wait(b"working on goal", start=set_end)
-    child.send(b"/goal set retitled goal\r")
-    reworded_end = child.wait(GOAL_UPDATED, start=set_end)
+    reworded_end = child.send_wait(b"/goal set retitled goal\r", GOAL_UPDATED, start=set_end)
     child.send(b"/goal lock\r")
     child.wait(b"Goal wording locked against model changes",
                start=reworded_end)
-    child.send(b"/goal unlock\r")
-    child.wait(b"Goal wording unlocked for model changes")
-    child.send(b"/goal complete\r")
-    complete_end = child.wait(GOAL_CLEARED, start=reworded_end)
+    child.send_wait(b"/goal unlock\r", b"Goal wording unlocked for model changes")
+    complete_end = child.send_wait(b"/goal complete\r", GOAL_CLEARED, start=reworded_end)
     checkpoint_end = child.wait_idle_prompt(start=complete_end)
 
-    child.send(b"/goal slow goal\r")
-    set_end = child.wait(GOAL_SET, start=checkpoint_end)
+    set_end = child.send_wait(b"/goal slow goal\r", GOAL_SET, start=checkpoint_end)
     child.wait(b"working on goal", start=set_end)
-    child.send(b"/goal cancel\r")
-    cancel_end = child.wait(GOAL_CLEARED, start=set_end)
+    cancel_end = child.send_wait(b"/goal cancel\r", GOAL_CLEARED, start=set_end)
     child.exit_cleanly(cancel_end)
 
     log = events(new_session(before))
@@ -1779,8 +1662,7 @@ def test_goal_refusal_failure_block_and_restart_state():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal refusing goal\r")
-    child.wait(b"I cannot continue this goal.")
+    child.send_wait(b"/goal refusing goal\r", b"I cannot continue this goal.")
     child.wait(b"Goal active; retrying")
     child.send(b"/goal pause\r")
     paused = child.wait(b"Goal paused at the current turn boundary")
@@ -1791,8 +1673,7 @@ def test_goal_refusal_failure_block_and_restart_state():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal failing goal\r")
-    child.wait(b"fixture goal provider failed")
+    child.send_wait(b"/goal failing goal\r", b"fixture goal provider failed")
     child.wait(b"Goal active; retrying")
     done = child.wait(b"goal done", timeout=20.0)
     child.exit_cleanly(done)
@@ -1805,11 +1686,9 @@ def test_goal_refusal_failure_block_and_restart_state():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal blocked goal\r")
-    child.wait(b"Goal blocked by model")
+    child.send_wait(b"/goal blocked goal\r", b"Goal blocked by model")
     answer_end = child.wait(b"goal done")
-    child.send(b"/goal\r")
-    status_end = child.wait(b": blocked", start=answer_end)
+    status_end = child.send_wait(b"/goal\r", b": blocked", start=answer_end)
     blocker_end = child.wait(b"fixture dependency is unavailable", start=status_end)
     child.wait(PROMPT.rstrip(), start=blocker_end)
     child.exit_now()
@@ -1820,8 +1699,7 @@ def test_goal_refusal_failure_block_and_restart_state():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"/goal slow goal\r")
-    child.wait(b"working on goal")
+    child.send_wait(b"/goal slow goal\r", b"working on goal")
     session_id = new_session(before)
     child.kill()
     resumed = Child(["--resume", session_id])
@@ -1840,16 +1718,14 @@ def test_saved_goal_restored_without_lookup():
     before = session_ids()
     with Child([]) as child:
         child.wait_idle_prompt()
-        child.send(b"/goal slow goal\r")
-        child.wait(b"working on goal")
+        child.send_wait(b"/goal slow goal\r", b"working on goal")
         child.send(b"/goal pause\r")
         paused = child.wait(b"Goal paused at the current turn boundary")
         checkpoint = child.wait(b"goal checkpoint", start=paused)
         child.wait_idle_prompt(start=checkpoint)
         wording = "obnovit žluťoučký plán bez opakování"
         start = len(child.buf)
-        child.send(("/goal set " + wording + "\r").encode())
-        changed = child.wait(GOAL_UPDATED, start=start)
+        changed = child.send_wait(("/goal set " + wording + "\r").encode(), GOAL_UPDATED, start=start)
         child.send(b"/goal lock\r")
         locked = child.wait(b"Goal wording locked against model changes", start=changed)
         child.wait_idle_prompt(start=locked)
@@ -1870,8 +1746,7 @@ def test_saved_goal_restored_without_lookup():
             resumed.drain(0.1)
             assert len(events(session_id)) == len(original)
             # A normal follow-up must not create a replacement or resume it.
-            resumed.send(b"ping\r")
-            answer = resumed.wait(b"pong", start=restored)
+            answer = resumed.send_wait(b"ping\r", b"pong", start=restored)
             resumed.exit_cleanly(answer)
         current = events(session_id)
         assert [e for e in current if e["type"].startswith("goal_")] == [
@@ -1884,8 +1759,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
         before = session_ids()
         with Child([]) as child:
             child.wait_idle_prompt()
-            child.send(b"/goal blocked goal\r")
-            answer = child.wait(b"goal done")
+            answer = child.send_wait(b"/goal blocked goal\r", b"goal done")
             child.wait_idle_prompt(start=answer)
             if state != "blocked":
                 start = len(child.buf)
@@ -1908,13 +1782,10 @@ def test_resume_preserves_inactive_and_queued_goal_states():
     before = session_ids()
     with Child([]) as child:
         child.wait_idle_prompt()
-        child.send(b"/goal slow goal\r")
-        child.wait(b"working on goal")
-        child.send(b"ping\t")
-        child.wait(b"queued (/next or /q c) " + PROMPT + b"ping")
+        child.send_wait(b"/goal slow goal\r", b"working on goal")
+        child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
         session_id = new_session(before)
-        child.send(b"\x04")
-        child.wait(RESUME_HEADER, timeout=4.0)
+        child.send_wait(b"\x04", RESUME_HEADER, timeout=4.0)
         command = child.finish()
     original = events(session_id)
     with Child.from_command(command) as resumed:
@@ -1926,8 +1797,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
         assert len([e for e in current if e["type"] == "turn_started"]) == 1
         assert [e for e in current if e["type"].startswith("goal_")] == [
             e for e in original if e["type"].startswith("goal_")]
-        resumed.send(b"/next\r")
-        answer = resumed.wait(b"pong", start=paused_queue)
+        answer = resumed.send_wait(b"/next\r", b"pong", start=paused_queue)
         done = resumed.wait(b"goal done", start=answer)
         resumed.exit_cleanly(done)
     current = events(session_id)
@@ -1940,50 +1810,37 @@ def test_queue_mutation_commands():
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
-    child.send(b"queue_slow\r")
-    child.wait(b"working slowly")
+    child.send_wait(b"queue_slow\r", b"working slowly")
 
     for text in (b"first", b"second", b"third"):
-        child.send(text + b"\t")
-        child.wait(b"queued (/next or /q c) " + PROMPT + text)
+        child.send_wait(text + b"\t", b"queued (/next or /q c) " + PROMPT + text)
 
     start = len(child.buf)
-    child.send(b"/q\r")
-    listed = child.wait(b"3 ", start=start)
+    listed = child.send_wait(b"/q\r", b"3 ", start=start)
     child.wait(b"first", start=start)
     child.wait(b"second", start=start)
     child.wait(b"third", start=start)
     child.wait("»".encode(), start=listed)
 
-    child.send(b"/q p\r")
-    child.wait(b"1 future turn cancelled")
-    child.send(b"/q 1d\r")
-    child.wait(b"1 future turn cancelled")
+    child.send_wait(b"/q p\r", b"1 future turn cancelled")
+    child.send_wait(b"/q 1d\r", b"1 future turn cancelled")
 
-    child.send(b"/q 1e\r")
-    edit_start = child.wait("edit 1 › ".encode())
+    edit_start = child.send_wait(b"/q 1e\r", "edit 1 › ".encode())
     child.wait(b"second", start=edit_start)
     cancel_start = len(child.buf)
-    child.send(b"\x03")
-    child.wait(b"^C\r\n", start=cancel_start)
+    child.send_wait(b"\x03", b"^C\r\n", start=cancel_start)
     child.wait("»".encode(), start=cancel_start)
-    child.send(b"/q 1e\r")
-    edit_start = child.wait("edit 1 › ".encode(), start=cancel_start)
+    edit_start = child.send_wait(b"/q 1e\r", "edit 1 › ".encode(), start=cancel_start)
     child.wait(b"second", start=edit_start)
-    child.send(b" active\r")
-    child.wait("› second active".encode(), start=edit_start)
+    child.send_wait(b" active\r", "› second active".encode(), start=edit_start)
 
-    child.send(b"fourth\t")
-    child.wait(b"queued (/next or /q c) " + PROMPT + b"fourth")
-    child.send(b"\x03")
-    interrupted_end = child.wait(b"turn interrupted")
+    child.send_wait(b"fourth\t", b"queued (/next or /q c) " + PROMPT + b"fourth")
+    interrupted_end = child.send_wait(b"\x03", b"turn interrupted")
     child.wait_idle_prompt(start=interrupted_end)
 
-    child.send(b"/queue 1 edit\r")
-    edit_start = child.wait("edit 1 › ".encode(), start=interrupted_end)
+    edit_start = child.send_wait(b"/queue 1 edit\r", "edit 1 › ".encode(), start=interrupted_end)
     child.wait(b"second active", start=edit_start)
-    child.send(b" idle\r")
-    child.wait("› second active idle".encode(), start=edit_start)
+    child.send_wait(b" idle\r", "› second active idle".encode(), start=edit_start)
 
     child.send(b"/exit\r")
     _, status = os.waitpid(child.pid, 0)
@@ -1996,13 +1853,10 @@ def test_queue_mutation_commands():
     resumed.wait(b"/medium   ?% (2) \xe2\x80\xba ")
     resumed.wait(PROMPT.rstrip())
     start = len(resumed.buf)
-    resumed.send(b"/q\r")
-    resumed.wait(b"second active idle", start=start)
+    resumed.send_wait(b"/q\r", b"second active idle", start=start)
     resumed.wait(b"fourth", start=start)
-    resumed.send(b"/queue clear\r")
-    cleared_end = resumed.wait(b"2 future turns cancelled", start=start)
-    resumed.send(b"/q\r")
-    empty_end = resumed.wait(b"future-turn queue is empty", start=cleared_end)
+    cleared_end = resumed.send_wait(b"/queue clear\r", b"2 future turns cancelled", start=start)
+    empty_end = resumed.send_wait(b"/q\r", b"future-turn queue is empty", start=cleared_end)
     resumed.wait(PROMPT.rstrip(), start=empty_end)
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -2047,20 +1901,16 @@ def test_preferences_and_verbosity():
         child.send(f"/verbose {value}\r".encode())
         end = child.wait(b"/verbose expects one integer from 0 through 6", start=end)
         child.wait(PROMPT.rstrip(), start=end)
-    child.send(b"/verbose\r")
-    end = child.wait(b"verbosity: 6 (wire)", start=end)
+    end = child.send_wait(b"/verbose\r", b"verbosity: 6 (wire)", start=end)
     child.wait(PROMPT.rstrip(), start=end)
 
-    child.send(b"/effort quantum\r")
-    end = child.wait(b"effort for next turn: quantum")
+    end = child.send_wait(b"/effort quantum\r", b"effort for next turn: quantum")
     child.wait(PROMPT.rstrip(), start=end)
 
-    child.send(b"/verbose 4\r")
-    end = child.wait(b"verbosity: 4")
+    end = child.send_wait(b"/verbose 4\r", b"verbosity: 4")
     child.wait(PROMPT.rstrip(), start=end)
 
-    child.send(b"ping\r")
-    child.wait(b"event \xe2\x80\xba")
+    child.send_wait(b"ping\r", b"event \xe2\x80\xba")
     answer_end = child.wait(b"pong")
     terminal_end = child.wait(b"turn_completed synced", start=answer_end)
     child.exit_cleanly(terminal_end)
@@ -2082,8 +1932,7 @@ def test_active_verbosity():
             before = session_ids()
             with Child(["-v"] * initial) as child:
                 child.wait_idle_prompt()
-                child.send(b"managed_command_queue\r")
-                child.wait("⠋".encode())
+                child.send_wait(b"managed_command_queue\r", "⠋".encode())
                 session = new_session(before)
                 start = len(child.buf)
                 child.send(f"/verbose {level}".encode() + key)
@@ -2118,8 +1967,7 @@ def test_runtime_verbosity_resume():
             assert shlex.split(command).count("-v") == level, command
         with Child.from_command(command) as resumed:
             resumed.wait_idle_prompt()
-            resumed.send(b"/verbose\r")
-            end = resumed.wait(f"verbosity: {level} (".encode())
+            end = resumed.send_wait(b"/verbose\r", f"verbosity: {level} (".encode())
             resumed.wait_idle_prompt(start=end)
             resumed.exit_now()
 
@@ -2129,10 +1977,8 @@ def test_command_name_completion():
     child.wait(PROMPT.rstrip())
 
     start = len(child.buf)
-    child.send(b"/he\t")
-    end = child.wait(b"lp", start=start)
-    child.send(b"\r")
-    help_end = child.wait(b"/compact", start=end)
+    end = child.send_wait(b"/he\t", b"lp", start=start)
+    help_end = child.send_wait(b"\r", b"/compact", start=end)
     child.wait(b"Empty Tab switch view", start=help_end)
     child.wait(b"Tab complete/indent/queue", start=help_end)
     child.drain()
@@ -2140,8 +1986,7 @@ def test_command_name_completion():
     child.wait(PROMPT.rstrip(), start=help_end)
 
     start = len(child.buf)
-    child.send(b"/?\r")
-    alias_end = child.wait(b"/help", start=start)
+    alias_end = child.send_wait(b"/?\r", b"/help", start=start)
     child.wait(b"/?", start=alias_end)
     alias_end = child.wait(b"/compact", start=alias_end)
     child.wait(b"Tab complete/indent/queue", start=alias_end)
@@ -2163,8 +2008,7 @@ def test_command_name_completion():
         (b"/ex", b"/exit"),
     ):
         start = len(child.buf)
-        child.send(prefix + b"\t")
-        end = child.wait(command + b" ", start=start)
+        end = child.send_wait(prefix + b"\t", command + b" ", start=start)
         clear_draft_incrementally(child)
 
     for prefix in (b"/h", b"/c"):
@@ -2181,47 +2025,38 @@ def test_command_name_completion():
         clear_draft_incrementally(child)
 
     start = len(child.buf)
-    child.send(b"/mo gpt\x1b[D\x1b[D\x1b[D\x1b[D\t")
-    end = child.wait(b"del gpt", start=start)
+    end = child.send_wait(b"/mo gpt\x1b[D\x1b[D\x1b[D\x1b[D\t", b"del gpt", start=start)
     clear_draft_incrementally(child)
 
     start = len(child.buf)
-    child.send(b"/h\ti\t")
-    end = child.wait(b"/history", start=start)
+    end = child.send_wait(b"/h\ti\t", b"/history", start=start)
     clear_draft_incrementally(child)
 
     start = len(child.buf)
-    child.send(b"x\t")
-    end = child.wait(b"x   ", start=start)
+    end = child.send_wait(b"x\t", b"x   ", start=start)
     edit = bytes(child.buf[start:end])
     assert b"\x1b[2K" not in edit, edit
     assert DEFAULT_IDLE_PROMPT not in edit, edit
     clear_draft_incrementally(child)
 
-    child.send(b"slow\r")
-    child.wait(b"working slowly")
+    child.send_wait(b"slow\r", b"working slowly")
 
     start = len(child.buf)
-    child.send(b"/he\t")
-    end = child.wait(b"lp", start=start)
-    child.send(b"\r")
-    help_end = child.wait(b"/compact", start=end)
+    end = child.send_wait(b"/he\t", b"lp", start=start)
+    help_end = child.send_wait(b"\r", b"/compact", start=end)
     child.wait(b"Tab complete/indent/queue", start=help_end)
     child.wait("»".encode(), start=help_end)
 
     start = len(child.buf)
-    child.send(b"/?\r")
-    alias_end = child.wait(b"/help", start=start)
+    alias_end = child.send_wait(b"/?\r", b"/help", start=start)
     child.wait(b"/?", start=alias_end)
     alias_end = child.wait(b"/compact", start=alias_end)
     child.wait(b"Tab complete/indent/queue", start=alias_end)
     child.wait("»".encode(), start=alias_end)
 
     start = len(child.buf)
-    child.send(b"/sta\t")
-    end = child.wait(b"tus", start=start)
-    child.send(b"\r")
-    status_end = child.wait(b"state: active", start=end)
+    end = child.send_wait(b"/sta\t", b"tus", start=start)
+    status_end = child.send_wait(b"\r", b"state: active", start=end)
     child.wait("»".encode(), start=status_end)
     child.send(b"/config\r")
     config_end = child.wait(
@@ -2373,10 +2208,8 @@ def test_provider_login_and_first_run():
             fresh = root / ("cancelled" if cancel else "first-run")
             with Child.from_command(shlex.join([BINARY, "--dotdir", str(fresh)])) as child:
                 child.wait(b"Provider: ")
-                child.send(b"openrouter\n")
-                child.wait(b"Local provider name [openrouter]: ")
-                child.send(b"\n")
-                child.wait(b"API key (hidden;")
+                child.send_wait(b"openrouter\n", b"Local provider name [openrouter]: ")
+                child.send_wait(b"\n", b"API key (hidden;")
                 child.send(b"hidden-first-run-key\n")
                 end = child.wait(b"Fetch this provider's model list now?")
                 assert b"hidden-first-run-key" not in child.buf
@@ -2386,8 +2219,7 @@ def test_provider_login_and_first_run():
                     assert not (fresh / "config.ini").exists()
                     assert not (fresh / "auth").exists()
                 else:
-                    child.send(b"n\n")
-                    child.wait(b"Model number or exact model ID: ", start=end)
+                    child.send_wait(b"n\n", b"Model number or exact model ID: ", start=end)
                     child.send(b"vendor/model\n")
                     end = child.wait(b"Default model: openrouter / vendor/model")
                     child.wait(PROMPT.rstrip(), start=end)
@@ -2420,8 +2252,7 @@ def test_compaction_policy_selection():
     child = Child(["--config", str(config), "--no-color"])
     try:
         child.wait(PROMPT.rstrip())
-        child.send(b"/model cache\r")
-        end = child.wait(b"compact=745560 (auto)")
+        end = child.send_wait(b"/model cache\r", b"compact=745560 (auto)")
         child.wait(PROMPT.rstrip(), start=end)
         original_cache = cache_path.read_bytes()
         for selector, expected in (
@@ -2437,8 +2268,7 @@ def test_compaction_policy_selection():
             child.wait(PROMPT.rstrip(), start=end)
             for command in (b"/model\r", b"/status\r"):
                 start = len(child.buf)
-                child.send(command)
-                end = child.wait(expected, start=start)
+                end = child.send_wait(command, expected, start=start)
                 child.wait(PROMPT.rstrip(), start=end)
         assert config.read_bytes() == original_config
         assert cache_path.read_bytes() == original_cache
@@ -2471,25 +2301,21 @@ def test_provider_local_models(native=True):
     with Child(["--config", str(config)]) as child:
         child.wait(b"codex-lb/small/high")
         assert session_ids() == before
-        child.send(b"/status\r")
-        child.wait(b"hard-input=121600")
+        child.send_wait(b"/status\r", b"hard-input=121600")
         child.wait(b"context rule: [model-limit codex-lb/small]")
         start = len(child.buf)
-        child.send(b"ping\r")
-        answer_end = child.wait(b"pong", start=start)
+        answer_end = child.send_wait(b"ping\r", b"pong", start=start)
         sid = new_session(before)
         wait_turn_completed(child, sid, "ping")
         child.wait_idle_prompt(start=answer_end)
-        child.send(b"/compact\r")
-        end = child.wait(COMPACTED, start=start)
+        end = child.send_wait(b"/compact\r", COMPACTED, start=start)
         child.wait_idle_prompt(start=end)
         child.send(b"/model large/high save\r")
         child.wait(b"model for next turn: codex-lb / large / high")
         end = child.wait(b"configuration saved:")
         child.wait_idle_prompt(start=end)
         start = len(child.buf)
-        child.send(b"/status\r")
-        child.wait(b"hard-input=475000", start=start)
+        child.send_wait(b"/status\r", b"hard-input=475000", start=start)
         child.wait_idle_prompt(start=start)
         child.exit_now()
         log = events(sid)
@@ -2532,8 +2358,7 @@ def test_model_cache_and_selection():
 
     # Explicit refresh creates the complete all-provider cache.
     start = len(child.buf)
-    child.send(b"/model cache\r")
-    child.wait(b"selected: first / uncached-start / low", start=start)
+    child.send_wait(b"/model cache\r", b"selected: first / uncached-start / low", start=start)
     child.wait(b"1. first / gpt-5.6-luna / high", start=start)
     child.wait(b"16. second / vendor/future-model / low", start=start)
     cache = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -2556,15 +2381,13 @@ def test_model_cache_and_selection():
     # /model list is a cache-only alias and retains the stored timestamp.
     original = cache_path.read_bytes()
     original_inode = cache_path.stat().st_ino
-    child.send(b"/model list\r")
-    end = child.wait(stamp + b"\r\n", start=end)
+    end = child.send_wait(b"/model list\r", stamp + b"\r\n", start=end)
     end = child.wait(initial_prompt, start=end)
     assert cache_path.read_bytes() == original
     assert cache_path.stat().st_ino == original_inode
 
     # A later explicit refresh atomically replaces the complete catalog.
-    child.send(b"/model cache\r")
-    child.wait(b"16. second / vendor/future-model / low", start=end)
+    child.send_wait(b"/model cache\r", b"16. second / vendor/future-model / low", start=end)
     refreshed = json.loads(cache_path.read_text(encoding="utf-8"))
     assert refreshed["updated_at_ms"] >= cache["updated_at_ms"]
     assert cache_path.stat().st_ino != original_inode
@@ -2623,8 +2446,7 @@ def test_model_cache_and_selection():
         b"model for next turn: second / gpt-5.6-luna / high", start=end
     )
     child.wait(PROMPT.rstrip(), start=end)
-    child.send(b"ping\r")
-    answer_end = child.wait(b"pong", start=end)
+    answer_end = child.send_wait(b"ping\r", b"pong", start=end)
     child.exit_cleanly(answer_end)
 
     session_id = new_session(before)
@@ -2643,13 +2465,11 @@ def test_model_cache_and_selection():
     # Provider/model/effort selection survives a process restart and resume.
     resumed = Child(["--config", str(config), "--resume", session_id])
     resumed.wait(PROMPT.rstrip())
-    resumed.send(b"/status\r")
-    status_end = resumed.wait(b"provider: second")
+    status_end = resumed.send_wait(b"/status\r", b"provider: second")
     resumed.wait(b"model: gpt-5.6-luna", start=status_end)
     status_end = resumed.wait(b"effort: high", start=status_end)
     resumed.wait(PROMPT.rstrip(), start=status_end)
-    resumed.send(b"ping\r")
-    answer_end = resumed.wait(b"pong", start=status_end)
+    answer_end = resumed.send_wait(b"ping\r", b"pong", start=status_end)
     resumed.exit_cleanly(answer_end)
     turns = [event for event in events(session_id)
              if event["type"] == "turn_started"]
@@ -2701,8 +2521,7 @@ def test_model_configuration_save():
     child.wait(PROMPT.rstrip())
 
     # Selection without a suffix remains session-only.
-    child.send(b"/model cache\r")
-    cached = child.wait(b"16. second / vendor/future-model / low")
+    cached = child.send_wait(b"/model cache\r", b"16. second / vendor/future-model / low")
     child.wait(PROMPT.rstrip(), start=cached)
     child.send(b"/model #9\r")
     end = child.wait(
@@ -2752,8 +2571,7 @@ def test_model_configuration_save():
     end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT.rstrip(), start=end)
     assert config.read_bytes() == saved
-    child.send(b"/model s\r")
-    end = child.wait(b"model for next turn: second / s / cosmic", start=end)
+    end = child.send_wait(b"/model s\r", b"model for next turn: second / s / cosmic", start=end)
     end = child.wait(b"not known in the model cache", start=end)
     child.wait(PROMPT.rstrip(), start=end)
     assert config.read_bytes() == saved
@@ -2767,8 +2585,7 @@ def test_model_configuration_save():
         start=end,
     )
     child.wait(PROMPT.rstrip(), start=end)
-    child.send(b"/status\r")
-    status_end = child.wait(b"model: s", start=end)
+    status_end = child.send_wait(b"/status\r", b"model: s", start=end)
     child.wait(PROMPT.rstrip(), start=status_end)
     config.rmdir()
     config.write_bytes(saved)
@@ -2789,8 +2606,7 @@ def test_model_configuration_save():
     before_new = session_ids()
     child = Child(["--config", str(config)])
     child.wait(PROMPT.rstrip())
-    child.send(b"/status\r")
-    end = child.wait(b"provider: second")
+    end = child.send_wait(b"/status\r", b"provider: second")
     child.wait(b"model: durable-new", start=end)
     end = child.wait(b"effort: cosmic", start=end)
     child.wait(PROMPT.rstrip(), start=end)
@@ -2877,8 +2693,7 @@ def test_config_editor_reload():
         child = Child(["--config", str(config)])
         child.wait(PROMPT.rstrip())
         assert session_ids() == before
-        child.send(b"/verbose 2\r")
-        child.wait(b"verbosity: 2")
+        child.send_wait(b"/verbose 2\r", b"verbosity: 2")
 
         plan.write_text("unchanged", encoding="utf-8")
         child.send(b"/config\r")
@@ -2889,20 +2704,16 @@ def test_config_editor_reload():
         assert seen.read_text(encoding="utf-8") == str(config)
 
         plan.write_text(str(valid_two), encoding="utf-8")
-        child.send(b"/config\r")
-        end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+        end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
         child.wait("W  0%› ".encode(), start=end)
-        child.send(b"/status\r")
-        status_end = child.wait(b"verbosity: 2", start=end)
+        status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
         child.wait(PROMPT.rstrip(), start=status_end)
 
         plan.write_text(str(invalid), encoding="utf-8")
-        child.send(b"/config\r")
-        end = child.wait(b"invalid configuration at line 3", start=status_end)
+        end = child.send_wait(b"/config\r", b"invalid configuration at line 3", start=status_end)
         child.wait("W  0%› ".encode(), start=end)
-        child.send(b"/status\r")
-        status_end = child.wait(b"verbosity: 2", start=end)
+        status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
         child.wait(PROMPT.rstrip(), start=status_end)
 
@@ -2913,8 +2724,7 @@ def test_config_editor_reload():
             start=status_end,
         )
         child.wait(PROMPT.rstrip(), start=end)
-        child.send(b"/status\r")
-        status_end = child.wait(b"verbosity: 2", start=end)
+        status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
         child.wait(PROMPT.rstrip(), start=status_end)
 
@@ -2929,18 +2739,15 @@ def test_config_editor_reload():
             f"configuration reloaded: {config}".encode(), start=warning_end
         )
         child.wait(PROMPT.rstrip(), start=end)
-        child.send(b"/status\r")
-        status_end = child.wait(b"verbosity: 2", start=end)
+        status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
         child.wait(PROMPT.rstrip(), start=status_end)
 
         # Topology reloads preserve the selected private/public view.
         plan.write_text(str(network), encoding="utf-8")
-        child.send(b"/config\r")
-        end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
+        end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
         child.wait(PROMPT.rstrip(), start=end)
-        child.send(b"/chat\r")
-        child.wait(f"reloadop@{socket.gethostname()} : ".encode(), start=end)
+        child.send_wait(b"/chat\r", f"reloadop@{socket.gethostname()} : ".encode(), start=end)
         peer = IRCClient(network_port, "reloadpeer")
         peer.close()
         # Membership notifications start a turn; /config is idle-only.
@@ -3006,10 +2813,8 @@ def test_config_editor_reload():
                 link.close()
             upstream.close()
         plan.write_text(str(valid_one), encoding="utf-8")
-        child.send(b"/config\r")
-        end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
-        child.send(b"/rollout\r")
-        child.wait(PROMPT.rstrip(), start=end)
+        end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
+        child.send_wait(b"/rollout\r", PROMPT.rstrip(), start=end)
         child.exit_now()
 
         # The resolved default path is passed to the editor and may be created.
@@ -3078,8 +2883,7 @@ def test_known_context_meter():
     assert response["count_method"] == "unknown"
     assert response["input_tokens_bound"] == 0
     child.wait(b"?%", start=start)
-    child.send(b"\x03")
-    interrupted = child.wait(b"turn interrupted", start=start)
+    interrupted = child.send_wait(b"\x03", b"turn interrupted", start=start)
     child.exit_cleanly(interrupted)
 
     child = Child(["--config", str(config), "--resume", session_id])
@@ -3108,12 +2912,10 @@ def test_config_and_cli_model_passthrough():
     child = Child(["--config", str(config)])
     child.wait(b" openai/openai/gpt-5.6/medium   0% \xe2\x80\xba ")
 
-    child.send(b"/status\r")
-    end = child.wait(b"model: openai/gpt-5.6")
+    end = child.send_wait(b"/status\r", b"model: openai/gpt-5.6")
     child.wait(PROMPT.rstrip(), start=end)
 
-    child.send(b"ping\r")
-    answer_end = child.wait(b"pong")
+    answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
 
     session_id = new_session(before)
@@ -3134,8 +2936,7 @@ def test_config_and_cli_model_passthrough():
     )
     resumed.wait(PROMPT.rstrip(), start=end)
     for _ in range(2):  # Repeating /effort is a durable no-op, not a model reset.
-        resumed.send(b"/effort quantum\r")
-        end = resumed.wait(b"effort for next turn: quantum", start=end)
+        end = resumed.send_wait(b"/effort quantum\r", b"effort for next turn: quantum", start=end)
         resumed.wait(PROMPT.rstrip(), start=end)
     resumed.send(b"ping\r")
     resumed.wait("»".encode(),
@@ -3314,10 +3115,8 @@ def test_exit_resume_matrix():
     before = session_ids()
     active_eof = Child(["--no-color"])
     active_eof.wait(PROMPT.rstrip())
-    active_eof.send(b"slow\r")
-    active_eof.wait(b"working slowly")
-    active_eof.send(b"\x04")
-    active_eof.wait(RESUME_HEADER, timeout=1.0)
+    active_eof.send_wait(b"slow\r", b"working slowly")
+    active_eof.send_wait(b"\x04", RESUME_HEADER, timeout=1.0)
     active_eof_command = active_eof.finish()
     active_eof_id = new_session(before)
     assert command_arguments(active_eof_command)[-2:] == [
@@ -3349,8 +3148,7 @@ def test_exit_resume_matrix():
     answered = deleted.wait(b"pong")
     deleted.wait_idle_prompt(start=answered)
     deleted_id = new_session(before)
-    deleted.send(b"/delete\r")
-    deleted.wait(b"type the displayed 8-character id prefix to confirm")
+    deleted.send_wait(b"/delete\r", b"type the displayed 8-character id prefix to confirm")
     deleted.send(deleted_id[:8].encode() + b"\r")
     deleted.finish(expect_resume=False)
     assert not (STATE_ROOT / deleted_id).exists()
@@ -3407,21 +3205,17 @@ def test_runtime_network_commands():
     try:
         child.wait(PROMPT.rstrip())
         assert session_ids() == before
-        child.send(b"/help\r")
-        end = child.wait(b"/disconnect [ENDPOINT]")
+        end = child.send_wait(b"/help\r", b"/disconnect [ENDPOINT]")
         child.wait(PROMPT.rstrip(), start=end)
-        child.send(b"/chat\r")
-        end = child.wait(b"chat is offline")
+        end = child.send_wait(b"/chat\r", b"chat is offline")
         child.wait(chat_prompt("runtimeop"), start=end)
         child.send(b"keep-unsent-draft\r")
         end = child.wait(b"no IRC destination selected; use /names")
         child.wait(b"keep-unsent-draft", start=end)
         assert session_ids() == before
-        child.send(b"\x15/rollout\r")
-        end = child.wait("── rollout ──".encode(), start=end)
+        end = child.send_wait(b"\x15/rollout\r", "── rollout ──".encode(), start=end)
         child.wait(PROMPT.rstrip(), start=end)
-        child.send(b"slow\r")
-        end = child.wait(b"working slowly", start=end)
+        end = child.send_wait(b"slow\r", b"working slowly", start=end)
         session_id = new_session(before)
         child.send(f"/server start {endpoint}\r".encode())
         end = child.wait(f"hosting started on {endpoint}".encode(), start=end)
@@ -3443,8 +3237,7 @@ def test_runtime_network_commands():
         end = child.wait(b"hosting stopped; outgoing connections unchanged", start=end)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             assert probe.connect_ex(("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))) != 0
-        child.send(b"\x03")
-        end = child.wait(b"turn interrupted", start=end)
+        end = child.send_wait(b"\x03", b"turn interrupted", start=end)
         child.wait_idle_prompt(start=end)
         command = child.exit_now()
         arguments = command_arguments(command)
@@ -3602,8 +3395,7 @@ def test_network_collision_prompts():
         server = Child(["--no-color", "-vvvvvv", "-s", address, "-r", "lab"])
         children.append(server)
         server.wait(chat_prompt("root0"))
-        server.send(b"/names\r")
-        names_end = server.wait(b"model nick: agent0")
+        names_end = server.send_wait(b"/names\r", b"model nick: agent0")
         server.wait(b"operator nick: root0", start=names_end)
         for suffix in (1, 2):
             client = Child(["--no-color", "-c", address])
@@ -3695,8 +3487,7 @@ def test_network_live_nick_prompt():
         child.wait(f"7@{socket.gethostname()}".encode())
         child.drain()
         start = len(child.buf)
-        child.send(b"@ag\t")
-        child.wait(b"@agent7 ", start=start)
+        child.send_wait(b"@ag\t", b"@agent7 ", start=start)
         child.send(b"\x03")
         child.drain(0.03)
         # Preserve a draft and its cursor through a live rename.
@@ -3713,15 +3504,13 @@ def test_network_live_nick_prompt():
             assert remaining > 0, "renamed idle prompt was not painted"
             child.read_once(remaining)
         child.wait(b"/stats", start=start)
-        child.send(b"u\r")
-        status_end = child.wait(b"verbosity: 0", start=start)
+        status_end = child.send_wait(b"u\r", b"verbosity: 0", start=start)
         child.wait(chat_prompt("operator8"), start=status_end)
         child.drain()
         assert child.buf[start:].count(b"operator7 is now known as") == 1
         assert child.buf[start:].count(b"agent7 is now known as") == 1
         start = len(child.buf)
-        child.send(b"@ag\t")
-        child.wait(b"@agent8 ", start=start)
+        child.send_wait(b"@ag\t", b"@agent8 ", start=start)
         child.send(b"\x03")
         child.drain(0.03)
         # Local input is attributed to the accepted operator and the model's
@@ -3747,8 +3536,7 @@ def test_network_live_nick_prompt():
             child.read_once(remaining)
         renamed = len(child.buf)
         assert b"/stats" in child.buf[end:renamed]
-        child.send(b"u\r")
-        child.wait(b"verbosity: 0", start=renamed)
+        child.send_wait(b"u\r", b"verbosity: 0", start=renamed)
         deadline = time.monotonic() + 8.0
         while True:
             log = events(session_id)
@@ -3795,8 +3583,7 @@ def test_prompt_identity_is_terminal_safe():
     child.wait(b" openai/" + visible + "   0% › ".encode())
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
-    child.send(b"ping\r")
-    child.wait("»".encode())
+    child.send_wait(b"ping\r", "»".encode())
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
 
@@ -3825,8 +3612,7 @@ def test_model_message_corrections_are_private_and_specific():
         child = Child([])
         child.wait(DEFAULT_IDLE_PROMPT)
         start = len(child.buf)
-        child.send(prompt.encode() + b"\r")
-        recovered_end = child.wait(recovered, start=start)
+        recovered_end = child.send_wait(prompt.encode() + b"\r", recovered, start=start)
         child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=recovered_end)
         visible = bytes(child.buf[start:])
         assert correction.encode() not in visible
@@ -3882,8 +3668,7 @@ def test_network_view_routing_and_atomic_catchup():
         assert second not in hidden
 
         switch_start = len(child.buf)
-        child.send(switch)
-        boundary_end = child.wait("── rollout ──".encode(), start=switch_start)
+        boundary_end = child.send_wait(switch, "── rollout ──".encode(), start=switch_start)
         prompt_end = child.wait(rollout_idle, start=boundary_end)
         transition = bytes(child.buf[boundary_end:prompt_end])
         prompt_at = transition.find(rollout_idle.rstrip())
@@ -3920,8 +3705,7 @@ def test_network_view_routing_and_atomic_catchup():
         )
 
         same_start = len(child.buf)
-        child.send(b"/rollout\r")
-        child.wait(rollout_idle, start=same_start)
+        child.send_wait(b"/rollout\r", rollout_idle, start=same_start)
         child.drain()
         same_view = bytes(child.buf[same_start:])
         assert "── rollout ──".encode() not in same_view, same_view
@@ -3931,8 +3715,7 @@ def test_network_view_routing_and_atomic_catchup():
         assert same_view.count(rollout_idle) == 2, same_view  # Echo plus one idle prompt.
 
         chat_start = len(child.buf)
-        child.send(b"\t")
-        chat_boundary = child.wait("── chat ──".encode(), start=chat_start)
+        chat_boundary = child.send_wait(b"\t", "── chat ──".encode(), start=chat_start)
         child.wait(network_idle, start=chat_boundary)
 
         slash_first = b"slash-catchup-one"
@@ -3989,8 +3772,7 @@ def test_network_view_routing_and_atomic_catchup():
                    start=backlog_wire_start)
         child.drain()
         assert b"chat-route-backlog" not in child.buf[backlog_start:], bytes(child.buf[backlog_start:])
-        child.send(b"/chat\r")
-        chat_boundary = child.wait("── chat ──".encode(), start=backlog_start)
+        chat_boundary = child.send_wait(b"/chat\r", "── chat ──".encode(), start=backlog_start)
         backlog_end = child.wait(b"chat-route-backlog", start=chat_boundary)
         child.wait(network_idle, start=backlog_end)
         assert child.buf[chat_boundary:].count(b"chat-route-backlog") == 1
@@ -4060,16 +3842,13 @@ def test_chat_mention_completion_and_steering():
         for prompt, marker in (("slow", b"working slowly"),
                                ("managed_command_steer", b"fixture managed steering wait")):
             start = len(child.buf)
-            child.send(b"/rollout\r")
-            boundary = child.wait("── rollout ──".encode(), start=start)
+            boundary = child.send_wait(b"/rollout\r", "── rollout ──".encode(), start=start)
             child.wait_idle_prompt(start=boundary)
-            child.send(prompt.encode() + b"\r")
-            child.wait(marker, start=start)
+            child.send_wait(prompt.encode() + b"\r", marker, start=start)
             turn = next(event for event in reversed(events(session_id))
                         if event["type"] == "turn_started")
             turn_id = turn["data"]["turn_id"]
-            child.send(b"/chat\r")
-            boundary = child.wait("── chat ──".encode(), start=start)
+            boundary = child.send_wait(b"/chat\r", "── chat ──".encode(), start=start)
             child.wait(chat_prompt("localop"), start=boundary)
             # A unique completion in the middle preserves punctuation and tail.
             wire_start = len(human.buf)
@@ -4142,25 +3921,21 @@ def test_network_chat_and_managed_mention():
         assert session_ids() == before
 
         view_start = len(child.buf)
-        child.send(b"\t")
-        rollout_end = child.wait("── rollout ──".encode(), start=view_start)
+        rollout_end = child.send_wait(b"\t", "── rollout ──".encode(), start=view_start)
         child.wait(network_rollout_idle, start=rollout_end)
         child.send(b"/rollout\r")
         child.drain()
         assert child.buf[view_start:].count("── rollout ──".encode()) == 1
-        child.send(b"/chat\r")
-        chat_end = child.wait("── chat ──".encode(), start=rollout_end)
+        chat_end = child.send_wait(b"/chat\r", "── chat ──".encode(), start=rollout_end)
         child.wait(network_idle, start=chat_end)
         child.send(b"/chat\r")
         child.drain()
         assert child.buf[view_start:].count("── chat ──".encode()) == 1
-        child.send(b"/help\r")
-        help_end = child.wait(b"Empty Tab switch view", start=chat_end)
+        help_end = child.send_wait(b"/help\r", b"Empty Tab switch view", start=chat_end)
         child.wait(network_idle, start=help_end)
 
         draft_start = len(child.buf)
-        child.send(b"x\t")
-        draft_end = child.wait(b"x   ", start=draft_start)
+        draft_end = child.send_wait(b"x\t", b"x   ", start=draft_start)
         edit = bytes(child.buf[draft_start:draft_end])
         assert b"\x1b[2K" not in edit, edit
         assert network_idle not in edit, edit
@@ -4189,8 +3964,7 @@ def test_network_chat_and_managed_mention():
             if time.monotonic() >= deadline:
                 raise AssertionError("network stream turn did not start")
             time.sleep(0.01)
-        child.send(b"\t")
-        rollout_end = child.wait("── rollout ──".encode(), start=stream_start)
+        rollout_end = child.send_wait(b"\t", "── rollout ──".encode(), start=stream_start)
         child.wait(b"model-output-one", start=rollout_end)
         child.wait(network_active, start=stream_start)
         child.wait(b"model-output-two", start=rollout_end)
@@ -4198,8 +3972,7 @@ def test_network_chat_and_managed_mention():
         chat_wire_start = len(human.buf)
         peer_agent.message("chat backlog")
         human.wait(b"PRIVMSG #lab :chat backlog\r\n", start=chat_wire_start)
-        child.send(b"\t")
-        chat_end = child.wait("── chat ──".encode(), start=rollout_end)
+        chat_end = child.send_wait(b"\t", "── chat ──".encode(), start=rollout_end)
         backlog_end = child.wait(b"chat backlog", start=chat_end)
         child.send(b"/chat\r")
         child.drain()
@@ -4209,20 +3982,17 @@ def test_network_chat_and_managed_mention():
         child.drain()
         assert b"model-output-three" not in child.buf[chat_end:]
         child.wait(network_idle, start=backlog_end)
-        child.send(b"\t")
-        tail_end = child.wait(b"model-output-three", start=chat_end)
+        tail_end = child.send_wait(b"\t", b"model-output-three", start=chat_end)
         visible_stream = re.sub(LIVE_GAP, b"", child.buf[stream_start:tail_end])
         for fragment in (b"model-output-one", b"model-output-two",
                          b"model-output-three"):
             assert visible_stream.count(fragment) == 1, visible_stream
-        child.send(b"\t")
-        chat_end = child.wait("── chat ──".encode(), start=tail_end)
+        chat_end = child.send_wait(b"\t", "── chat ──".encode(), start=tail_end)
         child.wait(network_idle, start=chat_end)
         assert (b"PRIVMSG #lab :model-output-one model-output-two "
                 b"model-output-three\r\n" not in human.buf[model_wire_start:])
 
-        child.send(b"/rollout\r")
-        rollout_end = child.wait("── rollout ──".encode(), start=chat_end)
+        rollout_end = child.send_wait(b"/rollout\r", "── rollout ──".encode(), start=chat_end)
         child.wait(network_rollout_accounted_idle, start=rollout_end)
         search_start = len(child.buf)
         child.send(b"\x12network_view_stream")
@@ -4230,10 +4000,8 @@ def test_network_chat_and_managed_mention():
             b"m': network_view_stream",
             start=search_start,
         )
-        child.send(b"\x07")
-        child.wait(network_rollout_accounted_idle, start=search_start)
-        child.send(b"/chat\r")
-        chat_end = child.wait("── chat ──".encode(), start=search_start)
+        child.send_wait(b"\x07", network_rollout_accounted_idle, start=search_start)
+        chat_end = child.send_wait(b"/chat\r", "── chat ──".encode(), start=search_start)
         child.wait(network_idle, start=chat_end)
 
         terminal_start = len(child.buf)
@@ -4246,8 +4014,7 @@ def test_network_chat_and_managed_mention():
         assert (b"PRIVMSG #lab :network zero local only\r\n" not in
                 human.buf[wire_start:])
 
-        child.send(b"/verbose 1\r")
-        verbose_end = child.wait(b"verbosity: 1", start=terminal_start)
+        verbose_end = child.send_wait(b"/verbose 1\r", b"verbosity: 1", start=terminal_start)
         child.wait(network_idle, start=verbose_end)
         wire_start = len(human.buf)
         child.send(b"network_one\r")
@@ -4261,14 +4028,12 @@ def test_network_chat_and_managed_mention():
         child.send(b"network_tool\r")
         human.wait(b"PRIVMSG #lab :network tool complete\r\n", start=wire_start)
         wait_turn_completed(child, session_id, "network_tool")
-        child.send(b"/rollout\r")
-        child.wait(b"\xe2\x86\x92 exec_command", start=tool_start)
+        child.send_wait(b"/rollout\r", b"\xe2\x86\x92 exec_command", start=tool_start)
         child.wait(PROMPT.rstrip(), start=tool_start)
         child.drain()
         assert b"  arguments:" not in child.buf[tool_start:]
         assert b"fixture command succeeded" not in child.buf[tool_start:]
-        child.send(b"/chat\r")
-        child.wait("── chat ──".encode(), start=tool_start)
+        child.send_wait(b"/chat\r", "── chat ──".encode(), start=tool_start)
 
         operator_start = len(child.buf)
         wire_start = len(human.buf)
@@ -4315,8 +4080,7 @@ def test_network_chat_and_managed_mention():
         wait_turn_completed(child, session_id, "network_reminder")
         child.wait(network_idle, start=reminder_start)
 
-        child.send(b"/verbose 2\r")
-        verbose_end = child.wait(b"verbosity: 2", start=verbose_end)
+        verbose_end = child.send_wait(b"/verbose 2\r", b"verbosity: 2", start=verbose_end)
         child.wait(network_idle, start=verbose_end)
         commentary_start = len(child.buf)
         wire_start = len(human.buf)
@@ -4324,10 +4088,8 @@ def test_network_chat_and_managed_mention():
         human.wait(b"PRIVMSG #lab :network commentary reply\r\n",
                    start=wire_start)
         wait_turn_completed(child, session_id, "network_commentary")
-        child.send(b"/rollout\r")
-        child.wait(b"\xe2\x80\xa2 network local planning", start=verbose_end)
-        child.send(b"/chat\r")
-        child.wait("── chat ──".encode(), start=verbose_end)
+        child.send_wait(b"/rollout\r", b"\xe2\x80\xa2 network local planning", start=verbose_end)
+        child.send_wait(b"/chat\r", "── chat ──".encode(), start=verbose_end)
         child.wait(network_idle, start=commentary_start)
 
         wire_start = len(human.buf)
@@ -4352,19 +4114,15 @@ def test_network_chat_and_managed_mention():
         assert managed_end > wire_start
         assert (b"PRIVMSG #lab :network managed local completion\r\n" not in
                 human.buf[wire_start:])
-        child.send(b"/chat\r")
-        child.wait("── chat ──".encode(), start=managed_view)
+        child.send_wait(b"/chat\r", "── chat ──".encode(), start=managed_view)
 
         compact_start = len(child.buf)
-        child.send(b"/compact\r")
-        compact_prompt = child.wait(network_idle, start=compact_start)
+        compact_prompt = child.send_wait(b"/compact\r", network_idle, start=compact_start)
         child.drain()
         assert COMPACTED not in child.buf[compact_start:]
-        child.send(b"/rollout\r")
-        compact_end = child.wait(COMPACTED, start=compact_prompt)
+        compact_end = child.send_wait(b"/rollout\r", COMPACTED, start=compact_prompt)
         child.wait(PROMPT.rstrip(), start=compact_end)
-        child.send(b"/chat\r")
-        chat_end = child.wait("── chat ──".encode(), start=compact_end)
+        chat_end = child.send_wait(b"/chat\r", "── chat ──".encode(), start=compact_end)
         assert child.buf[compact_prompt:chat_end].count(COMPACTED) == 1
         child.wait(network_idle, start=chat_end)
         wire_start = len(human.buf)
@@ -4523,8 +4281,7 @@ def test_ctrl_d_exit():
             child.drain(0.1)
             assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
             if prompt == b"queue_slow":
-                child.send(b"\t")
-                child.wait(b"queued (/next or /q c) " + PROMPT + b"ping", start=start)
+                child.send_wait(b"\t", b"queued (/next or /q c) " + PROMPT + b"ping", start=start)
             else:
                 child.send(b"\x7f" * 4)
             if prompt == b"slow":
@@ -4579,14 +4336,11 @@ def test_goal_orderly_quit_resume():
         with Child(args) as child:
             child.wait(chat_prompt("goalop") if mode == "host" else PROMPT.rstrip())
             if mode == "host":
-                child.send(b"/rollout\r")
-                switched = child.wait("── rollout ──".encode())
+                switched = child.send_wait(b"/rollout\r", "── rollout ──".encode())
                 child.wait_idle_prompt(start=switched)
-            child.send(b"/goal slow goal\r")
-            child.wait(b"working on goal")
+            child.send_wait(b"/goal slow goal\r", b"working on goal")
             session_id = new_session(before)
-            child.send(b"/goal lock\r")
-            child.wait(b"Goal wording locked against model changes")
+            child.send_wait(b"/goal lock\r", b"Goal wording locked against model changes")
             expected = 0
             if mode == "eof":
                 attrs = termios.tcgetattr(child.fd)
@@ -4600,8 +4354,7 @@ def test_goal_orderly_quit_resume():
             elif mode == "five-ctrl-c":
                 # A turn-only Ctrl-C deliberately pauses first; a later exit
                 # must preserve that pause, not turn it back into an active goal.
-                child.send(b"\x03")
-                child.wait(b"Goal paused at the current turn boundary")
+                child.send_wait(b"\x03", b"Goal paused at the current turn boundary")
                 child.send(b"\x03" * 4)
             else:
                 child.send(b"\x04")
@@ -4659,8 +4412,7 @@ def test_five_ctrl_c_exit():
         child.send(b"\x03" * 4)
         child.drain(0.1)
         assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
-        child.send(b"\x03")
-        child.wait(RESUME_HEADER if prompt else b"\x1b[?2004l", timeout=4.0)
+        child.send_wait(b"\x03", RESUME_HEADER if prompt else b"\x1b[?2004l", timeout=4.0)
         child.finish(expect_resume=bool(prompt))
         if not prompt:
             assert session_ids() == before
@@ -4678,8 +4430,7 @@ def test_ctrl_c_sequence_reset():
         child.send(b"x" + b"\x03" * 4)
         child.drain(0.05)
         assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
-        child.send(b"\x03")
-        child.wait(b"\x1b[?2004l")
+        child.send_wait(b"\x03", b"\x1b[?2004l")
         child.finish(expect_resume=False)
         assert session_ids() == before
 
@@ -4688,13 +4439,11 @@ def test_full_input_queue_keeps_exit_live():
     for gesture in (b"\x03" * 5, b"\x15\x04"):
         with Child([]) as child:
             child.wait_idle_prompt()
-            child.send(b"engine_blocked\r")
-            child.wait(b"engine-block-start")
+            child.send_wait(b"engine_blocked\r", b"engine-block-start")
             child.send(b"/verbose 1\r" * 32 + b"retained-draft\r")
             child.wait(b"input backlog is full", timeout=1.0)
             child.wait(b"\a", timeout=1.0)
-            child.send(gesture)
-            child.wait(RESUME_HEADER, timeout=4.0)
+            child.send_wait(gesture, RESUME_HEADER, timeout=4.0)
             child.finish()
 
 
@@ -4704,10 +4453,8 @@ def test_history_lock_keeps_editing_live():
         child.wait_idle_prompt()
         with (Path(DOTDIR) / "prompt_history").open("r+") as history:
             fcntl.lockf(history, fcntl.LOCK_EX)
-            child.send(b"\x12")
-            start = child.wait(b"reverse-i-search")
-            child.send(b"locked-history")
-            child.wait(b"y': ", start=start, timeout=0.25)
+            start = child.send_wait(b"\x12", b"reverse-i-search")
+            child.send_wait(b"locked-history", b"y': ", start=start, timeout=0.25)
             assert_bytes_in_order(child.buf[start:], b"locked-history")
             child.send(b"\x07draft-alive")
             child.drain(0.1)
@@ -4726,8 +4473,7 @@ def test_editor_during_render_flood():
         before = session_ids()
         with Child([mode]) as child:
             child.wait_idle_prompt()
-            child.send(b"render_flood\r")
-            start = child.wait(b"row-0000")
+            start = child.send_wait(b"render_flood\r", b"row-0000")
             child.send(b"live-draft")
             deadline = time.monotonic() + 0.25
             while b"live-draft" not in re.sub(
@@ -4753,8 +4499,7 @@ def test_editor_during_blocked_engine(key=b"\r"):
     failure = None
     try:
         child.wait_idle_prompt()
-        child.send(b"engine_blocked\r")
-        after = child.wait(b"engine-block-start")
+        after = child.send_wait(b"engine_blocked\r", b"engine-block-start")
         tasks = Path(f"/proc/{child.pid}/task")
         if tasks.exists():
             # GCC TSan adds one instrumentation worker, not an application thread.
@@ -4785,8 +4530,7 @@ def test_editor_during_blocked_engine(key=b"\r"):
                 child.read_once(remaining)
         except AssertionError as exc:
             failure = exc
-        child.send(b"\x03")
-        end = child.wait(b"engine-block-end", start=after)
+        end = child.send_wait(b"\x03", b"engine-block-end", start=after)
         child.exit_cleanly(end)
     finally:
         child.kill()
@@ -4807,8 +4551,7 @@ def test_stalled_output_consumes_input():
                             os.O_NONBLOCK) for info in inherited)
             slave = os.open(os.readlink(f"/proc/{child.pid}/fd/0"),
                             os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
-            child.send(b"render_flood\r")
-            after = child.wait(b"row-0000")
+            after = child.send_wait(b"render_flood\r", b"row-0000")
             # Stop draining until the terminal fills. Input must still be consumed.
             time.sleep(0.15)
             child.send(b"/co\t\t\x15/verbose 0\rpinx\x7fg")
@@ -4825,8 +4568,7 @@ def test_stalled_output_consumes_input():
             child.wait_idle_prompt(start=end)
             child.wait(b"/compact", start=after)
             child.wait(b"/config", start=after)
-            child.send(b"\r")
-            end = child.wait(b"pong", start=end)
+            end = child.send_wait(b"\r", b"pong", start=end)
             child.exit_cleanly(end)
         finally:
             if slave is not None:
