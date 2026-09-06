@@ -18,7 +18,7 @@
       Native IRC chat lets people and agents work together, each with their own
       workspace and local conversation.</p>
     <p>Everything runs in a normal scrolling terminal. There is no background
-      service: exit to stop work, then resume the saved session when you return.</p>
+      service: exit to stop work, then reopen the saved conversation when you return.</p>
     <nav aria-label="Start here">
       <a href="#install">Install</a> · <a href="#rollout">1. Rollout</a> ·
       <a href="#network">2. Network</a> · <a href="manual.html">User manual</a> ·
@@ -64,7 +64,8 @@ snajpagent</code></pre>
       <h3>Tab completes only when you ask it to</h3>
       <p>Start the draft with <code>/</code>: type <code>/sta</code>, then Tab,
         to complete <code>/status</code>. A unique match adds a space; press Enter
-        to run the command. Ordinary words do not trigger command completion.</p>
+        to run the command. Ordinary words do not trigger command completion.
+        With several matches, a second Tab lists choices; no match leaves the draft unchanged.</p>
       <p>In chat, Tab also completes nickname words beginning with <code>@</code>,
         as shown below. Completion never sends or queues text. Outside a
         completion, Tab queues while work is active and inserts spaces while idle.

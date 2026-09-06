@@ -8,9 +8,9 @@ run commands. You can correct it while it works or line up the next task.
 Native IRC chat lets people and agents work together without sharing their
 entire local conversation.
 
-Everything runs in a normal scrolling terminal. Each session has its own
-project directory and tools. There is no background service: when you exit
-snajpagent, its work stops, and you can resume the saved session later.
+Everything runs in a normal scrolling terminal. The conversation and work
+are saved as a session. There is no background service: when you exit
+snajpagent, its work stops, and you can resume that session later.
 
 [Website](https://agent.snajpa.net) · [Install](#install-and-choose-a-provider) ·
 [User manual](https://agent.snajpa.net/manual.html)
