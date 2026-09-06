@@ -353,6 +353,24 @@ test_prompt_spinners(void)
         assert(!strstr(output, "\033[2K") && !strchr(output, '\n'));
         term.prompt_visible = false;
     }
+    term.opened = false;
+    term.tool_spinner_off_delay_ms = 500u;
+    const char *held[] = {" G", " P", " T"};
+    assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", held, 8u, 6u) == 0);
+    assert(snag_term_set_spinner_states(&term, 3u) == 0);
+    assert(strcmp(term.label, "GT> ") == 0 && term.spinner_states == 3u);
+    uint64_t deadline = term.tool_spinner_off_at;
+    assert(snag_term_set_prompt_template(&term, false, "\xfd\xfe idle> ", held, 8u, 1u) == 0);
+    assert(term.tool_spinner_off_at == deadline && strstr(term.label, "GT"));
+    assert(snag_term_set_spinner_states(&term, 5u) == 0 && !term.tool_spinner_off_at);
+    assert(snag_term_set_spinner_states(&term, 3u) == 0 && term.tool_spinner_off_at >= deadline);
+    term.tool_spinner_off_at = 1u;
+    assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", held, 8u, 3u) == 0);
+    assert(strcmp(term.label, "GP> ") == 0);
+    term.tool_spinner_off_delay_ms = 0u;
+    assert(snag_term_set_spinner_states(&term, 6u) == 0);
+    assert(snag_term_set_spinner_states(&term, 2u) == 0);
+    assert(strcmp(term.label, " P> ") == 0 && !term.tool_spinner_off_at);
     snag_term_close(&term);
 }
 

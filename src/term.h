@@ -114,8 +114,8 @@ struct snag_term {
     char prompt_template[SNAG_TERM_LABEL_BYTES];
     struct snag_prompt_clock prompt_clock;
     struct snag_term_spinner spinner[SNAG_TERM_SPINNER_COUNT];
-    uint64_t spinner_epoch_ms;
-    uint32_t spinner_per_second;
+    uint64_t spinner_epoch_ms, tool_spinner_off_at;
+    uint32_t spinner_per_second, tool_spinner_off_delay_ms;
     unsigned int spinner_states;
     bool opened;
     bool raw;

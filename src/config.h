@@ -128,7 +128,7 @@ struct snag_config {
     char prompt_spinner_goal[SNAG_CONFIG_SPINNER_MAX];
     char prompt_spinner_provider[SNAG_CONFIG_SPINNER_MAX];
     char prompt_spinner_tool[SNAG_CONFIG_SPINNER_MAX];
-    uint32_t prompt_spinner_per_second;
+    uint32_t prompt_spinner_per_second, prompt_tool_spinner_off_delay_ms;
     struct snag_irc_config irc;
     char *shell;
     uint32_t default_yield_ms;

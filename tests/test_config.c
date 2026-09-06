@@ -496,6 +496,7 @@ main(void)
     assert(strcmp(config.prompt_spinner_provider, " ◴◷◶◵") == 0);
     assert(strcmp(config.prompt_spinner_tool, " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") == 0);
     assert(config.prompt_spinner_per_second == 8u);
+    assert(config.prompt_tool_spinner_off_delay_ms == 500u);
     {
         static const char *const contexts[] = {"0", "9", "10", "99", "100", "?"};
         static const char *const queues[] = {"0", "1", "9", "10", "128"};
@@ -673,6 +674,10 @@ main(void)
     expect_ui(path, "prompt_spinner_interrupt", "\" x\"", false);
     expect_ui(path, "prompt_spinner_per_second", "0", false);
     expect_ui(path, "prompt_spinner_per_second", "61", false);
+    expect_ui(path, "prompt_tool_spinner_off_delay_ms", "0", true);
+    expect_ui(path, "prompt_tool_spinner_off_delay_ms", "60000", true);
+    expect_ui(path, "prompt_tool_spinner_off_delay_ms", "60001", false);
+    expect_ui(path, "prompt_tool_spinner_off_delay_ms", "-1", false);
 
     expect_ui(path, "prompt",
         "{chat:x}{rollout-idle:y}{rollout-active:z}", true);

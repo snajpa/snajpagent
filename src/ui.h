@@ -42,7 +42,7 @@ int snag_ui_capture_route(struct snag_ui *ui, const char *text);
 /* The immutable command catalog must outlive the UI (the app uses static data). */
 int snag_ui_commands(struct snag_ui *ui, const struct snag_term_command *commands,
                       size_t count);
-int snag_ui_typing_pause(struct snag_ui *ui, uint32_t ms);
+int snag_ui_timing(struct snag_ui *ui, const struct snag_config *config);
 uint32_t snag_ui_pause_remaining(struct snag_ui *ui);
 int snag_ui_open(struct snag_ui *ui, char *error, size_t error_size);
 int snag_ui_external(struct snag_ui *ui, bool begin,

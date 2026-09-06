@@ -50,6 +50,7 @@ struct ui_message {
         enum snag_ui_operation operation;
         unsigned int value;
         struct ui_prompt prompt;
+        struct { uint32_t typing_pause_ms, tool_spinner_off_delay_ms; } timing;
         struct { int fd; enum snag_presentation kind; } public;
         struct { uint64_t turns; size_t queued; bool resumed; } orientation;
         struct snag_irc_event irc;
@@ -327,7 +328,8 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
                              message->data.commands.count);
         return 0;
     case UI_PAUSE:
-        snag_term_set_typing_pause(term, message->data.value);
+        snag_term_set_typing_pause(term, message->data.timing.typing_pause_ms);
+        term->tool_spinner_off_delay_ms = message->data.timing.tool_spinner_off_delay_ms;
         return 0;
     case UI_OPEN:
         if (snag_term_open(term, error, error_size) < 0)
@@ -881,9 +883,10 @@ snag_ui_commands(struct snag_ui *ui, const struct snag_term_command *commands,
 }
 
 int
-snag_ui_typing_pause(struct snag_ui *ui, uint32_t ms)
+snag_ui_timing(struct snag_ui *ui, const struct snag_config *config)
 {
-    struct ui_message message = {.kind = UI_PAUSE, .data.value = ms};
+    struct ui_message message = {.kind = UI_PAUSE, .data.timing = {
+        config->typing_pause_ms, config->prompt_tool_spinner_off_delay_ms}};
     return send_message(ui, &message, NULL);
 }
 

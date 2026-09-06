@@ -1448,6 +1448,56 @@ def run_queue_case(binary, root):
             close_fixture_terminal(terminal)
 
 
+def run_tool_spinner_delay_case(binary, root):
+    for delay in (None, 0, 1500):
+        case = root / ("hold-" + str(delay))
+        workspace = case / "w"
+        workspace.mkdir(mode=0o700, parents=True)
+        config = case / "config.ini"
+        config.write_text(
+            "[agent]\nread_agents_md=false\n[provider openai]\n[ui]\n"
+            'prompt_spinner_provider = " P"\nprompt_spinner_tool = " T"\n'
+            "typing_pause_ms=0\n"
+            "prompt={activity_spinner}{chat:CHAT>}{rollout-idle:IDLE>}{rollout-active:BUSY>}\n" +
+            ("" if delay is None else f"prompt_tool_spinner_off_delay_ms={delay}\n"))
+        terminal = TmuxTerminal(case / "t", binary, workspace, case / "s", config,
+                                80, 16, args=("--no-listen", "--no-client"))
+        def bottom():
+            return terminal.capture().rstrip().splitlines()[-1]
+        try:
+            terminal.wait("IDLE>")
+            terminal.submit("text_tool")
+            wait_for_terminal_event(case / "s", {"turn_completed"}, 5.0)
+            deadline = time.monotonic() + 2.0
+            while "IDLE>" not in bottom():
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            if delay == 0:
+                assert bottom().strip() == "IDLE>", bottom()
+            else:
+                assert bottom().strip() == "TIDLE>", bottom()
+                terminal.send_text("draft survives")
+                terminal.resize(70, 16)
+                assert "draft survives" in bottom(), bottom()
+                if delay == 1500:
+                    time.sleep(0.3)
+                    terminal.send_key("C-u")
+                    terminal.submit("text_tool")
+                    deadline = time.monotonic() + 3.0
+                    while len(event_list(read_events(case / "s")[1], "turn_completed")) < 2:
+                        assert time.monotonic() < deadline
+                        time.sleep(0.01)
+                    time.sleep(0.3)
+                    assert bottom().strip() == "TIDLE>", bottom()
+                time.sleep((500 if delay is None else delay) / 1000 + 0.2)
+                assert not bottom().lstrip().startswith("T"), bottom()
+                terminal.send_key("C-u")
+            terminal.exit()
+            print(f"tool spinner off-delay {delay}: ok", flush=True)
+        finally:
+            close_fixture_terminal(terminal)
+
+
 def run_tool_case(binary, root):
     case = root / "tools"
     workspace = case / "workspace"
@@ -1897,6 +1947,7 @@ def run_fixture(binary, workspace, root):
     run_narrow_markdown_table_case(binary, root)
     run_render_case(binary, root)
     run_queue_case(binary, root)
+    run_tool_spinner_delay_case(binary, root)
     run_tool_case(binary, root)
     run_retained_composer_case(binary, root)
     run_lifecycle_case(binary, root)

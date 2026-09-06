@@ -1783,7 +1783,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     snag_ui_color(&app->ui, snag_cli_color(app->cli, app->config->color));
     snag_ui_markdown(&app->ui, snag_cli_markdown(app->cli, app->config->markdown));
     snag_ui_commands(&app->ui, commands, command_count());
-    snag_ui_typing_pause(&app->ui, app->config->typing_pause_ms);
+    snag_ui_timing(&app->ui, app->config);
     snag_config_free(&previous);
     rc = 0;
 out:
@@ -4173,7 +4173,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     snag_ui_commands(&app.ui, commands, command_count());
     if (app.networked && snag_ui_set_view(&app.ui, SNAG_RENDER_CHAT) < 0)
         goto out;
-    snag_ui_typing_pause(&app.ui, config.typing_pause_ms);
+    snag_ui_timing(&app.ui, &config);
     if (snag_ui_set_verbosity(&app.ui, cli->verbosity) < 0)
         goto out;
     if (!cli->execute && !cli->list &&

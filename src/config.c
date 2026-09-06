@@ -118,6 +118,7 @@ snag_config_init(struct snag_config *config)
     memcpy(config->prompt_spinner_tool, " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
            sizeof(" ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"));
     config->prompt_spinner_per_second = 8u;
+    config->prompt_tool_spinner_off_delay_ms = 500u;
     memcpy(config->irc.listen, "localhost:6667", 15u);
     config->irc.history_lines = 200u;
     config->shell = snag_default_shell();
@@ -806,6 +807,8 @@ parse_ui(struct parse_state *state, const char *key, const char *value)
         return parse_spinner(config->prompt_spinner_provider, value);
     if (strcmp(key, "prompt_spinner_tool") == 0)
         return parse_spinner(config->prompt_spinner_tool, value);
+    if (strcmp(key, "prompt_tool_spinner_off_delay_ms") == 0)
+        return parse_u32(value, 0u, 60000u, &config->prompt_tool_spinner_off_delay_ms);
     if (strcmp(key, "prompt_spinner_per_second") == 0)
         return parse_u32(value, 1u, 60u,
                          &config->prompt_spinner_per_second);

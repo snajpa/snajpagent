@@ -852,6 +852,25 @@ prompt_fits(const char *prompt,
     return used ? 0 : -1;
 }
 
+static unsigned int
+visible_spinner_states(const struct snag_term *term)
+{
+    return term->spinner_states | (term->tool_spinner_off_delay_ms &&
+        snag_monotonic_ms() < term->tool_spinner_off_at ?
+        1u << SNAG_TERM_SPINNER_TOOL : 0u);
+}
+
+static void
+set_spinner_states(struct snag_term *term, unsigned int states)
+{
+    if ((term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) &&
+        !(states & (1u << SNAG_TERM_SPINNER_TOOL)))
+        term->tool_spinner_off_at = snag_monotonic_ms() + term->tool_spinner_off_delay_ms;
+    if ((states & (1u << SNAG_TERM_SPINNER_TOOL)) || !term->tool_spinner_off_delay_ms)
+        term->tool_spinner_off_at = 0u;
+    term->spinner_states = states;
+}
+
 static int
 update_spinners(struct snag_term *term, uint64_t step)
 {
@@ -860,8 +879,10 @@ update_spinners(struct snag_term *term, uint64_t step)
 
     if (term->input_only)
         return 0;
+    if (snag_monotonic_ms() >= term->tool_spinner_off_at || !term->tool_spinner_off_delay_ms)
+        term->tool_spinner_off_at = 0u;
     if (compose_prompt(term->prompt_template, term->spinner,
-                       term->spinner_states, step, label) < 0)
+                       visible_spinner_states(term), step, label) < 0)
         return -1;
     changed = strcmp(label, term->label) != 0;
     memcpy(term->label, label, strlen(label) + 1u);
@@ -872,12 +893,16 @@ update_spinners(struct snag_term *term, uint64_t step)
 static bool
 animated_spinners(const struct snag_term *term)
 {
+    /* A held static frame also needs one final repaint when its delay expires. */
+    if (term->tool_spinner_off_at)
+        return true;
+    unsigned int states = visible_spinner_states(term);
     for (unsigned int slot = 0u; slot < SNAG_TERM_SPINNER_SLOTS; ++slot) {
         unsigned int id = slot == SNAG_TERM_SPINNER_PROVIDER &&
-            (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) ?
+            (states & (1u << SNAG_TERM_SPINNER_TOOL)) ?
             SNAG_TERM_SPINNER_TOOL : slot;
         if (strchr(term->prompt_template, SNAG_TERM_SPINNER_MARKER_BASE + slot) &&
-            term->spinner[id].frame_count > 1u && (term->spinner_states & (1u << id)))
+            term->spinner[id].frame_count > 1u && (states & (1u << id)))
             return true;
     }
     return false;
@@ -905,6 +930,11 @@ spinner_timeout(struct snag_term *term, int timeout_ms)
     boundary = ((step + 1u) * 1000u + term->spinner_per_second - 1u) /
                term->spinner_per_second;
     wait = boundary > elapsed ? boundary - elapsed : 1u;
+    if (term->tool_spinner_off_at) {
+        uint64_t remaining = term->tool_spinner_off_at > now ? term->tool_spinner_off_at - now : 1u;
+        if (remaining < wait)
+            wait = remaining;
+    }
     return timeout_ms < 0 || wait < (uint64_t)timeout_ms ? (int)wait : timeout_ms;
 }
 
@@ -1310,7 +1340,7 @@ redraw(struct snag_term *term)
         return 0;
     if (term->prompt_template[0] &&
         compose_prompt(term->prompt_template, term->spinner,
-                       term->spinner_states,
+                       visible_spinner_states(term),
                        spinner_step(term, snag_monotonic_ms()), current) < 0)
         return -1;
     if (term->prompt_template[0])
@@ -1379,7 +1409,8 @@ snag_term_set_prompt_template(struct snag_term *term, bool active,
                 term->spinner_states == states && term->spinner_per_second == per_second;
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT && unchanged; ++i)
         unchanged = strcmp(term->spinner[i].value, spinners[i]) == 0;
-    if (compose_prompt(label, configured, states,
+    set_spinner_states(term, states);
+    if (compose_prompt(label, configured, visible_spinner_states(term),
                        unchanged ? spinner_step(term, snag_monotonic_ms()) : 0u,
                        expanded) < 0)
         return -1;
@@ -1390,7 +1421,6 @@ snag_term_set_prompt_template(struct snag_term *term, bool active,
     memcpy(term->prompt_template, label, len + 1u);
     memcpy(term->label, expanded, strlen(expanded) + 1u);
     memcpy(term->spinner, configured, sizeof(term->spinner));
-    term->spinner_states = states;
     term->spinner_per_second = per_second;
     if (!unchanged)
         term->spinner_epoch_ms = snag_monotonic_ms();
@@ -1414,7 +1444,7 @@ snag_term_set_spinner_states(struct snag_term *term, unsigned int states)
     }
     if (!term->prompt_template[0] || term->spinner_states == states)
         return 0;
-    term->spinner_states = states;
+    set_spinner_states(term, states);
     term->spinner_epoch_ms = snag_monotonic_ms();
     return update_spinners(term, 0u);
 }

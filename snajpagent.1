@@ -1422,6 +1422,14 @@ prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 .B prompt_spinner_per_second
 Shared animation rate, 1 through 60.  Default: 8.  Hidden and static indicators
 do not animate.
+.TP
+.B prompt_tool_spinner_off_delay_ms
+Keep the tool indicator visible for this many milliseconds after a tool call
+finishes. Default: 500; range: 0 through 60000. Zero disables the delay.
+A new tool call resets the delay when it finishes. After expiry the current
+provider, goal and idle state is shown normally. Uses the existing spinner
+refresh timer, including when the configured tool frame is static.
+Only presentation is delayed; tool execution and result delivery are unchanged.
 .SS tool
 .TP
 .B shell
