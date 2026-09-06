@@ -45,6 +45,8 @@ let
       strictDeps = true;
       enableParallelBuilding = true;
       env.CFLAGS = "-Os -g -D_WIN32_WINNT=0x0601 -DWINVER=0x0601";
+      makeFlags = pkgs.lib.optional windows.stdenv.cc.isClang
+        "RC=${windows.stdenv.cc.targetPrefix}windres -I${windows.windows.mingw_w64_headers}/include";
       configureFlags = [ "--disable-shared" "--enable-static"
                          "--disable-dependency-tracking" ] ++ flags;
     };
