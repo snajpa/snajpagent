@@ -643,6 +643,25 @@ snag_goal_unfinished(enum snag_goal_status status)
            status == SNAG_GOAL_BLOCKED;
 }
 
+/* Counts and lineage always describe the request actually measured. */
+static void
+context_meter_set(struct snag_session *session, uint64_t tokens)
+{
+    memcpy(session->context_meter_provider, session->active_turn_provider,
+           sizeof(session->context_meter_provider));
+    memcpy(session->context_meter_model, session->active_turn_model,
+           sizeof(session->context_meter_model));
+    memcpy(session->context_meter_effort, session->active_turn_effort,
+           sizeof(session->context_meter_effort));
+    memcpy(session->context_meter_compact_id, session->active_response_compact_id,
+           sizeof(session->context_meter_compact_id));
+    memcpy(session->context_meter_provider_source_sha256,
+           session->active_response_provider_source_sha256,
+           sizeof(session->context_meter_provider_source_sha256));
+    session->context_meter_input_tokens = tokens;
+    session->context_meter_valid = true;
+}
+
 static int
 apply_event(struct snag_session *session, const char *type, const json_t *data,
             uint64_t seq, char *error, size_t error_size)
@@ -900,7 +919,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             "request_sha256", "source_seq", "source_sha256"
         };
         static const char *const methods[] = {
-            "exact", "anchored_upper_bound", "statistical_upper_estimate", "qualified_upper_bound"
+            "exact", "unknown", "anchored_upper_bound", "statistical_upper_estimate", "qualified_upper_bound"
         };
         static const char *const reasons[] = {
             "manual", "proactive", "hard_budget", "provider_rejection"
@@ -942,7 +961,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_integer_u64(data, "source_seq", &source_seq) < 0 ||
             source_seq == 0u || source_seq >= seq || source_seq <= session->compact_seq ||
             snag_json_integer_u64(data, "input_tokens_bound", &tokens) < 0 ||
-            tokens == 0u)
+            (strcmp(method, "unknown") == 0 ? tokens != 0u : tokens == 0u))
             goto invalid;
         if (session->compact_id[0] == '\0') {
             if (!json_is_null(json_object_get(data, "predecessor_compact_id")))
@@ -957,7 +976,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->active_compact_source_seq = source_seq;
     } else if (strcmp(type, "compaction_interrupted") == 0) {
         static const char *const keys[] = {"compact_id", "reason"};
-        static const char *const reasons[] = {"steering", "user", "endpoint_unavailable"};
+        static const char *const reasons[] = {"steering", "user", "endpoint_unavailable", "context_rejected"};
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *reason = snag_json_string(data, "reason");
 
@@ -977,7 +996,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             "output_sha256", "output_tokens_bound", "source_sha256"
         };
         static const char *const methods[] = {
-            "exact", "statistical_upper_estimate", "qualified_upper_bound"
+            "exact", "unknown", "statistical_upper_estimate", "qualified_upper_bound"
         };
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *method = snag_json_string(data, "count_method");
@@ -1003,7 +1022,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !output_hash || !snag_hex_is_lower(output_hash, SNAG_SHA256_HEX_LEN) ||
             snag_json_integer_u64(data, "input_tokens_bound", &in_tokens) < 0 ||
             snag_json_integer_u64(data, "output_tokens_bound", &out_tokens) < 0 ||
-            in_tokens == 0u || out_tokens == 0u ||
+            (strcmp(method, "unknown") == 0 ? in_tokens != 0u : in_tokens == 0u) ||
+            (strcmp(output_method, "unknown") == 0 ? out_tokens != 0u : out_tokens == 0u) ||
             compact_output_digest(output, computed, &bytes) < 0 || bytes == 0u ||
             strcmp(output_hash, computed) != 0)
             goto invalid;
@@ -1353,13 +1373,16 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
              (session->pending_steering_count != 0u &&
               all_pending_finished(session) &&
               session->response_outcome != SNAG_GRAPH_CONFLICT));
-        if (!snag_json_exact_keys(data, keys, 26u) ||
-            snag_json_integer_u64(data, "irc_seq", &session->response_irc_seq) < 0 ||
+        bool has_irc_seq = json_object_get(data, "irc_seq") != NULL;
+        /* Pre-watermark journals contain the same request facts without irc_seq. */
+        session->response_irc_seq = 0u;
+        if (!snag_json_exact_keys(data, keys, has_irc_seq ? 26u : 25u) ||
+            (has_irc_seq && snag_json_integer_u64(data, "irc_seq", &session->response_irc_seq) < 0) ||
             session->response_irc_seq > session->irc_received_seq || !session->active_turn ||
             !state_allows_start || !response_id ||
             !snag_hex_is_lower(response_id, SNAG_ID_HEX_LEN) || !turn_id ||
             strcmp(turn_id, session->active_turn_id) != 0 || !method ||
-            (strcmp(method, "exact") != 0 &&
+            (strcmp(method, "exact") != 0 && strcmp(method, "unknown") != 0 &&
              strcmp(method, "anchored_upper_bound") != 0 &&
              strcmp(method, "statistical_upper_estimate") != 0 &&
              strcmp(method, "qualified_upper_bound") != 0) ||
@@ -1415,6 +1438,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !request_hash || !snag_hex_is_lower(request_hash, SNAG_SHA256_HEX_LEN) ||
             !count_hash || !snag_hex_is_lower(count_hash, SNAG_SHA256_HEX_LEN) ||
             snag_json_integer_u64(data, "input_tokens_bound", &token_bound) < 0 ||
+            (strcmp(method, "unknown") == 0 && token_bound != 0u) ||
             (strcmp(method, "anchored_upper_bound") == 0 &&
              token_bound < session->usage_anchor_input_tokens) ||
             snag_json_integer_u64(data, "model_input_bytes",
@@ -1460,21 +1484,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->active_response_request_input_count = request_input_count;
         session->active_response_requested_output_tokens =
             requested_output_tokens;
-        memcpy(session->context_meter_provider,
-               session->active_turn_provider,
-               sizeof(session->context_meter_provider));
-        memcpy(session->context_meter_model, session->active_turn_model,
-               sizeof(session->context_meter_model));
-        memcpy(session->context_meter_effort, session->active_turn_effort,
-               sizeof(session->context_meter_effort));
-        memcpy(session->context_meter_compact_id, session->compact_id,
-               sizeof(session->context_meter_compact_id));
-        memcpy(session->context_meter_provider_source_sha256,
-               provider_source_sha256,
-               sizeof(session->context_meter_provider_source_sha256));
-        session->context_meter_input_tokens = token_bound;
-        session->context_meter_valid = true;
-        session->context_meter_estimated = strcmp(method, "exact") != 0;
+        memcpy(session->active_response_compact_id, session->compact_id,
+               sizeof(session->active_response_compact_id));
+        if (strcmp(method, "exact") == 0)
+            context_meter_set(session, token_bound);
         session->active_cycle = (unsigned int)cycle;
         session->response_open = true;
     } else if (strcmp(type, "response_capacity_rejected") == 0) {
@@ -1699,9 +1712,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 session->active_response_request_input_count;
             session->usage_anchor_input_tokens = graph.usage.input_tokens;
             session->usage_anchor_valid = true;
-            /* Replace this request's preflight estimate, not its lineage. */
-            session->context_meter_input_tokens = graph.usage.input_tokens;
-            session->context_meter_estimated = false;
+            context_meter_set(session, graph.usage.input_tokens);
         }
         session->response_open = false;
         session->response_complete = true;

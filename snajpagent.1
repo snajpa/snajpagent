@@ -602,19 +602,16 @@ active marker:
 .B ›
 while idle and
 .B »
-while active.  The percentage uses the latest comparable request input count
-and resolved input budget, rounded up.  Before measured usage is available,
-a non-exact preflight bound is prefixed with
-.BR ~
-(for example,
-.BR ~11% ).
-Completed response input usage replaces that request's preflight value.
-This is not cumulative session usage or an exact count of the next request;
-estimates and provider-reported usage can decrease without local compaction.
-A fresh or incomparable state shows
-.BR 0% ;
-an unknown budget shows
+while active.  The percentage uses the latest comparable provider-reported
+input count and resolved input budget, rounded up.  A full-request server count
+or completed response input usage supplies this value; local byte/token
+estimates are never used.  It describes the last measured request, not cumulative
+session usage, generated output, or text/tool results added since that request.
+Unknown counts or budgets, including a fresh or incomparable state, show
 .BR ?% .
+Without exact preflight, the value stays unchanged while another request runs.
+A provider/source/model/effort change or compaction invalidates incompatible
+measurements.  Actual reported usage can decrease without local compaction.
 .PP
 The default chat prompt is
 .IR "   HH:MM:SS " OPERATOR_NICK@MACHINE_HOSTNAME " : "
@@ -929,7 +926,7 @@ Use
 .B /model cache
 to discover models and advertised capacities.  Listing the cache is offline;
 there is no TTL and no dependency on an installed Codex.  Cached limits and
-learned accounting apply only to their original provider, URL, protocol, and
+counting capabilities and observed ceilings apply only to their original provider, URL, protocol, and
 model.  An explicit
 .B [model-limit PROVIDER/MODEL]
 overrides advertised capacities.  Missing capacities remain unknown.
@@ -1117,16 +1114,28 @@ requires exact preflight; and
 .B false
 disables it.  Default:
 .BR auto .
-OpenRouter's absent count endpoint (HTTP 404) uses the automatic fallback;
-strict counting still fails.  Other providers' ambiguous 404 responses and
-authentication failures do not disable exact counting.
+An absent endpoint (HTTP 405/501, or a route-level 404 without a semantic
+error code) uses the automatic fallback; strict counting still fails.
+Authentication failures and named model errors do not disable exact counting.
+OpenAI Platform and current llama.cpp servers provide full-request Responses
+counting.  Direct ChatGPT/Codex, OpenRouter and other Responses servers without
+that endpoint continue using measured response usage and bounded overflow recovery;
+no local tokenizer or byte-to-token conversion is substituted.
+.PP
+Proactive compaction uses exact preflight or the last compatible measured input
+usage.  New uncounted additions may exceed the limit; a recognized context
+rejection before any output triggers one compact-and-retry recovery without
+replaying completed tools.  Exact-count-driven reduction and summary selection
+are bounded to eight attempts.  Summary requests shrink to smaller complete
+history groups only after exact counts or actual context rejections, not estimates.
+An irreducible prompt/group fails clearly; the durable history is retained.
 .TP
 .B native_compaction
 Use the provider's native compaction endpoint.  When false, use an ordinary
 Responses summarization request instead.  Default:
 .BR true .
 .PP
-For direct ChatGPT/Codex, an unavailable native compaction endpoint falls back
+An unavailable native compaction endpoint falls back
 once to Responses summarization. Authentication failures do not trigger this
 fallback, and the configured provider/account and hard context guard stay intact.
 .TP
@@ -1404,7 +1413,7 @@ Do not share or commit these files.  An alternate dotdir has independent logins.
 .TP
 .I $HOME/.snajpagent/models.json
 Atomically replaced versioned provider/model registry containing advertised
-token capacities and source-bound learned accounting.  Refresh only with
+token capacities, counting capabilities and observed context ceilings.  Refresh only with
 .BR /model\ cache .
 .TP
 .I $HOME/.snajpagent/prompt_history
@@ -1574,8 +1583,9 @@ context bound or
 for the configured
 .BR "[tool] max_output_tokens" " ceiling (default: 6000)."
 Larger requested bounds are capped at that ceiling; smaller bounds are honored.
-The bound is persisted with the result and conservatively enforced as at most
-one token per retained UTF-8 byte.  Truncated context retains bounded
+For backward compatibility the option keeps its name, but the bound is a
+retained UTF-8 byte limit, not a token count or estimate. It is persisted
+with the result and enforces byte/memory safety.  Truncated context retains bounded
 provenance; complete redacted output remains in journal chunks.  Polls return
 only newly collected output, with exact stream-range references.  Multiple
 independent command calls may overlap; emission order does not establish a

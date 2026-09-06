@@ -106,6 +106,7 @@ enum {
 int snag_app_sync_destinations(struct app_state *app);
 int snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
                          char *error, size_t error_size);
+bool snag_app_measured_input(struct app_state *app, uint64_t *tokens);
 int snag_app_capacity_resolve(struct app_state *app,
                              const struct snag_provider_config *provider,
                              const char *model,
@@ -113,8 +114,6 @@ int snag_app_capacity_resolve(struct app_state *app,
                              char *error, size_t error_size);
 void snag_app_record_model_accounting(struct app_state *app,
                                      enum snag_count_capability capability,
-                                     uint64_t model_input_bytes,
-                                     uint64_t input_tokens,
                                      uint64_t hard_input_tokens);
 int snag_app_goal_command(struct app_state *app, const char *line, bool active);
 int snag_app_goal_tool(struct app_state *app,
@@ -264,7 +263,7 @@ bool snag_app_exact_count_enabled(enum snag_token_count_mode mode,
                                  enum snag_count_capability capability);
 int snag_app_provider_count(struct app_state *app, const json_t *count_request,
                            const struct snag_credential *credential,
-                           uint64_t model_input_bytes, uint64_t *input_tokens,
+                           uint64_t *input_tokens,
                            const char **count_method,
                            char *error, size_t error_size);
 int snag_app_provider_models(struct app_state *app,

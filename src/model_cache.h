@@ -37,7 +37,6 @@ struct snag_model_capacity {
     uint64_t max_output_tokens;
     uint64_t auto_compact_input_tokens;
     uint64_t hard_input_tokens;
-    uint64_t observed_tokens_per_million_bytes;
     unsigned int effective_context_window_percent;
     enum snag_capacity_source source;
     enum snag_count_capability count_capability;
@@ -65,7 +64,6 @@ int snag_model_cache_record(struct snag_store *store,
                            const struct snag_provider_config *provider,
                            const char *protocol, const char *model,
                            enum snag_count_capability capability,
-                           uint64_t model_input_bytes, uint64_t input_tokens,
                            uint64_t hard_input_tokens,
                            char *error, size_t error_size);
 

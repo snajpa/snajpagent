@@ -13,7 +13,6 @@
 #define SNAG_CONTEXT_MAX_COMPACT_ITEMS 128u
 
 int snag_context_codex_request(json_t *request);
-uint64_t snag_context_input_estimate(uint64_t bytes, uint64_t tokens_per_million_bytes);
 /* Bind the ordinary local model once when constructing a provider wire request. */
 int snag_context_provider_model(const struct snag_provider_config *provider,
                                 const char *model, json_t *request);
@@ -38,12 +37,6 @@ struct snag_context_projection {
 
 void snag_context_projection_init(struct snag_context_projection *projection);
 void snag_context_projection_free(struct snag_context_projection *projection);
-int snag_context_usage_anchor_bound(
-                      const struct snag_session *session,
-                      const char *provider, const char *model,
-                      const char *effort, const char *provider_source_sha256,
-                      const struct snag_context_projection *projection,
-                      uint64_t *input_tokens_bound);
 int snag_context_build(struct snag_session *session, const char *model,
                       const char *effort, unsigned int cycle,
                       const json_t *steering,

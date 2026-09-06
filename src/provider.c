@@ -941,7 +941,7 @@ parse_compact_body(struct provider_ctx *ctx, json_t **output,
         errno = ENOMEM;
         goto out;
     }
-    *output_tokens_bound = (uint64_t)output_bytes;
+    *output_tokens_bound = 0u;
     rc = 0;
 out:
     json_decref(root);
@@ -1673,8 +1673,10 @@ snag_provider_responses_count(const json_t *count_request,
                                       retry_count);
     if (rc != 0 && endpoint_unsupported &&
         (ctx.http_status == 405 || ctx.http_status == 501 ||
-         (ctx.http_status == 404 && snag_config_provider_is_openrouter(provider))))
+         (ctx.http_status == 404 && !ctx.provider_failure.code[0])))
         *endpoint_unsupported = true;
+    if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
+        rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc == 0)
         rc = parse_count_body(&ctx, input_tokens, error, error_size);
     if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {
@@ -1727,10 +1729,12 @@ snag_provider_responses_compact(const json_t *compact_request,
             error, error_size) == 0)
         rc = provider_request_perform(&ctx, "compact request failed", error,
                                       error_size, cancel_code, retry_count);
+    if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
+        rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc == 0)
         rc = parse_compact_body(&ctx, output, output_tokens_bound,
                                 error, error_size);
-    if (rc < 0 && provider->auth == SNAG_AUTH_CHATGPT &&
+    if (rc < 0 &&
         (ctx.http_status == 404 || ctx.http_status == 405 || ctx.http_status == 501))
         rc = SNAG_PROVIDER_UNSUPPORTED;
     if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {

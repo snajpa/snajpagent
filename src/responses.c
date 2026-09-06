@@ -51,15 +51,16 @@ snag_provider_failure_from_json(const json_t *root,
 {
     static const char *const limit_keys[] = {
         "context_limit", "context_length", "max_context_length",
-        "max_context_tokens"
+        "max_context_tokens", "n_ctx"
     };
     static const char *const requested_keys[] = {
-        "input_tokens", "requested_tokens", "requested_input_tokens"
+        "input_tokens", "requested_tokens", "requested_input_tokens", "n_prompt_tokens"
     };
     json_t *object;
     json_t *response;
     const char *code;
     const char *message;
+    const char *typed;
 
     if (!failure)
         return -1;
@@ -78,8 +79,14 @@ snag_provider_failure_from_json(const json_t *root,
                 object = nested;
         }
     }
+    typed = snag_json_string(json_is_object(response) ? response : root, "error_type");
+    if (!typed)
+        typed = snag_json_string(json_object_get(object, "metadata"), "error_type");
+    if (!json_is_object(object) && typed)
+        object = json_is_object(response) ? response : (json_t *)root;
     if (!json_is_object(object) &&
-        (json_object_get(root, "code") || json_object_get(root, "reason")))
+        (json_object_get(root, "code") || json_object_get(root, "reason") ||
+         json_object_get(root, "type")))
         object = (json_t *)root;
     if (!json_is_object(object))
         return object && !json_is_null(object) ? -1 : 0;
@@ -87,6 +94,9 @@ snag_provider_failure_from_json(const json_t *root,
         const char *keys[] = {"code", "reason", "type"};
         for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
             json_t *value = json_object_get(object, keys[i]);
+            if (i == 0u && json_is_integer(value) &&
+                json_integer_value(value) >= 100 && json_integer_value(value) <= 599)
+                continue; /* HTTP-shaped code, not a semantic error name. */
             if (value && !json_is_null(value) &&
                 (!json_is_string(value) || json_string_length(value) >= 64u ||
                  !snag_utf8_valid((const unsigned char *)json_string_value(value),
@@ -101,7 +111,9 @@ snag_provider_failure_from_json(const json_t *root,
     if (code)
         memcpy(failure->code, code, strlen(code) + 1u);
     /* A top-level SSE type is the event name, not the error category. */
-    if (object != root && snag_json_string(object, "type"))
+    if (snag_json_string(object, "type") &&
+        (object != root || !strcmp(snag_json_string(object, "type"), "exceed_context_size_error") ||
+         !strcmp(snag_json_string(object, "type"), "invalid_request_error")))
         snprintf(failure->type, sizeof(failure->type), "%s",
                  snag_json_string(object, "type"));
     if (message && strlen(message) < sizeof(failure->message) &&
@@ -115,6 +127,24 @@ snag_provider_failure_from_json(const json_t *root,
         if (failure_limit(object, requested_keys[i],
                           &failure->requested_input_tokens) < 0)
             return -1;
+    if ((typed && !strcmp(typed, "context_length_exceeded")) ||
+        !strcmp(failure->type, "exceed_context_size_error"))
+        snprintf(failure->code, sizeof(failure->code), "context_length_exceeded");
+    /* vLLM Responses has a specific validation error, not a context code.
+     * Match the complete grammar and param; never classify arbitrary HTTP 400. */
+    if (!strcmp(failure->type, "invalid_request_error") && message &&
+        snag_json_string(object, "param") &&
+        !strcmp(snag_json_string(object, "param"), "input")) {
+        unsigned long long prompt = 0u, limit = 0u;
+        int end = 0;
+        if (sscanf(message, "The engine prompt length %10llu exceeds the max_model_len %10llu. Please reduce prompt.%n",
+                   &prompt, &limit, &end) == 2 && end > 0 && !message[end] &&
+            limit > 1u && prompt >= limit && prompt <= SNAG_CONFIG_TOKEN_LIMIT_MAX) {
+            snprintf(failure->code, sizeof(failure->code), "context_length_exceeded");
+            failure->context_limit_tokens = limit - 1u;
+            failure->requested_input_tokens = prompt;
+        }
+    }
     return 0;
 }
 
@@ -788,6 +818,10 @@ handle_response_completed(struct snag_responses_stream *stream,
     if (!stream->created || stream->terminal ||
         response_identity(stream, response, "completed") < 0)
         return -1;
+    if (snag_provider_failure_from_json(root, &stream->provider_failure) < 0)
+        return stream_fail(stream, EPROTO, "invalid response error details");
+    if (snag_provider_failure_is_capacity(&stream->provider_failure))
+        return stream_fail(stream, EOVERFLOW, "provider context length exceeded");
     if (parse_provider_usage(stream, response) < 0)
         return -1;
     output = json_object_get(response, "output");

@@ -61,6 +61,9 @@ enum model_fixture {
     MODEL_COUNT_501,
     MODEL_COUNT_401,
     MODEL_COUNT_403,
+    MODEL_COUNT_OK,
+    MODEL_COUNT_MODEL_404,
+    MODEL_COUNT_OVERFLOW,
     MODEL_COMPACT_404,
     MODEL_COMPACT_403,
     MODEL_AUTH_DEVICE,
@@ -450,7 +453,10 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         unsigned int status = models == MODEL_COUNT_404 ? 404u :
                               models == MODEL_COUNT_405 ? 405u :
                               models == MODEL_COUNT_401 ? 401u :
-                              models == MODEL_COUNT_403 ? 403u : 501u;
+                              models == MODEL_COUNT_403 ? 403u :
+                              models == MODEL_COUNT_OK ? 200u :
+                              models == MODEL_COUNT_MODEL_404 ? 404u :
+                              models == MODEL_COUNT_OVERFLOW ? 400u : 501u;
         int fd = accept(listen_fd, NULL, NULL);
         if (fd < 0)
             server_fail("accept failed");
@@ -458,7 +464,14 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         if (strcmp(request.method, "POST") != 0 ||
             strcmp(request.path, "/v1/responses/input_tokens") != 0)
             server_fail("unexpected failed count request");
-        send_status(fd, status, "{\"error\":{\"message\":\"not available\"}}");
+        const char *body = models == MODEL_COUNT_OK ?
+            "{\"object\":\"response.input_tokens\",\"input_tokens\":42}" :
+            models == MODEL_COUNT_MODEL_404 ?
+            "{\"error\":{\"code\":\"model_not_found\",\"message\":\"no such model\"}}" :
+            models == MODEL_COUNT_OVERFLOW ?
+            "{\"error\":{\"code\":400,\"type\":\"exceed_context_size_error\",\"n_ctx\":10,\"n_prompt_tokens\":12}}" :
+            "{\"error\":{\"message\":\"not available\"}}";
+        send_status(fd, status, body);
         if (close(fd) < 0)
             server_fail("close failed count socket");
         _exit(0);
@@ -741,7 +754,7 @@ test_local_provider_transport(void)
                                           &cancel, &retries) == 0);
     assert(json_is_array(compact_output));
     assert(json_array_size(compact_output) == 1u);
-    assert(compact_bytes > 0u);
+    assert(compact_bytes == 0u); /* Output bytes are not a token count. */
     assert(retries == 0u);
     json_decref(compact_output);
     json_decref(request);
@@ -1104,7 +1117,7 @@ test_count_capability_statuses(void)
                    &config.providers[0], &credential, NULL, NULL, NULL,
                    &tokens, &endpoint_unsupported,
                    error, sizeof(error), NULL, NULL) < 0);
-        assert(endpoint_unsupported == (fixtures[i] != MODEL_COUNT_404));
+        assert(endpoint_unsupported);
         json_decref(request);
         snag_config_free(&config);
         stop_server(&server);
@@ -1124,12 +1137,16 @@ test_count_modes(void)
         {MODEL_COUNT_405, SNAG_TOKEN_COUNT_AUTO,
          SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false},
         {MODEL_COUNT_405, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, false},
-        {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, false},
+        {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO, SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false},
         {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO,
          SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, true},
         {MODEL_COUNT_404, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, true},
         {MODEL_COUNT_401, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true},
-        {MODEL_COUNT_403, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true}
+        {MODEL_COUNT_403, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true},
+        {MODEL_COUNT_MODEL_404, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, false},
+        {MODEL_COUNT_OVERFLOW, SNAG_TOKEN_COUNT_AUTO, SNAG_PROVIDER_CONTEXT_OVERFLOW, SNAG_COUNT_UNKNOWN, false},
+        {MODEL_COUNT_OK, SNAG_TOKEN_COUNT_AUTO, 0, SNAG_COUNT_SUPPORTED, false},
+        {MODEL_COUNT_OK, SNAG_TOKEN_COUNT_STRICT, 0, SNAG_COUNT_SUPPORTED, false}
     };
 
     assert(!snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_OFF,
@@ -1147,7 +1164,8 @@ test_count_modes(void)
         struct snag_credential credential;
         struct app_state app;
         json_t *request = request_with_marker("count-mode");
-        const char *method = "qualified_upper_bound";
+        const char *method = cases[i].mode == SNAG_TOKEN_COUNT_STRICT ?
+            "anchored_upper_bound" : "unknown";
         uint64_t tokens = 99u;
         char endpoint[128];
         char error[256] = {0};
@@ -1182,11 +1200,14 @@ test_count_modes(void)
         app.config = &config;
         app.turn_provider = &config.providers[0];
         app.turn_model = "gpt-transport-test";
-        rc = snag_app_provider_count(&app, request, &credential, 100u,
+        rc = snag_app_provider_count(&app, request, &credential,
                                     &tokens, &method, error, sizeof(error));
         assert((cases[i].result < 0 && rc < 0) || rc == cases[i].result);
         assert(app.turn_capacity.count_capability == cases[i].capability);
-        assert(tokens == 99u && strcmp(method, "qualified_upper_bound") == 0);
+        if (cases[i].fixture == MODEL_COUNT_OK)
+            assert(tokens == 42u && !strcmp(method, "exact"));
+        else
+            assert(tokens == 99u);
         assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
         snag_ui_free(&app.ui);
         snag_model_cache_free(&app.model_cache);
@@ -1554,7 +1575,7 @@ test_provider_auth(void)
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
         int rc = snag_provider_responses_compact(request, &config, &config.providers[0],
             &credential, NULL, NULL, NULL, &output, &bytes, error, sizeof(error), NULL, NULL);
-        assert(rc == (pass == 1u ? SNAG_PROVIDER_UNSUPPORTED : -1));
+        assert(rc == (pass < 2u ? SNAG_PROVIDER_UNSUPPORTED : -1));
         assert(output == NULL);
         stop_server(&server);
         json_decref(request);

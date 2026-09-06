@@ -572,7 +572,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
                        const char **count_method, struct snag_buf *request_body,
                        char *error, size_t error_size)
 {
-    uint64_t anchored_bound = 0u;
+    (void)provider_source_sha256;
     int rc;
 
     app->request_networked = snag_irc_enabled(app->config) &&
@@ -586,23 +586,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
 
     if (rc < 0)
         return -1;
-    *count_method = "qualified_upper_bound";
-    rc = snag_context_usage_anchor_bound(&app->session, app->turn_provider->name,
-        app->turn_model, app->turn_effort, provider_source_sha256, projection,
-        &anchored_bound);
-    if (rc < 0) {
-        snag_errorf(error, error_size, "cannot evaluate provider-usage anchor");
-        return -1;
-    }
-    if (rc == 1) {
-        projection->input_tokens_bound = anchored_bound;
-        *count_method = "anchored_upper_bound";
-    } else if (app->turn_capacity.observed_tokens_per_million_bytes) {
-        projection->input_tokens_bound = snag_context_input_estimate(
-            projection->model_input_bytes,
-            app->turn_capacity.observed_tokens_per_million_bytes);
-        *count_method = "statistical_upper_estimate";
-    }
+    *count_method = "unknown";
     rc = 0;
     if (snag_ui_enabled(&app->ui, SNAG_PRESENT_PROTOCOL)) {
         struct snag_buf encoded;
@@ -639,8 +623,7 @@ snag_app_response_started_data(const struct app_state *app,
 {
     const struct snag_model_capacity *capacity = &app->turn_capacity;
     const char *compact_id = app->session.compact_id;
-    const char *baseline = strcmp(count_method, "anchored_upper_bound") == 0 ?
-        app->session.usage_anchor_model_input_sha256 : NULL;
+    const char *baseline = NULL;
     json_t *ids = json_array();
     json_t *data = NULL;
 

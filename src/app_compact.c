@@ -29,10 +29,7 @@ hash_json_bounded(const json_t *value, size_t max,
 static bool
 count_method_valid(const char *method)
 {
-    return method && (strcmp(method, "exact") == 0 ||
-                      strcmp(method, "anchored_upper_bound") == 0 ||
-                      strcmp(method, "statistical_upper_estimate") == 0 ||
-                      strcmp(method, "qualified_upper_bound") == 0);
+    return method && (!strcmp(method, "exact") || !strcmp(method, "unknown"));
 }
 
 static bool
@@ -243,11 +240,12 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
         return -1;
     }
     *output = fixture_output;
-    *output_tokens_bound = (uint64_t)output_bytes;
+    *output_tokens_bound = 0u;
     return 0;
 #else
     struct snag_response_graph graph;
     struct snag_graph_decision decision;
+    struct snag_provider_failure failure = {0};
     int cancel_code = 0;
     int provider_rc;
     int rc = -1;
@@ -256,9 +254,10 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     provider_rc = snag_provider_responses_create(
         create_request, app->config, app->turn_provider, credential,
         &app->ui, NULL, NULL, snag_app_provider_input_pump, app, &graph,
-        NULL, error, error_size, &cancel_code, NULL);
+        &failure, error, error_size, &cancel_code, NULL);
     if (provider_rc != 0) {
-        rc = provider_rc;
+        rc = snag_provider_failure_is_capacity(&failure) ?
+            SNAG_PROVIDER_CONTEXT_OVERFLOW : provider_rc;
         goto out;
     }
     if (snag_response_graph_classify(&graph, &decision,
@@ -284,7 +283,7 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
         *output = NULL;
         goto out;
     }
-    *output_tokens_bound = (uint64_t)output_bytes;
+    *output_tokens_bound = 0u;
     rc = 0;
 out:
     snag_response_graph_free(&graph);
@@ -311,8 +310,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     char count_request_hash[SNAG_SHA256_HEX_LEN + 1u];
     char output_hash[SNAG_SHA256_HEX_LEN + 1u];
     char output_count_request_hash[SNAG_SHA256_HEX_LEN + 1u];
-    const char *count_method = "qualified_upper_bound";
-    const char *output_count_method = "qualified_upper_bound";
+    const char *count_method = "unknown";
+    const char *output_count_method = "unknown";
     const char *model;
     const char *effort;
     size_t source_bytes = 0u;
@@ -326,6 +325,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     uint64_t source_budget;
     uint64_t threshold;
     bool use_exact;
+    bool reduced = false;
+    bool generated = false;
+    char prior_request[SNAG_SHA256_HEX_LEN + 1u] = {0};
     bool started = false;
     bool native;
     int build_rc;
@@ -378,16 +380,12 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     use_exact = snag_app_exact_count_enabled(
         app->turn_provider->exact_token_count,
         app->turn_capacity.count_capability);
-    source_budget = app->turn_capacity.hard_input_known && !use_exact &&
-        !app->turn_capacity.observed_tokens_per_million_bytes ?
-        app->turn_capacity.hard_input_tokens : SNAG_CONTEXT_MAX_COMPACT - 4096u;
-    if (source_budget > SNAG_CONTEXT_MAX_COMPACT - 4096u)
-        source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
+    source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
         build_rc = snag_context_compact_request_build(&app->session, model, effort,
                                             active_prefix,
                                             source_budget,
-                                            use_exact,
+                                            true,
                                             &request, &count_request,
                                             source_hash, &source_bytes,
                                             request_hash, &request_bytes,
@@ -447,59 +445,70 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                      "compaction provider request exceeds 12 MiB");
             goto out;
         }
-        input_tokens_bound = snag_context_input_estimate((uint64_t)count_request_bytes,
-            app->turn_capacity.observed_tokens_per_million_bytes);
-        count_method = app->turn_capacity.observed_tokens_per_million_bytes ?
-            "statistical_upper_estimate" : "qualified_upper_bound";
+        if (reduced && !strcmp(prior_request, request_hash)) {
+            snprintf(error, error_size, "irreducible complete history group exceeds provider context");
+            goto out;
+        }
+        input_tokens_bound = 0u;
+        count_method = "unknown";
+        stage_rc = SNAG_APP_COUNT_SKIPPED;
         if (use_exact) {
-            stage_rc = snag_app_provider_count(app, count_request, credential, 0u,
-                &input_tokens_bound, &count_method, error, error_size);
-            if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED) {
+            stage_rc = snag_app_provider_count(app, count_request, credential,
+                &input_tokens_bound, &count_method,
+                error, error_size);
+            if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED &&
+                stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
                 rc = stage_rc;
                 goto out;
             }
-            if (stage_rc == SNAG_APP_COUNT_SKIPPED) {
+            if (stage_rc == SNAG_APP_COUNT_SKIPPED)
                 use_exact = false;
+        }
+        if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW &&
+            !(strcmp(count_method, "exact") == 0 &&
+              app->turn_capacity.hard_input_known &&
+              input_tokens_bound > app->turn_capacity.hard_input_tokens)) {
+            if (snag_random_id(compact_id) < 0) {
+                snprintf(error, error_size, "cryptographic compact id generation failed");
+                goto out;
+            }
+            if (commit_rendered(app, "compaction_started",
+                    compaction_started_data(&app->session, model, compact_id, reason,
+                        count_method, source_seq, source_hash, request_hash,
+                        count_request_hash, input_tokens_bound), error, error_size) < 0)
+                goto out;
+            started = true;
+            stage_rc = native ?
+                snag_app_provider_compact(app, provider_request, credential,
+                    &output, &output_tokens_bound, error, error_size) :
+                run_responses_compaction(app, provider_request, credential,
+                    &output, &output_tokens_bound, error, error_size);
+            if (stage_rc == 0) {
+                generated = true;
+                break;
+            }
+            if (stage_rc == SNAG_PROVIDER_UNSUPPORTED ||
+                stage_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW) {
+                if (commit_rendered(app, "compaction_interrupted",
+                        compaction_interrupted_data(compact_id,
+                            stage_rc == SNAG_PROVIDER_UNSUPPORTED ?
+                            "endpoint_unavailable" : "context_rejected"),
+                        error, error_size) < 0)
+                    goto out;
+                started = false;
+            }
+            if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
+                rc = stage_rc;
+                goto out;
             }
         }
-        if (input_tokens_bound == 0u ||
-            input_tokens_bound > (uint64_t)INT64_MAX) {
-            snprintf(error, error_size,
-                     "compact input-token bound is invalid");
-            errno = EOVERFLOW;
-            goto out;
-        }
-        if (!app->turn_capacity.hard_input_known ||
-            input_tokens_bound <= app->turn_capacity.hard_input_tokens)
-            break;
-        if (selection == 7u || source_bytes <= 1u) {
-            snprintf(error, error_size,
-                     "compaction input estimate %llu (%s) cannot fit hard budget %llu",
-                     (unsigned long long)input_tokens_bound, count_method,
-                     (unsigned long long)app->turn_capacity.hard_input_tokens);
-            errno = EOVERFLOW;
-            goto out;
-        }
-        if (strcmp(count_method, "qualified_upper_bound") != 0) {
-            uint64_t scaled;
-            if ((uint64_t)source_bytes > UINT64_MAX /
-                    app->turn_capacity.hard_input_tokens)
-                scaled = (uint64_t)source_bytes / 2u;
-            else
-                scaled = (uint64_t)source_bytes *
-                    app->turn_capacity.hard_input_tokens /
-                    input_tokens_bound;
-            source_budget = scaled - scaled / 10u;
-        } else {
-            uint64_t envelope = count_request_bytes > source_bytes ?
-                (uint64_t)(count_request_bytes - source_bytes) : 0u;
-            source_budget = app->turn_capacity.hard_input_tokens > envelope ?
-                app->turn_capacity.hard_input_tokens - envelope : 0u;
-        }
-        if (source_budget >= (uint64_t)source_bytes)
-            source_budget = (uint64_t)source_bytes - 1u;
+        /* Shrink bytes only after a measured rejection/count: no token conversion.
+         * The walker preserves complete groups; identical irreducible input stops. */
+        memcpy(prior_request, request_hash, sizeof(prior_request));
+        reduced = true;
+        source_budget = source_bytes / 2u;
         if (!source_budget)
-            source_budget = 1u; /* Zero means unbounded to the source walker. */
+            source_budget = 1u;
         json_decref(provider_request);
         provider_request = NULL;
         json_decref(count_request);
@@ -507,53 +516,14 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         json_decref(request);
         request = NULL;
     }
-    if (!active_prefix && strcmp(reason, "proactive") == 0 &&
-        input_tokens_bound < threshold) {
-        rc = 0;
+    if (!generated) {
+        snprintf(error, error_size, "compaction input still exceeds context after eight attempts");
         goto out;
-    }
-    if (snag_random_id(compact_id) < 0) {
-        snprintf(error, error_size, "cryptographic compact id generation failed");
-        goto out;
-    }
-    if (commit_rendered(app, "compaction_started",
-            compaction_started_data(&app->session, model, compact_id, reason,
-                                    count_method, source_seq, source_hash,
-                                    request_hash, count_request_hash,
-                                    input_tokens_bound),
-            error, error_size) < 0)
-        goto out;
-    started = true;
-    if (native) {
-        stage_rc = snag_app_provider_compact(app, provider_request, credential,
-                                            &output,
-                                            &output_tokens_bound,
-                                            error, error_size);
-        if (stage_rc == SNAG_PROVIDER_UNSUPPORTED) {
-            if (commit_rendered(app, "compaction_interrupted",
-                    compaction_interrupted_data(compact_id, "endpoint_unavailable"),
-                    error, error_size) < 0)
-                goto out;
-            started = false;
-        }
-        if (stage_rc != 0) {
-            rc = stage_rc;
-            goto out;
-        }
-    } else {
-        stage_rc = run_responses_compaction(app, provider_request, credential,
-                                            &output,
-                                            &output_tokens_bound,
-                                            error, error_size);
-        if (stage_rc != 0) {
-            rc = stage_rc;
-            goto out;
-        }
     }
     if (snag_context_compact_output_valid(output, output_hash, &output_bytes,
                                          error, error_size) < 0)
         goto out;
-    output_tokens_bound = (uint64_t)output_bytes;
+    output_tokens_bound = 0u;
     if (snag_context_compact_output_count_request_build(output,
             snag_config_model_upstream(app->turn_provider, model),
             &output_count_request, output_count_request_hash,
@@ -562,13 +532,16 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         goto out;
     if (use_exact) {
         stage_rc = snag_app_provider_count(app, output_count_request, credential,
-            0u, &output_tokens_bound, &output_count_method, error, error_size);
-        if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED) {
+            &output_tokens_bound, &output_count_method, error, error_size);
+        if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED &&
+            stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
             rc = stage_rc;
             goto out;
         }
-        if (stage_rc == SNAG_APP_COUNT_SKIPPED)
-            output_tokens_bound = (uint64_t)output_bytes;
+        if (stage_rc != 0) {
+            output_tokens_bound = 0u;
+            output_count_method = "unknown";
+        }
     }
     if (output_tokens_bound > (uint64_t)INT64_MAX) {
         snprintf(error, error_size, "compact output bound is too large");
@@ -656,7 +629,8 @@ snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
     }
     threshold = snag_model_compact_threshold(app->turn_provider,
                                            &app->turn_capacity);
-    if (!threshold || input_tokens_bound < threshold)
+    if (!snag_app_measured_input(app, &input_tokens_bound) ||
+        !threshold || input_tokens_bound < threshold)
         return 0;
     return snag_app_compact_idle_command(app, "proactive", error, error_size);
 }
@@ -679,9 +653,13 @@ snag_app_compact_before_response(struct app_state *app,
     {
         uint64_t threshold = snag_model_compact_threshold(app->turn_provider,
                                                         &app->turn_capacity);
-        bool over_hard = app->turn_capacity.hard_input_known &&
+        uint64_t measured = input_tokens_bound;
+        bool measured_known = strcmp(count_method, "exact") == 0 ||
+            snag_app_measured_input(app, &measured);
+        bool over_hard = strcmp(count_method, "exact") == 0 &&
+            app->turn_capacity.hard_input_known &&
             input_tokens_bound > app->turn_capacity.hard_input_tokens;
-        bool over_proactive = threshold && input_tokens_bound >= threshold;
+        bool over_proactive = measured_known && threshold && measured >= threshold;
         int rc;
 
         if (!over_hard && !over_proactive)
@@ -690,11 +668,9 @@ snag_app_compact_before_response(struct app_state *app,
                             true, credential, compacted, error, error_size);
         if (rc != 0)
             return rc;
-        if (over_hard && !*compacted &&
-            strcmp(count_method, "statistical_upper_estimate") != 0 &&
-            strcmp(count_method, "qualified_upper_bound") != 0) {
+        if (over_hard && !*compacted) {
             snprintf(error, error_size,
-                     "context input estimate %llu (%s) exceeds hard budget %llu; no complete older turn can be compacted",
+                     "context input count %llu (%s) exceeds hard budget %llu; no complete older turn can be compacted",
                      (unsigned long long)input_tokens_bound, count_method,
                      (unsigned long long)app->turn_capacity.hard_input_tokens);
             errno = EOVERFLOW;

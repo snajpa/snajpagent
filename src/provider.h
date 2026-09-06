@@ -20,6 +20,8 @@ typedef int (*snag_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 
 /* Optional native operation is absent; no semantic output was returned. */
 #define SNAG_PROVIDER_UNSUPPORTED 4
+/* Typed context overflow from a count or native compaction operation. */
+#define SNAG_PROVIDER_CONTEXT_OVERFLOW 5
 
 /* Fixed-issuer auth transport: bounded, cancellable, and never body-logged. */
 int snag_provider_auth_post(const char *issuer, const char *path, const char *type,

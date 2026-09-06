@@ -49,24 +49,6 @@ struct context_builder {
     bool max_output_known;
 };
 
-#define SNAG_USAGE_ANCHOR_ENVELOPE_RESERVE UINT64_C(512)
-#define SNAG_USAGE_ANCHOR_ITEM_RESERVE UINT64_C(32)
-
-uint64_t
-snag_context_input_estimate(uint64_t bytes, uint64_t ratio)
-{
-    uint64_t scaled;
-
-    if (!ratio)
-        return bytes;
-    if (!bytes || bytes > (UINT64_MAX - 999999u) / ratio)
-        return SNAG_CONFIG_TOKEN_LIMIT_MAX;
-    scaled = (bytes * ratio + 999999u) / UINT64_C(1000000);
-    if (scaled > (SNAG_CONFIG_TOKEN_LIMIT_MAX - 512u) * 8u / 9u)
-        return SNAG_CONFIG_TOKEN_LIMIT_MAX;
-    return scaled + scaled / 8u + 512u;
-}
-
 void
 snag_context_projection_init(struct snag_context_projection *projection)
 {
@@ -146,8 +128,7 @@ bounded_command_output(struct snag_buf *out, const char *text, size_t len,
     snag_sha256_hex(text, len, digest);
     n = snprintf(notice, sizeof(notice),
         "\n[command output truncated for model context; "
-        "max_output_tokens=%u uses the conservative one-token-per-UTF-8-byte "
-        "bound; original_bytes=%zu; sha256=%s; complete output remains in "
+        "max_output_tokens=%u is a UTF-8 byte limit, not a token count; original_bytes=%zu; sha256=%s; complete output remains in "
         "the durable session journal]\n",
         max_output_tokens, len, digest);
     if (n < 0 || (size_t)n >= sizeof(notice)) {
@@ -985,8 +966,8 @@ exec_tool_schema(uint32_t max_timeout_ms, uint32_t max_output_tokens)
             "Set timeout_ms only when this command needs a deadline; null "
             "runs without a timeout. Pick a positive max_output_tokens limit "
             "for result text sent to model context, or null for the configured "
-            "ceiling (%u). Larger requests are capped; this is a conservative "
-            "one-token-per-UTF-8-byte upper bound.", max_output_tokens) < 0)
+            "ceiling (%u). This legacy-named limit caps retained UTF-8 bytes, "
+            "not tokens.", max_output_tokens) < 0)
         return NULL;
     return tool_schema("exec_command", description, json_pack(
         "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
@@ -1011,7 +992,7 @@ stdin_tool_schema(uint32_t max_output_tokens)
             "eof=false/null to terminate it and receive its terminal result. "
             "Pick a positive max_output_tokens limit for new result text sent "
             "to model context, or null for the configured ceiling (%u). Larger "
-            "requests are capped; this is a conservative one-token-per-UTF-8-byte upper bound.",
+            "requests are capped. This legacy-named limit caps retained UTF-8 bytes, not tokens.",
             max_output_tokens) < 0)
         return NULL;
     return tool_schema("write_stdin", description, json_pack(
@@ -1175,113 +1156,6 @@ tool_schemas(bool goal_active,
         return NULL;
     }
     return tools;
-}
-
-static bool
-checked_add_u64(uint64_t *value, uint64_t addition)
-{
-    if (*value > UINT64_MAX - addition)
-        return false;
-    *value += addition;
-    return true;
-}
-
-int
-snag_context_usage_anchor_bound(
-    const struct snag_session *session, const char *provider,
-    const char *model, const char *effort,
-    const char *provider_source_sha256,
-    const struct snag_context_projection *projection,
-    uint64_t *input_tokens_bound)
-{
-    json_t *items;
-    json_t *prefix = NULL;
-    char prefix_hash[SNAG_SHA256_HEX_LEN + 1u];
-    size_t anchor_prefix_count;
-    size_t current_count;
-    size_t controller_count;
-    uint64_t added_bytes;
-    uint64_t added_count;
-    uint64_t envelope;
-    uint64_t item_reserve;
-    uint64_t bound;
-    int rc = 0;
-
-    if (!session || !provider || !model || !effort ||
-        !provider_source_sha256 || !projection ||
-        !input_tokens_bound || !projection->create_request) {
-        errno = EINVAL;
-        return -1;
-    }
-    *input_tokens_bound = 0u;
-    if (!session->usage_anchor_valid ||
-        strcmp(session->usage_anchor_provider, provider) != 0 ||
-        strcmp(session->usage_anchor_model, model) != 0 ||
-        strcmp(session->usage_anchor_effort, effort) != 0 ||
-        strcmp(session->usage_anchor_provider_source_sha256,
-               provider_source_sha256) != 0 ||
-        strcmp(session->usage_anchor_compact_id, session->compact_id) != 0 ||
-        projection->request_input_count <
-            session->usage_anchor_request_input_count ||
-        projection->request_input_bytes <
-            session->usage_anchor_request_input_bytes ||
-        projection->create_request_bytes < projection->request_input_bytes)
-        return 0;
-    items = json_object_get(projection->create_request, "input");
-    if (!json_is_array(items) || json_array_size(items) !=
-        projection->request_input_count)
-        return 0;
-    current_count = projection->request_input_count;
-    controller_count = projection->request_controller_count;
-    if (controller_count > current_count ||
-        controller_count > session->usage_anchor_request_input_count)
-        return 0;
-    anchor_prefix_count = session->usage_anchor_request_input_count -
-        controller_count;
-    prefix = json_array();
-    if (!prefix)
-        return -1;
-    for (size_t i = 0; i < anchor_prefix_count; ++i) {
-        if (json_array_append(prefix, json_array_get(items, i)) < 0)
-            goto out;
-    }
-    for (size_t i = current_count - controller_count;
-         i < current_count; ++i) {
-        if (json_array_append(prefix, json_array_get(items, i)) < 0)
-            goto out;
-    }
-    if (snag_json_digest_bounded(prefix, SNAG_CONTEXT_MAX_REQUEST,
-                          prefix_hash, NULL) < 0)
-        goto out;
-    if (strcmp(prefix_hash,
-               session->usage_anchor_request_input_sha256) != 0) {
-        rc = 0;
-        goto out;
-    }
-    added_bytes = (uint64_t)projection->request_input_bytes -
-        session->usage_anchor_request_input_bytes;
-    added_count = (uint64_t)projection->request_input_count -
-        session->usage_anchor_request_input_count;
-    envelope = (uint64_t)projection->create_request_bytes -
-        (uint64_t)projection->request_input_bytes;
-    if (added_count > UINT64_MAX / SNAG_USAGE_ANCHOR_ITEM_RESERVE) {
-        errno = EOVERFLOW;
-        goto out;
-    }
-    item_reserve = added_count * SNAG_USAGE_ANCHOR_ITEM_RESERVE;
-    bound = session->usage_anchor_input_tokens;
-    if (!checked_add_u64(&bound, added_bytes) ||
-        !checked_add_u64(&bound, envelope) ||
-        !checked_add_u64(&bound, SNAG_USAGE_ANCHOR_ENVELOPE_RESERVE) ||
-        !checked_add_u64(&bound, item_reserve)) {
-        errno = EOVERFLOW;
-        goto out;
-    }
-    *input_tokens_bound = bound;
-    rc = 1;
-out:
-    json_decref(prefix);
-    return rc;
 }
 
 static json_t *
@@ -1828,7 +1702,7 @@ snag_context_build(struct snag_session *session, const char *model,
         errno = EOVERFLOW;
         goto out;
     }
-    projection->input_tokens_bound = (uint64_t)projection->model_input_bytes;
+    projection->input_tokens_bound = 0u; /* Unknown until counted by the provider. */
     rc = 0;
 out:
     snag_buf_free(&network_harness);

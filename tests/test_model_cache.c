@@ -83,7 +83,7 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
     }
     assert(saw_small && saw_large);
     assert(snag_model_cache_record(store, cache, provider, "codex", "large",
-                                  SNAG_COUNT_UNKNOWN, 0u, 0u, 400000u, error, sizeof(error)) == 0);
+                                  SNAG_COUNT_UNKNOWN, 400000u, error, sizeof(error)) == 0);
     assert(snag_model_cache_find(cache, "codex", "large") == NULL);
     assert(snag_model_capacity_resolve(cache, &config, provider, "large", "codex",
                                       &capacity, error, sizeof(error)) == 0);
@@ -358,7 +358,7 @@ main(void)
         assert(setrlimit(RLIMIT_FSIZE, &limited) == 0);
         assert(snag_model_cache_record(&store, &cache, &config.providers[0],
                    "openai", "org/model", SNAG_COUNT_SUPPORTED,
-                   1000u, 250u, 800000u, error, sizeof(error)) < 0);
+                   800000u, error, sizeof(error)) < 0);
         assert(cache.providers == original && json_equal(original, snapshot));
         assert(snag_model_cache_replace(&store, providers, 234567u, &cache,
                                        error, sizeof(error)) < 0);
@@ -379,13 +379,13 @@ main(void)
         assert(snag_model_cache_load(&store, &stale, error, sizeof(error)) == 0);
         assert(snag_model_cache_record(&store, &cache, &config.providers[0],
                    "openai", "org/model", SNAG_COUNT_SUPPORTED,
-                   1000u, 250u, 800000u, error, sizeof(error)) == 0);
+                   800000u, error, sizeof(error)) == 0);
         assert(json_equal(retained, stale.providers));
         assert(!json_equal(retained, cache.providers));
         /* A no-op still adopts changes made by another cache owner. */
         assert(snag_model_cache_record(&store, &stale, &config.providers[0],
                    "openai", "org/model", SNAG_COUNT_UNKNOWN,
-                   500u, 200u, 850000u, error, sizeof(error)) == 0);
+                   850000u, error, sizeof(error)) == 0);
         assert(json_equal(stale.providers, cache.providers));
         snag_model_cache_free(&stale);
         json_decref(retained);
@@ -394,7 +394,7 @@ main(void)
                    AT_SYMLINK_NOFOLLOW) == 0);
     assert(snag_model_cache_record(&store, &cache, &config.providers[0],
                "openai", "org/model", SNAG_COUNT_UNKNOWN,
-               500u, 200u, 850000u, error, sizeof(error)) == 0);
+               850000u, error, sizeof(error)) == 0);
     assert(fstatat(store.root_fd, "models.json", &after,
                    AT_SYMLINK_NOFOLLOW) == 0);
     assert(before.st_dev == after.st_dev && before.st_ino == after.st_ino);
@@ -402,49 +402,30 @@ main(void)
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.count_capability == SNAG_COUNT_SUPPORTED);
-    assert(capacity.observed_tokens_per_million_bytes == 250000u);
     assert(capacity.hard_input_tokens == 800000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            720000u);
     assert(capacity.source == SNAG_CAPACITY_OBSERVED);
     assert(snag_model_cache_record(&store, &cache, &config.providers[0],
                "openai", "org/model", SNAG_COUNT_UNKNOWN,
-               2000u, 600u, 700000u, error, sizeof(error)) == 0);
+               700000u, error, sizeof(error)) == 0);
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
-    assert(capacity.observed_tokens_per_million_bytes == 300000u);
     assert(capacity.hard_input_tokens == 700000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            630000u);
-    assert(snag_model_cache_record(&store, &cache, &config.providers[0],
-               "openai", "org/model", SNAG_COUNT_UNKNOWN,
-               2000u, 500u, 0u, error, sizeof(error)) == 0);
-    assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
-               "org/model", "openai", &capacity,
-               error, sizeof(error)) == 0);
-    assert(capacity.observed_tokens_per_million_bytes == 300000u);
-    assert(snag_model_cache_record(&store, &cache, &config.providers[0],
-               "openai", "org/model", SNAG_COUNT_UNKNOWN,
-               2000u, 700u, 0u, error, sizeof(error)) == 0);
-    assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
-               "org/model", "openai", &capacity,
-               error, sizeof(error)) == 0);
-    assert(capacity.observed_tokens_per_million_bytes == 350000u);
-    assert(snag_model_cache_record(&store, &cache, &config.providers[0],
-               "openai", "org/model", SNAG_COUNT_UNKNOWN,
-               33554432u, 4000000000u, 0u, error, sizeof(error)) == 0);
-    assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
-               "org/model", "openai", &capacity,
-               error, sizeof(error)) == 0);
-    assert(capacity.observed_tokens_per_million_bytes == 119209290u);
+    /* Legacy samples stay readable but refresh clears them and never derives ratios. */
+    json_t *legacy_model = (json_t *)snag_model_cache_find(&cache, config.providers[0].name, "org/model");
+    assert(legacy_model);
+    assert(json_object_set_new(legacy_model, "observed_input_bytes", json_integer(2000)) == 0);
+    assert(json_object_set_new(legacy_model, "observed_input_tokens", json_integer(700)) == 0);
     assert(snag_model_cache_replace(&store, providers, 234567u, &cache,
                                    error, sizeof(error)) == 0);
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.count_capability == SNAG_COUNT_UNKNOWN);
-    assert(capacity.observed_tokens_per_million_bytes == 119209290u);
     assert(capacity.hard_input_tokens == 700000u);
 
     assert(snprintf(config.providers[0].base_url,
@@ -458,7 +439,7 @@ main(void)
     assert(!capacity.hard_input_known);
     assert(snag_model_cache_record(&store, &cache, &config.providers[0],
                "openai", "org/model", SNAG_COUNT_UNSUPPORTED,
-               0u, 0u, 0u, error, sizeof(error)) == 1);
+               0u, error, sizeof(error)) == 1);
     assert(json_object_set_new(json_array_get(providers, 0), "base_url",
                json_string("https://changed.example.test/v1")) == 0);
     assert(snag_model_cache_replace(&store, providers, 345678u, &cache,
@@ -467,7 +448,6 @@ main(void)
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
     assert(capacity.count_capability == SNAG_COUNT_UNKNOWN);
-    assert(capacity.observed_tokens_per_million_bytes == 0u);
     assert(capacity.hard_input_tokens == 922000u);
 
     test_local_models(&store, &cache);

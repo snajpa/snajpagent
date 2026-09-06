@@ -853,7 +853,7 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
                             max_output_tokens) > 0);
             assert(strstr(snag_json_string(tool, "description"), fallback));
             assert(strstr(snag_json_string(tool, "description"),
-                          "one-token-per-UTF-8-byte upper bound"));
+                          "not tokens"));
         }
         properties = assert_strict_tool_contract(tool);
         assert_schema_type(json_object_get(properties, "command"), "string", 0);
@@ -941,178 +941,6 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
         assert(array_has_string(actions, "block"));
         assert_schema_type(json_object_get(properties, "text"), "string", 1);
     }
-}
-
-static size_t
-canonical_size(const json_t *value)
-{
-    struct snag_buf encoded;
-    size_t size;
-
-    snag_buf_init(&encoded, SNAG_CONTEXT_MAX_REQUEST);
-    assert(snag_json_canonical(value, &encoded) == 0);
-    size = encoded.len;
-    snag_buf_free(&encoded);
-    return size;
-}
-
-static void
-test_usage_anchor(void)
-{
-    struct snag_session session;
-    struct snag_context_projection projection;
-    json_t *prefix = json_array();
-    json_t *items = json_array();
-    json_t *old_item = json_object();
-    json_t *new_item = json_object();
-    json_t *request = json_object();
-    uint64_t bound = 0u;
-    uint64_t expected;
-
-    assert(prefix && items && old_item && new_item && request);
-    snag_session_init(&session);
-    snag_context_projection_init(&projection);
-    assert(snag_json_set_new(old_item, "content", json_string("old")) == 0);
-    assert(snag_json_set_new(old_item, "role", json_string("user")) == 0);
-    assert(snag_json_set_new(new_item, "content", json_string("new")) == 0);
-    assert(snag_json_set_new(new_item, "role", json_string("user")) == 0);
-    assert(json_array_append(prefix, old_item) == 0);
-    assert(json_array_append_new(items, old_item) == 0);
-    old_item = NULL;
-    assert(json_array_append_new(items, new_item) == 0);
-    new_item = NULL;
-    assert(snag_json_set_new(request, "input", items) == 0);
-    items = NULL;
-    assert(snag_json_set_new(request, "model", json_string("model")) == 0);
-    projection.create_request = request;
-    request = NULL;
-    projection.request_input_count = 2u;
-    projection.request_input_bytes = canonical_size(
-        json_object_get(projection.create_request, "input"));
-    projection.create_request_bytes = canonical_size(projection.create_request);
-
-    session.usage_anchor_valid = true;
-    memcpy(session.usage_anchor_provider, "provider", 9u);
-    memcpy(session.usage_anchor_model, "model", 6u);
-    memcpy(session.usage_anchor_effort, "medium", 7u);
-    memcpy(session.usage_anchor_provider_source_sha256,
-           "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 65u);
-    session.usage_anchor_request_input_count = 1u;
-    session.usage_anchor_request_input_bytes = canonical_size(prefix);
-    session.usage_anchor_input_tokens = 100u;
-    assert(snag_json_digest(prefix,
-            session.usage_anchor_request_input_sha256) == 0);
-    expected = session.usage_anchor_input_tokens +
-        (uint64_t)projection.request_input_bytes -
-        session.usage_anchor_request_input_bytes +
-        (uint64_t)projection.create_request_bytes -
-        (uint64_t)projection.request_input_bytes + 512u + 32u;
-    assert(snag_context_usage_anchor_bound(&session, "provider", "model",
-               "medium",
-               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-               &projection, &bound) == 1);
-    assert(bound == expected);
-    assert(snag_context_usage_anchor_bound(&session, "other", "model",
-               "medium",
-               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-               &projection, &bound) == 0);
-    assert(snag_context_usage_anchor_bound(&session, "provider", "model",
-               "medium",
-               "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-               &projection, &bound) == 0);
-    memcpy(session.compact_id, "different", 10u);
-    assert(snag_context_usage_anchor_bound(&session, "provider", "model",
-               "medium",
-               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-               &projection, &bound) == 0);
-    session.compact_id[0] = '\0';
-    assert(json_object_set_new(json_array_get(
-               json_object_get(projection.create_request, "input"), 0u),
-               "content", json_string("changed")) == 0);
-    projection.request_input_bytes = canonical_size(
-        json_object_get(projection.create_request, "input"));
-    projection.create_request_bytes = canonical_size(projection.create_request);
-    assert(snag_context_usage_anchor_bound(&session, "provider", "model",
-               "medium",
-               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-               &projection, &bound) == 0);
-
-    json_decref(prefix);
-    snag_context_projection_free(&projection);
-}
-
-static void
-test_usage_anchor_before_controller_suffix(void)
-{
-    struct snag_session session;
-    struct snag_context_projection projection;
-    json_t *anchor = json_array();
-    json_t *items = json_array();
-    json_t *request = json_object();
-    json_t *old = json_object();
-    json_t *added = json_object();
-    json_t *controller = json_object();
-    uint64_t bound = 0u;
-
-    assert(anchor && items && request && old && added && controller);
-    snag_session_init(&session);
-    snag_context_projection_init(&projection);
-    assert(snag_json_set_new(old, "content", json_string("old")) == 0);
-    assert(snag_json_set_new(old, "role", json_string("user")) == 0);
-    assert(snag_json_set_new(added, "content", json_string("new")) == 0);
-    assert(snag_json_set_new(added, "role", json_string("assistant")) == 0);
-    assert(snag_json_set_new(controller, "content",
-                            json_string("stable controller")) == 0);
-    assert(snag_json_set_new(controller, "role", json_string("developer")) == 0);
-    assert(json_array_append(anchor, old) == 0);
-    assert(json_array_append(anchor, controller) == 0);
-    assert(json_array_append_new(items, old) == 0);
-    old = NULL;
-    assert(json_array_append_new(items, added) == 0);
-    added = NULL;
-    assert(json_array_append_new(items, controller) == 0);
-    controller = NULL;
-    assert(snag_json_set_new(request, "input", items) == 0);
-    items = NULL;
-    assert(snag_json_set_new(request, "model", json_string("model")) == 0);
-    projection.create_request = request;
-    request = NULL;
-    projection.request_input_count = 3u;
-    projection.request_controller_count = 1u;
-    projection.request_input_bytes = canonical_size(
-        json_object_get(projection.create_request, "input"));
-    projection.create_request_bytes = canonical_size(projection.create_request);
-
-    session.usage_anchor_valid = true;
-    memcpy(session.usage_anchor_provider, "provider", 9u);
-    memcpy(session.usage_anchor_model, "model", 6u);
-    memcpy(session.usage_anchor_effort, "medium", 7u);
-    memcpy(session.usage_anchor_provider_source_sha256,
-           "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 65u);
-    session.usage_anchor_request_input_count = 2u;
-    session.usage_anchor_request_input_bytes = canonical_size(anchor);
-    session.usage_anchor_input_tokens = 100u;
-    assert(snag_json_digest(anchor,
-            session.usage_anchor_request_input_sha256) == 0);
-    assert(snag_context_usage_anchor_bound(&session, "provider", "model",
-               "medium",
-               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-               &projection, &bound) == 1);
-    assert(bound > session.usage_anchor_input_tokens);
-
-    assert(json_object_set_new(json_array_get(
-               json_object_get(projection.create_request, "input"), 2u),
-               "content", json_string("changed controller")) == 0);
-    projection.request_input_bytes = canonical_size(
-        json_object_get(projection.create_request, "input"));
-    projection.create_request_bytes = canonical_size(projection.create_request);
-    assert(snag_context_usage_anchor_bound(&session, "provider", "model",
-               "medium",
-               "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-               &projection, &bound) == 0);
-
-    json_decref(anchor);
-    snag_context_projection_free(&projection);
 }
 
 static void
@@ -1355,7 +1183,7 @@ test_context_meter_usage(void)
     char session_id[SNAG_ID_HEX_LEN + 1u];
     const char *scratch = getenv("TMPDIR");
     const uint64_t bounds[] = {73069u, 86071u, 52373u, 50034u, 1000u};
-    const uint64_t measured[] = {73368u, 25055u, 43097u, 50034u, 0u};
+    const uint64_t measured[] = {73368u, 25055u, 43097u, 43097u, 0u};
     struct snag_store store;
     struct snag_session session;
 
@@ -1381,13 +1209,17 @@ test_context_meter_usage(void)
         data = response_started(turn, response, NULL);
         assert(json_object_set_new(data, "input_tokens_bound",
                                    json_integer((json_int_t)bounds[i])) == 0);
-        if (i != 0u)
+        if (i == 1u)
+            assert(json_object_del(data, "irc_seq") == 0); /* Real legacy shape. */
+        if (i != 0u) {
             assert(json_object_set_new(data, "count_method",
-                        json_string("statistical_upper_estimate")) == 0);
+                        json_string(i == 1u ? "statistical_upper_estimate" : "unknown")) == 0);
+            if (i > 1u)
+                assert(json_object_set_new(data, "input_tokens_bound", json_integer(0)) == 0);
+        }
         assert(snag_session_commit(&session, "response_started", data,
                                    NULL, error, sizeof(error)) == 0);
-        assert(session.context_meter_input_tokens == bounds[i]);
-        assert(session.context_meter_estimated == (i != 0u));
+        assert(session.context_meter_input_tokens == (i ? measured[i - 1u] : bounds[0]));
         data = response_completed(turn, response, "answer");
         assert(json_object_set_new(data, "usage",
                     json_pack("{s:o,s:n,s:n,s:n}", "input_tokens",
@@ -1396,7 +1228,6 @@ test_context_meter_usage(void)
         assert(snag_session_commit(&session, "response_completed", data,
                                    NULL, error, sizeof(error)) == 0);
         assert(session.context_meter_input_tokens == measured[i]);
-        assert(session.context_meter_estimated == (i == 3u));
         assert(snag_session_commit(&session, "turn_completed",
                     turn_completed(turn, response), NULL, error, sizeof(error)) == 0);
         snag_session_close(&session);
@@ -1404,7 +1235,6 @@ test_context_meter_usage(void)
                                  error, sizeof(error)) == 0);
         assert(session.context_meter_valid);
         assert(session.context_meter_input_tokens == measured[i]);
-        assert(session.context_meter_estimated == (i == 3u));
         assert(!strcmp(session.context_meter_provider, "default"));
         assert(!session.context_meter_compact_id[0]);
     }
@@ -1444,8 +1274,6 @@ main(void)
     test_read_only_and_queue_controllers();
     test_provider_model_projection();
     test_durable_irc_input_watermark();
-    test_usage_anchor();
-    test_usage_anchor_before_controller_suffix();
     assert(mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
     assert(snprintf(workspace, sizeof(workspace), "%s/work", temp) > 0);
@@ -1458,9 +1286,6 @@ main(void)
     snag_context_projection_init(&projection);
     snag_instructions_init(&instructions);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
-    assert(snag_context_input_estimate(318003u, 262814u) < 258400u);
-    assert(snag_context_input_estimate(318003u, 0u) == 318003u);
-    assert(snag_context_input_estimate(UINT64_MAX, UINT64_MAX) == SNAG_CONFIG_TOKEN_LIMIT_MAX);
     test_compact_groups(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
     assert(snag_session_create(&store, &session, workspace, "default",

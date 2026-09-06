@@ -763,10 +763,10 @@ started = [event for event in events if event["type"] == "compaction_started"]
 completed = [event for event in events if event["type"] == "compaction_completed"]
 assert len(started) == 1 and len(completed) == 1
 assert started[0]["data"]["reason"] == "proactive"
-assert started[0]["data"]["count_method"] == "qualified_upper_bound"
+assert started[0]["data"]["count_method"] == "unknown"
 assert started[0]["data"]["count_request_sha256"]
-assert completed[0]["data"]["count_method"] == "qualified_upper_bound"
-assert completed[0]["data"]["output_count_method"] == "qualified_upper_bound"
+assert completed[0]["data"]["count_method"] == "unknown"
+assert completed[0]["data"]["output_count_method"] == "unknown"
 assert completed[0]["data"]["output_count_request_sha256"]
 PY
 
@@ -850,7 +850,7 @@ assert len(started) == 2 and len(completed) == 2
 assert turn2["seq"] < started[0]["seq"] < completed[0]["seq"] < responses2[0]["seq"]
 assert started[0]["data"]["source_seq"] == turn2["seq"] - 1
 assert started[0]["data"]["reason"] == "proactive"
-assert completed[0]["data"]["output_count_method"] == "qualified_upper_bound"
+assert completed[0]["data"]["output_count_method"] == "unknown"
 assert responses2[0]["data"]["compact_id"] == started[0]["data"]["compact_id"]
 assert responses2[0]["data"]["profile_id"]
 assert responses2[0]["data"]["capability_version"]
@@ -913,8 +913,7 @@ if expected:
 PY
 done
 
-# A source-bound statistical estimate can drive the meter and compaction, but
-# cannot terminalize a sendable first request when no older turn can compact.
+# Legacy byte/token samples are ignored; an uncounted input remains unknown.
 statistical_state="$root/statistical-budget-state"
 mkdir -m 700 "$statistical_state"
 cat >"$statistical_state/models.json" <<'EOF'
@@ -936,8 +935,8 @@ import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 started = [event for event in events if event["type"] == "response_started"]
 assert len(started) == 1
-assert started[0]["data"]["count_method"] == "statistical_upper_estimate"
-assert started[0]["data"]["input_tokens_bound"] > 1
+assert started[0]["data"]["count_method"] == "unknown"
+assert started[0]["data"]["input_tokens_bound"] == 0
 assert not any(event["type"] == "turn_failed" for event in events)
 assert len([event for event in events if event["type"] == "turn_completed"]) == 1
 PY
@@ -970,10 +969,7 @@ assert failed[0]["data"]["class"] == "context"
 assert "hard budget 1" in failed[0]["data"]["message"]
 PY
 
-# Provider-reported token usage remains a usable rolling anchor when completed
-# tool cycles grow in front of the stable controller suffix. This reconstructs
-# the first-turn failure shape that previously fell back to one-token-per-byte
-# accounting and tried to compact a nonexistent older turn.
+# Provider usage drives the meter without predicting later tool-cycle growth.
 anchor_state="$root/context-anchor-state"
 mkdir -m 700 "$anchor_state"
 cat >"$root/context-anchor.ini" <<'EOF'
@@ -1001,9 +997,8 @@ import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 starts = [event for event in events if event["type"] == "response_started"]
 assert len(starts) == 5
-assert starts[0]["data"]["count_method"] == "qualified_upper_bound"
-assert all(event["data"]["count_method"] == "anchored_upper_bound"
-           for event in starts[1:])
+assert all(event["data"]["count_method"] == "unknown" and
+           event["data"]["input_tokens_bound"] == 0 for event in starts)
 assert all(event["data"]["hard_input_tokens"] == 922000
            for event in starts)
 assert all(event["data"]["input_tokens_bound"] < 922000

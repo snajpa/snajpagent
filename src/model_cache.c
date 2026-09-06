@@ -451,12 +451,15 @@ static int
 prepare_accounting(json_t *model, const json_t *old)
 {
     static const char *const keys[] = {
-        "observed_hard_input_tokens", "observed_input_tokens",
-        "observed_input_bytes"
+        "observed_hard_input_tokens"
     };
 
     if (json_object_set_new(model, "count_capability",
                             json_string("unknown")) < 0)
+        return -1;
+    /* Schema-1 placeholders: old samples are readable but never learned or used. */
+    if (json_object_set_new(model, "observed_input_tokens", json_integer(0)) < 0 ||
+        json_object_set_new(model, "observed_input_bytes", json_integer(0)) < 0)
         return -1;
     if (old) {
         for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i)
@@ -545,7 +548,6 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
                        const struct snag_provider_config *provider,
                        const char *protocol, const char *model,
                        enum snag_count_capability capability,
-                       uint64_t model_input_bytes, uint64_t input_tokens,
                        uint64_t hard_input_tokens,
                        char *error, size_t error_size)
 {
@@ -555,21 +557,15 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
     const char *current_state;
     const char *next_state = NULL;
     uint64_t value = 0u;
-    uint64_t largest_bytes = 0u;
-    uint64_t largest_tokens = 0u;
     bool capability_changed;
-    bool sample_changed;
     bool hard_limit_changed;
     int lock_fd;
     int rc = 1;
 
     if (!store || !cache || !provider || !protocol || !model || !*model ||
         capability > SNAG_COUNT_UNSUPPORTED ||
-        ((model_input_bytes == 0u) != (input_tokens == 0u)) ||
-        input_tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
-        model_input_bytes > SNAG_MODEL_CACHE_INPUT_MAX ||
         hard_input_tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
-        (capability == SNAG_COUNT_UNKNOWN && !input_tokens && !hard_input_tokens)) {
+        (capability == SNAG_COUNT_UNKNOWN && !hard_input_tokens)) {
         errno = EINVAL;
         return -1;
     }
@@ -592,29 +588,16 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
         next_state = capability == SNAG_COUNT_SUPPORTED ?
             "supported" : "unsupported";
     capability_changed = next_state && strcmp(current_state, next_state) != 0;
-    (void)snag_json_integer_u64(item, "observed_input_bytes",
-                               &largest_bytes);
-    (void)snag_json_integer_u64(item, "observed_input_tokens",
-                               &largest_tokens);
     (void)snag_json_integer_u64(item, "observed_hard_input_tokens", &value);
-    sample_changed = input_tokens &&
-        (model_input_bytes > largest_bytes ||
-         (model_input_bytes == largest_bytes && input_tokens > largest_tokens));
     hard_limit_changed = hard_input_tokens &&
         (!value || hard_input_tokens < value);
-    if (!capability_changed && !sample_changed && !hard_limit_changed) {
+    if (!capability_changed && !hard_limit_changed) {
         rc = 0;
         goto adopt;
     }
     if (capability_changed &&
         json_object_set_new((json_t *)item, "count_capability",
                             json_string(next_state)) < 0)
-        goto write_error;
-    if (sample_changed &&
-        (json_object_set_new((json_t *)item, "observed_input_bytes",
-                             json_integer((json_int_t)model_input_bytes)) < 0 ||
-         json_object_set_new((json_t *)item, "observed_input_tokens",
-                             json_integer((json_int_t)input_tokens)) < 0))
         goto write_error;
     if (hard_limit_changed &&
         json_object_set_new((json_t *)item, "observed_hard_input_tokens",
@@ -947,27 +930,12 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache,
     if (cached_model) {
         const char *state = snag_json_string(cached_model, "count_capability");
         uint64_t observed_hard;
-        uint64_t observed_bytes;
-        uint64_t observed_tokens;
         if (strcmp(state, "supported") == 0)
             capacity->count_capability = SNAG_COUNT_SUPPORTED;
         else if (strcmp(state, "unsupported") == 0)
             capacity->count_capability = SNAG_COUNT_UNSUPPORTED;
         else
             capacity->count_capability = SNAG_COUNT_UNKNOWN;
-        observed_bytes = (uint64_t)json_integer_value(
-            json_object_get(cached_model, "observed_input_bytes"));
-        observed_tokens = (uint64_t)json_integer_value(
-            json_object_get(cached_model, "observed_input_tokens"));
-        if (observed_bytes) {
-            uint64_t whole = observed_tokens / observed_bytes;
-            uint64_t remainder = observed_tokens % observed_bytes;
-
-            capacity->observed_tokens_per_million_bytes =
-                whole * UINT64_C(1000000) +
-                (remainder * UINT64_C(1000000) + observed_bytes - 1u) /
-                    observed_bytes;
-        }
         observed_hard = (uint64_t)json_integer_value(
             json_object_get(cached_model, "observed_hard_input_tokens"));
         if (observed_hard && (!capacity->hard_input_known ||

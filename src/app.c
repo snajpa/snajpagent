@@ -236,8 +236,6 @@ apply_capacity_ceiling(const struct app_state *app,
 void
 snag_app_record_model_accounting(struct app_state *app,
                                 enum snag_count_capability capability,
-                                uint64_t model_input_bytes,
-                                uint64_t input_tokens,
                                 uint64_t hard_input_tokens)
 {
     char error[256] = {0};
@@ -247,7 +245,7 @@ snag_app_record_model_accounting(struct app_state *app,
     if (snag_model_cache_record(&app->store, &app->model_cache,
             app->turn_provider,
             snag_provider_catalog_protocol(app->turn_provider),
-            app->turn_model, capability, model_input_bytes, input_tokens,
+            app->turn_model, capability,
             hard_input_tokens, error, sizeof(error)) < 0)
         (void)app_warning(app, error[0] ? error :
             "model accounting observation could not be cached");
@@ -362,6 +360,24 @@ render_queue(struct app_state *app)
     return 0;
 }
 
+bool
+snag_app_measured_input(struct app_state *app, uint64_t *tokens)
+{
+    struct snag_session *s = &app->session;
+    char hash[SNAG_SHA256_HEX_LEN + 1u];
+
+    provider_capacity_source_sha256(app->turn_provider, app->turn_model, hash);
+    if (!s->context_meter_valid ||
+        strcmp(s->context_meter_provider, app->turn_provider->name) ||
+        strcmp(s->context_meter_model, app->turn_model) ||
+        strcmp(s->context_meter_effort, app->turn_effort) ||
+        strcmp(s->context_meter_compact_id, s->compact_id) ||
+        strcmp(s->context_meter_provider_source_sha256, hash))
+        return false;
+    *tokens = s->context_meter_input_tokens;
+    return true;
+}
+
 static int
 format_context_meter(struct app_state *app, bool active,
                      char meter[32u])
@@ -400,7 +416,7 @@ format_context_meter(struct app_state *app, bool active,
                provider_source_hash) != 0 ||
         strcmp(app->session.context_meter_compact_id,
                app->session.compact_id) != 0) {
-        memcpy(meter, "0%", sizeof("0%"));
+        memcpy(meter, "?%", sizeof("?%"));
         return 0;
     }
     if (!capacity->hard_input_known) {
@@ -414,8 +430,7 @@ format_context_meter(struct app_state *app, bool active,
     } else {
         percent = (unsigned int)((used * 100u + hard - 1u) / hard);
     }
-    n = snprintf(meter, 32u, "%s%u%%",
-                 app->session.context_meter_estimated ? "~" : "", percent);
+    n = snprintf(meter, 32u, "%u%%", percent);
     if (n < 0 || n >= 32) {
         errno = EOVERFLOW;
         return -1;
@@ -1025,23 +1040,21 @@ render_status(struct app_state *app)
         goto out;
     }
     if (snag_buf_printf(&text,
-            "\naccounting: policy=%s · exact-count=%s · estimate=%s",
+            "\naccounting: policy=%s · exact-count=%s",
             provider->exact_token_count == SNAG_TOKEN_COUNT_AUTO ? "auto" :
             provider->exact_token_count == SNAG_TOKEN_COUNT_STRICT ? "exact" :
             "off",
             capacity.count_capability == SNAG_COUNT_SUPPORTED ? "supported" :
             capacity.count_capability == SNAG_COUNT_UNSUPPORTED ? "unsupported" :
-            "unknown", capacity.observed_tokens_per_million_bytes ? "learned" :
-            "none") < 0)
+            "unknown") < 0)
         goto out;
-    if (app->session.usage_anchor_valid) {
+    if (app->session.context_meter_valid) {
         if (snag_buf_printf(&text,
-                "\nobserved usage: input=%llu tokens · model-input=%llu bytes · provider=%s · model=%s · effort=%s",
-                (unsigned long long)app->session.usage_anchor_input_tokens,
-                (unsigned long long)app->session.usage_anchor_model_input_bytes,
-                app->session.usage_anchor_provider,
-                app->session.usage_anchor_model,
-                app->session.usage_anchor_effort) < 0)
+                "\nobserved usage: input=%llu tokens · provider=%s · model=%s · effort=%s",
+                (unsigned long long)app->session.context_meter_input_tokens,
+                app->session.context_meter_provider,
+                app->session.context_meter_model,
+                app->session.context_meter_effort) < 0)
             goto out;
     } else if (snag_buf_append(&text, "\nobserved usage: unknown",
                               strlen("\nobserved usage: unknown")) < 0) {
@@ -1193,7 +1206,6 @@ append_catalog_limits(struct snag_buf *text, const json_t *model)
         {"max_input_tokens", "input"},
         {"max_output_tokens", "output"}
     };
-    uint64_t observed = 0u;
     bool any = false;
 
     if (!json_is_object(limits))
@@ -1208,11 +1220,7 @@ append_catalog_limits(struct snag_buf *text, const json_t *model)
             return -1;
         any = true;
     }
-    if (count)
-        (void)snag_json_integer_u64(model, "observed_input_bytes",
-                                   &observed);
-    if (count && snag_buf_printf(text, " · count=%s · estimate=%s", count,
-                                observed ? "learned" : "none") < 0)
+    if (count && snag_buf_printf(text, " · count=%s", count) < 0)
         return -1;
     return 0;
 }
@@ -2877,7 +2885,7 @@ run_turn(struct app_state *app, const char *prompt,
     }
     for (unsigned int cycle = 1u; cycle != 0u; ++cycle) {
         struct snag_graph_decision decision;
-        const char *count_method = "qualified_upper_bound";
+        const char *count_method = "unknown";
         uint64_t response_begin_ms;
         unsigned int provider_retry_count = 0u;
         struct snag_provider_failure provider_failure;
@@ -2905,7 +2913,7 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         provider_rc = snag_app_provider_count(app, projection.count_request, &credential,
-            projection.model_input_bytes, &projection.input_tokens_bound, &count_method,
+            &projection.input_tokens_bound, &count_method,
             error, sizeof(error));
         if (provider_rc == 1 && app->steering_requested) {
             app->steering_requested = false;
@@ -2914,6 +2922,29 @@ run_turn(struct app_state *app, const char *prompt,
         }
         if (provider_rc == 2 && app->interrupt_requested) {
             result = finish_user_interrupt(app, turn_id, error, sizeof(error));
+            goto out;
+        }
+        if (provider_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW) {
+            bool compacted = false;
+            int recovery = hard_compaction_attempts++ < 8u ?
+                snag_app_compact_after_capacity_rejection(app, &credential,
+                    &compacted, error, sizeof(error)) : -1;
+            if (recovery == 0 && compacted) {
+                --cycle;
+                continue;
+            }
+            if (recovery == 1 && app->steering_requested) {
+                app->steering_requested = false;
+                --cycle;
+                continue;
+            }
+            if (recovery == 2 && app->interrupt_requested) {
+                result = finish_user_interrupt(app, turn_id, error, sizeof(error));
+                goto out;
+            }
+            result = finish_turn_failure(app, turn_id, NULL, "context",
+                error[0] ? error : "input-token counter rejected irreducible context",
+                error, sizeof(error));
             goto out;
         }
         if (provider_rc != 0 && provider_rc != SNAG_APP_COUNT_SKIPPED) {
@@ -2937,7 +2968,7 @@ run_turn(struct app_state *app, const char *prompt,
                 char failure[256];
 
                 (void)snprintf(failure, sizeof(failure),
-                    "%s while reducing context estimate %llu (%s) to hard budget %llu",
+                    "%s while reducing context input count %llu (%s) to hard budget %llu",
                     hard_compaction_attempts >= 8u ?
                         "context compaction reached its eight-attempt bound" :
                         "context compaction repeated an over-budget request",
@@ -3182,16 +3213,9 @@ run_turn(struct app_state *app, const char *prompt,
                            sizeof(rejected_request_hash));
                     ceiling_matches = capacity_ceiling_matches(
                         app, app->turn_provider, app->turn_model);
-                    if (provider_failure.requested_input_tokens ||
-                        ceiling_matches)
+                    if (ceiling_matches)
                         snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
-                            provider_failure.requested_input_tokens ?
-                                projection.model_input_bytes : 0u,
-                            provider_failure.requested_input_tokens ?
-                                provider_failure.requested_input_tokens : 0u,
-                            ceiling_matches ?
-                                app->session.capacity_ceiling_input_tokens :
-                                0u);
+                            app->session.capacity_ceiling_input_tokens);
                     apply_capacity_ceiling(app, app->turn_provider,
                                            app->turn_model,
                                            &app->turn_capacity);
@@ -3288,10 +3312,6 @@ run_turn(struct app_state *app, const char *prompt,
             result = 3;
             goto out;
         }
-        if (graph.usage.input_known && graph.usage.input_tokens != 0u &&
-            strcmp(count_method, "exact") != 0)
-            snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
-                projection.model_input_bytes, graph.usage.input_tokens, 0u);
         error[0] = '\0';
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
             (void)app_error(app, error[0] ? error :

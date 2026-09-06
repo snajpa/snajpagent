@@ -38,7 +38,7 @@ MARKDOWN_TEXT = (
     "second paragraph\n\n"
     "> final quoted boundary"
 )
-DEFAULT_IDLE_PROMPT = "    0% openai/gpt-5.5-2026-04-23/medium ›"
+DEFAULT_IDLE_PROMPT = "    ?% openai/gpt-5.5-2026-04-23/medium ›"
 DEFAULT_ACCOUNTED_IDLE_PROMPT = "    ?% openai/gpt-5.5-2026-04-23/medium ›"
 DEFAULT_ACTIVE_PROMPT = " ◴  ?% openai/gpt-5.5-2026-04-23/medium »"
 DEFAULT_GOAL_ACTIVE_PROMPT = "⚑◴  ?% openai/gpt-5.5-2026-04-23/medium »"
@@ -1672,7 +1672,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         100, 24, environment=environment,
     )
     try:
-        terminal.wait("    0% ordinary/uncached-start/low ›")
+        terminal.wait("    ?% ordinary/uncached-start/low ›")
         terminal.submit("/verbose 6")
         terminal.wait("verbosity: 6")
         before = provider.catalog_paths()
@@ -1760,7 +1760,7 @@ def run_model_catalog_case(binary, root, provider, environment):
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
     expected = (f"{operator}@{MACHINE_HOSTNAME} :" if operator else
-                "    0% ordinary/uncached-start/low ›")
+                "    ?% ordinary/uncached-start/low ›")
     timestamped = re.compile(
         rf"(?m)^   \d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
     ) if operator else None
@@ -3427,11 +3427,144 @@ def run_interrupted_history_case(binary, root):
     assert not errors, errors
 
 
+def run_token_accounting_cases(binary, root):
+    """Exercise production count/summary recovery using the existing local server."""
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for mode in ("exact", "count-overflow", "openrouter", "llama", "vllm",
+                 "summary-irreducible", "summary-auth", "proactive"):
+        case = root / mode
+        case.mkdir(mode=0o700)
+        dotdir, config = case / "state", case / "config.ini"
+        (case / "input.txt").write_text("retained tool data")
+        provider = FakeResponses()
+        summaries, counts, creates = [], [], []
+        rejected_size = [None]
+        failed = [False]
+        tool_issued = [False]
+
+        def send(handler, status, payload, sse=False):
+            body = payload.encode() if sse else json.dumps(payload).encode()
+            handler.send_response(status)
+            handler.send_header("Content-Type", "text/event-stream" if sse else "application/json")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body)
+
+        def overflow(handler, sequence):
+            if mode == "openrouter":
+                send(handler, 200, provider.event("response.failed", {
+                    "type": "response.failed", "response": {
+                        "error": {"code": "invalid_prompt", "message": "too large"},
+                        "error_type": "context_length_exceeded"}}), True)
+            elif mode == "vllm":
+                send(handler, 400, {"error": {"code": 400, "type": "invalid_request_error",
+                    "param": "input", "message": "The engine prompt length 11000 exceeds the max_model_len 10000. Please reduce prompt."}})
+            else:
+                send(handler, 400, {"error": {"code": 400, "type": "exceed_context_size_error",
+                    "n_ctx": 10000, "n_prompt_tokens": 11000, "message": "too large"}})
+
+        def count(handler, request):
+            counts.append(request)
+            latest = provider.latest_user(request)
+            if mode == "count-overflow" and latest == "recover" and not failed[0]:
+                failed[0] = True
+                overflow(handler, 0)
+            else:
+                send(handler, 200, {"object": "response.input_tokens", "input_tokens": 42})
+
+        def respond(handler, request, sequence):
+            if request.get("tool_choice") == "none":
+                summaries.append(request)
+                size = len(json.dumps(request["input"]))
+                if mode == "summary-auth":
+                    send(handler, 401, {"error": {"code": "invalid_api_key"}})
+                elif mode == "summary-irreducible":
+                    overflow(handler, sequence)
+                elif mode != "proactive" and (rejected_size[0] is None or size > rejected_size[0] // 2):
+                    if rejected_size[0] is None:
+                        rejected_size[0] = size
+                    overflow(handler, sequence)
+                else:
+                    text = json.dumps([{"type": "message", "role": "developer", "content": "summary of prior seeds"}])
+                    send(handler, 200, provider.response_body(sequence, text), True)
+                return
+            creates.append(request)
+            latest = provider.latest_user(request)
+            if latest != "recover":
+                send(handler, 200, provider.response_body(sequence, "seed answer"), True)
+            elif mode == "exact" and not tool_issued[0]:
+                tool_issued[0] = True
+                send(handler, 200, provider.function_body(sequence, "counted-read", "exec_command", {
+                    "command": "cat input.txt", "workdir": str(case), "pty": False,
+                    "stdin": None, "timeout_ms": None, "yield_ms": 1000, "max_output_tokens": 1000}), True)
+            elif mode not in ("exact", "count-overflow", "proactive") and not failed[0]:
+                failed[0] = True
+                overflow(handler, sequence)
+            else:
+                send(handler, 200, provider.response_body(sequence, "recovered"), True)
+
+        provider.runtime_handler = respond
+        provider.runtime_count_handler = count
+        exact = mode in ("exact", "count-overflow")
+        base = ("[agent]\nmodel=host-model\nread_agents_md=false\n[provider local]\n"
+                f"base_url=http://127.0.0.1:{provider.port}\napi_key=${{SNAJPAGENT_IRC_UI_KEY}}\n"
+                f"native_compaction=false\nexact_token_count={'true' if exact else 'false'}\n"
+                "auto_compact_input_tokens=0\n[model-limit local/host-model]\nmax_input_tokens=10000\n")
+        config.write_text(base)
+        config.chmod(0o600)
+        def run(text, sid=None):
+            command = [binary, "--dotdir", str(dotdir), "--config", str(config), "-e"]
+            if sid:
+                command += ["--resume", sid]
+            result = subprocess.run(command + ["--", text], cwd=case,
+                                    capture_output=True, text=True, timeout=20,
+                                    env={**os.environ, "SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+            return result
+        try:
+            sid = None
+            for i in range(4):
+                result = run(f"seed-{i} " + "x" * 2000, sid)
+                assert result.returncode == 0, (mode, result.stderr)
+                sid = next((dotdir / "sessions").iterdir()).name
+            if mode == "proactive":
+                config.write_text(base.replace("auto_compact_input_tokens=0", "auto_compact_input_tokens=1"))
+            result = run("recover", sid)
+            _, events = read_events(dotdir)
+            if mode in ("summary-irreducible", "summary-auth"):
+                assert result.returncode != 0, (mode, result.stdout)
+                assert 1 <= len(summaries) <= 8
+                assert not event_list(events, "compaction_completed")
+                if mode == "summary-auth":
+                    assert len(summaries) == 1
+            else:
+                assert result.returncode == 0 and result.stdout.strip() == "recovered", (mode, result.stderr)
+                if not exact:
+                    assert all(e["data"]["count_method"] == "unknown" and e["data"]["input_tokens_bound"] == 0
+                               for e in event_list(events, "response_started"))
+                if mode == "exact":
+                    assert len(counts) == len(creates) == 6, (len(counts), len(creates))
+                    assert len(event_list(events, "tool_started")) == 1
+                    for counted, created in zip(counts, creates):
+                        assert counted["input"] == created["input"] and counted["tools"] == created["tools"]
+                    assert "retained tool data" in json.dumps(creates[-1])
+                else:
+                    assert event_list(events, "compaction_completed"), mode
+                    if mode != "proactive":
+                        assert 2 <= len(summaries) <= 8
+                        assert len(json.dumps(summaries[-1])) < len(json.dumps(summaries[0]))
+            replay = subprocess.run([binary, "--dotdir", str(dotdir), "-l"], capture_output=True, text=True)
+            assert replay.returncode == 0, replay.stderr
+            print(f"token accounting production {mode}: ok", flush=True)
+        finally:
+            provider.close()
+
+
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
     try:
+        run_token_accounting_cases(binary, root / "token-accounting")
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)

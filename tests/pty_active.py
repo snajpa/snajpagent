@@ -25,7 +25,7 @@ DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
-DEFAULT_IDLE_PROMPT = f"    0% openai/{DEFAULT_MODEL}/medium › ".encode()
+DEFAULT_IDLE_PROMPT = f"    ?% openai/{DEFAULT_MODEL}/medium › ".encode()
 DEFAULT_ACCOUNTED_IDLE_PROMPT = f"    ?% openai/{DEFAULT_MODEL}/medium › ".encode()
 DEFAULT_ACTIVE_PROMPT = f" ◴  ?% openai/{DEFAULT_MODEL}/medium » ".encode()
 GOAL_SET = "• Goal set".encode()
@@ -454,7 +454,7 @@ def test_static_zero_width_spinner_has_no_refresh():
         "prompt_spinner_per_second = 60\n",
         encoding="utf-8",
     )
-    idle = f"  0% openai/{DEFAULT_MODEL}/medium › ".encode()
+    idle = f"  ?% openai/{DEFAULT_MODEL}/medium › ".encode()
     active = f"◆  ?% openai/{DEFAULT_MODEL}/medium » ".encode()
     child = Child(["--config", str(config)])
     try:
@@ -491,7 +491,7 @@ def test_prompt_clock_lifetime():
         # Empty Tab changes views, not the underlying composer capture.
         start = len(child.buf)
         child.send(b"\t")
-        idle = b"@" + original + "   0% › ".encode()
+        idle = b"@" + original + "   ?% › ".encode()
         child.wait(idle, start=start)
         child.send(b"clock-draft")
         child.drain()
@@ -509,7 +509,7 @@ def test_prompt_clock_lifetime():
         start = len(child.buf)
         child.send(b"\x03")
         cancelled = child.wait(b"^C\r\n", start=start)
-        child.wait("   0% › ".encode(), start=cancelled)
+        child.wait("   ?% › ".encode(), start=cancelled)
         replacement = latest_clock()
         assert replacement != original, bytes(child.buf[start:])
         child.drain(1.1)
@@ -579,7 +579,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
-    prompt = f"    0% openai/{model}/medium › ".encode()
+    prompt = f"    ?% openai/{model}/medium › ".encode()
     child = Child(["-m", model])
     try:
         child.wait(prompt)
@@ -875,7 +875,7 @@ def test_read_only_queries():
     one(log, "steering_added")
 
 
-def test_compaction_statistical_source():
+def test_compaction_ignores_legacy_samples():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     state = root / "statistical-compact"
     state.mkdir(mode=0o700)
@@ -907,10 +907,9 @@ def test_compaction_statistical_source():
     logs = list((state / "sessions").glob("*/events.jsonl"))
     assert len(logs) == 1
     log = [json.loads(line) for line in logs[0].read_text().splitlines()]
-    compact = one(log, "compaction_started")
-    assert compact["data"]["count_method"] == "statistical_upper_estimate"
-    assert compact["data"]["input_tokens_bound"] < 10000
-    assert one(log, "compaction_completed")["data"]["count_method"] == "statistical_upper_estimate"
+    assert not any(event["type"] == "compaction_started" for event in log)
+    starts = [event["data"] for event in log if event["type"] == "response_started"]
+    assert starts and all(e["count_method"] == "unknown" and e["input_tokens_bound"] == 0 for e in starts)
     assert not any(event["type"] == "turn_failed" for event in log)
 
 
@@ -1101,8 +1100,8 @@ def test_steering_during_pre_response_compaction():
     before = session_ids()
     child = Child([])
     child.wait(DEFAULT_IDLE_PROMPT)
-    child.send(b"ping\r")
-    answer_end = child.wait(b"pong")
+    child.send(b"context_anchor_chain\r")
+    answer_end = child.wait(b"context anchor complete")
     child.exit_cleanly(answer_end)
     session_id = new_session(before)
 
@@ -2493,7 +2492,7 @@ def test_provider_local_models(native=True):
 
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
-    initial_prompt = b"    0% first/uncached-start/low \xe2\x80\xba "
+    initial_prompt = b"    ?% first/uncached-start/low \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     config.write_text(
@@ -2528,7 +2527,7 @@ def test_model_cache_and_selection():
     assert first_model["observed_input_tokens"] == 0
     assert first_model["observed_hard_input_tokens"] == 0
     child.wait(b"count=unknown", start=start)
-    child.wait(b"estimate=none", start=start)
+    child.wait(b"count=unknown", start=start)
     stamp = cached_timestamp(cache)
     end = child.wait(stamp + b"\r\n" + initial_prompt, start=start)
 
@@ -2862,7 +2861,7 @@ def test_config_editor_reload():
         plan.write_text(str(valid_two), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
-        child.wait("W  0%› ".encode(), start=end)
+        child.wait("W  ?%› ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
@@ -2871,7 +2870,7 @@ def test_config_editor_reload():
         plan.write_text(str(invalid), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(b"invalid configuration at line 3", start=status_end)
-        child.wait("W  0%› ".encode(), start=end)
+        child.wait("W  ?%› ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
@@ -3017,7 +3016,7 @@ def test_known_context_meter():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"    0% first/uncached-start/low \xe2\x80\xba ")
+    child.wait(b"    ?% first/uncached-start/low \xe2\x80\xba ")
     child.send(b"/model gpt-5.6-luna / high\r")
     selected = child.wait(
         b"model for next turn: first / gpt-5.6-luna / high"
@@ -3037,13 +3036,10 @@ def test_known_context_meter():
         child.read_once(0.02)
     assert response is not None
     hard = response["hard_input_tokens"]
-    used = response["input_tokens_bound"]
     assert isinstance(hard, int) and hard > 0
-    assert isinstance(used, int) and used > 0
-    percent = min(100, (used * 100 + hard - 1) // hard)
-    assert percent > 0
-    prefix = "" if response["count_method"] == "exact" else "~"
-    child.wait(f"{prefix}{percent}%".encode(), start=start)
+    assert response["count_method"] == "unknown"
+    assert response["input_tokens_bound"] == 0
+    child.wait(b"?%", start=start)
     child.send(b"\x03")
     interrupted = child.wait(b"turn interrupted", start=start)
     child.exit_cleanly(interrupted)
@@ -3058,7 +3054,7 @@ def test_known_context_meter():
                  if event["type"] == "response_completed"][-1]
     used = completed["usage"]["input_tokens"]
     percent = min(100, (used * 100 + hard - 1) // hard)
-    # The idle prompt must replace the estimate with unprefixed measured usage.
+    # The idle prompt reports measured usage, and new unknown requests cannot replace it.
     child.wait(f" {percent}% first/gpt-5.6-luna/high › ".encode(), start=answered)
     child.exit_cleanly(answered)
 
@@ -3071,7 +3067,7 @@ def test_config_and_cli_model_passthrough():
     )
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b"    0% openai/openai/gpt-5.6/medium \xe2\x80\xba ")
+    child.wait(b"    ?% openai/openai/gpt-5.6/medium \xe2\x80\xba ")
 
     child.send(b"/status\r")
     end = child.wait(b"model: openai/gpt-5.6")
@@ -3091,7 +3087,7 @@ def test_config_and_cli_model_passthrough():
         "--config", str(config), "-m", "vendor/future-model",
         "--effort", "custom-effort", "--resume", session_id
     ])
-    resumed.wait(b"    0% openai/vendor/future-model/custom-effort \xe2\x80\xba ")
+    resumed.wait(b"    ?% openai/vendor/future-model/custom-effort \xe2\x80\xba ")
     start = len(resumed.buf)
     resumed.send(b"/status\r")
     end = resumed.wait(
@@ -3107,7 +3103,7 @@ def test_config_and_cli_model_passthrough():
                  start=end)
     answer_end = resumed.wait(b"pong", start=end)
     idle_end = resumed.wait(
-        b"    0% openai/openai/gpt-5.6/quantum \xe2\x80\xba ", start=answer_end
+        b"    ?% openai/openai/gpt-5.6/quantum \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
     _, status = os.waitpid(resumed.pid, 0)
@@ -3618,7 +3614,7 @@ def test_prompt_identity_is_terminal_safe():
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(b"    0% openai/" + visible + " › ".encode())
+    child.wait(b"    ?% openai/" + visible + " › ".encode())
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send(b"ping\r")
@@ -3947,7 +3943,7 @@ def test_network_chat_and_managed_mention():
     network_idle = f"localop@{socket.gethostname()} : ".encode()
     network_active = f"localop@{socket.gethostname()} : ".encode()
     network_rollout_idle = (
-        f"    0% openai/{DEFAULT_MODEL}/medium › ".encode()
+        f"    ?% openai/{DEFAULT_MODEL}/medium › ".encode()
     )
     network_rollout_accounted_idle = (
         f"    ?% openai/{DEFAULT_MODEL}/medium › ".encode()
@@ -4661,7 +4657,7 @@ def test_stalled_output_consumes_input():
 
 if __name__ == "__main__":
     test_resize_and_suspend_preserve_draft()
-    test_compaction_statistical_source()
+    test_compaction_ignores_legacy_samples()
     test_ctrl_d_exit()
     test_goal_orderly_quit_resume()
     test_stalled_output_consumes_input()

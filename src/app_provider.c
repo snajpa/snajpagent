@@ -119,7 +119,7 @@ snag_app_exact_count_enabled(enum snag_token_count_mode mode,
 int
 snag_app_provider_count(struct app_state *app, const json_t *count_request,
                        const struct snag_credential *credential,
-                       uint64_t model_input_bytes, uint64_t *input_tokens,
+                       uint64_t *input_tokens,
                        const char **count_method,
                        char *error, size_t error_size)
 {
@@ -131,9 +131,10 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
         return -1;
     }
     (void)input_tokens;
-    (void)model_input_bytes;
-    if (app->turn_provider->exact_token_count == SNAG_TOKEN_COUNT_STRICT)
+    if (app->turn_provider->exact_token_count == SNAG_TOKEN_COUNT_STRICT) {
         *count_method = "exact";
+        *input_tokens = 1000u;
+    }
     if (app->session.last_user &&
         strcmp(app->session.last_user, "compact_budget") == 0) {
         *input_tokens = 90000u;
@@ -168,12 +169,10 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
 #else
     bool endpoint_unsupported = false;
     uint64_t exact_tokens = 0u;
-    uint64_t sample_bytes;
     int cancel_code = 0;
     int rc;
 
-    if (strcmp(*count_method, "anchored_upper_bound") == 0 ||
-        !snag_app_exact_count_enabled(
+    if (!snag_app_exact_count_enabled(
             app->turn_provider->exact_token_count,
             app->turn_capacity.count_capability))
         return SNAG_APP_COUNT_SKIPPED;
@@ -187,15 +186,12 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
     if (rc == 0) {
         *input_tokens = exact_tokens;
         *count_method = "exact";
-        sample_bytes = *input_tokens ? model_input_bytes : 0u;
-        snag_app_record_model_accounting(app, SNAG_COUNT_SUPPORTED,
-                                        sample_bytes,
-                                        sample_bytes ? *input_tokens : 0u, 0u);
+        snag_app_record_model_accounting(app, SNAG_COUNT_SUPPORTED, 0u);
         return 0;
     }
     if (!endpoint_unsupported)
         return rc;
-    snag_app_record_model_accounting(app, SNAG_COUNT_UNSUPPORTED, 0u, 0u, 0u);
+    snag_app_record_model_accounting(app, SNAG_COUNT_UNSUPPORTED, 0u);
     if (app->turn_provider->exact_token_count == SNAG_TOKEN_COUNT_STRICT)
         return rc;
     if (error_size)
@@ -245,7 +241,7 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
         return -1;
     }
     *output = fixture_output;
-    *output_tokens_bound = (uint64_t)bytes;
+    *output_tokens_bound = 0u;
     return 0;
 #else
     int cancel_code = 0;

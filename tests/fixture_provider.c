@@ -1247,6 +1247,11 @@ snag_fixture_response(const char *prompt, const json_t *steering, const json_t *
     }
     rc = fixture_response((char *)resolved.data, expanded, workspace, cycle,
                            goal_prompt, goal_turn_count, emit, pump, opaque, graph, failure, error, error_size);
+    if (rc == 0 && !graph->usage.input_known &&
+        (!strcmp((char *)resolved.data, "ping") ||
+         !strcmp((char *)resolved.data, "native_compact_unavailable") ||
+         !strcmp((char *)resolved.data, "compact_budget")))
+        set_usage(graph, !strcmp((char *)resolved.data, "compact_budget") ? 90000u : 1000u, 1u);
 out:
     json_decref(expanded); snag_buf_free(&resolved); return rc;
 }

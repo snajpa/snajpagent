@@ -813,6 +813,48 @@ test_structured_capacity_failure(void)
     json_decref(root);
 }
 
+static void
+test_provider_context_formats(void)
+{
+    const struct { const char *json; bool capacity; uint64_t limit, input; } cases[] = {
+        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"context_length_exceeded\"}", true, 0, 0},
+        {"{\"response\":{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"context_length_exceeded\"}}", true, 0, 0},
+        {"{\"error\":{\"code\":400,\"metadata\":{\"error_type\":\"context_length_exceeded\"}}}", true, 0, 0},
+        {"{\"error\":{\"code\":400,\"type\":\"exceed_context_size_error\",\"n_ctx\":8192,\"n_prompt_tokens\":9000}}", true, 8192, 9000},
+        {"{\"code\":400,\"type\":\"exceed_context_size_error\",\"n_ctx\":8192,\"n_prompt_tokens\":9000}", true, 8192, 9000},
+        {"{\"error\":{\"type\":\"invalid_request_error\",\"param\":\"input\",\"message\":\"The engine prompt length 9000 exceeds the max_model_len 8192. Please reduce prompt.\"}}", true, 8191, 9000},
+        {"{\"error\":{\"type\":\"invalid_request_error\",\"param\":\"model\",\"message\":\"The engine prompt length 9000 exceeds the max_model_len 8192. Please reduce prompt.\"}}", false, 0, 0},
+        {"{\"error\":{\"code\":400,\"message\":\"context error\"}}", false, 0, 0},
+        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"max_tokens_exceeded\"}", false, 0, 0},
+        {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"authentication_error\"}", false, 0, 0},
+        {"{\"error\":{\"code\":\"invalid_prompt\"}}", false, 0, 0},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct snag_provider_failure failure;
+        json_t *root = json_loadb(cases[i].json, strlen(cases[i].json), 0, NULL);
+        assert(root);
+        assert(snag_provider_failure_from_json(root, &failure) == 0);
+        assert(snag_provider_failure_is_capacity(&failure) == cases[i].capacity);
+        assert(failure.context_limit_tokens == cases[i].limit);
+        assert(failure.requested_input_tokens == cases[i].input);
+        json_decref(root);
+    }
+    struct snag_responses_stream stream;
+    const char *created = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_cap\",\"status\":\"in_progress\"}}";
+    const char *completed = "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cap\",\"status\":\"completed\",\"error_type\":\"context_length_exceeded\",\"output\":[]}}";
+    snag_responses_stream_init(&stream, NULL, NULL);
+    struct snag_sse_record record = {0};
+    record.kind = SNAG_SSE_EVENT;
+    record.data = (const unsigned char *)created;
+    record.data_len = strlen(created);
+    assert(snag_responses_sse_record(&stream, &record) == 0);
+    record.data = (const unsigned char *)completed;
+    record.data_len = strlen(completed);
+    assert(snag_responses_sse_record(&stream, &record) < 0);
+    assert(snag_provider_failure_is_capacity(&stream.provider_failure));
+    snag_responses_stream_free(&stream);
+}
+
 int
 main(void)
 {
@@ -835,6 +877,7 @@ main(void)
     test_invalid_call_after_public_item();
     test_protocol_conflicts_fail_closed();
     test_structured_capacity_failure();
+    test_provider_context_formats();
     puts("test_responses: ok");
     return 0;
 }
