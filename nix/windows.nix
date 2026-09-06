@@ -137,6 +137,8 @@ in {
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
         "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
       )
+      # Upstream zlib.pc still advertises -lz; its static Windows archive is libzs.a.
+      makeFlagsArray+=("CURL_LIBS=$($PKG_CONFIG --static --libs libcurl | sed 's/-lz /-lzs /g')")
     '';
     installPhase = ''
       runHook preInstall
