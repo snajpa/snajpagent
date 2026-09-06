@@ -256,6 +256,10 @@ test_private_directory(void)
         assert(!snag_directory_open(file) && errno == ENOTDIR);
         assert(snag_fstat(file, &info) == 0);
         assert(close(file) == 0);
+        file = snag_open_read_security_at(fd, "data", false);
+        assert(file >= 0 && snag_fd_privacy(file, &privacy) == 0 && privacy.private_access);
+        assert(read(file, received, sizeof(received)) == sizeof(received));
+        assert(memcmp(bytes, received, sizeof(bytes)) == 0 && close(file) == 0);
 #ifdef _WIN32
         assert(CreateHardLinkA(alias, data, NULL));
 #else
@@ -263,6 +267,7 @@ test_private_directory(void)
 #endif
         assert(snag_stat(data, &info) == 0 && snag_stat(alias, &linked) == 0);
         assert(info.st_ino == linked.st_ino && info.st_dev == linked.st_dev && info.st_nlink == 2u);
+        assert(snag_open_private_append_at(fd, "data", false) == -1 && errno == EACCES);
         errno = 0;
         int rejected = snag_create_private_at(fd, "data", false);
         if (rejected != -1 || errno != EACCES) {
@@ -290,6 +295,7 @@ test_private_directory(void)
 #endif
         assert(snag_lstat(alias, &linked) == 0 && S_ISLNK(linked.st_mode));
         assert(snag_open_read_at(fd, "alias", false) == -1);
+        assert(snag_open_private_append_at(fd, "alias", false) == -1);
         assert(snag_stat(alias, &linked) == 0 && S_ISREG(linked.st_mode) &&
                linked.st_dev == info.st_dev && linked.st_ino == info.st_ino);
         assert(snag_unlink_at(fd, "alias", false) == 0);
@@ -341,6 +347,21 @@ test_private_directory(void)
     renamed = malloc(strlen(root) + 9u);
     assert(renamed);
     (void)sprintf(renamed, "%s-renamed", root);
+    {
+        unsigned char received[5];
+        const unsigned char expected[] = {'a', '\r', '\n', '\0', 'b'};
+        assert(snag_open_private_append_at(fd, "journal", false) < 0 && errno == ENOENT);
+        int file = snag_open_private_append_at(fd, "journal", true);
+        assert(file >= 0 && snag_write_full(file, expected, 3u) == 0 && close(file) == 0);
+        assert(snag_open_private_append_at(fd, "journal", true) < 0 && errno == EEXIST);
+        file = snag_open_private_append_at(fd, "journal", false);
+        assert(file >= 0 && lseek(file, 0, SEEK_SET) == 0);
+        assert(snag_write_full(file, expected + 3u, 2u) == 0 && close(file) == 0);
+        file = snag_open_read_security_at(fd, "journal", false);
+        assert(file >= 0 && read(file, received, sizeof(received)) == sizeof(received));
+        assert(!memcmp(expected, received, sizeof(expected)) && close(file) == 0);
+        assert(snag_unlink_at(fd, "journal", false) == 0);
+    }
     test_file_lock(fd);
     assert(rename(root, renamed) == 0);
     assert(snag_fstat(fd, &path_info) == 0 && path_info.st_ino == root_info.st_ino);
@@ -372,7 +393,7 @@ test_private_directory(void)
         errno = 0;
         assert(snag_fstat(read_fd, &path_info) == -1 && errno == EBADF);
         assert(snag_unlink_at(fd, long_name, false) == 0);
-        read_fd = snag_open_private_dir_at(-1, renamed);
+        read_fd = snag_open_read_security_at(-1, renamed, true);
         assert(read_fd >= 0 && snag_fd_privacy(read_fd, &privacy) == 0 && privacy.private_access);
         dir = snag_directory_open(read_fd);
         assert(dir);

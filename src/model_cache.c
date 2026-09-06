@@ -7,18 +7,10 @@
 #include "store_internal.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-#ifndef O_CLOEXEC
-#define O_CLOEXEC 0
-#endif
-#ifndef O_NOFOLLOW
-#define O_NOFOLLOW 0
-#endif
 
 #define SNAG_MODEL_CACHE_FILE_MAX (8u * 1024u * 1024u)
 #define SNAG_MODEL_CACHE_MODELS_MAX 4096u
@@ -303,7 +295,7 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
         errno = EINVAL;
         return -1;
     }
-    fd = openat(store->root_fd, "models.json", O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    fd = snag_open_read_security_at(store->root_fd, "models.json", false);
     if (fd < 0) {
         if (errno == ENOENT)
             return 1;
@@ -353,8 +345,7 @@ lock_cache(struct snag_store *store, char *error, size_t error_size)
     int fd;
     int saved;
 
-    fd = openat(store->root_fd, "models.lock",
-                O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    fd = snag_create_private_at(store->root_fd, "models.lock", false);
     if (fd < 0) {
         snag_errorf(error, error_size, "cannot open model cache lock: %s",
                   strerror(errno));
@@ -407,8 +398,7 @@ write_cache(struct snag_store *store, const json_t *providers,
         goto out;
     }
     (void)snprintf(tmp_name, sizeof(tmp_name), "models.json.tmp.%s", id);
-    fd = openat(store->root_fd, tmp_name,
-                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    fd = snag_create_private_at(store->root_fd, tmp_name, true);
     if (fd < 0) {
         snag_errorf(error, error_size, "cannot create model cache: %s",
                   strerror(errno));

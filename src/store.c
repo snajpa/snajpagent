@@ -4,11 +4,8 @@
 #include "instructions.h"
 #include "irc.h"
 #include "snajpagent.h"
-#include <dirent.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,14 +19,7 @@
 static int
 open_dir_path(const char *path)
 {
-    int flags = O_RDONLY | O_DIRECTORY;
-#ifdef O_CLOEXEC
-    flags |= O_CLOEXEC;
-#endif
-#ifdef O_NOFOLLOW
-    flags |= O_NOFOLLOW;
-#endif
-    return open(path, flags);
+    return snag_open_read_security_at(-1, path, true);
 }
 int
 snag_store_verify_private_fd(int fd, bool directory, const char *name,
@@ -243,15 +233,8 @@ snag_session_close(struct snag_session *session)
 static int
 lock_session(int dir_fd, int *fd_out, char *error, size_t error_size)
 {
-    int flags = O_RDWR | O_CREAT;
     int fd;
-#ifdef O_CLOEXEC
-    flags |= O_CLOEXEC;
-#endif
-#ifdef O_NOFOLLOW
-    flags |= O_NOFOLLOW;
-#endif
-    fd = openat(dir_fd, "lock", flags, 0600);
+    fd = snag_create_private_at(dir_fd, "lock", false);
     if (fd < 0) {
         snag_errorf(error, error_size, "cannot open session lock: %s", strerror(errno));
         return -1;
@@ -275,18 +258,9 @@ int
 snag_store_open_session_files(struct snag_session *session, bool create,
                    char *error, size_t error_size)
 {
-    int flags = O_RDWR | O_APPEND;
-#ifdef O_CLOEXEC
-    flags |= O_CLOEXEC;
-#endif
-#ifdef O_NOFOLLOW
-    flags |= O_NOFOLLOW;
-#endif
-    if (create)
-        flags |= O_CREAT | O_EXCL;
     if (lock_session(session->dir_fd, &session->lock_fd, error, error_size) < 0)
         return -1;
-    session->log_fd = openat(session->dir_fd, "events.jsonl", flags, 0600);
+    session->log_fd = snag_open_private_append_at(session->dir_fd, "events.jsonl", create);
     if (session->log_fd < 0) {
         snag_errorf(error, error_size, "cannot open event log: %s", strerror(errno));
         return -1;
@@ -2443,15 +2417,7 @@ snag_session_create(struct snag_store *store, struct snag_session *session,
         goto out;
     session->dir_path = dir;
     dir = NULL;
-    session->dir_fd = openat(store->sessions_fd, session->id,
-                             O_RDONLY | O_DIRECTORY
-#ifdef O_CLOEXEC
-                             | O_CLOEXEC
-#endif
-#ifdef O_NOFOLLOW
-                             | O_NOFOLLOW
-#endif
-    );
+    session->dir_fd = snag_open_read_security_at(store->sessions_fd, session->id, true);
     if (session->dir_fd < 0) {
         snag_errorf(error, error_size, "cannot open new session directory: %s",
                   strerror(errno));

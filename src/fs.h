@@ -29,7 +29,10 @@ int snag_unlink_at(int dirfd, const char *path, bool directory);
 int snag_rename_at(int from_dir, const char *from, int to_dir, const char *to);
 int snag_open_read(const char *path, bool directory);
 int snag_open_read_at(int dirfd, const char *path, bool directory);
-int snag_open_private_dir_at(int dirfd, const char *path);
+/* Also permit querying native ownership/permissions; callers decide privacy. */
+int snag_open_read_security_at(int dirfd, const char *path, bool directory);
+/* Exclusive-create a new journal, or append to an existing private journal. */
+int snag_open_private_append_at(int dirfd, const char *path, bool create);
 /* Exclusive whole-file lock, released by close. Busy nonblocking locks use EAGAIN. */
 int snag_lock_file(int fd, bool wait);
 void snag_path_slashes(char *path);

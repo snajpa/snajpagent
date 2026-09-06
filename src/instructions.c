@@ -5,20 +5,12 @@
 #include "snajpagent.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-#ifndef O_CLOEXEC
-#define O_CLOEXEC 0
-#endif
-#ifndef O_NOFOLLOW
-#define O_NOFOLLOW 0
-#endif
 
 void
 snag_instructions_init(struct snag_instruction_set *set)
@@ -115,7 +107,7 @@ try_candidate(struct snag_instruction_set *set, const char *path,
         errno = EOVERFLOW;
         return -1;
     }
-    fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    fd = snag_open_read(path, false);
     if (fd < 0) {
         snag_errorf(error, error_size, "cannot open instruction %s: %s",
                   path, strerror(errno));

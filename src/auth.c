@@ -5,7 +5,6 @@
 #include "json.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,7 +119,7 @@ auth_dir(int root_fd, bool create)
             return -1;
         }
     }
-    fd = openat(root_fd, "auth", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    fd = snag_open_read_security_at(root_fd, "auth", true);
     if (fd >= 0 && private_fd(fd, true) < 0) {
         (void)close(fd);
         return -1;
@@ -175,7 +174,7 @@ read_tokens(int dir, const struct snag_provider_config *provider,
 
     snag_auth_clear(tokens);
     (void)snprintf(path, sizeof(path), "%s.json", provider->name);
-    fd = openat(dir, path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    fd = snag_open_read_security_at(dir, path, false);
     if (fd < 0)
         return errno == ENOENT ? 1 : -1;
     snag_buf_init(&text, AUTH_FILE_MAX);

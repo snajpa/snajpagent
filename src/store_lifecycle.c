@@ -5,7 +5,6 @@
 #include "json.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -141,14 +140,7 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
         errno = EINVAL;
         return -1;
     }
-    dir_fd = openat(store->trash_fd, trash_name, O_RDONLY | O_DIRECTORY
-#ifdef O_CLOEXEC
-                    | O_CLOEXEC
-#endif
-#ifdef O_NOFOLLOW
-                    | O_NOFOLLOW
-#endif
-    );
+    dir_fd = snag_open_read_security_at(store->trash_fd, trash_name, true);
     if (dir_fd < 0) {
         snag_errorf(error, error_size, "cannot open deleted-session trash: %s",
                   strerror(errno));

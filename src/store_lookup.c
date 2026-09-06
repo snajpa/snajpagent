@@ -4,7 +4,6 @@
 #include "fs.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,7 +19,7 @@ static struct snag_directory *
 open_store_dir(struct snag_store *store, const char *name, const char *label,
                char *error, size_t error_size)
 {
-    int fd = snag_open_private_dir_at(store->root_fd, name);
+    int fd = snag_open_read_security_at(store->root_fd, name, true);
     struct snag_directory *dir;
 
     if (fd < 0)
@@ -155,14 +154,7 @@ open_full_id(struct snag_store *store, struct snag_session *session,
     }
     if (!session->dir_path)
         return -1;
-    session->dir_fd = openat(store->sessions_fd, id, O_RDONLY | O_DIRECTORY
-#ifdef O_CLOEXEC
-                             | O_CLOEXEC
-#endif
-#ifdef O_NOFOLLOW
-                             | O_NOFOLLOW
-#endif
-    );
+    session->dir_fd = snag_open_read_security_at(store->sessions_fd, id, true);
     if (session->dir_fd < 0) {
         snag_errorf(error, error_size, "cannot open session %s: %s", id,
                   strerror(errno));
@@ -207,14 +199,6 @@ open_snapshot(struct snag_store *store, struct snag_session *session,
               const char *id, char *error, size_t error_size)
 {
     char *sessions = NULL;
-    int flags = O_RDONLY;
-
-#ifdef O_CLOEXEC
-    flags |= O_CLOEXEC;
-#endif
-#ifdef O_NOFOLLOW
-    flags |= O_NOFOLLOW;
-#endif
     memcpy(session->id, id, SNAG_ID_HEX_LEN + 1u);
     sessions = snag_path_join(store->root_path, "sessions");
     if (sessions) {
@@ -223,20 +207,13 @@ open_snapshot(struct snag_store *store, struct snag_session *session,
     }
     if (!session->dir_path)
         return -1;
-    session->dir_fd = openat(store->sessions_fd, id, O_RDONLY | O_DIRECTORY
-#ifdef O_CLOEXEC
-                             | O_CLOEXEC
-#endif
-#ifdef O_NOFOLLOW
-                             | O_NOFOLLOW
-#endif
-    );
+    session->dir_fd = snag_open_read_security_at(store->sessions_fd, id, true);
     if (session->dir_fd < 0)
         return -1;
     if (snag_store_verify_private_fd(session->dir_fd, true, "session directory",
                                     error, error_size) < 0)
         return -1;
-    session->log_fd = openat(session->dir_fd, "events.jsonl", flags);
+    session->log_fd = snag_open_read_security_at(session->dir_fd, "events.jsonl", false);
     if (session->log_fd < 0)
         return -1;
     if (snag_store_verify_private_fd(session->log_fd, false, "event log",

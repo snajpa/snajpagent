@@ -440,9 +440,9 @@ snag_open_read_at(int dirfd, const char *path, bool directory)
 }
 
 int
-snag_open_private_dir_at(int dirfd, const char *path)
+snag_open_read_security_at(int dirfd, const char *path, bool directory)
 {
-    return open_read(dirfd, path, true, true, true);
+    return open_read(dirfd, path, true, directory, true);
 }
 
 int
@@ -572,7 +572,7 @@ snag_directory_close(struct snag_directory *dir)
 
 static int
 create_private(int dirfd, const char *path, bool relative, bool directory,
-               bool exclusive, int *file_fd)
+               int flags, int *file_fd)
 {
     HANDLE token = NULL, created = NULL;
     TOKEN_USER *user = NULL;
@@ -618,11 +618,11 @@ create_private(int dirfd, const char *path, bool relative, bool directory,
         access |= FILE_GENERIC_READ | FILE_GENERIC_WRITE;
     DWORD options = (directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE) |
                     FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT;
-    status = NtCreateFile(&created, access | DELETE,
+    status = NtCreateFile(&created, access | ((flags & _O_CREAT) ? DELETE : 0),
                           &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                          FILE_CREATE, options, NULL, 0);
-    if (!exclusive && status < 0) {
+                          (flags & _O_CREAT) ? FILE_CREATE : FILE_OPEN, options, NULL, 0);
+    if ((flags & _O_CREAT) && !(flags & _O_EXCL) && status < 0) {
         DWORD code = RtlNtStatusToDosError(status);
         if (code == ERROR_ALREADY_EXISTS || code == ERROR_FILE_EXISTS) {
             created = NULL;
@@ -670,7 +670,8 @@ create_private(int dirfd, const char *path, bool relative, bool directory,
         }
     }
     if (!directory) {
-        *file_fd = _open_osfhandle((intptr_t)created, _O_BINARY | _O_RDWR | _O_NOINHERIT);
+        *file_fd = _open_osfhandle((intptr_t)created,
+                                  _O_BINARY | _O_RDWR | _O_NOINHERIT | (flags & _O_APPEND));
         if (*file_fd < 0)
             goto out;
         created = NULL; /* CRT descriptor now owns the handle. */
@@ -707,13 +708,13 @@ out:
 int
 snag_mkdir_private(const char *path)
 {
-    return create_private(-1, path, false, true, true, NULL);
+    return create_private(-1, path, false, true, _O_CREAT | _O_EXCL, NULL);
 }
 
 int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
-    return create_private(dirfd, path, true, true, true, NULL);
+    return create_private(dirfd, path, true, true, _O_CREAT | _O_EXCL, NULL);
 }
 
 int
@@ -721,7 +722,17 @@ snag_create_private_at(int dirfd, const char *path, bool exclusive)
 {
     int fd = -1;
 
-    return create_private(dirfd, path, true, false, exclusive, &fd) < 0 ? -1 : fd;
+    return create_private(dirfd, path, true, false,
+                           _O_CREAT | (exclusive ? _O_EXCL : 0), &fd) < 0 ? -1 : fd;
+}
+
+int
+snag_open_private_append_at(int dirfd, const char *path, bool create)
+{
+    int fd = -1;
+
+    return create_private(dirfd, path, true, false,
+                           _O_APPEND | (create ? _O_CREAT | _O_EXCL : 0), &fd) < 0 ? -1 : fd;
 }
 
 static bool
@@ -1118,9 +1129,9 @@ snag_open_read_at(int dirfd, const char *path, bool directory)
 }
 
 int
-snag_open_private_dir_at(int dirfd, const char *path)
+snag_open_read_security_at(int dirfd, const char *path, bool directory)
 {
-    return open_read(dirfd, path, true);
+    return open_read(dirfd, path, directory);
 }
 
 int
@@ -1234,13 +1245,12 @@ snag_mkdir_private_at(int dirfd, const char *path)
     return mkdirat(dirfd, path, 0700);
 }
 
-int
-snag_create_private_at(int dirfd, const char *path, bool exclusive)
+static int
+open_private(int dirfd, const char *path, int flags)
 {
     struct stat st;
     struct snag_file_privacy privacy;
-    int fd = openat(dirfd, path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW |
-                    (exclusive ? O_EXCL : 0), 0600);
+    int fd = openat(dirfd, path, O_RDWR | O_CLOEXEC | O_NOFOLLOW | flags, 0600);
 
     if (fd < 0)
         return -1;
@@ -1252,6 +1262,18 @@ snag_create_private_at(int dirfd, const char *path, bool exclusive)
         return -1;
     }
     return fd;
+}
+
+int
+snag_create_private_at(int dirfd, const char *path, bool exclusive)
+{
+    return open_private(dirfd, path, O_CREAT | (exclusive ? O_EXCL : 0));
+}
+
+int
+snag_open_private_append_at(int dirfd, const char *path, bool create)
+{
+    return open_private(dirfd, path, O_APPEND | (create ? O_CREAT | O_EXCL : 0));
 }
 
 int
