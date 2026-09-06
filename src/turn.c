@@ -196,13 +196,11 @@ int
 snag_response_usage_from_json(const json_t *value,
                              struct snag_response_usage *usage)
 {
-    static const char *const keys[] = {
-        "input_tokens", "output_tokens", "reasoning_tokens", "total_tokens"
-    };
     struct snag_response_usage parsed;
 
     memset(&parsed, 0, sizeof(parsed));
-    if (!usage || !snag_json_exact_keys(value, keys, 4u) ||
+    if (!usage || !snag_json_exact_keys(value,
+        "input_tokens output_tokens reasoning_tokens total_tokens") ||
         nullable_usage_member(value, "input_tokens", &parsed.input_tokens,
                               &parsed.input_known) < 0 ||
         nullable_usage_member(value, "output_tokens", &parsed.output_tokens,
@@ -269,12 +267,6 @@ arguments_bounded(const json_t *arguments)
 static bool
 item_valid(const json_t *value)
 {
-    static const char *const public_keys[] = {
-        "kind", "local_item_id", "phase", "provider_item_id", "text"
-    };
-    static const char *const call_keys[] = {
-        "arguments", "call_id", "kind", "name", "provider_call_id", "provider_item_id"
-    };
     const char *kind = snag_json_string(value, "kind");
     const char *phase = snag_json_string(value, "phase");
     const char *id = snag_json_string(value, kind && !strcmp(kind, "tool_call") ?
@@ -284,12 +276,13 @@ item_valid(const json_t *value)
         !provider_id_valid(snag_json_string(value, "provider_item_id")))
         return false;
     if (!strcmp(kind, "tool_call"))
-        return snag_json_exact_keys(value, call_keys, 6u) &&
+        return snag_json_exact_keys(value,
+            "arguments call_id kind name provider_call_id provider_item_id") &&
             provider_id_valid(snag_json_string(value, "provider_call_id")) &&
             tool_name_valid(snag_json_string(value, "name")) &&
             arguments_bounded(json_object_get(value, "arguments"));
     return (!strcmp(kind, "assistant") || !strcmp(kind, "refusal")) &&
-        snag_json_exact_keys(value, public_keys, 5u) &&
+        snag_json_exact_keys(value, "kind local_item_id phase provider_item_id text") &&
         phase && (!strcmp(phase, "final_answer") ||
                   (!strcmp(kind, "assistant") && !strcmp(phase, "commentary"))) &&
         text_valid(snag_json_string(value, "text"), SNAG_MAX_PUBLIC_ITEM);
@@ -615,17 +608,14 @@ snag_tool_result_outcome_unknown(const char *reason)
 static int
 tool_excerpt_valid(const json_t *excerpt)
 {
-    static const char *const keys[] = {
-        "discarded_bytes", "encoding", "original_bytes", "retained",
-        "retained_bytes"
-    };
     const char *encoding;
     const char *retained;
     uint64_t discarded;
     uint64_t original;
     uint64_t retained_bytes;
 
-    if (!snag_json_exact_keys((json_t *)excerpt, keys, 5u) ||
+    if (!snag_json_exact_keys((json_t *)excerpt,
+        "discarded_bytes encoding original_bytes retained retained_bytes") ||
         !(encoding = snag_json_string(excerpt, "encoding")) ||
         !(retained = snag_json_string(excerpt, "retained")) ||
         snag_json_integer_u64(excerpt, "discarded_bytes", &discarded) < 0 ||
@@ -664,10 +654,9 @@ reason_is_not_run(const char *reason)
 int
 snag_tool_result_valid(const json_t *result)
 {
-    static const char *const keys[] = {
-        "duration_ms", "exit_code", "handle", "model_text", "reason",
-        "signal", "status", "stderr", "stdout", "max_output_tokens", "output_ref"
-    };
+    /* Optional fields extend the same required set, in dependency order. */
+    const char *keys = "output_ref max_output_tokens duration_ms exit_code handle "
+                       "model_text reason signal status stderr stdout";
     const char *status;
     const char *reason;
     const char *model_text;
@@ -678,9 +667,10 @@ snag_tool_result_valid(const json_t *result)
     json_t *signal_value;
     json_t *limit_value;
 
-    if ((!snag_json_exact_keys((json_t *)result, keys, 11u) &&
-         !snag_json_exact_keys((json_t *)result, keys, 10u) &&
-         !snag_json_exact_keys((json_t *)result, keys, 9u)) ||
+    if (!json_object_get(result, "output_ref"))
+        keys += json_object_get(result, "max_output_tokens") ?
+                sizeof("output_ref") : sizeof("output_ref max_output_tokens");
+    if (!snag_json_exact_keys(result, keys) ||
         snag_json_integer_u64(result, "duration_ms", &duration) < 0 ||
         !(status = snag_json_string(result, "status")) ||
         !(model_text = snag_json_string(result, "model_text")) ||
@@ -695,15 +685,14 @@ snag_tool_result_valid(const json_t *result)
         return -1;
     json_t *ref = json_object_get(result, "output_ref");
     if (ref) {
-        static const char *const ref_keys[] = {"handle", "stdout_start", "stdout_end",
-            "stderr_start", "stderr_end", "stdin_accepted", "stdin_written",
-            "stdin_pending", "stdin_open", "log_start", "log_end"};
         const char *h = snag_json_string(ref, "handle");
         const char *const begin[] = {"stdout_start", "stderr_start"};
         const char *const end[] = {"stdout_end", "stderr_end"};
         const char *const streams[] = {"stdout", "stderr"};
         uint64_t accepted, written, pending, log_start, log_end;
-        if (!snag_json_exact_keys(ref, ref_keys, 11u) || !h ||
+        if (!snag_json_exact_keys(ref,
+            "handle stdout_start stdout_end stderr_start stderr_end stdin_accepted stdin_written "
+            "stdin_pending stdin_open log_start log_end") || !h ||
             !snag_hex_is_lower(h, SNAG_ID_HEX_LEN) ||
             snag_json_integer_u64(ref, "log_start", &log_start) < 0 ||
             snag_json_integer_u64(ref, "log_end", &log_end) < 0 || log_start > log_end ||

@@ -1042,17 +1042,12 @@ static int
 command_args(const struct snag_response_item *call, const struct snag_config *config,
               struct command_args *args)
 {
-    static const char *const exec_keys[] = {
-        "command", "max_output_tokens", "pty", "stdin", "timeout_ms", "workdir", "yield_ms"
-    };
-    static const char *const stdin_keys[] = {
-        "data", "eof", "handle", "terminate", "yield_ms", "max_output_tokens"
-    };
     memset(args, 0, sizeof(*args));
     args->exec = !strcmp(call->name, "exec_command");
     if ((!args->exec && strcmp(call->name, "write_stdin")) ||
-        !snag_json_exact_keys(call->arguments, args->exec ? exec_keys : stdin_keys,
-                             args->exec ? 7u : 6u) ||
+        !snag_json_exact_keys(call->arguments,
+            args->exec ? "command max_output_tokens pty stdin timeout_ms workdir yield_ms" :
+                         "data eof handle terminate yield_ms max_output_tokens") ||
         !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
                           0u, SNAG_TOOL_YIELD_MAX_MS, &args->yield) ||
         !command_output_limit(call->arguments, config->max_output_tokens, &args->limit))

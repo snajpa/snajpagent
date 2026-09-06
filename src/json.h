@@ -29,8 +29,8 @@ int snag_json_digest(const json_t *value,
 int snag_json_digest_bounded(const json_t *value, size_t max,
                             char out[SNAG_SHA256_HEX_LEN + 1u],
                             size_t *bytes);
-bool snag_json_exact_keys(const json_t *object, const char *const *keys,
-                         size_t count);
+/* Fixed field names separated by single spaces; empty means an empty object. */
+bool snag_json_exact_keys(const json_t *object, const char *keys);
 const char *snag_json_string(const json_t *object, const char *key);
 int snag_json_set_new(json_t *object, const char *key, json_t *value);
 int snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out);

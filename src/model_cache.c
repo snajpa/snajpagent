@@ -79,14 +79,11 @@ capacity_limits_valid(const struct snag_model_capacity *c)
 static bool
 read_limits(const json_t *limits, struct snag_model_capacity *c)
 {
-    static const char *const keys[] = {
-        "auto_compact_input_tokens", "context_window_tokens",
-        "effective_context_window_percent", "input_context_window_tokens",
-        "max_context_window_tokens", "max_input_tokens", "max_output_tokens"
-    };
     uint64_t percent = 0u;
 
-    if (!snag_json_exact_keys(limits, keys, sizeof(keys) / sizeof(keys[0])) ||
+    if (!snag_json_exact_keys(limits,
+        "auto_compact_input_tokens context_window_tokens effective_context_window_percent "
+        "input_context_window_tokens max_context_window_tokens max_input_tokens max_output_tokens") ||
         !nullable_limit(limits, "context_window_tokens",
                         SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->context_window_tokens) ||
         !nullable_limit(limits, "max_context_window_tokens",
@@ -138,17 +135,13 @@ accounting_valid(const json_t *model)
 static bool
 model_valid(const json_t *model, bool cached)
 {
-    static const char *const catalog_keys[] = {
-        "default_effort", "efforts", "id", "limits"
-    };
-    static const char *const cache_keys[] = {"count_capability", "default_effort",
-        "efforts", "id", "limits", "observed_hard_input_tokens",
-        "observed_input_tokens", "observed_input_bytes"};
     json_t *fallback;
     json_t *efforts;
 
     if (!json_is_object(model) || !snag_json_exact_keys((json_t *)model,
-            cached ? cache_keys : catalog_keys, cached ? 8u : 4u) ||
+            cached ? "count_capability default_effort efforts id limits "
+                     "observed_hard_input_tokens observed_input_tokens observed_input_bytes" :
+                     "default_effort efforts id limits") ||
         !cache_string(json_object_get(model, "id"), SNAG_CONFIG_MODEL_MAX - 1u) ||
         !snag_model_limits_valid(json_object_get(model, "limits")))
         return false;
@@ -177,9 +170,6 @@ model_valid(const json_t *model, bool cached)
 static bool
 providers_valid(const json_t *providers, bool cached)
 {
-    static const char *const keys[] = {
-        "base_url", "models", "name", "protocol"
-    };
     size_t total_models = 0u;
     size_t total_entries = 0u;
 
@@ -193,7 +183,7 @@ providers_valid(const json_t *providers, bool cached)
         const char *protocol;
 
         if (!json_is_object(provider) ||
-            !snag_json_exact_keys(provider, keys, 4u) ||
+            !snag_json_exact_keys(provider, "base_url models name protocol") ||
             !cache_string(json_object_get(provider, "name"),
                           SNAG_CONFIG_PROVIDER_NAME_MAX) ||
             !cache_string(json_object_get(provider, "base_url"),
@@ -251,7 +241,6 @@ static int
 decode_cache(const unsigned char *data, size_t len,
              struct snag_model_cache *cache, char *error, size_t error_size)
 {
-    static const char *const keys[] = {"providers", "schema_version", "updated_at_ms"};
     json_t *root;
     json_t *providers;
     json_t *copy;
@@ -261,7 +250,7 @@ decode_cache(const unsigned char *data, size_t len,
     root = snag_json_load_strict(data, len, SNAG_MODEL_CACHE_FILE_MAX,
                                 error, error_size);
     if (!root || !json_is_object(root) ||
-        !snag_json_exact_keys(root, keys, 3u) ||
+        !snag_json_exact_keys(root, "providers schema_version updated_at_ms") ||
         snag_json_integer_u64(root, "schema_version", &schema) < 0 ||
         schema != SNAG_MODEL_CACHE_SCHEMA ||
         snag_json_integer_u64(root, "updated_at_ms", &updated) < 0 ||

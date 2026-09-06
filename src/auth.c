@@ -148,9 +148,6 @@ static int
 read_tokens(int dir, const struct snag_provider_config *provider,
              struct snag_auth_tokens *tokens)
 {
-    static const char *const keys[] = {
-        "kind", "base_url", "access_token", "refresh_token", "account_id", "expires_at_ms"
-    };
     char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u], error[128];
     struct snag_buf text;
     json_t *value = NULL;
@@ -173,7 +170,8 @@ read_tokens(int dir, const struct snag_provider_config *provider,
                                 error, sizeof(error));
     kind = snag_json_string(value, "kind");
     base = snag_json_string(value, "base_url");
-    if (!snag_json_exact_keys(value, keys, sizeof(keys) / sizeof(keys[0])) ||
+    if (!snag_json_exact_keys(value,
+        "kind base_url access_token refresh_token account_id expires_at_ms") ||
         !kind || !base || strcmp(kind, snag_auth_kind_name(provider->auth)) ||
         strcmp(base, provider->base_url) ||
         !token_copy(tokens->credential.value, sizeof(tokens->credential.value),

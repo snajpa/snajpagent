@@ -366,9 +366,6 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                  const struct snag_credential *credential, json_t **result,
                  char *error, size_t error_size)
 {
-    static const char *const send_keys[] = {"destination", "notice", "text"};
-    static const char *const topic_keys[] = {"destination", "topic"};
-
     if (app->session.active_read_only) {
         if (call && snag_read_only_tool(call->name)) {
             struct snag_secret_set secrets = {0};
@@ -413,7 +410,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         int rc;
 
         *result = NULL;
-        if (!snag_json_exact_keys(call->arguments, NULL, 0u)) {
+        if (!snag_json_exact_keys(call->arguments, "")) {
             *result = snag_tool_result_terminal(false,
                                                 "irc_state arguments are invalid");
             return *result ? 0 : -1;
@@ -439,7 +436,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         int rc;
 
         *result = NULL;
-        if (!snag_json_exact_keys(call->arguments, topic ? topic_keys : send_keys, topic ? 2u : 3u) ||
+        if (!snag_json_exact_keys(call->arguments,
+                                 topic ? "destination topic" : "destination notice text") ||
             !text || (!topic && !*text) || strlen(text) > SNAG_MAX_PUBLIC_ITEM ||
             !snag_utf8_valid((const unsigned char *)text, strlen(text), true) ||
             (!topic && !json_is_null(notice_value) &&

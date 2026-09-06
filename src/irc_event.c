@@ -45,14 +45,10 @@ event_field(const json_t *data, const char *key, char *out, size_t size)
 int
 snag_irc_event_read(const json_t *data, struct snag_irc_event *event)
 {
-    static const char *const keys[] = {
-        "endpoint", "historical", "kind", "local", "nick", "op",
-        "room", "text", "timestamp_ms", "stream", "sequence", "input"
-    };
     const char *kind = snag_json_string(data, "kind");
 
     memset(event, 0, sizeof(*event));
-    if (!snag_json_exact_keys(data, keys, sizeof(keys) / sizeof(keys[0])) || !kind ||
+    if (!snag_json_exact_keys(data, "endpoint historical kind local nick op room text timestamp_ms stream sequence input") || !kind ||
         !event_field(data, "endpoint", event->endpoint, sizeof(event->endpoint)) ||
         !event->endpoint[0] ||
         !event_field(data, "room", event->room, sizeof(event->room)) ||

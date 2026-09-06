@@ -388,11 +388,6 @@ int
 snag_tools_read_only(const struct snag_response_item *call, const char *workspace,
                     snag_tool_pump_fn pump, void *opaque, json_t **result)
 {
-    static const char *const read_keys[] = {"path", "start_line", "end_line"};
-    static const char *const list_keys[] = {"path", "recursive", "offset", "limit"};
-    static const char *const grep_keys[] = {
-        "path", "pattern", "recursive", "ignore_case", "literal", "offset", "limit"
-    };
     struct read_query q = {0};
     const json_t *args;
     const char *path;
@@ -413,8 +408,10 @@ snag_tools_read_only(const struct snag_response_item *call, const char *workspac
     q.problem = "Invalid native inspection arguments.";
     if (!snag_read_only_tool(call->name) || !workspace || !path || !*path ||
         strlen(path) > 4096u ||
-        !snag_json_exact_keys(args, q.read ? read_keys : q.grep ? grep_keys : list_keys,
-                             q.read ? 3u : q.grep ? 7u : 4u))
+        !snag_json_exact_keys(args,
+            q.read ? "path start_line end_line" :
+            q.grep ? "path pattern recursive ignore_case literal offset limit" :
+                     "path recursive offset limit"))
         goto out;
     if (q.read) {
         if (!number_arg(args, "start_line", 1u, 1u, INT32_MAX, &q.start) ||

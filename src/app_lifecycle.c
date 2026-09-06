@@ -531,7 +531,6 @@ snag_app_goal_tool(struct app_state *app,
                   const struct snag_response_item *call,
                   json_t **result, char *error, size_t error_size)
 {
-    static const char *const keys[] = {"action", "text"};
     const char *action;
     const char *text;
     json_t *text_value;
@@ -539,12 +538,11 @@ snag_app_goal_tool(struct app_state *app,
 
     *result = NULL;
     if (call && call->name && strcmp(call->name, "create_goal") == 0) {
-        static const char *const create_keys[] = {"objective"};
         const char *objective;
         size_t len;
         char message[128];
 
-        if (!snag_json_exact_keys(call->arguments, create_keys, 1u) ||
+        if (!snag_json_exact_keys(call->arguments, "objective") ||
             !(objective = snag_json_string(call->arguments, "objective")))
             return tool_result(false, "create_goal arguments are invalid", result);
         if (snag_goal_unfinished(app->session.goal_status))
@@ -564,7 +562,7 @@ snag_app_goal_tool(struct app_state *app,
         return tool_result(true, message, result);
     }
     if (!call || strcmp(call->name, "update_goal") != 0 ||
-        !snag_json_exact_keys(call->arguments, keys, 2u) ||
+        !snag_json_exact_keys(call->arguments, "action text") ||
         !(action = snag_json_string(call->arguments, "action")))
         return tool_result(false, "update_goal arguments are invalid", result);
     text_value = json_object_get(call->arguments, "text");

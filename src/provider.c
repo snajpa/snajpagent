@@ -851,7 +851,6 @@ static int
 parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
                  char *error, size_t error_size)
 {
-    static const char *const keys[] = {"input_tokens", "object"};
     char json_error[128] = {0};
     json_t *root;
     const char *object;
@@ -870,7 +869,7 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
         return snag_errno(EPROTO);
     }
     object = snag_json_string(root, "object");
-    if (!snag_json_exact_keys(root, keys, sizeof(keys) / sizeof(keys[0])) ||
+    if (!snag_json_exact_keys(root, "input_tokens object") ||
         !object || strcmp(object, "response.input_tokens") != 0 ||
         snag_json_integer_u64(root, "input_tokens", input_tokens) < 0) {
         snag_errorf(error, error_size,

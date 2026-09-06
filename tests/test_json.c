@@ -108,6 +108,19 @@ test_canonical_remains_durable_only(void)
 int
 main(void)
 {
+    json_t *fields = json_pack("{s:i,s:n}", "name", 1, "name_suffix");
+    assert(fields && snag_json_exact_keys(fields, "name name_suffix"));
+    assert(snag_json_exact_keys(fields, "name_suffix name"));
+    assert(!snag_json_exact_keys(fields, "name"));
+    assert(!snag_json_exact_keys(fields, "name name_suffix extra"));
+    assert(!snag_json_exact_keys(fields, "name suffix"));
+    assert(!snag_json_exact_keys(fields, ""));
+    assert(!snag_json_exact_keys(NULL, ""));
+    assert(!snag_json_exact_keys(json_null(), ""));
+    assert(json_object_del(fields, "name") == 0);
+    assert(json_object_del(fields, "name_suffix") == 0);
+    assert(snag_json_exact_keys(fields, ""));
+    json_decref(fields);
     struct snag_json_document document = {0};
     json_t *value = json_pack("{s:i}", "a", 1);
     char expected[SNAG_SHA256_HEX_LEN + 1u];

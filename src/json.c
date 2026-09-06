@@ -333,14 +333,22 @@ snag_json_digest(const json_t *value, char out[SNAG_SHA256_HEX_LEN + 1u])
 }
 
 bool
-snag_json_exact_keys(const json_t *object, const char *const *keys, size_t count)
+snag_json_exact_keys(const json_t *object, const char *keys)
 {
-    if (!json_is_object(object) || json_object_size(object) != count)
+    size_t count = 0u;
+
+    if (!json_is_object(object))
         return false;
-    for (size_t i = 0; i < count; ++i)
-        if (!json_object_get(object, keys[i]))
+    while (*keys) {
+        size_t len = strcspn(keys, " ");
+        if (!len || !json_object_getn(object, keys, len))
             return false;
-    return true;
+        ++count;
+        keys += len;
+        if (*keys)
+            ++keys;
+    }
+    return json_object_size(object) == count;
 }
 
 const char *
