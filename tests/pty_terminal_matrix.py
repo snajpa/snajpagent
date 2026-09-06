@@ -16,7 +16,7 @@ binary = os.path.abspath(sys.argv[1])
 workspace = os.path.abspath(sys.argv[2])
 dotdir = os.environ["SNAJPAGENT_DOTDIR"]
 state_root = Path(dotdir) / "sessions"
-fresh_prompt = " openai/gpt-5.5-2026-04-23/medium   ?% › ".encode()
+fresh_prompt = " openai/gpt-5.5-2026-04-23/medium   0% › ".encode()
 accounted_prompt = " openai/gpt-5.5-2026-04-23/medium   ?% › ".encode()
 
 

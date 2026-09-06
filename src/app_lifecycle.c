@@ -152,6 +152,8 @@ snag_app_lifecycle_command(struct app_state *app, const char *line,
         return 0;
     }
     if (strcmp(line, "/compact") == 0) {
+        if (app->session.pending_log)
+            return snag_ui_text(&app->ui, SNAG_UI_HOST, "nothing to compact before the first prompt");
         if (snag_app_compact_idle_command(app, "manual",
                                          error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
@@ -160,6 +162,10 @@ snag_app_lifecycle_command(struct app_state *app, const char *line,
         return 0;
     }
     if (strcmp(line, "/delete") == 0) {
+        if (app->session.pending_log) {
+            *exit_now = true;
+            return 0;
+        }
         char prefix[9];
         int confirm_rc = confirm_delete(app, prefix, error, sizeof(error));
         if (confirm_rc != 0) {

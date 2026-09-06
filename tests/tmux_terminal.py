@@ -38,7 +38,7 @@ MARKDOWN_TEXT = (
     "second paragraph\n\n"
     "> final quoted boundary"
 )
-DEFAULT_IDLE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   ?% ›"
+DEFAULT_IDLE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   0% ›"
 DEFAULT_ACCOUNTED_IDLE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   ?% ›"
 DEFAULT_ACTIVE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   ?% »"
 MACHINE_HOSTNAME = socket.gethostname()

@@ -671,7 +671,8 @@ input count and resolved input budget, rounded up.  A full-request server count
 or completed response input usage supplies this value; local byte/token
 estimates are never used.  It describes the last measured request, not cumulative
 session usage, generated output, or text/tool results added since that request.
-Unknown counts or budgets, including a fresh or incomparable state, show
+A fresh session with no submitted turns shows 0%.
+Unknown counts or budgets after a turn, including an incomparable state, show
 .BR ?% .
 Without exact preflight, the value stays unchanged while another request runs.
 A provider/source/model/effort change or compaction invalidates incompatible
@@ -1970,6 +1971,11 @@ level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details
 Error codes, not message wording, determine eligibility.  A failed stream never
 becomes a successful response merely because the connection closed.
 .SH SESSION DURABILITY
+New sessions remain in memory until the first prompt or goal is submitted.
+Exiting before then creates no saved session, needs no deletion, and prints no
+resume hint. Startup activity and selection changes are retained if a prompt
+is later submitted. Existing resumed sessions remain saved.
+.PP
 Every accepted transition is appended and synced before it is treated as
 durable.  Resume reconstructs turns, tool state, queue, goals, provider/model
 selection, and admitted IRC state.

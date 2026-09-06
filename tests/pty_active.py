@@ -25,7 +25,7 @@ DOTDIR = os.environ["SNAJPAGENT_DOTDIR"]
 STATE_ROOT = Path(DOTDIR) / "sessions"
 PROMPT = "› ".encode()
 DEFAULT_MODEL = "gpt-5.5-2026-04-23"
-DEFAULT_IDLE_PROMPT = f" openai/{DEFAULT_MODEL}/medium   ?% › ".encode()
+DEFAULT_IDLE_PROMPT = f" openai/{DEFAULT_MODEL}/medium   0% › ".encode()
 DEFAULT_ACCOUNTED_IDLE_PROMPT = f" openai/{DEFAULT_MODEL}/medium   ?% › ".encode()
 DEFAULT_ACTIVE_PROMPT = f" openai/{DEFAULT_MODEL}/medium   ?% » ".encode()
 GOAL_SET = "• Goal set".encode()
@@ -112,7 +112,14 @@ class Child:
         return self.finish()
 
     def finish(self, expected=0, expect_resume=True):
-        _, status = os.waitpid(self.pid, 0)
+        deadline = time.monotonic() + 8.0
+        while True:
+            pid, status = os.waitpid(self.pid, os.WNOHANG)
+            if pid:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"process did not exit: {bytes(self.buf)!r}")
+            self.read_once(0.05)
         self.pid = None
         while self.read_once(0.05):
             pass
@@ -3126,11 +3133,121 @@ def test_config_and_cli_model_passthrough():
     assert selection["old_effort"] == "default" and selection["new_effort"] == "quantum"
 
 
+def test_empty_session_lifecycle():
+    for action in (b"/exit\r", b"\x04", b"\x03" * 5, b"/archive\r", b"/delete\r",
+                   signal.SIGHUP, signal.SIGTERM):
+        before = session_ids()
+        child = Child(["--no-color", "--no-listen", "--no-client"])
+        try:
+            child.wait(DEFAULT_IDLE_PROMPT)
+            assert session_ids() == before
+            child.send(b"/compact\r")
+            child.wait(b"nothing to compact before the first prompt")
+            child.send(b"/status\r")
+            child.wait(DEFAULT_IDLE_PROMPT, start=len(child.buf))
+            assert session_ids() == before
+            if isinstance(action, int):
+                os.kill(child.pid, action)
+                child.finish(expected=128 + action, expect_resume=False)
+            else:
+                child.send(action)
+                child.finish(expect_resume=False)
+            assert session_ids() == before
+        finally:
+            child.kill()
+
+    before = session_ids()
+    child = Child(["--no-color", "--no-listen", "--no-client"])
+    try:
+        child.wait(DEFAULT_IDLE_PROMPT)
+        child.send(b"unsent draft")
+        child.wait(b"unsent draft")
+        child.send(b"\x15\x04")
+        child.finish(expect_resume=False)
+        assert session_ids() == before
+    finally:
+        child.kill()
+
+    before = session_ids()
+    child = Child(["--no-color", "--no-listen", "--no-client"])
+    try:
+        child.wait(DEFAULT_IDLE_PROMPT)
+        child.send(b"/model selected-before-prompt / high\r")
+        child.wait(b"selected-before-prompt/high   0%")
+        assert session_ids() == before
+        child.send(b"ping\r")
+        child.wait(b"pong")
+        sid = new_session(before)
+        command = child.exit_now()
+        assert command_arguments(command)[-2:] == ["--resume", sid]
+        log = events(sid)
+        assert len([e for e in log if e["type"] == "session_created"]) == 1
+        assert one(log, "turn_started")["data"]["config"]["model"] == "selected-before-prompt"
+    finally:
+        child.kill()
+    saved = (STATE_ROOT / sid / "events.jsonl").read_bytes()
+    resumed = Child(["--no-color", "--no-listen", "--no-client", "--resume", sid])
+    try:
+        resumed.wait(b"selected-before-prompt/high   ?%")
+        command = resumed.exit_now()
+        assert command_arguments(command)[-2:] == ["--resume", sid]
+        assert (STATE_ROOT / sid / "events.jsonl").read_bytes() == saved
+    finally:
+        resumed.kill()
+    print("empty session lifecycle: ok")
+
+
+
+def test_empty_network_session():
+    for sent in (False, True):
+        before = session_ids()
+        port = free_port()
+        child = Child(["--no-color", "--no-client", "--listen", f"127.0.0.1:{port}",
+                       "-n", "emptyagent", "-o", "emptyop", "-r", "lab"])
+        peer = None
+        try:
+            child.wait(chat_prompt("emptyop"))
+            peer = IRCClient(port, "emptypeer")
+            peer.message("background before input")
+            child.wait(b"background before input")
+            assert session_ids() == before
+            # Exercise buffered IRC rendering before a durable log exists.
+            child.send(b"/rollout\r")
+            child.wait(DEFAULT_IDLE_PROMPT)
+            child.send(b"/chat\r")
+            child.wait(chat_prompt("emptyop"), start=len(child.buf))
+            if sent:
+                child.send(b"operator first message\r")
+                peer.wait(b"operator first message")
+                deadline = time.monotonic() + 5.0
+                while session_ids() == before:
+                    assert time.monotonic() < deadline
+                    child.read_once(0.02)
+                sid = new_session(before)
+                command = child.exit_now()
+                assert command_arguments(command)[-2:] == ["--resume", sid]
+                journal = (STATE_ROOT / sid / "events.jsonl").read_text()
+                assert "background before input" in journal
+                assert "operator first message" in journal
+            else:
+                child.send(b"/exit\r")
+                child.finish(expect_resume=False)
+                assert session_ids() == before
+        finally:
+            if peer:
+                peer.close()
+            child.kill()
+    print("empty network session: ok", flush=True)
+
+
 def test_exit_resume_matrix():
     for exit_input in (b"/exit\r", b"\x04"):
         before = session_ids()
         child = Child(["--no-color"])
         child.wait(PROMPT.rstrip())
+        child.send(b"ping\r")
+        answered = child.wait(b"pong")
+        child.wait_idle_prompt(start=answered)
         session_id = new_session(before)
         child.send(exit_input)
         command = child.finish()
@@ -3141,6 +3258,9 @@ def test_exit_resume_matrix():
     before = session_ids()
     cancelled = Child(["--no-color"])
     cancelled.wait(DEFAULT_IDLE_PROMPT)
+    cancelled.send(b"ping\r")
+    answered = cancelled.wait(b"pong")
+    cancelled.wait_idle_prompt(start=answered)
     cancelled_id = new_session(before)
     start = len(cancelled.buf)
     cancelled.send(b"\x03" * 4)
@@ -3158,6 +3278,9 @@ def test_exit_resume_matrix():
         before = session_ids()
         child = Child(["--no-color"])
         child.wait(PROMPT.rstrip())
+        child.send(b"ping\r")
+        answered = child.wait(b"pong")
+        child.wait_idle_prompt(start=answered)
         session_id = new_session(before)
         os.kill(child.pid, signal_number)
         command = child.finish(expected=128 + signal_number)
@@ -3183,6 +3306,9 @@ def test_exit_resume_matrix():
     before = session_ids()
     archived = Child(["--no-color"])
     archived.wait(PROMPT.rstrip())
+    archived.send(b"ping\r")
+    answered = archived.wait(b"pong")
+    archived.wait_idle_prompt(start=answered)
     archived_id = new_session(before)
     archived.send(b"/archive\r")
     archived_command = archived.finish()
@@ -3194,6 +3320,9 @@ def test_exit_resume_matrix():
     before = session_ids()
     deleted = Child(["--no-color"])
     deleted.wait(PROMPT.rstrip())
+    deleted.send(b"ping\r")
+    answered = deleted.wait(b"pong")
+    deleted.wait_idle_prompt(start=answered)
     deleted_id = new_session(before)
     deleted.send(b"/delete\r")
     deleted.wait(b"type the displayed 8-character id prefix to confirm")
@@ -3204,6 +3333,9 @@ def test_exit_resume_matrix():
     before = session_ids()
     original = Child(["--no-color"])
     original.wait(PROMPT.rstrip())
+    original.send(b"ping\r")
+    answered = original.wait(b"pong")
+    original.wait_idle_prompt(start=answered)
     staged_id = new_session(before)
     original_command = original.exit_now()
     assert command_arguments(original_command)[-2:] == ["--resume", staged_id]
@@ -3227,12 +3359,8 @@ def test_exit_resume_matrix():
         "--no-color", "-s", occupied_endpoint,
         "-n", "agent", "-o", "localop", "-r", "lab",
     ])
-    failed_command = failed.finish(expected=3)
-    failed_arguments = command_arguments(failed_command)
-    failed_id = new_session(before)
-    assert failed_arguments[-2:] == ["--resume", failed_id]
-    assert failed_arguments[failed_arguments.index("--listen") + 1] == \
-        occupied_endpoint
+    failed.finish(expected=3, expect_resume=False)
+    assert session_ids() == before
     occupied.close()
 
 
@@ -4663,6 +4791,8 @@ def test_stalled_output_consumes_input():
 
 
 if __name__ == "__main__":
+    test_empty_session_lifecycle()
+    test_empty_network_session()
     test_resize_and_suspend_preserve_draft()
     test_compaction_ignores_legacy_samples()
     test_ctrl_d_exit()

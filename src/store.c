@@ -233,6 +233,10 @@ snag_session_close(struct snag_session *session)
         (void)close(session->dir_fd);
     free_session_state(session);
     free(session->dir_path);
+    if (session->pending_log) {
+        snag_buf_free(session->pending_log);
+        free(session->pending_log);
+    }
     snag_session_init(session);
 }
 static int
@@ -312,17 +316,22 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
         errno = ENOSPC;
         goto out;
     }
-    actual_end = snag_seek(session->log_fd, 0, SEEK_END);
-    if (actual_end < 0 || actual_end != session->log_end) {
-        snag_errorf(error, error_size, "event log end changed unexpectedly");
-        errno = EIO;
-        goto out;
-    }
-    if (snag_write_full(session->log_fd, line.data, line.len) < 0 ||
-        snag_sync_file(session->log_fd) < 0) {
-        snag_errorf(error, error_size, "cannot durably append %s: %s", type,
-                  strerror(errno));
-        goto out;
+    if (session->pending_log) {
+        if (snag_buf_append(session->pending_log, line.data, line.len) < 0)
+            goto memory_error;
+    } else {
+        actual_end = snag_seek(session->log_fd, 0, SEEK_END);
+        if (actual_end < 0 || actual_end != session->log_end) {
+            snag_errorf(error, error_size, "event log end changed unexpectedly");
+            errno = EIO;
+            goto out;
+        }
+        if (snag_write_full(session->log_fd, line.data, line.len) < 0 ||
+            snag_sync_file(session->log_fd) < 0) {
+            snag_errorf(error, error_size, "cannot durably append %s: %s", type,
+                      strerror(errno));
+            goto out;
+        }
     }
     session->log_end += (int64_t)line.len;
     session->next_seq++;
@@ -2046,7 +2055,17 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             if ((int64_t)want > boundary - read_off)
                 want = (size_t)(boundary - read_off);
         }
-        got = snag_pread(source->log_fd, chunk, want, read_off);
+        if (source->pending_log) {
+            if (read_off < 0 || (uint64_t)read_off > source->pending_log->len)
+                goto boundary_error;
+            if (want > source->pending_log->len - (size_t)read_off)
+                want = source->pending_log->len - (size_t)read_off;
+            got = (ssize_t)want;
+            if (want)
+                memcpy(chunk, source->pending_log->data + read_off, want);
+        } else {
+            got = snag_pread(source->log_fd, chunk, want, read_off);
+        }
         if (got < 0) {
             if (errno == EINTR)
                 continue;
@@ -2162,7 +2181,8 @@ snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
 {
     struct snag_session verifier;
 
-    if (!session || !fn || session->log_fd < 0 || session->log_end < 0 ||
+    if (!session || !fn || (!session->pending_log && session->log_fd < 0) ||
+        session->log_end < 0 ||
         !snag_hex_is_lower(session->id, SNAG_ID_HEX_LEN)) {
         snag_errorf(error, error_size, "invalid session event iterator");
         errno = EINVAL;
@@ -2309,91 +2329,95 @@ session_created_data(const char *workspace, const char *provider,
 }
 
 int
+snag_session_prepare(struct snag_session *session, const char *workspace,
+                     const char *provider, const char *model, const char *effort,
+                     char *error, size_t error_size)
+{
+    char *resolved = canonical_workspace(workspace, error, error_size);
+    int rc = -1;
+
+    if (!resolved)
+        return -1;
+    if (snag_random_id(session->id) < 0) {
+        snag_errorf(error, error_size, "cryptographic session id generation failed");
+        goto out;
+    }
+    session->pending_log = calloc(1u, sizeof(*session->pending_log));
+    if (!session->pending_log)
+        goto out;
+    snag_buf_init(session->pending_log, SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE);
+    rc = snag_session_commit(session, "session_created",
+        session_created_data(resolved, provider, model, effort),
+        NULL, error, error_size);
+out:
+    free(resolved);
+    return rc;
+}
+
+int
+snag_session_persist(struct snag_store *store, struct snag_session *session,
+                     char *error, size_t error_size)
+{
+    struct snag_session disk = *session;
+    char *parent;
+    int rc = -1;
+
+    if (!session->pending_log)
+        return 0;
+    if (snag_mkdir_private_at(store->sessions_fd, session->id) < 0) {
+        snag_errorf(error, error_size, "cannot create session directory: %s",
+                    strerror(errno));
+        return -1;
+    }
+    parent = snag_path_join(store->root_path, "sessions");
+    disk.dir_path = parent ? snag_path_join(parent, session->id) : NULL;
+    free(parent);
+    if (!disk.dir_path)
+        goto out;
+    disk.dir_fd = snag_open_read_security_at(store->sessions_fd, session->id, true);
+    if (disk.dir_fd < 0 ||
+        snag_store_verify_private_fd(disk.dir_fd, true, "session directory",
+                                    error, error_size) < 0 ||
+        snag_store_open_session_files(&disk, true, error, error_size) < 0)
+        goto out;
+    if (snag_write_full(disk.log_fd, session->pending_log->data,
+                        session->pending_log->len) < 0 ||
+        snag_sync_file(disk.log_fd) < 0 || snag_sync_dir(disk.dir_fd) < 0 ||
+        snag_sync_dir(store->sessions_fd) < 0) {
+        snag_errorf(error, error_size, "cannot persist new session: %s", strerror(errno));
+        goto out;
+    }
+    session->dir_path = disk.dir_path;
+    session->dir_fd = disk.dir_fd;
+    session->log_fd = disk.log_fd;
+    session->lock_fd = disk.lock_fd;
+    snag_buf_free(session->pending_log);
+    free(session->pending_log);
+    session->pending_log = NULL;
+    return 0;
+out:
+    if (disk.log_fd >= 0)
+        (void)close(disk.log_fd);
+    if (disk.lock_fd >= 0)
+        (void)close(disk.lock_fd);
+    if (disk.dir_fd >= 0) {
+        (void)snag_unlink_at(disk.dir_fd, "events.jsonl", false);
+        (void)snag_unlink_at(disk.dir_fd, "lock", false);
+        (void)close(disk.dir_fd);
+    }
+    free(disk.dir_path);
+    (void)snag_unlink_at(store->sessions_fd, session->id, true);
+    return rc;
+}
+
+int
 snag_session_create(struct snag_store *store, struct snag_session *session,
                    const char *workspace, const char *provider,
                    const char *model, const char *effort,
                    char *error, size_t error_size)
 {
-    char *resolved = NULL;
-    char *dir = NULL;
-    int created = 0;
-    int rc = -1;
-
-    resolved = canonical_workspace(workspace, error, error_size);
-    if (!resolved)
+    if (snag_session_prepare(session, workspace, provider, model, effort,
+                             error, error_size) < 0)
         return -1;
-    for (unsigned int attempt = 0; attempt < 32u; ++attempt) {
-        if (snag_random_id(session->id) < 0) {
-            snag_errorf(error, error_size, "cryptographic session id generation failed");
-            goto out;
-        }
-        if (snag_mkdir_private_at(store->sessions_fd, session->id) == 0) {
-            created = 1;
-            break;
-        }
-        if (errno != EEXIST) {
-            snag_errorf(error, error_size, "cannot create session directory: %s",
-                      strerror(errno));
-            goto out;
-        }
-    }
-    if (!created) {
-        snag_errorf(error, error_size, "could not allocate a unique session id");
-        errno = EEXIST;
-        goto out;
-    }
-    dir = snag_path_join(store->root_path, "sessions");
-    if (dir) {
-        char *full = snag_path_join(dir, session->id);
-        free(dir);
-        dir = full;
-    }
-    if (!dir)
-        goto out;
-    session->dir_path = dir;
-    dir = NULL;
-    session->dir_fd = snag_open_read_security_at(store->sessions_fd, session->id, true);
-    if (session->dir_fd < 0) {
-        snag_errorf(error, error_size, "cannot open new session directory: %s",
-                  strerror(errno));
-        goto out;
-    }
-    if (snag_store_verify_private_fd(session->dir_fd, true, "session directory",
-                          error, error_size) < 0 ||
-        snag_store_open_session_files(session, true, error, error_size) < 0)
-        goto out;
-    session->workspace = resolved;
-    resolved = NULL;
-    if (!snag_strcpy(session->default_provider,
-                    sizeof(session->default_provider), provider) ||
-        !snag_strcpy(session->default_model, sizeof(session->default_model), model) ||
-        !snag_strcpy(session->default_effort, sizeof(session->default_effort), effort)) {
-        errno = EOVERFLOW;
-        goto out;
-    }
-    if (snag_session_commit(session, "session_created",
-                           session_created_data(session->workspace, provider,
-                                                model, effort),
-                           NULL, error, error_size) < 0)
-        goto out;
-    if (snag_sync_dir(session->dir_fd) < 0 || snag_sync_dir(store->sessions_fd) < 0) {
-        snag_errorf(error, error_size, "cannot sync new session directory: %s",
-                  strerror(errno));
-        goto out;
-    }
-    rc = 0;
-out:
-    free(resolved);
-    free(dir);
-    if (rc < 0 && created) {
-        char failed_id[SNAG_ID_HEX_LEN + 1u];
-        memcpy(failed_id, session->id, sizeof(failed_id));
-        if (session->dir_fd >= 0) {
-            (void)snag_unlink_at(session->dir_fd, "events.jsonl", false);
-            (void)snag_unlink_at(session->dir_fd, "lock", false);
-        }
-        snag_session_close(session);
-        (void)snag_unlink_at(store->sessions_fd, failed_id, true);
-    }
-    return rc;
+    return snag_session_persist(store, session, error, error_size);
 }

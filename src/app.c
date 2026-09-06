@@ -321,6 +321,11 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
                      char *error, size_t error_size)
 {
     uint64_t seq;
+    if (strcmp(type, "goal_started") == 0 &&
+        snag_session_persist(&app->store, &app->session, error, error_size) < 0) {
+        json_decref(data);
+        return -1;
+    }
     int64_t offset = app->session.log_end;
     if (snag_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
@@ -330,8 +335,9 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
         strcmp(type, "future_turn_edited") == 0)
         ++app->input_generation;
     struct snag_render_source source = {offset, (size_t)(app->session.log_end - offset)};
-    if (snag_ui_durable(&app->ui, app->session.log_fd, source, type,
-                       app->config->default_timeout_ms, app->config->max_output_bytes) < 0 ||
+    if ((!app->session.pending_log &&
+         snag_ui_durable(&app->ui, app->session.log_fd, source, type,
+                         app->config->default_timeout_ms, app->config->max_output_bytes) < 0) ||
         snag_ui_event(&app->ui, seq, type) < 0) {
         snag_errorf(error, error_size, "durable event output failed");
         return -1;
@@ -395,6 +401,10 @@ format_context_meter(struct app_state *app, bool active,
     unsigned int percent;
     int n;
 
+    if (!active && app->session.turn_count == 0u) {
+        memcpy(meter, "0", sizeof("0"));
+        return 0;
+    }
     if (!provider || !model || !effort) {
         errno = EINVAL;
         return -1;
@@ -1999,6 +2009,11 @@ send_operator_routed(struct app_state *app, const char *line, const char *text,
     snag_buf_init(&report, 8192u);
     rc = snag_irc_send_route(app->irc, &app->ui.input_route, false, kind,
                               text, &report, error, sizeof(error));
+    if ((rc == 0 || rc == 2) &&
+        snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0) {
+        snag_buf_reset(&report);
+        rc = -1;
+    }
     for (size_t i = 0u; i < app->irc_destinations.count; ++i)
         if (app->irc_destinations.items[i].target.id == app->ui.selection.id &&
             !app->irc_destinations.items[i].joined)
@@ -2811,6 +2826,10 @@ run_turn(struct app_state *app, const char *prompt,
             "queued prompt must be nonempty valid UTF-8 within 256 KiB" :
             "prompt must be nonempty valid UTF-8 within 1 MiB");
         return 2;
+    }
+    if (snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0) {
+        (void)app_error(app, error);
+        return 3;
     }
     if (read_only && app->networked && !app->execute &&
         select_view(app, SNAG_RENDER_ROLLOUT, false) < 0)
@@ -3715,7 +3734,7 @@ write_resume_command(struct app_state *app, const char *program,
 {
     struct snag_buf command;
 
-    if (!dotdir || !app->session.id[0] || app->session.delete_requested)
+    if (!dotdir || app->session.log_fd < 0 || app->session.delete_requested)
         return;
     snag_buf_init(&command, RESUME_COMMAND_MAX);
     if (build_resume_command(app, program, dotdir, &command) == 0 &&
@@ -4289,7 +4308,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             rc = 2;
             goto out;
         }
-        if (snag_session_create(&app.store, &app.session, selected_workspace,
+        if (snag_session_prepare(&app.session, selected_workspace,
                                selected_provider->name, new_model, new_effort,
                                error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);

@@ -197,6 +197,69 @@ read_file(const char *path, char *buf, size_t size)
     return (size_t)n;
 }
 
+static int
+count_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
+            char *error, size_t error_size)
+{
+    size_t *count = opaque;
+    (void)type;
+    (void)data;
+    (void)error;
+    (void)error_size;
+    assert(seq == ++*count);
+    return 0;
+}
+
+static void
+test_pending_session(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    char id[SNAG_ID_HEX_LEN + 1u], error[256];
+    struct stat st;
+    size_t count = 0u;
+    int64_t end;
+
+    snag_session_init(&session);
+    assert(snag_session_prepare(&session, workspace, "default", "model", "high",
+                                error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    assert(session.pending_log && session.log_fd == -1 && session.dir_fd == -1);
+    assert(fstatat(store->sessions_fd, id, &st, 0) < 0 && errno == ENOENT);
+    snag_session_close(&session);
+    assert(fstatat(store->sessions_fd, id, &st, 0) < 0 && errno == ENOENT);
+
+    assert(snag_session_prepare(&session, workspace, "default", "model", "high",
+                                error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "model_selection_changed",
+        json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+                  "old_provider", "default", "new_provider", "default",
+                  "old_model", "model", "new_model", "selected",
+                  "old_effort", "high", "new_effort", "low"), NULL, error, sizeof(error)) == 0);
+    assert(snag_session_each_event(&session, count_event, &count,
+                                   error, sizeof(error)) == 0 && count == 2u);
+    memcpy(id, session.id, sizeof(id));
+    end = session.log_end;
+    /* Failed publication must leave the complete in-memory session retryable. */
+    assert(mkdirat(store->sessions_fd, id, 0700) == 0);
+    assert(snag_session_persist(store, &session, error, sizeof(error)) < 0);
+    assert(session.pending_log && session.log_end == end && session.next_seq == 3u);
+    assert(unlinkat(store->sessions_fd, id, AT_REMOVEDIR) == 0);
+    assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
+    assert(!session.pending_log && session.log_fd >= 0 && session.log_end == end);
+    assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.next_seq == 3u && session.log_end == end);
+    assert(strcmp(session.default_model, "selected") == 0);
+    assert(strcmp(session.default_effort, "low") == 0);
+    count = 0u;
+    assert(snag_session_each_event(&session, count_event, &count,
+                                   error, sizeof(error)) == 0 && count == 2u);
+    id[8] = '\0';
+    assert(snag_session_delete(store, &session, id, NULL, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+}
+
 int
 main(void)
 {
@@ -226,6 +289,7 @@ main(void)
     snag_store_init(&store);
     snag_session_init(&session);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
+    test_pending_session(&store, workspace);
     assert(snag_session_create(&store, &session, workspace,
                               "default", "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);

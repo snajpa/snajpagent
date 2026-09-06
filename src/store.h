@@ -126,6 +126,7 @@ struct snag_session {
     int dir_fd;
     int log_fd;
     int lock_fd;
+    struct snag_buf *pending_log; /* New sessions stay in memory until input. */
     int64_t log_end;
     uint64_t next_seq;
     uint64_t turn_count;
@@ -184,6 +185,11 @@ int snag_store_open(struct snag_store *store, const char *dotdir,
 
 void snag_session_init(struct snag_session *session);
 void snag_session_close(struct snag_session *session);
+int snag_session_prepare(struct snag_session *session, const char *workspace,
+                         const char *provider, const char *model, const char *effort,
+                         char *error, size_t error_size);
+int snag_session_persist(struct snag_store *store, struct snag_session *session,
+                         char *error, size_t error_size);
 int snag_session_create(struct snag_store *store, struct snag_session *session,
                        const char *workspace, const char *provider,
                        const char *model,
