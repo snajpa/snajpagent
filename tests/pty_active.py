@@ -938,7 +938,8 @@ def test_read_only_queue_replay_and_edit():
     child.send(b"/queue 1 edit\r")
     end = child.wait(b"/ro ping", start=end)
     child.send(b"\x15/ro repeat\r")
-    child.wait(b"/ro repeat", start=end)
+    end = child.wait(b"/ro repeat", start=end)
+    child.wait(f"openai/{DEFAULT_MODEL}/medium".encode(), start=end)
     child.send(b"\x03")
     end = child.wait(b"turn interrupted")
     child.exit_cleanly(end)
@@ -973,6 +974,7 @@ def test_read_only_queue_replay_and_edit():
     assert b"goal done" not in child.buf[end:] and b"pong" not in child.buf[end:]
     child.send(b"\x15/ro repeat\r")
     end = child.wait(b"/ro repeat", start=end)
+    child.wait(f"openai/{DEFAULT_MODEL}/medium".encode(), start=end)
     child.send(b"/next\r")
     end = child.wait(b"haha", start=end)
     end = child.wait(b"goal done", start=end)
