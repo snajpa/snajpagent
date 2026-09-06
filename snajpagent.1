@@ -608,8 +608,17 @@ Delete at the cursor when text remains.  On an empty draft, interrupt active
 work and exit without waiting for the model or command to finish.
 .TP
 .BR Up , " Down"
-Move through the shared persistent prompt history while preserving the current
-draft at the newest boundary.
+Move within the displayed rows of a wrapped or multiline draft, preserving the
+preferred terminal column.  At the draft edges, move through shared persistent
+prompt history and preserve the current draft at its newest boundary.
+.TP
+.BR Ctrl-P , " Ctrl-N"
+Move directly through prompt history, including from inside a multiline draft.
+.TP
+.BR Ctrl-Left , " Ctrl-Right" , " Option-Left" , " Option-Right"
+Move to the previous word start or next word end.  Words are separated by spaces,
+tabs or newlines, as with Ctrl-W.  Common PC control arrows, Mac option arrows
+and Meta-b/Meta-f sequences are accepted; the terminal must transmit them.
 .TP
 .B Ctrl-R
 Start case-sensitive incremental reverse search over prompt history.  Press it
@@ -704,7 +713,10 @@ include the colored bullet lines
 .BR "• Compacted" ,
 .BR "• Goal set" ,
 and
-.BR "• Goal cleared" .
+.BR "• Goal cleared" ,
+as well as updates, pause/resume, blocked and wording-lock changes.  An automatic
+pause retains its reason in that single notice.  Consecutive bullet notices form
+a group with one empty row around it, and none between members.
 Errors and local-command results appear in either view.
 .TP
 .B 1
@@ -748,6 +760,12 @@ retains the model's exact bytes.
 Top-level prose paragraphs are bulleted, with one empty row above and below,
 even while a paragraph is streaming.  Adjacent paragraphs share that row;
 headings, lists, code, tables and prompts use the same paragraph boundary.
+The editable draft also wraps whole words when they fit a terminal row; longer
+words use terminal wrapping.  These displayed wraps do not insert submitted
+newlines.  Explicit newlines and leading whitespace remain part of the draft.
+Any prompt after non-prompt content has one empty row above it.  Consecutive
+submitted prompts may be adjacent.
+.PP
 Generated prose wraps align below the paragraph text.  Code-block whitespace
 and the provider's original text are unchanged.  The live prompt is displayed
 immediately on cursor-capable terminals, without waiting for a quiet period.

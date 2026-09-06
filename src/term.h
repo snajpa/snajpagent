@@ -70,6 +70,8 @@ struct snag_term {
     struct snag_buf completion_output;
     bool completion_armed;
     size_t painted_label_len;
+    size_t painted_cursor_byte;
+    size_t preferred_column;
     unsigned int painted_columns;
     bool painted_color;
     size_t output_columns;

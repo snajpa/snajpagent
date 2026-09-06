@@ -37,11 +37,20 @@ The renderer counts existing terminal newlines and adds only the missing ones.
 Repeated source blank lines at prose boundaries cannot multiply the gap; internal
 code whitespace is preserved. A generated
 soft wrap of prose continues with two spaces, aligned with the first paragraph
-character after `• `. When that wrap would otherwise print a separator space as
+character after `• `, including margin wraps in words split across provider
+deltas. Already-visible word prefixes are not delayed or moved backwards;
+continued fragments fill the row, then resume at the same indentation. Apostrophes
+are not special break markers. When that wrap would otherwise print a separator space as
 the first character on the new row, that one space is omitted. Explicit
 non-blank source line breaks within one paragraph remain unbulleted. Headings,
 list items, block quotes, and fenced code keep their own structural markers
 instead of gaining a redundant paragraph bullet.
+
+Prompt and lifecycle boundaries use the same physical newline count. Consecutive
+prompts need no gap; all prompts after other content do. Compaction and every
+goal-state notice form one bullet class with a shared gap around the group,
+including when deferred rollout notices are replayed. Status queries, no-op
+warnings and errors remain ordinary content, not lifecycle transitions.
 
 IRC chat is the one presentation exception: its timestamp and sender prefix
 already delimit each independently framed message, so ordinary prose receives

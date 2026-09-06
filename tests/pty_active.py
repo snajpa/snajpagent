@@ -30,6 +30,7 @@ DEFAULT_IDLE_PROMPT = f" openai/{DEFAULT_MODEL}/medium   0% › ".encode()
 DEFAULT_ACCOUNTED_IDLE_PROMPT = f" openai/{DEFAULT_MODEL}/medium   ?% › ".encode()
 DEFAULT_ACTIVE_PROMPT = f" openai/{DEFAULT_MODEL}/medium   ?% » ".encode()
 GOAL_SET = "• Goal set".encode()
+GOAL_UPDATED = "• Goal updated".encode()
 GOAL_CLEARED = "• Goal cleared".encode()
 COMPACTED = "• Compacted".encode()
 RESUME_HEADER = \
@@ -650,13 +651,13 @@ def test_repeated_steering_rearms_composer():
 
     child.send(b"first steer\r")
     first_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"first steer")
-    boundary = child.wait(b"first steer\r\n\r\n",
+    boundary = child.wait(b"first steer\r\n",
                           start=first_ack - len(b"first steer"))
     child.wait(DEFAULT_ACTIVE_PROMPT, start=boundary)
     child.send(b"second steer\r")
     second_ack = child.wait(DEFAULT_ACTIVE_PROMPT + b"second steer",
                             start=first_ack)
-    boundary = child.wait(b"second steer\r\n\r\n",
+    boundary = child.wait(b"second steer\r\n",
                           start=second_ack - len(b"second steer"))
     child.wait(DEFAULT_ACTIVE_PROMPT, start=boundary)
     answer_end = child.wait(b"repeated steering complete")
@@ -808,16 +809,29 @@ def test_armed_fifo():
 
 def test_queue_prompt_counts():
     child = Child([])
+
+    def count_repaint(count, start):
+        # The retained frame may repaint just the changed digits. The tmux
+        # queue case verifies the complete prompt and counts on screen.
+        end = time.monotonic() + 8.0
+        pattern = re.compile(re.escape(f"({count}) »".encode()) +
+                             rb"|\r\x1b\[51C" + str(count).encode() + rb"(?=[)\r])")
+        while time.monotonic() < end:
+            match = pattern.search(child.buf, start)
+            if match:
+                return match.end()
+            child.read_once(0.1)
+        raise AssertionError(f"queue count {count} did not repaint: {bytes(child.buf)!r}")
     try:
         child.wait(DEFAULT_IDLE_PROMPT)
         child.send(b"queue_slow\r")
         after = child.wait(b"working slowly")
         for count in range(1, 11):
             child.send(f"entry-{count}\t".encode())
-            after = child.wait(f"({count}) »".encode(), start=after)
+            after = count_repaint(count, after)
         for command, count in ((b"/queue pop\r", 9), (b"/queue 1 delete\r", 8)):
             child.send(command)
-            after = child.wait(f"({count}) »".encode(), start=after)
+            after = count_repaint(count, after)
         child.send(b"\t")
         after = child.wait(b" : ", start=after)
         child.drain(0.05)
@@ -826,7 +840,7 @@ def test_queue_prompt_counts():
         after = child.wait(b"/medium   ?% (8) \xc2\xbb ", start=after)
         child.send(b"/queue clear\r")
         after = child.wait(b"8 future turns cancelled", start=after)
-        after = child.wait(b"/medium   ?% \xc2\xbb ", start=after)
+        after = child.wait("»".encode(), start=after)
         child.send(b"\x03")
         after = child.wait(b"turn interrupted", start=after)
         child.exit_cleanly(after)
@@ -1493,7 +1507,7 @@ def test_prompt_history_and_reverse_search():
     cancelled = bytes(second.buf[cancel:prompt_end])
     assert_bytes_in_order(cancelled, b"confirmation-cancelled-draft")
     assert b"delete cancelled" not in cancelled
-    assert cancelled.count(DEFAULT_ACCOUNTED_IDLE_PROMPT) == 1
+    assert cancelled.count(DEFAULT_ACCOUNTED_IDLE_PROMPT.rstrip()) == 1, cancelled
 
     run = subprocess.run(
         [BINARY, "--dotdir", DOTDIR, "-e", "--",
@@ -1656,7 +1670,7 @@ def test_goal_model_rewrite_and_lock():
     child.wait(PROMPT.rstrip())
     child.send(b"/goal rewrite goal\r")
     set_end = child.wait(GOAL_SET)
-    rewritten_end = child.wait(GOAL_SET, start=set_end)
+    rewritten_end = child.wait(GOAL_UPDATED, start=set_end)
     cleared_end = child.wait(GOAL_CLEARED, start=rewritten_end)
     answer_end = child.wait(b"goal done", start=cleared_end)
     child.exit_cleanly(answer_end)
@@ -1735,7 +1749,7 @@ def test_goal_user_terminal_commands_and_unlock():
     set_end = child.wait(GOAL_SET)
     child.wait(b"working on goal", start=set_end)
     child.send(b"/goal set retitled goal\r")
-    reworded_end = child.wait(GOAL_SET, start=set_end)
+    reworded_end = child.wait(GOAL_UPDATED, start=set_end)
     child.send(b"/goal lock\r")
     child.wait(b"Goal wording locked against model changes",
                start=reworded_end)
@@ -1774,8 +1788,10 @@ def test_goal_refusal_failure_block_and_restart_state():
     child.wait(PROMPT.rstrip())
     child.send(b"/goal refusing goal\r")
     child.wait(b"I cannot continue this goal")
-    paused_end = child.wait(b"goal paused after model refusal")
+    paused_end = child.wait(b"Goal paused after model refusal")
     child.exit_cleanly(paused_end)
+    assert bytes(child.buf).count(b"Goal paused") == 1, bytes(child.buf)
+    assert b"goal paused after" not in child.buf, bytes(child.buf)
     log = events(new_session(before))
     assert one(log, "goal_paused")["data"]["reason"] == "refusal"
 
@@ -1784,8 +1800,10 @@ def test_goal_refusal_failure_block_and_restart_state():
     child.wait(PROMPT.rstrip())
     child.send(b"/goal failing goal\r")
     child.wait(b"fixture goal provider failed")
-    paused_end = child.wait(b"goal paused after the turn stopped")
+    paused_end = child.wait(b"Goal paused after the turn stopped")
     child.exit_cleanly(paused_end)
+    assert bytes(child.buf).count(b"Goal paused") == 1, bytes(child.buf)
+    assert b"goal paused after" not in child.buf, bytes(child.buf)
     log = events(new_session(before))
     assert one(log, "goal_paused")["data"]["reason"] == "turn_stopped"
     one(log, "turn_failed")
@@ -1838,7 +1856,7 @@ def test_saved_goal_restored_without_lookup():
         wording = "obnovit žluťoučký plán bez opakování"
         start = len(child.buf)
         child.send(("/goal set " + wording + "\r").encode())
-        changed = child.wait(GOAL_SET, start=start)
+        changed = child.wait(GOAL_UPDATED, start=start)
         child.send(b"/goal lock\r")
         locked = child.wait(b"Goal wording locked against model changes", start=changed)
         child.wait_idle_prompt(start=locked)
@@ -1983,7 +2001,7 @@ def test_queue_mutation_commands():
     child.wait(b"next " + PROMPT + b"fourth")
     child.send(b"\x03")
     interrupted_end = child.wait(b"turn interrupted")
-    child.wait(b"/medium   ?% (2) \xe2\x80\xba ", start=interrupted_end)
+    child.wait_idle_prompt(start=interrupted_end)
 
     child.send(b"/queue 1 edit\r")
     edit_start = child.wait("edit 1 › ".encode(), start=interrupted_end)
@@ -3088,7 +3106,7 @@ def test_known_context_meter():
     used = completed["usage"]["input_tokens"]
     percent = min(100, (used * 100 + hard - 1) // hard)
     # The idle prompt reports measured usage, and new unknown requests cannot replace it.
-    child.wait(f" first/gpt-5.6-luna/high {percent:3}% › ".encode(), start=answered)
+    child.wait(f" first/gpt-5.6-luna/high {percent:3}% ›".encode(), start=answered)
     child.exit_cleanly(answered)
 
 
@@ -3862,7 +3880,7 @@ def test_network_view_routing_and_atomic_catchup():
         boundary_end = child.wait("── rollout ──".encode(), start=switch_start)
         prompt_end = child.wait(rollout_idle, start=boundary_end)
         transition = bytes(child.buf[boundary_end:prompt_end])
-        prompt_at = transition.find(rollout_idle)
+        prompt_at = transition.find(rollout_idle.rstrip())
         assert prompt_at >= 0, transition
         catchup = re.sub(LIVE_GAP, b"", transition[:prompt_at])
         assert network_idle not in catchup, catchup
@@ -3870,7 +3888,7 @@ def test_network_view_routing_and_atomic_catchup():
         assert catchup.count(first) == 1, catchup
         assert catchup.count(second) == 1, catchup
         assert catchup.find(first) < catchup.find(second), catchup
-        assert transition.count(rollout_idle) == 1, transition
+        assert transition.count(rollout_idle.rstrip()) == 1, transition
         return prompt_end
 
     try:
@@ -4565,7 +4583,7 @@ def test_goal_orderly_quit_resume():
                 # A turn-only Ctrl-C deliberately pauses first; a later exit
                 # must preserve that pause, not turn it back into an active goal.
                 child.send(b"\x03")
-                child.wait(b"goal paused after the turn stopped")
+                child.wait(b"Goal paused after the turn stopped")
                 child.send(b"\x03" * 4)
             else:
                 child.send(b"\x04")

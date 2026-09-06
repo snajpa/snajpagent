@@ -3520,7 +3520,6 @@ run_tracked_turn(struct app_state *app, const char *prompt,
 {
     char error[256] = {0};
     const char *reason = NULL;
-    const char *message = NULL;
     int rc = run_turn(app, prompt, queued, goal_turn, read_only);
 
     app->irc_turn_replies.count = 0u;
@@ -3531,10 +3530,8 @@ run_tracked_turn(struct app_state *app, const char *prompt,
         return rc;
     if (app->last_turn_refused) {
         reason = "refusal";
-        message = "goal paused after model refusal";
     } else if (rc != 0) {
         reason = "turn_stopped";
-        message = "goal paused after the turn stopped";
     }
     if (!reason)
         return rc;
@@ -3542,8 +3539,6 @@ run_tracked_turn(struct app_state *app, const char *prompt,
         (void)app_error(app, error[0] ? error : "goal pause could not be saved");
         return 3;
     }
-    if (message && app_warning(app, message) < 0)
-        return 6;
     return rc;
 }
 

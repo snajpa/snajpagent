@@ -201,7 +201,7 @@ boundary_before(struct snag_render *render, int fd, unsigned int kind,
         if (snag_term_write(fd, "\n\n", count) < 0 ||
             (render->term && snag_term_note_output(render->term, "\n\n", count, "") < 0))
             return -1;
-        render->trailing_newlines = 2u;
+        render->trailing_newlines += (unsigned int)count;
         if (render->public_item_open)
             render->public_column = 0u;
     }
@@ -592,7 +592,7 @@ snag_render_submitted(struct snag_render *render, const char *label, const char 
         if (rc == 0 && output_begin(render) < 0)
             rc = -1;
         else if (rc == 0) {
-            rc = write_role_chunk(render, BOUNDARY_PROMPT, STDERR_FILENO, COLOR_AGENT,
+            rc = write_role_block(render, BOUNDARY_PROMPT, STDERR_FILENO, COLOR_AGENT,
                                   (char *)line.data, line.len,
                                   line.len - len - 1u, terminal, true);
             if (terminal && render->term)
@@ -609,7 +609,6 @@ snag_render_submitted(struct snag_render *render, const char *label, const char 
             render->term->output_gap = 1u;
         if (render->public_item_open) {
             render->public_item_ended_lf = true;
-            render->public_trailing_newlines = 1u;
             render->public_column = 0u;
         }
     }
@@ -635,8 +634,8 @@ snag_render_before_prompt(struct snag_render *render)
         render->previous_public_item = false;
         return 0;
     }
-    count = render->previous_public_newlines < 2u ?
-            2u - render->previous_public_newlines : 0u;
+    count = render->trailing_newlines < 2u ?
+            2u - render->trailing_newlines : 0u;
     if (count && write_block(render, STDERR_FILENO, newlines, count,
                              false, true) < 0)
         return -1;
@@ -726,9 +725,9 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
                                      render->stderr_terminal;
     if (render->markdown && terminal && render->previous_public_item &&
         render->previous_public_markdown && render->previous_public_fd == fd &&
-        render->previous_public_newlines < 2u) {
+        render->trailing_newlines < 2u) {
         static const char newlines[] = "\n\n";
-        size_t count = 2u - render->previous_public_newlines;
+        size_t count = 2u - render->trailing_newlines;
 
         if (write_block(render, fd, newlines, count, false, true) < 0)
             return -1;
@@ -743,7 +742,6 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
     render->public_item_open = true;
     render->public_item_bytes = label_len != 0u;
     render->public_item_ended_lf = label_len && label[label_len - 1u] == '\n';
-    render->public_trailing_newlines = 0u;
     render->public_column = label_len ? snag_term_text_width(label, label_len) : 0u;
     render->wrap_has_word = false;
     render->wrap_continuation = false;
@@ -784,7 +782,6 @@ fail:
         render->public_item_open = false;
         render->public_item_bytes = false;
         render->public_item_ended_lf = false;
-        render->public_trailing_newlines = 0u;
         render->markdown_rendering = false;
         render->public_fd = -1;
         snag_buf_free(&render->markdown_state.table);
@@ -827,8 +824,6 @@ public_write(struct snag_render *render, const char *text, size_t len)
         return -1;
     render->public_item_bytes = true;
     render->public_item_ended_lf = text[len - 1u] == '\n';
-    render->public_trailing_newlines =
-        trailing_newlines(render->public_trailing_newlines, text, len);
     if (terminal) {
         render->trailing_newlines = trailing_newlines(render->trailing_newlines, text, len);
     }
@@ -897,8 +892,38 @@ flush_wrap_pending(struct snag_render *render)
         if (width == SIZE_MAX)
             return -1;
     }
-    if (public_write(render, text, len) < 0)
+    /* A continued token has already been displayed; do not buffer or move it
+     * backwards. Materialize its margin wraps too, so punctuation/delta splits
+     * cannot bypass prose indentation. Include combining marks with their base. */
+    if (columns >= 20u && render->markdown_rendering &&
+        render->markdown_state.prose && render->markdown_prose_bullets &&
+        (render->public_column >= columns || width > columns - render->public_column)) {
+        while (len) {
+            size_t used = 0u, cells = 0u;
+            size_t room = render->public_column < columns ? columns - render->public_column : 0u;
+            while (used < len) {
+                size_t n = snag_utf8_size((unsigned char)text[used]);
+                size_t w = snag_term_text_width(text + used, n);
+                if (w > room - cells)
+                    break;
+                used += n;
+                cells += w;
+            }
+            if (used && public_write(render, text, used) < 0)
+                return -1;
+            render->public_column += cells;
+            text += used;
+            len -= used;
+            if (len) {
+                if (public_write(render, "\n  ", 3u) < 0)
+                    return -1;
+                render->public_column = 2u;
+            }
+        }
+        width = 0u;
+    } else if (public_write(render, text, len) < 0) {
         return -1;
+    }
     if (render->public_column > SIZE_MAX - width) {
         errno = EOVERFLOW;
         return -1;
@@ -2266,7 +2291,6 @@ close_public_item(struct snag_render *render, bool discard_incomplete)
     bool had_bytes;
     bool markdown_item;
     bool terminal;
-    unsigned int trailing_newlines;
     bool invalid = false;
     int rc = 0;
     int saved_errno = 0;
@@ -2306,12 +2330,10 @@ close_public_item(struct snag_render *render, bool discard_incomplete)
     had_bytes = render->public_item_bytes;
     markdown_item = render->markdown_rendering;
     terminal = public_terminal(render);
-    trailing_newlines = render->public_trailing_newlines;
     render->public_item_open = false;
     render->public_output_open = false;
     render->public_item_bytes = false;
     render->public_item_ended_lf = false;
-    render->public_trailing_newlines = 0u;
     render->markdown_rendering = false;
     render->markdown_preserve_fence = false;
     render->public_fd = -1;
@@ -2330,13 +2352,9 @@ close_public_item(struct snag_render *render, bool discard_incomplete)
         write_block(render, STDERR_FILENO, "\n", 1u, false, true) < 0)
         rc = -1;
     if (had_bytes && terminal) {
-        if (!ended_lf)
-            trailing_newlines = fd == STDERR_FILENO || render->stderr_terminal ?
-                                1u : 0u;
         render->previous_public_item = true;
         render->previous_public_markdown = markdown_item;
         render->previous_public_fd = fd;
-        render->previous_public_newlines = trailing_newlines;
     }
     if (rc < 0 && !saved_errno)
         saved_errno = errno;
@@ -3260,13 +3278,23 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
         if (render->history_fd < 0)
             return -1;
     }
-    if (strcmp(type, "goal_lock_changed") == 0) {
+    if (strcmp(type, "goal_lock_changed") == 0 || strcmp(type, "goal_paused") == 0) {
         json_t *event = source_event(render, source);
         if (!event)
             return -1;
-        bool locked = json_is_true(json_object_get(json_object_get(event, "data"), "locked"));
-        int rc = render_bullet(render, locked ? "Goal wording locked against model changes" :
-                                               "Goal wording unlocked for model changes");
+        json_t *data = json_object_get(event, "data");
+        const char *notice;
+        if (strcmp(type, "goal_paused") == 0) {
+            const char *reason = json_string_value(json_object_get(data, "reason"));
+            notice = reason && strcmp(reason, "refusal") == 0 ?
+                "Goal paused after model refusal" :
+                reason && strcmp(reason, "turn_stopped") == 0 ?
+                "Goal paused after the turn stopped" : "Goal paused at the current turn boundary";
+        } else {
+            notice = json_is_true(json_object_get(data, "locked")) ?
+                "Goal wording locked against model changes" : "Goal wording unlocked for model changes";
+        }
+        int rc = render_bullet(render, notice);
         json_decref(event);
         return rc;
     }
@@ -3338,8 +3366,6 @@ snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
         notice = "Goal set";
     else if (strcmp(type, "goal_reworded") == 0)
         notice = "Goal updated";
-    else if (strcmp(type, "goal_paused") == 0)
-        notice = "Goal paused at the current turn boundary";
     else if (strcmp(type, "goal_resumed") == 0)
         notice = "Goal resumed";
     else if (strcmp(type, "goal_blocked") == 0)

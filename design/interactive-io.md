@@ -165,6 +165,19 @@ paragraph break, prompt redraw, or repeated boundary call cannot accumulate
 extra empty rows. The rule is independent of Markdown presentation type and
 does not alter submitted text, model text, events, or provider traffic.
 
+Every prompt after non-prompt output has one empty row above it, irrespective
+of view or Markdown mode. Consecutive submissions can be adjacent. Compaction
+and goal changes share a bullet class: one row around a group, none inside it.
+Pause reasons come from the durable event, not a duplicate host warning.
+
+The composer word-wraps fitting whitespace-delimited words while retaining every
+draft byte. Overlong words hard-wrap; explicit newlines keep their existing
+indentation. Up/Down move among displayed draft rows with a preferred cell
+column, then enter history at the edges. Ctrl-P/Ctrl-N always select history.
+Ctrl-arrow, Alt-arrow and Meta-b/f implement the same whitespace-delimited word
+movement as Ctrl-W. Display-to-source mapping uses the same sanitizing/wrapping
+pass as painting; resize first accounts for the actual old painted bytes.
+
 Rendered prose also has one empty row above and below throughout streaming,
 independent of its neighboring block type. The terminal's existing output detour
 stores a row count: it parks below live prose and resumes at the retained logical
@@ -270,7 +283,7 @@ as one UTF-8 physical line; backslash, newline, carriage return, tab, and other
 controls use reversible text escapes. The `0600` no-follow regular file retains
 the newest 100 decoded entries within 4 MiB. Torn tails and malformed records
 are skipped or repaired without changing accepted-input semantics. Fresh
-Up/Down navigation and Ctrl-R refresh from disk; an active search keeps a stable
+History navigation and Ctrl-R refresh from disk; an active search keeps a stable
 snapshot. Initial noninteractive input, confirmation input, aborted drafts,
 peer/model/tool text, and resumed `last_user` are excluded.
 

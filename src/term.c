@@ -23,7 +23,10 @@ static int redraw(struct snag_term *term);
 static size_t previous_cp(const unsigned char *s, size_t pos);
 static int compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
                          size_t *cursor_row, size_t *cursor_col,
-                         size_t *end_row, size_t *end_col);
+                         size_t *end_row, size_t *end_col, size_t *source_offset);
+static bool word_space(unsigned char c);
+static void frame_position(const struct snag_buf *frame, size_t offset, unsigned int columns,
+                           size_t *row, size_t *col);
 
 static void
 mark_sigint(int signal_number)
@@ -60,15 +63,15 @@ append_escape(struct snag_buf *out, uint32_t cp)
 static int
 append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
             bool prompt, size_t indent, unsigned int columns,
-            size_t stop, size_t *cursor_byte)
+            size_t stop, size_t *cursor_byte, bool reverse)
 {
     size_t col = indent;
     size_t i = 0u;
 
     if (columns >= 20u)
         col %= columns;
-    if (stop == 0u && cursor_byte)
-        *cursor_byte = out->len;
+    if (cursor_byte)
+        *cursor_byte = reverse ? 0u : out->len;
     while (i < len) {
         uint32_t cp;
         size_t n = snag_utf8_decode(text + i, len - i, &cp);
@@ -80,6 +83,22 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
             cp = text[i];
             n = 1u;
         }
+        /* A displayed wrap never changes the draft or its byte offsets. */
+        if (prompt && columns >= 20u && !word_space(text[i]) &&
+            (i == 0u || word_space(text[i - 1u]))) {
+            size_t end = i;
+            while (end < len && !word_space(text[end]))
+                ++end;
+            size_t word = snag_term_text_width((const char *)text + i, end - i);
+            if (word <= columns && col && word > columns - col) {
+                if (snag_buf_append(out, "\r\n", 2u) < 0)
+                    return -1;
+                col = 0u;
+            }
+        }
+        if (cursor_byte && (reverse ? out->len <= stop : i == stop))
+            *cursor_byte = reverse ? i : out->len;
+        before = out->len;
         if (cp == '\n') {
             if (prompt) {
                 if (snag_buf_append(out, "\r\n", 2u) < 0)
@@ -130,8 +149,8 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
             }
         }
         i += n;
-        if (i == stop && cursor_byte)
-            *cursor_byte = out->len;
+        if (cursor_byte && (reverse ? out->len <= stop : i == stop))
+            *cursor_byte = reverse ? i : out->len;
     }
     return 0;
 }
@@ -220,7 +239,7 @@ snag_term_write_safe(int fd, const char *text, size_t len)
     max = len * 8u + 32u;
     snag_buf_init(&out, max);
     rc = append_safe(&out, (const unsigned char *)text, len, false, 0u, 0u,
-                     len + 1u, NULL);
+                     len + 1u, NULL, false);
     if (rc == 0)
         rc = snag_term_write(fd, out.data, out.len);
     snag_buf_free(&out);
@@ -231,7 +250,7 @@ int
 snag_term_append_safe(struct snag_buf *out, const char *text, size_t len)
 {
     return append_safe(out, (const unsigned char *)text, len, false, 0u, 0u,
-                       len + 1u, NULL);
+                       len + 1u, NULL, false);
 }
 
 void
@@ -248,6 +267,7 @@ snag_term_init(struct snag_term *term)
     snag_buf_init(&term->completion_output, SNAG_MAX_DIRECT_PROMPT);
     term->columns = 80u;
     term->history_pos = SIZE_MAX;
+    term->preferred_column = SIZE_MAX;
     term->search_pos = SIZE_MAX;
 }
 
@@ -666,6 +686,7 @@ out:
 static void
 mark_input_activity(struct snag_term *term)
 {
+    term->preferred_column = SIZE_MAX;
     if (!term->active)
         return;
     term->typing_active = true;
@@ -890,15 +911,13 @@ spinner_timeout(struct snag_term *term, int timeout_ms)
 static int
 sync_prompt_layout_after_resize(struct snag_term *term)
 {
-    struct snag_buf scratch;
-    size_t cursor_row = 0u, cursor_col = 0u;
-    size_t end_row = 0u, end_col = 0u;
-    size_t label_len;
-    int rc = -1;
+    size_t cursor_row, cursor_col, end_row, end_col;
 
-    if (compose_frame(term, &scratch, &label_len, &cursor_row, &cursor_col,
-                       &end_row, &end_col) < 0)
-        goto out;
+    /* Reflow the bytes actually painted, not newly word-wrapped draft text. */
+    frame_position(&term->painted_prompt, term->painted_cursor_byte, term->columns,
+                   &cursor_row, &cursor_col);
+    frame_position(&term->painted_prompt, term->painted_prompt.len, term->columns,
+                   &end_row, &end_col);
     /*
      * tmux and VT terminals represent an exact-margin cursor as the pending
      * wrap position on the preceding row after reflow.  The renderer tracks
@@ -907,16 +926,13 @@ sync_prompt_layout_after_resize(struct snag_term *term)
      */
     if (cursor_row != 0u && cursor_col == 0u &&
         snag_term_write(STDERR_FILENO, " \b", 2u) < 0)
-        goto out;
+        return -1;
     term->rendered_rows = end_row + 1u;
     term->rendered_cursor_row = cursor_row;
     term->rendered_cursor_col = cursor_col;
     term->rendered_end_at_margin = end_row != 0u && end_col == 0u;
     term->rendered_cursor_pending_wrap = false;
-    rc = 0;
-out:
-    snag_buf_free(&scratch);
-    return rc;
+    return 0;
 }
 
 /* Views into sanitized prompt bytes, not a terminal-sized cell grid. */
@@ -976,7 +992,8 @@ frame_position(const struct snag_buf *frame, size_t offset, unsigned int columns
 
 static int
 compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
-               size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col)
+               size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col,
+               size_t *source_offset)
 {
     size_t label_len, cursor_byte = 0u, max;
     const char *label = prompt_label(term, &label_len);
@@ -1006,9 +1023,14 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
         return -1;
     out->max = max;
     if (append_safe(out, term->draft.data, term->draft.len, true, indent,
-                    term->columns, term->cursor, &cursor_byte) < 0)
+                    term->columns, source_offset ? *source_offset : term->cursor,
+                    &cursor_byte, source_offset != NULL) < 0)
         return -1;
-    frame_position(out, cursor_byte, term->columns, cursor_row, cursor_col);
+    if (source_offset)
+        *source_offset = cursor_byte;
+    else
+        term->painted_cursor_byte = cursor_byte;
+    frame_position(out, source_offset ? 0u : cursor_byte, term->columns, cursor_row, cursor_col);
     frame_position(out, out->len, term->columns, end_row, end_col);
     return 0;
 }
@@ -1322,7 +1344,7 @@ redraw(struct snag_term *term)
         return 0;
     }
     if (compose_frame(term, &out, &label_len, &cursor_row, &cursor_col,
-                       &end_row, &end_col) < 0)
+                       &end_row, &end_col, NULL) < 0)
         goto out;
     rc = paint_prompt(term, &out, label_len, cursor_row, cursor_col, end_row, end_col);
 out:
@@ -2125,6 +2147,64 @@ feed_text_byte(struct snag_term *term, unsigned char byte)
     return 0;
 }
 
+static size_t
+word_left(const struct snag_term *term)
+{
+    size_t pos = term->cursor;
+    while (pos && word_space(term->draft.data[previous_cp(term->draft.data, pos)]))
+        pos = previous_cp(term->draft.data, pos);
+    while (pos && !word_space(term->draft.data[previous_cp(term->draft.data, pos)]))
+        pos = previous_cp(term->draft.data, pos);
+    return pos;
+}
+
+static int
+move_vertical(struct snag_term *term, bool down, size_t preferred)
+{
+    struct snag_buf frame;
+    size_t label, row, col, end_row, end_col, source;
+    size_t target = term->rendered_cursor_row;
+    int rc;
+
+    if (term->history_pos != SIZE_MAX || (!down && !target) ||
+        (down && target + 1u >= term->rendered_rows))
+        return down ? history_down(term) : history_up(term);
+    target = down ? target + 1u : target - 1u;
+    if (preferred == SIZE_MAX)
+        preferred = term->rendered_cursor_col;
+    source = 0u;
+    struct prompt_row line = prompt_row(&term->painted_prompt, source, term->columns);
+    for (size_t y = 0u; y < target; ++y) {
+        source = line.next;
+        line = prompt_row(&term->painted_prompt, source, term->columns);
+    }
+    size_t width = 0u;
+    while (source < line.end) {
+        size_t next = prompt_cell_end(term->painted_prompt.data, source, line.end);
+        size_t cells = snag_term_text_width((char *)term->painted_prompt.data + source, next - source);
+        if (width + cells > preferred)
+            break;
+        width += cells;
+        source = next;
+    }
+    rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, &source);
+    snag_buf_free(&frame);
+    if (rc < 0)
+        return -1;
+    size_t old = term->cursor;
+    term->cursor = source;
+    rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
+    snag_buf_free(&frame);
+    if (rc < 0)
+        return -1;
+    if (row != target) {
+        term->cursor = old;
+        return down ? history_down(term) : history_up(term);
+    }
+    term->preferred_column = preferred;
+    return redraw(term);
+}
+
 struct escape_key {
     const char *bytes;
     size_t len;
@@ -2139,10 +2219,15 @@ enum {
     KEY_HOME,
     KEY_END,
     KEY_DELETE,
-    KEY_PASTE_BEGIN
+    KEY_PASTE_BEGIN,
+    KEY_WORD_LEFT,
+    KEY_WORD_RIGHT
 };
 
 static const struct escape_key keys[] = {
+    {"\033[1;5D", 6u, KEY_WORD_LEFT}, {"\033[1;5C", 6u, KEY_WORD_RIGHT},
+    {"\033[1;3D", 6u, KEY_WORD_LEFT}, {"\033[1;3C", 6u, KEY_WORD_RIGHT},
+    {"\033b", 2u, KEY_WORD_LEFT}, {"\033f", 2u, KEY_WORD_RIGHT},
     {"\033[A", 3u, KEY_UP}, {"\033[B", 3u, KEY_DOWN},
     {"\033[C", 3u, KEY_RIGHT}, {"\033[D", 3u, KEY_LEFT},
     {"\033[H", 3u, KEY_HOME}, {"\033[F", 3u, KEY_END},
@@ -2155,12 +2240,22 @@ apply_key(struct snag_term *term, int key)
 {
     if (term->searching && search_accept(term, false) < 0)
         return -1;
+    size_t preferred = term->preferred_column;
     mark_input_activity(term);
     switch (key) {
     case KEY_UP:
-        return history_up(term);
+        return move_vertical(term, false, preferred);
     case KEY_DOWN:
-        return history_down(term);
+        return move_vertical(term, true, preferred);
+    case KEY_WORD_LEFT:
+        term->cursor = word_left(term);
+        return redraw(term);
+    case KEY_WORD_RIGHT:
+        while (term->cursor < term->draft.len && word_space(term->draft.data[term->cursor]))
+            term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
+        while (term->cursor < term->draft.len && !word_space(term->draft.data[term->cursor]))
+            term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
+        return redraw(term);
     case KEY_RIGHT:
         term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
         return redraw(term);
@@ -2373,16 +2468,12 @@ feed_byte(struct snag_term *term, unsigned char byte,
         return redraw(term);
     case 0x15u:
         return delete_range(term, 0u, term->draft.len);
-    case 0x17u: {
-        size_t start = term->cursor;
-        while (start && word_space(term->draft.data[previous_cp(term->draft.data,
-                                                                 start)]))
-            start = previous_cp(term->draft.data, start);
-        while (start && !word_space(term->draft.data[previous_cp(term->draft.data,
-                                                                  start)]))
-            start = previous_cp(term->draft.data, start);
-        return delete_range(term, start, term->cursor);
-    }
+    case 0x17u:
+        return delete_range(term, word_left(term), term->cursor);
+    case 0x10u:
+        return history_up(term);
+    case 0x0eu:
+        return history_down(term);
     case 0x1au:
         return suspend_terminal(term);
     case 0x08u:
@@ -2409,6 +2500,7 @@ consume_resize(struct snag_term *term)
     if (term->input_only || !sigwinch_pending)
         return 0;
     sigwinch_pending = 0;
+    term->preferred_column = SIZE_MAX;
     if (!term->opened)
         return 0;
     was_capable = term->capable;

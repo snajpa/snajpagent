@@ -769,7 +769,7 @@ def assert_order(screen, fragments):
 def wrapped_fragment_pattern(fragment):
     if not fragment or "\n" in fragment:
         raise ValueError("wrapped fragment must be nonempty and single-line")
-    return re.compile(r"\n?".join(re.escape(char) for char in fragment))
+    return re.compile(r"(?:\n {0,2})?".join(re.escape(char) for char in fragment))
 
 
 def wait_wrapped_fragment(terminal, fragment, timeout=10.0):
@@ -848,7 +848,7 @@ def wait_normalized(terminal, needle, timeout=1.0):
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture(join_wrapped=True)
-        if needle in normalize_space(screen):
+        if normalize_space(needle) in normalize_space(screen):
             return screen, time.monotonic()
         if terminal.dead():
             raise AssertionError(
@@ -865,7 +865,12 @@ def assert_live_paragraph_gap(terminal, first, last):
     ends = [i for i, line in enumerate(lines) if last in line]
     if not starts or not ends:
         raise AssertionError(f"live paragraph missing: {first!r}, {last!r}:\n{screen}")
-    top, bottom = starts[-1], ends[-1]
+    top = starts[-1]
+    # The paragraph may grow between the observed fragment and this capture.
+    bottom = top
+    while bottom + 1 < len(lines) and lines[bottom + 1].strip():
+        bottom += 1
+    assert top <= ends[-1] <= bottom, screen
     if top == 0 or lines[top - 1].strip():
         raise AssertionError(f"live paragraph lacks its top gap:\n{screen}")
     if bottom + 1 >= len(lines) or lines[bottom + 1].strip():
@@ -885,41 +890,48 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
     terminal = TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, width, 14
     )
+    def prose_pattern(fragment):
+        return re.compile(r"(?:\n  )?".join(r"\s+" if c == " " else re.escape(c)
+                                            for c in fragment))
+
+    def wait_prose(fragment, timeout=1.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            screen = terminal.capture(join_wrapped=True)
+            if prose_pattern(fragment).search(screen):
+                return screen, time.monotonic()
+            time.sleep(0.01)
+        raise AssertionError(f"missing paced prose {fragment!r}:\n{screen}")
+
     try:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit("terminal_paced_unicode" if unicode else "terminal_paced_decode")
         prefix = "Paced tokens form inter" + ("🌙" if unicode else "")
         split = prefix + ("́" if unicode else "") + "fragment"
         expected = split + " and finish finalword"
-        wait_normalized(terminal, "Paced")
-        wait_normalized(terminal, "Paced tokens")
-        _, split_prefix_at = wait_normalized(
-            terminal, prefix
-        )
+        wait_prose("Paced")
+        wait_prose("Paced tokens")
+        _, split_prefix_at = wait_prose(prefix)
         assert_live_paragraph_gap(terminal, "• Paced", "inter")
         if typing:
             terminal.send_text("steer draft")
-            wait_wrapped_fragment(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft")
+            wait_normalized(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft")
             assert_live_paragraph_gap(terminal, "• Paced", "inter")
         if resize:
             time.sleep(0.05)
             terminal.resize(resize, 14)
             time.sleep(0.02)
             assert_live_paragraph_gap(terminal, "• Paced", "inter")
-        _, split_word_at = wait_normalized(
-            terminal, split
-        )
+        _, split_word_at = wait_prose(split)
         if split_word_at - split_prefix_at < 0.03:
             raise AssertionError(
                 "a complete split-word prefix was withheld until its suffix"
             )
         if typing:
             terminal.send_text(" more")
-            wait_wrapped_fragment(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft more")
-        wait_normalized(terminal, "and finish")
-        final_screen, final_at = wait_normalized(
-            terminal, expected, timeout=0.35
-        )
+            wait_normalized(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft more")
+        wait_prose("and finish")
+        final_screen, final_at = wait_prose(expected, timeout=0.35)
         if "working…" in final_screen:
             raise AssertionError(
                 "activity appeared while the paced public item was open"
@@ -927,7 +939,7 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
 
         time.sleep(0.45)
         held_screen = terminal.capture(join_wrapped=True)
-        if expected not in normalize_space(held_screen):
+        if not prose_pattern(expected).search(held_screen):
             raise AssertionError("the visible final fragment was erased")
         assert_live_paragraph_gap(terminal, "• Paced", "finalword")
         if typing:
@@ -935,7 +947,7 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
             normalized = normalize_space(screen)
             if normalized.count("steer draft more") != 1 or normalized.count("steer draft") != 1:
                 raise AssertionError(f"stale steer draft in scrollback:\n{screen}")
-            if normalized.count(expected) != 1:
+            if len(prose_pattern(expected).findall(screen)) != 1:
                 raise AssertionError(f"typing split/duplicated live paragraph:\n{screen}")
         if "working…" in held_screen:
             raise AssertionError(
@@ -958,8 +970,8 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
             raise AssertionError(
                 f"paced rendered text differs from durable output: {public!r}"
             )
-        final = normalize_space(terminal.capture(join_wrapped=True))
-        if final.count(expected) != 1:
+        final = terminal.capture(join_wrapped=True)
+        if len(prose_pattern(expected).findall(final)) != 1:
             raise AssertionError(
                 "paced text was missing, duplicated, or reordered in tmux history"
             )
@@ -1210,7 +1222,7 @@ def run_render_case(binary, root):
             raise AssertionError("repeated typing pause ended too early")
         if final.count(exact_margin) != 1:
             raise AssertionError(f"draft snapshot scrolled into history:\n{final}")
-        assert_order(final, ["supercalifragilisticexpialidocious", exact_margin])
+        assert_wrapped_order(final, ["supercalifragilisticexpialidocious", exact_margin])
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
         joined = terminal.capture(join_wrapped=True)
         assert_wrapped_order(
@@ -1503,12 +1515,12 @@ def run_retained_composer_case(binary, root):
         terminal.wait("p>")
         draft = "first-row-unchanged second-row-unchanged third-row"
         terminal.send_text(draft)
-        terminal.wait("p> " + draft, join_wrapped=True)
+        wait_normalized(terminal, "p> " + draft, timeout=5.0)
         terminal.send_key("Home")
         terminal.send_text("X")
-        terminal.wait("p> X" + draft, join_wrapped=True)
+        wait_normalized(terminal, "p> X" + draft, timeout=5.0)
         terminal.send_key("DC")
-        terminal.wait("p> X" + draft[1:], join_wrapped=True)
+        wait_normalized(terminal, "p> X" + draft[1:], timeout=5.0)
         terminal.send_key("C-u")
         terminal.send_text("short")
         screen = terminal.wait("p> short")
@@ -1518,35 +1530,35 @@ def run_retained_composer_case(binary, root):
         terminal.send_key("C-u")
         wide = "a" * 20 + "界é tail"
         terminal.send_text(wide)
-        screen = terminal.wait("界é tail")
-        if "p> " + "a" * 20 not in screen:
-            raise AssertionError(f"wide boundary damaged the previous row:\n{screen}")
+        wait_normalized(terminal, "a" * 20 + "界é tail", timeout=5.0)
+        screen = terminal.capture()
+        assert "\n" + "a" * 20 + "界é\ntail" in screen, screen
         cursor = terminal.run("display-message", "-p", "-t", terminal.target,
                               "#{cursor_x}").strip()
-        if cursor != "8":
+        if cursor != "4":
             raise AssertionError(f"wide/combining cursor column was {cursor}")
         terminal.send_key("BSpace")
-        terminal.wait("界é tai")
+        wait_normalized(terminal, "界é tai", timeout=5.0)
         terminal.resize(25, 18)
-        terminal.wait("界é tai", join_wrapped=True)
+        wait_normalized(terminal, "界é tai", timeout=5.0)
         terminal.resize(24, 18)
-        terminal.wait("界é tai", join_wrapped=True)
+        wait_normalized(terminal, "界é tai", timeout=5.0)
 
         terminal.send_key("C-u")
         terminal.send_text("a" * 21)  # Exact right margin, including p>.
-        terminal.wait("p> " + "a" * 21, join_wrapped=True)
+        wait_normalized(terminal, "p> " + "a" * 21, timeout=5.0)
         terminal.send_text("xyz")
-        terminal.wait("p> " + "a" * 21 + "xyz", join_wrapped=True)
+        wait_normalized(terminal, "p> " + "a" * 21 + "xyz", timeout=5.0)
         for _ in range(3):
             terminal.send_key("BSpace")
         terminal.send_text("Q")
-        terminal.wait("p> " + "a" * 21 + "Q", join_wrapped=True)
+        wait_normalized(terminal, "p> " + "a" * 21 + "Q", timeout=5.0)
         terminal.send_key("BSpace")
         terminal.send_key("BSpace")
         terminal.send_text("Z")
-        terminal.wait("p> " + "a" * 20 + "Z", join_wrapped=True)
+        wait_normalized(terminal, "p> " + "a" * 20 + "Z", timeout=5.0)
         terminal.resize(30, 18)
-        terminal.wait("p> " + "a" * 20 + "Z", join_wrapped=True)
+        wait_normalized(terminal, "p> " + "a" * 20 + "Z", timeout=5.0)
         terminal.send_key("C-u")
         terminal.exit()
     finally:
@@ -1555,6 +1567,192 @@ def run_retained_composer_case(binary, root):
             (case / "screen.txt").write_text(screen, encoding="utf-8")
         finally:
             close_fixture_terminal(terminal)
+
+
+def run_punctuation_case(binary, root):
+    # These are operator screen pastes, not provider-inserted newlines.
+    samples = (
+        "• I’ll fold those in too. I’ll check how the clock and spinner share refresh timing, "
+        "use a clearer prompt-update setting, and avoid adding a separate knob unless the code "
+        "needs one. I’ll aim to simplify the code while keeping all three\n  changes together.",
+        "• The focused checks now pass for retained drafts, live Unicode streaming with edits "
+        "and resize, lifecycle spacing,\n  queue counts, and word/vertical navigation. The "
+        "punctuation regression also passes with the pasted sample, so I haven’t changed "
+        "punctuation wrapping speculatively. The full check is running; I’m reviewing the final "
+        "changes and updating\n  the saved state.",
+    )
+    paragraphs = [sample[2:].replace("\n  ", " ") for sample in samples]
+    text = "\n\n".join(paragraphs) + "\n\nI haven't changed this: punctuation, not breaks. café́界 wrap-done"
+    provider = FakeResponses()
+    paused, proceed = threading.Event(), threading.Event()
+
+    def respond(handler):
+        request = json.loads(handler.rfile.read(int(handler.headers["Content-Length"])))
+        assert request["model"] == "host-model", request
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        for event in provider.response_body(1, text).split("\n\n"):
+            if "event: response.output_text.delta\n" in event:
+                data = json.loads(event.split("data: ", 1)[1])
+                # Pause mid-word at ASCII and curly apostrophes and after a
+                # colon. The editor must not reset the streaming paragraph.
+                cuts = sorted({0, len(text), *range(0, len(text), 17),
+                               *(i for i, c in enumerate(text) if c in "'’:"),
+                               *(i + 1 for i, c in enumerate(text) if c in "'’:" )})
+                for start, end in zip(cuts, cuts[1:]):
+                    packet = provider.event(data["type"], dict(data, delta=text[start:end]))
+                    handler.wfile.write(packet.encode())
+                    handler.wfile.flush()
+                    if text[end - 1] in "'’:" and not proceed.is_set():
+                        paused.set()
+                        assert proceed.wait(5.0), "editor did not release paced punctuation"
+                    time.sleep(0.012)
+            elif event:
+                handler.wfile.write((event + "\n\n").encode())
+                handler.wfile.flush()
+        handler.close_connection = True
+
+    provider.handle = respond
+    try:
+        for width, markdown in ((24, True), (110, True), (240, True), (110, False)):
+            paused.clear()
+            proceed.clear()
+            case = root / f"punct-{width}-{int(markdown)}"
+            workspace = case / "w"
+            workspace.mkdir(mode=0o700, parents=True)
+            config = case / "config.ini"
+            write_irc_config(config, provider.port, "host-model")
+            config.write_text(config.read_text().replace("typing_pause_ms = 50", "typing_pause_ms = 0"))
+            with config.open("a") as out:
+                out.write("prompt = {chat::}{rollout-idle:>}{rollout-active:>}\n")
+            terminal = TmuxTerminal(case / "t", binary, workspace, case / "s", config,
+                width, 20, args=("--markdown" if markdown else "--no-markdown",),
+                environment={"SNAJPAGENT_IRC_UI_KEY": "local-test-only"})
+            try:
+                terminal.wait(">")
+                terminal.submit("wrap-boundaries")
+                assert paused.wait(5.0), "provider did not pause at apostrophe"
+                terminal.wait("I’")
+                terminal.send_text("draft")
+                terminal.wait("> draft")
+                assert_live_paragraph_gap(terminal, "I’", "I’")
+                proceed.set()
+                for edit in (" more", " text", " end"):
+                    terminal.send_text(edit)
+                    time.sleep(0.04)
+                wait_normalized(terminal, "wrap-done", timeout=10.0)
+                wait_for_terminal_event(case / "s", {"turn_completed"}, 5.0)
+                screen = terminal.capture()
+                (case / "screen.txt").write_text(screen)
+                rows = screen.splitlines()
+                first = next(i for i, row in enumerate(rows) if "I’ll fold" in row)
+                last = next(i for i, row in enumerate(rows) if "wrap-done" in row)
+                visible = "".join(rows[first:last + 1]).replace("• ", "")
+                assert re.sub(r"\s", "", visible) == re.sub(r"\s", "", text), screen
+                assert not rows[first - 1].strip(), screen
+                assert not rows[last + 1].strip(), screen
+                assert sum("> draft" in row for row in rows) == 1, screen
+                # No artificial paragraph boundaries, no punctuation-alone
+                # early line breaks; all non-final rows fill the available row
+                # except a fitting next word moved intact to its successor.
+                for i in range(first, last):
+                    row, following = rows[i], rows[i + 1]
+                    if not row.strip() or not following.strip():
+                        continue
+                    if markdown:
+                        assert following.startswith("  "), (row, following, screen)
+                    tail = following.lstrip(" •")
+                    word = re.match(r"[^\s]+", tail).group()
+                    cells = sum(0 if c == "́" else 2 if c == "界" else 1 for c in row.rstrip())
+                    assert cells + 1 + len(word) > width, (row, following, screen)
+                _, events = read_events(case / "s")
+                response = event_list(events, "response_completed")[-1]
+                assert response["data"]["items"][0]["text"] == text
+                terminal.send_key("C-u")
+                terminal.exit()
+            finally:
+                proceed.set()
+                close_fixture_terminal(terminal)
+    finally:
+        proceed.set()
+        provider.close()
+
+
+def run_draft_navigation_case(binary, root):
+    case = root / "draft-keys"
+    workspace = case / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False, pause_ms=0)
+    with config.open("a") as out:
+        out.write("prompt = {chat::}{rollout-idle:>}{rollout-active:>}\n")
+    terminal = TmuxTerminal(case / "terminal", binary, workspace, case / "state",
+                            config, 24, 16)
+
+    def draft(expected):
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            screen = terminal.capture()
+            lines = screen.rstrip().splitlines()
+            if "> " in screen:
+                start = next(i for i in range(len(lines) - 1, -1, -1)
+                             if lines[i].startswith("> "))
+                if lines[start:] == expected:
+                    return
+            time.sleep(0.02)
+        raise AssertionError(f"expected draft {expected!r}:\n{screen}")
+
+    def raw(sequence):
+        terminal.run("send-keys", "-t", terminal.target, "-H",
+                     *(f"{byte:02x}" for byte in sequence))
+
+    try:
+        terminal.wait(">")
+        text = "alpha beta gamma delta epsilon zeta eta"
+        terminal.send_text(text)
+        draft(["> alpha beta gamma delta", " epsilon zeta eta"])
+        terminal.send_key("Up")
+        terminal.send_text("X")
+        draft(["> alpha beta gammXa", "delta epsilon zeta eta"])
+        terminal.send_key("C-u")
+        for left, right in ((b"\x1b[1;5D", b"\x1b[1;5C"),
+                            (b"\x1b[1;3D", b"\x1b[1;3C"),
+                            (b"\x1bb", b"\x1bf")):
+            terminal.send_text("one café界 three")
+            raw(left)
+            raw(left)
+            terminal.send_text("X")
+            raw(right)
+            terminal.send_text("Y")
+            draft(["> one Xcafé界Y three"])
+            terminal.send_key("C-u")
+        terminal.send_text(text)
+        terminal.send_key("Up")
+        terminal.send_key("Down")
+        terminal.send_text("!")
+        draft(["> alpha beta gamma delta", " epsilon zeta eta!"])
+        terminal.resize(25, 16)
+        draft(["> alpha beta gamma delta", "epsilon zeta eta!"])
+        terminal.send_key("C-u")
+        terminal.submit("history draft")
+        terminal.wait("fixture answer")
+        terminal.send_text("unsent")
+        terminal.send_key("C-p")
+        draft(["> history draft"])
+        terminal.send_key("C-n")
+        draft(["> unsent"])
+        terminal.send_key("C-u")
+        terminal.send_text(text)
+        terminal.send_key("Enter")
+        wait_for_terminal_event(case / "state", {"turn_completed"}, 5.0)
+        terminal.exit()
+        _, events = read_events(case / "state")
+        turns = event_list(events, "turn_started")
+        assert [event["data"]["text"] for event in turns] == ["history draft", text]
+    finally:
+        close_fixture_terminal(terminal)
 
 
 def run_lifecycle_case(binary, root):
@@ -1574,10 +1772,11 @@ def run_lifecycle_case(binary, root):
         terminal.wait("• Goal set")
         terminal.wait("working on goal")
         terminal.send_text("/goal cancel")
-        active = terminal.wait(f"{DEFAULT_ACTIVE_PROMPT} /goal cancel",
-                               join_wrapped=True)
-        assert re.search(r"(?m)^◴⚑ [0-9]{2}:[0-9]{2}:[0-9]{2}" +
-                         re.escape(f"{DEFAULT_ACTIVE_PROMPT} /goal cancel"),
+        active, _ = wait_normalized(terminal, f"{DEFAULT_ACTIVE_PROMPT.strip()} /goal cancel",
+                                    timeout=2.0)
+        active = "\n".join(normalize_space(line) for line in active.split("\n\n"))
+        assert re.search(r"(?m)^◴⚑ [0-9]{2}:[0-9]{2}:[0-9]{2} " +
+                         re.escape(normalize_space(f"{DEFAULT_ACTIVE_PROMPT} /goal cancel")),
                          active), active
         terminal.send_key("Enter")
         terminal.wait("• Goal cleared")
@@ -1627,6 +1826,49 @@ def run_lifecycle_case(binary, root):
             close_fixture_terminal(terminal)
 
 
+def run_bullet_class_case(binary, root):
+    case = root / "bullet-class"
+    workspace = case / "w"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False)
+    terminal = TmuxTerminal(case / "t", binary, workspace, case / "s", config, 100, 20)
+    try:
+        terminal.wait(DEFAULT_IDLE_PROMPT)
+        terminal.submit("/goal slow goal")
+        terminal.wait("working on goal")
+        terminal.submit("/goal pause")
+        terminal.wait("Goal paused at the current turn boundary")
+        terminal.wait("goal checkpoint")
+        wait_idle_prompt_at_bottom(terminal, DEFAULT_IDLE_PROMPT)
+        terminal.send_key("Tab")
+        commands = (("/goal lock", "goal_lock_changed", 1),
+                    ("/goal unlock", "goal_lock_changed", 2),
+                    ("/goal set changed while paused", "goal_reworded", 1),
+                    ("/goal complete", "goal_completed", 1),
+                    ("/compact", "compaction_completed", 1))
+        for command, kind, count in commands:
+            terminal.submit(command)
+            wait_event_count(case / "s", kind, count)
+        terminal.send_key("Tab")
+        terminal.wait("• Compacted")
+        wait_idle_prompt_at_bottom(terminal, DEFAULT_IDLE_PROMPT)
+        rows = terminal.capture().splitlines()
+        group = ["• Goal wording locked against model changes",
+                 "• Goal wording unlocked for model changes", "• Goal updated",
+                 "• Goal cleared", "• Compacted"]
+        first = rows.index(group[0])
+        assert rows[first:first + len(group)] == group, rows
+        assert not rows[first - 1].strip() and not rows[first + len(group)].strip(), rows
+        assert first < 2 or rows[first - 2].strip(), rows
+        assert rows[first + len(group) + 1].strip(), rows
+        for notice in group:
+            assert rows.count(notice) == 1, rows
+        terminal.exit()
+    finally:
+        close_fixture_terminal(terminal)
+
+
 def wait_for_terminal_event(dotdir, terminal_types, timeout):
     deadline = time.monotonic() + timeout
     path = None
@@ -1658,6 +1900,8 @@ def run_fixture(binary, workspace, root):
     run_tool_case(binary, root)
     run_retained_composer_case(binary, root)
     run_lifecycle_case(binary, root)
+    run_draft_navigation_case(binary, root)
+    run_bullet_class_case(binary, root)
     print("tmux_terminal fixture: ok")
 
 
@@ -3599,6 +3843,7 @@ def run_token_accounting_cases(binary, root):
 def run_irc_case(binary, root):
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
+    run_punctuation_case(binary, root)
     provider = FakeResponses()
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
     try:

@@ -426,7 +426,7 @@ test_retained_prompt(void)
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(strstr(output, "語") && !strstr(output, "tail"));
     assert(snag_term_restore_draft(&term, "aaaaaaaaaaaaaaaaa界") == 0);
-    assert(term.rendered_rows == 2u && term.rendered_cursor_col == 2u);
+    assert(term.rendered_rows == 2u && term.rendered_cursor_col == 19u);
     assert(snag_term_restore_draft(&term, "aaaaaaaaaaaaaaaaaa\nnext") == 0);
     assert(term.rendered_rows == 2u && term.rendered_cursor_col == 10u);
     assert(snag_term_restore_draft(&term, "cafè語 tail") == 0);
@@ -1084,7 +1084,7 @@ static void
 test_spacing_classes(void)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
-    const char *events[] = {"goal_started", "goal_reworded", "goal_paused",
+    const char *events[] = {"goal_started", "goal_reworded",
         "goal_resumed", "goal_blocked", "goal_completed", "goal_cancelled",
         "compaction_completed"};
     char output[8192];
@@ -1139,7 +1139,7 @@ test_spacing_classes(void)
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(strcmp(output, "input › one\ninput › two\n\n"
-        "• Goal set\n• Goal updated\n• Goal paused at the current turn boundary\n"
+        "• Goal set\n• Goal updated\n"
         "• Goal resumed\n• Goal blocked by model\n• Goal cleared\n• Goal cleared\n"
         "• Compacted\n\nheading\n\ninput › three\n") == 0);
 }
