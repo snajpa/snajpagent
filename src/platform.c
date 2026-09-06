@@ -618,7 +618,8 @@ create_private(int dirfd, const char *path, bool relative, bool directory,
         access |= FILE_GENERIC_READ | FILE_GENERIC_WRITE;
     DWORD options = (directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE) |
                     FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT;
-    status = NtCreateFile(&created, access | ((flags & _O_CREAT) ? DELETE : 0),
+    status = NtCreateFile(&created,
+                          access | ((flags & _O_CREAT) ? DELETE | WRITE_DAC | WRITE_OWNER : 0),
                           &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                           (flags & _O_CREAT) ? FILE_CREATE : FILE_OPEN, options, NULL, 0);
@@ -733,6 +734,129 @@ snag_open_private_append_at(int dirfd, const char *path, bool create)
 
     return create_private(dirfd, path, true, false,
                            _O_APPEND | (create ? _O_CREAT | _O_EXCL : 0), &fd) < 0 ? -1 : fd;
+}
+
+void
+snag_permissions_free(struct snag_permissions *permissions)
+{
+    if (permissions->native)
+        LocalFree(permissions->native);
+    permissions->native = NULL;
+}
+
+int
+snag_permissions_capture(int fd, struct snag_permissions *out)
+{
+    intptr_t handle = _get_osfhandle(fd);
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+
+    if (handle == -1 || !out) {
+        errno = out ? EBADF : EINVAL;
+        return -1;
+    }
+    DWORD error = GetSecurityInfo((HANDLE)handle, SE_FILE_OBJECT,
+        OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+        NULL, NULL, NULL, NULL, &descriptor);
+    if (error != ERROR_SUCCESS)
+        return path_error(error);
+    snag_permissions_free(out);
+    out->native = descriptor;
+    return 0;
+}
+
+static bool
+same_acl(PACL a, PACL b)
+{
+    if (!a || !b)
+        return a == b;
+    if (!IsValidAcl(a) || !IsValidAcl(b) || a->AclRevision != b->AclRevision ||
+        a->AceCount != b->AceCount)
+        return false;
+    for (DWORD i = 0; i < a->AceCount; ++i) {
+        ACE_HEADER *left, *right;
+        if (!GetAce(a, i, (void **)&left) || !GetAce(b, i, (void **)&right) ||
+            left->AceSize != right->AceSize || memcmp(left, right, left->AceSize))
+            return false;
+    }
+    return true;
+}
+
+static int
+permission_parts(const struct snag_permissions *permissions, PSID *owner,
+                 PSID *group, PACL *acl, SECURITY_DESCRIPTOR_CONTROL *control)
+{
+    BOOL present, defaulted;
+    DWORD revision;
+    PSECURITY_DESCRIPTOR descriptor = permissions->native;
+
+    if (!descriptor || !IsValidSecurityDescriptor(descriptor)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!GetSecurityDescriptorOwner(descriptor, owner, &defaulted) ||
+        !GetSecurityDescriptorGroup(descriptor, group, &defaulted) ||
+        !GetSecurityDescriptorDacl(descriptor, &present, acl, &defaulted) ||
+        !GetSecurityDescriptorControl(descriptor, control, &revision))
+        return path_error(GetLastError());
+    return 0;
+}
+
+int
+snag_permissions_match(int fd, const struct snag_permissions *permissions)
+{
+    struct snag_permissions current = {0};
+    PSID owner, group, old_owner, old_group;
+    PACL acl, old_acl;
+    SECURITY_DESCRIPTOR_CONTROL control, old_control;
+    const unsigned int flags = SE_DACL_PRESENT | SE_DACL_PROTECTED | SE_DACL_AUTO_INHERITED;
+    int rc = -1;
+
+    if (!permissions) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (permission_parts(permissions, &old_owner, &old_group, &old_acl, &old_control) < 0 ||
+        snag_permissions_capture(fd, &current) < 0)
+        return -1;
+    if (permission_parts(&current, &owner, &group, &acl, &control) == 0)
+        rc = (owner && old_owner ? EqualSid(owner, old_owner) : owner == old_owner) &&
+             (group && old_group ? EqualSid(group, old_group) : group == old_group) &&
+             (control & flags) == (old_control & flags) && same_acl(acl, old_acl);
+    int saved = errno;
+    snag_permissions_free(&current);
+    errno = saved;
+    return rc;
+}
+
+NTSYSAPI NTSTATUS NTAPI NtSetSecurityObject(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR);
+
+int
+snag_permissions_apply(int fd, const struct snag_permissions *permissions)
+{
+    intptr_t handle = _get_osfhandle(fd);
+    PSID owner, group;
+    PACL acl;
+    SECURITY_DESCRIPTOR_CONTROL control;
+    NTSTATUS status;
+
+    if (handle == -1 || !permissions) {
+        errno = permissions ? EBADF : EINVAL;
+        return -1;
+    }
+    if (permission_parts(permissions, &owner, &group, &acl, &control) < 0)
+        return -1;
+    /* SetSecurityInfo re-inherits ACLs; retain this snapshot on the held file. */
+    status = NtSetSecurityObject((HANDLE)handle,
+        OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+        permissions->native);
+    if (status < 0)
+        return path_error(RtlNtStatusToDosError(status));
+    int match = snag_permissions_match(fd, permissions);
+    if (match == 1)
+        return 0;
+    if (match == 0)
+        errno = EACCES;
+    return -1;
 }
 
 static bool
@@ -1254,6 +1378,13 @@ open_private(int dirfd, const char *path, int flags)
 
     if (fd < 0)
         return -1;
+    /* An exclusive private stage must remain usable even with a restrictive umask. */
+    if ((flags & O_EXCL) && fchmod(fd, 0600) < 0) {
+        int saved = errno;
+        (void)close(fd);
+        errno = saved;
+        return -1;
+    }
     if (fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0 ||
         !S_ISREG(st.st_mode) || st.st_nlink != 1u ||
         !privacy.effective_owner || !privacy.private_access) {
@@ -1291,6 +1422,58 @@ snag_fd_privacy(int fd, struct snag_file_privacy *out)
     out->effective_owner = st.st_uid == geteuid();
     out->private_access = !(st.st_mode & 077u);
     return 0;
+}
+
+void
+snag_permissions_free(struct snag_permissions *permissions)
+{
+    permissions->mode = 0;
+}
+
+int
+snag_permissions_capture(int fd, struct snag_permissions *out)
+{
+    struct stat st;
+
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fstat(fd, &st) < 0)
+        return -1;
+    out->mode = st.st_mode & 07777u;
+    return 0;
+}
+
+int
+snag_permissions_match(int fd, const struct snag_permissions *permissions)
+{
+    struct snag_permissions current = {0};
+
+    if (!permissions) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (snag_permissions_capture(fd, &current) < 0)
+        return -1;
+    return current.mode == permissions->mode;
+}
+
+int
+snag_permissions_apply(int fd, const struct snag_permissions *permissions)
+{
+    if (!permissions) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fchmod(fd, permissions->mode) < 0)
+        return -1;
+    int match = snag_permissions_match(fd, permissions);
+    if (match == 1)
+        return 0;
+    if (match == 0)
+        errno = EACCES;
+    return -1;
 }
 
 char *

@@ -4,7 +4,6 @@
 #include "base.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -15,16 +14,6 @@
 #include <sys/file.h>
 #include <sys/types.h>
 #include <unistd.h>
-
-#ifndef O_CLOEXEC
-#define O_CLOEXEC 0
-#endif
-#ifndef O_NOFOLLOW
-#define O_NOFOLLOW 0
-#endif
-#ifndef O_DIRECTORY
-#define O_DIRECTORY 0
-#endif
 
 enum section {
     SECTION_NONE,
@@ -1049,13 +1038,16 @@ unavailable:
 
 static int
 read_config(const char *path, bool require_file, struct snag_buf *text,
-            snag_file_info *file_stat, bool *private_file, char *error, size_t error_size)
+            snag_file_info *file_stat, bool *private_file,
+            struct snag_permissions *permissions, char *error, size_t error_size)
 {
     snag_file_info st;
     int fd;
     int rc = -1;
 
-    fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    fd = snag_open_read_security_at(-1, path, false);
+    if (fd < 0 && !permissions && errno == EACCES)
+        fd = snag_open_read(path, false);
     if (fd < 0) {
         if (!require_file && errno == ENOENT)
             return 1;
@@ -1072,6 +1064,10 @@ read_config(const char *path, bool require_file, struct snag_buf *text,
     }
     if (file_stat)
         *file_stat = st;
+    if (permissions && snag_permissions_capture(fd, permissions) < 0) {
+        snag_errorf(error, error_size, "cannot retain configuration permissions: %s", strerror(errno));
+        goto out;
+    }
     if (private_file) {
         struct snag_file_privacy privacy;
         int saved = errno;
@@ -1227,7 +1223,7 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
     (void)snag_strcpy(config->source_path, sizeof(config->source_path), path);
     snag_buf_init(&text, SNAG_CONFIG_FILE_MAX + 1u);
     bool private_file = false;
-    read_rc = read_config(path, explicit_path != NULL, &text, &file_stat, &private_file,
+    read_rc = read_config(path, explicit_path != NULL, &text, &file_stat, &private_file, NULL,
                           error, error_size);
     if (read_rc < 0)
         goto out;
@@ -1540,6 +1536,7 @@ save_config_settings(const char *path, bool allow_create,
     struct snag_buf output;
     snag_file_info before;
     snag_file_info current;
+    struct snag_permissions permissions = {0};
     char id[SNAG_ID_HEX_LEN + 1u];
     char temp[64] = {0};
     char leaf[NAME_MAX + 1u];
@@ -1580,11 +1577,11 @@ save_config_settings(const char *path, bool allow_create,
         goto out;
     }
     memcpy(leaf, slash + 1u, strlen(slash + 1u) + 1u);
-    if (slash == path_copy)
+    if ((size_t)(slash - path_copy) < snag_path_root_len(path_copy))
         slash[1] = '\0';
     else
         *slash = '\0';
-    parent_fd = open(path_copy, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    parent_fd = snag_open_read(path_copy, true);
     if (parent_fd < 0) {
         snag_errorf(error, error_size, "cannot open configuration directory: %s",
                   strerror(errno));
@@ -1597,7 +1594,7 @@ save_config_settings(const char *path, bool allow_create,
     }
     bool private_file = false;
     read_rc = read_config(path, !allow_create, &input, &before, &private_file,
-                          error, error_size);
+                          &permissions, error, error_size);
     if (read_rc < 0)
         goto out;
     if ((provider_config ?
@@ -1623,9 +1620,8 @@ save_config_settings(const char *path, bool allow_create,
     if (snag_random_id(id) < 0)
         goto out;
     (void)snprintf(temp, sizeof(temp), ".snajpagent-config-%s.tmp", id);
-    fd = openat(parent_fd, temp,
-                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (fd < 0 || fchmod(fd, read_rc == 0 ? before.st_mode & 07777u : 0600u) < 0 ||
+    fd = snag_create_private_at(parent_fd, temp, true);
+    if (fd < 0 || (read_rc == 0 && snag_permissions_apply(fd, &permissions) < 0) ||
         snag_write_full(fd, output.data, output.len) < 0 ||
         snag_sync_file(fd) < 0) {
         saved = errno;
@@ -1642,8 +1638,13 @@ save_config_settings(const char *path, bool allow_create,
     }
     fd = -1;
     if (read_rc == 0) {
-        if (snag_lstat_at(parent_fd, leaf, &current) < 0 ||
-            !same_file(&before, &current)) {
+        int original = snag_open_read_security_at(parent_fd, leaf, false);
+        bool unchanged = original >= 0 && snag_fstat(original, &current) == 0 &&
+                         same_file(&before, &current) &&
+                         snag_permissions_match(original, &permissions) == 1;
+        if (original >= 0)
+            (void)close(original);
+        if (!unchanged) {
             snag_errorf(error, error_size,
                       "configuration changed while it was being saved");
             errno = EAGAIN;
@@ -1676,6 +1677,7 @@ out:
         (void)close(parent_fd);
     }
     free(path_copy);
+    snag_permissions_free(&permissions);
     snag_secret_clear(output.data, output.len);
     snag_secret_clear(input.data, input.len);
     snag_buf_free(&output);

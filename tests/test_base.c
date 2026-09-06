@@ -14,6 +14,7 @@
 #include <windows.h>
 #include <winioctl.h>
 #include <aclapi.h>
+#include <sddl.h>
 #include <fcntl.h>
 #include <io.h>
 #include <process.h>
@@ -25,6 +26,42 @@
 #endif
 
 #ifdef _WIN32
+static void
+check_windows_permission_copy(int fd, const wchar_t *source)
+{
+    struct snag_permissions permissions = {0};
+    wchar_t path[MAX_PATH + 8u];
+    char utf8[(MAX_PATH + 8u) * 4u];
+    assert(swprintf(path, sizeof(path) / sizeof(path[0]), L"%ls-copy", source) > 0);
+    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, path, -1,
+                               utf8, sizeof(utf8), NULL, NULL));
+    int copy = snag_create_private_at(-1, utf8, true);
+    assert(copy >= 0 && snag_permissions_capture(fd, &permissions) == 0);
+    assert(snag_permissions_match(fd, &permissions) == 1);
+    if (snag_permissions_apply(copy, &permissions) < 0) {
+        (void)fprintf(stderr, "permission copy failed: errno=%d\n", errno);
+        struct snag_permissions actual = {0};
+        assert(snag_permissions_capture(copy, &actual) == 0);
+        PSECURITY_DESCRIPTOR descriptors[] = {permissions.native, actual.native};
+        for (size_t i = 0; i < 2u; ++i) {
+            char *sddl = NULL;
+            SECURITY_DESCRIPTOR_CONTROL control;
+            DWORD revision;
+            assert(ConvertSecurityDescriptorToStringSecurityDescriptorA(descriptors[i],
+                SDDL_REVISION_1, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                DACL_SECURITY_INFORMATION, &sddl, NULL));
+            assert(GetSecurityDescriptorControl(descriptors[i], &control, &revision));
+            (void)fprintf(stderr, "%s control=%x %s\n", i ? "copy" : "source", control, sddl);
+            LocalFree(sddl);
+        }
+        snag_permissions_free(&actual);
+        abort();
+    }
+    assert(snag_permissions_match(copy, &permissions) == 1);
+    snag_permissions_free(&permissions);
+    assert(close(copy) == 0 && DeleteFileW(path));
+}
+
 static void
 test_windows_privacy(void)
 {
@@ -64,6 +101,7 @@ test_windows_privacy(void)
     assert(handle != INVALID_HANDLE_VALUE);
     fd = _open_osfhandle((intptr_t)handle, _O_BINARY | _O_RDWR);
     assert(fd >= 0);
+    check_windows_permission_copy(fd, path);
     for (size_t i = 0; i < sizeof(rights) / sizeof(rights[0]); ++i) {
         PACL acl = NULL;
         entries[1].grfAccessPermissions = rights[i];
@@ -77,12 +115,14 @@ test_windows_privacy(void)
         assert(snag_fd_privacy(fd, &privacy) == 0);
         assert(privacy.real_owner && privacy.effective_owner);
         assert(privacy.private_access == expected[i]);
+        check_windows_permission_copy(fd, path);
     }
     assert(SetSecurityInfo(handle, SE_FILE_OBJECT,
                            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                            NULL, NULL, NULL, NULL) == ERROR_SUCCESS);
     assert(SetFileAttributesW(path, FILE_ATTRIBUTE_READONLY));
     assert(snag_fd_privacy(fd, &privacy) == 0 && !privacy.private_access);
+    check_windows_permission_copy(fd, path);
     assert(SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL));
     assert(_close(fd) == 0);
     assert(DeleteFileW(path));
@@ -363,6 +403,28 @@ test_private_directory(void)
         assert(snag_unlink_at(fd, "journal", false) == 0);
     }
     test_file_lock(fd);
+#ifndef _WIN32
+    {
+        struct snag_permissions permissions = {0};
+        mode_t mask = umask(0777);
+        int file = snag_create_private_at(fd, "permissions", true);
+        (void)umask(mask);
+        assert(file >= 0 && snag_fstat(file, &path_info) == 0 &&
+               (path_info.st_mode & 0777u) == 0600u);
+        const mode_t modes[] = {0u, 0400u, 0640u, 0751u};
+        for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
+            assert(fchmod(file, modes[i]) == 0);
+            assert(snag_permissions_capture(file, &permissions) == 0);
+            assert(snag_permissions_match(file, &permissions) == 1);
+            assert(fchmod(file, modes[i] ^ 0100u) == 0);
+            assert(snag_permissions_match(file, &permissions) == 0);
+            assert(snag_permissions_apply(file, &permissions) == 0);
+            assert(snag_permissions_match(file, &permissions) == 1);
+            snag_permissions_free(&permissions);
+        }
+        assert(close(file) == 0 && snag_unlink_at(fd, "permissions", false) == 0);
+    }
+#endif
     assert(rename(root, renamed) == 0);
     assert(snag_fstat(fd, &path_info) == 0 && path_info.st_ino == root_info.st_ino);
     {

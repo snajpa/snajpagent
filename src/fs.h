@@ -37,6 +37,20 @@ int snag_open_private_append_at(int dirfd, const char *path, bool create);
 int snag_lock_file(int fd, bool wait);
 void snag_path_slashes(char *path);
 
+/* Initialize to zero before capture; release after the replacement finishes. */
+struct snag_permissions {
+#ifdef _WIN32
+    void *native;
+#else
+    mode_t mode;
+#endif
+};
+int snag_permissions_capture(int fd, struct snag_permissions *out);
+int snag_permissions_apply(int fd, const struct snag_permissions *permissions);
+/* Returns 1 for equal, 0 for changed, -1 for an inspection error. */
+int snag_permissions_match(int fd, const struct snag_permissions *permissions);
+void snag_permissions_free(struct snag_permissions *permissions);
+
 struct snag_directory;
 /* Open takes fd ownership only on success; close releases it. */
 struct snag_directory *snag_directory_open(int fd);

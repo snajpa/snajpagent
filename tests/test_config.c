@@ -797,6 +797,7 @@ main(void)
 
         assert(snprintf(created, sizeof(created), "%s/new.ini", dotdir) > 0);
         /* A model-only writer cannot invent the selected provider. */
+        mode_t restrictive_mask = umask(0777);
         assert(snag_config_save_model(created, true, "default", "created-model",
                                      "medium", error, sizeof(error)) < 0);
         {
@@ -805,6 +806,7 @@ main(void)
             assert(snag_config_save_provider(created, true, &created_provider,
                                              "created-model", "medium", error, sizeof(error)) == 0);
         }
+        (void)umask(restrictive_mask);
         assert(stat(created, &st) == 0);
         assert((st.st_mode & 0777u) == 0600u);
         snag_config_init(&config);
