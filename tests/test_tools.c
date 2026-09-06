@@ -182,6 +182,33 @@ make_call(struct snag_response_graph *graph, const char *command,
 }
 
 static json_t *
+run_call(struct snag_response_graph *graph, struct snag_config *config,
+         const char *workspace, const char *secret, snag_tool_pump_fn pump, void *opaque)
+{
+    struct snag_credential credential;
+    struct snag_response_item call = snag_response_graph_item(graph, 0u);
+    json_t *result = NULL;
+    char error[256] = {0};
+
+    snag_credential_clear(&credential);
+    if (secret) {
+        credential.len = strlen(secret);
+        assert(credential.len <= SNAG_CREDENTIAL_MAX);
+        memcpy(credential.value, secret, credential.len + 1u);
+    }
+    int rc = snag_tools_run(&call, config, &credential, workspace,
+                            pump, opaque, -1, &result, error, sizeof(error));
+    if (rc != 0)
+        fprintf(stderr, "%s tool error: %s errno=%d\n", call.name, error, errno);
+    assert(rc == 0);
+    assert(result != NULL);
+    assert(snag_tool_result_valid(result) == 0);
+    snag_response_graph_free(graph);
+    snag_config_free(config);
+    return result;
+}
+
+static json_t *
 run_command_full(const char *command, int timeout_ms, const char *secret,
                  const char *stdin_text, snag_tool_pump_fn pump,
                  void *pump_opaque, int selected_limit,
@@ -189,10 +216,7 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
 {
     char cwd[4096];
     struct snag_config config;
-    struct snag_credential credential;
     struct snag_response_graph graph;
-    json_t *result = NULL;
-    char error[256];
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     snag_config_init(&config);
@@ -200,33 +224,16 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
     config.default_timeout_ms = 0;
     config.max_timeout_ms = 5000;
     config.max_output_tokens = ceiling;
-    snag_credential_clear(&credential);
-    if (secret) {
-        credential.len = strlen(secret);
-        assert(credential.len <= SNAG_CREDENTIAL_MAX);
-        memcpy(credential.value, secret, credential.len + 1u);
-    }
     make_call(&graph, command, cwd, timeout_ms, stdin_text);
     struct snag_response_item call = snag_response_graph_item(&graph, 0u);
     if (selected_limit >= 0)
         assert(json_object_set_new(call.arguments,
             "max_output_tokens", json_integer(selected_limit)) == 0);
-    error[0] = '\0';
-    {
-        int rc = snag_tools_run(&call, &config, &credential, cwd,
-                               pump, pump_opaque, -1, &result, error, sizeof(error));
-        if (rc != 0)
-            fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
-        assert(rc == 0);
-    }
-    assert(result != NULL);
-    assert(snag_tool_result_valid(result) == 0);
+    json_t *result = run_call(&graph, &config, cwd, secret, pump, pump_opaque);
     assert(json_integer_value(json_object_get(result,
                "max_output_tokens")) ==
            (selected_limit >= 0 && (uint32_t)selected_limit < ceiling ?
             (uint32_t)selected_limit : ceiling));
-    snag_response_graph_free(&graph);
-    snag_config_free(&config);
     return result;
 }
 
@@ -249,31 +256,14 @@ run_pty_command(const char *command, int timeout_ms)
 {
     char cwd[4096];
     struct snag_config config;
-    struct snag_credential credential;
     struct snag_response_graph graph;
-    json_t *result = NULL;
-    char error[256];
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     snag_config_init(&config);
     config.default_timeout_ms = 1000;
     config.max_timeout_ms = 5000;
-    snag_credential_clear(&credential);
     make_call_with_pty(&graph, command, cwd, timeout_ms, NULL, true);
-    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-    error[0] = '\0';
-    {
-        int rc = snag_tools_run(&call, &config, &credential, cwd,
-                               NULL, NULL, -1, &result, error, sizeof(error));
-        if (rc != 0)
-            fprintf(stderr, "pty tool error: %s errno=%d\n", error, errno);
-        assert(rc == 0);
-    }
-    assert(result != NULL);
-    assert(snag_tool_result_valid(result) == 0);
-    snag_response_graph_free(&graph);
-    snag_config_free(&config);
-    return result;
+    return run_call(&graph, &config, cwd, NULL, NULL, NULL);
 }
 
 static json_t *
@@ -282,11 +272,7 @@ run_tool_with_wait(const char *name, json_t *args,
 {
     char cwd[4096];
     struct snag_config config;
-    struct snag_credential credential;
     struct snag_response_graph graph;
-    json_t *result = NULL;
-    char error[256];
-    int rc;
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     snag_config_init(&config);
@@ -294,23 +280,11 @@ run_tool_with_wait(const char *name, json_t *args,
     config.default_yield_ms = 1000;
     config.max_wait_ms = max_wait_ms;
     config.max_timeout_ms = 5000;
-    snag_credential_clear(&credential);
     snag_response_graph_init(&graph);
     assert(snag_response_graph_set_provider_id(&graph, "resp_managed_test") == 0);
     assert(snag_response_graph_add_call(&graph, "item_managed_test",
                                        "call_managed_test", name, args) == 0);
-    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-    error[0] = '\0';
-    rc = snag_tools_run(&call, &config, &credential, cwd,
-                       pump, pump_opaque, -1, &result, error, sizeof(error));
-    if (rc != 0)
-        fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
-    assert(rc == 0);
-    assert(result != NULL);
-    assert(snag_tool_result_valid(result) == 0);
-    snag_response_graph_free(&graph);
-    snag_config_free(&config);
-    return result;
+    return run_call(&graph, &config, cwd, NULL, pump, pump_opaque);
 }
 
 static json_t *
@@ -452,35 +426,19 @@ static json_t *
 run_apply_patch(const char *workdir, const char *patch)
 {
     struct snag_config config;
-    struct snag_credential credential;
     struct snag_response_graph graph;
     json_t *args = json_object();
-    json_t *result = NULL;
-    char error[256];
-    int rc;
 
     assert(args != NULL);
     assert(snag_json_set_new(args, "patch", json_string(patch)) == 0);
     assert(snag_json_set_new(args, "workdir", json_string(workdir)) == 0);
     snag_config_init(&config);
-    snag_credential_clear(&credential);
     snag_response_graph_init(&graph);
     assert(snag_response_graph_set_provider_id(&graph, "resp_patch_test") == 0);
     assert(snag_response_graph_add_call(&graph, "item_patch_test",
                                        "call_patch_test", "apply_patch",
                                        args) == 0);
-    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-    error[0] = '\0';
-    rc = snag_tools_run(&call, &config, &credential, workdir,
-                       NULL, NULL, -1, &result, error, sizeof(error));
-    if (rc != 0)
-        fprintf(stderr, "patch tool error: %s errno=%d\n", error, errno);
-    assert(rc == 0);
-    assert(result != NULL);
-    assert(snag_tool_result_valid(result) == 0);
-    snag_response_graph_free(&graph);
-    snag_config_free(&config);
-    return result;
+    return run_call(&graph, &config, workdir, NULL, NULL, NULL);
 }
 
 static void
