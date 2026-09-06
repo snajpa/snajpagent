@@ -1929,7 +1929,7 @@ def foreground_at(styled, pattern):
     return colors[match.start(1)]
 
 
-def validate_irc_styles(terminal):
+def validate_irc_styles(terminal, own):
     styled = terminal.capture_styled()
     expected = [
         (nick, color, role)
@@ -1940,6 +1940,10 @@ def validate_irc_styles(terminal):
         for nick in nicks
     ]
     for nick, color, role in expected:
+        # Fixture replies contain the sender's nick, so they are local-model
+        # mentions in that model's own viewer.
+        if nick == own:
+            color, role = 35, "local-model mention magenta"
         pattern = rf"(?m)^\d{{2}}:\d{{2}}:\d{{2}} ({nick}) "
         assert foreground_at(styled, pattern) == color, f"{nick} missing {role}:\n{styled}"
 
@@ -3109,8 +3113,8 @@ def run_irc_chat_case(binary, root):
             if screen.count("@twoop set topic · shared integration topic") != 1:
                 raise AssertionError(f"{name} did not render the topic change once")
             validate_irc_events(terminal.dotdir)
-        for terminal in ordered:
-            validate_irc_styles(terminal)
+        for name, _model, own, _operator, _args in specs:
+            validate_irc_styles(terminals[name], own)
 
         for marker in (first, second):
             requests = provider.matching_requests(marker)
@@ -3134,6 +3138,11 @@ def run_irc_chat_case(binary, root):
                          b"USER highlightpeer 0 * :agent\r\nCAP END\r\nJOIN #lab\r\n")
             for terminal in ordered:
                 terminal.wait("highlightpeer joined")
+            peer.sendall(b"PRIVMSG #lab :ordinary palette baseline\r\n")
+            for terminal in ordered:
+                terminal.wait("ordinary palette baseline")
+                pattern = r"(?m)^\d{2}:\d{2}:\d{2} (highlightpeer) › ordinary palette baseline"
+                assert foreground_at(terminal.capture_styled(), pattern) == 36
             for target, viewer in (("hostop", "host"), ("oneop", "one"),
                                    ("hostbot", "host"), ("onebot", "one")):
                 if viewer == "one":
