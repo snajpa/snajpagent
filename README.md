@@ -44,10 +44,11 @@ The first implementation targets modern Linux; older-kernel qualification is
 separate. See [dependencies](DEPENDENCIES.md) for embedded trust, license/source
 obligations and the `SSL_CERT_FILE` override. Plain `make` remains host-only.
 
-`make prod-macos-arm64` cross-builds a small macOS 11+ ARM64 executable using
+`make prod-macos-arm64` or `make prod-macos-x86_64` cross-builds a small macOS
+11+ ARM64 or Intel executable using
 pinned LLVM and the Apple SDK. Application libraries and CA data are static;
 only the OS's `libSystem` remains dynamic. Copy
-`build/matrix/macos-arm64/bin/snajpagent`; the adjacent optional `.dSYM` matches
+`build/matrix/macos-ARCH/bin/snajpagent`; the adjacent optional `.dSYM` matches
 it. **Experimental: cross-built and inspected, not yet runtime-qualified on
 macOS.** No Apple signing identity or notarization is implied.
 

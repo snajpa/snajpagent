@@ -341,6 +341,7 @@ help:
 		'make -jN              Parallel host build; no cross-builds or VMs' \
 		'make prod-linux-x86_64 Self-contained Linux x86-64 via pinned Nix; network/cache on first build' \
 		'make prod-macos-arm64  macOS ARM64 with static application libraries via pinned Nix' \
+		'make prod-macos-x86_64 macOS Intel with static application libraries via pinned Nix' \
 		'make install          Build/install production by default' \
 		'make DEBUG=1 install  Deliberately build/install debug instead' \
 		'make check            Unit, CLI, terminal (if tmux exists), source/dependency checks' \
@@ -360,7 +361,7 @@ help:
 		'Live targets (livecheck, terminallivecheck, releaseevidence) use network/' \
 		'credentials and may incur provider charges; never part of make or help.'
 
-prod-linux-x86_64 prod-macos-arm64:
+prod-linux-x86_64 prod-macos-arm64 prod-macos-x86_64:
 	@test '$(DEBUG)' = 0 || { printf '%s\n' '$@: production only; use DEBUG=0' >&2; exit 2; }
 	@mkdir -p build/matrix
 	nix-build nix/portable.nix -A $(patsubst prod-%,%,$@) \
@@ -377,6 +378,6 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-linux-x86_64 prod-macos-arm64 FORCE
+.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-linux-x86_64 prod-macos-arm64 prod-macos-x86_64 FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d

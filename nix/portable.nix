@@ -43,6 +43,11 @@ in assert buildRevision == null || buildRevision == revision; {
     sourcePkgs = static;
     arch = "arm64";
   }).application { inherit source packageName version revision; };
+  macos-x86_64 = (import ./macos.nix {
+    inherit pkgs;
+    sourcePkgs = static;
+    arch = "x86_64";
+  }).application { inherit source packageName version revision; };
   linux-x86_64 = musl.stdenv.mkDerivation {
     pname = packageName;
     inherit version;
