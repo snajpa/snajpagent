@@ -76,6 +76,7 @@ size_t snag_path_root_len(const char *path);
 char *snag_realpath(const char *path);
 int snag_mkdir_private(const char *path);
 int snag_mkdir_private_at(int dirfd, const char *path);
+int snag_create_private_at(int dirfd, const char *path, bool exclusive);
 bool snag_strcpy(char *dst, size_t size, const char *src);
 char *snag_join_words(char *const *words, size_t count, size_t max);
 

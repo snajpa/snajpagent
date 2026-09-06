@@ -13,6 +13,7 @@
 #include <wincrypt.h>
 #include <winternl.h>
 #include <io.h>
+#include <fcntl.h>
 #include <uniwidth.h>
 #include <wchar.h>
 
@@ -107,7 +108,8 @@ wide_path(const char *path)
 static bool private_dacl(PACL dacl, PSID owner);
 
 static int
-mkdir_private(int dirfd, const char *path, bool relative)
+create_private(int dirfd, const char *path, bool relative, bool directory,
+               bool exclusive, int *file_fd)
 {
     HANDLE token = NULL, created = NULL, parent = NULL;
     TOKEN_USER *user = NULL;
@@ -118,7 +120,7 @@ mkdir_private(int dirfd, const char *path, bool relative)
     IO_STATUS_BLOCK io = {0};
     wchar_t *wide = wide_path(path);
     DWORD acl_size, close_error = 0;
-    bool allocated_name = false;
+    bool allocated_name = false, was_created = false;
     NTSTATUS status;
     int rc = -1, error;
 
@@ -184,14 +186,42 @@ mkdir_private(int dirfd, const char *path, bool relative)
     attributes.ObjectName = &name;
     attributes.Attributes = OBJ_CASE_INSENSITIVE;
     attributes.SecurityDescriptor = &descriptor;
-    status = NtCreateFile(&created, FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE | DELETE,
+    DWORD access = FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE;
+    if (!directory)
+        access |= FILE_GENERIC_READ | FILE_GENERIC_WRITE;
+    DWORD options = (directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE) |
+                    FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT;
+    status = NtCreateFile(&created, access | DELETE,
                           &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                          FILE_CREATE, FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
-                          NULL, 0);
+                          FILE_CREATE, options, NULL, 0);
+    if (!exclusive && status < 0) {
+        DWORD code = RtlNtStatusToDosError(status);
+        if (code == ERROR_ALREADY_EXISTS || code == ERROR_FILE_EXISTS) {
+            created = NULL;
+            status = NtCreateFile(&created, access, &attributes, &io, NULL,
+                FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                FILE_OPEN, options, NULL, 0);
+        }
+    }
     if (status < 0) {
+        created = NULL;
         path_error(RtlNtStatusToDosError(status));
         goto out;
+    }
+    was_created = io.Information == FILE_CREATED;
+    {
+        BY_HANDLE_FILE_INFORMATION info;
+        if (!GetFileInformationByHandle(created, &info))
+            goto native_error;
+        if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            errno = ELOOP;
+            goto out;
+        }
+        if (!directory && info.nNumberOfLinks != 1u) {
+            errno = EACCES;
+            goto out;
+        }
     }
     {
         PSECURITY_DESCRIPTOR actual = NULL;
@@ -205,9 +235,6 @@ mkdir_private(int dirfd, const char *path, bool relative)
         if (actual)
             LocalFree(actual);
         if (!valid) {
-            FILE_DISPOSITION_INFORMATION dispose = {TRUE};
-            (void)NtSetInformationFile(created, &io, &dispose, sizeof(dispose),
-                                       FileDispositionInformation);
             if (code != ERROR_SUCCESS)
                 path_error(code);
             else
@@ -215,12 +242,23 @@ mkdir_private(int dirfd, const char *path, bool relative)
             goto out;
         }
     }
+    if (!directory) {
+        *file_fd = _open_osfhandle((intptr_t)created, _O_BINARY | _O_RDWR | _O_NOINHERIT);
+        if (*file_fd < 0)
+            goto out;
+        created = NULL; /* CRT descriptor now owns the handle. */
+    }
     rc = 0;
     goto out;
 native_error:
     path_error(GetLastError());
 out:
     error = errno;
+    if (rc < 0 && created && was_created) {
+        FILE_DISPOSITION_INFORMATION dispose = {TRUE};
+        (void)NtSetInformationFile(created, &io, &dispose, sizeof(dispose),
+                                   FileDispositionInformation);
+    }
     if (created && !CloseHandle(created))
         close_error = GetLastError();
     if (token && !CloseHandle(token) && !close_error)
@@ -231,19 +269,34 @@ out:
     free(acl);
     free(wide);
     errno = error;
-    return rc == 0 && close_error ? path_error(close_error) : rc;
+    if (rc == 0 && close_error) {
+        if (file_fd && *file_fd >= 0) {
+            (void)_close(*file_fd);
+            *file_fd = -1;
+        }
+        return path_error(close_error);
+    }
+    return rc;
 }
 
 int
 snag_mkdir_private(const char *path)
 {
-    return mkdir_private(-1, path, false);
+    return create_private(-1, path, false, true, true, NULL);
 }
 
 int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
-    return mkdir_private(dirfd, path, true);
+    return create_private(dirfd, path, true, true, true, NULL);
+}
+
+int
+snag_create_private_at(int dirfd, const char *path, bool exclusive)
+{
+    int fd = -1;
+
+    return create_private(dirfd, path, true, false, exclusive, &fd) < 0 ? -1 : fd;
 }
 
 static bool
@@ -617,6 +670,26 @@ int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
     return mkdirat(dirfd, path, 0700);
+}
+
+int
+snag_create_private_at(int dirfd, const char *path, bool exclusive)
+{
+    struct stat st;
+    struct snag_file_privacy privacy;
+    int fd = openat(dirfd, path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW |
+                    (exclusive ? O_EXCL : 0), 0600);
+
+    if (fd < 0)
+        return -1;
+    if (fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0 ||
+        !S_ISREG(st.st_mode) || st.st_nlink != 1u ||
+        !privacy.effective_owner || !privacy.private_access) {
+        (void)close(fd);
+        errno = EACCES;
+        return -1;
+    }
+    return fd;
 }
 
 int

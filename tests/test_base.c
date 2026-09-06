@@ -137,6 +137,43 @@ test_private_directory(void)
 #endif
     assert(cwd && root && fd >= 0);
     assert(snag_fd_privacy(fd, &privacy) == 0 && privacy.effective_owner && privacy.private_access);
+    {
+        const char bytes[] = {'a', '\n', '\0', '\x1a', 'z'};
+        char received[sizeof(bytes)];
+        char *data = snag_path_join(root, "data"), *alias = snag_path_join(root, "alias");
+        int file = snag_create_private_at(fd, "data", true);
+        assert(data && alias && file >= 0);
+        assert(snag_fd_privacy(file, &privacy) == 0 && privacy.effective_owner && privacy.private_access);
+        assert(snag_write_full(file, bytes, sizeof(bytes)) == 0);
+        assert(snag_sync_file(file) == 0 && close(file) == 0);
+        errno = 0;
+        assert(snag_create_private_at(fd, "data", true) == -1 && errno == EEXIST);
+        file = snag_create_private_at(fd, "data", false);
+        assert(file >= 0);
+        assert(read(file, received, sizeof(received)) == sizeof(received));
+        assert(memcmp(bytes, received, sizeof(bytes)) == 0);
+        assert(close(file) == 0);
+#ifdef _WIN32
+        assert(CreateHardLinkA(alias, data, NULL));
+#else
+        assert(link(data, alias) == 0);
+#endif
+        errno = 0;
+        assert(snag_create_private_at(fd, "data", false) == -1 && errno == EACCES);
+        assert(unlink(alias) == 0);
+#ifdef _WIN32
+        assert(SetNamedSecurityInfoA(data, SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            NULL, NULL, NULL, NULL) == ERROR_SUCCESS);
+#else
+        assert(chmod(data, 0644) == 0);
+#endif
+        errno = 0;
+        assert(snag_create_private_at(fd, "data", false) == -1 && errno == EACCES);
+        assert(unlink(data) == 0);
+        free(data);
+        free(alias);
+    }
     child = snag_path_join(root, "child");
     renamed = snag_path_join(root, "renamed");
     absolute = snag_path_join(root, "absolute");

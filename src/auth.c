@@ -136,7 +136,7 @@ lock_provider(int dir, const char *name, snag_auth_pump_fn pump, void *opaque)
     uint64_t deadline = snag_monotonic_ms() + 30000u;
 
     (void)snprintf(path, sizeof(path), "%s.lock", name);
-    fd = openat(dir, path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    fd = snag_create_private_at(dir, path, false);
     if (fd < 0)
         return -1;
     if (private_fd(fd, false) < 0)
@@ -251,7 +251,7 @@ write_tokens(int dir, const struct snag_provider_config *provider,
         goto out;
     (void)snprintf(path, sizeof(path), "%s.json", provider->name);
     (void)snprintf(temp, sizeof(temp), "%s.tmp", id);
-    fd = openat(dir, temp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    fd = snag_create_private_at(dir, temp, true);
     if (fd < 0 || snag_write_full(fd, text.data, text.len) < 0 || fsync(fd) < 0 ||
         renameat(dir, temp, dir, path) < 0)
         goto out;
