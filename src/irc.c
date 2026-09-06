@@ -566,7 +566,7 @@ open_listener(const char *endpoint, char *error, size_t error_size)
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    gai = getaddrinfo(host, port, &hints, &addresses);
+    gai = snag_socket_addresses(host, port, &hints, &addresses);
     if (gai != 0) {
         snag_errorf(error, error_size, "cannot resolve IRC listen endpoint: %s",
                   gai_strerror(gai));
@@ -1573,7 +1573,7 @@ start_link(struct snag_irc_core *irc, struct irc_conn *link)
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
-    gai = getaddrinfo(host, port, &hints, &addresses);
+    gai = snag_socket_addresses(host, port, &hints, &addresses);
     if (gai != 0) {
         errno = EHOSTUNREACH;
         return 1;

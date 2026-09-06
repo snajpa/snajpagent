@@ -749,6 +749,20 @@ test_sockets(void)
     socklen_t address_size = sizeof(address);
 #endif
     assert(snag_network_init() == 0);
+    struct addrinfo hints = {0}, *addresses = NULL;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    assert(snag_socket_addresses("localhost", "80", &hints, &addresses) == 0 && addresses);
+    for (struct addrinfo *item = addresses; item; item = item->ai_next) {
+        if (item->ai_family == AF_INET)
+            assert(((struct sockaddr_in *)item->ai_addr)->sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+        else {
+            assert(item->ai_family == AF_INET6);
+            assert(IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *)item->ai_addr)->sin6_addr));
+        }
+    }
+    freeaddrinfo(addresses);
     snag_socket listener = snag_socket_open(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     assert(listener != SNAG_SOCKET_INVALID);
     assert(snag_socket_reuse(listener) == 0);

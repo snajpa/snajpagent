@@ -4,6 +4,23 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <string.h>
+
+int
+snag_socket_addresses(const char *host, const char *service,
+                       const struct addrinfo *hints, struct addrinfo **out)
+{
+    int rc = getaddrinfo(host, service, hints, out);
+#ifdef _WIN32
+    /* Minimal/old Windows environments may lack localhost resolver entries. */
+    if (rc && host && !_stricmp(host, "localhost")) {
+        struct addrinfo loopback = hints ? *hints : (struct addrinfo){0};
+        loopback.ai_flags &= ~AI_PASSIVE;
+        rc = getaddrinfo(NULL, service, &loopback, out);
+    }
+#endif
+    return rc;
+}
 
 #ifdef _WIN32
 int
