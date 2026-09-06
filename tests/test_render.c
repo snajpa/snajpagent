@@ -39,17 +39,23 @@ capture_open(bool stdout_enabled, bool stderr_enabled)
     return capture;
 }
 
-static size_t
-capture_close(struct output_capture *capture, char *out, size_t size, size_t used)
+static void
+capture_restore(struct output_capture *capture)
 {
-    ssize_t n;
-
     for (int i = 0; i < 2; ++i) {
         if (capture->saved[i] < 0)
             continue;
         assert(dup2(capture->saved[i], i + 1) >= 0);
         close(capture->saved[i]);
     }
+}
+
+static size_t
+capture_close(struct output_capture *capture, char *out, size_t size, size_t used)
+{
+    ssize_t n;
+
+    capture_restore(capture);
     while ((n = read(capture->fd, out + used, size - used - 1u)) > 0)
         used += (size_t)n;
     assert(n == 0);
@@ -604,11 +610,8 @@ test_completion_choices(void)
         {"/all @ag", "/all @agent", "@agent1", "@agent2"},
         {"@č", "@če", "@čenda", "@červen"},
     };
-    int fds[2], saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && pipe(fds) == 0);
-    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
-    assert(dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
     for (unsigned int flags = 0u; flags < 4u; ++flags) {
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
             struct snag_term term;
@@ -629,10 +632,10 @@ test_completion_choices(void)
             completion_input(&term, "\t");
             assert(term.draft.len == strlen(cases[i].common));
             assert(memcmp(term.draft.data, cases[i].common, term.draft.len) == 0);
-            assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+            assert(prompt_output(capture.fd, output, sizeof(output)) == 0u);
             size_t cursor = term.cursor;
             completion_input(&term, "\t");
-            assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+            assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
             assert(strstr(output, cases[i].first) && strstr(output, cases[i].second));
             assert(count_text(output, cases[i].first) == 1u);
             assert(!strstr(output, "ENDPOINT") && !strstr(output, "FILE"));
@@ -640,14 +643,14 @@ test_completion_choices(void)
             assert(memcmp(term.draft.data, cases[i].common, term.draft.len) == 0);
             /* Cursor movement breaks the consecutive-Tab sequence. */
             completion_input(&term, "\033[D\033[C\t");
-            assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+            assert(prompt_output(capture.fd, output, sizeof(output)) == 0u);
             /* Capture while output is stalled; listing is deferred, not lost. */
             term.input_only = true;
             completion_input(&term, "\t");
-            assert(term.completion_output.len && prompt_output(fds[0], output, sizeof(output)) == 0u);
+            assert(term.completion_output.len && prompt_output(capture.fd, output, sizeof(output)) == 0u);
             term.input_only = false;
             completion_input(&term, "x");
-            assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+            assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
             assert(strstr(output, cases[i].first) && strstr(output, cases[i].second));
             assert(!term.completion_output.len);
             snag_term_close(&term);
@@ -685,9 +688,8 @@ test_completion_choices(void)
         term.input_pos = term.input_len = 0u;
     }
     snag_term_close(&term);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    close(fds[0]);
+    capture_restore(&capture);
+    close(capture.fd);
 }
 
 static void
@@ -1252,19 +1254,7 @@ test_input_model_boundaries(void)
              suffix < sizeof(suffixes) / sizeof(suffixes[0]); ++suffix) {
             struct snag_render render;
             struct snag_term term;
-            int fds[2];
-            int saved_stdout;
-            int saved_stderr;
-            ssize_t n;
-            size_t used = 0u;
-
-            assert(pipe(fds) == 0);
-            saved_stdout = dup(STDOUT_FILENO);
-            saved_stderr = dup(STDERR_FILENO);
-            assert(saved_stdout >= 0 && saved_stderr >= 0);
-            assert(dup2(fds[1], STDOUT_FILENO) >= 0);
-            assert(dup2(fds[1], STDERR_FILENO) >= 0);
-            close(fds[1]);
+            struct output_capture capture = capture_open(true, true);
             snag_term_init(&term);
             term.columns = 120u;
             snag_render_init(&render, 0u);
@@ -1284,16 +1274,7 @@ test_input_model_boundaries(void)
             assert(snag_render_before_prompt(&render) == 0);
             snag_render_free(&render);
             snag_term_close(&term);
-            assert(dup2(saved_stdout, STDOUT_FILENO) >= 0);
-            assert(dup2(saved_stderr, STDERR_FILENO) >= 0);
-            close(saved_stdout);
-            close(saved_stderr);
-            while ((n = read(fds[0], output + used,
-                             sizeof(output) - used - 1u)) > 0)
-                used += (size_t)n;
-            assert(n == 0);
-            close(fds[0]);
-            output[used] = '\0';
+            (void)capture_close(&capture, output, sizeof(output), 0u);
             assert(strcmp(output, enabled ?
                           "model/low › question\n\n• answer\n\n" :
                           "model/low › question\n\nanswer\n\n") == 0);
@@ -1302,15 +1283,7 @@ test_input_model_boundaries(void)
     {
         struct snag_render render;
         struct snag_term term;
-        int fds[2];
-        int saved;
-        ssize_t n;
-        size_t used = 0u;
-
-        assert(pipe(fds) == 0);
-        saved = dup(STDERR_FILENO);
-        assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-        close(fds[1]);
+        struct output_capture capture = capture_open(false, true);
         snag_term_init(&term);
         memcpy(term.label, "model/low › ", strlen("model/low › ") + 1u);
         term.line_submission_echoed = true;
@@ -1321,14 +1294,7 @@ test_input_model_boundaries(void)
                                           "question") == 0);
         snag_render_free(&render);
         snag_term_close(&term);
-        assert(dup2(saved, STDERR_FILENO) >= 0);
-        close(saved);
-        while ((n = read(fds[0], output + used,
-                         sizeof(output) - used - 1u)) > 0)
-            used += (size_t)n;
-        assert(n == 0);
-        close(fds[0]);
-        output[used] = '\0';
+        (void)capture_close(&capture, output, sizeof(output), 0u);
         assert(strcmp(output, "") == 0);
     }
 }
@@ -1400,13 +1366,7 @@ test_history_failure(void)
 {
     struct snag_render render;
     struct snag_session session = {0};
-    int fds[2];
-    int saved;
-
-    assert(pipe(fds) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, 0u);
     render.stderr_terminal = true;
     session.last_assistant = "\xff";
@@ -1415,9 +1375,8 @@ test_history_failure(void)
     assert(errno == EILSEQ && !render.public_item_open);
     assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     assert(snag_render_public_end(&render) == 0);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    close(fds[0]);
+    capture_restore(&capture);
+    close(capture.fd);
 }
 
 static void
@@ -1699,12 +1658,9 @@ test_local_mention_highlight(void)
             }};
             struct snag_irc_event event = {.endpoint = "server", .nick = "peer"};
             char output[8192] = {0};
-            int fds[2], saved = dup(STDERR_FILENO);
+            struct output_capture capture = capture_open(false, true);
             bool color = (flags & 1u) != 0u;
-            assert(saved >= 0 && pipe(fds) == 0);
-            assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
-            assert(dup2(fds[1], STDERR_FILENO) >= 0);
-            close(fds[1]);
+            assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
             snag_term_init(&term);
             term.columns = 40u;
             strcpy(flags & 4u ? destinations.items[0].model :
@@ -1725,17 +1681,16 @@ test_local_mention_highlight(void)
             event.historical = !(flags & 2u);
             assert(snag_render_irc_event(&render, &event) == 0);
             assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-            size_t used = drain_available(fds[0], output, sizeof(output), 0u);
+            size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
             event.kind = SNAG_IRC_MESSAGE;
             event.op = false;
             strcpy(event.text, "ordinary followup");
             assert(snag_render_irc_event(&render, &event) == 0);
-            (void)drain_available(fds[0], output, sizeof(output), used);
+            (void)drain_available(capture.fd, output, sizeof(output), used);
             snag_render_free(&render);
             snag_term_close(&term);
-            assert(dup2(saved, STDERR_FILENO) >= 0);
-            close(saved);
-            close(fds[0]);
+            capture_restore(&capture);
+            close(capture.fd);
             assert((strstr(output, "[1] \033[1;35m") != NULL) == (color && cases[i].highlight));
             if (color) {
                 assert(strstr(output, strcmp(cases[i].room, "#room") == 0 ?
@@ -1901,11 +1856,9 @@ test_semantic_history(void)
         struct snag_render render;
         struct snag_buf response, finish;
         char args[1401], result[801], output[8192] = {0};
-        int fds[2], saved = dup(STDERR_FILENO);
-        assert(file && saved >= 0 && pipe(fds) == 0);
-        assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
-        assert(dup2(fds[1], STDERR_FILENO) >= 0);
-        close(fds[1]);
+        struct output_capture capture = capture_open(false, true);
+        assert(file);
+        assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
         memset(args, 'A', sizeof(args) - 1u);
         args[sizeof(args) - 1u] = '\0';
         memset(result, 'R', sizeof(result) - 1u);
@@ -1932,7 +1885,7 @@ test_semantic_history(void)
         assert(snag_render_protocol(&render, "hidden", "hidden-protocol", 15u) == 0);
         render.verbosity = level;
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-        size_t used = drain_available(fds[0], output, sizeof(output), 0u);
+        size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
         assert((strstr(output, "future_tool") != NULL) == (level >= 1u));
         assert((strstr(output, "RRRR") != NULL) == (level >= 2u));
         assert((strstr(output, "[arguments truncated]") != NULL) == (level == 2u));
@@ -1941,15 +1894,14 @@ test_semantic_history(void)
         render.verbosity = 6u;
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-        (void)drain_available(fds[0], output, sizeof(output), used);
+        (void)drain_available(capture.fd, output, sizeof(output), used);
         assert(count_text(output, "future_tool") == (level ? 2u : 0u));
         snag_render_free(&render);
         snag_buf_free(&response);
         snag_buf_free(&finish);
         fclose(file);
-        assert(dup2(saved, STDERR_FILENO) >= 0);
-        close(saved);
-        close(fds[0]);
+        capture_restore(&capture);
+        close(capture.fd);
     }
 }
 
@@ -1974,11 +1926,8 @@ test_live_downgrade(void)
     struct snag_render_block block;
     struct downgrade change = {&render, 0u, 2u};
     char payload[5000], output[8192] = {0};
-    int fds[2], saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && pipe(fds) == 0);
-    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
-    assert(dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
     memset(payload, 'Q', sizeof(payload));
     memcpy(payload + sizeof(payload) - 12u, "secret-tail", 12u);
     json_t *result = json_object();
@@ -1989,7 +1938,7 @@ test_live_downgrade(void)
     render.checkpoint = downgrade_checkpoint;
     render.checkpoint_opaque = &change;
     assert(snag_render_tool_block(&render, &block) == 0);
-    (void)drain_available(fds[0], output, sizeof(output), 0u);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
     assert(strstr(output, "[output truncated]") && !strstr(output, "secret-tail"));
     assert(block.body.len == sizeof(payload) - 1u);
     snag_render_block_free(&block);
@@ -2003,12 +1952,11 @@ test_live_downgrade(void)
     render.checkpoint = downgrade_checkpoint;
     render.checkpoint_opaque = &change;
     assert(snag_render_protocol(&render, "live", payload, strlen(payload)) == 0);
-    (void)drain_available(fds[0], output, sizeof(output), 0u);
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
     assert(strstr(output, "[display omitted]") && !strstr(output, "secret-tail"));
     snag_render_free(&render);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    close(fds[0]);
+    capture_restore(&capture);
+    close(capture.fd);
 }
 
 static void
@@ -2019,14 +1967,8 @@ test_append_only_views(unsigned int verbosity)
     struct snag_buf delivered;
     char output[8192] = {0};
     size_t used = 0u;
-    int fds[2];
-    int saved;
-
-    assert(pipe(fds) == 0);
-    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
-    saved = dup(STDERR_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    struct output_capture capture = capture_open(false, true);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
     snag_render_init(&render, verbosity);
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
@@ -2041,7 +1983,7 @@ test_append_only_views(unsigned int verbosity)
     snag_buf_init(&delivered, 1024u);
     assert(snag_render_rollout_begin(&render, STDERR_FILENO, "agent › ", SNAG_PRESENT_CONVERSATION) == 0);
     assert(snag_render_rollout(&render, "hidden-prefix ", 14u, &delivered) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strstr(output, "chat-one") != NULL);
     assert(strstr(output, "Goal set") == NULL);
     assert(strstr(output, "Compacted") == NULL);
@@ -2053,7 +1995,7 @@ test_append_only_views(unsigned int verbosity)
     assert(snag_render_runtime(&render, "queued-runtime") == 0);
     memcpy(event.text, "chat-two", 9u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strstr(output,
                   "── rollout ──\n• Goal set\n• Compacted\n"
                   "agent › hidden-prefix live-suffix ") != NULL);
@@ -2064,7 +2006,7 @@ test_append_only_views(unsigned int verbosity)
     assert(snag_render_rollout(&render, "hidden-tail", 11u, &delivered) == 0);
     assert(snag_render_rollout_end(&render) == 0);
     assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strstr(output, "── chat ──\n") != NULL);
     assert(strstr(output, "chat-two") != NULL);
     assert(strstr(output, "── rollout ──\nhidden-tail\n") != NULL);
@@ -2077,7 +2019,7 @@ test_append_only_views(unsigned int verbosity)
     assert(count_text(output, "• Compacted") == 1u);
     assert(count_text(output, "── rollout ──") == 2u);
     assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(count_text(output, "── rollout ──") == 2u);
     errno = 0;
     assert(snag_render_set_view(&render, (enum snag_render_view)-1) < 0);
@@ -2095,7 +2037,7 @@ test_append_only_views(unsigned int verbosity)
     memcpy(event.text, "peer-with-old-nick", 19u);
     assert(snag_render_irc_event(&render, &event) == 0);
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(count_text(output, "agent › public-before-rename") == 1u);
     assert(count_text(output, "agent2 › public-after-rename") == 1u);
     assert(count_text(output, "peer-with-old-nick") == 1u);
@@ -2118,11 +2060,11 @@ test_append_only_views(unsigned int verbosity)
     event.kind = SNAG_IRC_TOPIC;
     memcpy(event.text, "/workspace", 11u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(!strstr(output, "retained-own-message"));
     assert(!strstr(output, "── history replayed ──"));
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(count_text(output, "agent2 › retained-own-message") == 1u);
     assert(!strstr(output, " history agent2"));
     assert(count_text(output, "-agent2 - own-public-notice") == 1u);
@@ -2136,16 +2078,16 @@ test_append_only_views(unsigned int verbosity)
                                      SNAG_PRESENT_CONVERSATION) == 0);
     assert(snag_render_rollout(&render, "offline-private", 15u, NULL) == 0);
     assert(snag_render_rollout_end(&render) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(!strstr(output, "offline-private"));
     event.kind = SNAG_IRC_MESSAGE;
     memcpy(event.nick, "peer", 5u);
     memcpy(event.text, "offline-retained", 17u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(count_text(output, "offline-retained") == 1u);
     assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(count_text(output, "offline-private") == 1u);
     assert(snag_render_view(&render) == SNAG_RENDER_ROLLOUT);
     assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
@@ -2160,9 +2102,8 @@ test_append_only_views(unsigned int verbosity)
                   "hidden-prefix live-suffix hidden-tail") == 0);
     snag_buf_free(&delivered);
     snag_render_free(&render);
-    assert(dup2(saved, STDERR_FILENO) >= 0);
-    close(saved);
-    close(fds[0]);
+    capture_restore(&capture);
+    close(capture.fd);
 }
 
 int
