@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "tools.h"
+#include "fs.h"
 
 #include "tools_patch.h"
 
@@ -172,7 +173,7 @@ text_arg_valid(const char *text, size_t max)
 static bool
 absolute_dir_arg_valid(const char *path)
 {
-    struct stat st;
+    snag_file_info st;
     size_t len;
 
     if (!path || path == (const char *)-1 || !snag_path_root_len(path))
@@ -180,7 +181,7 @@ absolute_dir_arg_valid(const char *path)
     len = strlen(path);
     return len <= SNAG_PATH_MAX_BYTES &&
            snag_utf8_valid((const unsigned char *)path, len, true) &&
-           stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+           snag_stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 static int

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "secret_source.h"
+#include "fs.h"
 #include "base.h"
 #include "snag_jansson.h"
 
@@ -151,10 +152,10 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
             goto done;
         value = snag_strdup_checked(text, SNAG_SECRET_MAX);
     } else if (source->kind == SNAG_SECRET_FILE) {
-        struct stat st;
+        snag_file_info st;
         /* O_NONBLOCK avoids hanging on a FIFO; symlinks are intentional sources. */
         fd = open(source->path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0 || fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) ||
+        if (fd < 0 || snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) ||
             st.st_size < 0 || (uintmax_t)st.st_size > SNAG_SECRET_MAX + 2u)
             goto done;
         value = calloc(SNAG_SECRET_MAX + 4u, 1u);

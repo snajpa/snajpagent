@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
+#include "fs.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -136,6 +137,10 @@ test_private_directory(void)
     fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 #endif
     assert(cwd && root && fd >= 0);
+    snag_file_info root_info, path_info;
+    assert(snag_fstat(fd, &root_info) == 0 && S_ISDIR(root_info.st_mode));
+    assert(snag_stat(root, &path_info) == 0 && root_info.st_dev == path_info.st_dev &&
+           root_info.st_ino == path_info.st_ino);
     assert(snag_fd_privacy(fd, &privacy) == 0 && privacy.effective_owner && privacy.private_access);
     {
         const char bytes[] = {'a', '\n', '\0', '\x1a', 'z'};
@@ -145,6 +150,10 @@ test_private_directory(void)
         assert(data && alias && file >= 0);
         assert(snag_fd_privacy(file, &privacy) == 0 && privacy.effective_owner && privacy.private_access);
         assert(snag_write_full(file, bytes, sizeof(bytes)) == 0);
+        snag_file_info info, linked;
+        assert(snag_fstat(file, &info) == 0 && S_ISREG(info.st_mode) && info.st_size == sizeof(bytes));
+        assert(snag_lstat_at(fd, "data", &linked) == 0 && linked.st_dev == info.st_dev &&
+               linked.st_ino == info.st_ino && linked.st_size == sizeof(bytes));
         assert(snag_sync_file(file) == 0 && close(file) == 0);
         errno = 0;
         assert(snag_create_private_at(fd, "data", true) == -1 && errno == EEXIST);
@@ -152,12 +161,31 @@ test_private_directory(void)
         assert(file >= 0);
         assert(read(file, received, sizeof(received)) == sizeof(received));
         assert(memcmp(bytes, received, sizeof(bytes)) == 0);
+#ifdef _WIN32
+        LARGE_INTEGER offset;
+        DWORD returned;
+        offset.QuadPart = INT64_C(5368709120);
+        assert(DeviceIoControl((HANDLE)_get_osfhandle(file), 0x900c4u,
+                               NULL, 0, NULL, 0, &returned, NULL));
+        assert(SetFilePointerEx((HANDLE)_get_osfhandle(file), offset, NULL, FILE_BEGIN));
+        assert(SetEndOfFile((HANDLE)_get_osfhandle(file)));
+        assert(snag_fstat(file, &linked) == 0 && linked.st_size == offset.QuadPart);
+        offset.QuadPart = sizeof(bytes);
+        assert(SetFilePointerEx((HANDLE)_get_osfhandle(file), offset, NULL, FILE_BEGIN));
+        assert(SetEndOfFile((HANDLE)_get_osfhandle(file)));
+#else
+        assert(ftruncate(file, (off_t)INT64_C(5368709120)) == 0);
+        assert(snag_fstat(file, &linked) == 0 && linked.st_size == INT64_C(5368709120));
+        assert(ftruncate(file, sizeof(bytes)) == 0);
+#endif
         assert(close(file) == 0);
 #ifdef _WIN32
         assert(CreateHardLinkA(alias, data, NULL));
 #else
         assert(link(data, alias) == 0);
 #endif
+        assert(snag_stat(data, &info) == 0 && snag_stat(alias, &linked) == 0);
+        assert(info.st_ino == linked.st_ino && info.st_dev == linked.st_dev && info.st_nlink == 2u);
         errno = 0;
         int rejected = snag_create_private_at(fd, "data", false);
         if (rejected != -1 || errno != EACCES) {
@@ -177,6 +205,15 @@ test_private_directory(void)
             errno = error;
         }
         assert(rejected == -1 && errno == EACCES);
+        assert(unlink(alias) == 0);
+#ifdef _WIN32
+        assert(CreateSymbolicLinkA(alias, data, 0));
+#else
+        assert(symlink(data, alias) == 0);
+#endif
+        assert(snag_lstat(alias, &linked) == 0 && S_ISLNK(linked.st_mode));
+        assert(snag_stat(alias, &linked) == 0 && S_ISREG(linked.st_mode) &&
+               linked.st_dev == info.st_dev && linked.st_ino == info.st_ino);
         assert(unlink(alias) == 0);
 #ifdef _WIN32
         assert(SetNamedSecurityInfoA(data, SE_FILE_OBJECT,
@@ -211,6 +248,7 @@ test_private_directory(void)
     assert(renamed);
     (void)sprintf(renamed, "%s-renamed", root);
     assert(rename(root, renamed) == 0);
+    assert(snag_fstat(fd, &path_info) == 0 && path_info.st_ino == root_info.st_ino);
     assert(snag_mkdir_private_at(fd, "after-rename") == 0);
     nested = snag_path_join(renamed, "after-rename");
     assert(nested && rmdir(nested) == 0);

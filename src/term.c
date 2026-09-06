@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "term.h"
+#include "fs.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -555,14 +556,14 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     term->opened = true;
     for (int fd = STDOUT_FILENO; fd <= STDERR_FILENO; ++fd) {
         char path[SNAG_PATH_MAX_BYTES];
-        struct stat original, owned;
+        snag_file_info original, owned;
         if (!isatty(fd))
             continue;
         int name_error = ttyname_r(fd, path, sizeof(path));
         int copy = name_error ? -1 : open(path, O_WRONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
         if (name_error)
             errno = name_error;
-        if (copy < 0 || fstat(fd, &original) < 0 || fstat(copy, &owned) < 0 ||
+        if (copy < 0 || snag_fstat(fd, &original) < 0 || snag_fstat(copy, &owned) < 0 ||
             original.st_rdev != owned.st_rdev || !S_ISCHR(owned.st_mode)) {
             int saved_errno = copy < 0 ? errno : EIO;
             if (copy >= 0)

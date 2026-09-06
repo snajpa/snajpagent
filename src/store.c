@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
+#include "fs.h"
 #include "instructions.h"
 #include "irc.h"
 #include "snajpagent.h"
@@ -34,10 +35,10 @@ int
 snag_store_verify_private_fd(int fd, bool directory, const char *name,
                   char *error, size_t error_size)
 {
-    struct stat st;
+    snag_file_info st;
     struct snag_file_privacy privacy;
     bool valid;
-    if (fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0) {
+    if (snag_fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0) {
         snag_errorf(error, error_size, "cannot inspect %s: %s", name,
                   strerror(errno));
         return -1;
@@ -55,8 +56,8 @@ static int
 ensure_directory(const char *path, bool require_private,
                  char *error, size_t error_size)
 {
-    struct stat st;
-    if (lstat(path, &st) < 0) {
+    snag_file_info st;
+    if (snag_lstat(path, &st) < 0) {
         if (errno != ENOENT) {
             snag_errorf(error, error_size, "cannot inspect %s: %s", path,
                       strerror(errno));
@@ -67,7 +68,7 @@ ensure_directory(const char *path, bool require_private,
                       strerror(errno));
             return -1;
         }
-        if (lstat(path, &st) < 0) {
+        if (snag_lstat(path, &st) < 0) {
             snag_errorf(error, error_size, "cannot verify %s: %s", path,
                       strerror(errno));
             return -1;
@@ -2366,7 +2367,7 @@ static char *
 canonical_workspace(const char *workspace, char *error, size_t error_size)
 {
     char *resolved = snag_realpath(workspace);
-    struct stat st;
+    snag_file_info st;
 
     if (!resolved) {
         snag_errorf(error, error_size, "cannot resolve workspace %s: %s", workspace,
@@ -2375,7 +2376,7 @@ canonical_workspace(const char *workspace, char *error, size_t error_size)
     }
     if (strlen(resolved) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)resolved, strlen(resolved), true) ||
-        stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
+        snag_stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
         snag_errorf(error, error_size, "workspace must be an existing UTF-8 directory");
         free(resolved);
         errno = EINVAL;

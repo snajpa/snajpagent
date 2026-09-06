@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "login.h"
+#include "fs.h"
 #include "app.h"
 #include "auth.h"
 #include "base.h"
@@ -353,7 +354,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     struct snag_provider_config provider = {0};
     struct snag_auth_tokens tokens, previous;
     struct sigaction action, old_int, old_term;
-    struct stat st;
+    snag_file_info st;
     char error[256] = {0}, rollback_error[256] = {0};
     char model[SNAG_CONFIG_MODEL_MAX] = {0};
     char *dotdir = NULL, *path = NULL;
@@ -380,7 +381,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     path = snag_config_path(cli->config_path, dotdir, error, sizeof(error));
     if (!path)
         goto out;
-    first = lstat(path, &st) < 0 && errno == ENOENT;
+    first = snag_lstat(path, &st) < 0 && errno == ENOENT;
     if (setup && (!first || (getenv("OPENAI_API_KEY") && *getenv("OPENAI_API_KEY")))) {
         rc = 0;
         goto out;

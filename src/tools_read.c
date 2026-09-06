@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "tools.h"
+#include "fs.h"
 #include "base.h"
 
 #include <ctype.h>
@@ -49,10 +50,10 @@ checkpoint(struct read_query *q)
 static int
 open_entry(int parent, const char *name)
 {
-    struct stat before, after;
+    snag_file_info before, after;
     int fd;
 
-    if (fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) < 0)
+    if (snag_lstat_at(parent, name, &before) < 0)
         return -1;
     if (!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode)) {
         errno = EINVAL;
@@ -61,7 +62,7 @@ open_entry(int parent, const char *name)
     fd = openat(parent, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (fd < 0)
         return -1;
-    if (fstat(fd, &after) < 0 || before.st_dev != after.st_dev ||
+    if (snag_fstat(fd, &after) < 0 || before.st_dev != after.st_dev ||
         before.st_ino != after.st_ino ||
         (!S_ISREG(after.st_mode) && !S_ISDIR(after.st_mode))) {
         close(fd);
@@ -251,14 +252,14 @@ compare_names(const void *a, const void *b)
 static int
 walk(struct read_query *q, int fd, const char *path, unsigned int depth)
 {
-    struct stat st;
+    snag_file_info st;
     DIR *dir;
     struct dirent *entry;
     char **names = NULL;
     size_t count = 0;
     int rc = -1;
 
-    if (fstat(fd, &st) < 0) { close(fd); return -1; }
+    if (snag_fstat(fd, &st) < 0) { close(fd); return -1; }
     if (S_ISREG(st.st_mode) && (q->grep || q->read))
         return scan_file(q, fd, path);
     if (q->read || !S_ISDIR(st.st_mode)) {
@@ -303,7 +304,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
         const char *type;
 
         if (checkpoint(q) < 0 ||
-            fstatat(fd, names[i], &st, AT_SYMLINK_NOFOLLOW) < 0) {
+            snag_lstat_at(fd, names[i], &st) < 0) {
             rc = -1;
             break;
         }

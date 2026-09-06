@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "config.h"
+#include "fs.h"
 #include "base.h"
 
 #include <errno.h>
@@ -1048,9 +1049,9 @@ unavailable:
 
 static int
 read_config(const char *path, bool require_file, struct snag_buf *text,
-            struct stat *file_stat, bool *private_file, char *error, size_t error_size)
+            snag_file_info *file_stat, bool *private_file, char *error, size_t error_size)
 {
-    struct stat st;
+    snag_file_info st;
     int fd;
     int rc = -1;
 
@@ -1062,7 +1063,7 @@ read_config(const char *path, bool require_file, struct snag_buf *text,
                   path, strerror(errno));
         return -1;
     }
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+    if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
         snag_errorf(error, error_size,
                   "configuration must be a regular file no larger than 64 KiB");
@@ -1119,13 +1120,13 @@ static int
 validate_shell(struct snag_config *config, char *error, size_t error_size)
 {
     char *resolved;
-    struct stat st;
+    snag_file_info st;
     if (!snag_path_root_len(config->shell))
         goto invalid;
     resolved = snag_realpath(config->shell);
     if (!resolved)
         goto invalid;
-    if (strlen(resolved) > SNAG_CONFIG_PATH_MAX || stat(resolved, &st) < 0 ||
+    if (strlen(resolved) > SNAG_CONFIG_PATH_MAX || snag_stat(resolved, &st) < 0 ||
         !S_ISREG(st.st_mode) || access(resolved, X_OK) < 0) {
         free(resolved);
         goto invalid;
@@ -1210,7 +1211,7 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
     struct snag_buf text;
     char *owned_path = NULL;
     const char *path = explicit_path;
-    struct stat file_stat;
+    snag_file_info file_stat;
     int read_rc;
     int rc = -1;
 
@@ -1398,7 +1399,7 @@ next_line:
 }
 
 static bool
-same_file(const struct stat *left, const struct stat *right)
+same_file(const snag_file_info *left, const snag_file_info *right)
 {
     return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
            left->st_size == right->st_size && left->st_mtime == right->st_mtime &&
@@ -1537,8 +1538,8 @@ save_config_settings(const char *path, bool allow_create,
 {
     struct snag_buf input;
     struct snag_buf output;
-    struct stat before;
-    struct stat current;
+    snag_file_info before;
+    snag_file_info current;
     char id[SNAG_ID_HEX_LEN + 1u];
     char temp[64] = {0};
     char leaf[NAME_MAX + 1u];
@@ -1641,14 +1642,14 @@ save_config_settings(const char *path, bool allow_create,
     }
     fd = -1;
     if (read_rc == 0) {
-        if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) < 0 ||
+        if (snag_lstat_at(parent_fd, leaf, &current) < 0 ||
             !same_file(&before, &current)) {
             snag_errorf(error, error_size,
                       "configuration changed while it was being saved");
             errno = EAGAIN;
             goto out;
         }
-    } else if (fstatat(parent_fd, leaf, &current, AT_SYMLINK_NOFOLLOW) == 0 ||
+    } else if (snag_lstat_at(parent_fd, leaf, &current) == 0 ||
                errno != ENOENT) {
         snag_errorf(error, error_size,
                   "configuration appeared while it was being saved");

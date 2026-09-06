@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "fs.h"
 #include "base.h"
 #include "config.h"
 #include "context.h"
@@ -1418,8 +1419,8 @@ commit_model_selection(struct app_state *app,
     int rc;
 
     if (save) {
-        struct stat st;
-        bool missing = app->config_allow_create && lstat(app->config_path, &st) < 0 && errno == ENOENT;
+        snag_file_info st;
+        bool missing = app->config_allow_create && snag_lstat(app->config_path, &st) < 0 && errno == ENOENT;
         int save_rc = missing ? snag_config_save_provider(app->config_path, true, provider,
                                 model, effort, error, sizeof(error)) :
             snag_config_save_model(app->config_path, app->config_allow_create, provider->name,
@@ -1624,7 +1625,7 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
                 char *error, size_t error_size)
 {
     struct snag_sha256 digest;
-    struct stat st;
+    snag_file_info st;
     unsigned char hash[32];
     int fd;
 
@@ -1637,7 +1638,7 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
                   path, strerror(errno));
         return -1;
     }
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+    if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
         (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
         snag_errorf(error, error_size,
                   "configuration must be a regular file no larger than 64 KiB");
@@ -3632,7 +3633,7 @@ resolve_workspace_path(const char *path, const char *label,
                        char *error, size_t error_size)
 {
     char *resolved = snag_realpath(path);
-    struct stat st;
+    snag_file_info st;
     if (!resolved) {
         snag_errorf(error, error_size, "cannot resolve %s workspace %s: %s",
                   label, path, strerror(errno));
@@ -3640,7 +3641,7 @@ resolve_workspace_path(const char *path, const char *label,
     }
     if (strlen(resolved) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)resolved, strlen(resolved), true) ||
-        stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
+        snag_stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
         snag_errorf(error, error_size, "%s workspace must be an existing UTF-8 directory",
                   label);
         free(resolved);

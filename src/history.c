@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "history.h"
+#include "fs.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -111,7 +112,7 @@ history_lock(int fd)
 static int
 history_file_open(struct snag_history *term)
 {
-    struct stat st;
+    snag_file_info st;
     struct snag_file_privacy privacy;
     int fd = open(term->path,
                   O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
@@ -119,7 +120,7 @@ history_file_open(struct snag_history *term)
 
     if (fd < 0)
         return -1;
-    if (fstat(fd, &st) < 0) {
+    if (snag_fstat(fd, &st) < 0) {
         int saved = errno;
         (void)close(fd);
         errno = saved;
@@ -228,13 +229,13 @@ out:
 static int
 history_load_locked(struct snag_history *term, int fd, bool *damaged)
 {
-    struct stat st;
+    snag_file_info st;
     struct snag_buf file, decoded;
     size_t pos = 0u;
     bool dirty = false;
     int rc = -1;
 
-    if (fstat(fd, &st) < 0 || st.st_size < 0 ||
+    if (snag_fstat(fd, &st) < 0 || st.st_size < 0 ||
         (uintmax_t)st.st_size > HISTORY_FILE_BYTES)
         return -1;
     snag_buf_init(&file, HISTORY_FILE_BYTES + 1u);

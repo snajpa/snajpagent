@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
+#include "fs.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -106,6 +107,163 @@ wide_path(const char *path)
 }
 
 static bool private_dacl(PACL dacl, PSID owner);
+
+static int
+file_info(HANDLE handle, snag_file_info *out)
+{
+    BY_HANDLE_FILE_INFORMATION info;
+    snag_file_info st = {0};
+    DWORD type;
+
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+    SetLastError(ERROR_SUCCESS);
+    type = GetFileType(handle);
+    if (type == FILE_TYPE_UNKNOWN) {
+        DWORD code = GetLastError();
+        return path_error(code ? code : ERROR_NOT_SUPPORTED);
+    }
+    if (type == FILE_TYPE_DISK) {
+        if (!GetFileInformationByHandle(handle, &info))
+            return path_error(GetLastError());
+        st.st_dev = info.dwVolumeSerialNumber;
+        st.st_ino = ((uint64_t)info.nFileIndexHigh << 32u) | info.nFileIndexLow;
+        st.st_nlink = info.nNumberOfLinks;
+        st.st_size = (int64_t)(((uint64_t)info.nFileSizeHigh << 32u) | info.nFileSizeLow);
+        uint64_t ticks = ((uint64_t)info.ftLastWriteTime.dwHighDateTime << 32u) |
+                         info.ftLastWriteTime.dwLowDateTime;
+        st.st_mtime = (int64_t)(ticks / 10000000u) - INT64_C(11644473600);
+        if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            st.st_mode = S_IFLNK;
+        else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            st.st_mode = S_IFDIR;
+        else
+            st.st_mode = S_IFREG;
+        /* Attribute bits are not a Unix permission or Windows ACL snapshot. */
+        st.st_mode |= 0400u;
+        if (S_ISDIR(st.st_mode))
+            st.st_mode |= 0100u;
+        if (!(info.dwFileAttributes & FILE_ATTRIBUTE_READONLY))
+            st.st_mode |= 0200u;
+    } else if (type == FILE_TYPE_CHAR) {
+        st.st_mode = S_IFCHR;
+        st.st_rdev = (uint64_t)(uintptr_t)handle;
+    } else if (type == FILE_TYPE_PIPE) {
+        st.st_mode = S_IFIFO;
+    } else {
+        return path_error(ERROR_NOT_SUPPORTED);
+    }
+    *out = st;
+    return 0;
+}
+
+int
+snag_fstat(int fd, snag_file_info *out)
+{
+    intptr_t handle = _get_osfhandle(fd);
+
+    if (handle == -1) {
+        errno = EBADF;
+        return -1;
+    }
+    return file_info((HANDLE)handle, out);
+}
+
+static int
+path_stat(int dirfd, const char *path, bool relative, bool nofollow, snag_file_info *out)
+{
+    HANDLE handle = NULL;
+    OBJECT_ATTRIBUTES attributes = {0};
+    IO_STATUS_BLOCK io = {0};
+    UNICODE_STRING name = {0};
+    wchar_t *wide = wide_path(path);
+    bool allocated_name = false;
+    NTSTATUS status;
+    int rc = -1, error;
+
+    if (!wide)
+        return -1;
+    if (!out || !*wide) {
+        errno = out ? ENOENT : EINVAL;
+        goto out;
+    }
+    if (relative && !snag_path_root_len(path)) {
+        intptr_t parent = _get_osfhandle(dirfd);
+        snag_file_info info;
+        if (parent == -1) {
+            errno = EBADF;
+            goto out;
+        }
+        if (file_info((HANDLE)parent, &info) < 0)
+            goto out;
+        if (!S_ISDIR(info.st_mode)) {
+            errno = ENOTDIR;
+            goto out;
+        }
+        if (*wide == L'/' || *wide == L'\\') {
+            errno = EINVAL;
+            goto out;
+        }
+        for (wchar_t *p = wide; *p; ++p)
+            if (*p == L'/')
+                *p = L'\\';
+        name.Buffer = wide;
+        name.Length = (USHORT)(wcslen(wide) * sizeof(*wide));
+        name.MaximumLength = name.Length + sizeof(*wide);
+        attributes.RootDirectory = (HANDLE)parent;
+    } else {
+        if (!(BOOLEAN)RtlDosPathNameToNtPathName_U(wide, &name, NULL, NULL)) {
+            errno = EINVAL;
+            goto out;
+        }
+        allocated_name = true;
+    }
+    attributes.Length = sizeof(attributes);
+    attributes.ObjectName = &name;
+    attributes.Attributes = OBJ_CASE_INSENSITIVE;
+    status = NtCreateFile(&handle, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attributes,
+        &io, NULL, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT | (nofollow ? FILE_OPEN_REPARSE_POINT : 0),
+        NULL, 0);
+    if (status < 0) {
+        handle = NULL;
+        path_error(RtlNtStatusToDosError(status));
+        goto out;
+    }
+    rc = file_info(handle, out);
+out:
+    error = errno;
+    if (handle && !CloseHandle(handle) && rc == 0) {
+        path_error(GetLastError());
+        error = errno;
+        rc = -1;
+    }
+    if (allocated_name)
+        RtlFreeUnicodeString(&name);
+    free(wide);
+    errno = error;
+    return rc;
+}
+
+int
+snag_stat(const char *path, snag_file_info *out)
+{
+    return path_stat(-1, path, false, false, out);
+}
+
+int
+snag_lstat(const char *path, snag_file_info *out)
+{
+    return path_stat(-1, path, false, true, out);
+}
+
+int
+snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
+{
+    return path_stat(dirfd, path, true, true, out);
+}
 
 static int
 create_private(int dirfd, const char *path, bool relative, bool directory,
@@ -659,6 +817,30 @@ snag_sync_dir(int fd)
 #include <unistd.h>
 #include <wchar.h>
 #include <sys/stat.h>
+
+int
+snag_fstat(int fd, snag_file_info *out)
+{
+    return fstat(fd, out);
+}
+
+int
+snag_stat(const char *path, snag_file_info *out)
+{
+    return stat(path, out);
+}
+
+int
+snag_lstat(const char *path, snag_file_info *out)
+{
+    return lstat(path, out);
+}
+
+int
+snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
+{
+    return fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
+}
 
 int
 snag_mkdir_private(const char *path)

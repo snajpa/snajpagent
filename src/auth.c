@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "auth.h"
+#include "fs.h"
 #include "base.h"
 #include "json.h"
 
@@ -79,9 +80,9 @@ snag_auth_key(struct snag_auth_tokens *tokens, const char *key,
 static int
 private_fd(int fd, bool directory)
 {
-    struct stat st;
+    snag_file_info st;
     struct snag_file_privacy privacy;
-    if (fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0 ||
+    if (snag_fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0 ||
         !privacy.effective_owner || !privacy.private_access ||
         (directory ? !S_ISDIR(st.st_mode) :
                      (!S_ISREG(st.st_mode) || st.st_nlink != 1u))) {
@@ -170,7 +171,7 @@ read_tokens(int dir, const struct snag_provider_config *provider,
     struct snag_buf text;
     json_t *value = NULL;
     const char *kind, *base;
-    struct stat st;
+    snag_file_info st;
     int fd, rc = -1;
 
     snag_auth_clear(tokens);
@@ -179,7 +180,7 @@ read_tokens(int dir, const struct snag_provider_config *provider,
     if (fd < 0)
         return errno == ENOENT ? 1 : -1;
     snag_buf_init(&text, AUTH_FILE_MAX);
-    if (private_fd(fd, false) < 0 || fstat(fd, &st) < 0 ||
+    if (private_fd(fd, false) < 0 || snag_fstat(fd, &st) < 0 ||
         st.st_size < 1 || (uint64_t)st.st_size > AUTH_FILE_MAX)
         goto out;
     for (;;) {

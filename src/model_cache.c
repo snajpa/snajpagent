@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "model_cache.h"
+#include "fs.h"
 
 #include "base.h"
 #include "json.h"
@@ -293,7 +294,7 @@ int
 snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
                      char *error, size_t error_size)
 {
-    struct stat st;
+    snag_file_info st;
     struct snag_buf data;
     int fd;
     int rc = -1;
@@ -311,7 +312,7 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
     }
     snag_buf_init(&data, SNAG_MODEL_CACHE_FILE_MAX);
     struct snag_file_privacy privacy;
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || snag_fd_privacy(fd, &privacy) < 0 ||
+    if (snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || snag_fd_privacy(fd, &privacy) < 0 ||
         !privacy.real_owner || !privacy.private_access || st.st_size <= 0 ||
         (uintmax_t)st.st_size > SNAG_MODEL_CACHE_FILE_MAX) {
         snag_errorf(error, error_size,

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "tools_patch.h"
+#include "fs.h"
 
 #include "base.h"
 #include "json.h"
@@ -84,7 +85,7 @@ struct patch_op {
     bool eol_crlf;
     bool final_nl;
     mode_t mode;
-    struct stat st;
+    snag_file_info st;
     size_t added_lines;
     size_t removed_lines;
 };
@@ -645,7 +646,7 @@ read_target_file(int root_fd, struct patch_op *op,
         snag_errorf(error, error_size, "patch target %s cannot be opened", op->path);
         goto out;
     }
-    if (fstat(fd, &op->st) < 0)
+    if (snag_fstat(fd, &op->st) < 0)
         goto out;
     if (!S_ISREG(op->st.st_mode) || op->st.st_size > (off_t)PATCH_FILE_MAX) {
         snag_errorf(error, error_size,
@@ -671,13 +672,13 @@ validate_add_target(int root_fd, struct patch_op *op,
                     char *error, size_t error_size)
 {
     char leaf[NAME_MAX + 1u];
-    struct stat st;
+    snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
 
     if (parent_fd < 0)
         return -1;
-    if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+    if (snag_lstat_at(parent_fd, leaf, &st) == 0) {
         snag_errorf(error, error_size, "add target %s already exists", op->path);
         errno = EEXIST;
         goto out;
@@ -702,7 +703,7 @@ validate_delete_target(int root_fd, struct patch_op *op,
 
     if (parent_fd < 0)
         return -1;
-    if (fstatat(parent_fd, leaf, &op->st, AT_SYMLINK_NOFOLLOW) < 0) {
+    if (snag_lstat_at(parent_fd, leaf, &op->st) < 0) {
         snag_errorf(error, error_size, "delete target %s cannot be checked", op->path);
         goto out;
     }
@@ -940,7 +941,7 @@ validate_and_compute(struct patch_set *set, int root_fd,
 }
 
 static bool
-same_identity(const struct stat *a, const struct stat *b)
+same_identity(const snag_file_info *a, const snag_file_info *b)
 {
     return a->st_dev == b->st_dev && a->st_ino == b->st_ino &&
            a->st_mtime == b->st_mtime && a->st_size == b->st_size &&
@@ -1010,14 +1011,14 @@ install_add(int root_fd, const struct patch_op *op,
 {
     char leaf[NAME_MAX + 1u];
     char temp[NAME_MAX + 1u];
-    struct stat st;
+    snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
     int saved;
 
     if (parent_fd < 0)
         return -1;
-    if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0) {
+    if (snag_lstat_at(parent_fd, leaf, &st) == 0) {
         snag_errorf(error, error_size, "add target %s appeared before install", op->path);
         errno = EEXIST;
         goto out;
@@ -1051,14 +1052,14 @@ install_update(int root_fd, const struct patch_op *op,
 {
     char leaf[NAME_MAX + 1u];
     char temp[NAME_MAX + 1u];
-    struct stat st;
+    snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
     int saved;
 
     if (parent_fd < 0)
         return -1;
-    if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
+    if (snag_lstat_at(parent_fd, leaf, &st) < 0 ||
         !same_identity(&op->st, &st)) {
         snag_errorf(error, error_size, "update target %s changed before install", op->path);
         errno = ESTALE;
@@ -1068,7 +1069,7 @@ install_update(int root_fd, const struct patch_op *op,
         snag_errorf(error, error_size, "update target %s could not be staged", op->path);
         goto out;
     }
-    if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
+    if (snag_lstat_at(parent_fd, leaf, &st) < 0 ||
         !same_identity(&op->st, &st)) {
         saved = errno;
         (void)unlinkat(parent_fd, temp, 0);
@@ -1098,13 +1099,13 @@ install_delete(int root_fd, const struct patch_op *op,
                char *error, size_t error_size)
 {
     char leaf[NAME_MAX + 1u];
-    struct stat st;
+    snag_file_info st;
     int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     int rc = -1;
 
     if (parent_fd < 0)
         return -1;
-    if (fstatat(parent_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
+    if (snag_lstat_at(parent_fd, leaf, &st) < 0 ||
         !same_identity(&op->st, &st)) {
         snag_errorf(error, error_size, "delete target %s changed before install", op->path);
         errno = ESTALE;
@@ -1321,11 +1322,11 @@ static int
 workdir_valid(const char *workdir, size_t len, const char *session_workspace,
               char *error, size_t error_size)
 {
-    struct stat st;
+    snag_file_info st;
     if (!len || len > SNAG_PATH_MAX_BYTES || workdir[0] != '/' ||
         strcmp(workdir, session_workspace) != 0 ||
         !snag_utf8_valid((const unsigned char *)workdir, len, true) ||
-        stat(workdir, &st) < 0 || !S_ISDIR(st.st_mode)) {
+        snag_stat(workdir, &st) < 0 || !S_ISDIR(st.st_mode)) {
         snag_errorf(error, error_size,
                   "apply_patch workdir must be the session workspace directory");
         errno = EINVAL;

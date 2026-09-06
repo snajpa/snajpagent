@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "instructions.h"
+#include "fs.h"
 #include "json.h"
 #include "snajpagent.h"
 
@@ -88,13 +89,13 @@ static int
 try_candidate(struct snag_instruction_set *set, const char *path,
               bool *added, char *error, size_t error_size)
 {
-    struct stat st;
+    snag_file_info st;
     struct snag_buf text;
     int fd = -1;
     int rc = -1;
 
     *added = false;
-    if (lstat(path, &st) < 0) {
+    if (snag_lstat(path, &st) < 0) {
         if (errno == ENOENT)
             return 0;
         snag_errorf(error, error_size, "cannot inspect instruction %s: %s",
@@ -230,13 +231,13 @@ find_project_root(const char *workspace, char **root,
         return -1;
     for (;;) {
         char *git = snag_path_join(current, ".git");
-        struct stat st;
+        snag_file_info st;
 
         if (!git) {
             free(current);
             return -1;
         }
-        if (lstat(git, &st) == 0) {
+        if (snag_lstat(git, &st) == 0) {
             if (S_ISLNK(st.st_mode) || (!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode))) {
                 snag_errorf(error, error_size,
                           ".git at %s must be a non-symlink file or directory", git);
@@ -331,7 +332,7 @@ snag_instructions_discover(struct snag_instruction_set *set,
     char *global = NULL;
     char *canonical_workspace = NULL;
     char *project_root = NULL;
-    struct stat st;
+    snag_file_info st;
     int rc = -1;
 
     snag_instructions_free(set);
@@ -342,7 +343,7 @@ snag_instructions_discover(struct snag_instruction_set *set,
     global = config_instruction_root(error, error_size);
     if (!global)
         goto out;
-    if (lstat(global, &st) == 0) {
+    if (snag_lstat(global, &st) == 0) {
         if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
             snag_errorf(error, error_size,
                       "instruction config root must be a real directory");
@@ -360,7 +361,7 @@ snag_instructions_discover(struct snag_instruction_set *set,
     if (!canonical_workspace || strlen(canonical_workspace) > SNAG_PATH_MAX_BYTES ||
         !snag_utf8_valid((const unsigned char *)canonical_workspace,
                         strlen(canonical_workspace), true) ||
-        stat(canonical_workspace, &st) < 0 || !S_ISDIR(st.st_mode)) {
+        snag_stat(canonical_workspace, &st) < 0 || !S_ISDIR(st.st_mode)) {
         snag_errorf(error, error_size,
                   "workspace must be an existing UTF-8 directory for instruction discovery");
         errno = EINVAL;
