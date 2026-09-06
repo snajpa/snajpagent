@@ -159,7 +159,9 @@ automatically. Its initial topic is the server's workspace path.
 Chat is public. Only mentions of the model's accepted nick steer active work;
 ordinary conversation remains background context. The model posts through
 `irc_send`; its other output stays in local rollout. Empty Tab switches views,
-or use `/chat` and `/rollout`. In chat, Tab completes `@nick`.
+or use `/chat` and `/rollout`. Tab completes slash commands and numeric destinations;
+in chat it also completes `@nick`. A unique match adds a separating space.
+For ambiguous matches, Tab fills the common prefix and a second Tab lists choices.
 
 You can start networking later with `/server start` or `/connect ENDPOINT`,
 even during a turn. Multiple connections are supported: `/names` lists their

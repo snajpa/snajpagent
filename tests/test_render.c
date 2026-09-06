@@ -474,8 +474,9 @@ test_mention_completion(void)
         {"agent1\nagent2\n", "@agent", "@agent", 6u, 6u},
         {"agent\n", "@missing", "@missing", 8u, 8u},
         {"", "@", "@", 1u, 1u},
-        {"agent\n", "hi @agxxx, bye", "hi @agent, bye", 6u, 9u},
-        {"agent\n", "hey\n@ag tail", "hey\n@agent tail", 7u, 10u},
+        {"agent\n", "hi @agxxx, bye", "hi @agent , bye", 6u, 10u},
+        {"agent\n", "hey\n@ag tail", "hey\n@agent tail", 7u, 11u},
+        {"agent\n", "@agent", "@agent ", 6u, 7u},
         {"[bot]\n", "@{bo", "@[bot] ", 4u, 7u},
         {"čenda\n", "@če", "@čenda ", 4u, 8u},
         {"čenda\nčerven\n", "@č", "@če", 3u, 4u},
@@ -509,6 +510,105 @@ test_mention_completion(void)
 }
 
 static void
+completion_input(struct snag_term *term, const char *bytes)
+{
+    enum snag_term_action action;
+    char *text = NULL;
+    term->input_pos = 0u;
+    term->input_len = strlen(bytes);
+    assert(term->input_len <= sizeof(term->input));
+    memcpy(term->input, bytes, term->input_len);
+    assert(snag_term_poll(term, 0, -1, &action, &text) == 0);
+    assert(action == SNAG_TERM_NONE && !text);
+}
+
+static void
+test_completion_choices(void)
+{
+    static const struct snag_term_command commands[] = {
+        {"/connect ENDPOINT", NULL}, {"/config FILE", NULL},
+        {"/compact", NULL}, {"/help", NULL}, {"/help", NULL}
+    };
+    static const struct {
+        const char *draft, *common, *first, *second;
+    } cases[] = {
+        {"/c", "/co", "/connect", "/config"},
+        {"/1", "/1", "/12", "/17"},
+        {"@ag", "@agent", "@agent1", "@agent2"},
+        {"/17 @ag", "/17 @agent", "@agent1", "@agent2"},
+        {"/all @ag", "/all @agent", "@agent1", "@agent2"},
+        {"@č", "@če", "@čenda", "@červen"},
+    };
+    int fds[2], saved = dup(STDERR_FILENO);
+    assert(saved >= 0 && pipe(fds) == 0);
+    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
+    assert(dup2(fds[1], STDERR_FILENO) >= 0);
+    close(fds[1]);
+    for (unsigned int flags = 0u; flags < 4u; ++flags) {
+        for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            struct snag_term term;
+            char output[4096];
+            struct snag_irc_destinations destinations = {.count = 2u, .items = {
+                {.target = {.id = 12u}, .joined = true,
+                 .nicks = "agent1\nagent2\nčenda\nčerven\n"},
+                {.target = {.id = 17u}, .joined = true,
+                 .nicks = "Agent1\nagent2\n"},
+            }};
+            snag_term_init(&term);
+            term.chat = true;
+            term.active = (flags & 1u) != 0u;
+            term.columns = flags & 2u ? 10u : 80u;
+            snag_term_set_commands(&term, commands, sizeof(commands) / sizeof(commands[0]));
+            assert(snag_term_set_destinations(&term, &destinations) == 0);
+            assert(snag_term_restore_draft(&term, cases[i].draft) == 0);
+            completion_input(&term, "\t");
+            assert(term.draft.len == strlen(cases[i].common));
+            assert(memcmp(term.draft.data, cases[i].common, term.draft.len) == 0);
+            assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+            size_t cursor = term.cursor;
+            completion_input(&term, "\t");
+            assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+            assert(strstr(output, cases[i].first) && strstr(output, cases[i].second));
+            assert(count_text(output, cases[i].first) == 1u);
+            assert(!strstr(output, "ENDPOINT") && !strstr(output, "FILE"));
+            assert(term.cursor == cursor && term.draft.len == strlen(cases[i].common));
+            assert(memcmp(term.draft.data, cases[i].common, term.draft.len) == 0);
+            /* Cursor movement breaks the consecutive-Tab sequence. */
+            completion_input(&term, "\033[D\033[C\t");
+            assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+            /* Capture while output is stalled; listing is deferred, not lost. */
+            term.input_only = true;
+            completion_input(&term, "\t");
+            assert(term.completion_output.len && prompt_output(fds[0], output, sizeof(output)) == 0u);
+            term.input_only = false;
+            completion_input(&term, "x");
+            assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+            assert(strstr(output, cases[i].first) && strstr(output, cases[i].second));
+            assert(!term.completion_output.len);
+            snag_term_close(&term);
+        }
+    }
+    struct snag_term term;
+    snag_term_init(&term);
+    snag_term_set_commands(&term, commands, sizeof(commands) / sizeof(commands[0]));
+    const char *drafts[] = {"/he", "/help", "/he tail"};
+    for (size_t i = 0u; i < 3u; ++i) {
+        assert(snag_term_restore_draft(&term, drafts[i]) == 0);
+        term.cursor = i == 1u ? 5u : 3u;
+        completion_input(&term, "\t");
+        const char *expected = i == 2u ? "/help tail" : "/help ";
+        assert(term.draft.len == strlen(expected));
+        assert(memcmp(term.draft.data, expected, term.draft.len) == 0);
+        assert(term.cursor == 6u);
+        assert(!term.completion_armed);
+    }
+    snag_term_close(&term);
+    assert(dup2(saved, STDERR_FILENO) >= 0);
+    close(saved);
+    close(fds[0]);
+}
+
+static void
 test_destination_editor(void)
 {
     static const struct {
@@ -521,7 +621,7 @@ test_destination_editor(void)
         {"/all @ag", "/all @agent", true},
         {"/9 @ag", "/9 @ag", true},
         {"/2oops @ag", "/2oops @ag", true},
-        {"/1", "/17", true}
+        {"/1", "/17 ", true}
     };
     struct snag_irc_destinations destinations = {0};
     struct snag_irc_route route, frozen;
@@ -1953,6 +2053,7 @@ main(void)
     test_prompt_spinners();
     test_retained_prompt();
     test_mention_completion();
+    test_completion_choices();
     test_destination_editor();
     test_markdown_streaming();
     test_markdown_tables();

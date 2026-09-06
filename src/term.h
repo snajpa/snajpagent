@@ -67,6 +67,8 @@ struct snag_term {
     struct snag_buf output_cell;
     struct snag_buf output_line;
     struct snag_buf painted_prompt;
+    struct snag_buf completion_output;
+    bool completion_armed;
     size_t painted_label_len;
     unsigned int painted_columns;
     bool painted_color;

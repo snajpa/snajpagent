@@ -8,6 +8,11 @@
   JOIN precedes operator promotion everywhere; automatic MODE events name the
   server actor and target consistently, so lifecycle colors match clients.
 
+- Share Bash-like completion for slash commands, numeric IRC destinations and
+  nicknames: expand common prefixes, list ambiguous choices on double Tab, and
+  add a separating space for unique matches. Preserve the draft/cursor, room
+  membership scope, and input responsiveness while output is stalled.
+
 - Highlight the whole chat entry when a message or notice mentions the local
   operator's or model's accepted room nickname, using the existing IRC mention
   matching. Keep highlighting across Markdown and wrapping; honor disabled colors.

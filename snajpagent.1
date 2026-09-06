@@ -333,11 +333,14 @@ it is not killed.  In chat, send to the selected room.  A model-nick mention
 steers at the next safe response/tool boundary without truncating generation.
 .TP
 .B Tab
-Complete a slash command when possible.  In chat, complete an
+Complete a slash command or numeric IRC destination when possible.  In chat, complete an
 .B @nick
 at the cursor from current room members.  Ambiguous matches expand their common
-prefix; no match leaves the draft unchanged.  Mention completion never queues
-or sends text.  While idle, otherwise insert spaces.
+prefix; a second consecutive Tab lists the matching choices and restores the
+draft and cursor.  Unique matches include a trailing space, reusing an existing
+space before retained text.  These rules apply to every completion type.
+No match leaves the draft unchanged.  Completion never queues or sends text.
+While idle, otherwise insert spaces.
 During a turn, queue the draft for a later FIFO turn, except that
 .B /verbose
 applies locally immediately.  Empty Tab always switches

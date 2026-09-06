@@ -268,6 +268,7 @@ snag_term_init(struct snag_term *term)
     snag_buf_init(&term->output_cell, SIZE_MAX);
     snag_buf_init(&term->output_line, SIZE_MAX);
     snag_buf_init(&term->painted_prompt, SIZE_MAX);
+    snag_buf_init(&term->completion_output, SNAG_MAX_DIRECT_PROMPT);
     term->columns = 80u;
     term->history_pos = SIZE_MAX;
     term->search_pos = SIZE_MAX;
@@ -1360,6 +1361,7 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
         snag_term_write(STDERR_FILENO, out.data, out.len) < 0)
         goto out;
     snag_buf_free(&term->painted_prompt);
+    snag_buf_free(&term->completion_output);
     term->painted_prompt = *frame;
     memset(frame, 0, sizeof(*frame));
     term->painted_label_len = label;
@@ -1613,6 +1615,7 @@ replace_draft(struct snag_term *term, const char *text)
 int
 snag_term_restore_draft(struct snag_term *term, const char *text)
 {
+    term->completion_armed = false;
     term->prompt_wanted = true;
     mark_input_activity(term);
     return replace_draft(term, text);
@@ -1907,8 +1910,10 @@ command_name_length(const struct snag_term_command *command)
 
 static int
 replace_completion(struct snag_term *term, const char *name, size_t name_len,
-                   size_t token_start, size_t token_end, bool space)
+                   size_t token_start, size_t token_end, bool unique)
 {
+    bool space = unique && (token_end == term->draft.len ||
+                            term->draft.data[token_end] != ' ');
     size_t tail_len = term->draft.len - token_end;
     size_t next_len;
 
@@ -1929,68 +1934,170 @@ replace_completion(struct snag_term *term, const char *name, size_t name_len,
         term->draft.data[token_start + name_len] = ' ';
     term->draft.len = next_len;
     term->cursor = token_start + name_len + (size_t)space;
+    if (unique && !space && term->cursor < term->draft.len &&
+        term->draft.data[term->cursor] == ' ')
+        ++term->cursor;
     history_reset_navigation(term);
     mark_input_activity(term);
     return redraw(term);
 }
 
+/* One matching/replacement/listing policy for commands, destinations and nicks. */
+struct completion {
+    struct snag_buf names;
+    size_t count, common;
+    bool fold;
+};
+
+static bool
+completion_byte_equal(unsigned char a, unsigned char b, bool fold)
+{
+    return fold ? snag_irc_fold(a) == snag_irc_fold(b) : a == b;
+}
+
+static int
+completion_add(struct completion *matches, const char *name, size_t len,
+                const unsigned char *prefix, size_t prefix_len)
+{
+    size_t i = 0u;
+
+    while (i < prefix_len && i < len &&
+           completion_byte_equal((unsigned char)name[i], prefix[i], matches->fold))
+        ++i;
+    if (i != prefix_len || !len)
+        return 0;
+    for (size_t pos = 0u; pos < matches->names.len;) {
+        const char *previous = (const char *)matches->names.data + pos;
+        size_t previous_len = strlen(previous), same = 0u;
+        while (same < len && same < previous_len &&
+               completion_byte_equal((unsigned char)name[same],
+                                     (unsigned char)previous[same], matches->fold))
+            ++same;
+        if (same == len && same == previous_len)
+            return 0;
+        pos += previous_len + 1u;
+    }
+    if (!matches->count)
+        matches->common = len;
+    else {
+        while (i < matches->common && i < len &&
+               completion_byte_equal((unsigned char)name[i], matches->names.data[i], matches->fold))
+            ++i;
+        matches->common = i;
+    }
+    ++matches->count;
+    return snag_buf_append(&matches->names, name, len) < 0 ? -1 :
+           snag_buf_putc(&matches->names, '\0');
+}
+
+static int
+flush_completions(struct snag_term *term)
+{
+    if (!term->completion_output.len || term->input_only || term->output_depth)
+        return 0;
+    /* Output may read more input under backpressure. Detach this snapshot so
+     * another double Tab cannot invalidate the bytes being written. */
+    struct snag_buf output = term->completion_output;
+    snag_buf_init(&term->completion_output, SNAG_MAX_DIRECT_PROMPT);
+    int rc = -1;
+    if (leave_prompt(term) < 0 || snag_term_output_begin(term, true) < 0)
+        goto out;
+    if ((!term->output_seen || term->output_ended_lf ||
+         snag_term_write(STDERR_FILENO, "\n", 1u) == 0) &&
+        snag_term_write(STDERR_FILENO, output.data, output.len) == 0)
+        rc = snag_term_note_output(term, (const char *)output.data, output.len, "");
+    term->redraw_after_output = true;
+    if (snag_term_output_end(term) < 0)
+        rc = -1;
+out:
+    snag_buf_free(&output);
+    return rc;
+}
+
+static int
+finish_completion(struct snag_term *term, struct completion *matches,
+                   size_t start, size_t end)
+{
+    bool list = term->completion_armed && matches->count > 1u;
+    term->completion_armed = matches->count > 1u;
+    if (!matches->count)
+        return 0;
+    while (matches->common &&
+           !snag_utf8_valid(matches->names.data, matches->common, true))
+        --matches->common;
+    if (matches->count == 1u || matches->common > term->cursor - start)
+        if (replace_completion(term, (const char *)matches->names.data,
+                               matches->common, start, end, matches->count == 1u) < 0)
+            return -1;
+    if (!list)
+        return 0;
+    snag_buf_reset(&term->completion_output);
+    size_t column = 0u, width = 0u;
+    for (size_t pos = 0u; pos < matches->names.len;) {
+        const char *name = (const char *)matches->names.data + pos;
+        size_t len = strlen(name), cells = snag_term_text_width(name, len) + matches->fold;
+        if (cells > width)
+            width = cells;
+        pos += len + 1u;
+    }
+    for (size_t pos = 0u; pos < matches->names.len;) {
+        const char *name = (const char *)matches->names.data + pos;
+        size_t len = strlen(name), cells = snag_term_text_width(name, len) + matches->fold;
+        if ((matches->fold && snag_buf_putc(&term->completion_output, '@') < 0) ||
+            snag_term_append_safe(&term->completion_output, name, len) < 0)
+            return -1;
+        pos += len + 1u;
+        column += width + 2u;
+        if (pos == matches->names.len || column + width > snag_term_columns(term)) {
+            if (snag_buf_putc(&term->completion_output, '\n') < 0)
+                return -1;
+            column = 0u;
+        } else {
+            for (size_t pad = cells; pad < width + 2u; ++pad)
+                if (snag_buf_putc(&term->completion_output, ' ') < 0)
+                    return -1;
+        }
+    }
+    return flush_completions(term);
+}
+
 static int
 complete_command_name(struct snag_term *term, bool *handled)
 {
-    char match[SNAG_TERM_LABEL_BYTES] = {0};
-    size_t match_len = 0u;
-    size_t matches = 0u;
-    size_t token_end = 0u;
-    size_t prefix_len = term->cursor;
+    size_t token_end = 0u, prefix_len = term->cursor;
+    struct completion matches = {0};
+    int rc = -1;
 
     *handled = false;
-    if (!prefix_len || !term->draft.len ||
-        term->draft.data[0] != '/' ||
+    if (!prefix_len || !term->draft.len || term->draft.data[0] != '/' ||
         (term->draft.len > 1u && term->draft.data[1] == '/'))
         return 0;
-    while (token_end < term->draft.len &&
-           !word_space(term->draft.data[token_end]))
+    while (token_end < term->draft.len && !word_space(term->draft.data[token_end]))
         ++token_end;
     if (prefix_len > token_end)
         return 0;
     *handled = true;
+    snag_buf_init(&matches.names, SNAG_MAX_DIRECT_PROMPT);
     size_t destinations = term->destinations ? term->destinations->count : 0u;
     for (size_t i = 0u; i < term->command_count + destinations; ++i) {
         char numeric[16u];
         struct snag_term_command command;
-        size_t name_len;
-        size_t common;
 
-        if (i < term->command_count) {
+        if (i < term->command_count)
             command = term->commands[i];
-        } else {
+        else {
             (void)snprintf(numeric, sizeof(numeric), "/%u",
                 term->destinations->items[i - term->command_count].target.id);
             command = (struct snag_term_command){numeric, NULL};
         }
-        if (!command.syntax)
-            continue;
-        name_len = command_name_length(&command);
-        if (name_len >= sizeof(match) || name_len < prefix_len ||
-            memcmp(command.syntax, term->draft.data, prefix_len) != 0)
-            continue;
-        ++matches;
-        if (!match[0]) {
-            memcpy(match, command.syntax, name_len);
-            match_len = name_len;
-            continue;
-        }
-        common = prefix_len;
-        while (common < match_len && common < name_len &&
-               match[common] == command.syntax[common])
-            ++common;
-        match_len = common;
+        if (command.syntax && completion_add(&matches, command.syntax,
+                command_name_length(&command), term->draft.data, prefix_len) < 0)
+            goto out;
     }
-    if (!match[0] || (matches > 1u && match_len == prefix_len) ||
-        (token_end == match_len &&
-         memcmp(term->draft.data, match, match_len) == 0))
-        return 0;
-    return replace_completion(term, match, match_len, 0u, token_end, false);
+    rc = finish_completion(term, &matches, 0u, token_end);
+out:
+    snag_buf_free(&matches.names);
+    return rc;
 }
 
 static bool
@@ -2002,9 +2109,9 @@ nick_byte(unsigned char c)
 static int
 complete_mention(struct snag_term *term, bool *handled)
 {
-    const char *match = NULL;
-    size_t start = term->cursor, end = term->cursor, common = 0u, first_len = 0u;
-    bool unique = true;
+    size_t start = term->cursor, end = term->cursor;
+    struct completion matches = {.fold = true};
+    int rc = -1;
     uint32_t id;
     size_t body;
     enum snag_irc_target_command command = snag_irc_target_parse(
@@ -2022,6 +2129,7 @@ complete_mention(struct snag_term *term, bool *handled)
     while (end < term->draft.len && nick_byte(term->draft.data[end]))
         ++end;
     size_t prefix = term->cursor - start;
+    snag_buf_init(&matches.names, SNAG_MAX_DIRECT_PROMPT);
     size_t destinations = term->destinations ? term->destinations->count : 1u;
     for (size_t destination = 0u; destination < destinations; ++destination) {
       const char *nicks = term->nicks;
@@ -2035,37 +2143,17 @@ complete_mention(struct snag_term *term, bool *handled)
       }
       for (const char *nick = nicks; nick && *nick;) {
         const char *line = strchr(nick, '\n');
-        size_t len = line ? (size_t)(line - nick) : strlen(nick), i = 0u;
+        size_t len = line ? (size_t)(line - nick) : strlen(nick);
 
-        while (i < prefix && i < len &&
-               snag_irc_fold((unsigned char)nick[i]) ==
-               snag_irc_fold(term->draft.data[start + i]))
-            ++i;
-        if (i == prefix) {
-            if (!match) {
-                match = nick;
-                common = first_len = len;
-            } else {
-                while (i < common && i < len &&
-                       snag_irc_fold((unsigned char)nick[i]) ==
-                       snag_irc_fold((unsigned char)match[i]))
-                    ++i;
-                if (i != first_len || i != len)
-                    unique = false;
-                common = i;
-            }
-        }
+        if (completion_add(&matches, nick, len, term->draft.data + start, prefix) < 0)
+            goto out;
         nick = line ? line + 1u : NULL;
       }
     }
-    if (!match)
-        return 0;
-    while (common && !snag_utf8_valid((const unsigned char *)match, common, true))
-        --common;
-    if (common < prefix || (!unique && common == prefix))
-        return 0;
-    return replace_completion(term, match, common, start, end,
-                              unique && end == term->draft.len);
+    rc = finish_completion(term, &matches, start, end);
+out:
+    snag_buf_free(&matches.names);
+    return rc;
 }
 
 static int
@@ -2360,6 +2448,8 @@ static int
 feed_byte(struct snag_term *term, unsigned char byte,
           enum snag_term_action *action, char **text)
 {
+    if (byte != '\t')
+        term->completion_armed = false;
     if (byte == 0x03u) {
         uint64_t now = snag_monotonic_ms();
         if (!term->ctrl_c_count || now - term->ctrl_c_since_ms > 2000u) {
@@ -2523,7 +2613,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         term->output_columns = 0u;
         snag_buf_reset(&term->output_line);
     }
-    if (consume_resize(term) < 0)
+    if (consume_resize(term) < 0 || flush_completions(term) < 0)
         return -1;
     if (term->prompt_visible && term->capable && !term->searching &&
         !term->output_depth && animated_spinners(term) &&
@@ -2635,6 +2725,7 @@ snag_term_close(struct snag_term *term)
     snag_buf_free(&term->output_cell);
     snag_buf_free(&term->output_line);
     snag_buf_free(&term->painted_prompt);
+    snag_buf_free(&term->completion_output);
     if (output_owner == term)
         output_owner = NULL;
     for (size_t i = 0u; i < 2u; ++i)

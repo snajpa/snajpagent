@@ -276,11 +276,16 @@ Enter submits the displayed match. Search never wraps or animates its prompt.
 Tab uses the following order in every ordinary composer:
 
 1. an empty draft cycles the available presentation views;
-2. a nonempty slash-command prefix is completed when possible;
+2. a nonempty slash-command prefix (including numeric IRC destinations) is
+   completed when possible;
 3. in chat, an `@nick` token at the cursor completes from current joined-room
    members across endpoints, using IRC case folding. One match expands with a
-   trailing space at draft end; multiple matches expand their common prefix.
-   No match leaves the draft unchanged. Mention completion never queues or
+   trailing space; multiple matches expand their common prefix. A second
+   consecutive Tab lists ambiguous choices in terminal-width columns and
+   restores the draft/cursor. This same rule applies to commands and destinations.
+   Unique completion reuses an existing space or inserts one before any retained
+   suffix, leaving the cursor after the separator. No match leaves the draft
+   unchanged. Completion never queues or
    sends text, preserves surrounding text and UTF-8 boundaries, and follows
    joins, departures, reconnects and nick changes through existing owner queues;
 4. other nonempty text retains the existing contextual action: indentation

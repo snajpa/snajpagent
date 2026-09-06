@@ -2017,7 +2017,19 @@ def test_command_name_completion():
     ):
         start = len(child.buf)
         child.send(prefix + b"\t")
-        end = child.wait(command, start=start)
+        end = child.wait(command + b" ", start=start)
+        clear_draft_incrementally(child)
+
+    for prefix in (b"/h", b"/c"):
+        start = len(child.buf)
+        child.send(prefix + b"\t")
+        child.drain(0.08)
+        assert b"/help" not in child.buf[start:] and b"/compact" not in child.buf[start:]
+        child.send(b"\t")
+        choices = (b"/help", b"/history") if prefix == b"/h" else (b"/compact", b"/config")
+        for choice in choices:
+            child.wait(choice, start=start)
+        child.wait(prefix, start=child.buf.rfind(choices[-1]))
         clear_draft_incrementally(child)
 
     start = len(child.buf)
@@ -3728,12 +3740,17 @@ def test_chat_mention_completion_and_steering():
             # A unique completion in the middle preserves punctuation and tail.
             wire_start = len(human.buf)
             child.send(b"hello @rem, tail" + b"\x1b[D" * 6 + b"\t\x05\r")
-            human.wait(b"PRIVMSG #lab :hello @remoteop, tail\r\n", start=wire_start)
+            human.wait(b"PRIVMSG #lab :hello @remoteop , tail\r\n", start=wire_start)
             human.message("ordinary operator chatter")
             human.message("@agent7 is someone else")
             human.wait(b"PRIVMSG #lab :@agent7 is someone else\r\n", start=wire_start)
             # Unmatched and ambiguous completion must not queue active drafts.
-            child.send(b"@absent\t\x03@\t\x03")
+            child.send(b"@absent\t\t\x03@\t")
+            choices_start = len(child.buf)
+            child.send(b"\t")
+            for nick in (b"@agent", b"@localop", b"@remoteop"):
+                child.wait(nick, start=choices_start)
+            child.send(b"\x03")
             child.drain(0.08)
             log = events(session_id)
             assert not [event for event in log if event["type"] == "queue_added"]
@@ -3746,7 +3763,7 @@ def test_chat_mention_completion_and_steering():
             child.send(b"@ag\tterminate it\r")
             human.wait(b"PRIVMSG #lab :@agent terminate it\r\n", start=wire_start)
             wait_turn_completed(child, session_id, prompt)
-            wait_turn_completed(child, session_id, "hello @remoteop, tail")
+            wait_turn_completed(child, session_id, "hello @remoteop , tail")
             log = events(session_id)
             steering = [event for event in log if event["type"] == "steering_added"
                         and event["data"]["turn_id"] == turn_id]
