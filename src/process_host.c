@@ -220,17 +220,27 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
     cwd = snag_utf8_to_wide(directory);
     if (!exe || !cwd)
         goto out;
+    for (wchar_t *p = exe; *p; ++p)
+        if (*p == L'/')
+            *p = L'\\';
+    char *native_shell = snag_wide_to_utf8(exe);
+    if (!native_shell)
+        goto out;
+    int prefix = snag_buf_printf(&line, "\"%s\"", native_shell);
+    free(native_shell);
+    if (prefix < 0)
+        goto out;
     const wchar_t *base = wcsrchr(exe, L'\\');
     const wchar_t *slash = wcsrchr(exe, L'/');
     if (slash && (!base || slash > base))
         base = slash;
     base = base ? base + 1 : exe;
     if (!_wcsicmp(base, L"cmd.exe") || !_wcsicmp(base, L"cmd")) {
-        if (snag_buf_printf(&line, "\"%s\" /d /q /v:off /s /c \"%s\"", shell, command) < 0)
+        if (snag_buf_printf(&line, " /d /q /v:off /s /c \"%s\"", command) < 0)
             goto out;
     } else {
         /* A configured POSIX shell still receives one -c argument using CRT quoting. */
-        if (snag_buf_printf(&line, "\"%s\" -c \"", shell) < 0)
+        if (snag_buf_append(&line, " -c \"", 5u) < 0)
             goto out;
         for (const char *p = command; *p;) {
             size_t slashes = 0;

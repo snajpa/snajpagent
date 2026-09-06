@@ -155,6 +155,9 @@ static void
 test_native_process(bool pty)
 {
     char *shell = snag_default_shell();
+    char *canonical_shell = shell ? snag_realpath(shell) : NULL;
+    free(shell);
+    shell = canonical_shell;
     char **env = snag_environment_entries();
     char *directory = snag_realpath(".");
     struct snag_child child;
