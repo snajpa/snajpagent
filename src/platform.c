@@ -104,6 +104,8 @@ wide_path(const char *path)
     return wide;
 }
 
+static bool private_dacl(PACL dacl, PSID owner);
+
 static int
 mkdir_private(int dirfd, const char *path, bool relative)
 {
@@ -182,7 +184,7 @@ mkdir_private(int dirfd, const char *path, bool relative)
     attributes.ObjectName = &name;
     attributes.Attributes = OBJ_CASE_INSENSITIVE;
     attributes.SecurityDescriptor = &descriptor;
-    status = NtCreateFile(&created, FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+    status = NtCreateFile(&created, FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE | DELETE,
                           &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                           FILE_CREATE, FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
@@ -190,6 +192,28 @@ mkdir_private(int dirfd, const char *path, bool relative)
     if (status < 0) {
         path_error(RtlNtStatusToDosError(status));
         goto out;
+    }
+    {
+        PSECURITY_DESCRIPTOR actual = NULL;
+        PSID actual_owner = NULL;
+        PACL actual_dacl = NULL;
+        DWORD code = GetSecurityInfo(created, SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &actual_owner, NULL, &actual_dacl, NULL, &actual);
+        bool valid = code == ERROR_SUCCESS && actual_owner && IsValidSid(actual_owner) &&
+            EqualSid(actual_owner, user->User.Sid) && private_dacl(actual_dacl, actual_owner);
+        if (actual)
+            LocalFree(actual);
+        if (!valid) {
+            FILE_DISPOSITION_INFORMATION dispose = {TRUE};
+            (void)NtSetInformationFile(created, &io, &dispose, sizeof(dispose),
+                                       FileDispositionInformation);
+            if (code != ERROR_SUCCESS)
+                path_error(code);
+            else
+                errno = EACCES;
+            goto out;
+        }
     }
     rc = 0;
     goto out;

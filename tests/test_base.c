@@ -105,6 +105,73 @@ test_windows_privacy(void)
 #endif
 
 static void
+test_private_directory(void)
+{
+    char *cwd = snag_realpath("."), *after, *root, *child, *renamed;
+    char *nested, *absolute;
+    struct snag_file_privacy privacy;
+    int fd;
+#ifdef _WIN32
+    wchar_t temp[MAX_PATH], wide[MAX_PATH];
+    char path[MAX_PATH * 4u];
+    DWORD count = GetTempPathW(MAX_PATH, temp);
+    assert(count && count < MAX_PATH);
+    assert(GetTempFileNameW(temp, L"snp", 0, wide));
+    assert(DeleteFileW(wide));
+    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1,
+                               path, sizeof(path), NULL, NULL));
+    assert(snag_mkdir_private(path) == 0);
+    root = snag_realpath(path);
+    HANDLE handle = CreateFileW(wide, FILE_READ_ATTRIBUTES | READ_CONTROL,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    assert(handle != INVALID_HANDLE_VALUE);
+    fd = _open_osfhandle((intptr_t)handle, _O_RDONLY | _O_BINARY);
+#else
+    const char *temp = getenv("TMPDIR");
+    char *pattern = snag_path_join(temp ? temp : "/tmp", "snag-private-dir-XXXXXX");
+    assert(pattern && mkdtemp(pattern));
+    root = snag_realpath(pattern);
+    free(pattern);
+    fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+#endif
+    assert(cwd && root && fd >= 0);
+    assert(snag_fd_privacy(fd, &privacy) == 0 && privacy.effective_owner && privacy.private_access);
+    child = snag_path_join(root, "child");
+    renamed = snag_path_join(root, "renamed");
+    absolute = snag_path_join(root, "absolute");
+    assert(child && renamed && absolute);
+    assert(snag_mkdir_private_at(fd, "child") == 0);
+    errno = 0;
+    assert(snag_mkdir_private_at(fd, "child") == -1 && errno == EEXIST);
+    errno = 0;
+    assert(snag_mkdir_private_at(-1, "relative") == -1 && errno == EBADF);
+    assert(snag_mkdir_private_at(-1, absolute) == 0);
+    assert(rename(child, renamed) == 0);
+    assert(rmdir(renamed) == 0);
+    assert(rmdir(absolute) == 0);
+    free(child);
+    free(renamed);
+    free(absolute);
+    renamed = malloc(strlen(root) + 9u);
+    assert(renamed);
+    (void)sprintf(renamed, "%s-renamed", root);
+    assert(rename(root, renamed) == 0);
+    assert(snag_mkdir_private_at(fd, "after-rename") == 0);
+    nested = snag_path_join(renamed, "after-rename");
+    assert(nested && rmdir(nested) == 0);
+    free(nested);
+    assert(close(fd) == 0);
+    assert(rmdir(renamed) == 0);
+    after = snag_realpath(".");
+    assert(after && strcmp(cwd, after) == 0);
+    free(after);
+    free(cwd);
+    free(root);
+    free(renamed);
+}
+
+static void
 test_realpath(void)
 {
     char *path = snag_realpath(".");
@@ -342,6 +409,7 @@ main(void)
     test_path_join();
     test_platform();
     test_realpath();
+    test_private_directory();
 #ifdef _WIN32
     test_windows_privacy();
 #endif
