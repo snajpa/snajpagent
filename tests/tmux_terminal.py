@@ -1910,19 +1910,33 @@ def validate_irc_events(dotdir):
             )
 
 
+def foreground_at(styled, text):
+    foreground = None
+    for chunk in re.split(r"(\x1b\[[0-9;]*m)", styled):
+        if chunk.startswith("\x1b["):
+            for value in chunk[2:-1].split(";"):
+                code = int(value or "0")
+                if code in (0, 39):
+                    foreground = None
+                elif 30 <= code <= 37:
+                    foreground = code
+        elif text in chunk:
+            return foreground
+    raise AssertionError(f"styled terminal has no {text!r}:\n{styled}")
+
+
 def validate_irc_styles(terminal):
     styled = terminal.capture_styled()
     expected = [
-        (rf"\x1b\[[0-9;]*{color}m{nick}", f"{nick} {role}")
+        (nick, color, role)
         for color, role, nicks in (
             (35, "operator magenta", ("@oneop", "@twoop")),
             (36, "agent cyan", ("hostbot", "onebot", "twobot")),
         )
         for nick in nicks
     ]
-    for pattern, role in expected:
-        if re.search(pattern, styled) is None:
-            raise AssertionError(f"network UI is missing {role} styling")
+    for nick, color, role in expected:
+        assert foreground_at(styled, nick + " ") == color, f"{nick} missing {role}:\n{styled}"
 
 
 def run_destination_case(binary, root, provider, environment):
@@ -3116,26 +3130,19 @@ def run_irc_case(binary, root):
                 peer.sendall(f"PRIVMSG #lab :{message}\r\n".encode())
                 terminals["host"].wait(ending)
                 if target == "oneop":
+                    deadline = time.monotonic() + 5.0
+                    while not any(event["data"].get("text") == message
+                                  for event in event_list(maybe_events(terminals["one"].dotdir), "irc_event")):
+                        assert time.monotonic() < deadline, "client did not retain queued highlight"
+                        time.sleep(0.02)
                     terminals["one"].submit("/chat")
                 for name, terminal in terminals.items():
                     terminal.wait(ending)
                     styled = terminal.capture_styled()
-                    # Track tmux's SGR foreground through Markdown and soft wrap.
-                    foreground = None
-                    found = False
-                    for chunk in re.split(r"(\x1b\[[0-9;]*m)", styled):
-                        if chunk.startswith("\x1b["):
-                            for value in chunk[2:-1].split(";"):
-                                code = int(value or "0")
-                                if code in (0, 39):
-                                    foreground = None
-                                elif 30 <= code <= 37:
-                                    foreground = code
-                        if ending in chunk:
-                            assert (foreground == 35) == (name == {"hostop": "host", "oneop": "one"}[target]), styled
-                            found = True
-                            break
-                    assert found, styled
+                    # Foreground must survive Markdown and soft wrap through
+                    # the final text, only in the addressed operator's UI.
+                    assert (foreground_at(styled, ending) == 35) == (
+                        name == {"hostop": "host", "oneop": "one"}[target]), styled
                 wait_irc_idle(ordered)
         wait_irc_quits(terminals["host"], ("highlightpeer",))
         wait_irc_idle(ordered)
