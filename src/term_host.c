@@ -4,11 +4,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stdio.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <io.h>
+
+static void
+reset_input(struct snag_term_host *host)
+{
+    host->input_high = 0;
+    host->input_skip_lf = false;
+    host->input_count = host->input_next = 0;
+    host->input_key_len = host->input_key_at = host->input_repeats = 0;
+    host->input_resized = false;
+    memset(host->input_events, 0, sizeof(host->input_events));
+    memset(host->input_key, 0, sizeof(host->input_key));
+}
 
 bool
 snag_term_host_capable(void)
@@ -35,8 +48,7 @@ snag_term_input_capture(struct snag_term_host *host)
         return -1;
     }
     host->raw_input = false;
-    host->input_high = 0;
-    host->input_skip_lf = false;
+    reset_input(host);
     return 0;
 }
 
@@ -46,8 +58,9 @@ snag_term_input_raw(struct snag_term_host *host)
     DWORD mode = host->input_mode;
     if (host->raw_input)
         return 0;
-    mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_QUICK_EDIT_MODE);
-    mode |= ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT |
+              ENABLE_QUICK_EDIT_MODE | ENABLE_VIRTUAL_TERMINAL_INPUT);
+    mode |= ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT;
     if (!SetConsoleMode((HANDLE)_get_osfhandle(0), mode)) {
         errno = ENOTSUP;
         return -1;
@@ -59,8 +72,7 @@ snag_term_input_raw(struct snag_term_host *host)
 int
 snag_term_input_flush(struct snag_term_host *host)
 {
-    host->input_high = 0;
-    host->input_skip_lf = false;
+    reset_input(host);
     if (FlushConsoleInputBuffer((HANDLE)_get_osfhandle(0)))
         return 0;
     errno = EIO;
@@ -71,8 +83,6 @@ int
 snag_term_input_restore(struct snag_term_host *host, bool flush)
 {
     int rc = flush ? snag_term_input_flush(host) : 0;
-    host->input_high = 0;
-    host->input_skip_lf = false;
     if (!SetConsoleMode((HANDLE)_get_osfhandle(0), host->input_mode))
         rc = -1;
     if (rc == 0)
@@ -80,6 +90,144 @@ snag_term_input_restore(struct snag_term_host *host, bool flush)
     if (rc < 0)
         errno = EIO;
     return rc;
+}
+
+static int
+encode_key(struct snag_term_host *host, const KEY_EVENT_RECORD *key)
+{
+    static const struct { WORD key; char final; } cursors[] = {
+        {VK_UP, 'A'}, {VK_DOWN, 'B'}, {VK_RIGHT, 'C'}, {VK_LEFT, 'D'},
+        {VK_HOME, 'H'}, {VK_END, 'F'}
+    };
+    DWORD control = key->dwControlKeyState;
+    bool shift = (control & SHIFT_PRESSED) != 0;
+    bool alt = (control & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+    bool ctrl = (control & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    unsigned int modifier = 1u + shift + 2u * alt + 4u * ctrl;
+    WCHAR c = key->uChar.UnicodeChar;
+    int n;
+
+    host->input_key_at = host->input_key_len = 0;
+    host->input_repeats = key->wRepeatCount;
+    for (size_t i = 0; i < sizeof(cursors) / sizeof(cursors[0]); ++i)
+        if (key->wVirtualKeyCode == cursors[i].key) {
+            n = modifier == 1u ? snprintf(host->input_key, sizeof(host->input_key),
+                    "\033[%c", cursors[i].final) :
+                snprintf(host->input_key, sizeof(host->input_key), "\033[1;%u%c", modifier, cursors[i].final);
+            host->input_key_len = (unsigned int)n;
+            return 0;
+        }
+    unsigned int code = key->wVirtualKeyCode == VK_INSERT ? 2u :
+                        key->wVirtualKeyCode == VK_DELETE ? 3u :
+                        key->wVirtualKeyCode == VK_PRIOR ? 5u :
+                        key->wVirtualKeyCode == VK_NEXT ? 6u : 0u;
+    if (code) {
+        n = modifier == 1u ? snprintf(host->input_key, sizeof(host->input_key), "\033[%u~", code) :
+            snprintf(host->input_key, sizeof(host->input_key), "\033[%u;%u~", code, modifier);
+        host->input_key_len = (unsigned int)n;
+        return 0;
+    }
+    if (key->wVirtualKeyCode == VK_TAB && shift) {
+        memcpy(host->input_key, "\033[Z", 3u);
+        host->input_key_len = 3u;
+        return 0;
+    }
+    if (!c) {
+        if (!ctrl || key->wVirtualKeyCode != VK_SPACE)
+            return 0;
+        host->input_key[0] = 0;
+        host->input_key_len = 1u;
+        return 0;
+    }
+    WCHAR scalar[2] = {c, 0};
+    int units = 1;
+    if (c >= 0xd800u && c <= 0xdbffu) {
+        bool incomplete = host->input_high != 0;
+        host->input_high = c;
+        if (!incomplete)
+            return 0;
+        scalar[0] = 0xfffdu;
+    } else if (host->input_high) {
+        scalar[0] = c >= 0xdc00u && c <= 0xdfffu ? host->input_high : 0xfffdu;
+        scalar[1] = c;
+        units = 2;
+        host->input_high = 0;
+    } else if (c >= 0xdc00u && c <= 0xdfffu)
+        scalar[0] = 0xfffdu;
+    /* AltGr produces printable text, not an Escape-prefixed meta command. */
+    size_t prefix = alt && !(ctrl && c >= 0x20u) ? 1u : 0u;
+    if (prefix)
+        host->input_key[0] = '\033';
+    n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, scalar, units,
+                            host->input_key + prefix, (int)(sizeof(host->input_key) - prefix), NULL, NULL);
+    if (!n) {
+        errno = EILSEQ;
+        return -1;
+    }
+    host->input_key_len = (unsigned int)n + (unsigned int)prefix;
+    return 0;
+}
+
+static ssize_t
+read_keys(struct snag_term_host *host, HANDLE input, unsigned char *buffer, size_t size)
+{
+    size_t used = 0;
+    unsigned int consumed = 0;
+    while (used < size) {
+        if (host->input_key_len && host->input_repeats) {
+            size_t take = host->input_key_len - host->input_key_at;
+            if (take > size - used)
+                take = size - used;
+            memcpy(buffer + used, host->input_key + host->input_key_at, take);
+            used += take;
+            host->input_key_at += (unsigned int)take;
+            if (host->input_key_at == host->input_key_len) {
+                host->input_key_at = 0;
+                --host->input_repeats;
+            }
+            continue;
+        }
+        if (consumed == 128u)
+            break;
+        if (host->input_next == host->input_count) {
+            DWORD available, got;
+            if (!GetNumberOfConsoleInputEvents(input, &available)) {
+                errno = EIO;
+                return -1;
+            }
+            if (!available)
+                break;
+            if (available > 16u)
+                available = 16u;
+            if (!ReadConsoleInputW(input, host->input_events, available, &got)) {
+                errno = EIO;
+                return -1;
+            }
+            host->input_next = 0;
+            host->input_count = got;
+            if (!got)
+                break;
+        }
+        const INPUT_RECORD *event = &host->input_events[host->input_next++];
+        ++consumed;
+        if (event->EventType == WINDOW_BUFFER_SIZE_EVENT)
+            host->input_resized = true;
+        if (event->EventType == KEY_EVENT && event->Event.KeyEvent.bKeyDown &&
+            event->Event.KeyEvent.wRepeatCount && encode_key(host, &event->Event.KeyEvent) < 0)
+            return -1;
+    }
+    if (used)
+        return (ssize_t)used;
+    errno = EAGAIN;
+    return -1;
+}
+
+bool
+snag_term_input_resized(struct snag_term_host *host)
+{
+    bool resized = host->input_resized;
+    host->input_resized = false;
+    return resized;
 }
 
 ssize_t
@@ -103,32 +251,11 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
         errno = error == ERROR_NO_DATA ? EAGAIN : error == ERROR_INVALID_HANDLE ? EBADF : EIO;
         return -1;
     }
+    if (!(mode & ENABLE_LINE_INPUT))
+        return read_keys(host, input, buffer, size);
     size_t capacity = (size - prefix) / 3u;
     if (capacity > 256u)
         capacity = 256u;
-    if (!(mode & ENABLE_LINE_INPUT)) {
-        INPUT_RECORD records[64];
-        DWORD count;
-        size_t units = 0;
-        WCHAR last = 0;
-        if (!PeekConsoleInputW(input, records, 64u, &count)) {
-            errno = EIO;
-            return -1;
-        }
-        for (DWORD i = 0; i < count; ++i) {
-            const KEY_EVENT_RECORD *key = &records[i].Event.KeyEvent;
-            if (records[i].EventType == KEY_EVENT && key->bKeyDown && key->uChar.UnicodeChar) {
-                units += key->wRepeatCount;
-                last = key->uChar.UnicodeChar;
-            }
-        }
-        if (units && last >= 0xd800u && last <= 0xdbffu)
-            --units;
-        if (!units)
-            units = 1u;
-        if (capacity > units)
-            capacity = units;
-    }
     if (prefix)
         wide[0] = host->input_high;
     if (!ReadConsoleW(input, wide + prefix, (DWORD)capacity, &got, NULL)) {
@@ -235,6 +362,13 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
 {
     (void)host;
     return read(STDIN_FILENO, buffer, size);
+}
+
+bool
+snag_term_input_resized(struct snag_term_host *host)
+{
+    (void)host;
+    return false;
 }
 
 int

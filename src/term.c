@@ -2664,6 +2664,8 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             return 0;
         }
         count = snag_term_input_read(&term->host, term->input, sizeof(term->input));
+        if (snag_term_input_resized(&term->host))
+            sigwinch_pending = 1;
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
             return feed_byte(term, 0x03u, action, text);

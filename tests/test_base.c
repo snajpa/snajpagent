@@ -621,6 +621,73 @@ test_realpath(void)
 #endif
 }
 
+#ifdef _WIN32
+static void
+test_console_keys(struct snag_term_host *host)
+{
+    static const struct {
+        WORD key;
+        WCHAR c;
+        DWORD modifiers;
+        WORD repeats;
+        const char *bytes;
+        size_t size;
+    } cases[] = {
+        {VK_UP, 0, 0, 1, "\033[A", 3},
+        {VK_LEFT, 0, LEFT_CTRL_PRESSED, 1, "\033[1;5D", 6},
+        {VK_HOME, 0, SHIFT_PRESSED | LEFT_ALT_PRESSED, 1, "\033[1;4H", 6},
+        {VK_DELETE, 0, LEFT_ALT_PRESSED, 1, "\033[3;3~", 6},
+        {VK_TAB, L'\t', SHIFT_PRESSED, 1, "\033[Z", 3},
+        {'X', L'x', LEFT_ALT_PRESSED, 1, "\033x", 2},
+        {'Q', L'@', RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED, 1, "@", 1},
+        {VK_SPACE, 0, LEFT_CTRL_PRESSED, 1, "\0", 1},
+        {'C', 3, LEFT_CTRL_PRESSED, 1, "\003", 1},
+        {'X', L'x', 0, 10, "xxxxxxxxxx", 10},
+        {VK_UP, 0, 0, 3, "\033[A\033[A\033[A", 9}
+    };
+    HANDLE input = (HANDLE)_get_osfhandle(0);
+    DWORD written;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        INPUT_RECORD event = {.EventType = KEY_EVENT};
+        event.Event.KeyEvent = (KEY_EVENT_RECORD){
+            .bKeyDown = TRUE, .wRepeatCount = cases[i].repeats,
+            .wVirtualKeyCode = cases[i].key, .uChar.UnicodeChar = cases[i].c,
+            .dwControlKeyState = cases[i].modifiers
+        };
+        assert(WriteConsoleInputW(input, &event, 1u, &written) && written == 1u);
+        size_t used = 0;
+        while (used < cases[i].size) {
+            char bytes[4];
+            ssize_t n = snag_term_input_read(host, bytes, sizeof(bytes));
+            assert(n > 0 && (size_t)n <= cases[i].size - used);
+            assert(!memcmp(bytes, cases[i].bytes + used, (size_t)n));
+            used += (size_t)n;
+        }
+    }
+    INPUT_RECORD events[20] = {0};
+    for (size_t i = 0; i < 20u; ++i) {
+        events[i].EventType = KEY_EVENT;
+        events[i].Event.KeyEvent.bKeyDown = TRUE;
+        events[i].Event.KeyEvent.wRepeatCount = 1;
+        events[i].Event.KeyEvent.uChar.UnicodeChar = L'a';
+    }
+    assert(WriteConsoleInputW(input, events, 20u, &written) && written == 20u);
+    for (size_t i = 0; i < 5u; ++i) {
+        char bytes[4];
+        assert(snag_term_input_read(host, bytes, sizeof(bytes)) == 4);
+        assert(!memcmp(bytes, "aaaa", 4u));
+    }
+    events[0].Event.KeyEvent.bKeyDown = FALSE;
+    events[1].EventType = FOCUS_EVENT;
+    events[2].EventType = WINDOW_BUFFER_SIZE_EVENT;
+    events[2].Event.WindowBufferSizeEvent.dwSize = (COORD){80, 25};
+    assert(WriteConsoleInputW(input, events, 3u, &written) && written == 3u);
+    char bytes[4];
+    assert(snag_term_input_read(host, bytes, sizeof(bytes)) < 0 && errno == EAGAIN);
+    assert(snag_term_input_resized(host) && !snag_term_input_resized(host));
+}
+#endif
+
 static void
 test_input_mode(void)
 {
@@ -636,7 +703,6 @@ test_input_mode(void)
     DWORD mode;
     assert(GetConsoleMode((HANDLE)_get_osfhandle(0), &mode));
     assert(!(mode & (ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT)));
-    assert(mode & ENABLE_VIRTUAL_TERMINAL_INPUT);
     assert(GetConsoleCP() == codepage);
 #else
     struct termios raw;
@@ -682,6 +748,20 @@ test_input_mode(void)
     assert(WriteConsoleInputW(input, keys + 1u, 1u, &written) && written == 1u);
     assert(snag_term_input_read(&host, received, sizeof(received)) < 0 && errno == EAGAIN);
     assert(snag_term_input_flush(&host) == 0 && host.input_high == 0);
+    /* Malformed UTF-16 must not lose subsequent text or end the session. */
+    assert(WriteConsoleInputW(input, keys + 2u, 1u, &written) && written == 1u);
+    assert(snag_term_input_read(&host, received, sizeof(received)) == 3);
+    assert(!memcmp(received, "\xef\xbf\xbd", 3u));
+    assert(WriteConsoleInputW(input, keys + 1u, 1u, &written) && written == 1u);
+    assert(snag_term_input_read(&host, received, sizeof(received)) < 0 && errno == EAGAIN);
+    assert(WriteConsoleInputW(input, keys + 1u, 1u, &written) && written == 1u);
+    assert(snag_term_input_read(&host, received, sizeof(received)) == 3 && host.input_high);
+    assert(!memcmp(received, "\xef\xbf\xbd", 3u));
+    keys[0].Event.KeyEvent.uChar.UnicodeChar = L'x';
+    assert(WriteConsoleInputW(input, keys, 1u, &written) && written == 1u);
+    assert(snag_term_input_read(&host, received, sizeof(received)) == 4 && !host.input_high);
+    assert(!memcmp(received, "\xef\xbf\xbdx", 4u));
+    test_console_keys(&host);
 #endif
     assert(snag_term_input_restore(&host, false) == 0);
 #ifdef _WIN32

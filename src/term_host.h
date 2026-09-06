@@ -6,12 +6,20 @@
 #include <sys/types.h>
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 struct snag_signal_mask { unsigned char unused; };
 struct snag_term_host {
     unsigned long input_mode;
     bool raw_input;
     unsigned short input_high;
     bool input_skip_lf;
+    INPUT_RECORD input_events[16];
+    unsigned int input_count, input_next;
+    char input_key[32];
+    unsigned int input_key_len, input_key_at, input_repeats;
+    bool input_resized;
     unsigned long output_mode[2];
 };
 #else
@@ -38,5 +46,6 @@ int snag_term_input_restore(struct snag_term_host *host, bool flush);
 int snag_term_input_flush(struct snag_term_host *host);
 /* Buffer capacity is at least four bytes; incomplete UTF-16 returns EAGAIN. */
 ssize_t snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size);
+bool snag_term_input_resized(struct snag_term_host *host);
 
 #endif
