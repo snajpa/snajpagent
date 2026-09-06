@@ -2735,6 +2735,109 @@ def run_runtime_history_case(binary, root, provider, environment):
         provider.runtime_handler = None
 
 
+def run_provider_retry_input_cases(binary, root, provider, environment):
+    for mode in ("steer", "chat", "mention", "queue", "command", "before", "zero", "healthy"):
+        case = root / ("retry-" + mode)
+        workspace = case / "work"
+        workspace.mkdir(mode=0o700, parents=True)
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        endpoint = f"127.0.0.1:{free_loopback_port()}"
+        arrived, release = threading.Event(), threading.Event()
+        requests = []
+        marker = "fresh-input-" + mode
+
+        def respond(handler, request, sequence):
+            if provider.latest_user(request) == "retry-original":
+                requests.append(request)
+                first = len(requests) == 1
+            else:
+                first = False
+                if requests:
+                    requests.append(request)
+            fail = first and mode != "healthy"
+            if first:
+                arrived.set()
+                assert release.wait(10.0), "retry input was not admitted"
+            body = (provider.event("response.failed", {
+                "type": "response.failed", "response": {"error": {
+                    "code": "server_error", "message": "temporary fixture failure"}}
+            }) if fail else provider.response_body(sequence, "retry input complete")).encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Retry-After", "0" if mode == "zero" else "2")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(body)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "term", binary, workspace, case / "state", config,
+            140, 28, args=["-s", endpoint, "-n", "retrybot", "-o", "retryop", "-r", "lab"],
+            environment=environment)
+        peer = None
+        try:
+            terminal.wait(f"retryop@{MACHINE_HOSTNAME} :")
+            peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
+            peer.sendall(b"NICK retrypeer\r\nUSER retrypeer 0 * :human\r\nJOIN #lab\r\n")
+            terminal.wait("retrypeer joined")
+            wait_irc_idle([terminal])
+            terminal.submit("/rollout")
+            terminal.wait("host-model/medium ›")
+            terminal.submit("retry-original")
+            assert arrived.wait(5.0)
+            if mode not in ("before", "zero", "healthy"):
+                release.set()
+                terminal.wait("provider retry 1/2", timeout=5.0)
+            if mode == "steer":
+                terminal.submit(marker)
+            elif mode == "queue":
+                terminal.submit("/queue " + marker)
+            elif mode == "command":
+                terminal.submit("/status")
+            else:
+                text = ("retrybot: " if mode == "mention" else "") + marker
+                peer.sendall(f"PRIVMSG #lab :{text}\r\n".encode())
+                deadline = time.monotonic() + 5.0
+                while True:
+                    _, events = read_events(terminal.dotdir)
+                    if any(e["data"].get("text") == text for e in event_list(events, "irc_event")):
+                        break
+                    assert time.monotonic() < deadline, "chat was not admitted during retry"
+                    time.sleep(0.02)
+                if mode in ("before", "zero", "healthy"):
+                    release.set()
+            wait_irc_idle([terminal])
+            _, events = read_events(terminal.dotdir)
+            if mode == "command":
+                assert len(requests) == 2 and requests[0] == requests[1], requests
+            else:
+                assert len(requests) >= 1
+                assert all(request != requests[0] for request in requests[1:]), "new input replayed stale request"
+                if mode == "queue":
+                    queued = event_list(events, "future_turn_queued")
+                    assert any(e["data"]["text"] == marker for e in queued)
+                    terminal.submit("/next")
+                    terminal.wait("retry input complete")
+                    wait_irc_idle([terminal])
+                assert any(marker in json.dumps(request) for request in requests[1:]), (mode, requests)
+                if mode == "steer":
+                    assert event_list(events, "response_interrupted")
+                    assert not event_list(events, "response_failed")
+                if mode == "healthy":
+                    assert not event_list(events, "response_interrupted")
+                    assert not event_list(events, "response_failed")
+            terminal.exit()
+            print(f"tmux_terminal provider retry input {mode}: ok", flush=True)
+        finally:
+            release.set()
+            if peer is not None:
+                peer.close()
+            terminal.close()
+            provider.runtime_handler = None
+
+
 def run_irc_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
@@ -2754,6 +2857,7 @@ def run_irc_case(binary, root):
     ]
     terminals = {}
     try:
+        run_provider_retry_input_cases(binary, root, provider, environment)
         run_runtime_networking_cases(binary, root, provider, environment)
         run_runtime_routing_cases(binary, root, provider, environment)
         run_runtime_boundary_cases(binary, root, provider, environment)

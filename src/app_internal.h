@@ -73,6 +73,7 @@ struct app_state {
     int stream_errno;
     char stream_error[256];
     bool steering_requested;
+    uint64_t input_generation;
     bool interrupt_requested;
     bool queue_armed;
     bool goal_armed;
@@ -245,6 +246,7 @@ int snag_app_parse_queue_argument(const char *argument,
                                  size_t *number);
 
 int snag_app_active_input_pump(void *opaque, unsigned int timeout_ms);
+int snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms);
 int snag_app_irc_event(void *opaque, const struct snag_irc_event *event);
 int snag_app_irc_trace(void *opaque, unsigned int level, char direction,
                       const char *endpoint, const char *text, size_t len);

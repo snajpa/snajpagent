@@ -1415,6 +1415,22 @@ IRC protocol.  snajpagent clients expect its advertised single-room behavior.
 .PP
 The built-in IRC subset has no TLS or authentication.  A non-loopback listener
 is suitable only for a trusted network or a separately secured tunnel.
+.SH PROVIDER FAILURES
+Transient transport, HTTP rate-limit/server, and structured Responses stream
+failures receive at most two retries of the same request, with bounded backoff
+and cancellation available during the wait.  Earlier turn/tool work is not
+replayed.  Additional live chat, steering or queued input prevents further
+retries, including during backoff.  Steering keeps its immediate handoff;
+background chat and queued turns retain their normal admission rules, without
+interrupting a healthy response.  View/status controls alone do not veto retries.
+Stream retries stop once output or tool activity has been observed;
+malformed or ambiguous partial records are not automatically replayed.
+.PP
+Policy refusals (including cybersecurity restrictions), access errors,
+exhausted quota, and unknown structured errors end the request without retry.
+Error codes, not message wording, determine eligibility.  The agent does not
+rephrase requests or switch providers to bypass a refusal.  A failed stream
+never becomes a successful response merely because the connection closed.
 .SH SESSION DURABILITY
 Every accepted transition is appended and synced before it is treated as
 durable.  Resume reconstructs turns, tool state, queue, goals, provider/model

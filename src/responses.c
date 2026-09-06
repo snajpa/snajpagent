@@ -79,17 +79,31 @@ snag_provider_failure_from_json(const json_t *root,
         }
     }
     if (!json_is_object(object) &&
-        (snag_json_string(root, "code") || snag_json_string(root, "reason")))
+        (json_object_get(root, "code") || json_object_get(root, "reason")))
         object = (json_t *)root;
     if (!json_is_object(object))
-        return 0;
+        return object && !json_is_null(object) ? -1 : 0;
+    {
+        const char *keys[] = {"code", "reason", "type"};
+        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+            json_t *value = json_object_get(object, keys[i]);
+            if (value && !json_is_null(value) &&
+                (!json_is_string(value) || json_string_length(value) >= 64u ||
+                 !snag_utf8_valid((const unsigned char *)json_string_value(value),
+                                 json_string_length(value), true)))
+                return -1;
+        }
+    }
     code = snag_json_string(object, "code");
     if (!code)
         code = snag_json_string(object, "reason");
     message = snag_json_string(object, "message");
-    if (code && *code && strlen(code) < sizeof(failure->code) &&
-        snag_utf8_valid((const unsigned char *)code, strlen(code), true))
+    if (code)
         memcpy(failure->code, code, strlen(code) + 1u);
+    /* A top-level SSE type is the event name, not the error category. */
+    if (object != root && snag_json_string(object, "type"))
+        snprintf(failure->type, sizeof(failure->type), "%s",
+                 snag_json_string(object, "type"));
     if (message && strlen(message) < sizeof(failure->message) &&
         snag_utf8_valid((const unsigned char *)message, strlen(message), true))
         memcpy(failure->message, message, strlen(message) + 1u);
@@ -832,6 +846,7 @@ handle_provider_failure(struct snag_responses_stream *stream,
     json_t *response = json_object_get(root, "response");
     json_t *error = json_object_get(root, "error");
     const char *message = NULL;
+    struct snag_provider_failure failure;
 
     if (json_is_object(response)) {
         json_t *nested = json_object_get(response, "error");
@@ -842,10 +857,13 @@ handle_provider_failure(struct snag_responses_stream *stream,
         message = snag_json_string(error, "message");
     if (!message && strcmp(type, "error") == 0)
         message = snag_json_string(root, "message");
-    if (snag_provider_failure_from_json(root, &stream->provider_failure) < 0)
+    if (snag_provider_failure_from_json(root, &failure) < 0)
         return stream_fail(stream, EPROTO,
                            "invalid structured provider failure");
-    return stream_fail(stream, EIO, "%s%s%s", type,
+    stream->provider_failure = failure;
+    const char *kind = failure.code[0] ? failure.code : failure.type;
+    return stream_fail(stream, EIO, "%s%s%s%s%s%s", type,
+                       kind[0] ? " [" : "", kind, kind[0] ? "]" : "",
                        message ? ": " : "", message ? message : "");
 }
 
@@ -853,10 +871,19 @@ static int
 dispatch_event(struct snag_responses_stream *stream, const char *type,
                const json_t *root)
 {
+    json_t *output = json_object_get(json_object_get(root, "response"), "output");
+    if (output && (!json_is_array(output) || json_array_size(output)))
+        stream->retry_unsafe = true;
     if (strcmp(type, "keepalive") == 0)
         return 0;
     if (strcmp(type, "response.created") == 0)
         return handle_response_created(stream, root);
+    /* Only lifecycle notices prove no output or hosted-tool activity. */
+    if (strcmp(type, "response.queued") != 0 &&
+        strcmp(type, "response.in_progress") != 0 &&
+        strcmp(type, "response.failed") != 0 &&
+        strcmp(type, "response.incomplete") != 0 && strcmp(type, "error") != 0)
+        stream->retry_unsafe = true;
     if (strcmp(type, "response.output_item.added") == 0)
         return handle_output_item(stream, root, false);
     if (strcmp(type, "response.output_item.done") == 0)

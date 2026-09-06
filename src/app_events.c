@@ -316,6 +316,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     }
     if (event->historical)
         return 0;
+    if (chat)
+        ++app->input_generation;
     urgent = chat && snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     reply_offset = app->irc_urgent.len;
     if (append_irc_projection(urgent ? &app->irc_urgent :

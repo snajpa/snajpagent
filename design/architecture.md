@@ -91,8 +91,14 @@ nonproductive. An explicit empty or oversized assistant message instead
 creates one terse, size-specific developer correction for the next model
 cycle; the normal operator UI does not present that correction as an error.
 
-Structured non-2xx and SSE failures retain their bounded provider code,
-message, and integral capacity details. A pre-output
+Structured non-2xx and SSE failures retain their bounded provider code/type,
+message, and integral capacity details. The shared provider request loop retries
+known transient failures at most twice, never policy/access/quota or unknown
+structured errors. Before replay it checks output/activity observations and
+fresh input, resets the decoder, and keeps the request bytes unchanged. New
+live chat or queued input suppresses retries without steering healthy responses;
+direct steering retains its normal interruption path. No whole-turn replay or
+provider switching is involved. A pre-output
 `context_length_exceeded` closes the open response with the durable
 `response_capacity_rejected` transition. Trustworthy context-limit or
 requested-input detail lowers a durable in-session safety ceiling and updates

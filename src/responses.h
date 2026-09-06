@@ -11,6 +11,7 @@
 #define SNAG_MAX_RESPONSE_PARTS 96u
 struct snag_provider_failure {
     char code[64];
+    char type[64];
     char message[256];
     /* Positive provider facts; zero means absent, never a measured zero. */
     uint64_t context_limit_tokens;
@@ -75,6 +76,7 @@ struct snag_responses_stream {
     bool created;
     bool terminal;
     bool failed;
+    bool retry_unsafe;
     enum snag_output_correction output_correction;
     struct snag_provider_failure provider_failure;
     char error[256];

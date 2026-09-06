@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Retry transient structured provider failures and safely truncated streams in
+  the existing bounded request loop. Do not retry policy/access/quota failures,
+  unknown codes, partial output or tool activity. New chat, steering and queued
+  input veto further retries; incomplete SSE cannot report success.
+
 - Remove the unused environment-only credential reader and room-name getter;
   credential boundary tests now exercise the production secret-source resolver.
 

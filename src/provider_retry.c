@@ -2,6 +2,7 @@
 #include "provider_retry.h"
 
 #include <limits.h>
+#include <string.h>
 
 #define SNAG_PROVIDER_BACKOFF_BASE_MS 250u
 #define SNAG_PROVIDER_BACKOFF_MAX_MS 2000u
@@ -11,6 +12,33 @@ snag_provider_http_status_retryable(long status)
 {
     return status == 408 || status == 429 ||
            (status >= 500 && status <= 599 && status != 501);
+}
+
+bool
+snag_provider_failure_retryable(long status, const char *code, const char *type)
+{
+    static const char *const transient[] = {
+        "server_error", "internal_server_error", "service_unavailable_error",
+        "server_is_overloaded", "rate_limit_exceeded", "rate_limit_error",
+        "slow_down"
+    };
+    const char *kinds[] = {code, type};
+
+    if (status && !snag_provider_http_status_retryable(status))
+        return false;
+    if ((!code || !*code) && (!type || !*type))
+        return status != 0;
+    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); ++k) {
+        size_t i;
+        if (!kinds[k] || !*kinds[k])
+            continue;
+        for (i = 0; i < sizeof(transient) / sizeof(transient[0]); ++i)
+            if (strcmp(kinds[k], transient[i]) == 0)
+                break;
+        if (i == sizeof(transient) / sizeof(transient[0]))
+            return false;
+    }
+    return true;
 }
 
 int

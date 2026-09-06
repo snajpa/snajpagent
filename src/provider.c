@@ -76,6 +76,7 @@ struct provider_ctx {
     bool curl_global;
     bool semantic_body_seen;
     bool request_may_have_been_sent;
+    bool new_input;
     char error[256];
     struct snag_provider_failure provider_failure;
 };
@@ -322,6 +323,8 @@ process_controls(struct provider_ctx *ctx)
     if (!ctx->pump)
         return 0;
     rc = ctx->pump(ctx->pump_opaque, 0u);
+    if (rc == SNAG_PROVIDER_NEW_INPUT)
+        ctx->new_input = true;
     if (rc < 0) {
         ctx->cancel_code = 3;
         ctx_error(ctx, "active input could not be processed");
@@ -590,6 +593,14 @@ low_speed_seconds(uint32_t idle_timeout_ms)
 static void
 begin_attempt(struct provider_ctx *ctx)
 {
+    if (ctx->sse.record) {
+        snag_responses_emit_fn emit = ctx->stream.emit;
+        void *opaque = ctx->stream.opaque;
+        snag_sse_free(&ctx->sse);
+        snag_responses_stream_free(&ctx->stream);
+        snag_responses_stream_init(&ctx->stream, emit, opaque);
+        snag_sse_init(&ctx->sse, snag_responses_sse_record, &ctx->stream);
+    }
     ctx->http_status = 0;
     ctx->cancel_code = 0;
     ctx->retry_after_ms = 0u;
@@ -597,14 +608,13 @@ begin_attempt(struct provider_ctx *ctx)
     ctx->body_failed = false;
     ctx->semantic_body_seen = false;
     ctx->error[0] = '\0';
+    memset(&ctx->provider_failure, 0, sizeof(ctx->provider_failure));
     snag_buf_reset(&ctx->error_body);
 }
 
 static bool
-curl_code_retryable(CURLcode code, bool semantic_body_seen)
+curl_code_retryable(CURLcode code)
 {
-    if (semantic_body_seen)
-        return false;
     switch (code) {
     case CURLE_COULDNT_RESOLVE_HOST:
     case CURLE_COULDNT_RESOLVE_PROXY:
@@ -629,6 +639,10 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         ctx->retry_after_present, ctx->retry_after_ms);
     uint64_t deadline = snag_monotonic_ms() + delay_ms;
 
+    if (process_controls(ctx))
+        return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
+    if (ctx->new_input)
+        return SNAG_PROVIDER_NEW_INPUT;
     if (ctx->render) {
         char line[160];
         (void)snprintf(line, sizeof(line),
@@ -646,21 +660,12 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         uint64_t remaining = now < deadline ? deadline - now : 0u;
         uint32_t slice = remaining > 25u ? 25u : (uint32_t)remaining;
         struct pollfd wake = {snag_ui_wake_fd(ctx->render), POLLIN, 0};
+        if (process_controls(ctx))
+            return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
+        if (ctx->new_input)
+            return SNAG_PROVIDER_NEW_INPUT;
         if (!remaining)
             break;
-        if (ctx->pump) {
-            int rc = ctx->pump(ctx->pump_opaque, 0u);
-            if (rc < 0) {
-                snag_errorf(error, error_size,
-                          "active input could not be processed during provider retry");
-                errno = EIO;
-                return -1;
-            }
-            if (rc == 1 || rc == 2) {
-                ctx->cancel_code = rc;
-                return rc;
-            }
-        }
         if (poll(&wake, 1u, (int)slice) < 0 && errno != EINTR) {
             snag_errorf(error, error_size, "provider retry wait failed");
             return -1;
@@ -672,19 +677,48 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
 static bool
 retryable_attempt(struct provider_ctx *ctx, CURLcode code)
 {
-    if (ctx->body_failed)
+    if (ctx->body_failed || code == CURLE_ABORTED_BY_CALLBACK)
         return false;
-    if (code == CURLE_OK)
-        return snag_provider_http_status_retryable(ctx->http_status);
-    if (code == CURLE_ABORTED_BY_CALLBACK)
-        return false;
-    return curl_code_retryable(code, ctx->semantic_body_seen);
+    if (ctx->http_status >= 300 || ctx->http_status < 200) {
+        if (ctx->error_body.len) {
+            json_t *root = snag_json_load_strict(ctx->error_body.data,
+                ctx->error_body.len, SNAG_WIRE_BODY_MAX, NULL, 0u);
+            int rc = snag_provider_failure_from_json(root, &ctx->provider_failure);
+            json_decref(root);
+            if (rc < 0) {
+                memset(&ctx->provider_failure, 0, sizeof(ctx->provider_failure));
+                return false;
+            }
+        }
+        if (ctx->http_status && !snag_provider_failure_retryable(ctx->http_status,
+                ctx->provider_failure.code, ctx->provider_failure.type))
+            return false;
+        return code == CURLE_OK ? ctx->http_status != 0 : curl_code_retryable(code);
+    }
+    if (ctx->sse.record) {
+        if (ctx->stream.retry_unsafe || ctx->stream.terminal)
+            return false;
+        if (ctx->stream.failed)
+            return snag_provider_failure_retryable(0,
+                ctx->stream.provider_failure.code, ctx->stream.provider_failure.type);
+        /* A partial record may hide output/activity we have not decoded yet. */
+        if (ctx->sse.failed || ctx->sse.pending_cr || ctx->sse.line.len ||
+            ctx->sse.data_seen || ctx->sse.event.len)
+            return false;
+        return curl_code_retryable(code);
+    }
+    return !ctx->semantic_body_seen && curl_code_retryable(code);
 }
 
 static int
 retry_reason(struct provider_ctx *ctx, CURLcode code,
              char *reason, size_t reason_size)
 {
+    if (ctx->stream.failed) {
+        const struct snag_provider_failure *failure = &ctx->stream.provider_failure;
+        return snprintf(reason, reason_size, "%s",
+                        failure->code[0] ? failure->code : failure->type) > 0 ? 0 : -1;
+    }
     if (code == CURLE_OK)
         return snprintf(reason, reason_size, "HTTP %ld", ctx->http_status) > 0 ?
                0 : -1;
@@ -706,6 +740,15 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx,
         long request_size = 0;
         begin_attempt(ctx);
         code = perform_request(curl, ctx);
+        if (code == CURLE_OK && ctx->sse.record &&
+            ctx->http_status >= 200 && ctx->http_status < 300) {
+            if (snag_sse_finish(&ctx->sse, ctx->error, sizeof(ctx->error)) < 0)
+                code = CURLE_WRITE_ERROR;
+            else if (!ctx->stream.terminal) {
+                ctx_error(ctx, "provider stream ended before response.completed");
+                code = CURLE_PARTIAL_FILE;
+            }
+        }
         if (curl_easy_getinfo(curl, CURLINFO_REQUEST_SIZE,
                               &request_size) == CURLE_OK && request_size > 0)
             ctx->request_may_have_been_sent = true;
@@ -715,8 +758,7 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx,
                 *cancel_code = ctx->cancel_code;
             break;
         }
-        if (retries >= SNAG_PROVIDER_MAX_RETRIES ||
-            !retryable_attempt(ctx, code))
+        if (!retryable_attempt(ctx, code) || retries >= SNAG_PROVIDER_MAX_RETRIES)
             break;
         {
             char reason[96];
@@ -724,6 +766,12 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx,
             if (retry_reason(ctx, code, reason, sizeof(reason)) < 0)
                 snprintf(reason, sizeof(reason), "retryable provider failure");
             wait_rc = retry_wait(ctx, retries, reason, error, error_size);
+            if (wait_rc == SNAG_PROVIDER_NEW_INPUT) {
+                if (ctx->render)
+                    (void)snag_ui_text(ctx->render, SNAG_UI_WARNING,
+                                      "provider retry stopped: new input arrived");
+                break;
+            }
             if (wait_rc == 1 || wait_rc == 2) {
                 code = CURLE_ABORTED_BY_CALLBACK;
                 if (cancel_code)
@@ -774,21 +822,6 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
         return -1;
     }
     snag_buf_init(&redacted, SNAG_WIRE_BODY_MAX);
-    if (ctx->error_body.len) {
-        json_t *root = snag_json_load_strict(ctx->error_body.data,
-                                            ctx->error_body.len,
-                                            SNAG_WIRE_BODY_MAX,
-                                            json_error,
-                                            sizeof(json_error));
-        if (root) {
-            if (snag_provider_failure_from_json(root,
-                                               &ctx->provider_failure) < 0)
-                memset(&ctx->provider_failure, 0,
-                       sizeof(ctx->provider_failure));
-            json_decref(root);
-        }
-        json_error[0] = '\0';
-    }
     rc = snag_wire_json_redact(ctx->error_body.data, ctx->error_body.len,
                               &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));
@@ -1402,6 +1435,10 @@ auth_pump(void *opaque, uint32_t wait_ms)
 {
     struct provider_ctx *ctx = opaque;
     int rc = ctx->pump ? ctx->pump(ctx->pump_opaque, wait_ms) : 0;
+    if (rc == SNAG_PROVIDER_NEW_INPUT) {
+        ctx->new_input = true;
+        return 0;
+    }
     if (rc)
         ctx->cancel_code = rc < 0 ? 3 : rc;
     return rc;
@@ -1774,12 +1811,6 @@ snag_provider_responses_create(const json_t *create_request,
                                       error_size, cancel_code, retry_count);
     if (rc != 0)
         goto out;
-    if (snag_sse_finish(&ctx.sse, error, error_size) < 0) {
-        snag_errorf(error, error_size,
-                  stream_or_sse_error(&ctx, error,
-                                      "invalid provider SSE stream"));
-        goto out;
-    }
     rc = snag_responses_stream_finish(&ctx.stream, graph, error, error_size);
     if (rc != 0) {
         if (rc > 0)
@@ -1789,7 +1820,7 @@ snag_provider_responses_create(const json_t *create_request,
     rc = 0;
 out:
     if (failure) {
-        if (ctx.stream.provider_failure.code[0])
+        if (ctx.stream.failed)
             *failure = ctx.stream.provider_failure;
         else
             *failure = ctx.provider_failure;

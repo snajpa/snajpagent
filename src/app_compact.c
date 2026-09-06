@@ -276,7 +276,7 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     snag_response_graph_init(&graph);
     provider_rc = snag_provider_responses_create(
         create_request, app->config, app->turn_provider, credential,
-        &app->ui, NULL, NULL, snag_app_active_input_pump, app, &graph,
+        &app->ui, NULL, NULL, snag_app_provider_input_pump, app, &graph,
         NULL, error, error_size, &cancel_code, NULL);
     if (provider_rc != 0) {
         rc = provider_rc;

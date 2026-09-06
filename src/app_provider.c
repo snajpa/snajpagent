@@ -14,6 +14,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+int
+snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms)
+{
+    struct app_state *app = opaque;
+    uint64_t before = app->input_generation;
+    int rc = snag_app_active_input_pump(app, timeout_ms);
+
+    return rc == 0 && before != app->input_generation ? SNAG_PROVIDER_NEW_INPUT : rc;
+}
+
 #ifdef SNAJPAGENT_TEST_FIXTURE
 static bool fixture_capacity_rejected_once;
 
@@ -134,7 +144,7 @@ fail:
                       snag_app_active_input_pump, app, error, error_size) < 0)
         return -1;
     rc = snag_provider_models_list(app->config, provider, &credential,
-                                  &app->ui, snag_app_active_input_pump, app,
+                                  &app->ui, snag_app_provider_input_pump, app,
                                   models, error, error_size);
     snag_credential_clear(&credential);
     return rc;
@@ -214,7 +224,7 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
     rc = snag_provider_responses_count(count_request, app->config,
                                       app->turn_provider, credential,
                                       &app->ui,
-                                      snag_app_active_input_pump, app,
+                                      snag_app_provider_input_pump, app,
                                       &exact_tokens, &endpoint_unsupported,
                                       error, error_size,
                                       &cancel_code, NULL);
@@ -296,7 +306,7 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
     int rc = snag_provider_responses_compact(compact_request, app->config,
                                             app->turn_provider,
                                             credential, &app->ui,
-                                            snag_app_active_input_pump, app,
+                                            snag_app_provider_input_pump, app,
                                             output, output_tokens_bound,
                                             error, error_size, &cancel_code, NULL);
     if (rc == 1 || rc == 2)
@@ -391,7 +401,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt,
                                            app->turn_provider, credential,
                                            &app->ui,
                                            snag_app_stream_public, app,
-                                           snag_app_active_input_pump, app, graph,
+                                           snag_app_provider_input_pump, app, graph,
                                            failure, error, error_size, &cancel_code,
                                            retry_count);
     if (rc == 1 || rc == 2)

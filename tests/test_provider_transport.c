@@ -55,6 +55,7 @@ enum model_fixture {
     MODEL_CREATE_HTTP_FAILURE,
     MODEL_CREATE_SSE_FAILURE,
     MODEL_OPENROUTER_SEARCH,
+    MODEL_CREATE_RETRY,
     MODEL_COUNT_404,
     MODEL_COUNT_405,
     MODEL_COUNT_501,
@@ -72,6 +73,17 @@ enum model_fixture {
 };
 
 static bool authentication_fixture;
+
+static const struct retry_case {
+    const char *prefix;
+    const char *body;
+    unsigned int status;
+    unsigned int failures;
+    unsigned int retries;
+    bool truncated;
+    const char *diagnostic; /* NULL: failure(s), then success. */
+    const char *emitted;
+} *retry_case;
 
 static void
 write_all_or_die(int fd, const char *data, size_t len)
@@ -390,6 +402,49 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                   "text/event-stream", create_sse);
         _exit(0);
     }
+    if (models == MODEL_CREATE_RETRY) {
+        struct http_request request;
+        char first[BODY_MAX], body[BODY_MAX];
+        unsigned int attempts = retry_case->failures + !retry_case->diagnostic;
+        alarm(15u);
+        for (unsigned int i = 0; i < attempts; ++i) {
+            int fd = accept(listen_fd, NULL, NULL);
+            if (fd < 0)
+                server_fail("retry accept failed");
+            read_request(fd, &request);
+            if (strcmp(request.method, "POST") || strcmp(request.path, "/v1/responses"))
+                server_fail("unexpected retry request");
+            if (i == 0)
+                memcpy(first, request.body, request.body_len + 1u);
+            else if (strcmp(first, request.body))
+                server_fail("retry changed request bytes");
+            if (i == retry_case->failures) {
+                send_response(fd, "text/event-stream", create_sse);
+            } else {
+                int n = snprintf(body, sizeof(body), "%s%s", retry_case->prefix,
+                                 retry_case->body);
+                if (n < 0 || (size_t)n >= sizeof(body))
+                    server_fail("retry fixture overflow");
+                if (retry_case->truncated) {
+                    char header[256];
+                    int h = snprintf(header, sizeof(header),
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                        "Content-Length: %u\r\nConnection: close\r\n\r\n",
+                        (unsigned int)n + 100u);
+                    assert(h > 0 && (size_t)h < sizeof(header));
+                    write_all_or_die(fd, header, (size_t)h);
+                    write_all_or_die(fd, body, (size_t)n);
+                } else if (retry_case->status == 200u) {
+                    send_response(fd, "text/event-stream", body);
+                } else {
+                    send_status(fd, retry_case->status, body);
+                }
+            }
+            if (close(fd) < 0)
+                server_fail("close retry socket failed");
+        }
+        _exit(0);
+    }
     if (models >= MODEL_COUNT_404) {
         struct http_request request;
         unsigned int status = models == MODEL_COUNT_404 ? 404u :
@@ -513,6 +568,10 @@ start_server(struct local_server *server, enum model_fixture models,
     assert(server->pid >= 0);
     if (server->pid == 0)
         server_child(server->fd, models, transport);
+    if (models == MODEL_CREATE_RETRY) {
+        assert(close(server->fd) == 0);
+        server->fd = -1;
+    }
 }
 
 static void
@@ -520,7 +579,8 @@ stop_server(struct local_server *server)
 {
     int status;
 
-    assert(close(server->fd) == 0);
+    if (server->fd >= 0)
+        assert(close(server->fd) == 0);
     assert(waitpid(server->pid, &status, 0) == server->pid);
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);
@@ -845,6 +905,167 @@ test_structured_create_failures(void)
         snag_config_free(&config);
         stop_server(&server);
     }
+}
+
+struct retry_cancel {
+    int fd, code;
+    struct snag_buf notice;
+};
+
+static int
+cancel_retry(void *opaque, uint32_t wait_ms)
+{
+    struct retry_cancel *cancel = opaque;
+    char buf[512];
+    ssize_t n;
+    (void)wait_ms;
+    while ((n = read(cancel->fd, buf, sizeof(buf))) > 0)
+        assert(snag_buf_append(&cancel->notice, buf, (size_t)n) == 0);
+    assert(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+    return cancel->notice.data && strstr((const char *)cancel->notice.data,
+        "provider retry 1/2") ? cancel->code : 0;
+}
+
+static void
+test_create_retries(void)
+{
+    static const char created[] =
+        ": heartbeat\n\n"
+        "id: discarded-event\n"
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"discarded\",\"status\":\"in_progress\",\"output\":[]}}\n\n";
+    static const char transient[] =
+        "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\","
+        "\"message\":\"Response payload is not completed: <TransferEncodingError: 400, message='Not enough data to satisfy transfer length header.'> transport-secret\"}}}\n\n";
+    static const char partial[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"partial\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"m\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"m\",\"content_index\":0,\"delta\":\"once\"}\n\n";
+    const struct retry_case cases[] = {
+        {created, transient, 200, 1, 1, false, NULL, "local transport"},
+        {created, transient, 200, 3, 2, false, "retried 2 times", ""},
+        {"", "data: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}\n\n",
+            200, 1, 1, false, NULL, "local transport"},
+        {"", "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"type\":\"service_unavailable_error\"}}}\n\n",
+            200, 1, 1, false, NULL, "local transport"},
+        {"", "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"cyber_policy\",\"message\":\"flagged for possible cybersecurity risk\"}}}\n\n",
+            200, 1, 0, false, "[cyber_policy]", ""},
+        {"", "data: {\"type\":\"error\",\"code\":\"unknown\",\"message\":\"TransferEncodingError\"}\n\n",
+            200, 1, 0, false, "[unknown]", ""},
+        {"", "data: {\"type\":\"error\",\"message\":\"TransferEncodingError\"}\n\n",
+            200, 1, 0, false, "TransferEncodingError", ""},
+        {"", "data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n",
+            200, 1, 0, false, "[max_output_tokens]", ""},
+        {"", "data: {\"type\":\"error\",\"code\":\"server_error\",\"context_limit\":-1}\n\n",
+            200, 1, 0, false, "invalid structured", ""},
+        {"", "{\"error\":{\"code\":\"slow_down\",\"type\":\"rate_limit_error\"}}",
+            429, 1, 1, false, NULL, "local transport"},
+        {"", "{\"error\":{\"code\":\"credit_balance_exhausted\",\"type\":\"insufficient_quota\"}}",
+            429, 1, 0, false, "credit_balance_exhausted", ""},
+        {"", "{\"error\":{\"type\":\"insufficient_quota\"}}",
+            429, 1, 0, false, "insufficient_quota", ""},
+        {"", "{\"error\":{\"code\":\"cyber_policy\"}}",
+            500, 1, 0, false, "cyber_policy", ""},
+        {"", "{\"error\":{\"code\":\"unknown\",\"type\":\"server_error\"}}",
+            503, 1, 0, false, "unknown", ""},
+        {"", "{\"error\":{\"code\":23,\"type\":\"server_error\"}}",
+            500, 1, 0, false, "HTTP 500", ""},
+        {"", "{\"error\":{\"code\":\"server_error\"}}",
+            503, 3, 2, false, "retried 2 times", ""},
+        {"", "temporarily unavailable", 503, 1, 1, false, NULL, "local transport"},
+        {"", "", 200, 1, 1, true, NULL, "local transport"},
+        {created, "", 200, 1, 1, true, NULL, "local transport"},
+        {created, "", 200, 1, 1, false, NULL, "local transport"},
+        {created, "data: {", 200, 1, 0, false, "mid-event", ""},
+        {created, "data: {", 200, 1, 0, true, "provider transport failed", ""},
+        {created, "data: {bad}\n\n", 200, 1, 0, false, "JSON", ""},
+        {partial, transient, 200, 1, 0, false, "[server_error]", "once"},
+        {partial, "", 200, 1, 0, true, "provider transport failed", "once"},
+        {created, "data: {\"type\":\"response.failed\",\"response\":{\"output\":[{\"type\":\"function_call\"}],\"error\":{\"code\":\"server_error\"}}}\n\n",
+            200, 1, 0, false, "[server_error]", ""},
+        {"data: {\"type\":\"response.web_search_call.in_progress\"}\n\n",
+            transient, 200, 1, 0, false, "[server_error]", ""},
+        {"data: {\"type\":\"response.future_activity\"}\n\n",
+            transient, 200, 1, 0, false, "[server_error]", ""},
+        {"data: {\"type\":\"response.created\",\"response\":{\"id\":\"tools\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"status\":\"in_progress\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"\"}}\n\n",
+            transient, 200, 1, 0, false, "[server_error]", ""}
+    };
+
+    size_t count = sizeof(cases) / sizeof(cases[0]);
+    const struct retry_case cancelled = {created, transient, 200, 1, 0, false, "", ""};
+    for (size_t i = 0; i < count + 3u; ++i) {
+        struct local_server server;
+        struct snag_config config;
+        struct snag_credential credential;
+        struct snag_response_graph graph;
+        struct snag_provider_failure failure;
+        struct emitted_text emitted = {0};
+        json_t *request = request_with_marker("retry-current-cycle");
+        char error[512] = {0};
+        unsigned int retries = 99u;
+        int cancel = 99;
+        int pipefd[2], saved_stderr = -1;
+        struct snag_ui ui;
+        struct retry_cancel cancellation = {.code = i < count ? 0 : (int)(i - count + 1u)};
+
+        retry_case = i < count ? &cases[i] : &cancelled;
+        start_server(&server, MODEL_CREATE_RETRY, false);
+        if (cancellation.code) {
+            assert(pipe(pipefd) == 0);
+            assert(fcntl(pipefd[0], F_SETFL, O_NONBLOCK) == 0);
+            saved_stderr = dup(STDERR_FILENO);
+            assert(saved_stderr >= 0 && dup2(pipefd[1], STDERR_FILENO) == STDERR_FILENO);
+            assert(close(pipefd[1]) == 0);
+            cancellation.fd = pipefd[0];
+            snag_buf_init(&cancellation.notice, 4096u);
+            assert(snag_ui_init(&ui) == 0);
+        }
+        snag_config_init(&config);
+        snprintf(config.providers[0].base_url, sizeof(config.providers[0].base_url),
+                 "http://127.0.0.1:%u/v1", server.port);
+        strcpy(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent");
+        strcpy(config.providers[0].openrouter_title, "snajpagent");
+        config.providers[0].request_timeout_ms = 3000u;
+        credential_set(&credential, "transport-secret");
+        snag_response_graph_init(&graph);
+        snag_buf_init(&emitted.text, 1024u);
+        int rc = snag_provider_responses_create(request, &config,
+            &config.providers[0], &credential, cancellation.code ? &ui : NULL,
+            emit_capture, &emitted, cancellation.code ? cancel_retry : NULL,
+            &cancellation, &graph, &failure, error, sizeof(error), &cancel, &retries);
+        if (cancellation.code) {
+            snag_ui_free(&ui);
+            assert(dup2(saved_stderr, STDERR_FILENO) == STDERR_FILENO);
+            assert(close(saved_stderr) == 0 && close(pipefd[0]) == 0);
+            snag_buf_free(&cancellation.notice);
+        }
+        if ((!cancellation.code && (retry_case->diagnostic ? rc >= 0 : rc != 0)) ||
+            retries != retry_case->retries ||
+            (retry_case->diagnostic && !strstr(error, retry_case->diagnostic)))
+            fprintf(stderr, "retry case %zu: rc=%d retries=%u: %s\n", i, rc, retries, error);
+        int expected_cancel = cancellation.code == SNAG_PROVIDER_NEW_INPUT ? 0 : cancellation.code;
+        assert(rc == (expected_cancel ? expected_cancel : retry_case->diagnostic ? -1 : 0));
+        assert(retries == retry_case->retries && cancel == expected_cancel);
+        assert(!strstr(error, "transport-secret") && !strstr(failure.message, "transport-secret"));
+        if (retry_case->diagnostic) {
+            assert(strstr(error, retry_case->diagnostic));
+            assert(graph.count == 0u);
+        } else {
+            assert(!failure.code[0] && !failure.type[0] && !failure.message[0]);
+            assert(graph.count == 1u && strcmp(graph.provider_response_id, "resp_transport") == 0);
+        }
+        assert(emitted.text.len == strlen(retry_case->emitted));
+        if (emitted.text.len)
+            assert(memcmp(emitted.text.data, retry_case->emitted, emitted.text.len) == 0);
+        snag_response_graph_free(&graph);
+        snag_buf_free(&emitted.text);
+        snag_credential_clear(&credential);
+        snag_config_free(&config);
+        json_decref(request);
+        stop_server(&server);
+    }
+    retry_case = NULL;
 }
 
 static void
@@ -1363,6 +1584,7 @@ main(void)
     test_openrouter_search_transport();
     test_codex_path_selection();
     test_structured_create_failures();
+    test_create_retries();
     test_count_capability_statuses();
     test_count_modes();
     puts("test_provider_transport: ok");

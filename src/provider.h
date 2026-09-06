@@ -14,6 +14,10 @@ struct snag_ui;
 
 typedef int (*snag_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 
+/* Pump: -1 failure, 0 continue, 1 steer, 2 cancel, 3 new non-steering input.
+ * New input lets a healthy response finish but prevents further retries. */
+#define SNAG_PROVIDER_NEW_INPUT 3
+
 /* Optional native operation is absent; no semantic output was returned. */
 #define SNAG_PROVIDER_UNSUPPORTED 4
 

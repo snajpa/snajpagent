@@ -392,6 +392,10 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
     if (snag_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;
+    if (strcmp(type, "steering_added") == 0 ||
+        strcmp(type, "future_turn_queued") == 0 ||
+        strcmp(type, "future_turn_edited") == 0)
+        ++app->input_generation;
     struct snag_render_source source = {offset, (size_t)(app->session.log_end - offset)};
     if (snag_ui_durable(&app->ui, app->session.log_fd, source, type,
                        app->config->default_timeout_ms, app->config->max_output_bytes) < 0 ||
