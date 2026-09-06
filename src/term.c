@@ -1914,7 +1914,7 @@ flush_completions(struct snag_term *term)
     struct snag_buf output = term->completion_output;
     snag_buf_init(&term->completion_output, SNAG_MAX_DIRECT_PROMPT);
     int rc = -1;
-    if (leave_prompt(term) < 0 || snag_term_output_begin(term, true) < 0)
+    if (leave_prompt(term) < 0 || snag_term_output_begin(term) < 0)
         goto out;
     if ((!term->output_seen || term->output_ended_lf ||
          snag_term_write(STDERR_FILENO, "\n", 1u) == 0) &&
