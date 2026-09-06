@@ -599,7 +599,6 @@ test_local_provider_transport(void)
     struct local_server server;
     struct snag_config config;
     struct snag_credential credential;
-    struct snag_response_graph graph;
     struct emitted_text emitted;
     json_t *request;
     struct snag_json_document compact_output = {0};
@@ -678,7 +677,7 @@ test_local_provider_transport(void)
     json_decref(request);
 
     request = request_with_marker("transport-create");
-    snag_response_graph_init(&graph);
+    struct snag_response_graph graph = {0};
     memset(&emitted, 0, sizeof(emitted));
     snag_buf_init(&emitted.text, 128u);
     assert(snag_provider_responses_create(connection,
@@ -817,7 +816,6 @@ test_structured_create_failures(void)
         struct local_server server;
         struct snag_config config;
         struct snag_credential credential;
-        struct snag_response_graph graph;
         struct snag_provider_failure failure;
         json_t *request = request_with_marker("capacity-failure");
         char endpoint[128];
@@ -841,7 +839,7 @@ test_structured_create_failures(void)
                         sizeof(config.providers[0].openrouter_title),
                         "%s", "snajpagent") > 0);
         credential_set(&credential, "transport-secret");
-        snag_response_graph_init(&graph);
+        struct snag_response_graph graph = {0};
         memset(&failure, 0, sizeof(failure));
         assert(snag_provider_responses_create((struct snag_provider_connection){
             &config, &config.providers[0], &credential, NULL,
@@ -954,7 +952,6 @@ test_create_retries(void)
         struct local_server server;
         struct snag_config config;
         struct snag_credential credential;
-        struct snag_response_graph graph;
         struct snag_provider_failure failure;
         struct emitted_text emitted = {0};
         json_t *request = request_with_marker("retry-current-cycle");
@@ -983,7 +980,7 @@ test_create_retries(void)
         strcpy(config.providers[0].openrouter_title, "snajpagent");
         config.providers[0].request_timeout_ms = 3000u;
         credential_set(&credential, "transport-secret");
-        snag_response_graph_init(&graph);
+        struct snag_response_graph graph = {0};
         snag_buf_init(&emitted.text, 1024u);
         int rc = snag_provider_responses_create((struct snag_provider_connection){
             &config, &config.providers[0], &credential, cancellation.code ? &ui : NULL,
@@ -1137,7 +1134,7 @@ test_count_modes(void)
         memset(&app, 0, sizeof(app));
         snag_store_init(&app.store);
         assert(snag_store_open(&app.store, temp, error, sizeof(error)) == 0);
-        snag_model_cache_init(&app.model_cache);
+        app.model_cache = (struct snag_model_cache){0};
         assert(snag_ui_init(&app.ui) == 0);
         app.config = &config;
         app.turn_provider = &config.providers[0];
@@ -1186,7 +1183,6 @@ test_openrouter_search_transport(void)
     struct local_server server;
     struct snag_config config;
     struct snag_credential credential;
-    struct snag_response_graph graph;
     struct emitted_text emitted = {0};
     json_t *request;
     char endpoint[128], error[256] = {0};
@@ -1216,7 +1212,7 @@ test_openrouter_search_transport(void)
         search_tools, sizeof(search_tools) - 1u, 0, NULL)) == 0);
     assert(snag_config_provider_is_openrouter(&config.providers[0]));
     snag_buf_init(&emitted.text, 128u);
-    snag_response_graph_init(&graph);
+    struct snag_response_graph graph = {0};
     assert(snag_provider_responses_create(connection,
         request, emit_capture, &emitted, &graph, NULL, error, sizeof(error), &retries) == 0);
     assert(!retries);
@@ -1237,7 +1233,6 @@ test_openrouter_search_transport(void)
     assert(json_array_append_new(json_object_get(request, "input"), json_loadb(
         local_output, sizeof(local_output) - 1u, 0, NULL)) == 0);
     snag_response_graph_free(&graph);
-    snag_response_graph_init(&graph);
     snag_buf_reset(&emitted.text);
     emitted.calls = 0u;
     assert(snag_provider_responses_create(connection,

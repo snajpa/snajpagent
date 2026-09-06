@@ -164,7 +164,7 @@ make_call_with_pty(struct snag_response_graph *graph, const char *command,
     json_t *args = call_args(command, workdir, timeout_ms, stdin_text);
     assert(args != NULL);
     assert(snag_json_set_new(args, "pty", json_boolean(pty)) == 0);
-    snag_response_graph_init(graph);
+    *graph = (struct snag_response_graph){0};
     assert(snag_response_graph_set_provider_id(graph, "resp_tool_test") == 0);
     assert(snag_response_graph_add_call(graph, "item_tool_test",
                                        "call_tool_test", "exec_command",
@@ -269,7 +269,6 @@ run_tool_with_wait(const char *name, json_t *args,
 {
     char cwd[4096];
     struct snag_config config;
-    struct snag_response_graph graph;
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     snag_config_init(&config);
@@ -277,7 +276,7 @@ run_tool_with_wait(const char *name, json_t *args,
     config.default_yield_ms = 1000;
     config.max_wait_ms = max_wait_ms;
     config.max_timeout_ms = 5000;
-    snag_response_graph_init(&graph);
+    struct snag_response_graph graph = {0};
     assert(snag_response_graph_set_provider_id(&graph, "resp_managed_test") == 0);
     assert(snag_response_graph_add_call(&graph, "item_managed_test",
                                        "call_managed_test", name, args) == 0);

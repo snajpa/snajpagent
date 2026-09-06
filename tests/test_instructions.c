@@ -36,7 +36,6 @@ main(void)
     char leaf[4096];
     char path[4096];
     char error[256];
-    struct snag_instruction_set set;
     json_t *metadata;
 
     assert(mkdtemp(temp));
@@ -66,7 +65,7 @@ main(void)
     assert(snprintf(path, sizeof(path), "%s/AGENTS.md", leaf) > 0);
     write_file(path, "leaf guidance\n");
 
-    snag_instructions_init(&set);
+    struct snag_instruction_set set = {0};
     assert(snag_instructions_discover(&set, leaf, error, sizeof(error)) == 0);
     assert(set.count == 4u);
     assert(strstr(set.paths[0], "/snajpagent/AGENTS.override.md") != NULL);

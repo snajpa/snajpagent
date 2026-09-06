@@ -49,18 +49,12 @@ struct context_builder {
 };
 
 void
-snag_context_projection_init(struct snag_context_projection *projection)
-{
-    memset(projection, 0, sizeof(*projection));
-}
-
-void
 snag_context_projection_free(struct snag_context_projection *projection)
 {
     snag_json_document_free(&projection->model_input);
     snag_json_document_free(&projection->create_request);
     snag_json_document_free(&projection->count_request);
-    snag_context_projection_init(projection);
+    *projection = (struct snag_context_projection){0};
 }
 
 static int

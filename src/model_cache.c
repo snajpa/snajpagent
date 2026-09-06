@@ -20,17 +20,11 @@
 #define SNAG_MODEL_CACHE_SCHEMA 1u
 
 void
-snag_model_cache_init(struct snag_model_cache *cache)
-{
-    memset(cache, 0, sizeof(*cache));
-}
-
-void
 snag_model_cache_free(struct snag_model_cache *cache)
 {
     if (cache->providers)
         json_decref(cache->providers);
-    snag_model_cache_init(cache);
+    *cache = (struct snag_model_cache){0};
 }
 
 static bool
@@ -571,7 +565,7 @@ snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache
 adopt:
     snag_model_cache_free(cache);
     *cache = staged;
-    snag_model_cache_init(&staged);
+    staged = (struct snag_model_cache){0};
     goto out;
 write_error:
     (void)snag_fail(error, error_size, ENOMEM, "cannot update model cache observation");

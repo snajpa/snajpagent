@@ -116,8 +116,6 @@ args(void)
 int
 main(void)
 {
-    struct snag_response_graph graph;
-    struct snag_response_graph copy;
     struct snag_graph_decision decision;
     json_t *encoded;
     json_t *result;
@@ -126,7 +124,7 @@ main(void)
     char action_b[SNAG_SHA256_HEX_LEN + 1u];
     char *large;
 
-    snag_response_graph_init(&graph);
+    struct snag_response_graph graph = {0};
     assert(snag_response_graph_add_call(&graph, "item_web", "call_web",
                                        "web_search", json_object()) < 0);
     assert(snag_response_graph_add_call(&graph, "item_web", "call_web",
@@ -143,7 +141,7 @@ main(void)
     assert(decision.final_index == 0u);
     encoded = snag_response_graph_json(&graph);
     assert(encoded);
-    snag_response_graph_init(&copy);
+    struct snag_response_graph copy = {0};
     assert(snag_response_graph_set_provider_id(&copy, "resp_final") == 0);
     assert(snag_response_graph_from_json(&copy, encoded,
                                         error, sizeof(error)) == 0);
@@ -156,14 +154,11 @@ main(void)
     assert(json_array_append_new(encoded,
                                  json_deep_copy(json_array_get(encoded, 0u))) == 0);
     snag_response_graph_free(&copy);
-    snag_response_graph_init(&copy);
     assert(snag_response_graph_from_json(&copy, encoded,
                                         error, sizeof(error)) < 0);
     json_decref(encoded);
     snag_response_graph_free(&copy);
     snag_response_graph_free(&graph);
-
-    snag_response_graph_init(&graph);
     assert(snag_response_graph_set_provider_id(&graph, "resp_calls") == 0);
     assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT,
                                          SNAG_PHASE_COMMENTARY,
@@ -178,7 +173,7 @@ main(void)
     assert(encoded);
     assert(snag_partial_public_validate(encoded,
                                        error, sizeof(error)) < 0);
-    snag_response_graph_init(&copy);
+    copy = (struct snag_response_graph){0};
     assert(snag_response_graph_set_provider_id(&copy, "resp_calls") == 0);
     assert(snag_response_graph_from_json(&copy, encoded,
                                         error, sizeof(error)) == 0);
@@ -217,8 +212,6 @@ main(void)
                                        error, sizeof(error)) == 0);
     assert(decision.outcome == SNAG_GRAPH_CONFLICT);
     snag_response_graph_free(&graph);
-
-    snag_response_graph_init(&graph);
     assert(snag_response_graph_set_provider_id(&graph, "resp_irc") == 0);
     {
         static const char *const names[] = {
@@ -242,7 +235,7 @@ main(void)
     assert(decision.outcome == SNAG_GRAPH_CALLS && decision.call_count == 3u);
     encoded = snag_response_graph_json(&graph);
     assert(encoded);
-    snag_response_graph_init(&copy);
+    copy = (struct snag_response_graph){0};
     assert(snag_response_graph_set_provider_id(&copy, "resp_irc") == 0);
     assert(snag_response_graph_from_json(&copy, encoded,
                                         error, sizeof(error)) == 0);
@@ -252,8 +245,6 @@ main(void)
     json_decref(encoded);
     snag_response_graph_free(&copy);
     snag_response_graph_free(&graph);
-
-    snag_response_graph_init(&graph);
     assert(snag_response_graph_set_provider_id(&graph, "resp_empty") == 0);
     assert(snag_response_graph_classify(&graph, &decision,
                                        error, sizeof(error)) == 0);
@@ -264,7 +255,7 @@ main(void)
     assert(large);
     memset(large, 'x', SNAG_MAX_PUBLIC_ITEM);
     large[SNAG_MAX_PUBLIC_ITEM] = '\0';
-    snag_response_graph_init(&graph);
+    graph = (struct snag_response_graph){0};
     assert(snag_response_graph_set_provider_id(&graph, "resp_large") == 0);
     assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT,
                                          SNAG_PHASE_COMMENTARY,

@@ -13,17 +13,11 @@
 #include <unistd.h>
 
 void
-snag_instructions_init(struct snag_instruction_set *set)
-{
-    memset(set, 0, sizeof(*set));
-}
-
-void
 snag_instructions_free(struct snag_instruction_set *set)
 {
     for (size_t i = 0; i < set->count; ++i)
         free(set->paths[i]);
-    snag_instructions_init(set);
+    *set = (struct snag_instruction_set){0};
 }
 
 static int

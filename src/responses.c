@@ -1123,7 +1123,6 @@ snag_responses_stream_finish(struct snag_responses_stream *stream,
                             struct snag_response_graph *graph,
                             char *error, size_t error_size)
 {
-    struct snag_response_graph staged;
     int rc = -1;
 
     if (stream->failed || !stream->created || !stream->terminal ||
@@ -1133,7 +1132,7 @@ snag_responses_stream_finish(struct snag_responses_stream *stream,
                               "Responses stream ended before completion");
         goto out;
     }
-    snag_response_graph_init(&staged);
+    struct snag_response_graph staged = {0};
     staged.usage = stream->usage;
     if (snag_response_graph_set_provider_id(&staged, stream->response_id) < 0) {
         (void)stream_fail(stream, errno ? errno : EPROTO,

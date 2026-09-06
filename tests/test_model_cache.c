@@ -178,7 +178,6 @@ main(void)
     char error[256] = {0};
     char encoded[8192];
     struct snag_store store;
-    struct snag_model_cache cache;
     struct snag_model_capacity capacity;
     struct snag_config config;
     struct stat before;
@@ -190,7 +189,7 @@ main(void)
     assert(mkdtemp(temp));
     snag_store_init(&store);
     assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
-    snag_model_cache_init(&cache);
+    struct snag_model_cache cache = {0};
     write_file_at(store.root_fd, "models.json", old_cache);
     assert(snag_model_cache_load(&store, &cache, error, sizeof(error)) < 0);
     assert(strstr(error, "use /model cache while idle") != NULL);

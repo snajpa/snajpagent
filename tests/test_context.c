@@ -302,7 +302,6 @@ test_compact_groups(struct snag_store *store, const char *workspace)
     const char *next_turn = "a2000000000000000000000000000000";
     const char *handle = "0000000000000000000000000000c002";
     struct snag_session session;
-    struct snag_instruction_set instructions;
     struct snag_context_projection projection;
     json_t *empty = json_array();
     uint64_t boundaries[4];
@@ -312,7 +311,7 @@ test_compact_groups(struct snag_store *store, const char *workspace)
     memset(text, 'x', sizeof(text) - 1u);
     text[sizeof(text) - 1u] = '\0';
     snag_session_init(&session);
-    snag_instructions_init(&instructions);
+    struct snag_instruction_set instructions = {0};
     assert(snag_session_create(store, &session, workspace, "default",
                               SNAJPAGENT_MODEL, "medium", error, sizeof(error)) == 0);
     memcpy(session_id, session.id, sizeof(session_id));
@@ -394,7 +393,7 @@ test_compact_groups(struct snag_store *store, const char *workspace)
                                           prefix.model_input.bytes, output_bytes, output);
         assert(json_object_set_new(data, "count_method", json_string("statistical_upper_estimate")) == 0);
         commit_event(&session, "compaction_completed", data);
-        snag_context_projection_init(&projection);
+        projection = (struct snag_context_projection){0};
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
             0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
         json_t *input = json_object_get(projection.create_request.value, "input");
@@ -504,10 +503,8 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
                  compaction_started_data(&session, compact, "hard_budget", prefix.source_seq, prefix.model_input.sha256, prefix.create_request.sha256, prefix.model_input.bytes));
     commit_event(&session, "compaction_completed",
                  compaction_completed_data(compact, prefix.model_input.sha256, output_hash, prefix.create_request.sha256, prefix.model_input.bytes, output_bytes, output));
-    struct snag_context_projection projection;
-    struct snag_instruction_set instructions;
-    snag_context_projection_init(&projection);
-    snag_instructions_init(&instructions);
+    struct snag_context_projection projection = {0};
+    struct snag_instruction_set instructions = {0};
     json_t *snapshot = json_array(), *item = json_object();
     assert(snag_json_set_new(item, "id", json_string(steer)) == 0);
     assert(snag_json_set_new(item, "text", json_string("fresh steer")) == 0);
@@ -776,7 +773,6 @@ test_read_only_and_queue_controllers(void)
     const char *scratch = getenv("TMPDIR");
     struct snag_store store;
     struct snag_session session;
-    struct snag_context_projection projection;
     struct snag_config config;
     json_t *empty = json_array();
     json_t *started;
@@ -788,7 +784,7 @@ test_read_only_and_queue_controllers(void)
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
     snag_store_init(&store);
     snag_session_init(&session);
-    snag_context_projection_init(&projection);
+    struct snag_context_projection projection = {0};
     snag_config_init(&config);
     config.irc.listen_explicit = true;
     snag_config_provider_init(&config.providers[1], "selected");
@@ -895,7 +891,6 @@ test_provider_model_projection(void)
     struct snag_config config;
     struct snag_store store;
     struct snag_session session;
-    struct snag_context_projection projection;
     json_t *empty = json_array(), *started;
 
     assert(mkdtemp(temp));
@@ -908,7 +903,7 @@ test_provider_model_projection(void)
     strcpy(config.providers[0].models[0].upstream, "gpt-6-astra");
     snag_store_init(&store);
     snag_session_init(&session);
-    snag_context_projection_init(&projection);
+    struct snag_context_projection projection = {0};
     assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
     assert(snag_session_create(&store, &session, temp, "codex-lb", "small", "high", error, sizeof(error)) == 0);
     started = turn_started_model("01010101010101010101010101010101", 1u, "hello", temp, "small");
@@ -1151,8 +1146,6 @@ main(void)
     const char *goal_turn = "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d";
     struct snag_store store;
     struct snag_session session;
-    struct snag_context_projection projection;
-    struct snag_instruction_set instructions;
     json_t *empty_steering;
     json_t *items;
     json_t *request_input;
@@ -1172,8 +1165,8 @@ main(void)
     write_file(agents, "context guidance\n");
     snag_store_init(&store);
     snag_session_init(&session);
-    snag_context_projection_init(&projection);
-    snag_instructions_init(&instructions);
+    struct snag_context_projection projection = {0};
+    struct snag_instruction_set instructions = {0};
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_input_time_and_recovery(&store, workspace);
     test_compact_groups(&store, workspace);
@@ -1248,8 +1241,6 @@ main(void)
     }
     {
         struct snag_session active;
-        struct snag_context_projection active_projection;
-        struct snag_instruction_set no_instructions;
         struct snag_context_projection compact = {0};
         json_t *compact_output = compact_output_fixture();
         struct snag_json_document output_count = {0};
@@ -1265,8 +1256,8 @@ main(void)
         const char *active_model = "staged-active-model";
 
         snag_session_init(&active);
-        snag_context_projection_init(&active_projection);
-        snag_instructions_init(&no_instructions);
+        struct snag_context_projection active_projection = {0};
+        struct snag_instruction_set no_instructions = {0};
         assert(active_steering);
         assert(snag_session_create(&store, &active, workspace, "default",
                                   SNAJPAGENT_MODEL, "default",
@@ -1371,16 +1362,14 @@ main(void)
         const char *steer_id = "12121212121212121212121212121212";
         const char *steer_id2 = "13131313131313131313131313131313";
         struct snag_session steered;
-        struct snag_context_projection steered_projection;
-        struct snag_instruction_set no_instructions;
         json_t *snapshot = json_array();
         json_t *snapshot_item = json_object();
         json_t *snapshot_item2 = json_object();
         json_t *input;
 
         snag_session_init(&steered);
-        snag_context_projection_init(&steered_projection);
-        snag_instructions_init(&no_instructions);
+        struct snag_context_projection steered_projection = {0};
+        struct snag_instruction_set no_instructions = {0};
         assert(snapshot && snapshot_item && snapshot_item2);
         assert(snag_json_set_new(snapshot_item, "id",
                                 json_string(steer_id)) == 0);
@@ -1449,15 +1438,13 @@ main(void)
         const char *command_handle = "16161616161616161616161616161616";
         const char *command_steer = "18181818181818181818181818181818";
         struct snag_session steered;
-        struct snag_context_projection steered_projection;
-        struct snag_instruction_set no_instructions;
         json_t *snapshot = json_array();
         json_t *snapshot_item = json_object();
         json_t *input;
 
         snag_session_init(&steered);
-        snag_context_projection_init(&steered_projection);
-        snag_instructions_init(&no_instructions);
+        struct snag_context_projection steered_projection = {0};
+        struct snag_instruction_set no_instructions = {0};
         assert(snapshot && snapshot_item);
         assert(snag_json_set_new(snapshot_item, "id",
                                 json_string(command_steer)) == 0);
@@ -1526,7 +1513,6 @@ main(void)
         struct snag_json_document output_count = {0};
         json_t *bounded_steering = NULL;
         json_t *input;
-        struct snag_context_projection bounded_projection;
         char output_hash[SNAG_SHA256_HEX_LEN + 1u];
         size_t first_bytes = 0u;
         size_t output_bytes = 0u;
@@ -1610,7 +1596,7 @@ main(void)
                          (uint64_t)compact.model_input.bytes,
                          (uint64_t)output_bytes, compact_output));
         assert(bounded.compact_seq == first_turn_end);
-        snag_context_projection_init(&bounded_projection);
+        struct snag_context_projection bounded_projection = {0};
         bounded_steering = json_array();
         assert(bounded_steering != NULL);
         assert(snag_context_build(&bounded, bounded.default_model, "medium", 1,

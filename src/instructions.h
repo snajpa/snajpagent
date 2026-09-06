@@ -13,7 +13,6 @@ struct snag_instruction_set {
     size_t count;
 };
 
-void snag_instructions_init(struct snag_instruction_set *set);
 void snag_instructions_free(struct snag_instruction_set *set);
 int snag_instructions_add_directory(struct snag_instruction_set *set, const char *dir,
                                    char *error, size_t error_size);

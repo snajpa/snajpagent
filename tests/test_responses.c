@@ -22,7 +22,7 @@ parsed_new(size_t max)
 {
     struct parsed_stream parsed = {0};
 
-    snag_response_graph_init(&parsed.graph);
+    parsed.graph = (struct snag_response_graph){0};
     snag_buf_init(&parsed.text, max);
     return parsed;
 }

@@ -46,7 +46,6 @@ struct snag_model_capacity {
     bool cache_source_mismatch;
 };
 
-void snag_model_cache_init(struct snag_model_cache *cache);
 void snag_model_cache_free(struct snag_model_cache *cache);
 bool snag_model_limits_valid(const json_t *limits);
 

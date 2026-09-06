@@ -193,12 +193,11 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
         "content", "fixture responses compact summary",
         "role", "developer", "type", "message"), error, error_size);
 #else
-    struct snag_response_graph graph;
     struct snag_graph_decision decision;
     struct snag_provider_failure failure = {0};
     int rc;
 
-    snag_response_graph_init(&graph);
+    struct snag_response_graph graph = {0};
     rc = snag_provider_responses_create((struct snag_provider_connection){
         app->config, app->turn_provider, credential, &app->ui,
         snag_app_provider_input_pump, app},

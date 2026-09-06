@@ -1605,11 +1605,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *provider_response_id = snag_json_string(data, "provider_response_id");
         const char *response_id = snag_json_string(data, "response_id");
         const char *status = snag_json_string(data, "status");
-        struct snag_response_graph graph;
         struct snag_graph_decision decision;
         int graph_rc;
 
-        snag_response_graph_init(&graph);
+        struct snag_response_graph graph = {0};
         if (!snag_json_exact_keys(data,
             "cycle items provider_response_id response_id status turn_id "
             "usage") || !current_response(session, data) ||

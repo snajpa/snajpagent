@@ -28,7 +28,6 @@ struct snag_context_projection {
     uint64_t source_seq; /* Selected complete group for compaction. */
 };
 
-void snag_context_projection_init(struct snag_context_projection *projection);
 void snag_context_projection_free(struct snag_context_projection *projection);
 int snag_context_build(struct snag_session *session, const char *model,
                       const char *effort, unsigned int cycle,

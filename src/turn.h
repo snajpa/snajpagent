@@ -112,7 +112,6 @@ struct snag_graph_decision {
     const char *message;
 };
 
-void snag_response_graph_init(struct snag_response_graph *graph);
 void snag_response_graph_free(struct snag_response_graph *graph);
 /* Borrowed view; strings/arguments live until the owning graph is changed. */
 struct snag_response_item snag_response_graph_item(const struct snag_response_graph *graph,

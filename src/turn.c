@@ -216,17 +216,11 @@ snag_response_usage_from_json(const json_t *value,
 }
 
 void
-snag_response_graph_init(struct snag_response_graph *graph)
-{
-    memset(graph, 0, sizeof(*graph));
-}
-
-void
 snag_response_graph_free(struct snag_response_graph *graph)
 {
     json_decref(graph->items);
     free(graph->provider_response_id);
-    snag_response_graph_init(graph);
+    *graph = (struct snag_response_graph){0};
 }
 
 int
@@ -539,10 +533,9 @@ int
 snag_partial_public_validate(const json_t *items,
                             char *error, size_t error_size)
 {
-    struct snag_response_graph graph;
     int rc = -1;
 
-    snag_response_graph_init(&graph);
+    struct snag_response_graph graph = {0};
     if (snag_response_graph_from_json(&graph, items,
                                      error, error_size) < 0)
         goto out;

@@ -74,8 +74,7 @@ delete_data(const char *prefix, const char *trash_name)
 static json_t *
 turn_started_data(const struct snag_session *session, const char *turn_id)
 {
-    struct snag_instruction_set instructions;
-    snag_instructions_init(&instructions);
+    struct snag_instruction_set instructions = {0};
     json_t *metadata = snag_instructions_metadata_json(&instructions);
     snag_instructions_free(&instructions);
     assert(metadata);

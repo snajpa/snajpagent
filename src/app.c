@@ -2942,7 +2942,7 @@ run_turn(struct app_state *app, const char *prompt,
         snag_credential_clear(&credential);
         return 3;
     }
-    snag_response_graph_init(&graph);
+    graph = (struct snag_response_graph){0};
     if (app->config->read_agents_md) {
         if (snag_instructions_discover(&app->turn_instructions,
                                       app->session.workspace,
@@ -4254,8 +4254,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     snag_buf_init(&app.irc_background_refs, SNAG_MAX_IRC_SNAPSHOT);
     snag_buf_init(&app.irc_background, SNAG_MAX_IRC_SNAPSHOT);
     snag_config_init(&config);
-    snag_instructions_init(&app.turn_instructions);
-    snag_model_cache_init(&app.model_cache);
+    app.turn_instructions = (struct snag_instruction_set){0};
+    app.model_cache = (struct snag_model_cache){0};
     snag_store_init(&app.store);
     snag_session_init(&app.session);
     if (snag_ui_init(&app.ui) < 0)
