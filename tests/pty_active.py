@@ -42,6 +42,12 @@ def chat_prompt(operator):
 
 
 class Child:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.kill()
+
     def __init__(self, args):
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
@@ -194,8 +200,7 @@ def test_resize_and_suspend_preserve_draft():
     for suspend in (False, True):
         text = b"suspend draft" if suspend else b"resize draft"
         before = session_ids()
-        child = Child(["-vvvv"])
-        try:
+        with Child(["-vvvv"]) as child:
             child.wait(DEFAULT_IDLE_PROMPT)
             child.send(text)
             typed_end = child.wait(text)
@@ -230,8 +235,6 @@ def test_resize_and_suspend_preserve_draft():
             child.exit_now()
             if not suspend:
                 assert b"\x1b[?2004l" in child.buf[idle:], bytes(child.buf)
-        finally:
-            child.kill()
         turn = one(events(new_session(before)), "turn_started")
         assert turn["data"]["text"] == text.decode(), turn
 
@@ -418,8 +421,7 @@ def wait_prompt_painted(child, prompt, start=0, timeout=8.0):
 
 
 def test_incremental_prompt_edit_and_utf8_cursor_column():
-    child = Child([])
-    try:
+    with Child([]) as child:
         wait_prompt_painted(child, DEFAULT_IDLE_PROMPT)
         empty_tab_start = len(child.buf)
         child.send(b"\t")
@@ -444,13 +446,10 @@ def test_incremental_prompt_edit_and_utf8_cursor_column():
         assert f"\r\x1b[{prompt_column + 1}C".encode() not in movement, movement
         assert b"\x1b[2K" not in movement, movement
         assert DEFAULT_IDLE_PROMPT not in movement, movement
-    finally:
-        child.kill()
 
 
 def test_incremental_active_prompt_keeps_status_stable():
-    child = Child([])
-    try:
+    with Child([]) as child:
         child.wait(DEFAULT_IDLE_PROMPT)
         child.send(b"terminal_status\r")
         child.wait("»".encode())
@@ -464,8 +463,6 @@ def test_incremental_active_prompt_keeps_status_stable():
         assert b"\x1b[2K" not in edit, edit
         assert b"working\xe2\x80\xa6" not in edit, edit
         assert DEFAULT_ACTIVE_PROMPT not in edit, edit
-    finally:
-        child.kill()
 
 
 def test_static_zero_width_spinner_has_no_refresh():
@@ -481,8 +478,7 @@ def test_static_zero_width_spinner_has_no_refresh():
     )
     idle = DEFAULT_IDLE_PROMPT
     active = DEFAULT_ACTIVE_PROMPT
-    child = Child(["--config", str(config)])
-    try:
+    with Child(["--config", str(config)]) as child:
         child.wait(idle)
         child.send(b"terminal_status\r")
         first = child.wait(b"status-first-fragment ")
@@ -492,8 +488,6 @@ def test_static_zero_width_spinner_has_no_refresh():
         settled = len(child.buf)
         child.drain(0.35)
         assert len(child.buf) == settled, bytes(child.buf[settled:])
-    finally:
-        child.kill()
 
 
 def test_prompt_clock_lifetime():
@@ -583,8 +577,7 @@ def test_initial_unrenderable_prompt_is_rejected_atomically():
 
 
 def test_incremental_multiline_delete_clears_old_tail():
-    child = Child([])
-    try:
+    with Child([]) as child:
         child.wait(DEFAULT_IDLE_PROMPT)
         child.send(b"abcdef\nsecond")
         child.wait(b"second")
@@ -601,15 +594,12 @@ def test_incremental_multiline_delete_clears_old_tail():
         assert b"second" not in edit and b"\n" not in edit, edit
         assert b"\x1b[2K" not in edit, edit
         assert DEFAULT_IDLE_PROMPT not in edit, edit
-    finally:
-        child.kill()
 
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
     prompt = f" openai/{model}/medium   0% › ".encode()
-    child = Child(["-m", model])
-    try:
+    with Child(["-m", model]) as child:
         child.wait(prompt)
         start = len(child.buf)
         child.send(b"x\n" * 8 + b"z")
@@ -617,8 +607,6 @@ def test_incremental_wrapped_long_prompt_multiline_indent():
         edit = bytes(child.buf[start:end])
         assert b"\x1b[2K" not in edit, edit
         assert prompt not in edit, edit
-    finally:
-        child.kill()
 
 
 def test_steering():
@@ -817,7 +805,6 @@ def test_armed_fifo():
 
 
 def test_queue_prompt_counts():
-    child = Child([])
 
     def count_repaint(count, start):
         # The retained frame may repaint just the changed digits. The tmux
@@ -831,7 +818,7 @@ def test_queue_prompt_counts():
                 return match.end()
             child.read_once(0.1)
         raise AssertionError(f"queue count {count} did not repaint: {bytes(child.buf)!r}")
-    try:
+    with Child([]) as child:
         child.wait(DEFAULT_IDLE_PROMPT)
         child.send(b"queue_slow\r")
         after = child.wait(b"working slowly")
@@ -853,8 +840,6 @@ def test_queue_prompt_counts():
         child.send(b"\x03")
         after = child.wait(b"turn interrupted", start=after)
         child.exit_cleanly(after)
-    finally:
-        child.kill()
 
 
 def test_read_only_queries():
@@ -1408,8 +1393,7 @@ def test_active_ctrl_c_clears_draft():
 
 
 def test_ctrl_c_cancels_partial_editor_states():
-    child = Child([])
-    try:
+    with Child([]) as child:
         child.wait(DEFAULT_IDLE_PROMPT)
         escape_start = len(child.buf)
         child.send(b"escape-draft\x1b")
@@ -1428,8 +1412,6 @@ def test_ctrl_c_cancels_partial_editor_states():
         child.wait(DEFAULT_IDLE_PROMPT, start=paste_end)
         child.send(b"clean-after-cancel\r")
         child.wait(b"fixture answer", start=paste_end)
-    finally:
-        child.kill()
 
 
 def test_prompt_history_and_reverse_search():
@@ -1856,8 +1838,7 @@ def test_goal_refusal_failure_block_and_restart_state():
 
 def test_saved_goal_restored_without_lookup():
     before = session_ids()
-    child = Child([])
-    try:
+    with Child([]) as child:
         child.wait_idle_prompt()
         child.send(b"/goal slow goal\r")
         child.wait(b"working on goal")
@@ -1873,8 +1854,6 @@ def test_saved_goal_restored_without_lookup():
         locked = child.wait(b"Goal wording locked against model changes", start=changed)
         child.wait_idle_prompt(start=locked)
         child.exit_now()
-    finally:
-        child.kill()
     session_id = new_session(before)
     original = events(session_id)
     goal_id = one(original, "goal_started")["data"]["goal_id"]
@@ -1883,8 +1862,7 @@ def test_saved_goal_restored_without_lookup():
                       "[provider openai]\nbase_url = http://127.0.0.1:1/v1\n"
                       "api_key = fixture-only\n", encoding="utf-8")
     for selector in ([session_id], ["--last"]):
-        resumed = Child(["--config", str(config), "--resume", *selector])
-        try:
+        with Child(["--config", str(config), "--resume", *selector]) as resumed:
             status = resumed.wait(f"goal {goal_id[:8]}: paused · wording locked".encode())
             restored = resumed.wait(wording.encode(), start=status)
             assert b"revision: 2" in resumed.buf[status:restored]
@@ -1895,8 +1873,6 @@ def test_saved_goal_restored_without_lookup():
             resumed.send(b"ping\r")
             answer = resumed.wait(b"pong", start=restored)
             resumed.exit_cleanly(answer)
-        finally:
-            resumed.kill()
         current = events(session_id)
         assert [e for e in current if e["type"].startswith("goal_")] == [
             e for e in original if e["type"].startswith("goal_")]
@@ -1906,8 +1882,7 @@ def test_saved_goal_restored_without_lookup():
 def test_resume_preserves_inactive_and_queued_goal_states():
     for state in ("blocked", "completed", "cancelled"):
         before = session_ids()
-        child = Child([])
-        try:
+        with Child([]) as child:
             child.wait_idle_prompt()
             child.send(b"/goal blocked goal\r")
             answer = child.wait(b"goal done")
@@ -1918,26 +1893,20 @@ def test_resume_preserves_inactive_and_queued_goal_states():
                 cleared = child.wait(GOAL_CLEARED, start=start)
                 child.wait_idle_prompt(start=cleared)
             child.exit_now()
-        finally:
-            child.kill()
         session_id = new_session(before)
         original = events(session_id)
         goal_id = one(original, "goal_started")["data"]["goal_id"]
-        resumed = Child(["--resume", session_id])
-        try:
+        with Child(["--resume", session_id]) as resumed:
             restored = resumed.wait(f"goal {goal_id[:8]}: {state}".encode())
             if state == "blocked":
                 restored = resumed.wait(b"blocker: fixture dependency is unavailable", start=restored)
             resumed.wait_idle_prompt(start=restored)
             resumed.drain(0.1)
             resumed.exit_now()
-        finally:
-            resumed.kill()
         assert events(session_id) == original
 
     before = session_ids()
-    child = Child([])
-    try:
+    with Child([]) as child:
         child.wait_idle_prompt()
         child.send(b"/goal slow goal\r")
         child.wait(b"working on goal")
@@ -1947,11 +1916,8 @@ def test_resume_preserves_inactive_and_queued_goal_states():
         child.send(b"\x04")
         child.wait(RESUME_HEADER, timeout=4.0)
         command = child.finish()
-    finally:
-        child.kill()
     original = events(session_id)
-    resumed = Child.from_command(command)
-    try:
+    with Child.from_command(command) as resumed:
         restored = resumed.wait(b": active")
         paused_queue = resumed.wait(b"queued future turns are paused", start=restored)
         resumed.wait_idle_prompt(start=paused_queue)
@@ -1964,8 +1930,6 @@ def test_resume_preserves_inactive_and_queued_goal_states():
         answer = resumed.wait(b"pong", start=paused_queue)
         done = resumed.wait(b"goal done", start=answer)
         resumed.exit_cleanly(done)
-    finally:
-        resumed.kill()
     current = events(session_id)
     assert [e["data"]["input_kind"] for e in current if e["type"] == "turn_started"] == [
         "goal", "queued", "goal"]
@@ -2116,8 +2080,7 @@ def test_active_verbosity():
     for key in (b"\r", b"\t"):
         for initial, level in ((0, 3), (3, 0)):
             before = session_ids()
-            child = Child(["-v"] * initial)
-            try:
+            with Child(["-v"] * initial) as child:
                 child.wait_idle_prompt()
                 child.send(b"managed_command_queue\r")
                 child.wait("⠋".encode())
@@ -2139,14 +2102,11 @@ def test_active_verbosity():
                 assert not any(e["type"] in (
                     "steering_added", "future_turn_queued", "response_interrupted"
                 ) for e in log)
-            finally:
-                child.kill()
 
 
 def test_runtime_verbosity_resume():
     for level in (0, 1, 6):
-        child = Child(["-vvv"])
-        try:
+        with Child(["-vvv"]) as child:
             child.wait_idle_prompt()
             child.send(b"ping\r")
             answered = child.wait(b"pong")
@@ -2156,17 +2116,12 @@ def test_runtime_verbosity_resume():
             child.wait_idle_prompt(start=end)
             command = child.exit_now()
             assert shlex.split(command).count("-v") == level, command
-        finally:
-            child.kill()
-        resumed = Child.from_command(command)
-        try:
+        with Child.from_command(command) as resumed:
             resumed.wait_idle_prompt()
             resumed.send(b"/verbose\r")
             end = resumed.wait(f"verbosity: {level} (".encode())
             resumed.wait_idle_prompt(start=end)
             resumed.exit_now()
-        finally:
-            resumed.kill()
 
 
 def test_command_name_completion():
@@ -2416,8 +2371,7 @@ def test_provider_login_and_first_run():
     try:
         for cancel in (True, False):
             fresh = root / ("cancelled" if cancel else "first-run")
-            child = Child.from_command(shlex.join([BINARY, "--dotdir", str(fresh)]))
-            try:
+            with Child.from_command(shlex.join([BINARY, "--dotdir", str(fresh)])) as child:
                 child.wait(b"Provider: ")
                 child.send(b"openrouter\n")
                 child.wait(b"Local provider name [openrouter]: ")
@@ -2442,8 +2396,6 @@ def test_provider_login_and_first_run():
                     assert not list((fresh / "sessions").glob("*/events.jsonl"))
                     assert (fresh / "auth" / "openrouter.json").exists()
                     assert b"hidden-first-run-key" not in child.buf
-            finally:
-                child.kill()
     finally:
         if prior is None:
             os.environ.pop("SNAJPAGENT_TEST_LOGIN", None)
@@ -2516,8 +2468,7 @@ def test_provider_local_models(native=True):
     )
     config.write_text(text, encoding="utf-8")
     before = session_ids()
-    child = Child(["--config", str(config)])
-    try:
+    with Child(["--config", str(config)]) as child:
         child.wait(b"codex-lb/small/high")
         assert session_ids() == before
         child.send(b"/status\r")
@@ -2551,18 +2502,13 @@ def test_provider_local_models(native=True):
         prefix = (STATE_ROOT / sid / "events.jsonl").read_bytes()
         # A provider rename is recovered explicitly; old history stays byte-identical.
         config.write_text(config.read_text().replace("codex-lb", "renamed"))
-        resumed = Child(["--config", str(config), "--provider", "renamed", "--resume", sid])
-        try:
+        with Child(["--config", str(config), "--provider", "renamed", "--resume", sid]) as resumed:
             resumed.wait(b"renamed/large/high")
             resumed.exit_now()
             assert (STATE_ROOT / sid / "events.jsonl").read_bytes().startswith(prefix)
             changes = [e["data"] for e in events(sid) if e["type"] == "model_selection_changed"]
             assert changes[-1]["new_provider"] == "renamed"
             assert changes[-1]["new_model"] == "large"
-        finally:
-            resumed.kill()
-    finally:
-        child.kill()
 
 
 def test_model_cache_and_selection():
@@ -3506,8 +3452,7 @@ def test_runtime_network_commands():
         assert "--listen" not in arguments and "--client" not in arguments
         log = events(session_id)
         assert not [event for event in log if event["type"] == "steering_added"]
-        resumed = Child.from_command(command)
-        try:
+        with Child.from_command(command) as resumed:
             resumed.wait(b"session id " + session_id[:8].encode())
             resumed.wait(PROMPT.rstrip())
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -3515,8 +3460,6 @@ def test_runtime_network_commands():
             ready, _, _ = select.select([upstream], [], [], 0.1)
             assert not ready, "resume resurrected an outgoing config default"
             resumed.exit_now()
-        finally:
-            resumed.kill()
     finally:
         if peer is not None:
             peer.close()
@@ -4567,8 +4510,7 @@ def test_ctrl_d_exit():
     for prompt in (None, b"queue_slow", b"engine_blocked", b"/goal slow goal",
                    b"slow"):
         before = session_ids()
-        child = Child([])
-        try:
+        with Child([]) as child:
             child.wait_idle_prompt()
             if prompt:
                 child.send(prompt + b"\r")
@@ -4610,8 +4552,7 @@ def test_ctrl_d_exit():
             if prompt == b"/goal slow goal":
                 assert not [e for e in log if e["type"] == "goal_paused"]
             if prompt in (b"queue_slow", b"/goal slow goal"):
-                resumed = Child.from_command(command)
-                try:
+                with Child.from_command(command) as resumed:
                     if prompt == b"/goal slow goal":
                         active = resumed.wait(b": active")
                         done = resumed.wait(b"goal done", start=active)
@@ -4625,11 +4566,7 @@ def test_ctrl_d_exit():
                     resumed.exit_now()
                     log = events(command_arguments(command)[-1])
                     assert len([e for e in log if e["type"] == "turn_started"]) == 1
-                finally:
-                    resumed.kill()
             assert b"engine-block-end" not in child.buf
-        finally:
-            child.kill()
 
 
 def test_goal_orderly_quit_resume():
@@ -4639,8 +4576,7 @@ def test_goal_orderly_quit_resume():
         if mode == "host":
             args = ["-v", "--listen", f"localhost:{free_port()}", "--no-client",
                     "-n", "goalagent", "-o", "goalop", "-r", "lab"]
-        child = Child(args)
-        try:
+        with Child(args) as child:
             child.wait(chat_prompt("goalop") if mode == "host" else PROMPT.rstrip())
             if mode == "host":
                 child.send(b"/rollout\r")
@@ -4671,8 +4607,6 @@ def test_goal_orderly_quit_resume():
                 child.send(b"\x04")
             child.wait(RESUME_HEADER, timeout=4.0)
             command = child.finish(expected=expected)
-        finally:
-            child.kill()
         stopped = events(session_id)
         goal = one(stopped, "goal_started")["data"]
         assert one(stopped, "goal_lock_changed")["data"]["locked"]
@@ -4682,8 +4616,7 @@ def test_goal_orderly_quit_resume():
         else:
             assert not [e for e in stopped if e["type"] == "goal_paused"]
         one(stopped, "turn_interrupted")
-        resumed = Child.from_command(command)
-        try:
+        with Child.from_command(command) as resumed:
             if mode == "five-ctrl-c":
                 restored = resumed.wait(f"goal {goal['goal_id'][:8]}: paused · wording locked".encode())
                 resumed.wait_idle_prompt(start=restored)
@@ -4707,8 +4640,6 @@ def test_goal_orderly_quit_resume():
             else:
                 done = resumed.wait(b"goal done", start=restored)
                 resumed.exit_cleanly(done)
-        finally:
-            resumed.kill()
         restored_log = events(session_id)
         assert one(restored_log, "goal_started")["data"] == goal
         assert one(restored_log, "goal_completed")["data"]["goal_id"] == goal["goal_id"]
@@ -4737,8 +4668,7 @@ def test_five_ctrl_c_exit():
 
 def test_ctrl_c_sequence_reset():
     before = session_ids()
-    child = Child([])
-    try:
+    with Child([]) as child:
         child.wait_idle_prompt()
         child.send(b"\x03" * 4)
         child.drain(2.1)
@@ -4752,14 +4682,11 @@ def test_ctrl_c_sequence_reset():
         child.wait(b"\x1b[?2004l")
         child.finish(expect_resume=False)
         assert session_ids() == before
-    finally:
-        child.kill()
 
 
 def test_full_input_queue_keeps_exit_live():
     for gesture in (b"\x03" * 5, b"\x15\x04"):
-        child = Child([])
-        try:
+        with Child([]) as child:
             child.wait_idle_prompt()
             child.send(b"engine_blocked\r")
             child.wait(b"engine-block-start")
@@ -4769,14 +4696,11 @@ def test_full_input_queue_keeps_exit_live():
             child.send(gesture)
             child.wait(RESUME_HEADER, timeout=4.0)
             child.finish()
-        finally:
-            child.kill()
 
 
 def test_history_lock_keeps_editing_live():
     before = session_ids()
-    child = Child([])
-    try:
+    with Child([]) as child:
         child.wait_idle_prompt()
         with (Path(DOTDIR) / "prompt_history").open("r+") as history:
             fcntl.lockf(history, fcntl.LOCK_EX)
@@ -4795,15 +4719,12 @@ def test_history_lock_keeps_editing_live():
         child.send(b"/exit\r")
         child.finish(expect_resume=False)
         assert session_ids() == before
-    finally:
-        child.kill()
 
 
 def test_editor_during_render_flood():
     for mode in ("--markdown", "--no-markdown"):
         before = session_ids()
-        child = Child([mode])
-        try:
+        with Child([mode]) as child:
             child.wait_idle_prompt()
             child.send(b"render_flood\r")
             start = child.wait(b"row-0000")
@@ -4819,8 +4740,6 @@ def test_editor_during_render_flood():
             child.send(b"\x03")
             child.drain(0.1)
             child.exit_now()
-        finally:
-            child.kill()
         completed = one(events(new_session(before)), "response_completed")
         text = completed["data"]["items"][0]["text"]
         expected = "| row | text |\n| --- | --- |\n" + "".join(
