@@ -2710,7 +2710,7 @@ render_irc_event_now(struct snag_render *render,
         if (irc_piece(render,
                 event->kind == SNAG_IRC_NOTICE ? "- " : "› ", true) < 0)
             goto out;
-        if (colored && highlight && irc_piece(render, COLOR_RESET, false) < 0)
+        if (colored && irc_piece(render, COLOR_RESET, false) < 0)
             goto out;
         markdown_body = event->kind == SNAG_IRC_MESSAGE && render->markdown &&
                         render->stderr_terminal && !event->op;

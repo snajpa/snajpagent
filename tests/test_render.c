@@ -1530,9 +1530,8 @@ test_local_mention_highlight(void)
                     const char *body = strstr(output, nick);
                     assert(body);
                     body += strlen(nick);
-                    snprintf(boundary, sizeof(boundary), "%s%s%s",
-                             cases[i].highlight ? "" : "\033[0m", separator,
-                             cases[i].highlight ? "\033[0m" : "");
+                    snprintf(boundary, sizeof(boundary), "%s%s\033[0m",
+                             cases[i].highlight ? "" : "\033[0m", separator);
                     assert(strncmp(body, boundary, strlen(boundary)) == 0);
                     assert(!strstr(body, "35m"));
                     snprintf(nick, sizeof(nick), "\033[1;35m%s ", cases[i].sender);
