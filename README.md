@@ -3,248 +3,282 @@
 # snajpagent
 
 snajpagent is a fast, lightweight, networked coding agent for your terminal.
-Give a model a task in your project, let it inspect files and run tools, and
-steer it while it works. Native IRC connects people and agents in shared rooms;
-each session keeps its own workspace, tools, and local working view.
+Ask an AI model to work on a project: it can inspect files, make changes, and
+run commands. You can correct it while it works or line up the next task.
+Native IRC chat lets people and agents work together without sharing their
+entire local conversation.
 
-If you have used another agent harness, the basic loop will be familiar:
-prompt, model response, tool calls, results, and another response. snajpagent
-puts that loop in an ordinary scrolling terminal rather than a full-screen
-interface. You can correct the current work, queue a separate task, or set a
-goal that continues across turns. The foreground process owns the work; there
-is no background service to install or manage.
+Everything runs in a normal scrolling terminal. The conversation and work
+are saved as a session. There is no background service: when you exit
+snajpagent, its work stops, and you can resume that session later.
 
 [Website](https://agent.snajpa.net) · [Install](#install-and-choose-a-provider) ·
-[User manual](https://agent.snajpa.net/manual.html) · [Manual source](snajpagent.1)
+[User manual](https://agent.snajpa.net/manual.html)
 
 ## 1. Work in rollout
 
-Start in the project you want the model to work on:
+After [installing and choosing a provider](#install-and-choose-a-provider),
+start in the project you want to change. This directory is your **workspace**.
 
 ```sh
 cd /path/to/your/project
 snajpagent
 ```
 
-Describe the result and any constraints, then press Enter. For example:
+Describe a task and press Enter. For example:
 “Fix the empty-input bug, keep the public API unchanged, and run the tests.”
-A **turn** is that prompt and the model/tool work it starts. It may take several
-provider responses and tool calls before the model reaches a final answer.
-A **session** retains those turns, settings, tool results, queued prompts, and
-goals so you can resume later.
 
-**Rollout** is the local view of this work. At the default verbosity it shows
-model text. `/verbose 1` adds compact tool activity; `/verbose 2` adds argument
-and result previews. `/verbose 3` shows retained tool detail within the existing
-capture limits. You can change verbosity during work without interrupting it.
+The model can read files, edit them, and run commands to carry out your request.
+That prompt and the work it starts make up a **turn**. One turn may involve
+several exchanges with the model before it gives a final answer.
+
+**Rollout** is the local view of that conversation and work. It opens first
+when no networking is configured.
+
+Text beginning with `/` is a command to snajpagent, not a request to the model.
+Type these commands and press Enter unless another key is specified.
+`/help` lists commands and keys; `/status` shows the current state.
+
+By default you see model text. `/verbose 1` adds compact tool activity;
+`/verbose 2` adds previews of tool inputs and results. You can change this
+while the model works.
 
 [![A real rollout fixing whitespace handling and passing four checks](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 
-This is a real coding run: the model changed whitespace handling and ran four
-checks. The prompt identifies the provider, model, effort, and context usage.
-`›` means idle; `»` means active. A pending queue adds `(N)` before the marker.
-The activity indicator distinguishes provider work from running tools, while
-the goal indicator independently shows automatic continuation.
+In this real run, the model changed whitespace handling and ran four checks.
+The input prompt shows the selected model and context percentage.
+`›` means **idle**, waiting for a task; `»` means **active**, working on a turn.
 
-### Steer now, queue for later
+### Correct the current task or add the next one
 
-You do not have to wait for a final answer to type. Typing opens a draft;
-it does not send anything by itself.
+You can type while work is active. Your unsent text is a **draft**; typing alone
+does not interrupt the model.
 
-- **Enter while idle** starts a turn.
-- **Enter during rollout work** steers the current turn. “Use the existing
-  parser; don't add a dependency” interrupts the provider response and resumes
-  from its delivered text with your correction. An already-running command
-  stays alive and is handed back to the model, not silently restarted or killed.
-- **Tab during work, with ordinary text**, queues a separate turn. “Then add
-  regression coverage” waits outside the current model cycle. It does not
-  interrupt the current response. Completion takes precedence, as described below.
+**Press Enter to steer the current turn.** For example, “Use the existing
+parser; don't add a dependency” changes what the model is doing now.
+In rollout, this interrupts the model's response and continues from the text
+already delivered. A command that has started keeps running; steering does
+not kill or restart it.
 
-The queue is first-in, first-out. After current work finishes, queued prompts
-run sequentially in the same session—not as parallel agents. `(N)` counts
-pending prompts and excludes the running one. You can inspect and edit them:
+**Press Tab at the end of an ordinary message to queue a later turn.**
+“Then add regression coverage” waits until current work finishes. The model
+does not receive that queued prompt as a change to its current task.
+
+This queue runs oldest first, one turn at a time in the same session.
+It is not a set of parallel agents. The prompt shows `(N)` for the number
+of waiting turns, excluding the one currently running.
+
+### Completion is for `/commands`, not ordinary words
+
+Start a draft with `/` to complete a command name. Type `/sta`, then press
+Tab: it becomes `/status `, with a space after it. Press **Enter** to run it.
+The same completion works for numbered room commands such as `/2`, explained below.
+
+Tab is only completing the command name while the cursor is in that first
+`/word`. It does not try to complete ordinary sentences. In chat, it also
+completes nickname words beginning with `@`; see the example in chapter two.
+
+A unique completion adds a space and leaves you ready to keep typing.
+If several names match, Tab extends their common beginning; a second Tab lists
+the choices. If none match, the text stays unchanged—it is not queued instead.
+
+For ordinary text outside a completion, Tab queues while your model is active
+and inserts spaces while idle. **With an empty draft, Tab switches views.**
+Completion itself never sends a message or queues a turn.
+
+### Inspect and edit the queue
+
+Use `/queue` to see the waiting prompts. These commands change the queue,
+not the task already running:
 
 ```text
-/queue                 list pending turns
-/queue 2 edit          revise item 2 in the composer
+/queue 2 edit          revise item 2
 /queue 2 delete        remove item 2
 /queue pop             remove the newest item
-/queue clear           remove all pending items
+/queue clear           remove all waiting items
 ```
 
-Editing preserves the item's place and holds automatic draining while the
-editor is open. Enter saves the replacement; Ctrl-C abandons the edit.
-Clearing the queue does not cancel the current turn.
+The queue editor opens the chosen prompt for editing in the input line.
+Enter saves your replacement in the same position; Ctrl-C abandons the edit.
+Waiting work does not start while the editor is open.
 
-An interrupted or failed turn can leave the queue paused. Retained prompts
-also wait after session resume. Inspect the list, then use `/next` while idle
-to restart FIFO execution. It starts with the oldest item and allows the rest
-to drain; it is not a “run exactly one item” command.
+After interruption or failure, the queue can be paused. Queued prompts also
+wait after session resume. Use `/next` while idle to restart the queue,
+beginning with the oldest prompt and then continuing through the rest.
 
-### What Tab does
+### Edit a draft and stop work
 
-In an ordinary composer, Tab has this order:
+- **Ctrl-J:** insert a newline. Pasting multiple lines also keeps them in the
+  draft rather than sending each line.
+- **Up/Down:** recall prompts. **Ctrl-R:** search prompt history.
+- **Ctrl-C with text in the draft:** clear it without stopping the model.
+- **Ctrl-C with an empty draft:** interrupt the current turn.
+- **Ctrl-D with an empty draft:** exit snajpagent.
 
-1. **Empty draft:** switch between chat and rollout, including during work or
-   while disconnected. Switching does not submit input or stop the model.
-2. **Completable text:** complete slash commands or numeric destinations;
-   in chat, also complete `@nick`. Ambiguous matches expand their common prefix;
-   another Tab lists choices. Completion never sends or queues text.
-3. **Other text:** queue a later turn while active, or insert spaces while idle.
+After a failed turn, `/retry` continues from the conversation and tool results
+already saved. It does not repeat completed tools or restart a paused queue.
 
-Ctrl-J inserts a newline. Pasted newlines stay in the draft rather than being
-submitted. Up/Down recall prompts and Ctrl-R searches their shared history.
-Ctrl-C clears a nonempty draft without stopping work; with an empty draft it
-interrupts the turn. Ctrl-D on an empty draft exits the foreground process.
-`/help` lists the controls, and the manual gives the full editing reference.
+### Keep working toward a goal
 
-### Goals, stopping, and resuming
-
-An ordinary completed turn returns control to you. A **goal** explicitly asks
-snajpagent to keep working across turns until complete or genuinely blocked:
+Normally, a final answer ends the turn and returns control to you. A **goal**
+asks snajpagent to keep taking turns toward a result:
 
 ```text
 /goal fix the reconnect bug, add tests, and validate the change
-/goal status
-/goal pause
-/goal resume
 ```
 
-`/goal pause` pauses continuation at a turn boundary. Queued operator turns
-run before the next automatic goal turn. A wording lock (`/goal lock`) prevents
-the model from changing the objective; the operator can still reword it.
-`/goal complete` and `/goal cancel` end it explicitly.
+It continues until complete, paused, cancelled, or blocked. Waiting operator
+prompts run before the next automatic goal turn. `/goal status` shows progress
+and any blocker. `/goal pause` stops automatic continuation at a turn boundary;
+`/goal resume` starts it again.
 
-**Exiting is not the same as pausing a goal.** No work runs after the process
-exits, but its active goal remains active in saved state. It continues when you
-resume. Use `/goal pause` first if you want it to stay paused. Turn-only
-interruption, refusal, and failure pause automatic goal work.
+Pausing a goal does not kill a command already running. To end the goal
+explicitly, use `/goal complete` or `/goal cancel`. Other goal controls,
+including locking its wording against model changes, are in the manual.
 
-Normal exit prints the exact resume command. You can also use:
+### Leave and come back
+
+A **session** is the saved conversation, settings, tool results, queue, and goal.
+Normal exit prints a command to reopen that exact session. You can also list
+sessions or reopen the newest for the current workspace:
 
 ```sh
 snajpagent -l
 snajpagent --resume --last
 ```
 
-Resume restores the saved goal state and wording: active goals continue;
-paused, blocked, and finished goals remain so. Retained queued prompts wait
-for `/next` and cannot be bypassed by automatic goal continuation. `/history`
-shows the latest retained exchange. `/archive` hides an idle session from the
-normal active listing without deleting its history.
+**Exit is not goal pause.** No work runs after exit, but a saved active goal
+continues when you resume. Use `/goal pause` first if you want it to stay paused.
+Paused, blocked, and finished goals retain their saved states.
 
-After a failed turn, `/retry` continues from retained conversation and tool
-results without replaying completed tools or duplicating the original prompt.
-It does not resume a paused queue. Resuming a session restores context, not
-operating-system processes that ended when the old foreground process exited.
+Queued prompts still wait for `/next` after resume, ahead of automatic goal
+work. Resume restores saved context, not command processes that ended with
+the previous program. `/history` shows the latest retained exchange;
+`/archive` archives an idle session without deleting its history.
 
-On Windows, the printed command targets a normal `cmd.exe` prompt with delayed
-expansion off (the default), as its header states. Paste it there, not into
-PowerShell or a batch file. The command uses a scoped child interpreter to keep
-literal `%`, `!`, quotes and other path characters intact without changing your
+On Windows, paste the printed resume command into a normal `cmd.exe` prompt
+with delayed expansion off, as its header specifies—not PowerShell or a batch
+file. The command preserves literal argument characters without changing your
 shell's environment.
-
-### Models, context, and read-only work
-
-`/status` explains the current state, model selection, queue, context budget,
-and token accounting. `/model` lists the local catalog without a network request;
-`/model cache` explicitly refreshes it. Select a listed row by number or use
-`/model PROVIDER/MODEL/EFFORT`. A typed model need not appear in the cache;
-the provider decides whether it is available. Add `save` to persist a selection.
-
-The context percentage is a comparable request-token bound divided by the
-resolved input budget, rounded up. It is not a running bill or necessarily an
-exact tokenizer measurement. `?%` means the budget is unknown; inspect the
-catalog and model-limit rules rather than assuming a model's capacity.
-Output reservations and provider safety policy can reduce usable input below
-the total context window. The manual explains explicit limits and counting policy.
-
-Automatic compaction normally follows the effective budget. `/compact` compacts
-an idle session explicitly, retaining a summary for continuation while the
-original durable transcript remains on disk. Compaction does not promise that
-every detail stays in active model context; keep important requirements and
-established findings in project documents the model can read again.
-
-For inspection without command execution or patches, use `/ro QUERY`. That
-turn has native listing, reading, searching, and provider-hosted web search,
-not the normal command, goal, or IRC tools. During active work, queue it with
-`/queue /ro QUERY`. This is a tool restriction, not a confidentiality sandbox:
-readable local files remain accessible, and normal session history is recorded.
 
 ## 2. Work together over the network
 
-Networking is part of the same program, not a separate coordinator. snajpagent
-can host a single-room IRC server and connect to other instances. Each session
-has an operator nick and a model nick. People and agents share conversation;
-they do not automatically share files, credentials, or command processes.
-Use separate worktrees when multiple agents should edit independently.
+IRC is a chat protocol built into snajpagent. One instance can host a room;
+others connect to it. Each session has two chat names, or **nicks**: one for
+the operator (you) and one for its model.
 
-Run these in separate terminals, from the projects each model should work in:
+Run these in separate terminals, from the workspace each model should use:
 
 ```sh
 snajpagent -s -n builder -o alice -r work
 snajpagent -c -n reviewer -o bob
 ```
 
-The first hosts `#work` at `localhost:6667`; the second joins automatically.
-`-n` names the model and `-o` its operator. `/names` shows actual accepted
-nicks and room membership. If a preferred nick is occupied, the client chooses
-a suffixed nick; address the accepted one rather than assuming registration
-kept the preference.
+The first command hosts `#work` at `localhost:6667`. The second connects to
+that room on the same machine. `-n` names the model, `-o` names its operator,
+and `-r` names the hosted room.
 
-### Shared chat, local rollout
+This shares conversation, not files, credentials, or command processes.
+For independent edits to the same repository, use separate Git worktrees—
+working directories with their own checked-out files.
 
-Networked startup opens **chat**. Enter sends publicly to the selected room
-as your operator identity. For example, `@builder check the empty-input case`
-asks that model to work. A later mention steers active work at a safe
-response/tool boundary, without truncating generation as local rollout Enter
-does. Unaddressed conversation remains background context, not a command that
-starts a new turn.
+### Send a room message or speak to your own model
 
-Models explicitly publish through `irc_send`; ordinary model responses and
-tool activity remain in local rollout unless the model chooses to share them.
-A chat reply is therefore not a broadcast of the whole working transcript.
-Do not treat this separation as automatic secrecy: any shared content still
-needs to be appropriate for the room.
+Networked startup opens **chat**, the shared room conversation. Enter sends
+as your operator nick. For example, `@builder check the empty-input case`
+asks builder to work. A mention during its work steers it at a safe boundary.
+Unlike rollout Enter, it does not cut off the current model response.
 
-Empty **Tab** switches to rollout to inspect your model, then back to chat.
-`/chat` and `/rollout` select a view directly. Work and connections continue;
-returning displays buffered output. With text during work, non-completing Tab
-still queues a **local future turn**, even in chat. Enter sends a room message.
-Offline chat refuses an unsendable draft instead of silently treating it as a
-private prompt.
+Ordinary room conversation is background context; it does not start a new
+turn by itself. A model uses the `irc_send` tool to publish a chosen reply.
+Its other responses and tool activity stay in its local rollout.
+
+**Press Tab on an empty draft to switch between chat and rollout.**
+`/chat` and `/rollout` select a view directly. Work continues while you switch;
+returning displays output that arrived while the view was hidden.
+
+In rollout, ordinary Enter input goes to your own model, not the room.
+In chat, Enter sends to the room; if disconnected, the draft is kept rather
+than silently used as a private prompt.
+
+### Complete a nickname, then finish the message
+
+In chat, type `@bu` and press **Tab**. If `builder` is the unique match,
+this becomes `@builder `, including the space. Continue writing:
+
+```text
+@builder check the empty-input case
+```
+
+Now choose how to submit the finished text:
+
+- **Enter:** send it to the room.
+- **Tab at the end, while your local model is active:** queue it as a local
+  follow-up for that model. It is not sent to the room.
+
+`@` starts the nickname word, not necessarily the whole message:
+`please ask @bu` also completes. Bare `bu` does not.
+If the cursor is still at the end of `@bu` or `@builder`, Tab completes that
+name first. Once past the added space and at the end of your finished message,
+Tab can queue it. While idle, that Tab inserts spaces instead.
 
 [![Operators and models discuss a regression test in a real IRC room](www/screenshots/irc.png)](www/screenshots/irc.png)
 
-Colors indicate roles, not individuals: operator nicks are cyan and model
-nicks blue across host/client views. Mentions of your accepted operator/model
-nick highlight the timestamp, sender nick and `›` in magenta. Message bodies
-and rendered Markdown keep their normal appearance. A sender mentioning only
-its own nick does not trigger highlighting. Exact hues depend on the terminal
-palette; names and markers remain meaningful without color.
+Operator nicks are cyan and model nicks blue. Mentions of your operator or
+model highlight the timestamp, sender, and `›` in magenta, leaving the body
+unchanged. A sender mentioning only its own nick does not trigger highlighting.
+Exact colors depend on the terminal palette.
 
-Reconnect catches up only on missing room events, using durable IDs and cursors.
-Already-received conversation is not shown or added as new model input again.
-New clients get bounded initial history; gaps beyond server retention are reported.
+### Add connections and choose a room
 
-### Connections and destinations
+`/names` lists rooms and their members. It also shows the actual nicknames:
+a name already in use gets a suffix, so address the accepted name.
 
-Use `/server start` or `/connect ENDPOINT` in an existing session, even during
-a turn. `/server stop` stops hosting only; `/disconnect` removes outgoing
-connections without stopping a hosted room. These controls preserve the view
-and session. The runtime handles joins, history, liveness, and reconnects.
-A requested connection is not necessarily a completed join; check `/status`.
+You can change connections without restarting the session. `/server start`
+hosts a room; `/connect ENDPOINT` adds a connection. An endpoint is an address
+such as `localhost:6667`. `/server stop` stops hosting only, while `/disconnect`
+removes outgoing connections. `/status` distinguishes a requested connection
+from one that has joined successfully.
 
-Multiple destinations have numbers shown by `/names`. `/2` selects one,
-`/2 TEXT` sends there once without changing selection, and `/all TEXT` broadcasts
-once. These explicit sends also work from rollout. Model sends use their own
-explicit destination rather than following the operator's UI selection.
-A host has one destination regardless of how many clients join its room.
+When there are several rooms, `/names` gives each a number. `/2` selects one
+for ordinary chat input. `/2 TEXT` sends there once without changing your
+selection; `/all TEXT` broadcasts once. These explicit sends also work in
+rollout. The model chooses its own send destination rather than following
+your current selection.
 
-IRC has **no authentication or TLS**. Use localhost, a trusted network, or a
-secure tunnel; do not expose the listener as an unauthenticated public service.
-Tools run with your local permissions, without a command-approval sandbox.
-Protect credentials, configuration, session logs, and prompt history.
+The program handles reconnects and retrieves missing room events without
+repeating already-received conversation. New clients get bounded initial
+history; gaps beyond the server's retained history are reported.
+
+**IRC has no authentication or TLS.** Use localhost, a trusted network, or a
+secure tunnel. Local rollout is not a secrecy guarantee: the model can choose
+to share its contents. Tools run with your permissions, without command-approval
+sandboxing. Protect credentials, session logs, and prompt history.
+
+## Choose a model and manage context
+
+A **provider** is the service that runs your chosen model. `/model` lists its
+locally cached catalog without a network request. `/model cache` explicitly
+refreshes catalogs. Select a displayed row by number, or use
+`/model PROVIDER/MODEL/EFFORT` while idle. Effort is the model's reasoning-effort
+setting. Add `save` to persist a selection.
+
+**Context** is the information sent to the model for its next response. It has
+a size limit. The prompt's percentage compares a request-token bound with the
+usable input budget; it is not a bill or necessarily an exact token count.
+`?%` means capacity is unknown. `/status` explains the current accounting,
+and the manual covers capacity rules and output reservations.
+
+**Compaction** replaces older active context with a summary so work can
+continue. It normally happens automatically as context fills. `/compact`
+requests it while idle. The original transcript stays on disk, but not every
+detail survives in the summary. Keep important requirements in project documents.
+
+For inspection without commands or edits, use `/ro QUERY`. This turn can list,
+read, and search files and use provider-hosted web search. It cannot run commands,
+patch files, change goals, or send IRC messages. During active work, use
+`/queue /ro QUERY` to ask it next. Read-only limits tool actions, not confidentiality:
+readable local files remain accessible, and normal session history is recorded.
 
 ## Install and choose a provider
 
@@ -262,35 +296,33 @@ make
 sudo make install
 ```
 
-Installation adds the binary and manual under `/usr/local`. Production also
-needs `strip` and `objcopy` on Linux, or `strip` and `dsymutil` on macOS.
-`make DEBUG=1` builds for debugging; `make help` lists overrides and standalone
-targets. See [dependency notes](DEPENDENCIES.md) for platform scope.
+The binary and manual install under `/usr/local`. Production also needs `strip`
+and `objcopy` on Linux, or `strip` and `dsymutil` on macOS. `make DEBUG=1` builds
+for debugging; `make help` lists build options. See [dependency notes](DEPENDENCIES.md)
+for platform scope.
 
 `make -jN prod-matrix` builds all implemented standalone targets into
 `build/matrix/`, without installation or VMs. Legacy and other planned ports
 remain unfinished; successful cross-builds are not runtime qualification.
 
-The experimental Windows x64 package is built explicitly with
-`make prod-windows-x86_64` using pinned Nix dependencies. Copy
-`build/matrix/windows-x86_64/bin/snajpagent.exe` to Windows: application
-libraries and CA roots are included, with no third-party runtime DLLs.
-It is qualified incrementally on Windows 11; legacy Windows remains in progress.
-Plain `make` still builds only the host platform.
+For experimental Windows x64, `make prod-windows-x86_64` builds using pinned
+Nix dependencies. Copy `build/matrix/windows-x86_64/bin/snajpagent.exe` to Windows;
+application libraries and CA roots are included without third-party runtime DLLs.
+Qualification is incremental on Windows 11; legacy Windows remains in progress.
+Plain `make` builds only the host platform.
 
 Without configuration or existing credentials, the first interactive launch
-offers setup for ChatGPT/Codex, OpenRouter, OpenAI, or a custom Responses-compatible
-provider. Authenticate and select a supported model. Device login, stored keys,
-and explicit environment/file credentials have distinct behavior; the manual
-covers them. `snajpagent login status` inspects configured credential sources
-without contacting a provider. `logout` removes a selected stored login only.
+offers ChatGPT/Codex, OpenRouter, OpenAI, or custom-provider setup. Authenticate
+and choose a supported model. `snajpagent login status` reports local credential
+sources without contacting a provider. The manual explains login methods and logout.
 
-Private configuration and credentials live under `$HOME/.snajpagent` by default.
-For manual configuration, create the directory privately and save `config.ini`:
+For manual configuration, create a private directory:
 
 ```sh
 install -d -m 700 "$HOME/.snajpagent"
 ```
+
+Save this as `$HOME/.snajpagent/config.ini`, choosing a supported model:
 
 ```ini
 [agent]
@@ -302,27 +334,24 @@ base_url = https://api.openai.com
 api_key = ${OPENAI_API_KEY}
 ```
 
-Export the named credential and choose a model supported by that provider.
-Provider names are local labels, not a hardcoded list. `/config` opens the file
-in `$EDITOR` and reloads valid changes; invalid edits remain on disk while the
-previous valid runtime configuration stays active. The manual covers named
-providers, aliases, model limits, secret files, and precedence.
+Export `OPENAI_API_KEY` in your shell before launch. Provider names are local
+labels. `/config` opens the active file in `$EDITOR` and reloads valid changes.
+If an edit is invalid, the previous runtime configuration stays active, but
+fix the file before restarting.
 
 ## Project guidance and scripts
 
-snajpagent advertises applicable `AGENTS.md` paths; the model reads relevant
-files and follows their pointers. Point those files at your existing project
-notes rather than creating a second permission system. Good notes preserve
-findings, decisions, corrections, and remaining work. A later session should
-read them and verify current facts, not treat a recorded proposal as approval.
+Put project instructions in `AGENTS.md`, with pointers to relevant documents.
+snajpagent tells the model where those files are; it reads the guidance it
+needs. Notes can preserve findings and decisions between sessions, but a
+recorded proposal is not permission to act.
 
-`-d DIR` adds a local documentation root with `AGENTS.md` or
-`AGENTS.override.md`; repeat it for several roots. Relative paths use the launch
-directory, independently of `-C`. These roots belong to the invocation and are
-included in the printed resume command. Small or read-only tasks need not create
-documentation chores.
+`-d DIR` adds a documentation root containing `AGENTS.md` or `AGENTS.override.md`.
+Repeat it for several roots. Relative paths use the launch directory, even
+with `-C`; the printed resume command retains them. Small tasks need not
+create documentation chores.
 
-For scripts, one-shot mode accepts a prompt after `--` or from stdin:
+One-shot mode runs a prompt without an interactive conversation:
 
 ```sh
 snajpagent -e -- "run the tests and summarize failures"
@@ -330,13 +359,11 @@ printf '%s\n' 'review the current diff' | snajpagent -e
 ```
 
 Model text goes to stdout; diagnostics and the resume hint go to stderr.
-Redirected output has no terminal color or Markdown presentation. Use exit
-status for failure handling; do not treat the internal pre-1.0 event-log format
-as a stable integration API.
+Redirected output has no terminal styling. Use exit status for failure handling;
+the internal pre-1.0 event-log format is not a stable integration API.
 
-Read the [user manual](https://agent.snajpa.net/manual.html), `man snajpagent`,
-or its [source](snajpagent.1) for the complete interface and troubleshooting.
-The hosted manual is formatted from that same source on deployment; public
-behavior changes must update it in the same change, as specified in
-[AGENTS.md](AGENTS.md). [Design notes](design/architecture.md) cover implementation.
+The [user manual](https://agent.snajpa.net/manual.html) and `man snajpagent`
+cover the full reference and troubleshooting. Both come from [one source](snajpagent.1);
+[project instructions](AGENTS.md) require updates alongside behavior changes.
+[Design notes](design/architecture.md) cover implementation.
 Licensed [GPL-2.0-only](COPYING); see [LICENSE_SCOPE](LICENSE_SCOPE).
