@@ -66,6 +66,10 @@ in windows.stdenv.mkDerivation {
     bash ${gnulib}/gnulib-tool --import --lgpl=2 --no-vc-files \
       --lib=libsnagregex --source-base=lib --m4-base=m4 regex
     cp ${charset} lib/localcharset.c
+    substituteInPlace lib/regcomp.c \
+      --replace-fail 'codeset_name = nl_langinfo (CODESET);' 'codeset_name = "UTF-8";'
+    substituteInPlace lib/c32is-impl.h \
+      --replace-fail 'if (wc == WEOF || wc == (wchar_t) wc)' 'if (wc == WEOF)'
     autoreconf -fiv
   '';
   configureFlags = [ "--disable-nls" "--disable-dependency-tracking"
@@ -80,5 +84,5 @@ in windows.stdenv.mkDerivation {
     cp ${gnulib}/doc/COPYING.LESSERv2 "$out/share/licenses/snajpagent-regex/"
     runHook postInstall
   '';
-  meta.license = pkgs.lib.licenses.lgpl21Plus;
+  meta.license = with pkgs.lib.licenses; [ lgpl21Plus gpl2Only ];
 }

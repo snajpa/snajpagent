@@ -168,9 +168,9 @@ tests/test_render: src/base.c src/platform.c src/json.c src/history.c src/term.c
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ src/base.c src/platform.c src/json.c src/history.c src/term.c src/render.c src/render_prepare.c tests/test_render.c $(LDLIBS)
 
-tests/test_turn: src/base.c src/platform.c src/json.c src/turn.c tests/test_turn.c src/base.h src/fs.h src/json.h src/turn.h
+tests/test_turn: src/base.c src/platform.c src/json.c src/turn.c src/tools_read.c tests/test_turn.c $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
-		-o $@ src/base.c src/platform.c src/json.c src/turn.c tests/test_turn.c $(LDLIBS)
+		-o $@ src/base.c src/platform.c src/json.c src/turn.c src/tools_read.c tests/test_turn.c $(LDLIBS)
 
 
 tests/test_tools: src/base.c src/platform.c src/json.c src/wire.c src/credential.c src/secret.c src/config.c src/secret_source.c src/turn.c src/tools.c src/tools_read.c src/tools_patch.c tests/test_tools.c $(HEADERS)

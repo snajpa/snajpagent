@@ -1,10 +1,84 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "turn.h"
+#include "tools.h"
+#include "fs.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <locale.h>
+#include <unistd.h>
+
+static int
+cancel_read(void *opaque, unsigned int timeout)
+{
+    (void)opaque;
+    (void)timeout;
+    return 2;
+}
+
+static void
+check_native_read(const char *workspace, const char *name, const char *arguments,
+                  bool success, const char *expected, snag_tool_pump_fn pump)
+{
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = (char *)name};
+    json_t *result = NULL;
+    char error[128];
+
+    call.arguments = snag_json_load_strict((const unsigned char *)arguments,
+                                          strlen(arguments), 8192u, error, sizeof(error));
+    assert(call.arguments);
+    assert(snag_tools_read_only(&call, workspace, pump, NULL, &result) == (pump ? 2 : 0));
+    assert(snag_tool_result_valid(result) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), success ? "succeeded" : "failed"));
+    if (!strstr(snag_json_string(result, "model_text"), expected)) {
+        (void)fprintf(stderr, "%s unexpected output: %s\n", name, snag_json_string(result, "model_text"));
+        abort();
+    }
+    json_decref(result);
+    json_decref(call.arguments);
+}
+
+static void
+test_native_read_results(void)
+{
+    char id[SNAG_ID_HEX_LEN + 1u];
+#ifdef _WIN32
+    const char *scratch = getenv("TMP");
+    assert(setlocale(LC_CTYPE, "C"));
+#else
+    const char *scratch = getenv("TMPDIR");
+    assert(setlocale(LC_CTYPE, ""));
+#endif
+    if (!scratch)
+        scratch = ".";
+    assert(snag_random_id(id) == 0);
+    char *path = snag_path_join(scratch, id);
+    assert(path && snag_mkdir_private(path) == 0);
+    char *root = snag_realpath(path);
+    free(path);
+    int dir = snag_open_read(root, true);
+    int file = snag_create_private_at(dir, "text", true);
+    const char text[] = "Alpha\n\xce\xb2" "eta\n\xf0\x9f\x98\x80\n";
+    assert(root && dir >= 0 && file >= 0);
+    assert(snag_write_full(file, text, sizeof(text) - 1u) == 0 && close(file) == 0);
+    check_native_read(root, "read_file", "{\"path\":\"text\",\"start_line\":null,\"end_line\":null}",
+        true, "1:Alpha\n2:\xce\xb2" "eta\n3:\xf0\x9f\x98\x80\n", NULL);
+    check_native_read(root, "read_file", "{\"path\":\"text\",\"start_line\":2,\"end_line\":2}",
+        true, "2:\xce\xb2" "eta\n", NULL);
+    check_native_read(root, "list_files", "{\"path\":\".\",\"recursive\":true,\"offset\":null,\"limit\":null}",
+        true, "./text\tfile", NULL);
+    check_native_read(root, "grep", "{\"path\":\".\",\"pattern\":\"^.$\",\"recursive\":true,\"ignore_case\":false,\"literal\":false,\"offset\":null,\"limit\":null}",
+        true, "./text:3:\xf0\x9f\x98\x80", NULL);
+    check_native_read(root, "grep", "{\"path\":\"text\",\"pattern\":\"[\",\"recursive\":false,\"ignore_case\":false,\"literal\":false,\"offset\":null,\"limit\":null}",
+        false, "", NULL);
+    check_native_read(root, "read_file", "{\"path\":\"text\",\"start_line\":null,\"end_line\":null}",
+        false, "interrupted", cancel_read);
+    assert(snag_unlink_at(dir, "text", false) == 0 && close(dir) == 0);
+    assert(snag_unlink_at(-1, root, true) == 0);
+    free(root);
+}
 
 static json_t *
 args(void)
@@ -225,6 +299,7 @@ main(void)
         assert(snag_response_usage_valid(&usage) < 0);
     }
 
+    test_native_read_results();
     puts("test_turn: ok");
     return 0;
 }
