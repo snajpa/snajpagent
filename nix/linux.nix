@@ -53,7 +53,7 @@ in {
       runHook preInstall
       mkdir -p "$out/bin" "$debug"
       cp ${packageName} "$out/bin/"
-      cp ${packageName}.debug "$debug/"
+      cp debug-${packageName} "$debug/"
       ln -s "$debug" "$out/bin/.debug"
       runHook postInstall
     '';

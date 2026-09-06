@@ -25,7 +25,7 @@ TARGET_OS := $(shell uname -s)
 ifeq ($(TARGET_OS),Darwin)
 DEBUG_SYMBOLS = $(BIN).dSYM
 else
-DEBUG_SYMBOLS = $(BIN).debug
+DEBUG_SYMBOLS = debug-$(BIN)
 endif
 EVIDENCE_DIR ?= build/release-evidence/current-host
 RELEASE_PLATFORMS ?= linux-x86_64 linux-aarch64 macos-x86_64 macos-arm64
@@ -57,6 +57,7 @@ $(BIN): $(COMMON_OBJ) src/main.o
 			$(STRIP) -S -x "$$stage/$(BIN)"; \
 		else \
 			$(OBJCOPY) --only-keep-debug "$$stage/$(BIN)" "$$stage/$(DEBUG_SYMBOLS)"; \
+			chmod 0644 "$$stage/$(DEBUG_SYMBOLS)"; \
 			$(STRIP) --strip-all "$$stage/$(BIN)"; \
 			$(OBJCOPY) --add-gnu-debuglink="$$stage/$(DEBUG_SYMBOLS)" "$$stage/$(BIN)"; \
 		fi; \
@@ -95,7 +96,7 @@ $(BUILD_INPUTS): FORCE
 		fi; \
 	else \
 		rm -f $(BIN) $(COMMON_OBJ) src/main.o $(TEST_BIN); \
-		rm -rf tests/.fixture-obj $(BIN).debug $(BIN).dSYM; \
+		rm -rf tests/.fixture-obj debug-$(BIN) $(BIN).debug $(BIN).dSYM; \
 		mv -f "$$tmp" '$@'; \
 	fi
 
@@ -332,7 +333,7 @@ sizecheck:
 
 clean:
 	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN)
-	rm -rf tests/.fixture-obj build $(BIN).debug $(BIN).dSYM
+	rm -rf tests/.fixture-obj build debug-$(BIN) $(BIN).debug $(BIN).dSYM
 
 help:
 	@printf '%s\n' \

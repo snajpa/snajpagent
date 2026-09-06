@@ -1,6 +1,7 @@
 # Build outputs
 /snajpagent
 /snajpagent.debug
+/debug-snajpagent
 /snajpagent.dSYM/
 /src/*.d
 /src/*.o
