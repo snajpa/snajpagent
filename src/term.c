@@ -5,7 +5,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -177,14 +176,22 @@ snag_term_text_width(const char *value, size_t len)
     return width;
 }
 
+static int
+output_checkpoint(void *opaque)
+{
+    struct snag_term *term = opaque;
+    term->input_only = true;
+    int rc = term->input_checkpoint(term->input_opaque);
+    term->input_only = false;
+    return rc;
+}
+
 int
 snag_term_write(int fd, const void *text, size_t len)
 {
-    const unsigned char *bytes = text;
     struct snag_term *term = output_owner;
     int target = term && fd >= STDOUT_FILENO && fd <= STDERR_FILENO ?
                  term->output_fd[fd - STDOUT_FILENO] : -1;
-    struct pollfd pfd[2] = {{target >= 0 ? target : fd, POLLOUT, 0}, {-1, POLLIN, 0}};
 
     /* Input-only checkpoints capture intent, never recursively paint output. */
     if (term && term->input_only)
@@ -194,38 +201,9 @@ snag_term_write(int fd, const void *text, size_t len)
         errno = EBADF;
         return -1;
     }
-    while (len) {
-        size_t amount = len < 1024u ? len : 1024u;
-        pfd[1].fd = term && term->raw ? STDIN_FILENO : -1;
-        int rc = poll(pfd, 2u, 0);
-        if (rc >= 0 && !(pfd[0].revents & POLLOUT) && term && term->input_checkpoint) {
-            term->input_only = true;
-            rc = term->input_checkpoint(term->input_opaque);
-            term->input_only = false;
-            if (rc < 0)
-                return -1;
-        }
-        if (rc >= 0 && !(pfd[0].revents & POLLOUT))
-            rc = poll(pfd, 2u, term ? 16 : -1);
-        if (rc < 0 && errno == EINTR)
-            continue;
-        if (rc < 0)
-            return -1;
-        if (pfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            errno = EIO;
-            return -1;
-        }
-        if (!(pfd[0].revents & POLLOUT))
-            continue;
-        ssize_t written = write(pfd[0].fd, bytes, amount);
-        if (written < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
-            continue;
-        if (written <= 0)
-            return -1;
-        bytes += written;
-        len -= (size_t)written;
-    }
-    return 0;
+    return snag_term_output_write(term ? &term->host : NULL, target >= 0 ? target : fd,
+        text, len, term && term->raw,
+        term && term->input_checkpoint ? output_checkpoint : NULL, term);
 }
 
 int
@@ -527,7 +505,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     for (int fd = STDOUT_FILENO; fd <= STDERR_FILENO; ++fd) {
         if (!snag_isatty(fd))
             continue;
-        int copy = snag_term_output_open(fd);
+        int copy = snag_term_output_open(&term->host, fd);
         if (copy < 0) {
             int saved_errno = errno;
             snag_term_close(term);
@@ -540,11 +518,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     output_owner = term;
     if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
         int saved_errno = errno;
-        (void)snag_term_input_restore(&term->host, true);
-        snag_term_controls_restore(&term->host);
-        term->opened = false;
-        term->raw = false;
-        term->controls_installed = false;
+        snag_term_close(term);
         errno = saved_errno;
         snag_errorf(error, error_size, "cannot enable bracketed paste: %s", strerror(errno));
         return -1;
@@ -2117,6 +2091,8 @@ out:
 static int
 suspend_terminal(struct snag_term *term)
 {
+    if (!snag_term_can_suspend())
+        return snag_term_write(STDERR_FILENO, "\a", 1u);
     if (snag_term_hide(term) < 0)
         return -1;
     if (term->bracketed_paste &&
@@ -2127,7 +2103,7 @@ suspend_terminal(struct snag_term *term)
         snag_term_input_restore(&term->host, false) < 0)
         return -1;
     term->raw = false;
-    if (raise(SIGSTOP) < 0)
+    if (snag_term_suspend() < 0)
         return -1;
     if (set_raw(term) < 0)
         return -1;
@@ -2680,6 +2656,7 @@ snag_term_close(struct snag_term *term)
     }
     if (term->controls_installed)
         snag_term_controls_restore(&term->host);
+    snag_term_output_close(&term->host);
     history_clear(term);
     free(term->search_original);
     free(term->nicks);

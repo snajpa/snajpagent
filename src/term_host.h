@@ -11,6 +11,7 @@
 #define NOMINMAX
 #include <windows.h>
 struct snag_signal_mask { unsigned char unused; };
+struct snag_console_writer;
 struct snag_term_host {
     unsigned long input_mode;
     bool raw_input;
@@ -22,6 +23,8 @@ struct snag_term_host {
     unsigned int input_key_len, input_key_at, input_repeats;
     bool input_resized;
     unsigned long output_mode[2];
+    HANDLE output_console[2];
+    struct snag_console_writer *writer;
 };
 #else
 #include <signal.h>
@@ -58,6 +61,12 @@ enum {
 };
 /* Bitmask above, zero timeout, or -1 error; wake-only does not consume input. */
 int snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms);
-int snag_term_output_open(int fd);
+int snag_term_output_open(struct snag_term_host *host, int fd);
+int snag_term_output_write(struct snag_term_host *host, int fd,
+                           const void *text, size_t len, bool input,
+                           int (*checkpoint)(void *), void *opaque);
+void snag_term_output_close(struct snag_term_host *host);
+bool snag_term_can_suspend(void);
+int snag_term_suspend(void);
 
 #endif

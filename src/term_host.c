@@ -16,6 +16,182 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <io.h>
+#include <process.h>
+
+bool
+snag_term_can_suspend(void)
+{
+    return false;
+}
+
+int
+snag_term_suspend(void)
+{
+    errno = ENOTSUP;
+    return -1;
+}
+
+struct snag_console_writer {
+    HANDLE thread, work, done;
+    atomic_bool stop, cancel;
+    int fd, error;
+    const unsigned char *bytes;
+    size_t len;
+};
+
+static int
+write_native(int fd, const unsigned char *bytes, size_t len, const atomic_bool *cancel)
+{
+    HANDLE handle = (HANDLE)_get_osfhandle(fd);
+    DWORD mode, written;
+    bool console = GetConsoleMode(handle, &mode) != 0;
+    while (len) {
+        if (cancel && atomic_load(cancel))
+            return EINTR;
+        size_t used = 0;
+        if (console) {
+            WCHAR wide[1024];
+            size_t units = 0;
+            while (used < len && units + 2u <= sizeof(wide) / sizeof(wide[0])) {
+                uint32_t cp;
+                size_t n = snag_utf8_decode(bytes + used, len - used, &cp);
+                if (!n) {
+                    cp = 0xfffdu;
+                    n = 1;
+                }
+                if (cp == '\n')
+                    wide[units++] = L'\r';
+                if (cp <= 0xffffu)
+                    wide[units++] = (WCHAR)cp;
+                else {
+                    cp -= 0x10000u;
+                    wide[units++] = (WCHAR)(0xd800u + (cp >> 10));
+                    wide[units++] = (WCHAR)(0xdc00u + (cp & 0x3ffu));
+                }
+                used += n;
+            }
+            size_t at = 0;
+            while (at < units) {
+                if (!WriteConsoleW(handle, wide + at, (DWORD)(units - at), &written, NULL))
+                    goto fail;
+                if (!written)
+                    return EIO;
+                at += written;
+            }
+        } else {
+            DWORD amount = len > 1024u ? 1024u : (DWORD)len;
+            if (!WriteFile(handle, bytes, amount, &written, NULL))
+                goto fail;
+            if (!written)
+                return EIO;
+            used = written;
+        }
+        bytes += used;
+        len -= used;
+    }
+    return 0;
+fail:
+    switch (GetLastError()) {
+    case ERROR_OPERATION_ABORTED: return EINTR;
+    case ERROR_BROKEN_PIPE: case ERROR_NO_DATA: return EPIPE;
+    case ERROR_INVALID_HANDLE: return EBADF;
+    default: return EIO;
+    }
+}
+
+static unsigned int __stdcall
+console_writer(void *opaque)
+{
+    struct snag_console_writer *writer = opaque;
+    while (WaitForSingleObject(writer->work, INFINITE) == WAIT_OBJECT_0) {
+        if (atomic_load(&writer->stop))
+            break;
+        writer->error = write_native(writer->fd, writer->bytes, writer->len, &writer->cancel);
+        (void)SetEvent(writer->done);
+    }
+    return 0;
+}
+
+void
+snag_term_output_close(struct snag_term_host *host)
+{
+    struct snag_console_writer *writer = host->writer;
+    /* stdout/stderr can share a console buffer; unwind in reverse order. */
+    for (size_t i = 2u; i-- > 0u;)
+        if (host->output_console[i]) {
+            (void)SetConsoleMode(host->output_console[i], host->output_mode[i]);
+            host->output_console[i] = NULL;
+        }
+    if (!writer)
+        return;
+    atomic_store(&writer->stop, true);
+    (void)SetEvent(writer->work);
+    if (writer->thread) {
+        (void)WaitForSingleObject(writer->thread, INFINITE);
+        (void)CloseHandle(writer->thread);
+    }
+    if (writer->work)
+        (void)CloseHandle(writer->work);
+    if (writer->done)
+        (void)CloseHandle(writer->done);
+    free(writer);
+    host->writer = NULL;
+}
+
+int
+snag_term_output_write(struct snag_term_host *host, int fd,
+                       const void *text, size_t len, bool input,
+                       int (*checkpoint)(void *), void *opaque)
+{
+    (void)input;
+    if (!host || !checkpoint) {
+        int error = write_native(fd, text, len, NULL);
+        if (error)
+            errno = error;
+        return error ? -1 : 0;
+    }
+    if (!host->writer) {
+        host->writer = calloc(1, sizeof(*host->writer));
+        if (!host->writer)
+            return -1;
+        host->writer->work = CreateEventW(NULL, FALSE, FALSE, NULL);
+        host->writer->done = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if (host->writer->work && host->writer->done)
+            host->writer->thread = (HANDLE)_beginthreadex(NULL, 0, console_writer, host->writer, 0, NULL);
+        if (!host->writer->thread) {
+            snag_term_output_close(host);
+            errno = EIO;
+            return -1;
+        }
+    }
+    struct snag_console_writer *writer = host->writer;
+    writer->fd = fd;
+    writer->bytes = text;
+    writer->len = len;
+    atomic_store(&writer->cancel, false);
+    (void)ResetEvent(writer->done);
+    (void)SetEvent(writer->work);
+    int error = 0;
+    for (;;) {
+        DWORD rc = WaitForSingleObject(writer->done, 16u);
+        if (rc == WAIT_OBJECT_0)
+            break;
+        if (rc == WAIT_FAILED && !error)
+            error = EIO;
+        if (!error && checkpoint(opaque) < 0)
+            error = errno ? errno : EIO;
+        /* Retry cancellation until completion to cover the start-I/O race. */
+        if (error) {
+            atomic_store(&writer->cancel, true);
+            (void)CancelSynchronousIo(writer->thread);
+        }
+    }
+    if (!error)
+        error = writer->error;
+    if (error)
+        errno = error;
+    return error ? -1 : 0;
+}
 
 static _Atomic(void (*)(int)) console_interrupt;
 
@@ -75,9 +251,13 @@ reset_input(struct snag_term_host *host)
 }
 
 int
-snag_term_output_open(int fd)
+snag_term_output_open(struct snag_term_host *host, int fd)
 {
     HANDLE copy;
+    if (fd < 1 || fd > 2) {
+        errno = EINVAL;
+        return -1;
+    }
     if (!snag_isatty(fd))
         return -1;
     if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)_get_osfhandle(fd),
@@ -90,7 +270,18 @@ snag_term_output_open(int fd)
         int saved = errno;
         (void)CloseHandle(copy);
         errno = saved;
+        return -1;
     }
+    DWORD mode;
+    if (!GetConsoleMode(copy, &mode) ||
+        !SetConsoleMode(copy, mode | ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT |
+                        ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN)) {
+        (void)_close(result);
+        errno = ENOTSUP;
+        return -1;
+    }
+    host->output_mode[fd - 1] = mode;
+    host->output_console[fd - 1] = copy;
     return result;
 }
 
@@ -432,6 +623,60 @@ snag_term_signals_unblock(void)
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+bool
+snag_term_can_suspend(void)
+{
+    return true;
+}
+
+int
+snag_term_suspend(void)
+{
+    return raise(SIGSTOP);
+}
+
+int
+snag_term_output_write(struct snag_term_host *host, int fd,
+                       const void *text, size_t len, bool input,
+                       int (*checkpoint)(void *), void *opaque)
+{
+    const unsigned char *bytes = text;
+    struct pollfd fds[2] = {{fd, POLLOUT, 0}, {input ? STDIN_FILENO : -1, POLLIN, 0}};
+    (void)host;
+    while (len) {
+        int rc = poll(fds, 2u, 0);
+        if (rc >= 0 && !(fds[0].revents & POLLOUT) && checkpoint && checkpoint(opaque) < 0)
+            return -1;
+        if (rc >= 0 && !(fds[0].revents & POLLOUT))
+            rc = poll(fds, 2u, checkpoint ? 16 : -1);
+        if (rc < 0 && errno == EINTR)
+            continue;
+        if (rc < 0)
+            return -1;
+        if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            errno = EIO;
+            return -1;
+        }
+        if (!(fds[0].revents & POLLOUT))
+            continue;
+        size_t amount = len < 1024u ? len : 1024u;
+        ssize_t written = write(fd, bytes, amount);
+        if (written < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
+            continue;
+        if (written <= 0)
+            return -1;
+        bytes += written;
+        len -= (size_t)written;
+    }
+    return 0;
+}
+
+void
+snag_term_output_close(struct snag_term_host *host)
+{
+    (void)host;
+}
+
 int
 snag_term_controls_install(struct snag_term_host *host,
                            void (*interrupt)(int), void (*resize)(int))
@@ -459,8 +704,9 @@ snag_term_controls_restore(struct snag_term_host *host)
 }
 
 int
-snag_term_output_open(int fd)
+snag_term_output_open(struct snag_term_host *host, int fd)
 {
+    (void)host;
     char path[SNAG_PATH_MAX_BYTES];
     snag_file_info original, owned;
     int error = ttyname_r(fd, path, sizeof(path));

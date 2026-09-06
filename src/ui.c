@@ -605,6 +605,13 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
         size_t amount = message->len - offset;
         if (amount > 1024u)
             amount = 1024u;
+        if (raw && amount < message->len - offset) {
+            size_t boundary = amount;
+            while (boundary && ((unsigned char)message->text[offset + boundary] & 0xc0u) == 0x80u)
+                --boundary;
+            if (boundary)
+                amount = boundary;
+        }
         if (render_input_checkpoint(display) < 0)
             return -1;
         while (!raw && !public_stopped(runtime) &&

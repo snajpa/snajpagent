@@ -624,6 +624,92 @@ test_realpath(void)
 }
 
 #ifdef _WIN32
+static int
+cancel_console_output(void *opaque)
+{
+    unsigned int *calls = opaque;
+    ++*calls;
+    if (*calls < 2u)
+        return 0;
+    errno = ECANCELED;
+    return -1;
+}
+
+static void
+test_console_output(void)
+{
+    struct snag_term_host host = {0};
+    int pair[2];
+    assert(_pipe(pair, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
+    char output[65536];
+    memset(output, 'x', sizeof(output));
+    unsigned int calls = 0;
+    uint64_t start = snag_monotonic_ms();
+    assert(snag_term_output_write(&host, pair[1], output, sizeof(output), false,
+                                  cancel_console_output, &calls) < 0 && errno == ECANCELED);
+    assert(calls == 2u && snag_monotonic_ms() - start < 2000u);
+    assert(close(pair[1]) == 0);
+    DWORD got;
+    assert(ReadFile((HANDLE)_get_osfhandle(pair[0]), output, sizeof(output), &got, NULL) && got);
+    for (DWORD i = 0; i < got; ++i)
+        assert(output[i] == 'x');
+    assert(close(pair[0]) == 0);
+    int sink = _open("NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT);
+    assert(sink >= 0);
+    assert(snag_term_output_write(&host, sink, "ok", 2u, false, cancel_console_output, &calls) == 0);
+    assert(close(sink) == 0);
+    snag_term_output_close(&host);
+    assert(!host.writer);
+
+    HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
+    assert(screen != INVALID_HANDLE_VALUE);
+    int fd = _open_osfhandle((intptr_t)screen, _O_WRONLY | _O_BINARY | _O_NOINHERIT);
+    assert(fd >= 0);
+    assert(snag_term_output_write(NULL, fd, "A\xe4\xb8\xad\xf0\x9f\x98\x80Z", 9u,
+                                  false, NULL, NULL) == 0);
+    WCHAR result[16] = {0};
+    BOOL read_ok = ReadConsoleOutputCharacterW(screen, result, 10u, (COORD){0, 0}, &got);
+    const WCHAR expected[] = {L'A', 0x4e2du, 0xd83du, 0xde00u, L'Z'};
+    assert(SetConsoleCursorPosition(screen, (COORD){0, 1}));
+    DWORD direct_count;
+    assert(WriteConsoleW(screen, expected, 5u, &direct_count, NULL) && direct_count == 5u);
+    WCHAR direct[16] = {0};
+    assert(ReadConsoleOutputCharacterW(screen, direct, 10u, (COORD){0, 1}, &direct_count));
+    /* The classic console cell APIs may replace supplementary glyphs even
+     * for direct WriteConsoleW. Compare identical native screen projections. */
+    if (!read_ok || got != direct_count || memcmp(result, direct, got * sizeof(*result))) {
+        (void)fprintf(stderr, "console output ok=%u got=%lu error=%lu units:",
+                       (unsigned int)read_ok, (unsigned long)got, (unsigned long)GetLastError());
+        for (DWORD i = 0; i < got; ++i)
+            (void)fprintf(stderr, " %04x", (unsigned int)result[i]);
+        (void)fprintf(stderr, "\n");
+        (void)fprintf(stderr, "direct wide output got=%lu units:", (unsigned long)direct_count);
+        for (DWORD i = 0; i < direct_count; ++i)
+            (void)fprintf(stderr, " %04x", (unsigned int)direct[i]);
+        (void)fprintf(stderr, "\n");
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (GetConsoleScreenBufferInfo(screen, &info))
+            (void)fprintf(stderr, "console cursor %d,%d\n", info.dwCursorPosition.X, info.dwCursorPosition.Y);
+        CHAR_INFO cells[10] = {0};
+        SMALL_RECT rect = {0, 0, 9, 0};
+        if (ReadConsoleOutputW(screen, cells, (COORD){10, 1}, (COORD){0, 0}, &rect)) {
+            (void)fprintf(stderr, "console cells:");
+            for (size_t i = 0; i < 10u; ++i)
+                (void)fprintf(stderr, " %04x/%04x", (unsigned int)cells[i].Char.UnicodeChar,
+                               (unsigned int)cells[i].Attributes);
+            (void)fprintf(stderr, "\n");
+        }
+        abort();
+    }
+    assert(result[0] == L'A' && result[1] == 0x4e2du);
+    bool suffix = false;
+    for (DWORD i = 0; i < got; ++i)
+        suffix |= result[i] == L'Z';
+    assert(suffix);
+    assert(close(fd) == 0);
+}
+
 static void
 test_console_keys(struct snag_term_host *host)
 {
@@ -710,19 +796,33 @@ test_input_mode(void)
     assert(sink >= 0 && !snag_isatty(sink) && close(sink) == 0);
 #endif
     if (snag_isatty(2)) {
-        int copy = snag_term_output_open(2);
+        struct snag_term_host output_host = {0};
+#ifdef _WIN32
+        DWORD original_mode, changed_mode;
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(2), &original_mode));
+#endif
+        int copy = snag_term_output_open(&output_host, 2);
         assert(copy >= 0 && snag_isatty(copy));
 #ifdef _WIN32
         DWORD flags;
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) &&
+               (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING));
         assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &flags) &&
                !(flags & HANDLE_FLAG_INHERIT));
 #else
         assert(fcntl(copy, F_GETFD) & FD_CLOEXEC);
 #endif
+        snag_term_output_close(&output_host);
+#ifdef _WIN32
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(2), &changed_mode) && changed_mode == original_mode);
+#endif
         assert(close(copy) == 0 && snag_isatty(2));
     }
     if (!snag_isatty(0))
         return;
+#ifdef _WIN32
+    test_console_output();
+#endif
     struct snag_term_host host = {0};
 #ifdef _WIN32
     UINT codepage = GetConsoleCP();
