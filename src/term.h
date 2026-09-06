@@ -79,7 +79,6 @@ struct snag_term {
     struct snag_history_snapshot history;
     char *history_draft;
     char *search_original;
-    char *nicks;
     struct snag_irc_destinations *destinations;
     struct snag_irc_target destination;
     const struct snag_term_command *commands;
@@ -158,8 +157,6 @@ int snag_term_external_begin(struct snag_term *term,
                             char *error, size_t error_size);
 int snag_term_external_end(struct snag_term *term,
                           char *error, size_t error_size);
-int snag_term_set_prompt_label(struct snag_term *term, bool active,
-                              const char *label);
 int snag_term_set_prompt_template(struct snag_term *term, bool active,
                                  const char *label,
                                  const char *const spinners[SNAG_TERM_SPINNER_COUNT],

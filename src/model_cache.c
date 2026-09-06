@@ -700,37 +700,6 @@ snag_model_cache_best_effort(const json_t *model, const char *fallback)
     return fallback;
 }
 
-int
-snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
-                      const char *fallback_effort,
-                      const char **provider, const char **model,
-                      const char **effort)
-{
-    if (!cache || !cache->providers || !index || !provider || !model || !effort)
-        return -1;
-    for (size_t i = 0; i < json_array_size(cache->providers); ++i) {
-        json_t *provider_entry = json_array_get(cache->providers, i);
-        json_t *models = json_object_get(provider_entry, "models");
-        for (size_t j = 0; j < json_array_size(models); ++j) {
-            json_t *model_entry = json_array_get(models, j);
-            json_t *efforts = json_object_get(model_entry, "efforts");
-            size_t variants = json_array_size(efforts);
-            if (!variants)
-                variants = 1u;
-            if (index > variants) {
-                index -= variants;
-                continue;
-            }
-            *provider = snag_json_string(provider_entry, "name");
-            *model = snag_json_string(model_entry, "id");
-            *effort = json_array_size(efforts) ?
-                json_string_value(json_array_get(efforts, index - 1u)) :
-                snag_model_cache_best_effort(model_entry, fallback_effort);
-            return *provider && *model && *effort ? 0 : -1;
-        }
-    }
-    return 1;
-}
 
 const json_t *
 snag_model_metadata(const struct snag_model_cache *cache,

@@ -338,13 +338,13 @@ test_retained_prompt(void)
     saved_fd = dup(STDERR_FILENO);
     assert(saved_fd >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
     close(fds[1]);
-    assert(snag_term_set_prompt_label(&term, true, "  9%> ") == 0);
+    assert(snag_term_set_prompt_template(&term, true, "  9%> ", frames, 8u, 0u) == 0);
     assert(snag_term_restore_draft(&term, "first row stays\nsecond row stays") == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
-    assert(snag_term_set_prompt_label(&term, true, "  9%> ") == 0);
+    assert(snag_term_set_prompt_template(&term, true, "  9%> ", frames, 8u, 0u) == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
     size_t cursor_row = term.rendered_cursor_row, cursor_col = term.rendered_cursor_col;
-    assert(snag_term_set_prompt_label(&term, true, " 10%> ") == 0);
+    assert(snag_term_set_prompt_template(&term, true, " 10%> ", frames, 8u, 0u) == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(strstr(output, "10") && !strstr(output, "stays") && !strchr(output, '\n'));
     assert(!strstr(output, "\033[K") && !strstr(output, "\033[2K"));
@@ -359,10 +359,10 @@ test_retained_prompt(void)
     assert(snag_term_restore_draft(&term, "invalid:\xff") == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(strstr(output, "invalid:\\xFF"));
-    assert(snag_term_set_prompt_label(&term, true, "two\nlines> ") == 0);
+    assert(snag_term_set_prompt_template(&term, true, "two\nlines> ", frames, 8u, 0u) == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(strstr(output, "two\\nlines> "));
-    assert(snag_term_set_prompt_label(&term, true, " 10%> ") == 0);
+    assert(snag_term_set_prompt_template(&term, true, " 10%> ", frames, 8u, 0u) == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
     char multiline[141];
     memset(multiline, '\n', sizeof(multiline) - 1u);
@@ -388,11 +388,11 @@ test_retained_prompt(void)
     assert(snag_term_restore_draft(&term, "cafè語 tail") == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
     snag_term_set_color(&term, true);
-    assert(snag_term_set_prompt_label(&term, true, " 10%> ") == 0);
+    assert(snag_term_set_prompt_template(&term, true, " 10%> ", frames, 8u, 0u) == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[1;36m") && !strstr(output, "tail"));
     snag_term_set_color(&term, false);
-    assert(snag_term_set_prompt_label(&term, true, " 10%> ") == 0);
+    assert(snag_term_set_prompt_template(&term, true, " 10%> ", frames, 8u, 0u) == 0);
     assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
     assert(!strstr(output, "tail"));
 
@@ -430,7 +430,7 @@ test_retained_prompt(void)
     term.last_output_ms -= 200u;
     assert(snag_term_poll(&term, 20, -1, &action, &text) == 0);
     assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) > 0u);
-    assert(snag_term_set_prompt_label(&term, false, "cursor> ") == 0);
+    assert(snag_term_set_prompt_template(&term, false, "cursor> ", frames, 8u, 0u) == 0);
     assert(snag_term_restore_draft(&term, "unchanged") == 0);
     (void)prompt_output(fds[0], output, sizeof(output));
     const char *moves[] = {"\033[H", "\033[F", "\033[D"};
@@ -452,7 +452,7 @@ test_retained_prompt(void)
     int readonly = open("/dev/null", O_RDONLY);
     assert(readonly >= 0 && dup2(readonly, STDERR_FILENO) >= 0);
     close(readonly);
-    assert(snag_term_set_prompt_label(&term, true, "failure> ") < 0);
+    assert(snag_term_set_prompt_template(&term, true, "failure> ", frames, 8u, 0u) < 0);
     assert(term.painted_prompt.len == 0u);
     assert(dup2(saved_fd, STDERR_FILENO) >= 0);
     close(saved_fd);
@@ -486,14 +486,17 @@ test_mention_completion(void)
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         for (unsigned int active = 0u; active < 2u; ++active) {
             struct snag_term term;
+            struct snag_irc_destinations destinations = {.count = 1u};
             enum snag_term_action action;
             char *text = NULL;
 
             snag_term_init(&term);
             term.chat = true;
             term.active = active != 0u;
-            term.nicks = snag_strdup_checked(cases[i].nicks, 4096u);
-            assert(term.nicks);
+            destinations.items[0].target = (struct snag_irc_target){1u, 1u};
+            destinations.items[0].joined = true;
+            strcpy(destinations.items[0].nicks, cases[i].nicks);
+            assert(snag_term_set_destinations(&term, &destinations) == 0);
             assert(snag_buf_append(&term.draft, cases[i].draft,
                                   strlen(cases[i].draft)) == 0);
             term.cursor = cases[i].cursor;

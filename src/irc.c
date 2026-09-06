@@ -2517,30 +2517,6 @@ fail:
     return -1;
 }
 
-int
-snag_irc_core_send_operator(struct snag_irc_core *irc, const char *text,
-                      char *error, size_t error_size)
-{
-    return send_chat(irc, snag_irc_core_operator_nick(irc), LINK_OPERATOR,
-                     SNAG_IRC_MESSAGE, text, error, error_size);
-}
-
-int
-snag_irc_core_send_agent(struct snag_irc_core *irc, const char *text,
-                   char *error, size_t error_size)
-{
-    return send_chat(irc, snag_irc_core_model_nick(irc), LINK_AGENT,
-                     SNAG_IRC_MESSAGE, text, error, error_size);
-}
-
-int
-snag_irc_core_send_agent_notice(struct snag_irc_core *irc, const char *text,
-                          char *error, size_t error_size)
-{
-    return send_chat(irc, snag_irc_core_model_nick(irc), LINK_AGENT,
-                     SNAG_IRC_NOTICE, text, error, error_size);
-}
-
 static int
 set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
              char *error, size_t error_size)
@@ -2592,17 +2568,17 @@ fail:
 }
 
 int
-snag_irc_core_set_operator_topic(struct snag_irc_core *irc, const char *topic,
-                           char *error, size_t error_size)
+snag_irc_core_send(struct snag_irc_core *irc, bool model,
+                   enum snag_irc_event_kind kind, const char *text,
+                   char *error, size_t error_size)
 {
-    return set_topic_as(irc, topic, LINK_OPERATOR, error, error_size);
-}
+    enum link_role role = model ? LINK_AGENT : LINK_OPERATOR;
 
-int
-snag_irc_core_set_agent_topic(struct snag_irc_core *irc, const char *topic,
-                        char *error, size_t error_size)
-{
-    return set_topic_as(irc, topic, LINK_AGENT, error, error_size);
+    if (kind == SNAG_IRC_TOPIC)
+        return set_topic_as(irc, text, role, error, error_size);
+    return send_chat(irc, model ? snag_irc_core_model_nick(irc) :
+                                 snag_irc_core_operator_nick(irc),
+                     role, kind, text, error, error_size);
 }
 
 static int

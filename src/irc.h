@@ -113,16 +113,6 @@ int snag_irc_state(const struct snag_irc *irc, struct snag_buf *out,
                    char *error, size_t error_size);
 int snag_irc_tick(struct snag_irc *irc, int timeout_ms,
                  char *error, size_t error_size);
-int snag_irc_send_operator(struct snag_irc *irc, const char *text,
-                          char *error, size_t error_size);
-int snag_irc_send_agent(struct snag_irc *irc, const char *text,
-                       char *error, size_t error_size);
-int snag_irc_send_agent_notice(struct snag_irc *irc, const char *text,
-                              char *error, size_t error_size);
-int snag_irc_set_operator_topic(struct snag_irc *irc, const char *topic,
-                               char *error, size_t error_size);
-int snag_irc_set_agent_topic(struct snag_irc *irc, const char *topic,
-                            char *error, size_t error_size);
 int snag_irc_snapshot(const struct snag_irc *irc, struct snag_buf *out,
                      char *error, size_t error_size);
 int snag_irc_restore_event(struct snag_irc *irc,
@@ -135,8 +125,6 @@ const char *snag_irc_model_nick(const struct snag_irc *irc);
 const char *snag_irc_operator_nick(const struct snag_irc *irc);
 /* Consumes an admitted primary-identity change, including during command waits. */
 bool snag_irc_identity_changed(struct snag_irc *irc);
-/* Returns 1 with changed newline-separated membership, 0 unchanged, -1 on error. */
-int snag_irc_take_nicks(struct snag_irc *irc, struct snag_buf *out);
 /* Endpoint "local" broadcasts, so any joined endpoint's model alias matches. */
 bool snag_irc_mentions_agent(const struct snag_irc *irc, const char *endpoint,
                             const char *text);

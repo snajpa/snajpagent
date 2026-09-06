@@ -84,10 +84,6 @@ int snag_model_each(const struct snag_model_cache *cache, const struct snag_conf
                      const char *fallback_effort, snag_model_entry_fn visit, void *opaque);
 const char *snag_model_cache_best_effort(const json_t *model,
                                         const char *fallback);
-int snag_model_cache_entry(const struct snag_model_cache *cache, size_t index,
-                          const char *fallback_effort,
-                          const char **provider, const char **model,
-                          const char **effort);
 
 int snag_model_capacity_resolve(
     const struct snag_model_cache *cache, const struct snag_config *config,

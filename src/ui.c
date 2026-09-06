@@ -12,7 +12,7 @@
 #include <string.h>
 
 enum ui_kind {
-    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_NICKS, UI_DESTINATIONS, UI_SELECT, UI_ROUTE, UI_COMMANDS, UI_PAUSE,
+    UI_TEXT, UI_LEVEL, UI_COLOR, UI_MARKDOWN, UI_DESTINATIONS, UI_SELECT, UI_ROUTE, UI_COMMANDS, UI_PAUSE,
     UI_OPEN, UI_EXTERNAL, UI_PROMPT, UI_SPINNERS, UI_DRAFT,
     UI_VIEW, UI_SUBMITTED, UI_PUBLIC_BEGIN, UI_PUBLIC, UI_VALIDATE,
     UI_ORIENTATION, UI_HISTORY, UI_IRC, UI_DURABLE, UI_EVENT,
@@ -310,11 +310,6 @@ apply_message(struct snag_ui_display *display, struct ui_message *message,
     }
     case UI_MARKDOWN:
         snag_render_set_markdown(render, message->data.value != 0u);
-        return 0;
-    case UI_NICKS:
-        free(term->nicks);
-        term->nicks = message->text;
-        message->text = NULL;
         return 0;
     case UI_DESTINATIONS:
         if (snag_term_set_destinations(term, message->data.destinations) < 0)
@@ -849,13 +844,6 @@ snag_ui_markdown(struct snag_ui *ui, bool enabled)
 {
     struct ui_message message = {.kind = UI_MARKDOWN, .data.value = enabled};
     return send_message(ui, &message, NULL);
-}
-
-int
-snag_ui_nicks(struct snag_ui *ui, const char *nicks)
-{
-    struct ui_message message = {.kind = UI_NICKS};
-    return send_message(ui, &message, nicks);
 }
 
 int

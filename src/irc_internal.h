@@ -27,16 +27,9 @@ int snag_irc_core_copy_history(struct snag_irc_core *dst,
                               const struct snag_irc_core *src, bool hosted_only);
 int snag_irc_core_tick(struct snag_irc_core *irc, int timeout_ms, snag_wake_fd wake_fd,
                       char *error, size_t error_size);
-int snag_irc_core_send_operator(struct snag_irc_core *irc, const char *text,
-                               char *error, size_t error_size);
-int snag_irc_core_send_agent(struct snag_irc_core *irc, const char *text,
-                            char *error, size_t error_size);
-int snag_irc_core_send_agent_notice(struct snag_irc_core *irc, const char *text,
-                                   char *error, size_t error_size);
-int snag_irc_core_set_operator_topic(struct snag_irc_core *irc, const char *text,
-                                    char *error, size_t error_size);
-int snag_irc_core_set_agent_topic(struct snag_irc_core *irc, const char *text,
-                                 char *error, size_t error_size);
+int snag_irc_core_send(struct snag_irc_core *irc, bool model,
+                       enum snag_irc_event_kind kind, const char *text,
+                       char *error, size_t error_size);
 int snag_irc_core_view(const struct snag_irc_core *irc, struct snag_irc_view *view);
 int snag_irc_core_history(const struct snag_irc_core *irc, struct snag_buf *out);
 void snag_irc_core_remember(struct snag_irc_core *irc,

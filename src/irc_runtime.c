@@ -12,11 +12,9 @@
 #define IRC_RECORDS (IRC_MAILBOX * (SNAG_CONFIG_IRC_CLIENT_MAX + 1u))
 
 enum irc_record_kind { IRC_EVENT, IRC_TRACE, IRC_VIEW };
-enum irc_command { IRC_OPERATOR, IRC_AGENT, IRC_NOTICE,
-                   IRC_OPERATOR_TOPIC, IRC_AGENT_TOPIC, IRC_RESTORE };
-
 struct irc_request {
-    enum irc_command command;
+    enum snag_irc_event_kind kind;
+    bool model;
     uint64_t revision;
     const char *text;
     const struct snag_irc_event *event;
@@ -70,7 +68,6 @@ struct snag_irc {
     snag_wake_fd wake[2];
     bool stopping;
     bool identity_changed; /* Mailbox-locked; retained across command drains. */
-    bool nicks_changed; /* Engine-owned, retained across command drains. */
     int failure;
 };
 
@@ -182,22 +179,10 @@ execute(struct irc_owner *owner, struct irc_request *request)
         errno = ESTALE;
         return -1;
     }
-    switch (request->command) {
-    case IRC_OPERATOR:
-        return snag_irc_core_send_operator(core, request->text, error, size);
-    case IRC_AGENT:
-        return snag_irc_core_send_agent(core, request->text, error, size);
-    case IRC_NOTICE:
-        return snag_irc_core_send_agent_notice(core, request->text, error, size);
-    case IRC_OPERATOR_TOPIC:
-        return snag_irc_core_set_operator_topic(core, request->text, error, size);
-    case IRC_AGENT_TOPIC:
-        return snag_irc_core_set_agent_topic(core, request->text, error, size);
-    case IRC_RESTORE:
+    if (request->event)
         return snag_irc_core_restore_event(core, request->event);
-    }
-    errno = EINVAL;
-    return -1;
+    return snag_irc_core_send(core, request->model, request->kind,
+                              request->text, error, size);
 }
 
 static void *
@@ -317,8 +302,6 @@ drain(struct snag_irc *irc, int timeout_ms)
         --owner->queued;
         pthread_cond_broadcast(&irc->changed);
         if (record->kind != IRC_TRACE) {
-            if (strcmp(owner->view.nicks, record->view.nicks) != 0)
-                irc->nicks_changed = true;
             if (irc->owner_count && owner == irc->owners[0] &&
                 (strcmp(owner->view.model, record->view.model) != 0 ||
                  strcmp(owner->view.operator, record->view.operator) != 0))
@@ -464,7 +447,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
     }
     ++irc->owner_count;
     ++irc->routing_revision;
-    irc->identity_changed = irc->nicks_changed = true;
+    irc->identity_changed = true;
     return 0;
 fail:
     free_owner(owner);
@@ -526,7 +509,7 @@ snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint,
     memmove(irc->owners + index, irc->owners + index + 1u,
             (--irc->owner_count - index) * sizeof(*irc->owners));
     ++irc->routing_revision;
-    irc->identity_changed = irc->nicks_changed = true;
+    irc->identity_changed = true;
     snag_irc_core_remember(irc->history, &event);
     return irc->event_fn ? irc->event_fn(irc->opaque, &event) : 0;
 }
@@ -646,7 +629,7 @@ snag_irc_configure(struct snag_irc *irc, const struct snag_config *config,
                 break;
             }
     }
-    irc->identity_changed = irc->nicks_changed = true;
+    irc->identity_changed = true;
     return snag_irc_preferences(irc, config, workspace, error, error_size);
 }
 
@@ -746,7 +729,6 @@ snag_irc_open(struct snag_irc **out, const struct snag_config *config,
     irc->event_fn = event_fn;
     irc->trace_fn = trace_fn;
     irc->opaque = opaque;
-    irc->nicks_changed = true;
     irc->wake[0] = irc->wake[1] = SNAG_WAKE_INVALID;
     if (snag_wakeup_create(irc->wake) < 0)
         goto fail;
@@ -806,7 +788,6 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
 {
     int failed = 0;
     size_t accepted = 0u;
-    enum irc_command command;
     struct snag_irc_route frozen;
 
     if (!route || !route->count || route->count > SNAG_IRC_DESTINATIONS_MAX) {
@@ -828,12 +809,11 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
             }
     if (irc && start_owners(irc) < 0)
         return -1;
-    command = kind == SNAG_IRC_TOPIC ? (model ? IRC_AGENT_TOPIC : IRC_OPERATOR_TOPIC) :
-              kind == SNAG_IRC_NOTICE ? IRC_NOTICE : model ? IRC_AGENT : IRC_OPERATOR;
     for (size_t i = 0u; i < route->count; ++i) {
         struct irc_owner *owner = NULL;
         struct irc_request request = {
-            .command = command, .text = text, .revision = route->targets[i].revision
+            .kind = kind, .model = model, .text = text,
+            .revision = route->targets[i].revision
         };
         int rc = 1;
         for (size_t j = 0u; irc && j < irc->owner_count; ++j)
@@ -858,72 +838,6 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
             return -1;
     }
     return failed ? (accepted ? 2 : 1) : 0;
-}
-
-static int
-send_command(struct snag_irc *irc, enum irc_command command, const char *text,
-             char *error, size_t error_size)
-{
-    bool accepted = false;
-
-    if (!irc || !irc->owner_count) {
-        errno = ENOTCONN;
-        snag_errorf(error, error_size, "no active IRC destinations; use /connect or /server start");
-        return -1;
-    }
-    if (start_owners(irc) < 0)
-        return -1;
-    for (size_t i = 0u; i < irc->owner_count; ++i) {
-        struct irc_request request = {.command = command, .text = text};
-        int rc = request_owner(irc->owners[i], &request);
-
-        if (rc == 0) {
-            accepted = true;
-            continue;
-        }
-        snag_errorf(error, error_size, "%s", request.error[0] ?
-                   request.error : strerror(errno));
-        if (errno != EACCES)
-            return -1;
-    }
-    if (accepted && error_size)
-        error[0] = '\0';
-    return accepted ? 0 : -1;
-}
-
-int
-snag_irc_send_operator(struct snag_irc *irc, const char *text,
-                      char *error, size_t error_size)
-{
-    return send_command(irc, IRC_OPERATOR, text, error, error_size);
-}
-
-int
-snag_irc_send_agent(struct snag_irc *irc, const char *text,
-                   char *error, size_t error_size)
-{
-    return send_command(irc, IRC_AGENT, text, error, error_size);
-}
-
-int
-snag_irc_send_agent_notice(struct snag_irc *irc, const char *text,
-                          char *error, size_t error_size)
-{
-    return send_command(irc, IRC_NOTICE, text, error, error_size);
-}
-
-int
-snag_irc_set_operator_topic(struct snag_irc *irc, const char *text,
-                           char *error, size_t error_size)
-{
-    return send_command(irc, IRC_OPERATOR_TOPIC, text, error, error_size);
-}
-
-int
-snag_irc_set_agent_topic(struct snag_irc *irc, const char *text,
-                        char *error, size_t error_size)
-{
-    return send_command(irc, IRC_AGENT_TOPIC, text, error, error_size);
 }
 
 int
@@ -966,7 +880,7 @@ snag_irc_snapshot(const struct snag_irc *irc, struct snag_buf *out,
 int
 snag_irc_restore_event(struct snag_irc *irc, const struct snag_irc_event *event)
 {
-    struct irc_request request = {.command = IRC_RESTORE, .event = event};
+    struct irc_request request = {.event = event};
 
     if (!irc || snag_irc_core_restore_event(irc->history, event) < 0)
         return -1;
@@ -1024,19 +938,4 @@ snag_irc_mentions_agent(const struct snag_irc *irc, const char *endpoint,
             return true;
     }
     return false;
-}
-
-int
-snag_irc_take_nicks(struct snag_irc *irc, struct snag_buf *out)
-{
-    if (!irc || !irc->nicks_changed)
-        return 0;
-    for (size_t i = 0u; i < irc->owner_count; ++i)
-        if (snag_buf_append(out, irc->owners[i]->view.nicks,
-                          strlen(irc->owners[i]->view.nicks)) < 0)
-            return -1;
-    if (snag_buf_terminate(out) < 0)
-        return -1;
-    irc->nicks_changed = false;
-    return 1;
 }

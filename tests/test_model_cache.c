@@ -184,6 +184,12 @@ main(void)
     assert(snag_model_cache_replace(&store, providers, 123456u, &cache,
                                    error, sizeof(error)) == 0);
     assert(cache.updated_at_ms == 123456u);
+    snag_config_init(&config);
+    config.provider_count = 2u;
+    strcpy(config.providers[0].name, "paid");
+    strcpy(config.providers[0].base_url, "https://api.example.test/v1");
+    strcpy(config.providers[1].name, "codex");
+    strcpy(config.providers[1].base_url, "https://chat.example.test/backend-api/codex");
     {
         const char *name, *model, *effort;
         static const char *const expected[][3] = {
@@ -195,15 +201,15 @@ main(void)
         };
 
         for (size_t i = 0; i < 5u; ++i) {
-            assert(snag_model_cache_entry(&cache, i + 1u, "fallback",
+            assert(snag_model_entry(&cache, &config, i + 1u, "fallback",
                                          &name, &model, &effort) == 0);
             assert(strcmp(name, expected[i][0]) == 0);
             assert(strcmp(model, expected[i][1]) == 0);
             assert(strcmp(effort, expected[i][2]) == 0);
         }
-        assert(snag_model_cache_entry(&cache, 0u, "fallback",
-                                     &name, &model, &effort) < 0);
-        assert(snag_model_cache_entry(&cache, 6u, "fallback",
+        assert(snag_model_entry(&cache, &config, 0u, "fallback",
+                                &name, &model, &effort) == 1);
+        assert(snag_model_entry(&cache, &config, 6u, "fallback",
                                      &name, &model, &effort) == 1);
     }
     fd = openat(store.root_fd, "models.json", O_RDONLY);
@@ -220,12 +226,6 @@ main(void)
     snag_model_cache_free(&cache);
     assert(snag_model_cache_load(&store, &cache, error, sizeof(error)) == 0);
 
-    snag_config_init(&config);
-    assert(snprintf(config.providers[0].name,
-                    sizeof(config.providers[0].name), "%s", "paid") > 0);
-    assert(snprintf(config.providers[0].base_url,
-                    sizeof(config.providers[0].base_url), "%s",
-                    "https://api.example.test/v1") > 0);
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
                "org/model", "openai", &capacity,
                error, sizeof(error)) == 0);
@@ -260,11 +260,6 @@ main(void)
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) ==
            120000u);
 
-    assert(snprintf(config.providers[1].name,
-                    sizeof(config.providers[1].name), "%s", "codex") > 0);
-    assert(snprintf(config.providers[1].base_url,
-                    sizeof(config.providers[1].base_url), "%s",
-                    "https://chat.example.test/backend-api/codex") > 0);
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[1],
                "codex-context-only", "codex", &capacity,
                error, sizeof(error)) == 0);

@@ -1373,34 +1373,6 @@ out:
 }
 
 int
-snag_term_set_prompt_label(struct snag_term *term, bool active,
-                          const char *label)
-{
-    size_t len;
-
-    if (!term || !label || !(len = strlen(label)) || len >= sizeof(term->label)) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (!term->capable &&
-        (term->active != active || strcmp(term->label, label) != 0) &&
-        snag_term_hide(term) < 0)
-        return -1;
-    term->active = active;
-    if (!active)
-        term->typing_active = false;
-    term->prompt_wanted = true;
-    term->line_submission_echoed = false;
-    term->prompt_template[0] = '\0';
-    term->spinner_states = 0u;
-    memset(term->spinner, 0, sizeof(term->spinner));
-    memcpy(term->label, label, len + 1u);
-    if (term->output_depth)
-        term->redraw_after_output = true;
-    return redraw(term);
-}
-
-int
 snag_term_set_prompt_template(struct snag_term *term, bool active,
                              const char *label,
                              const char *const spinners[SNAG_TERM_SPINNER_COUNT],
@@ -2066,18 +2038,14 @@ complete_mention(struct snag_term *term, bool *handled)
         ++end;
     size_t prefix = term->cursor - start;
     snag_buf_init(&matches.names, SNAG_MAX_DIRECT_PROMPT);
-    size_t destinations = term->destinations ? term->destinations->count : 1u;
+    size_t destinations = term->destinations ? term->destinations->count : 0u;
     for (size_t destination = 0u; destination < destinations; ++destination) {
-      const char *nicks = term->nicks;
-      if (term->destinations) {
         const struct snag_irc_destination *item = &term->destinations->items[destination];
         if (command == SNAG_IRC_TARGET_INVALID ||
             (command != SNAG_IRC_TARGET_ALL && item->target.id !=
              (command == SNAG_IRC_TARGET_SEND ? id : term->destination.id)))
             continue;
-        nicks = item->nicks;
-      }
-      for (const char *nick = nicks; nick && *nick;) {
+      for (const char *nick = item->nicks; nick && *nick;) {
         const char *line = strchr(nick, '\n');
         size_t len = line ? (size_t)(line - nick) : strlen(nick);
 
@@ -2663,7 +2631,6 @@ snag_term_close(struct snag_term *term)
     snag_term_host_close(&term->host);
     history_clear(term);
     free(term->search_original);
-    free(term->nicks);
     free(term->destinations);
     snag_buf_free(&term->search_label);
     snag_buf_free(&term->search_query);
