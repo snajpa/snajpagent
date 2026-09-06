@@ -632,30 +632,6 @@ array_has_string(json_t *array, const char *value)
     return 0;
 }
 
-static void
-assert_schema_type(json_t *schema, const char *type, int nullable)
-{
-    json_t *schema_type;
-
-    assert(json_is_object(schema));
-    schema_type = json_object_get(schema, "type");
-    if (!nullable) {
-        assert(json_is_string(schema_type));
-        assert(strcmp(json_string_value(schema_type), type) == 0);
-        return;
-    }
-    assert(json_is_array(schema_type));
-    assert(json_array_size(schema_type) == 2u);
-    assert(array_has_string(schema_type, type));
-    assert(array_has_string(schema_type, "null"));
-}
-
-static void
-assert_required_contains(json_t *required, const char *name)
-{
-    assert(array_has_string(required, name));
-}
-
 static json_t *
 tool_by_name(json_t *tools, const char *name)
 {
@@ -757,9 +733,18 @@ assert_strict_tool_contract(json_t *tool)
         key = json_object_iter_key(iter);
         schema = json_object_iter_value(iter);
         assert(schema);
-        assert_required_contains(required, key);
+        assert(array_has_string(required, key));
     }
     return properties;
+}
+
+static void
+assert_properties(json_t *tool, json_t *expected)
+{
+    json_t *properties = json_object_get(json_object_get(tool, "parameters"), "properties");
+
+    assert(expected && json_equal(properties, expected));
+    json_decref(expected);
 }
 
 static void
@@ -767,122 +752,67 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
                             uint32_t max_timeout_ms,
                             uint32_t max_output_tokens)
 {
-    size_t index;
-    json_t *tool;
-    json_t *properties;
+    char fallback[32];
+    json_t *tool, *expected;
 
+    assert(snprintf(fallback, sizeof(fallback), "ceiling (%u)", max_output_tokens) > 0);
     assert(json_is_array(tools));
-    for (index = 0u; index < json_array_size(tools); ++index) {
-        tool = json_array_get(tools, index);
-        if (strcmp(snag_json_string(tool, "type"), "web_search") == 0) {
+    for (size_t i = 0u; i < json_array_size(tools); ++i) {
+        tool = json_array_get(tools, i);
+        if (strcmp(snag_json_string(tool, "type"), "web_search") == 0)
             assert(json_object_size(tool) == 1u);
-            continue;
-        }
-        (void)assert_strict_tool_contract(tool);
+        else
+            (void)assert_strict_tool_contract(tool);
     }
-
-    tool = tool_by_type(tools, "web_search");
-    if (tool)
-        assert(json_object_size(tool) == 1u);
 
     tool = tool_by_name(tools, "exec_command");
     if (tool) {
-        assert(strstr(snag_json_string(tool, "description"),
-                      "uses the configured command deadline") != NULL);
-        {
-            char fallback[32];
-            assert(snprintf(fallback, sizeof(fallback), "ceiling (%u)",
-                            max_output_tokens) > 0);
-            assert(strstr(snag_json_string(tool, "description"), fallback));
-            assert(strstr(snag_json_string(tool, "description"),
-                          "not tokens"));
-        }
-        properties = assert_strict_tool_contract(tool);
-        assert_schema_type(json_object_get(properties, "command"), "string", 0);
-        assert_schema_type(json_object_get(properties, "workdir"), "string", 0);
-        assert_schema_type(json_object_get(properties, "stdin"), "string", 1);
-        assert_schema_type(json_object_get(properties, "pty"), "boolean", 1);
-        assert_schema_type(json_object_get(properties, "yield_ms"), "integer", 1);
-        assert_schema_type(json_object_get(properties, "timeout_ms"), "integer", 1);
-        assert_schema_type(json_object_get(properties, "max_output_tokens"),
-                           "integer", 1);
-        assert(json_integer_value(json_object_get(json_object_get(properties,
-                   "max_output_tokens"), "minimum")) == 1);
-        assert((uint64_t)json_integer_value(json_object_get(json_object_get(
-                   properties, "max_output_tokens"), "maximum")) ==
-               max_output_tokens);
-        assert(json_integer_value(json_object_get(
-                   json_object_get(properties, "timeout_ms"), "minimum")) == 1);
-        assert((uint64_t)json_integer_value(json_object_get(
-                   json_object_get(properties, "timeout_ms"), "maximum")) ==
-               max_timeout_ms);
+        const char *description = snag_json_string(tool, "description");
+        assert(strstr(description, "uses the configured command deadline"));
+        assert(strstr(description, fallback));
+        assert(strstr(description, "not tokens"));
+        assert_properties(tool, json_pack(
+            "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
+            "s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I}}",
+            "command", "type", "string", "workdir", "type", "string",
+            "stdin", "type", "string", "null", "pty", "type", "boolean", "null",
+            "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
+            "timeout_ms", "type", "integer", "null", "minimum", 1,
+                "maximum", (json_int_t)max_timeout_ms,
+            "max_output_tokens", "type", "integer", "null", "minimum", 1,
+                "maximum", (json_int_t)max_output_tokens));
     }
 
     tool = tool_by_name(tools, "write_stdin");
-    assert(tool != NULL);
-    properties = assert_strict_tool_contract(tool);
-    {
-        char fallback[32];
-        assert(snprintf(fallback, sizeof(fallback), "ceiling (%u)",
-                        max_output_tokens) > 0);
-        assert(strstr(snag_json_string(tool, "description"), fallback));
-    }
-    {
-        json_t *handle_schema = json_object_get(properties, "handle");
-        json_t *allowed;
-
-        assert_schema_type(handle_schema, "string", 0);
-        allowed = json_object_get(handle_schema, "enum");
-        if (active_handle) {
-            assert(json_is_array(allowed));
-            assert(json_array_size(allowed) == 1u);
-            assert(strcmp(json_string_value(json_array_get(allowed, 0)),
-                          active_handle) == 0);
-        } else {
-            assert(allowed == NULL);
-        }
-    }
-    assert_schema_type(json_object_get(properties, "data"), "string", 0);
-    assert_schema_type(json_object_get(properties, "eof"), "boolean", 1);
-    assert_schema_type(json_object_get(properties, "terminate"), "boolean", 1);
-    assert_schema_type(json_object_get(properties, "yield_ms"), "integer", 1);
-    assert_schema_type(json_object_get(properties, "max_output_tokens"),
-                       "integer", 1);
-    assert(json_integer_value(json_object_get(json_object_get(properties,
-               "max_output_tokens"), "minimum")) == 1);
-    assert(json_integer_value(json_object_get(json_object_get(properties,
-               "max_output_tokens"), "maximum")) == max_output_tokens);
+    assert(tool && strstr(snag_json_string(tool, "description"), fallback));
+    expected = json_pack(
+        "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
+        "s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:I}}",
+        "handle", "type", "string", "data", "type", "string",
+        "eof", "type", "boolean", "null", "terminate", "type", "boolean", "null",
+        "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
+        "max_output_tokens", "type", "integer", "null", "minimum", 1,
+            "maximum", (json_int_t)max_output_tokens);
+    assert(expected);
+    if (active_handle)
+        assert(json_object_set_new(json_object_get(expected, "handle"),
+                                   "enum", json_pack("[s]", active_handle)) == 0);
+    assert_properties(tool, expected);
 
     tool = tool_by_name(tools, "apply_patch");
-    if (tool) {
-        properties = assert_strict_tool_contract(tool);
-        assert_schema_type(json_object_get(properties, "patch"), "string", 0);
-        assert_schema_type(json_object_get(properties, "workdir"), "string", 0);
-    }
-
+    if (tool)
+        assert_properties(tool, json_pack("{s:{s:s},s:{s:s}}",
+            "patch", "type", "string", "workdir", "type", "string"));
     tool = tool_by_name(tools, "create_goal");
     if (tool) {
-        assert(strstr(snag_json_string(tool, "description"),
-                      "explicitly request") != NULL);
-        properties = assert_strict_tool_contract(tool);
-        assert_schema_type(json_object_get(properties, "objective"),
-                           "string", 0);
+        assert(strstr(snag_json_string(tool, "description"), "explicitly request"));
+        assert_properties(tool, json_pack("{s:{s:s}}", "objective", "type", "string"));
     }
-
     tool = tool_by_name(tools, "update_goal");
-    if (tool) {
-        json_t *actions;
-        properties = assert_strict_tool_contract(tool);
-        assert_schema_type(json_object_get(properties, "action"), "string", 0);
-        actions = json_object_get(json_object_get(properties, "action"),
-                                  "enum");
-        assert(json_is_array(actions));
-        assert(json_array_size(actions) == 3u);
-        assert(array_has_string(actions, "rewrite"));
-        assert(array_has_string(actions, "complete"));
-        assert(array_has_string(actions, "block"));
-        assert_schema_type(json_object_get(properties, "text"), "string", 1);
-    }
+    if (tool)
+        assert_properties(tool, json_pack("{s:{s:s,s:[s,s,s]},s:{s:[s,s]}}",
+            "action", "type", "string", "enum", "rewrite", "complete", "block",
+            "text", "type", "string", "null"));
 }
 
 static void

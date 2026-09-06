@@ -48,12 +48,18 @@ class Child:
     def __exit__(self, *_):
         self.kill()
 
-    def __init__(self, args):
+    def __init__(self, args, ready=None):
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(WORKSPACE)
             os.execv(BINARY, [BINARY, "--dotdir", DOTDIR, *args])
         self.buf = bytearray()
+        if ready is not None:
+            try:
+                self.wait(ready)
+            except BaseException:
+                self.kill()
+                raise
 
     @classmethod
     def from_command(cls, command):
@@ -600,8 +606,7 @@ def test_incremental_wrapped_long_prompt_multiline_indent():
 
 def test_steering():
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", "»".encode())
     child.wait(b"working slowly")
     answer_end = child.send_wait(b"change course\r", b"steered: change course")
@@ -621,8 +626,7 @@ def test_steering():
 
 def test_repeated_steering_rearms_composer():
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow_resteer\r", b"working slowly")
 
     first_ack = child.send_wait(b"first steer\r", DEFAULT_ACTIVE_PROMPT + b"first steer")
@@ -653,8 +657,7 @@ def test_repeated_steering_rearms_composer():
 
 def test_public_index_gap():
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     commentary_end = child.send_wait(b"public_index_gap\r", b"Checking hidden work.")
     answer_end = child.wait(b"Gap-safe final.", start=commentary_end)
     child.exit_cleanly(answer_end)
@@ -670,8 +673,7 @@ def test_public_index_gap():
 
 def test_public_index_diagnostic():
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"public_index_decrease\r", b"index one")
     failure_end = child.wait(b"public output indexes did not increase")
     exhausted = child.wait(b"turn failed; try /retry", start=failure_end, timeout=20.0)
@@ -691,8 +693,7 @@ def test_public_index_diagnostic():
 
 def test_split_utf8_steering():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send(b"slow_utf8\r")
     deadline = time.monotonic() + 4.0
     while session_ids() == before:
@@ -714,8 +715,7 @@ def test_typing_pause_and_transient_composer():
         "typing-pause.ini"
     config.write_text("[provider openai]\n[ui]\ntyping_pause_ms = 300\n", encoding="utf-8")
     before = session_ids()
-    child = Child(["--config", str(config)])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child(["--config", str(config)], DEFAULT_IDLE_PROMPT)
     first_end = child.send_wait(b"typing_stream\r", b"model-output-one")
 
     edit_start = len(child.buf)
@@ -755,8 +755,7 @@ def test_typing_pause_and_transient_composer():
 
 def test_armed_fifo():
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", b"working slowly")
     child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
     child.wait(b"/medium   ?% (1) \xc2\xbb ")
@@ -814,8 +813,7 @@ def test_queue_prompt_counts():
 def test_read_only_queries():
     Path(WORKSPACE, "ro-input.txt").write_text("native text\nsecond line\n", encoding="utf-8")
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     end = child.send_wait(b"/ro\r", b"usage: /ro QUERY")
     child.wait_idle_prompt(start=end)
     end = child.send_wait(b"/ro ro_native\r", b"native complete")
@@ -840,8 +838,7 @@ def test_read_only_queries():
     assert not any(x["type"] == "goal_started" for x in log)
 
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", b"working slowly")
     end = child.send_wait(b"/ro ping\r", b"/ro cannot steer an active turn")
     child.wait(b"/ro ping", start=end)
@@ -860,8 +857,7 @@ def test_read_only_queries():
 
     # Ordinary steers keep the existing read-only turn read-only.
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"/ro slow\r", b"working slowly")
     end = child.send_wait(b"replacement\r", b"steered: replacement")
     child.exit_cleanly(end)
@@ -914,13 +910,11 @@ def test_read_only_multiline_compaction_and_chat():
     config = root / "config" / "ro-compaction.ini"
     config.write_text("[provider openai]\nauto_compact_input_tokens = 1\n", encoding="utf-8")
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(end)
     sid = new_session(before)
-    child = Child(["--config", str(config), "--resume", sid])
-    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
+    child = Child(["--config", str(config), "--resume", sid], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     end = child.send_wait(b"/ro ro_native\r", b"native complete")
     child.exit_cleanly(end)
     log = events(sid)
@@ -928,8 +922,7 @@ def test_read_only_multiline_compaction_and_chat():
     assert [x for x in log if x["type"] == "turn_started"][-1]["data"]["read_only"] is True
 
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", b"working slowly")
     end = child.send_wait(b"\x1b[200~/ro inspect\nmultiline\x1b[201~\r", b"/ro cannot steer an active turn")
     child.wait(b"multiline", start=end)
@@ -947,8 +940,7 @@ def test_read_only_multiline_compaction_and_chat():
 
     before = session_ids()
     child = Child(["--no-color", "-s", f"127.0.0.1:{free_port()}",
-                   "-n", "roagent", "-o", "rooperator", "-r", "lab"])
-    child.wait(chat_prompt("rooperator"))
+                   "-n", "roagent", "-o", "rooperator", "-r", "lab"], chat_prompt("rooperator"))
     end = child.send_wait(b"/ro ro_native\r", b"native complete")
     child.exit_cleanly(end)
     log = events(new_session(before))
@@ -961,8 +953,7 @@ def test_read_only_multiline_compaction_and_chat():
 
 def test_read_only_queue_replay_and_edit():
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"queue_slow\r", b"working slowly")
     child.send_wait(b"/ro ping\t", b"queued (/next or /q c) " + PROMPT + b"/ro ping")
     end = len(child.buf)
@@ -988,8 +979,7 @@ def test_read_only_queue_replay_and_edit():
     assert turns[1]["text"] == "repeat"
 
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"/goal slow goal\r", b"working on goal")
     end = child.send_wait(b"/ro ping\t", b"queued (/next or /q c) " + PROMPT + b"/ro ping")
     child.send_wait(b"/queue 1 edit\r", b"/ro ping", start=end)
@@ -1009,8 +999,7 @@ def test_read_only_queue_replay_and_edit():
 
 def test_managed_command_steering_and_tab_queue():
     before = session_ids()
-    child = Child(["-v"])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child(["-v"], DEFAULT_IDLE_PROMPT)
     tool_start = child.send_wait(b"managed_command_steer\r", b"fixture managed steering wait")
     deadline = time.monotonic() + 1.0
     while not any(frame.encode() in child.buf[tool_start:] for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"):
@@ -1035,8 +1024,7 @@ def test_managed_command_steering_and_tab_queue():
     assert not [item for item in log if item["type"] == "process_closed"]
 
     before = session_ids()
-    child = Child(["-v"])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child(["-v"], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"managed_command_queue\r", b"fixture managed queue wait")
     child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
     command_end = child.wait(b"managed command queue complete")
@@ -1071,14 +1059,12 @@ def test_steering_during_pre_response_compaction():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     answer_end = child.send_wait(b"context_anchor_chain\r", b"context anchor complete")
     child.exit_cleanly(answer_end)
     session_id = new_session(before)
 
-    child = Child(["--config", str(config), "--resume", session_id])
-    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
+    child = Child(["--config", str(config), "--resume", session_id], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     child.send_wait(b"compaction_steer\r", "»".encode())
     steer_end = child.send_wait(b"change plan\r", DEFAULT_ACTIVE_PROMPT + b"change plan")
     child.wait("»".encode(), start=steer_end)
@@ -1103,21 +1089,18 @@ def test_steering_during_pre_response_compaction():
         steering["data"]["steering_id"]
     ]
 
-    resumed = Child(["--config", str(config), "--resume", session_id])
-    resumed.wait(PROMPT.rstrip())
+    resumed = Child(["--config", str(config), "--resume", session_id], PROMPT.rstrip())
     resumed.exit_now()
 
 
 def test_steering_during_capacity_recovery_compaction():
     before = session_ids()
-    child = Child([])
-    child.wait(DEFAULT_IDLE_PROMPT)
+    child = Child([], DEFAULT_IDLE_PROMPT)
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
     session_id = new_session(before)
 
-    child = Child(["--resume", session_id])
-    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
+    child = Child(["--resume", session_id], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     child.send(b"capacity_recovery_steer\r")
     deadline = time.monotonic() + 4.0
     while not any(e["type"] == "compaction_started" and
@@ -1206,8 +1189,7 @@ def test_agents_md_config():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["--config", str(enabled_config), "-C", str(workspace)])
-    child.wait(PROMPT.rstrip())
+    child = Child(["--config", str(enabled_config), "-C", str(workspace)], PROMPT.rstrip())
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
     turn = one(events(new_session(before)), "turn_started")
@@ -1221,8 +1203,7 @@ def test_agents_md_config():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["--config", str(disabled_config), "-C", str(workspace)])
-    child.wait(PROMPT.rstrip())
+    child = Child(["--config", str(disabled_config), "-C", str(workspace)], PROMPT.rstrip())
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
     turn = one(events(new_session(before)), "turn_started")
@@ -1236,8 +1217,7 @@ def test_agents_md_config():
     before = session_ids()
     options = ["--config", str(disabled_config), "-C", str(workspace),
                "-d", str(docs), "-d" + str(docs / "."), "-d", str(workspace)]
-    child = Child(options)
-    child.wait(PROMPT.rstrip())
+    child = Child(options, PROMPT.rstrip())
     end = child.send_wait(b"ping\r", b"pong")
     child.wait_idle_prompt(start=end)
     end = child.send_wait(b"/compact\r", COMPACTED, start=end)
@@ -1261,8 +1241,7 @@ def test_agents_md_config():
 
 def test_interrupt():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"slow\r", b"working slowly")
     interrupted_end = child.send_wait(b"\x03", b"turn interrupted")
     child.drain(0.1)
@@ -1285,8 +1264,7 @@ def test_interrupt():
 
 def test_active_ctrl_c_clears_draft():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"queue_slow\r", b"working slowly")
 
     edit_start = len(child.buf)
@@ -1330,11 +1308,9 @@ def test_ctrl_c_cancels_partial_editor_states():
 def test_prompt_history_and_reverse_search():
     history = Path(DOTDIR) / "prompt_history"
     before_second = session_ids()
-    second = Child([])
-    second.wait(DEFAULT_IDLE_PROMPT)
+    second = Child([], DEFAULT_IDLE_PROMPT)
     assert session_ids() == before_second
-    first = Child([])
-    first.wait(DEFAULT_IDLE_PROMPT)
+    first = Child([], DEFAULT_IDLE_PROMPT)
     for entry in (
         b"history-repeat-old",
         b"history-repeat-new",
@@ -1426,8 +1402,7 @@ def test_prompt_history_and_reverse_search():
 
 def test_multiline_and_paste():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     first_end = child.send_wait(b"line one\nline two\r", b"fixture answer")
     child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=first_end)
     answer_end = child.send_wait(b"\x1b[200~ping\x1b[201~\r", b"pong")
@@ -1440,15 +1415,13 @@ def test_multiline_and_paste():
 
 def test_resume_pauses_fifo():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"slow\r", b"working slowly")
     child.send_wait(b"/queue ping\r", b"queued (/next or /q c) " + PROMPT + b"ping")
     session_id = new_session(before)
     child.kill()
 
-    resumed = Child(["--resume", session_id])
-    resumed.wait(b"1 queued paused")
+    resumed = Child(["--resume", session_id], b"1 queued paused")
     resumed.wait(b"queued future turns are paused; use /next")
     resumed.wait(b"/medium   ?% (1) \xe2\x80\xba ")
     resumed.drain(0.3)
@@ -1467,8 +1440,7 @@ def test_resume_pauses_fifo():
 
 def test_goal_quoted_reserved_wording():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     error_end = child.send_wait(b"/goal pause after release\r", b"reserved /goal command has extra text")
     child.wait(PROMPT.rstrip(), start=error_end)
     answer_end = child.send_wait(b'/goal "pause after release"\r', b"goal done")
@@ -1488,8 +1460,7 @@ def test_goal_quoted_reserved_wording():
 
 def test_goal_automatic_continuation():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     checkpoint_end = child.send_wait(b"/goal automatic goal\r", b"goal checkpoint")
     answer_end = child.wait(b"goal done", start=checkpoint_end)
     child.exit_cleanly(answer_end)
@@ -1505,8 +1476,7 @@ def test_goal_automatic_continuation():
 
 def test_model_created_goal_continuation():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     started_end = child.send_wait(b"please create a persistent goal\r", GOAL_SET)
     checkpoint_end = child.wait(b"model-created checkpoint", start=started_end)
     cleared_end = child.wait(GOAL_CLEARED, start=checkpoint_end)
@@ -1529,8 +1499,7 @@ def test_goal_configured_wording_limit():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["--config", str(config)])
-    child.wait(PROMPT.rstrip())
+    child = Child(["--config", str(config)], PROMPT.rstrip())
     error_end = child.send_wait(b"/goal abcde\r", b"goal wording must contain 1..4 UTF-8 bytes")
     child.wait(PROMPT.rstrip(), start=error_end)
     answer_end = child.send_wait(b"/goal tiny\r", b"goal done")
@@ -1544,8 +1513,7 @@ def test_goal_configured_wording_limit():
 
 def test_goal_model_rewrite_and_lock():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     set_end = child.send_wait(b"/goal rewrite goal\r", GOAL_SET)
     rewritten_end = child.wait(GOAL_UPDATED, start=set_end)
     cleared_end = child.wait(GOAL_CLEARED, start=rewritten_end)
@@ -1560,8 +1528,7 @@ def test_goal_model_rewrite_and_lock():
     }
 
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal locked goal\r", b"preparing goal rewrite")
     lock_end = child.send_wait(b"/goal lock\r", b"Goal wording locked against model changes")
     answer_end = child.wait(b"goal done", start=lock_end)
@@ -1574,8 +1541,7 @@ def test_goal_model_rewrite_and_lock():
 
 def test_goal_pause_resume_and_queue_priority():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal slow goal\r", b"working on goal")
     pause_end = child.send_wait(b"/goal pause\r", b"Goal paused at the current turn boundary")
     checkpoint_end = child.wait(b"goal checkpoint", start=pause_end)
@@ -1591,8 +1557,7 @@ def test_goal_pause_resume_and_queue_priority():
     assert [item["data"]["input_kind"] for item in turns] == ["goal", "goal"]
 
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal slow goal\r", b"working on goal")
     child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
     child.send_wait(b"/ro repeat\t", b"queued (/next or /q c) " + PROMPT + b"/ro repeat")
@@ -1611,8 +1576,7 @@ def test_goal_pause_resume_and_queue_priority():
 
 def test_goal_user_terminal_commands_and_unlock():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     set_end = child.send_wait(b"/goal slow goal\r", GOAL_SET)
     child.wait(b"working on goal", start=set_end)
     reworded_end = child.send_wait(b"/goal set retitled goal\r", GOAL_UPDATED, start=set_end)
@@ -1645,8 +1609,7 @@ def test_goal_user_terminal_commands_and_unlock():
 
 def test_goal_refusal_failure_block_and_restart_state():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal refusing goal\r", b"I cannot continue this goal.")
     child.wait(b"Goal active; retrying")
     child.send(b"/goal pause\r")
@@ -1656,8 +1619,7 @@ def test_goal_refusal_failure_block_and_restart_state():
     assert one(log, "goal_paused")["data"]["reason"] == "user"
 
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal failing goal\r", b"fixture goal provider failed")
     child.wait(b"Goal active; retrying")
     done = child.wait(b"goal done", timeout=20.0)
@@ -1669,8 +1631,7 @@ def test_goal_refusal_failure_block_and_restart_state():
     one(log, "goal_completed")
 
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal blocked goal\r", b"Goal blocked by model")
     answer_end = child.wait(b"goal done")
     status_end = child.send_wait(b"/goal\r", b": blocked", start=answer_end)
@@ -1682,8 +1643,7 @@ def test_goal_refusal_failure_block_and_restart_state():
         "fixture dependency is unavailable"
 
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal slow goal\r", b"working on goal")
     session_id = new_session(before)
     child.kill()
@@ -1790,8 +1750,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
 
 def test_queue_mutation_commands():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
     child.send_wait(b"queue_slow\r", b"working slowly")
 
     for text in (b"first", b"second", b"third"):
@@ -1830,8 +1789,7 @@ def test_queue_mutation_commands():
     assert os.waitstatus_to_exitcode(status) == 0
 
     session_id = new_session(before)
-    resumed = Child(["--resume", session_id])
-    resumed.wait(b"2 queued paused")
+    resumed = Child(["--resume", session_id], b"2 queued paused")
     resumed.wait(b"/medium   ?% (2) \xe2\x80\xba ")
     resumed.wait(PROMPT.rstrip())
     start = len(resumed.buf)
@@ -1871,8 +1829,7 @@ def test_queue_mutation_commands():
 
 def test_preferences_and_verbosity():
     before = session_ids()
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
 
     for level in range(7):
         start = len(child.buf)
@@ -1950,8 +1907,7 @@ def test_runtime_verbosity_resume():
 
 
 def test_command_name_completion():
-    child = Child([])
-    child.wait(PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip())
 
     start = len(child.buf)
     end = child.send_wait(b"/he\t", b"lp", start=start)
@@ -2071,8 +2027,7 @@ def test_uncached_typed_model_selection():
     try:
         # Even an explicitly located Codex cache is not snajpagent state.
         os.environ["CODEX_HOME"] = str(custom_codex_home)
-        child = Child([])
-        child.wait(PROMPT.rstrip())
+        child = Child([], PROMPT.rstrip())
         end = child.send_wait(b"/model\r", b"model cache is empty; use /model cache while idle")
         child.wait(PROMPT.rstrip(), start=end)
         assert not cache_path.exists()
@@ -2094,8 +2049,7 @@ def test_uncached_typed_model_selection():
 
         # The conventional ~/.codex cache is ignored as well.
         os.environ.pop("CODEX_HOME", None)
-        child = Child([])
-        child.wait(PROMPT.rstrip())
+        child = Child([], PROMPT.rstrip())
         end = child.send_wait(b"/model list\r", b"model cache is empty; use /model cache while idle")
         child.wait(PROMPT.rstrip(), start=end)
         assert not cache_path.exists()
@@ -2322,8 +2276,7 @@ def test_model_cache_and_selection():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["--config", str(config)])
-    child.wait(PROMPT.rstrip())
+    child = Child(["--config", str(config)], PROMPT.rstrip())
 
     # Explicit refresh creates the complete all-provider cache.
     start = len(child.buf)
@@ -2424,8 +2377,7 @@ def test_model_cache_and_selection():
     assert turn["data"]["config"]["effort"] == "high"
 
     # Provider/model/effort selection survives a process restart and resume.
-    resumed = Child(["--config", str(config), "--resume", session_id])
-    resumed.wait(PROMPT.rstrip())
+    resumed = Child(["--config", str(config), "--resume", session_id], PROMPT.rstrip())
     status_end = resumed.send_wait(b"/status\r", b"provider: second")
     resumed.wait(b"model: gpt-5.6-luna", start=status_end)
     status_end = resumed.wait(b"effort: high", start=status_end)
@@ -2443,8 +2395,7 @@ def test_model_cache_and_selection():
     complete_inode = cache_path.stat().st_ino
     os.environ["SNAJPAGENT_FIXTURE_MODEL_FAILURE"] = "second"
     try:
-        failing = Child(["--config", str(config)])
-        failing.wait(PROMPT.rstrip())
+        failing = Child(["--config", str(config)], PROMPT.rstrip())
         failed_end = failing.send_wait(b"/model cache\r",
             b"cannot refresh provider second: fixture model discovery failed"
         )
@@ -2477,8 +2428,7 @@ def test_model_configuration_save():
     original = config.read_bytes()
     original_mode = config.stat().st_mode & 0o777
     before = session_ids()
-    child = Child(["--config", str(config)])
-    child.wait(PROMPT.rstrip())
+    child = Child(["--config", str(config)], PROMPT.rstrip())
 
     # Selection without a suffix remains session-only.
     cached = child.send_wait(b"/model cache\r", b"16. second / vendor/future-model / low")
@@ -2559,8 +2509,7 @@ def test_model_configuration_save():
 
     # A new session consumes the saved provider and defaults from that path.
     before_new = session_ids()
-    child = Child(["--config", str(config)])
-    child.wait(PROMPT.rstrip())
+    child = Child(["--config", str(config)], PROMPT.rstrip())
     end = child.send_wait(b"/status\r", b"provider: second")
     child.wait(b"model: durable-new", start=end)
     end = child.wait(b"effort: cosmic", start=end)
@@ -2645,8 +2594,7 @@ def test_config_editor_reload():
     os.environ["SNAJPAGENT_EDITOR_SEEN"] = str(seen)
     try:
         before = session_ids()
-        child = Child(["--config", str(config)])
-        child.wait(PROMPT.rstrip())
+        child = Child(["--config", str(config)], PROMPT.rstrip())
         assert session_ids() == before
         child.send_wait(b"/verbose 2\r", b"verbosity: 2")
 
@@ -2770,8 +2718,7 @@ def test_config_editor_reload():
         try:
             default_config.unlink(missing_ok=True)
             plan.write_text(str(valid_one), encoding="utf-8")
-            child = Child([])
-            child.wait(PROMPT.rstrip())
+            child = Child([], PROMPT.rstrip())
             end = child.send_wait(b"/config\r",
                 f"configuration reloaded: {default_config}".encode()
             )
@@ -2802,8 +2749,7 @@ def test_config_editor_reload():
 def test_known_context_meter():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     before = session_ids()
-    child = Child(["--config", str(config)])
-    child.wait(b" first/uncached-start/low   0% \xe2\x80\xba ")
+    child = Child(["--config", str(config)], b" first/uncached-start/low   0% \xe2\x80\xba ")
     selected = child.send_wait(b"/model gpt-5.6-luna / high\r",
         b"model for next turn: first / gpt-5.6-luna / high"
     )
@@ -2854,8 +2800,7 @@ def test_config_and_cli_model_passthrough():
         encoding="utf-8",
     )
     before = session_ids()
-    child = Child(["--config", str(config)])
-    child.wait(b" openai/openai/gpt-5.6/medium   0% \xe2\x80\xba ")
+    child = Child(["--config", str(config)], b" openai/openai/gpt-5.6/medium   0% \xe2\x80\xba ")
 
     end = child.send_wait(b"/status\r", b"model: openai/gpt-5.6")
     child.wait(PROMPT.rstrip(), start=end)
@@ -2872,8 +2817,7 @@ def test_config_and_cli_model_passthrough():
     resumed = Child([
         "--config", str(config), "-m", "openai/future",
         "--effort", "custom-effort", "--resume", session_id
-    ])
-    resumed.wait(b" openai/future/custom-effort   ?% \xe2\x80\xba ")
+    ], b" openai/future/custom-effort   ?% \xe2\x80\xba ")
     start = len(resumed.buf)
     end = resumed.send_wait(b"/status\r",
         b"model: future (staged once)", start=start
@@ -3012,8 +2956,7 @@ def test_empty_network_session():
 def test_exit_resume_matrix():
     for exit_input in (b"/exit\r", b"\x04"):
         before = session_ids()
-        child = Child(["--no-color"])
-        child.wait(PROMPT.rstrip())
+        child = Child(["--no-color"], PROMPT.rstrip())
         child.send(b"ping\r")
         answered = child.wait(b"pong")
         child.wait_idle_prompt(start=answered)
@@ -3025,8 +2968,7 @@ def test_exit_resume_matrix():
         assert arguments[arguments.index("--dotdir") + 1] == DOTDIR
 
     before = session_ids()
-    cancelled = Child(["--no-color"])
-    cancelled.wait(DEFAULT_IDLE_PROMPT)
+    cancelled = Child(["--no-color"], DEFAULT_IDLE_PROMPT)
     cancelled.send(b"ping\r")
     answered = cancelled.wait(b"pong")
     cancelled.wait_idle_prompt(start=answered)
@@ -3045,8 +2987,7 @@ def test_exit_resume_matrix():
 
     for signal_number in (signal.SIGHUP, signal.SIGTERM):
         before = session_ids()
-        child = Child(["--no-color"])
-        child.wait(PROMPT.rstrip())
+        child = Child(["--no-color"], PROMPT.rstrip())
         child.send(b"ping\r")
         answered = child.wait(b"pong")
         child.wait_idle_prompt(start=answered)
@@ -3056,8 +2997,7 @@ def test_exit_resume_matrix():
         assert command_arguments(command)[-2:] == ["--resume", session_id]
 
     before = session_ids()
-    active_eof = Child(["--no-color"])
-    active_eof.wait(PROMPT.rstrip())
+    active_eof = Child(["--no-color"], PROMPT.rstrip())
     active_eof.send_wait(b"slow\r", b"working slowly")
     active_eof.send_wait(b"\x04", RESUME_HEADER, timeout=1.0)
     active_eof_command = active_eof.finish()
@@ -3071,8 +3011,7 @@ def test_exit_resume_matrix():
     assert b"slow complete" not in active_eof.buf
 
     before = session_ids()
-    archived = Child(["--no-color"])
-    archived.wait(PROMPT.rstrip())
+    archived = Child(["--no-color"], PROMPT.rstrip())
     archived.send(b"ping\r")
     answered = archived.wait(b"pong")
     archived.wait_idle_prompt(start=answered)
@@ -3085,8 +3024,7 @@ def test_exit_resume_matrix():
     assert one(events(archived_id), "session_archived")
 
     before = session_ids()
-    deleted = Child(["--no-color"])
-    deleted.wait(PROMPT.rstrip())
+    deleted = Child(["--no-color"], PROMPT.rstrip())
     deleted.send(b"ping\r")
     answered = deleted.wait(b"pong")
     deleted.wait_idle_prompt(start=answered)
@@ -3097,8 +3035,7 @@ def test_exit_resume_matrix():
     assert not (STATE_ROOT / deleted_id).exists()
 
     before = session_ids()
-    original = Child(["--no-color"])
-    original.wait(PROMPT.rstrip())
+    original = Child(["--no-color"], PROMPT.rstrip())
     original.send(b"ping\r")
     answered = original.wait(b"pong")
     original.wait_idle_prompt(start=answered)
@@ -3108,8 +3045,7 @@ def test_exit_resume_matrix():
     staged = Child([
         "--no-color", "-m", "openai/future", "--effort", "xhigh",
         "--resume", staged_id,
-    ])
-    staged.wait(PROMPT.rstrip())
+    ], PROMPT.rstrip())
     staged_command = staged.exit_now()
     staged_arguments = command_arguments(staged_command)
     assert staged_arguments[staged_arguments.index("-m") + 1] == "openai/future"
@@ -3210,8 +3146,7 @@ def test_network_resume_roles():
     client = Child([
         "--no-color", "-c", upstream_endpoint,
         "-n", "clientagent", "-o", "clientop",
-    ])
-    client.wait(chat_prompt("clientop"))
+    ], chat_prompt("clientop"))
     assert session_ids() == before
     first_links = accept_connections(upstream, 2)
     client.send(b"/rollout\r")
@@ -3243,8 +3178,7 @@ def test_network_resume_roles():
     server = Child([
         "--no-color", "-s", server_endpoint,
         "-n", "serveragent", "-o", "serverop", "-r", "lab",
-    ])
-    server.wait(chat_prompt("serverop"))
+    ], chat_prompt("serverop"))
     assert session_ids() == before
     peer = IRCClient(server_port, "firstpeer")
     peer.message("retained room message")
@@ -3288,8 +3222,7 @@ def test_network_resume_roles():
         "--no-color", "-s", combined_endpoint,
         "-c", upstream_endpoint,
         "-n", "combinedagent", "-o", "combinedop", "-r", "lab",
-    ])
-    combined.wait(chat_prompt("combinedop"))
+    ], chat_prompt("combinedop"))
     assert session_ids() == before
     first_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "combinedpeer")
@@ -3514,8 +3447,7 @@ def test_prompt_identity_is_terminal_safe():
     unsafe_effort = "odd\u202eeffort"
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
-    child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(b" openai/" + visible + "   0% › ".encode())
+    child = Child(["-m", unsafe_model, "--effort", unsafe_effort], b" openai/" + visible + "   0% › ".encode())
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send_wait(b"ping\r", "»".encode())
@@ -3544,8 +3476,7 @@ def test_model_message_corrections_are_private_and_specific():
     ]
     for prompt, correction, recovered in cases:
         before = session_ids()
-        child = Child([])
-        child.wait(DEFAULT_IDLE_PROMPT)
+        child = Child([], DEFAULT_IDLE_PROMPT)
         start = len(child.buf)
         recovered_end = child.send_wait(prompt.encode() + b"\r", recovered, start=start)
         child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=recovered_end)
