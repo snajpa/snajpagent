@@ -3134,8 +3134,9 @@ def run_irc_chat_case(binary, root):
                          b"USER highlightpeer 0 * :agent\r\nCAP END\r\nJOIN #lab\r\n")
             for terminal in ordered:
                 terminal.wait("highlightpeer joined")
-            for target in ("hostop", "oneop"):
-                if target == "oneop":
+            for target, viewer in (("hostop", "host"), ("oneop", "one"),
+                                   ("hostbot", "host"), ("onebot", "one")):
+                if viewer == "one":
                     wait_current_prompt(terminals["one"], "oneop")
                     terminals["one"].submit("/rollout")
                     terminals["one"].wait("── rollout ──")
@@ -3143,7 +3144,7 @@ def run_irc_chat_case(binary, root):
                 message = f"@{target.upper()} **highlight start** `code` " + "wrapped message " * 12 + ending
                 peer.sendall(f"PRIVMSG #lab :{message}\r\n".encode())
                 terminals["host"].wait(ending)
-                if target == "oneop":
+                if viewer == "one":
                     deadline = time.monotonic() + 5.0
                     while not any(event["data"].get("text") == message
                                   for event in event_list(maybe_events(terminals["one"].dotdir)[1], "irc_event")):
@@ -3154,9 +3155,9 @@ def run_irc_chat_case(binary, root):
                     terminal.wait(ending)
                     styled = terminal.capture_styled()
                     # Foreground must survive Markdown and soft wrap through
-                    # the final text, only in the addressed operator's UI.
+                    # the final text, only in the addressed local identity's UI.
                     assert (foreground_at(styled, f"({ending})") == 35) == (
-                        name == {"hostop": "host", "oneop": "one"}[target]), styled
+                        name == viewer), styled
                 wait_irc_idle(ordered)
         wait_irc_quits(terminals["host"], ("highlightpeer",))
         wait_irc_idle(ordered)

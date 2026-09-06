@@ -2726,7 +2726,8 @@ render_irc_event_now(struct snag_render *render,
                 origin = &destinations->items[i];
         highlight = origin &&
             (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
-            snag_irc_nick_mentioned(event->text, origin->operator);
+            (snag_irc_nick_mentioned(event->text, origin->operator) ||
+             snag_irc_nick_mentioned(event->text, origin->model));
         if (origin && destinations->count > 1u)
             (void)snprintf(source, sizeof(source), "[%u] ", origin->target.id);
         else if (!origin && strcmp(event->endpoint, "local") != 0)

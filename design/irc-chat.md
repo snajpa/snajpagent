@@ -392,12 +392,12 @@ uses the same sender-role colors, whether hosting or connected as a client.
 Locality, nick changes and history replay do not change a sender's palette.
 Attributes are always reset at field boundaries so user/model text cannot
 inherit them.
-Messages and notices mentioning the local operator's currently accepted nick
-for their room highlight the whole entry in bold magenta, including wrapped
-lines and Markdown text. Matching uses IRC case folding and nick boundaries,
+Messages and notices mentioning the local operator's or model's currently
+accepted nick for their room highlight the whole entry in bold magenta,
+including wrapped lines and Markdown text. Matching uses IRC case folding and nick boundaries,
 not substrings or another server's aliases. The same display rule applies to
-retained chat; it does not promote history or operator mentions into model
-steering. Color disabled means no highlight escapes.
+retained chat; it does not change model steering or promote history or operator
+mentions into model input. Color disabled means no highlight escapes.
 Terse lifecycle milestone lines have their own bold-green role spanning the
 bullet and text. Durable identities are separate live debug records at level 4.
 Chat timestamps and sender labels already frame messages, so Markdown rendering

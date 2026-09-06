@@ -1360,7 +1360,7 @@ capture_color(enum snag_color_mode mode, bool chat_view,
 }
 
 static void
-test_operator_highlight(void)
+test_local_mention_highlight(void)
 {
     static const struct {
         const char *text, *nick, *room;
@@ -1376,15 +1376,18 @@ test_operator_highlight(void)
         {"@alice old alias", "alice2", "#room", SNAG_IRC_MESSAGE, false, false},
         {"@alice2 accepted alias", "alice2", "#room", SNAG_IRC_MESSAGE, false, true},
         {"@alice topic", "alice", "#room", SNAG_IRC_TOPIC, false, false},
-        {"unregistered operator", "", "#room", SNAG_IRC_MESSAGE, false, false},
+        {"unregistered nick", "", "#room", SNAG_IRC_MESSAGE, false, false},
+        {"@local-other also addressed", "alice", "#room", SNAG_IRC_MESSAGE, false, true},
     };
-    for (unsigned int flags = 0u; flags < 4u; ++flags) {
+    for (unsigned int flags = 0u; flags < 8u; ++flags) {
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
             struct snag_render render;
             struct snag_term term;
             struct snag_irc_destinations destinations = {.count = 2u, .items = {
-                {.endpoint = "server", .room = "#room", .target = {.id = 1u}},
-                {.endpoint = "other", .room = "#room", .operator = "bob", .target = {.id = 2u}},
+                {.endpoint = "server", .room = "#room", .operator = "local-other",
+                 .model = "local-other", .target = {.id = 1u}},
+                {.endpoint = "other", .room = "#room", .operator = "bob",
+                 .model = "bob", .target = {.id = 2u}},
             }};
             struct snag_irc_event event = {.endpoint = "server", .nick = "peer"};
             char output[8192] = {0};
@@ -1396,7 +1399,8 @@ test_operator_highlight(void)
             close(fds[1]);
             snag_term_init(&term);
             term.columns = 40u;
-            strcpy(destinations.items[0].operator, cases[i].nick);
+            strcpy(flags & 4u ? destinations.items[0].model :
+                               destinations.items[0].operator, cases[i].nick);
             assert(snag_term_set_destinations(&term, &destinations) == 0);
             snag_render_init(&render, 0u);
             render.stderr_terminal = true;
@@ -1858,7 +1862,7 @@ main(void)
     assert(setlocale(LC_ALL, "") != NULL);
     assert(setenv("TZ", "UTC0", 1) == 0);
     tzset();
-    test_operator_highlight();
+    test_local_mention_highlight();
     assert(capture_orientation(false, output, sizeof(output)) > 0u);
     assert(strcmp(output, SNAJPAGENT_IDENTITY
                   " · /work/tree · session id 01234567\n") == 0);
