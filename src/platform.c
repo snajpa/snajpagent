@@ -156,6 +156,82 @@ wide_path(const char *path)
 
 static bool private_dacl(PACL dacl, PSID owner);
 
+static char *
+utf8_string(const wchar_t *wide)
+{
+    int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, NULL, 0, NULL, NULL);
+    if (!size) {
+        path_error(GetLastError());
+        return NULL;
+    }
+    char *out = malloc((size_t)size);
+    if (out && !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, out, size, NULL, NULL)) {
+        DWORD error = GetLastError();
+        free(out);
+        path_error(error);
+        return NULL;
+    }
+    return out;
+}
+
+char *
+snag_environment(const char *name)
+{
+    wchar_t *key = wide_path(name);
+    if (!key)
+        return NULL;
+    SetLastError(ERROR_SUCCESS);
+    DWORD size = GetEnvironmentVariableW(key, NULL, 0);
+    if (!size) {
+        DWORD error = GetLastError();
+        free(key);
+        if (error == ERROR_SUCCESS)
+            return strdup("");
+        if (error == ERROR_ENVVAR_NOT_FOUND)
+            errno = ENOENT;
+        else
+            path_error(error);
+        return NULL;
+    }
+    if (size > 32768u) {
+        free(key);
+        errno = E2BIG;
+        return NULL;
+    }
+    wchar_t *value = calloc(size, sizeof(*value));
+    if (!value) {
+        free(key);
+        return NULL;
+    }
+    DWORD got = GetEnvironmentVariableW(key, value, size);
+    free(key);
+    char *out = NULL;
+    if (got < size && got)
+        out = utf8_string(value);
+    else
+        errno = EAGAIN; /* The environment changed between the size and read. */
+    volatile wchar_t *wipe = value;
+    for (DWORD i = 0; i < size; ++i)
+        wipe[i] = 0;
+    free(value);
+    return out;
+}
+
+char *
+snag_home_directory(void)
+{
+    char *path = snag_environment("HOME");
+    if (!path && errno != ENOENT)
+        return NULL;
+    if (!path || !*path) {
+        free(path);
+        path = snag_environment("USERPROFILE");
+    }
+    if (path)
+        snag_path_slashes(path);
+    return path;
+}
+
 char *
 snag_default_shell(void)
 {
@@ -166,19 +242,7 @@ snag_default_shell(void)
         return NULL;
     }
     memcpy(directory + len, L"\\cmd.exe", 9u * sizeof(*directory));
-    int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, directory, -1, NULL, 0, NULL, NULL);
-    if (!size) {
-        path_error(GetLastError());
-        return NULL;
-    }
-    char *out = malloc((size_t)size);
-    if (out && !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, directory, -1, out, size, NULL, NULL)) {
-        DWORD error = GetLastError();
-        free(out);
-        path_error(error);
-        return NULL;
-    }
-    return out;
+    return utf8_string(directory);
 }
 
 int
@@ -1704,6 +1768,27 @@ snag_fsync(int fd)
 #include <langinfo.h>
 #include <strings.h>
 #include <sys/wait.h>
+
+char *
+snag_environment(const char *name)
+{
+    if (!name) {
+        errno = EINVAL;
+        return NULL;
+    }
+    const char *value = getenv(name);
+    if (!value) {
+        errno = ENOENT;
+        return NULL;
+    }
+    return strdup(value);
+}
+
+char *
+snag_home_directory(void)
+{
+    return snag_environment("HOME");
+}
 
 char *
 snag_default_shell(void)

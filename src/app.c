@@ -3624,7 +3624,7 @@ current_workspace(char *error, size_t error_size)
 char *
 snag_app_dotdir(const char *override, char *error, size_t error_size)
 {
-    const char *home = getenv("HOME");
+    char *home = override ? NULL : snag_home_directory();
     char *path;
     size_t len;
 
@@ -3648,11 +3648,13 @@ snag_app_dotdir(const char *override, char *error, size_t error_size)
         }
     }
     else {
+        free(home);
         snag_errorf(error, error_size,
                   "HOME is unavailable for the default dotdir; use --dotdir DIR");
         errno = EINVAL;
         return NULL;
     }
+    free(home);
     if (!path)
         return NULL;
     len = strlen(path);

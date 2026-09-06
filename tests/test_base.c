@@ -42,6 +42,47 @@ test_shutdown_signal(int number)
 }
 
 #ifdef _WIN32
+static void
+test_home_environment(void)
+{
+    const WCHAR *names[] = {L"HOME", L"USERPROFILE", L"SNAJPAGENT_TEST_ENV_UTF8"};
+    WCHAR *saved[3] = {0};
+    for (size_t i = 0; i < 3u; ++i) {
+        DWORD size = GetEnvironmentVariableW(names[i], NULL, 0);
+        if (size) {
+            saved[i] = calloc(size, sizeof(*saved[i]));
+            assert(saved[i] && GetEnvironmentVariableW(names[i], saved[i], size) < size);
+        }
+    }
+    assert(SetEnvironmentVariableW(L"HOME", NULL));
+    assert(SetEnvironmentVariableW(L"USERPROFILE", L"C:\\Users\\\x4e2d Space"));
+    char *home = snag_home_directory();
+    assert(home && !strcmp(home, "C:/Users/\xe4\xb8\xad Space"));
+    free(home);
+    assert(SetEnvironmentVariableW(L"HOME", L"D:\\Explicit\\Home"));
+    home = snag_home_directory();
+    assert(home && !strcmp(home, "D:/Explicit/Home"));
+    free(home);
+    assert(SetEnvironmentVariableW(names[2], L"token-\x4e2d-\xd83d\xde00"));
+    char *value = snag_environment("SNAJPAGENT_TEST_ENV_UTF8");
+    assert(value && !strcmp(value, "token-\xe4\xb8\xad-\xf0\x9f\x98\x80"));
+    assert(SetEnvironmentVariableW(names[2], L"changed"));
+    assert(!strcmp(value, "token-\xe4\xb8\xad-\xf0\x9f\x98\x80"));
+    free(value);
+    assert(SetEnvironmentVariableW(names[2], NULL));
+    assert(!snag_environment("SNAJPAGENT_TEST_ENV_UTF8") && errno == ENOENT);
+    for (size_t i = 0; i < 3u; ++i) {
+        assert(SetEnvironmentVariableW(names[i], saved[i]));
+        if (saved[i]) {
+            volatile WCHAR *wipe = saved[i];
+            size_t size = wcslen(saved[i]);
+            for (size_t j = 0; j < size; ++j)
+                wipe[j] = 0;
+            free(saved[i]);
+        }
+    }
+}
+
 static int
 editor_test_child(void)
 {
@@ -1097,6 +1138,10 @@ test_input_mode(void)
 static void
 test_platform(void)
 {
+#ifdef _WIN32
+    test_home_environment();
+#endif
+    assert(!snag_environment(NULL) && errno == EINVAL);
     char *shell = snag_default_shell();
     assert(shell && snag_file_executable(shell) == 0);
     free(shell);

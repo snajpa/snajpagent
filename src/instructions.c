@@ -143,27 +143,32 @@ out:
 static char *
 config_instruction_root(char *error, size_t error_size)
 {
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    const char *home = getenv("HOME");
+    char *xdg = snag_environment("XDG_CONFIG_HOME");
     char *base;
     char *root;
 
     if (xdg && *xdg) {
         if (!snag_path_root_len(xdg)) {
+            free(xdg);
             snag_errorf(error, error_size, "XDG_CONFIG_HOME must be absolute");
             errno = EINVAL;
             return NULL;
         }
         base = snag_strdup_checked(xdg, SNAG_PATH_MAX_BYTES);
     } else {
+        char *home = snag_home_directory();
         if (!snag_path_root_len(home)) {
+            free(home);
+            free(xdg);
             snag_errorf(error, error_size,
                       "HOME is unavailable for instruction discovery");
             errno = EINVAL;
             return NULL;
         }
         base = snag_path_join(home, ".config");
+        free(home);
     }
+    free(xdg);
     if (!base)
         return NULL;
     root = snag_path_join(base, SNAJPAGENT_NAME);

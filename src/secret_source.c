@@ -55,6 +55,7 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
     struct snag_secret_source source = {0};
     struct snag_buf path;
     json_t *literal = NULL;
+    char *home = NULL;
     size_t len = strlen(expression);
     int rc = -1;
 
@@ -92,7 +93,8 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
             if (snag_buf_printf(&path, "%s", expression) < 0)
                 goto invalid;
         } else if (strncmp(expression, "~/", 2u) == 0) {
-            base = getenv("HOME");
+            home = snag_home_directory();
+            base = home;
             if (!snag_path_root_len(base) ||
                 snag_buf_printf(&path, "%s/%s", base, expression + 2u) < 0)
                 goto invalid;
@@ -120,6 +122,7 @@ invalid:
     snag_errorf(error, error_size,
                "invalid secret source; use ${ENV}, a double-quoted literal, or a file path");
 done:
+    free(home);
     if (json_is_string(literal)) {
         volatile char *p = (volatile char *)json_string_value(literal);
         for (size_t i = 0; i < json_string_length(literal); ++i)
@@ -140,9 +143,12 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
     int fd = -1, rc = -1;
 
     *out = NULL;
-    if (source->kind == SNAG_SECRET_ENV || source->kind == SNAG_SECRET_LITERAL) {
-        const char *text = source->kind == SNAG_SECRET_ENV ?
-                           getenv(source->value) : source->value;
+    if (source->kind == SNAG_SECRET_ENV) {
+        value = snag_environment(source->value);
+        if (value)
+            len = strlen(value);
+    } else if (source->kind == SNAG_SECRET_LITERAL) {
+        const char *text = source->value;
         if (!text || !(len = strnlen(text, SNAG_SECRET_MAX + 1u)) || len > SNAG_SECRET_MAX)
             goto done;
         value = snag_strdup_checked(text, SNAG_SECRET_MAX);
