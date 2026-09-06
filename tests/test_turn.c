@@ -85,10 +85,12 @@ test_native_read_results(void)
     char *above = snag_path_join(root_path, "../..");
     json_t *listing = json_pack("{s:s,s:b,s:n,s:i}", "path", above,
                                 "recursive", 0, "offset", "limit", 1);
-    char *listing_text = listing ? json_dumps(listing, JSON_COMPACT) : NULL;
-    assert(above && listing_text);
-    check_native_read(root, "list_files", listing_text, true, "next_offset=", NULL);
-    free(listing_text);
+    struct snag_buf listing_text;
+    snag_buf_init(&listing_text, 8192u);
+    assert(above && listing && snag_json_canonical(listing, &listing_text) == 0 &&
+           snag_buf_terminate(&listing_text) == 0);
+    check_native_read(root, "list_files", (char *)listing_text.data, true, "next_offset=", NULL);
+    snag_buf_free(&listing_text);
     json_decref(listing);
     free(above);
     free(root_path);
