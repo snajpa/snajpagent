@@ -39,6 +39,9 @@ struct snag_term_host {
 int snag_term_signals_block(struct snag_signal_mask *saved);
 int snag_term_signals_restore(const struct snag_signal_mask *saved);
 int snag_term_signals_unblock(void);
+int snag_term_controls_install(struct snag_term_host *host,
+                                void (*interrupt)(int), void (*resize)(int));
+void snag_term_controls_restore(struct snag_term_host *host);
 bool snag_term_host_capable(void);
 unsigned int snag_term_host_columns(void);
 int snag_term_input_capture(struct snag_term_host *host);

@@ -496,8 +496,6 @@ set_raw(struct snag_term *term)
 int
 snag_term_open(struct snag_term *term, char *error, size_t error_size)
 {
-    struct sigaction action;
-
     if (term->opened) {
         errno = EALREADY;
         snag_errorf(error, error_size, "terminal already open: %s", strerror(errno));
@@ -513,34 +511,16 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
         snag_errorf(error, error_size, "cannot enter terminal input mode: %s", strerror(errno));
         return -1;
     }
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = mark_sigint;
-    sigemptyset(&action.sa_mask);
-    if (sigaction(SIGINT, &action, &term->host.sigint) < 0) {
+    if (snag_term_controls_install(&term->host, mark_sigint, mark_sigwinch) < 0) {
         int saved_errno = errno;
         if (term->raw)
             (void)snag_term_input_restore(&term->host, true);
         term->raw = false;
         errno = saved_errno;
-        snag_errorf(error, error_size, "cannot install terminal interrupt handler: %s", strerror(errno));
+        snag_errorf(error, error_size, "cannot install terminal control handlers: %s", strerror(errno));
         return -1;
     }
-    term->sigint_installed = true;
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = mark_sigwinch;
-    sigemptyset(&action.sa_mask);
-    if (sigaction(SIGWINCH, &action, &term->host.sigwinch) < 0) {
-        int saved_errno = errno;
-        if (term->raw)
-            (void)snag_term_input_restore(&term->host, true);
-        (void)sigaction(SIGINT, &term->host.sigint, NULL);
-        term->raw = false;
-        term->sigint_installed = false;
-        errno = saved_errno;
-        snag_errorf(error, error_size, "cannot install terminal resize handler: %s", strerror(errno));
-        return -1;
-    }
-    term->sigwinch_installed = true;
+    term->controls_installed = true;
     sigint_pending = 0;
     sigwinch_pending = 0;
     term->opened = true;
@@ -561,12 +541,10 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
         int saved_errno = errno;
         (void)snag_term_input_restore(&term->host, true);
-        (void)sigaction(SIGINT, &term->host.sigint, NULL);
-        (void)sigaction(SIGWINCH, &term->host.sigwinch, NULL);
+        snag_term_controls_restore(&term->host);
         term->opened = false;
         term->raw = false;
-        term->sigint_installed = false;
-        term->sigwinch_installed = false;
+        term->controls_installed = false;
         errno = saved_errno;
         snag_errorf(error, error_size, "cannot enable bracketed paste: %s", strerror(errno));
         return -1;
@@ -2700,10 +2678,8 @@ snag_term_close(struct snag_term *term)
         if (term->raw)
             (void)snag_term_input_restore(&term->host, true);
     }
-    if (term->sigwinch_installed)
-        (void)sigaction(SIGWINCH, &term->host.sigwinch, NULL);
-    if (term->sigint_installed)
-        (void)sigaction(SIGINT, &term->host.sigint, NULL);
+    if (term->controls_installed)
+        snag_term_controls_restore(&term->host);
     history_clear(term);
     free(term->search_original);
     free(term->nicks);

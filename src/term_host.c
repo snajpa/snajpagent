@@ -9,11 +9,58 @@
 #include <string.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdatomic.h>
+#include <signal.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <io.h>
+
+static _Atomic(void (*)(int)) console_interrupt;
+
+static BOOL WINAPI
+console_control(DWORD event)
+{
+    if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT)
+        return FALSE;
+    void (*interrupt)(int) = atomic_load(&console_interrupt);
+    if (!interrupt)
+        return FALSE;
+    interrupt(SIGINT);
+    /* Wake the input wait without injecting a second Ctrl-C keystroke. */
+    INPUT_RECORD record = {.EventType = FOCUS_EVENT};
+    DWORD written;
+    (void)WriteConsoleInputW(GetStdHandle(STD_INPUT_HANDLE), &record, 1u, &written);
+    return TRUE;
+}
+
+int
+snag_term_controls_install(struct snag_term_host *host,
+                           void (*interrupt)(int), void (*resize)(int))
+{
+    (void)host;
+    (void)resize;
+    void (*absent)(int) = NULL;
+    if (!interrupt || !atomic_compare_exchange_strong(&console_interrupt, &absent, interrupt)) {
+        errno = interrupt ? EBUSY : EINVAL;
+        return -1;
+    }
+    if (!SetConsoleCtrlHandler(console_control, TRUE)) {
+        atomic_store(&console_interrupt, NULL);
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
+void
+snag_term_controls_restore(struct snag_term_host *host)
+{
+    (void)host;
+    (void)SetConsoleCtrlHandler(console_control, FALSE);
+    atomic_store(&console_interrupt, NULL);
+}
 
 static void
 reset_input(struct snag_term_host *host)
@@ -384,6 +431,32 @@ snag_term_signals_unblock(void)
 #include <pthread.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+
+int
+snag_term_controls_install(struct snag_term_host *host,
+                           void (*interrupt)(int), void (*resize)(int))
+{
+    struct sigaction action = {0};
+    sigemptyset(&action.sa_mask);
+    action.sa_handler = interrupt;
+    if (sigaction(SIGINT, &action, &host->sigint) < 0)
+        return -1;
+    action.sa_handler = resize;
+    if (sigaction(SIGWINCH, &action, &host->sigwinch) < 0) {
+        int error = errno;
+        (void)sigaction(SIGINT, &host->sigint, NULL);
+        errno = error;
+        return -1;
+    }
+    return 0;
+}
+
+void
+snag_term_controls_restore(struct snag_term_host *host)
+{
+    (void)sigaction(SIGWINCH, &host->sigwinch, NULL);
+    (void)sigaction(SIGINT, &host->sigint, NULL);
+}
 
 int
 snag_term_output_open(int fd)

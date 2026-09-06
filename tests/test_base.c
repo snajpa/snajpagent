@@ -14,6 +14,8 @@
 #include <wchar.h>
 #include <locale.h>
 #include <regex.h>
+#include <signal.h>
+#include <stdatomic.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -691,6 +693,14 @@ test_console_keys(struct snag_term_host *host)
 }
 #endif
 
+static atomic_uint console_interrupts;
+static void
+test_control_signal(int number)
+{
+    if (number == SIGINT)
+        (void)atomic_fetch_add(&console_interrupts, 1u);
+}
+
 static void
 test_input_mode(void)
 {
@@ -729,6 +739,25 @@ test_input_mode(void)
     assert(tcgetattr(0, &raw) == 0 && !(raw.c_lflag & (ECHO | ICANON | ISIG)));
 #endif
     assert(snag_term_input_flush(&host) == 0);
+    assert(snag_term_controls_install(&host, test_control_signal, test_control_signal) == 0);
+#ifdef _WIN32
+    assert(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, 0));
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    while (!atomic_load(&console_interrupts) && snag_monotonic_ms() < deadline)
+        assert(snag_sleep_ms(1u) == 0);
+    assert(atomic_load(&console_interrupts) == 1u);
+    assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, 1000) == SNAG_TERM_WAIT_INPUT);
+    char ignored[4];
+    assert(snag_term_input_read(&host, ignored, sizeof(ignored)) < 0 && errno == EAGAIN);
+#else
+    assert(raise(SIGINT) == 0 && atomic_load(&console_interrupts) == 1u);
+#endif
+    snag_term_controls_restore(&host);
+#ifndef _WIN32
+    struct sigaction restored_control;
+    assert(sigaction(SIGINT, NULL, &restored_control) == 0 &&
+           restored_control.sa_handler == host.sigint.sa_handler);
+#endif
     assert(snag_term_input_wait(&host, SNAG_WAKE_INVALID, -2) < 0 && errno == EINVAL);
     snag_wake_fd wake[2];
     assert(snag_wakeup_create(wake) == 0);

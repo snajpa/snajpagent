@@ -122,8 +122,7 @@ struct snag_term {
     bool prompt_visible;
     bool active;
     bool capable;
-    bool sigint_installed;
-    bool sigwinch_installed;
+    bool controls_installed;
     bool line_submission_echoed;
     bool typing_active;
     bool output_seen;
