@@ -76,8 +76,9 @@ the static GNU implementation. SDK declarations do not prove old-OS symbol
 availability: compile with availability warnings as errors and select genuine
 upstream missing-symbol fallbacks where necessary.
 
-LLVM's Mach-O linker creates an ad-hoc signature and llvm-strip regenerates
-its hashes. Matching optional symbols are retained as a dSYM with the same
+LLVM's Mach-O linker creates an ad-hoc signature for ARM64 and llvm-strip
+regenerates its hashes. The Intel slice remains unsigned, including inside
+the universal file. Matching optional symbols are retained as a dSYM with the same
 UUID. This is not Developer ID signing, notarization, or runtime qualification:
 the initial targets are explicitly experimental until actual macOS tests
 pass. No separately installed third-party shared libraries are introduced.

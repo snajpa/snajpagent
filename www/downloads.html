@@ -63,8 +63,8 @@
         <li><strong>macOS:</strong> universal contains both Intel and Apple Silicon
           slices. Application libraries are included, but Apple's system library
           is still required. The build deployment target is macOS 11; actual
-          macOS runtime qualification is pending. Builds are ad-hoc signed, not
-          Developer ID signed or notarized.</li>
+          macOS runtime qualification is pending. ARM64 is ad-hoc signed;
+          Intel is unsigned. Neither is Developer ID signed or notarized.</li>
         <li><strong>Windows:</strong> choose x64 or native ARM64. Both include
           application libraries and use only Windows system DLLs; ARM64 uses
           the OS UCRT. Runtime checks have run in Windows PE build 26100 (x64)
