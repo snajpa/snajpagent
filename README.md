@@ -153,6 +153,13 @@ needs `strip` and `objcopy` on Linux, or `strip` and `dsymutil` on macOS.
 `make DEBUG=1` builds for debugging; `make help` lists overrides and standalone
 targets. See [dependency notes](DEPENDENCIES.md) for portability.
 
+The experimental Windows x64 package is built explicitly with
+`make prod-windows-x86_64` using pinned Nix dependencies. Copy
+`build/matrix/windows-x86_64/bin/snajpagent.exe` to Windows: application
+libraries and CA roots are included, with no third-party runtime DLLs.
+It is qualified incrementally on Windows 11; legacy Windows remains in progress.
+Plain `make` still builds only the host platform.
+
 Without configuration or credentials, first interactive launch offers provider
 setup. Authenticate and select a supported model. Private configuration and
 credentials live under `$HOME/.snajpagent`. `/config` opens configuration;

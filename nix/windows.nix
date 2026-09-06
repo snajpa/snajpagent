@@ -135,10 +135,8 @@ in {
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
-        "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
+        "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl | sed -E 's/(^| )-lz( |$)/\1-lzs\2/g')"
       )
-      # Upstream zlib.pc still advertises -lz; its static Windows archive is libzs.a.
-      makeFlagsArray+=("CURL_LIBS=$($PKG_CONFIG --static --libs libcurl | sed 's/-lz /-lzs /g')")
     '';
     installPhase = ''
       runHook preInstall
