@@ -1147,34 +1147,13 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
                       provider->name, detail[0] ? detail : strerror(errno));
             goto out;
         }
-        entry = json_object();
-        if (!entry) {
-            json_decref(models);
+        entry = json_pack("{s:o,s:s,s:s,s:s}", "models", models,
+            "base_url", provider->base_url, "name", provider->name,
+            "protocol", snag_provider_catalog_protocol(provider));
+        if (!entry || json_array_append_new(providers, entry) < 0) {
             (void)snag_fail(error, error_size, ENOMEM, "cannot assemble model cache");
             goto out;
         }
-        if (snag_json_set_new(entry, "models", models) < 0) {
-            models = NULL;
-            json_decref(entry);
-            (void)snag_fail(error, error_size, ENOMEM, "cannot assemble model cache");
-            goto out;
-        }
-        models = NULL;
-        if (snag_json_set_new(entry, "base_url",
-                             json_string(provider->base_url)) < 0 ||
-            snag_json_set_new(entry, "name", json_string(provider->name)) < 0 ||
-            snag_json_set_new(entry, "protocol",
-                json_string(snag_provider_catalog_protocol(provider))) < 0) {
-            json_decref(entry);
-            (void)snag_fail(error, error_size, ENOMEM, "cannot assemble model cache");
-            goto out;
-        }
-        if (json_array_append_new(providers, entry) < 0) {
-            entry = NULL;
-            (void)snag_fail(error, error_size, ENOMEM, "cannot assemble model cache");
-            goto out;
-        }
-        entry = NULL;
     }
     if (snag_model_cache_replace(&app->store, providers, snag_time_ms(),
                                 &app->model_cache, error, error_size) < 0)

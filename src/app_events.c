@@ -16,21 +16,16 @@
 static json_t *
 turn_config(const struct app_state *app)
 {
-    json_t *config = json_pack("{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b}",
+    return json_pack("{s:s,s:s,s:o,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b}",
         "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
-        "effort", app->turn_effort, "max_output_tokens", "model", app->turn_model,
+        "effort", app->turn_effort, "max_output_tokens",
+        app->turn_capacity.max_output_tokens ?
+            json_integer((json_int_t)app->turn_capacity.max_output_tokens) : json_null(),
+        "model", app->turn_model,
         "provider", app->turn_provider->name, "profile_id", SNAJPAGENT_PROFILE_ID,
         "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1,
         "max_parallel_commands", (int)app->config->max_parallel_commands,
         "parallel_tool_calls", app->turn_provider->parallel_tool_calls);
-
-    if (config && app->turn_capacity.max_output_tokens &&
-        snag_json_set_new(config, "max_output_tokens",
-            json_integer((json_int_t)app->turn_capacity.max_output_tokens)) < 0) {
-        json_decref(config);
-        return NULL;
-    }
-    return config;
 }
 
 json_t *
@@ -38,29 +33,15 @@ snag_app_turn_started_data(const struct app_state *app, const char *prompt,
                   const char *turn_id, const struct snag_queued_turn *queued,
                   bool goal_turn, bool read_only)
 {
-    json_t *instructions = snag_instructions_metadata_json(&app->turn_instructions);
-    json_t *config = turn_config(app);
-    json_t *data = json_pack("{s:O,s:s,s:O,s:b,s:s?,s:n,s:s,s:s,s:I,s:s}",
-        "config", config, "input_kind", goal_turn ? "goal" : queued ? "queued" : "direct",
-        "instructions", instructions, "read_only", read_only,
-        "queue_id", queued ? queued->queue_id : NULL, "queue_seq",
+    return json_pack("{s:o,s:s,s:o,s:I,s:b,s:s?,s:o,s:s,s:s,s:I,s:s}",
+        "config", turn_config(app), "input_kind", goal_turn ? "goal" : queued ? "queued" : "direct",
+        "instructions", snag_instructions_metadata_json(&app->turn_instructions),
+        "received_at_ms", (json_int_t)(queued ? queued->received_ms : app->input_received_ms),
+        "read_only", read_only, "queue_id", queued ? queued->queue_id : NULL,
+        "queue_seq", queued ? json_integer((json_int_t)queued->seq) : json_null(),
         "text", prompt, "turn_id", turn_id,
         "turn_number", (json_int_t)(app->session.turn_count + 1u),
         "workspace", app->session.workspace);
-
-    if (data && snag_json_set_new(data, "received_at_ms",
-            json_integer((json_int_t)(queued ? queued->received_ms : app->input_received_ms))) < 0) {
-        json_decref(data);
-        data = NULL;
-    }
-    if (data && queued &&
-        snag_json_set_new(data, "queue_seq", json_integer((json_int_t)queued->seq)) < 0) {
-        json_decref(data);
-        data = NULL;
-    }
-    json_decref(config);
-    json_decref(instructions);
-    return data;
 }
 
 static int
@@ -223,7 +204,6 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason,
                      char *error, size_t error_size)
 {
     struct snag_buf snapshot;
-    json_t *data = NULL;
     int rc = -1;
 
     if (!app || !app->irc || !reason)
@@ -237,23 +217,13 @@ snag_app_irc_snapshot(struct app_state *app, const char *reason,
     if (rc < 0)
         goto out;
     rc = -1;
-    if (snag_buf_terminate(&snapshot) < 0 || !(data = json_object()) ||
-        snag_json_set_new(data, "reason", json_string(reason)) < 0 ||
-        snag_json_set_new(data, "text",
-                         json_string((const char *)snapshot.data)) < 0 ||
-        snag_json_set_new(data, "timestamp_ms",
-                         json_integer((json_int_t)snag_time_ms())) < 0)
+    if (snag_buf_terminate(&snapshot) < 0)
         goto out;
-    if (snag_app_commit_event(app, "irc_snapshot", data,
-                             error, error_size) < 0) {
-        data = NULL;
-        goto out;
-    }
-    data = NULL;
-    rc = 0;
+    rc = snag_app_commit_event(app, "irc_snapshot",
+        json_pack("{s:s,s:s,s:I}", "reason", reason,
+                  "text", (const char *)snapshot.data,
+                  "timestamp_ms", (json_int_t)snag_time_ms()), error, error_size);
 out:
-    if (data)
-        json_decref(data);
     snag_buf_free(&snapshot);
     if (rc < 0 && error_size && !error[0])
         (void)snprintf(error, error_size, "cannot retain IRC room snapshot");
@@ -619,16 +589,18 @@ snag_app_response_started_data(const struct app_state *app,
             goto out;
     }
     data = json_pack(
-        "{s:s?,s:s,s:s?,s:s,s:s,s:s,s:I,s:s,s:n,s:I,s:s,s:I,s:s,"
-        "s:s,s:s,s:s,s:I,s:I,s:s,s:n,s:s,s:s,s:b,s:O,s:s}",
-        "baseline_sha256", baseline,
+        "{s:I,s:s?,s:s,s:s?,s:s,s:s,s:s,s:I,s:s,s:o,s:I,s:s,s:I,s:s,"
+        "s:s,s:s,s:s,s:I,s:I,s:s,s:o,s:s,s:s,s:b,s:O,s:s}",
+        "irc_seq", (json_int_t)projection->irc_seq, "baseline_sha256", baseline,
         "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
         "compact_id", *compact_id ? compact_id : NULL,
         "count_method", count_method,
         "count_request_sha256", projection->count_request.sha256,
         "capacity_source", snag_capacity_source_name(capacity->source),
         "cycle", (json_int_t)cycle, "effort", app->turn_effort,
-        "hard_input_tokens", "input_tokens_bound", (json_int_t)projection->input_tokens_bound,
+        "hard_input_tokens", capacity->hard_input_known ?
+            json_integer((json_int_t)capacity->hard_input_tokens) : json_null(),
+        "input_tokens_bound", (json_int_t)projection->input_tokens_bound,
         "model", app->turn_model, "model_input_bytes", (json_int_t)projection->model_input.bytes,
         "model_input_sha256", projection->model_input.sha256,
         "profile_id", SNAJPAGENT_PROFILE_ID, "provider", app->turn_provider->name,
@@ -636,23 +608,11 @@ snag_app_response_started_data(const struct app_state *app,
         "request_input_bytes", (json_int_t)projection->request_input_bytes,
         "request_input_count", (json_int_t)projection->request_input_count,
         "request_input_sha256", projection->request_input_sha256,
-        "requested_output_tokens", "request_sha256", projection->create_request.sha256,
+        "requested_output_tokens", capacity->max_output_tokens ?
+            json_integer((json_int_t)capacity->max_output_tokens) : json_null(),
+        "request_sha256", projection->create_request.sha256,
         "response_id", response_id, "source_bound", capacity->source_bound,
         "steering_ids", ids, "turn_id", turn_id);
-    if (data &&
-        ((capacity->hard_input_known &&
-          snag_json_set_new(data, "hard_input_tokens",
-              json_integer((json_int_t)capacity->hard_input_tokens)) < 0) ||
-         (capacity->max_output_tokens &&
-          snag_json_set_new(data, "requested_output_tokens",
-              json_integer((json_int_t)capacity->max_output_tokens)) < 0))) {
-        json_decref(data);
-        data = NULL;
-    }
-    if (data && json_object_set_new(data, "irc_seq", json_integer((json_int_t)projection->irc_seq)) < 0) {
-        json_decref(data);
-        data = NULL;
-    }
 out:
     json_decref(ids);
     return data;
@@ -665,42 +625,23 @@ snag_app_response_capacity_rejected_data(
     const struct snag_model_capacity *capacity,
     const char *provider_source_sha256)
 {
-    json_t *data = json_object();
-    uint64_t safety_ceiling = 0u;
-
-    if (failure && capacity)
-        safety_ceiling = snag_capacity_safety_ceiling(
-            failure->context_limit_tokens, failure->requested_input_tokens,
-            capacity->max_output_tokens);
-
-    if (!data || !turn_id || !response_id || !request_hash || !failure ||
+    if (!turn_id || !response_id || !request_hash || !failure ||
         !capacity || !provider_source_sha256 ||
-        !snag_hex_is_lower(provider_source_sha256, SNAG_SHA256_HEX_LEN) ||
-        snag_json_set_new(data, "code", json_string(failure->code)) < 0 ||
-        snag_json_set_new(data, "context_limit_tokens",
-            failure->context_limit_tokens ?
-                json_integer((json_int_t)failure->context_limit_tokens) :
-                json_null()) < 0 ||
-        snag_json_set_new(data, "cycle", json_integer((json_int_t)cycle)) < 0 ||
-        snag_json_set_new(data, "message", json_string(failure->message)) < 0 ||
-        snag_json_set_new(data, "observed_hard_input_tokens",
-            safety_ceiling ?
-                json_integer((json_int_t)safety_ceiling) : json_null()) < 0 ||
-        snag_json_set_new(data, "provider_source_sha256",
-                         json_string(provider_source_sha256)) < 0 ||
-        snag_json_set_new(data, "request_sha256",
-                         json_string(request_hash)) < 0 ||
-        snag_json_set_new(data, "requested_input_tokens",
-            failure->requested_input_tokens ?
-                json_integer((json_int_t)failure->requested_input_tokens) :
-                json_null()) < 0 ||
-        snag_json_set_new(data, "response_id", json_string(response_id)) < 0 ||
-        snag_json_set_new(data, "turn_id", json_string(turn_id)) < 0) {
-        if (data)
-            json_decref(data);
+        !snag_hex_is_lower(provider_source_sha256, SNAG_SHA256_HEX_LEN))
         return NULL;
-    }
-    return data;
+    uint64_t safety_ceiling = snag_capacity_safety_ceiling(
+        failure->context_limit_tokens, failure->requested_input_tokens,
+        capacity->max_output_tokens);
+    return json_pack("{s:s,s:o,s:I,s:s,s:o,s:s,s:s,s:o,s:s,s:s}",
+        "code", failure->code, "context_limit_tokens", failure->context_limit_tokens ?
+            json_integer((json_int_t)failure->context_limit_tokens) : json_null(),
+        "cycle", (json_int_t)cycle, "message", failure->message,
+        "observed_hard_input_tokens", safety_ceiling ?
+            json_integer((json_int_t)safety_ceiling) : json_null(),
+        "provider_source_sha256", provider_source_sha256, "request_sha256", request_hash,
+        "requested_input_tokens", failure->requested_input_tokens ?
+            json_integer((json_int_t)failure->requested_input_tokens) : json_null(),
+        "response_id", response_id, "turn_id", turn_id);
 }
 
 json_t *
@@ -708,16 +649,11 @@ snag_app_response_completed_data(const char *turn_id, const char *response_id,
                         unsigned int cycle,
                         const struct snag_response_graph *graph)
 {
-    json_t *items = snag_response_graph_json(graph);
-    json_t *usage = snag_response_usage_json(&graph->usage);
-    json_t *data = json_pack("{s:I,s:O,s:s,s:s,s:s,s:s,s:O}",
-        "cycle", (json_int_t)cycle, "items", items,
+    return json_pack("{s:I,s:o,s:s,s:s,s:s,s:s,s:o}",
+        "cycle", (json_int_t)cycle, "items", snag_response_graph_json(graph),
         "provider_response_id", graph->provider_response_id,
         "response_id", response_id, "status", "completed",
-        "turn_id", turn_id, "usage", usage);
-    json_decref(items);
-    json_decref(usage);
-    return data;
+        "turn_id", turn_id, "usage", snag_response_usage_json(&graph->usage));
 }
 
 json_t *
@@ -740,10 +676,9 @@ json_t *
 snag_app_future_turn_cancelled_data(const struct snag_session *session,
                            const bool remove[SNAG_MAX_PENDING_TURNS])
 {
-    json_t *data = json_object();
     json_t *ids = json_array();
 
-    if (!data || !ids)
+    if (!ids)
         goto fail;
     for (size_t i = 0; i < session->pending_queue_count; ++i) {
         if (remove[i] && json_array_append_new(ids,
@@ -752,20 +687,9 @@ snag_app_future_turn_cancelled_data(const struct snag_session *session,
     }
     if (json_array_size(ids) == 0u)
         goto fail;
-    {
-        int rc = snag_json_set_new(data, "queue_ids", ids);
-        ids = NULL;
-        if (rc < 0)
-            goto fail;
-    }
-    if (snag_json_set_new(data, "reason", json_string("user")) < 0)
-        goto fail;
-    return data;
+    return json_pack("{s:o,s:s}", "queue_ids", ids, "reason", "user");
 fail:
-    if (ids)
-        json_decref(ids);
-    if (data)
-        json_decref(data);
+    json_decref(ids);
     return NULL;
 }
 
@@ -774,12 +698,10 @@ snag_app_response_interrupted_data(const char *turn_id, const char *response_id,
                           unsigned int cycle, const char *origin,
                           const char *reason, json_t *partial_public)
 {
-    json_t *partial = partial_public ? partial_public : json_array();
-    json_t *data = json_pack("{s:I,s:s,s:O,s:s,s:s,s:s}",
-        "cycle", (json_int_t)cycle, "origin", origin, "partial_public", partial,
+    return json_pack("{s:I,s:s,s:o,s:s,s:s,s:s}",
+        "cycle", (json_int_t)cycle, "origin", origin,
+        "partial_public", partial_public ? partial_public : json_array(),
         "reason", reason, "response_id", response_id, "turn_id", turn_id);
-    json_decref(partial);
-    return data;
 }
 
 json_t *
