@@ -84,21 +84,30 @@ must reproduce each original payload byte-for-byte. The combined dSYM must
 retain both original UUIDs. This coalescing is packaging, not proof of runtime
 compatibility, signing identity or notarization.
 
-## Windows foundations (not a complete agent port)
+## Experimental native Windows x86-64
 
 `nix/windows.nix` builds static x86-64 Windows Jansson, Mbed TLS, compression,
 c-ares, HTTP/2 and GNU Unicode/IDN libraries using the same pinned nixpkgs
 sources. It takes the `pkgs` exported by `nix/portable.nix`. The compile API
 baseline is Windows 7; actual execution so far is in Windows PE
 10.0.26100.6584 from Microsoft's 25H2 evaluation media. A version macro does
-not establish an older-OS runtime pass. There is no `prod-windows-*` target
-yet: filesystem/ACL, process, console and socket integration remains open.
+not establish an older-OS runtime pass. `make prod-windows-x86_64` packages the
+complete native executable with static application libraries and embedded roots
+at `build/matrix/windows-x86_64/bin/snajpagent.exe`; `.debug/` contains optional
+matching symbols. Nix and third-party runtime DLLs are not needed on Windows.
+Filesystem/ACL, native Unicode console, process jobs/overlapped pipes, ConPTY,
+IRC and provider integration are implemented. Runtime qualification is scoped
+to the actual tested modern guest; old Windows and other architectures remain
+in progress.
 
 The existing base/SSE/JSON/wire/Responses/retry tests and upstream Mbed TLS
 self-tests run there without third-party runtime DLLs. An upstream curl CLI
 was built only to check the static dependency closure and reported HTTP/2,
 IDN, asynchronous DNS, TLS and gzip/Brotli/Zstd. It is not a shipped helper,
-an external `/ro` tool, or proof of complete provider transport.
+an external `/ro` tool. The production agent separately completed native `/ro`,
+parallel command and ConPTY provider round trips through a host-local fake
+endpoint, plus TLS untrusted-CA rejection, explicit-CA success and hostname
+rejection. No paid model was needed for those checks.
 
 `src/platform.c` owns the native clock/entropy/descriptor primitives and
 Unicode scalar width. Existing POSIX builds retain libc width behavior;
