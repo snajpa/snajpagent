@@ -594,6 +594,19 @@ credential_set(struct snag_credential *credential, const char *value)
 }
 
 static void
+transport_settings(struct snag_provider_config *provider, struct snag_credential *credential)
+{
+    provider->connect_timeout_ms = 1000u;
+    provider->idle_timeout_ms = 1000u;
+    provider->request_timeout_ms = 3000u;
+    assert(snag_strcpy(provider->openrouter_referer, sizeof(provider->openrouter_referer),
+                       "https://github.com/snajpa/snajpagent"));
+    assert(snag_strcpy(provider->openrouter_title, sizeof(provider->openrouter_title),
+                       "snajpagent"));
+    credential_set(credential, "transport-secret");
+}
+
+static void
 test_local_provider_transport(void)
 {
     struct local_server server;
@@ -619,19 +632,10 @@ test_local_provider_transport(void)
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name,
                     sizeof(config.providers[1].name), "transport") > 0);
-    config.providers[1].connect_timeout_ms = 1000u;
-    config.providers[1].idle_timeout_ms = 1000u;
-    config.providers[1].request_timeout_ms = 3000u;
     assert(snprintf(config.providers[1].base_url,
                     sizeof(config.providers[1].base_url),
                     "%s/v1/", endpoint) > 0);
-    assert(snprintf(config.providers[1].openrouter_referer,
-                    sizeof(config.providers[1].openrouter_referer),
-                    "%s", "https://github.com/snajpa/snajpagent") > 0);
-    assert(snprintf(config.providers[1].openrouter_title,
-                    sizeof(config.providers[1].openrouter_title),
-                    "%s", "snajpagent") > 0);
-    credential_set(&credential, "transport-secret");
+    transport_settings(&config.providers[1], &credential);
 
     assert(snag_provider_models_list(connection,
         &models, error, sizeof(error)) == 0);
@@ -722,16 +726,7 @@ test_codex_path_selection(void)
         &config, &config.providers[0], &credential, NULL,
         NULL, NULL};
     snag_config_init(&config);
-    credential_set(&credential, "transport-secret");
-    assert(snprintf(config.providers[0].openrouter_referer,
-                    sizeof(config.providers[0].openrouter_referer), "%s",
-                    "https://github.com/snajpa/snajpagent") > 0);
-    assert(snprintf(config.providers[0].openrouter_title,
-                    sizeof(config.providers[0].openrouter_title), "%s",
-                    "snajpagent") > 0);
-    config.providers[0].connect_timeout_ms = 1000u;
-    config.providers[0].idle_timeout_ms = 1000u;
-    config.providers[0].request_timeout_ms = 3000u;
+    transport_settings(&config.providers[0], &credential);
     start_server(&server, MODEL_CODEX_LOOKALIKE, false);
     assert(snprintf(endpoint, sizeof(endpoint),
                     "http://127.0.0.1:%u/backend-api/codexish",
@@ -829,16 +824,7 @@ test_structured_create_failures(void)
         assert(snprintf(config.providers[0].base_url,
                         sizeof(config.providers[0].base_url),
                         "%s", endpoint) > 0);
-        config.providers[0].connect_timeout_ms = 1000u;
-        config.providers[0].idle_timeout_ms = 1000u;
-        config.providers[0].request_timeout_ms = 3000u;
-        assert(snprintf(config.providers[0].openrouter_referer,
-                        sizeof(config.providers[0].openrouter_referer),
-                        "%s", "https://github.com/snajpa/snajpagent") > 0);
-        assert(snprintf(config.providers[0].openrouter_title,
-                        sizeof(config.providers[0].openrouter_title),
-                        "%s", "snajpagent") > 0);
-        credential_set(&credential, "transport-secret");
+        transport_settings(&config.providers[0], &credential);
         struct snag_response_graph graph = {0};
         memset(&failure, 0, sizeof(failure));
         assert(snag_provider_responses_create((struct snag_provider_connection){
@@ -1042,16 +1028,7 @@ test_count_capability_statuses(void)
         snag_config_init(&config);
         assert(snprintf(config.providers[0].base_url,
                         sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-        config.providers[0].connect_timeout_ms = 1000u;
-        config.providers[0].idle_timeout_ms = 1000u;
-        config.providers[0].request_timeout_ms = 3000u;
-        assert(snprintf(config.providers[0].openrouter_referer,
-                        sizeof(config.providers[0].openrouter_referer), "%s",
-                        "https://github.com/snajpa/snajpagent") > 0);
-        assert(snprintf(config.providers[0].openrouter_title,
-                        sizeof(config.providers[0].openrouter_title), "%s",
-                        "snajpagent") > 0);
-        credential_set(&credential, "transport-secret");
+        transport_settings(&config.providers[0], &credential);
         assert(snag_provider_responses_count((struct snag_provider_connection){
             &config, &config.providers[0], &credential, NULL,
             NULL, NULL},
@@ -1120,17 +1097,8 @@ test_count_modes(void)
                         sizeof(config.providers[0].base_url), "%s",
                         cases[i].openrouter ? "https://openrouter.ai/api/v1" : endpoint) > 0);
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
-        assert(snprintf(config.providers[0].openrouter_referer,
-                        sizeof(config.providers[0].openrouter_referer), "%s",
-                        "https://github.com/snajpa/snajpagent") > 0);
-        assert(snprintf(config.providers[0].openrouter_title,
-                        sizeof(config.providers[0].openrouter_title), "%s",
-                        "snajpagent") > 0);
-        config.providers[0].connect_timeout_ms = 1000u;
-        config.providers[0].idle_timeout_ms = 1000u;
-        config.providers[0].request_timeout_ms = 3000u;
         config.providers[0].exact_token_count = cases[i].mode;
-        credential_set(&credential, "transport-secret");
+        transport_settings(&config.providers[0], &credential);
         memset(&app, 0, sizeof(app));
         snag_store_init(&app.store);
         assert(snag_store_open(&app.store, temp, error, sizeof(error)) == 0);
@@ -1198,15 +1166,7 @@ test_openrouter_search_transport(void)
     snag_config_init(&config);
     (void)snprintf(config.providers[0].base_url, sizeof(config.providers[0].base_url),
                    "https://openrouter.ai/api/v1");
-    (void)snprintf(config.providers[0].openrouter_referer,
-                   sizeof(config.providers[0].openrouter_referer),
-                   "https://github.com/snajpa/snajpagent");
-    (void)snprintf(config.providers[0].openrouter_title,
-                   sizeof(config.providers[0].openrouter_title), "snajpagent");
-    config.providers[0].connect_timeout_ms = 1000u;
-    config.providers[0].idle_timeout_ms = 1000u;
-    config.providers[0].request_timeout_ms = 3000u;
-    credential_set(&credential, "transport-secret");
+    transport_settings(&config.providers[0], &credential);
     request = request_with_marker("search example domains");
     assert(json_object_set_new(request, "tools", json_loadb(
         search_tools, sizeof(search_tools) - 1u, 0, NULL)) == 0);
