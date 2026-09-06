@@ -3,18 +3,11 @@
 #include "fs.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#ifndef O_CLOEXEC
-#define O_CLOEXEC 0
-#endif
-#ifndef O_NOFOLLOW
-#define O_NOFOLLOW 0
-#endif
 #define HISTORY_FILE_BYTES (SNAG_HISTORY_BYTES * 4u + SNAG_HISTORY_COUNT)
 
 void
@@ -107,28 +100,11 @@ history_lock(int fd)
 static int
 history_file_open(struct snag_history *term)
 {
-    snag_file_info st;
-    struct snag_file_privacy privacy;
-    int fd = open(term->path,
-                  O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
-    int flags;
+    int fd = snag_open_history(term->path);
 
     if (fd < 0)
         return -1;
-    if (snag_fstat(fd, &st) < 0) {
-        int saved = errno;
-        (void)close(fd);
-        errno = saved;
-        return -1;
-    }
-    if (!S_ISREG(st.st_mode) || snag_fd_privacy(fd, &privacy) < 0 || !privacy.effective_owner) {
-        (void)close(fd);
-        errno = EACCES;
-        return -1;
-    }
-    flags = fcntl(fd, F_GETFD);
-    if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0 ||
-        fchmod(fd, 0600) < 0 || history_lock(fd) < 0) {
+    if (history_lock(fd) < 0) {
         int saved = errno;
         (void)close(fd);
         errno = saved;
@@ -305,7 +281,7 @@ snag_history_open(struct snag_history *term, const char *dotdir)
 {
     struct snag_buf path;
 
-    if (!term || !dotdir || dotdir[0] != '/') {
+    if (!term || !snag_path_root_len(dotdir)) {
         errno = EINVAL;
         return -1;
     }

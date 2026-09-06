@@ -36,6 +36,8 @@ int snag_open_read_at(int dirfd, const char *path, bool directory);
 int snag_open_read_security_at(int dirfd, const char *path, bool directory);
 /* Exclusive-create a new journal, or append to an existing private journal. */
 int snag_open_private_append_at(int dirfd, const char *path, bool create);
+/* Preserve contents; tighten only the current effective owner's history file. */
+int snag_open_history(const char *path);
 /* Exclusive whole-file lock, released by close. Busy nonblocking locks use EAGAIN. */
 int snag_lock_file(int fd, bool wait);
 struct snag_directory_lock {

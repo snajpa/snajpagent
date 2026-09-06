@@ -362,6 +362,7 @@ test_private_directory(void)
         assert(snag_stat(data, &info) == 0 && snag_stat(alias, &linked) == 0);
         assert(info.st_ino == linked.st_ino && info.st_dev == linked.st_dev && info.st_nlink == 2u);
         assert(snag_open_private_append_at(fd, "data", false) == -1 && errno == EACCES);
+        assert(snag_open_history(data) == -1 && errno == EACCES);
         errno = 0;
         int rejected = snag_create_private_at(fd, "data", false);
         if (rejected != -1 || errno != EACCES) {
@@ -390,6 +391,7 @@ test_private_directory(void)
         assert(snag_lstat(alias, &linked) == 0 && S_ISLNK(linked.st_mode));
         assert(snag_open_read_at(fd, "alias", false) == -1);
         assert(snag_open_private_append_at(fd, "alias", false) == -1);
+        assert(snag_open_history(alias) == -1);
         assert(snag_stat(alias, &linked) == 0 && S_ISREG(linked.st_mode) &&
                linked.st_dev == info.st_dev && linked.st_ino == info.st_ino);
         assert(snag_unlink_at(fd, "alias", false) == 0);
@@ -403,6 +405,21 @@ test_private_directory(void)
 #endif
         errno = 0;
         assert(snag_create_private_at(fd, "data", false) == -1 && errno == EACCES);
+        file = snag_open_history(data);
+        assert(file >= 0 && snag_fd_privacy(file, &privacy) == 0 &&
+               privacy.effective_owner && privacy.private_access);
+        assert(read(file, received, sizeof(received)) == sizeof(received));
+        assert(!memcmp(bytes, received, sizeof(bytes)));
+        assert(lseek(file, 0, SEEK_SET) == 0 && snag_write_full(file, "z", 1u) == 0);
+        assert(snag_fstat(file, &linked) == 0 && linked.st_size == sizeof(bytes) + 1u);
+        assert(close(file) == 0);
+#ifndef _WIN32
+        if (geteuid() == 0) {
+            assert(chown(data, 1u, (gid_t)-1) == 0);
+            assert(snag_open_history(data) == -1 && errno == EACCES);
+            assert(chown(data, 0u, (gid_t)-1) == 0);
+        }
+#endif
         assert(snag_unlink_at(fd, "data", false) == 0);
         free(data);
         free(alias);
