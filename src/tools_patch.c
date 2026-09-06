@@ -49,16 +49,15 @@ enum hunk_type {
 
 struct patch_hunk {
     enum hunk_type type;
-    struct line_vec old_lines;
-    struct line_vec new_lines;
-    struct line_vec preview_lines;
-    bool changed;
+    char **lines; /* Borrowed slice, including context/add/remove markers. */
+    size_t count;
+    size_t old_count;
 };
 
 struct patch_op {
     enum patch_op_type type;
     const char *path;
-    struct line_vec add_lines;
+    char **add_lines;
     struct patch_hunk *hunks;
     size_t hunk_count;
     size_t hunk_cap;
@@ -113,22 +112,10 @@ line_vec_push(struct line_vec *vec, char *line)
 }
 
 static void
-hunk_free(struct patch_hunk *hunk)
-{
-    line_vec_free(&hunk->old_lines);
-    line_vec_free(&hunk->new_lines);
-    line_vec_free(&hunk->preview_lines);
-    memset(hunk, 0, sizeof(*hunk));
-}
-
-static void
 op_free(struct patch_op *op)
 {
     if (!op)
         return;
-    line_vec_free(&op->add_lines);
-    for (size_t i = 0; i < op->hunk_count; ++i)
-        hunk_free(&op->hunks[i]);
     free(op->hunks);
     free(op->old_bytes);
     snag_permissions_free(&op->permissions);
@@ -398,12 +385,11 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
         op->path = path;
         ++i;
         if (type == OP_ADD) {
+            op->add_lines = lines + i;
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 if (lines[i][0] != '+') {
                     return snag_fail(error, error_size, EINVAL, "add-file body lines must start with +");
                 }
-                if (line_vec_push(&op->add_lines, lines[i] + 1) < 0)
-                    return -1;
                 ++op->added_lines;
                 ++i;
             }
@@ -414,12 +400,14 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
         } else {
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 struct patch_hunk *hunk;
+                bool changed = false;
                 if (!is_hunk_header(lines[i]) ||
                     op_add_hunk(set, op, &hunk) < 0 ||
                     parse_hunk_header(lines[i], &hunk->type,
                                       error, error_size) < 0)
                     return -1;
                 ++i;
+                hunk->lines = lines + i;
                 while (i + 1u < line_count && !is_file_header(lines[i]) &&
                        !is_hunk_header(lines[i])) {
                     if (hunk->type == HUNK_START || hunk->type == HUNK_END) {
@@ -432,18 +420,11 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                         return snag_fail(error, error_size, EINVAL,
                                   "update hunk body lines must start with space, -, or +");
                     }
-                    if (line_vec_push(&hunk->preview_lines, lines[i]) < 0)
-                        return -1;
-                    if (lines[i][0] == ' ' || lines[i][0] == '-') {
-                        if (line_vec_push(&hunk->old_lines, lines[i] + 1) < 0)
-                            return -1;
-                    }
-                    if (lines[i][0] == ' ' || lines[i][0] == '+') {
-                        if (line_vec_push(&hunk->new_lines, lines[i] + 1) < 0)
-                            return -1;
-                    }
+                    ++hunk->count;
+                    if (lines[i][0] != '+')
+                        ++hunk->old_count;
                     if (lines[i][0] == '+' || lines[i][0] == '-') {
-                        hunk->changed = true;
+                        changed = true;
                         if (lines[i][0] == '+')
                             ++op->added_lines;
                         else
@@ -452,12 +433,12 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                     ++i;
                 }
                 if ((hunk->type == HUNK_START || hunk->type == HUNK_END) &&
-                    hunk->new_lines.n == 0u) {
+                    hunk->count == 0u) {
                     return snag_fail(error, error_size, EINVAL,
                               "anchored hunks must insert at least one line");
                 }
                 if (hunk->type == HUNK_NORMAL &&
-                    (!hunk->changed || hunk->old_lines.n == 0u)) {
+                    (!changed || hunk->old_count == 0u)) {
                     return snag_fail(error, error_size, EINVAL,
                               "normal hunks need a nonempty old pattern and a change");
                 }
@@ -669,19 +650,20 @@ parse_file_lines(char *bytes, size_t len, struct line_vec *lines,
 
 static bool
 line_range_matches(const struct line_vec *lines, size_t pos,
-                   const struct line_vec *pattern)
+                   const struct patch_hunk *pattern)
 {
-    if (pos > lines->n || pattern->n > lines->n - pos)
+    if (pos > lines->n || pattern->old_count > lines->n - pos)
         return false;
-    for (size_t i = 0; i < pattern->n; ++i)
-        if (strcmp(lines->v[pos + i], pattern->v[i]) != 0)
+    for (size_t i = 0; i < pattern->count; ++i)
+        if (pattern->lines[i][0] != '+' &&
+            strcmp(lines->v[pos++], pattern->lines[i] + 1u) != 0)
             return false;
     return true;
 }
 
 static size_t
 find_unique_match(const struct line_vec *lines, size_t cursor,
-                  const struct line_vec *pattern,
+                  const struct patch_hunk *pattern,
                   char *error, size_t error_size)
 {
     size_t matches = 0;
@@ -725,9 +707,12 @@ append_line_range(struct snag_buf *out, const struct line_vec *lines,
 }
 
 static int
-append_new_lines(struct snag_buf *out, const struct line_vec *lines, bool crlf)
+append_new_lines(struct snag_buf *out, char *const *lines, size_t count, bool crlf)
 {
-    return append_line_range(out, lines, 0u, lines->n, crlf);
+    for (size_t i = 0; i < count; ++i)
+        if (lines[i][0] != '-' && append_line_with_eol(out, lines[i] + 1u, crlf) < 0)
+            return -1;
+    return 0;
 }
 
 static void
@@ -765,7 +750,7 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
                 goto out;
             }
             start_seen = true;
-            if (append_new_lines(&op->new_bytes, &hunk->new_lines,
+            if (append_new_lines(&op->new_bytes, hunk->lines, hunk->count,
                                  op->eol_crlf) < 0)
                 goto out;
             continue;
@@ -778,7 +763,7 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
             }
             if (append_line_range(&op->new_bytes, &lines, cursor, lines.n,
                                   op->eol_crlf) < 0 ||
-                append_new_lines(&op->new_bytes, &hunk->new_lines,
+                append_new_lines(&op->new_bytes, hunk->lines, hunk->count,
                                  op->eol_crlf) < 0)
                 goto out;
             cursor = lines.n;
@@ -786,16 +771,16 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
             continue;
         }
         {
-            size_t match = find_unique_match(&lines, cursor, &hunk->old_lines,
+            size_t match = find_unique_match(&lines, cursor, hunk,
                                              error, error_size);
             if (match == SIZE_MAX)
                 goto out;
             if (append_line_range(&op->new_bytes, &lines, cursor, match,
                                   op->eol_crlf) < 0 ||
-                append_new_lines(&op->new_bytes, &hunk->new_lines,
+                append_new_lines(&op->new_bytes, hunk->lines, hunk->count,
                                  op->eol_crlf) < 0)
                 goto out;
-            cursor = match + hunk->old_lines.n;
+            cursor = match + hunk->old_count;
         }
     }
     if (append_line_range(&op->new_bytes, &lines, cursor, lines.n,
@@ -813,7 +798,7 @@ static int
 compute_add_bytes(struct patch_op *op)
 {
     snag_buf_reset(&op->new_bytes);
-    return append_new_lines(&op->new_bytes, &op->add_lines, false);
+    return append_new_lines(&op->new_bytes, op->add_lines, op->added_lines, false);
 }
 
 static int
@@ -1086,9 +1071,9 @@ append_hunk_preview(struct snag_buf *out, size_t *used, bool *truncated,
 
     if (preview_printf(out, used, truncated, "%s\n", header) < 0)
         return -1;
-    for (size_t i = 0; i < hunk->preview_lines.n; ++i)
+    for (size_t i = 0; i < hunk->count; ++i)
         if (preview_printf(out, used, truncated, "%s\n",
-                           hunk->preview_lines.v[i]) < 0)
+                           hunk->lines[i]) < 0)
             return -1;
     return 0;
 }
@@ -1109,9 +1094,9 @@ append_patch_preview(struct snag_buf *out, const struct patch_set *set)
             if (preview_printf(out, &used, &truncated,
                                "*** Add File: %s\n", op->path) < 0)
                 return -1;
-            for (size_t j = 0; j < op->add_lines.n; ++j)
-                if (preview_printf(out, &used, &truncated, "+%s\n",
-                                   op->add_lines.v[j]) < 0)
+            for (size_t j = 0; j < op->added_lines; ++j)
+                if (preview_printf(out, &used, &truncated, "%s\n",
+                                   op->add_lines[j]) < 0)
                     return -1;
         } else if (op->type == OP_UPDATE) {
             if (preview_printf(out, &used, &truncated,
