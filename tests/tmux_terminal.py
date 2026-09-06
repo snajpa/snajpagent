@@ -4160,6 +4160,113 @@ def run_manual_retry_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_patch_cases(binary, root, provider, environment):
+    case = root / "patch"
+    workspace = case / "work"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_irc_config(config, provider.port, "host-model")
+    call_id, patch = "", ""
+    number = 0
+
+    def respond(handler, request, sequence):
+        outputs = sum(item.get("type") == "function_call_output" for item in request["input"])
+        assert outputs in (number - 1, number), request
+        finished = outputs == number
+        body = (provider.response_body(sequence, call_id + " done") if finished else
+                provider.function_body(sequence, call_id, "apply_patch", {
+                    "patch": patch, "workdir": str(workspace)})).encode()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+        handler.close_connection = True
+
+    def apply(text, status="succeeded"):
+        nonlocal call_id, patch, number
+        number += 1
+        call_id, patch = f"patch-{number}", text
+        terminal.submit(f"apply patch case {number}")
+        terminal.wait(call_id + " done")
+        wait_irc_idle([terminal])
+        _, events = read_events(terminal.dotdir)
+        finished = event_list(events, "tool_finished")
+        assert len(finished) == number, "patch case executed more than once"
+        result = finished[-1]["data"]["result"]
+        assert result["status"] == status, result
+        return result["model_text"]
+
+    mask = os.umask(0o027)
+    try:
+        terminal = TmuxTerminal(case / "term", binary, workspace, case / "state",
+                                config, 120, 28, environment=environment)
+    finally:
+        os.umask(mask)
+    provider.runtime_handler = respond
+    try:
+        with terminal:
+            terminal.wait("host-model/medium   ?% ›")
+            (workspace / "a.txt").write_bytes(b"one\ntwo\n")
+            (workspace / "a.txt").chmod(0o751)
+            (workspace / "old.txt").write_bytes(b"bye\n")
+            preview = apply("*** Begin Patch\n*** Add File: new.txt\n+alpha\n+beta\n"
+                            "*** Update File: a.txt\n@@\n one\n-two\n+TWO\n"
+                            "*** Delete File: old.txt\n*** End Patch\n")
+            for text in ("Diff preview (bounded", "*** Update File: a.txt", "-two",
+                         "+TWO", "*** Delete File: old.txt"):
+                assert text in preview, preview
+            assert (workspace / "a.txt").read_bytes() == b"one\nTWO\n"
+            assert (workspace / "a.txt").stat().st_mode & 0o777 == 0o751
+            assert (workspace / "new.txt").read_bytes() == b"alpha\nbeta\n"
+            assert (workspace / "new.txt").stat().st_mode & 0o777 == 0o640
+            assert not (workspace / "old.txt").exists()
+
+            for before, after in ((b"a\n\nb\n", b"a\n\nB\n"),
+                                  (b"a\r\n\r\nb\r\n", b"a\r\n\r\nB\r\n"),
+                                  (b"a\n\nb", b"a\n\nB"),
+                                  (b"a\r\n\r\nb", b"a\r\n\r\nB"),
+                                  (b"a\nb\r\n", None), (b"a\rb\n", None),
+                                  (b"a\r\nb\n", None)):
+                (workspace / "lines").write_bytes(before)
+                apply("*** Begin Patch\r\n*** Update File: lines\r\n@@\r\n"
+                      "-b\r\n+B\r\n*** End Patch\r\n",
+                      "succeeded" if after else "patch_rejected")
+                assert (workspace / "lines").read_bytes() == (after or before)
+
+            (workspace / "dup.txt").write_bytes(b"x\nx\n")
+            apply("*** Begin Patch\n*** Update File: dup.txt\n@@\n-x\n+y\n"
+                  "*** End Patch\n", "patch_rejected")
+            assert (workspace / "dup.txt").read_bytes() == b"x\nx\n"
+            names = set(workspace.iterdir())
+            apply("*** Begin Patch\n*** Add File: ../evil.txt\n+nope\n"
+                  "*** End Patch\n", "patch_rejected")
+            assert set(workspace.iterdir()) == names
+            assert not (case / "evil.txt").exists()
+            (workspace / "real.txt").write_bytes(b"real\n")
+            (workspace / "link.txt").symlink_to("real.txt")
+            apply("*** Begin Patch\n*** Update File: link.txt\n@@\n-real\n"
+                  "+changed\n*** End Patch\n", "patch_rejected")
+            assert (workspace / "real.txt").read_bytes() == b"real\n"
+            assert (workspace / "link.txt").is_symlink()
+            names = set(workspace.iterdir())
+            apply("*** Begin Patch\n*** Add File: added.txt\n+should-not-exist\n"
+                  "*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n",
+                  "patch_rejected")
+            assert set(workspace.iterdir()) == names
+            payload = "a" * (150 * 1024)
+            preview = apply("*** Begin Patch\n*** Add File: big.txt\n+" + payload +
+                            "\n*** End Patch\n")
+            assert len(preview.encode()) < 512 * 1024
+            assert "Diff preview (bounded" in preview
+            assert "diff preview truncated" in preview
+            assert (workspace / "big.txt").read_bytes() == (payload + "\n").encode()
+            terminal.exit()
+            print("tmux_terminal patch behavior: ok", flush=True)
+    finally:
+        provider.runtime_handler = None
+
+
 def run_incremental_history_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
@@ -4848,6 +4955,7 @@ def run_irc_case(binary, root):
         run_automatic_turn_retry_cases(binary, root, provider, environment)
         run_post_exit_drain_cases(binary, root, provider, environment)
         run_tool_yield_cases(binary, root, provider, environment)
+        run_patch_cases(binary, root, provider, environment)
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)

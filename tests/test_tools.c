@@ -22,8 +22,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define PATCH_MODEL_MAX_FOR_TEST (512u * 1024u)
-
 static void
 test_child_wait_ownership(void)
 {
@@ -366,26 +364,6 @@ write_text_file(const char *path, const char *text)
     assert(fclose(f) == 0);
 }
 
-static char *
-read_text_file(const char *path)
-{
-    FILE *f = fopen(path, "rb");
-    long len;
-    char *out;
-
-    assert(f != NULL);
-    assert(fseek(f, 0L, SEEK_END) == 0);
-    len = ftell(f);
-    assert(len >= 0);
-    assert(fseek(f, 0L, SEEK_SET) == 0);
-    out = malloc((size_t)len + 1u);
-    assert(out != NULL);
-    assert(fread(out, 1u, (size_t)len, f) == (size_t)len);
-    out[len] = '\0';
-    assert(fclose(f) == 0);
-    return out;
-}
-
 static void
 join_path(char *out, size_t out_size, const char *dir, const char *name)
 {
@@ -420,25 +398,6 @@ sleep_ms(unsigned int ms)
     remaining.tv_nsec = (long)(ms % 1000u) * 1000000L;
     while (nanosleep(&remaining, &remaining) < 0 && errno == EINTR)
         ;
-}
-
-static json_t *
-run_apply_patch(const char *workdir, const char *patch)
-{
-    struct snag_config config;
-    struct snag_response_graph graph;
-    json_t *args = json_object();
-
-    assert(args != NULL);
-    assert(snag_json_set_new(args, "patch", json_string(patch)) == 0);
-    assert(snag_json_set_new(args, "workdir", json_string(workdir)) == 0);
-    snag_config_init(&config);
-    snag_response_graph_init(&graph);
-    assert(snag_response_graph_set_provider_id(&graph, "resp_patch_test") == 0);
-    assert(snag_response_graph_add_call(&graph, "item_patch_test",
-                                       "call_patch_test", "apply_patch",
-                                       args) == 0);
-    return run_call(&graph, &config, workdir, NULL, NULL, NULL);
 }
 
 static void
@@ -1185,244 +1144,6 @@ test_secret_snapshot_rotation(void)
     snag_config_free(&config);
 }
 
-static void
-test_apply_patch_add_update_delete(void)
-{
-    char *dir = make_temp_workspace();
-    char path[4096];
-    char *text;
-    json_t *result;
-    const char patch[] =
-        "*** Begin Patch\n"
-        "*** Add File: new.txt\n"
-        "+alpha\n"
-        "+beta\n"
-        "*** Update File: a.txt\n"
-        "@@\n"
-        " one\n"
-        "-two\n"
-        "+TWO\n"
-        "*** Delete File: old.txt\n"
-        "*** End Patch\n";
-
-    join_path(path, sizeof(path), dir, "a.txt");
-    write_text_file(path, "one\ntwo\n");
-    assert(chmod(path, 0751) == 0);
-    join_path(path, sizeof(path), dir, "old.txt");
-    write_text_file(path, "bye\n");
-    mode_t mask = umask(0027);
-    result = run_apply_patch(dir, patch);
-    (void)umask(mask);
-    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
-    {
-        const char *model_text = snag_json_string(result, "model_text");
-        assert(strstr(model_text, "Diff preview (bounded") != NULL);
-        assert(strstr(model_text, "*** Update File: a.txt") != NULL);
-        assert(strstr(model_text, "-two") != NULL);
-        assert(strstr(model_text, "+TWO") != NULL);
-        assert(strstr(model_text, "*** Delete File: old.txt") != NULL);
-    }
-    json_decref(result);
-    join_path(path, sizeof(path), dir, "a.txt");
-    struct stat permissions;
-    assert(stat(path, &permissions) == 0 && (permissions.st_mode & 0777u) == 0751u);
-    text = read_text_file(path);
-    assert(strcmp(text, "one\nTWO\n") == 0);
-    free(text);
-    join_path(path, sizeof(path), dir, "new.txt");
-    assert(stat(path, &permissions) == 0 && (permissions.st_mode & 0777u) == 0640u);
-    text = read_text_file(path);
-    assert(strcmp(text, "alpha\nbeta\n") == 0);
-    free(text);
-    join_path(path, sizeof(path), dir, "old.txt");
-    assert(access(path, F_OK) < 0 && errno == ENOENT);
-    remove_file_in_dir(dir, "a.txt");
-    remove_file_in_dir(dir, "new.txt");
-    assert(rmdir(dir) == 0);
-    free(dir);
-}
-
-static void
-test_patch_line_endings(void)
-{
-    static const struct {
-        const char *before, *after;
-    } cases[] = {
-        {"a\n\nb\n", "a\n\nB\n"},
-        {"a\r\n\r\nb\r\n", "a\r\n\r\nB\r\n"},
-        {"a\n\nb", "a\n\nB"},
-        {"a\r\n\r\nb", "a\r\n\r\nB"},
-        {"a\nb\r\n", NULL},
-        {"a\rb\n", NULL},
-        {"a\r\nb\n", NULL}
-    };
-    char *dir = make_temp_workspace();
-    char path[4096];
-
-    join_path(path, sizeof(path), dir, "lines");
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        json_t *result;
-        char *text;
-        write_text_file(path, cases[i].before);
-        result = run_apply_patch(dir, "*** Begin Patch\r\n*** Update File: lines\r\n"
-                                     "@@\r\n-b\r\n+B\r\n*** End Patch\r\n");
-        assert(strcmp(snag_json_string(result, "status"),
-                      cases[i].after ? "succeeded" : "patch_rejected") == 0);
-        text = read_text_file(path);
-        assert(strcmp(text, cases[i].after ? cases[i].after : cases[i].before) == 0);
-        free(text);
-        json_decref(result);
-    }
-    remove_file_in_dir(dir, "lines");
-    assert(rmdir(dir) == 0);
-    free(dir);
-}
-
-static void
-test_apply_patch_rejects_ambiguous_match(void)
-{
-    char *dir = make_temp_workspace();
-    char path[4096];
-    char *text;
-    json_t *result;
-    const char patch[] =
-        "*** Begin Patch\n"
-        "*** Update File: dup.txt\n"
-        "@@\n"
-        "-x\n"
-        "+y\n"
-        "*** End Patch\n";
-
-    join_path(path, sizeof(path), dir, "dup.txt");
-    write_text_file(path, "x\nx\n");
-    result = run_apply_patch(dir, patch);
-    assert(strcmp(snag_json_string(result, "status"), "patch_rejected") == 0);
-    json_decref(result);
-    text = read_text_file(path);
-    assert(strcmp(text, "x\nx\n") == 0);
-    free(text);
-    remove_file_in_dir(dir, "dup.txt");
-    assert(rmdir(dir) == 0);
-    free(dir);
-}
-
-static void
-test_apply_patch_rejects_path_escape(void)
-{
-    char *dir = make_temp_workspace();
-    json_t *result;
-    const char patch[] =
-        "*** Begin Patch\n"
-        "*** Add File: ../evil.txt\n"
-        "+nope\n"
-        "*** End Patch\n";
-
-    result = run_apply_patch(dir, patch);
-    assert(strcmp(snag_json_string(result, "status"), "patch_rejected") == 0);
-    json_decref(result);
-    assert(rmdir(dir) == 0);
-    free(dir);
-}
-
-static void
-test_apply_patch_rejects_symlink_target(void)
-{
-    char *dir = make_temp_workspace();
-    char path[4096];
-    char linkpath[4096];
-    char *text;
-    json_t *result;
-    const char patch[] =
-        "*** Begin Patch\n"
-        "*** Update File: link.txt\n"
-        "@@\n"
-        "-real\n"
-        "+changed\n"
-        "*** End Patch\n";
-
-    join_path(path, sizeof(path), dir, "real.txt");
-    write_text_file(path, "real\n");
-    join_path(linkpath, sizeof(linkpath), dir, "link.txt");
-    assert(symlink("real.txt", linkpath) == 0);
-    result = run_apply_patch(dir, patch);
-    assert(strcmp(snag_json_string(result, "status"), "patch_rejected") == 0);
-    json_decref(result);
-    text = read_text_file(path);
-    assert(strcmp(text, "real\n") == 0);
-    free(text);
-    remove_file_in_dir(dir, "link.txt");
-    remove_file_in_dir(dir, "real.txt");
-    assert(rmdir(dir) == 0);
-    free(dir);
-}
-
-static void
-test_apply_patch_validates_before_install(void)
-{
-    char *dir = make_temp_workspace();
-    char path[4096];
-    json_t *result;
-    const char patch[] =
-        "*** Begin Patch\n"
-        "*** Add File: added.txt\n"
-        "+should-not-exist\n"
-        "*** Update File: missing.txt\n"
-        "@@\n"
-        "-old\n"
-        "+new\n"
-        "*** End Patch\n";
-
-    result = run_apply_patch(dir, patch);
-    assert(strcmp(snag_json_string(result, "status"), "patch_rejected") == 0);
-    json_decref(result);
-    join_path(path, sizeof(path), dir, "added.txt");
-    assert(access(path, F_OK) < 0 && errno == ENOENT);
-    assert(rmdir(dir) == 0);
-    free(dir);
-}
-
-static void
-test_apply_patch_preview_is_bounded(void)
-{
-    char *dir = make_temp_workspace();
-    char path[4096];
-    char *patch;
-    char *text;
-    json_t *result;
-    const size_t payload = 150u * 1024u;
-    const char *head =
-        "*** Begin Patch\n"
-        "*** Add File: big.txt\n"
-        "+";
-    const char *tail =
-        "\n"
-        "*** End Patch\n";
-    size_t len = strlen(head) + payload + strlen(tail);
-
-    patch = malloc(len + 1u);
-    assert(patch != NULL);
-    memcpy(patch, head, strlen(head));
-    memset(patch + strlen(head), 'a', payload);
-    memcpy(patch + strlen(head) + payload, tail, strlen(tail) + 1u);
-    result = run_apply_patch(dir, patch);
-    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
-    {
-        const char *model_text = snag_json_string(result, "model_text");
-        assert(strlen(model_text) < PATCH_MODEL_MAX_FOR_TEST);
-        assert(strstr(model_text, "Diff preview (bounded") != NULL);
-        assert(strstr(model_text, "diff preview truncated") != NULL);
-    }
-    json_decref(result);
-    join_path(path, sizeof(path), dir, "big.txt");
-    text = read_text_file(path);
-    assert(strlen(text) == payload + 1u);
-    free(text);
-    remove_file_in_dir(dir, "big.txt");
-    assert(rmdir(dir) == 0);
-    free(patch);
-    free(dir);
-}
-
 static int
 ro_cancel(void *opaque, unsigned int timeout_ms)
 {
@@ -1689,13 +1410,6 @@ main(void)
     test_all_provider_secrets_removed_and_redacted();
     test_secret_snapshot_rotation();
     test_apply_patch_rejects_null_result();
-    test_apply_patch_add_update_delete();
-    test_patch_line_endings();
-    test_apply_patch_rejects_ambiguous_match();
-    test_apply_patch_rejects_path_escape();
-    test_apply_patch_rejects_symlink_target();
-    test_apply_patch_validates_before_install();
-    test_apply_patch_preview_is_bounded();
     test_provider_secret_redacted_from_output();
     test_provider_secret_redacted_across_read_boundary();
     puts("test_tools: ok");
