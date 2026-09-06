@@ -96,9 +96,9 @@ test_deltas_survive_empty_terminal_output(void)
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
     assert(strcmp(graph.provider_response_id, "resp_ping") == 0);
-    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(graph.items[0].text, "haha") == 0);
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "haha") == 0);
     assert(emitted.calls == 2u);
     assert(emitted.text.len == 4u);
     assert(memcmp(emitted.text.data, "haha", 4u) == 0);
@@ -129,10 +129,10 @@ test_terminal_snapshot_can_supply_unseen_items(void)
         assert(0);
     }
     assert(graph.count == 2u);
-    assert(graph.items[0].phase == SNAG_PHASE_COMMENTARY);
-    assert(strcmp(graph.items[0].text, "Working. Done.") == 0);
-    assert(graph.items[1].phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(graph.items[1].text, "answer") == 0);
+    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_COMMENTARY);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "Working. Done.") == 0);
+    assert(snag_response_graph_item(&graph, 1).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&graph, 1).text, "answer") == 0);
     assert(emitted.last_index == 1u);
     assert(emitted.last_phase == SNAG_PHASE_FINAL_ANSWER);
     snag_buf_free(&emitted.text);
@@ -294,8 +294,8 @@ test_unused_response_events_are_ignored(void)
     assert(parse_stream(wire, 11u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(strcmp(graph.items[0].text, "Source.") == 0);
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "Source.") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.text.len == 7u);
     assert(memcmp(emitted.text.data, "Source.", 7u) == 0);
@@ -319,7 +319,7 @@ test_terminal_snapshot_ignores_unused_text_metadata(void)
     assert(parse_stream(wire, 13u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(strcmp(graph.items[0].text, "See file.") == 0);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "See file.") == 0);
     assert(emitted.calls == 1u);
     snag_buf_free(&emitted.text);
     snag_response_graph_free(&graph);
@@ -362,7 +362,7 @@ test_unused_annotation_shapes_are_ignored(void)
         assert(parse_stream((char *)wire.data, 7u, &graph, &emitted,
                             error, sizeof(error)) == 0);
         assert(graph.count == 1u);
-        assert(strcmp(graph.items[0].text, "x") == 0);
+        assert(strcmp(snag_response_graph_item(&graph, 0).text, "x") == 0);
         snag_buf_free(&emitted.text);
         snag_response_graph_free(&graph);
         snag_buf_free(&wire);
@@ -400,10 +400,10 @@ test_phase_absent_text_becomes_visible_final(void)
         assert(0);
     }
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(graph.items[0].provider_item_id, "msg_pong") == 0);
-    assert(strcmp(graph.items[0].text, "pong") == 0);
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&graph, 0).provider_item_id, "msg_pong") == 0);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "pong") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_phase == SNAG_PHASE_COMMENTARY);
     assert(strcmp(emitted.last_provider_id, "msg_pong") == 0);
@@ -441,11 +441,11 @@ test_phase_absent_text_before_tool_stays_commentary(void)
         assert(0);
     }
     assert(graph.count == 2u);
-    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNAG_PHASE_COMMENTARY);
-    assert(strcmp(graph.items[0].text, "Checking.") == 0);
-    assert(graph.items[1].kind == SNAG_ITEM_TOOL_CALL);
-    assert(strcmp(graph.items[1].provider_call_id, "call_2") == 0);
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_COMMENTARY);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "Checking.") == 0);
+    assert(snag_response_graph_item(&graph, 1).kind == SNAG_ITEM_TOOL_CALL);
+    assert(strcmp(snag_response_graph_item(&graph, 1).provider_call_id, "call_2") == 0);
     snag_buf_free(&emitted.text);
     snag_response_graph_free(&graph);
 }
@@ -482,11 +482,11 @@ test_empty_reasoning_item_is_internal_only(void)
     assert(parse_stream(wire, 19u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(graph.items[0].provider_item_id,
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&graph, 0).provider_item_id,
                   "msg_after_reasoning") == 0);
-    assert(strcmp(graph.items[0].text, "ok") == 0);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "ok") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_index == 1u);
     assert(strcmp(emitted.last_provider_id, "msg_after_reasoning") == 0);
@@ -534,10 +534,10 @@ test_web_search_item_is_internal_only(void)
     assert(parse_stream(wire, 23u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(graph.items[0].phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(graph.items[0].provider_item_id, "msg_after_web") == 0);
-    assert(strcmp(graph.items[0].text, "done") == 0);
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(snag_response_graph_item(&graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(snag_response_graph_item(&graph, 0).provider_item_id, "msg_after_web") == 0);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "done") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_index == 1u);
     assert(strcmp(emitted.last_provider_id, "msg_after_web") == 0);
@@ -572,8 +572,8 @@ test_future_items_and_content_are_inert(void)
     assert(parse_stream(wire, 17u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(strcmp(graph.items[0].text, "visible") == 0);
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "visible") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.last_index == 1u);
     snag_buf_free(&emitted.text);
@@ -622,10 +622,10 @@ test_function_call_arguments(void)
     assert(parse_stream(wire, 31u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNAG_ITEM_TOOL_CALL);
-    assert(strcmp(graph.items[0].provider_call_id, "call_1") == 0);
-    assert(strcmp(graph.items[0].name, "exec_command") == 0);
-    assert(strcmp(snag_json_string(graph.items[0].arguments, "command"),
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_TOOL_CALL);
+    assert(strcmp(snag_response_graph_item(&graph, 0).provider_call_id, "call_1") == 0);
+    assert(strcmp(snag_response_graph_item(&graph, 0).name, "exec_command") == 0);
+    assert(strcmp(snag_json_string(snag_response_graph_item(&graph, 0).arguments, "command"),
                   "printf hi") == 0);
     assert(emitted.calls == 0u);
     snag_buf_free(&emitted.text);
@@ -648,8 +648,8 @@ test_refusal(void)
     assert(parse_stream(wire, 0u, &graph, &emitted,
                         error, sizeof(error)) == 0);
     assert(graph.count == 1u);
-    assert(graph.items[0].kind == SNAG_ITEM_REFUSAL);
-    assert(strcmp(graph.items[0].text, "I cannot do that.") == 0);
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_REFUSAL);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "I cannot do that.") == 0);
     assert(emitted.last_kind == SNAG_ITEM_REFUSAL);
     snag_buf_free(&emitted.text);
     snag_response_graph_free(&graph);
@@ -688,7 +688,7 @@ test_invalid_call_after_public_item(void)
         assert(strstr(error, "function"));
         assert(emitted.text.len == 7u);
         assert(graph.count == 1u);
-        assert(strcmp(graph.items[0].text, "previous graph") == 0);
+        assert(strcmp(snag_response_graph_item(&graph, 0).text, "previous graph") == 0);
         snag_buf_free(&wire);
         snag_buf_free(&emitted.text);
         snag_response_graph_free(&graph);

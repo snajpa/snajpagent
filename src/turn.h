@@ -91,9 +91,8 @@ struct snag_response_usage {
 
 struct snag_response_graph {
     char *provider_response_id;
-    struct snag_response_item *items;
+    json_t *items;
     size_t count;
-    size_t cap;
     size_t encoded_bytes;
     struct snag_response_usage usage;
 };
@@ -115,6 +114,9 @@ struct snag_graph_decision {
 
 void snag_response_graph_init(struct snag_response_graph *graph);
 void snag_response_graph_free(struct snag_response_graph *graph);
+/* Borrowed view; strings/arguments live until the owning graph is changed. */
+struct snag_response_item snag_response_graph_item(const struct snag_response_graph *graph,
+                                                   size_t index);
 int snag_response_graph_set_provider_id(struct snag_response_graph *graph,
                                        const char *provider_response_id);
 int snag_response_graph_add_public(struct snag_response_graph *graph,

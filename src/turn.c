@@ -107,40 +107,30 @@ public_kind(enum snag_item_kind kind)
     return kind == SNAG_ITEM_ASSISTANT || kind == SNAG_ITEM_REFUSAL;
 }
 
-static json_t *item_json(const struct snag_response_item *item);
-
-static void
-item_free(struct snag_response_item *item)
+struct snag_response_item
+snag_response_graph_item(const struct snag_response_graph *graph, size_t index)
 {
-    free(item->provider_item_id);
-    free(item->provider_call_id);
-    free(item->text);
-    free(item->name);
-    if (item->arguments)
-        json_decref(item->arguments);
-    memset(item, 0, sizeof(*item));
-}
-
-static int
-account_last_item(struct snag_response_graph *graph)
-{
-    json_t *value;
-    size_t bytes, total;
-    int rc;
-
-    value = item_json(&graph->items[graph->count - 1u]);
-    if (!value)
-        return -1;
-    rc = snag_json_digest_bounded(value, SNAG_MAX_RESPONSE_GRAPH, NULL, &bytes);
-    json_decref(value);
-    if (rc < 0 || !snag_size_add(bytes, graph->count == 1u ? 2u : 1u, &total) ||
-        (graph->count > 1u && !snag_size_add(graph->encoded_bytes, total, &total)) ||
-        total > SNAG_MAX_RESPONSE_GRAPH) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    graph->encoded_bytes = total;
-    return 0;
+    json_t *value = json_array_get(graph->items, index);
+    const char *kind = snag_json_string(value, "kind");
+    const char *phase = snag_json_string(value, "phase");
+    const char *local = snag_json_string(value, "local_item_id");
+    const char *call = snag_json_string(value, "call_id");
+    struct snag_response_item item = {
+        .kind = kind && !strcmp(kind, "assistant") ? SNAG_ITEM_ASSISTANT :
+                kind && !strcmp(kind, "refusal") ? SNAG_ITEM_REFUSAL : SNAG_ITEM_TOOL_CALL,
+        .phase = phase && !strcmp(phase, "commentary") ? SNAG_PHASE_COMMENTARY :
+                 phase && !strcmp(phase, "final_answer") ? SNAG_PHASE_FINAL_ANSWER : SNAG_PHASE_NONE,
+        .provider_item_id = (char *)snag_json_string(value, "provider_item_id"),
+        .provider_call_id = (char *)snag_json_string(value, "provider_call_id"),
+        .name = (char *)snag_json_string(value, "name"),
+        .text = (char *)snag_json_string(value, "text"),
+        .arguments = json_object_get(value, "arguments")
+    };
+    if (local && snag_hex_is_lower(local, SNAG_ID_HEX_LEN))
+        memcpy(item.local_item_id, local, sizeof(item.local_item_id));
+    if (call && snag_hex_is_lower(call, SNAG_ID_HEX_LEN))
+        memcpy(item.call_id, call, sizeof(item.call_id));
+    return item;
 }
 
 static int
@@ -248,36 +238,9 @@ snag_response_graph_init(struct snag_response_graph *graph)
 void
 snag_response_graph_free(struct snag_response_graph *graph)
 {
-    for (size_t i = 0; i < graph->count; ++i)
-        item_free(&graph->items[i]);
-    free(graph->items);
+    json_decref(graph->items);
     free(graph->provider_response_id);
     snag_response_graph_init(graph);
-}
-
-static struct snag_response_item *
-append_item(struct snag_response_graph *graph)
-{
-    struct snag_response_item *items;
-    size_t cap;
-
-    if (graph->count >= SNAG_MAX_RESPONSE_ITEMS) {
-        errno = EOVERFLOW;
-        return NULL;
-    }
-    if (graph->count == graph->cap) {
-        cap = graph->cap ? graph->cap * 2u : 8u;
-        if (cap > SNAG_MAX_RESPONSE_ITEMS)
-            cap = SNAG_MAX_RESPONSE_ITEMS;
-        items = realloc(graph->items, cap * sizeof(*items));
-        if (!items)
-            return NULL;
-        memset(items + graph->cap, 0,
-               (cap - graph->cap) * sizeof(*items));
-        graph->items = items;
-        graph->cap = cap;
-    }
-    return &graph->items[graph->count++];
 }
 
 int
@@ -295,61 +258,6 @@ snag_response_graph_set_provider_id(struct snag_response_graph *graph,
     free(graph->provider_response_id);
     graph->provider_response_id = copy;
     return 0;
-}
-
-static int
-set_local_id(char out[SNAG_ID_HEX_LEN + 1u], const char *persisted)
-{
-    if (!persisted)
-        return snag_random_id(out);
-    memcpy(out, persisted, SNAG_ID_HEX_LEN + 1u);
-    return 0;
-}
-
-static int
-add_public(struct snag_response_graph *graph, enum snag_item_kind kind,
-           enum snag_item_phase phase, const char *provider_item_id,
-           const char *text, const char *local_item_id)
-{
-    struct snag_response_item *item;
-    bool shape = (kind == SNAG_ITEM_ASSISTANT &&
-                  (phase == SNAG_PHASE_COMMENTARY ||
-                   phase == SNAG_PHASE_FINAL_ANSWER)) ||
-                 (kind == SNAG_ITEM_REFUSAL &&
-                  phase == SNAG_PHASE_FINAL_ANSWER);
-
-    if (!shape || !provider_id_valid(provider_item_id) ||
-        (local_item_id &&
-         !snag_hex_is_lower(local_item_id, SNAG_ID_HEX_LEN)) ||
-        !text_valid(text, SNAG_MAX_PUBLIC_ITEM)) {
-        errno = EINVAL;
-        return -1;
-    }
-    item = append_item(graph);
-    if (!item)
-        return -1;
-    item->kind = kind;
-    item->phase = phase;
-    if (set_local_id(item->local_item_id, local_item_id) < 0 ||
-        !(item->provider_item_id =
-          snag_strdup_checked(provider_item_id, SNAG_MAX_PROVIDER_ID)) ||
-        !(item->text = snag_strdup_checked(text, SNAG_MAX_PUBLIC_ITEM)) ||
-        account_last_item(graph) < 0) {
-        item_free(item);
-        --graph->count;
-        return -1;
-    }
-    return 0;
-}
-
-int
-snag_response_graph_add_public(struct snag_response_graph *graph,
-                              enum snag_item_kind kind,
-                              enum snag_item_phase phase,
-                              const char *provider_item_id,
-                              const char *text)
-{
-    return add_public(graph, kind, phase, provider_item_id, text, NULL);
 }
 
 static bool
@@ -372,57 +280,119 @@ arguments_bounded(const json_t *arguments)
            snag_json_digest_bounded(arguments, SNAG_MAX_TOOL_ARGUMENTS, NULL, NULL) == 0;
 }
 
-static int
-add_call(struct snag_response_graph *graph, const char *provider_item_id,
-         const char *provider_call_id, const char *name, json_t *arguments,
-         const char *call_id)
+static bool
+item_valid(const json_t *value)
 {
-    struct snag_response_item *item;
-    size_t calls = 0;
+    static const char *const public_keys[] = {
+        "kind", "local_item_id", "phase", "provider_item_id", "text"
+    };
+    static const char *const call_keys[] = {
+        "arguments", "call_id", "kind", "name", "provider_call_id", "provider_item_id"
+    };
+    const char *kind = snag_json_string(value, "kind");
+    const char *phase = snag_json_string(value, "phase");
+    const char *id = snag_json_string(value, kind && !strcmp(kind, "tool_call") ?
+                                     "call_id" : "local_item_id");
 
-    for (size_t i = 0; i < graph->count; ++i)
-        if (graph->items[i].kind == SNAG_ITEM_TOOL_CALL)
-            ++calls;
-    if (calls >= SNAG_MAX_CALLS_PER_RESPONSE ||
-        !provider_id_valid(provider_item_id) ||
-        !provider_id_valid(provider_call_id) || !tool_name_valid(name) ||
-        (call_id && !snag_hex_is_lower(call_id, SNAG_ID_HEX_LEN)) ||
-        !arguments_bounded(arguments)) {
-        if (arguments)
-            json_decref(arguments);
+    if (!kind || !id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+        !provider_id_valid(snag_json_string(value, "provider_item_id")))
+        return false;
+    if (!strcmp(kind, "tool_call"))
+        return snag_json_exact_keys(value, call_keys, 6u) &&
+            provider_id_valid(snag_json_string(value, "provider_call_id")) &&
+            tool_name_valid(snag_json_string(value, "name")) &&
+            arguments_bounded(json_object_get(value, "arguments"));
+    return (!strcmp(kind, "assistant") || !strcmp(kind, "refusal")) &&
+        snag_json_exact_keys(value, public_keys, 5u) &&
+        phase && (!strcmp(phase, "final_answer") ||
+                  (!strcmp(kind, "assistant") && !strcmp(phase, "commentary"))) &&
+        text_valid(snag_json_string(value, "text"), SNAG_MAX_PUBLIC_ITEM);
+}
+
+/* Takes ownership. Admission never leaves a partially appended item. */
+static int
+append_item(struct snag_response_graph *graph, json_t *value)
+{
+    size_t bytes, total, calls = 0u;
+    int rc = -1;
+
+    if (!value)
+        return -1;
+    if (!item_valid(value)) {
+        errno = EINVAL;
+        goto out;
+    }
+    if (!strcmp(snag_json_string(value, "kind"), "tool_call")) {
+        for (size_t i = 0u; i < graph->count; ++i)
+            calls += snag_response_graph_item(graph, i).kind == SNAG_ITEM_TOOL_CALL;
+        if (calls >= SNAG_MAX_CALLS_PER_RESPONSE) {
+            errno = EINVAL;
+            goto out;
+        }
+    }
+    if (graph->count >= SNAG_MAX_RESPONSE_ITEMS ||
+        snag_json_digest_bounded(value, SNAG_MAX_RESPONSE_GRAPH, NULL, &bytes) < 0 ||
+        !snag_size_add(bytes, graph->count ? 1u : 2u, &total) ||
+        (graph->count && !snag_size_add(graph->encoded_bytes, total, &total)) ||
+        total > SNAG_MAX_RESPONSE_GRAPH) {
+        errno = EOVERFLOW;
+        goto out;
+    }
+    if (!graph->items && !(graph->items = json_array()))
+        goto out;
+    if (json_array_append(graph->items, value) < 0)
+        goto out;
+    ++graph->count;
+    graph->encoded_bytes = total;
+    rc = 0;
+out:
+    json_decref(value);
+    return rc;
+}
+
+int
+snag_response_graph_add_public(struct snag_response_graph *graph,
+                              enum snag_item_kind kind, enum snag_item_phase phase,
+                              const char *provider_item_id, const char *text)
+{
+    char id[SNAG_ID_HEX_LEN + 1u];
+    if (!public_kind(kind) ||
+        (phase != SNAG_PHASE_FINAL_ANSWER &&
+         (kind != SNAG_ITEM_ASSISTANT || phase != SNAG_PHASE_COMMENTARY)) ||
+        !provider_id_valid(provider_item_id) || !text_valid(text, SNAG_MAX_PUBLIC_ITEM)) {
         errno = EINVAL;
         return -1;
     }
-    item = append_item(graph);
-    if (!item) {
-        json_decref(arguments);
+    if (snag_random_id(id) < 0)
         return -1;
-    }
-    item->kind = SNAG_ITEM_TOOL_CALL;
-    item->phase = SNAG_PHASE_NONE;
-    item->arguments = arguments;
-    if (set_local_id(item->call_id, call_id) < 0 ||
-        !(item->provider_item_id =
-          snag_strdup_checked(provider_item_id, SNAG_MAX_PROVIDER_ID)) ||
-        !(item->provider_call_id =
-          snag_strdup_checked(provider_call_id, SNAG_MAX_PROVIDER_ID)) ||
-        !(item->name = snag_strdup_checked(name, 64u)) ||
-        account_last_item(graph) < 0) {
-        item_free(item);
-        --graph->count;
-        return -1;
-    }
-    return 0;
+    return append_item(graph, json_pack("{s:s,s:s,s:s,s:s,s:s}",
+        "kind", snag_item_kind_name(kind), "local_item_id", id,
+        "phase", snag_item_phase_name(phase), "provider_item_id", provider_item_id,
+        "text", text));
 }
 
 int
 snag_response_graph_add_call(struct snag_response_graph *graph,
-                            const char *provider_item_id,
-                            const char *provider_call_id,
+                            const char *provider_item_id, const char *provider_call_id,
                             const char *name, json_t *arguments)
 {
-    return add_call(graph, provider_item_id, provider_call_id, name,
-                    arguments, NULL);
+    char id[SNAG_ID_HEX_LEN + 1u];
+    json_t *value;
+    if (!provider_id_valid(provider_item_id) || !provider_id_valid(provider_call_id) ||
+        !tool_name_valid(name) || !arguments_bounded(arguments)) {
+        json_decref(arguments);
+        errno = EINVAL;
+        return -1;
+    }
+    if (snag_random_id(id) < 0) {
+        json_decref(arguments);
+        return -1;
+    }
+    value = json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
+        "kind", "tool_call", "call_id", id, "provider_item_id", provider_item_id,
+        "provider_call_id", provider_call_id, "name", name, "arguments", arguments);
+    json_decref(arguments);
+    return append_item(graph, value);
 }
 
 static int
@@ -430,7 +400,8 @@ identifiers_valid(const struct snag_response_graph *graph,
                   char *error, size_t error_size)
 {
     for (size_t i = 0; i < graph->count; ++i) {
-        const struct snag_response_item *item = &graph->items[i];
+        struct snag_response_item view = snag_response_graph_item(graph, i);
+        const struct snag_response_item *item = &view;
 
         if (public_kind(item->kind) &&
             !snag_hex_is_lower(item->local_item_id, SNAG_ID_HEX_LEN)) {
@@ -447,18 +418,19 @@ identifiers_valid(const struct snag_response_graph *graph,
             return -1;
         }
         for (size_t j = 0; j < i; ++j) {
+            struct snag_response_item previous = snag_response_graph_item(graph, j);
             if (public_kind(item->kind) &&
-                public_kind(graph->items[j].kind) &&
+                public_kind(previous.kind) &&
                 strcmp(item->local_item_id,
-                       graph->items[j].local_item_id) == 0) {
+                       previous.local_item_id) == 0) {
                 snag_errorf(error, error_size,
                           "response graph repeats a local item id");
                 errno = EINVAL;
                 return -1;
             }
             if (item->kind == SNAG_ITEM_TOOL_CALL &&
-                graph->items[j].kind == SNAG_ITEM_TOOL_CALL &&
-                strcmp(item->call_id, graph->items[j].call_id) == 0) {
+                previous.kind == SNAG_ITEM_TOOL_CALL &&
+                strcmp(item->call_id, previous.call_id) == 0) {
                 snag_errorf(error, error_size,
                           "response graph repeats a call id");
                 errno = EINVAL;
@@ -490,19 +462,18 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
     if (identifiers_valid(graph, error, error_size) < 0)
         return -1;
     for (size_t i = 0; i < graph->count; ++i) {
-        const struct snag_response_item *item = &graph->items[i];
+        struct snag_response_item view = snag_response_graph_item(graph, i);
+        const struct snag_response_item *item = &view;
         bad_index = i;
         if (!provider_id_valid(item->provider_item_id)) {
             snag_errorf(error, error_size, "response item %zu has invalid identity", i);
             errno = EINVAL;
             return -1;
         }
+        if (!item_valid(json_array_get(graph->items, i)))
+            goto bad_item;
         switch (item->kind) {
         case SNAG_ITEM_ASSISTANT:
-            if ((item->phase != SNAG_PHASE_COMMENTARY &&
-                 item->phase != SNAG_PHASE_FINAL_ANSWER) ||
-                !text_valid(item->text, SNAG_MAX_PUBLIC_ITEM))
-                goto bad_item;
             have_speech = true;
             last_speech = i;
             if (item->phase == SNAG_PHASE_FINAL_ANSWER) {
@@ -511,20 +482,12 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
             }
             break;
         case SNAG_ITEM_REFUSAL:
-            if (item->phase != SNAG_PHASE_FINAL_ANSWER ||
-                !text_valid(item->text, SNAG_MAX_PUBLIC_ITEM))
-                goto bad_item;
             have_speech = true;
             last_speech = i;
             ++terminal_count;
             terminal_index = i;
             break;
         case SNAG_ITEM_TOOL_CALL:
-            if (!snag_hex_is_lower(item->call_id, SNAG_ID_HEX_LEN) ||
-                !provider_id_valid(item->provider_call_id) ||
-                !tool_name_valid(item->name) ||
-                !arguments_bounded(item->arguments))
-                goto bad_item;
             ++calls;
             break;
         }
@@ -535,7 +498,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
         return -1;
     }
     {
-        json_t *items = snag_response_graph_json(graph);
+        json_t *items = graph->items ? json_incref(graph->items) : json_array();
         int rc = items ? snag_json_digest_bounded(items, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) : -1;
         if (items)
             json_decref(items);
@@ -557,7 +520,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
     }
     if (terminal_count == 1u) {
         decision->final_index = terminal_index;
-        decision->outcome = graph->items[terminal_index].kind == SNAG_ITEM_REFUSAL ?
+        decision->outcome = snag_response_graph_item(graph, terminal_index).kind == SNAG_ITEM_REFUSAL ?
                             SNAG_GRAPH_REFUSAL : SNAG_GRAPH_FINAL;
         return 0;
     }
@@ -594,81 +557,14 @@ snag_tool_action_digest(const struct snag_response_item *call,
     return rc;
 }
 
-static json_t *
-item_json(const struct snag_response_item *item)
-{
-    const char *kind = snag_item_kind_name(item->kind);
-
-    switch (item->kind) {
-    case SNAG_ITEM_ASSISTANT:
-    case SNAG_ITEM_REFUSAL:
-        return json_pack("{s:s,s:s,s:s,s:s,s:s}",
-            "kind", kind, "local_item_id", item->local_item_id,
-            "phase", snag_item_phase_name(item->phase),
-            "provider_item_id", item->provider_item_id, "text", item->text);
-    case SNAG_ITEM_TOOL_CALL:
-        return json_pack("{s:o,s:s,s:s,s:s,s:s,s:s}",
-            "arguments", json_deep_copy(item->arguments),
-            "kind", kind, "call_id", item->call_id, "name", item->name,
-            "provider_call_id", item->provider_call_id,
-            "provider_item_id", item->provider_item_id);
-    }
-    return NULL;
-}
-
 json_t *
 snag_response_graph_json(const struct snag_response_graph *graph)
 {
-    json_t *items = json_array();
-    if (!items)
-        return NULL;
-    for (size_t i = 0; i < graph->count; ++i) {
-        json_t *item = item_json(&graph->items[i]);
-        if (!item) {
-            json_decref(items);
-            return NULL;
-        }
-        if (json_array_append_new(items, item) < 0) {
-            json_decref(items);
-            return NULL;
-        }
-    }
-    return items;
-}
-
-static int
-parse_public(struct snag_response_graph *graph, const json_t *value,
-             enum snag_item_kind kind, char *error, size_t error_size)
-{
-    static const char *const keys[] = {
-        "kind", "local_item_id", "phase", "provider_item_id", "text"
-    };
-    const char *phase = snag_json_string(value, "phase");
-    const char *provider_id = snag_json_string(value, "provider_item_id");
-    const char *text = snag_json_string(value, "text");
-    const char *local_id = snag_json_string(value, "local_item_id");
-    enum snag_item_phase p;
-    if (!snag_json_exact_keys((json_t *)value, keys, 5u) || !phase || !provider_id ||
-        !text || !local_id || !snag_hex_is_lower(local_id, SNAG_ID_HEX_LEN))
-        goto invalid;
-    if (strcmp(phase, "commentary") == 0)
-        p = SNAG_PHASE_COMMENTARY;
-    else if (strcmp(phase, "final_answer") == 0)
-        p = SNAG_PHASE_FINAL_ANSWER;
-    else
-        goto invalid;
-    if (add_public(graph, kind, p, provider_id, text, local_id) < 0)
-        goto invalid;
-    return 0;
-invalid:
-    snag_errorf(error, error_size, "invalid public response item");
-    errno = EINVAL;
-    return -1;
+    return graph->items ? json_deep_copy(graph->items) : json_array();
 }
 
 int
-snag_response_graph_from_json(struct snag_response_graph *graph,
-                             const json_t *items,
+snag_response_graph_from_json(struct snag_response_graph *graph, const json_t *items,
                              char *error, size_t error_size)
 {
     if (!json_is_array(items) || json_array_size(items) > SNAG_MAX_RESPONSE_ITEMS) {
@@ -676,46 +572,13 @@ snag_response_graph_from_json(struct snag_response_graph *graph,
         errno = EINVAL;
         return -1;
     }
-    for (size_t i = 0; i < json_array_size(items); ++i) {
-        json_t *value = json_array_get(items, i);
-        const char *kind = snag_json_string(value, "kind");
-        if (!json_is_object(value) || !kind)
-            goto invalid;
-        if (strcmp(kind, "assistant") == 0) {
-            if (parse_public(graph, value, SNAG_ITEM_ASSISTANT,
-                             error, error_size) < 0)
-                return -1;
-        } else if (strcmp(kind, "refusal") == 0) {
-            if (parse_public(graph, value, SNAG_ITEM_REFUSAL,
-                             error, error_size) < 0)
-                return -1;
-        } else if (strcmp(kind, "tool_call") == 0) {
-            static const char *const keys[] = {
-                "arguments", "call_id", "kind", "name", "provider_call_id",
-                "provider_item_id"
-            };
-            const char *call_id = snag_json_string(value, "call_id");
-            const char *name = snag_json_string(value, "name");
-            const char *provider_call_id = snag_json_string(value, "provider_call_id");
-            const char *provider_item_id = snag_json_string(value, "provider_item_id");
-            json_t *arguments = json_object_get(value, "arguments");
-            if (!snag_json_exact_keys(value, keys, 6u) || !call_id ||
-                !snag_hex_is_lower(call_id, SNAG_ID_HEX_LEN) || !arguments ||
-                add_call(graph, provider_item_id, provider_call_id, name,
-                         json_deep_copy(arguments), call_id) < 0)
-                goto invalid;
-        } else {
-            goto invalid;
+    for (size_t i = 0u; i < json_array_size(items); ++i)
+        if (append_item(graph, json_deep_copy(json_array_get(items, i))) < 0) {
+            snag_errorf(error, error_size, "invalid response item at index %zu", graph->count);
+            errno = EINVAL;
+            return -1;
         }
-    }
-    if (identifiers_valid(graph, error, error_size) < 0)
-        return -1;
-    return 0;
-invalid:
-    snag_errorf(error, error_size, "invalid response item at index %zu",
-              graph->count);
-    errno = EINVAL;
-    return -1;
+    return identifiers_valid(graph, error, error_size);
 }
 
 int
@@ -730,7 +593,7 @@ snag_partial_public_validate(const json_t *items,
                                      error, error_size) < 0)
         goto out;
     for (size_t i = 0; i < graph.count; ++i) {
-        if (!public_kind(graph.items[i].kind)) {
+        if (!public_kind(snag_response_graph_item(&graph, i).kind)) {
             snag_errorf(error, error_size,
                       "partial public array contains a non-public item");
             errno = EINVAL;

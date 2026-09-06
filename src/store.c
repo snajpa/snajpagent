@@ -1808,7 +1808,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->final_item_id[0] = '\0';
         session->final_response_id[0] = '\0';
         for (size_t i = 0; i < graph.count; ++i) {
-            const struct snag_response_item *item = &graph.items[i];
+            struct snag_response_item view = snag_response_graph_item(&graph, i);
+            const struct snag_response_item *item = &view;
             if (item->kind == SNAG_ITEM_ASSISTANT ||
                 item->kind == SNAG_ITEM_REFUSAL) {
                 if (replace_text(&session->last_assistant, item->text,
@@ -1852,7 +1853,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
         if (decision.outcome == SNAG_GRAPH_FINAL ||
             decision.outcome == SNAG_GRAPH_REFUSAL) {
-            const struct snag_response_item *item = &graph.items[decision.final_index];
+            struct snag_response_item view = snag_response_graph_item(&graph, decision.final_index);
+            const struct snag_response_item *item = &view;
             memcpy(session->final_item_id, item->local_item_id,
                    sizeof(session->final_item_id));
             memcpy(session->final_response_id, response_id,

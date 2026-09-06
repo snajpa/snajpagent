@@ -1093,7 +1093,7 @@ build_call(struct snag_responses_stream *stream,
     return 0;
 }
 
-static void
+static int
 normalize_implicit_message_terminal(struct snag_response_graph *graph)
 {
     size_t last_assistant = graph->count;
@@ -1101,7 +1101,8 @@ normalize_implicit_message_terminal(struct snag_response_graph *graph)
     bool has_terminal_public = false;
 
     for (size_t i = 0; i < graph->count; ++i) {
-        struct snag_response_item *item = &graph->items[i];
+        struct snag_response_item view = snag_response_graph_item(graph, i);
+        const struct snag_response_item *item = &view;
         if (item->kind == SNAG_ITEM_TOOL_CALL)
             has_call = true;
         if ((item->kind == SNAG_ITEM_ASSISTANT &&
@@ -1111,8 +1112,13 @@ normalize_implicit_message_terminal(struct snag_response_graph *graph)
         if (item->kind == SNAG_ITEM_ASSISTANT)
             last_assistant = i;
     }
-    if (!has_call && !has_terminal_public && last_assistant < graph->count)
-        graph->items[last_assistant].phase = SNAG_PHASE_FINAL_ANSWER;
+    if (!has_call && !has_terminal_public && last_assistant < graph->count) {
+        if (json_object_set_new(json_array_get(graph->items, last_assistant),
+                                "phase", json_string("final_answer")) < 0)
+            return -1;
+        graph->encoded_bytes += strlen("final_answer") - strlen("commentary");
+    }
+    return 0;
 }
 
 int
@@ -1152,7 +1158,10 @@ snag_responses_stream_finish(struct snag_responses_stream *stream,
         if (rc != 0)
             goto staged_out;
     }
-    normalize_implicit_message_terminal(&staged);
+    if (normalize_implicit_message_terminal(&staged) < 0) {
+        rc = stream_fail(stream, ENOMEM, "cannot retain implicit terminal phase");
+        goto staged_out;
+    }
     snag_response_graph_free(graph);
     *graph = staged;
     rc = 0;

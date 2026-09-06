@@ -736,7 +736,7 @@ test_local_provider_transport(void)
                                          &retries) == 0);
     assert(strcmp(graph.provider_response_id, "resp_transport") == 0);
     assert(graph.count == 1u);
-    assert(strcmp(graph.items[0].text, "local transport") == 0);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.text.len == strlen("local transport"));
     assert(memcmp(emitted.text.data, "local transport",
@@ -1278,12 +1278,12 @@ test_openrouter_search_transport(void)
         error, sizeof(error), &cancel, &retries) == 0);
     assert(!cancel && !retries);
     assert(graph.count == 2u);
-    assert(graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(strcmp(graph.items[0].text, "Found https://example.com") == 0);
-    assert(graph.items[1].kind == SNAG_ITEM_TOOL_CALL);
-    assert(strcmp(graph.items[1].name, "read_file") == 0);
-    assert(strcmp(graph.items[1].provider_call_id, "call_after_search") == 0);
-    assert(strcmp(snag_json_string(graph.items[1].arguments, "path"), "README.md") == 0);
+    assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "Found https://example.com") == 0);
+    assert(snag_response_graph_item(&graph, 1).kind == SNAG_ITEM_TOOL_CALL);
+    assert(strcmp(snag_response_graph_item(&graph, 1).name, "read_file") == 0);
+    assert(strcmp(snag_response_graph_item(&graph, 1).provider_call_id, "call_after_search") == 0);
+    assert(strcmp(snag_json_string(snag_response_graph_item(&graph, 1).arguments, "path"), "README.md") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.text.len == strlen("Found https://example.com"));
     assert(memcmp(emitted.text.data, "Found https://example.com", emitted.text.len) == 0);
@@ -1300,8 +1300,8 @@ test_openrouter_search_transport(void)
     assert(snag_provider_responses_create(request, &config, &config.providers[0],
         &credential, NULL, emit_capture, &emitted, NULL, NULL, &graph, NULL,
         error, sizeof(error), &cancel, &retries) == 0);
-    assert(graph.count == 1u && graph.items[0].kind == SNAG_ITEM_ASSISTANT);
-    assert(strcmp(graph.items[0].text, "local transport") == 0);
+    assert(graph.count == 1u && snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
     assert(emitted.calls == 1u && !cancel && !retries);
     snag_response_graph_free(&graph);
     snag_buf_free(&emitted.text);

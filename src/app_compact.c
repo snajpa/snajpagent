@@ -255,17 +255,17 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     if (snag_response_graph_classify(&graph, &decision,
                                     error, error_size) < 0)
         goto out;
+    struct snag_response_item final = snag_response_graph_item(&graph, decision.final_index);
     if (decision.outcome != SNAG_GRAPH_FINAL ||
         decision.final_index >= graph.count ||
-        !graph.items[decision.final_index].text) {
+        !final.text) {
         snprintf(error, error_size,
                  "Responses compaction did not return a final JSON answer");
         errno = EPROTO;
         goto out;
     }
     *output = snag_json_load_strict(
-        (const unsigned char *)graph.items[decision.final_index].text,
-        strlen(graph.items[decision.final_index].text),
+        (const unsigned char *)final.text, strlen(final.text),
         SNAG_CONTEXT_MAX_COMPACT, error, error_size);
     if (!*output)
         goto out;

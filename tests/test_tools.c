@@ -212,12 +212,13 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
         memcpy(credential.value, secret, credential.len + 1u);
     }
     make_call(&graph, command, cwd, timeout_ms, stdin_text);
+    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
     if (selected_limit >= 0)
-        assert(json_object_set_new(graph.items[0].arguments,
+        assert(json_object_set_new(call.arguments,
             "max_output_tokens", json_integer(selected_limit)) == 0);
     error[0] = '\0';
     {
-        int rc = snag_tools_run(&graph.items[0], &config, &credential, cwd,
+        int rc = snag_tools_run(&call, &config, &credential, cwd,
                                pump, pump_opaque, -1, &result, error, sizeof(error));
         if (rc != 0)
             fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
@@ -264,9 +265,10 @@ run_pty_command(const char *command, int timeout_ms)
     config.max_timeout_ms = 5000;
     snag_credential_clear(&credential);
     make_call_with_pty(&graph, command, cwd, timeout_ms, NULL, true);
+    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
     error[0] = '\0';
     {
-        int rc = snag_tools_run(&graph.items[0], &config, &credential, cwd,
+        int rc = snag_tools_run(&call, &config, &credential, cwd,
                                NULL, NULL, -1, &result, error, sizeof(error));
         if (rc != 0)
             fprintf(stderr, "pty tool error: %s errno=%d\n", error, errno);
@@ -302,8 +304,9 @@ run_tool_with_wait(const char *name, json_t *args,
     assert(snag_response_graph_set_provider_id(&graph, "resp_managed_test") == 0);
     assert(snag_response_graph_add_call(&graph, "item_managed_test",
                                        "call_managed_test", name, args) == 0);
+    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
     error[0] = '\0';
-    rc = snag_tools_run(&graph.items[0], &config, &credential, cwd,
+    rc = snag_tools_run(&call, &config, &credential, cwd,
                        pump, pump_opaque, -1, &result, error, sizeof(error));
     if (rc != 0)
         fprintf(stderr, "tool error: %s errno=%d\n", error, errno);
@@ -485,8 +488,9 @@ run_apply_patch(const char *workdir, const char *patch)
     assert(snag_response_graph_add_call(&graph, "item_patch_test",
                                        "call_patch_test", "apply_patch",
                                        args) == 0);
+    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
     error[0] = '\0';
-    rc = snag_tools_run(&graph.items[0], &config, &credential, workdir,
+    rc = snag_tools_run(&call, &config, &credential, workdir,
                        NULL, NULL, -1, &result, error, sizeof(error));
     if (rc != 0)
         fprintf(stderr, "patch tool error: %s errno=%d\n", error, errno);
@@ -647,28 +651,29 @@ test_command_output_limit_is_required_and_positive(void)
     snag_config_init(&config);
     snag_credential_clear(&credential);
     make_call(&graph, "printf never-run", cwd, 1000, NULL);
-    assert(json_object_del(graph.items[0].arguments,
+    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
+    assert(json_object_del(call.arguments,
                            "max_output_tokens") == 0);
-    assert(snag_tools_run(&graph.items[0], &config, &credential, cwd,
+    assert(snag_tools_run(&call, &config, &credential, cwd,
                          NULL, NULL, -1, &result, error, sizeof(error)) == 0);
     assert(!strcmp(snag_json_string(result, "status"), "not_run"));
     json_decref(result);
     result = snag_tool_result_terminal(false, "invalid arguments");
     assert(result != NULL);
     config.max_output_tokens = 123u;
-    assert(snag_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
+    assert(snag_tools_attach_output_limit(&call, &config, result) == 0);
     assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
     json_decref(result);
     result = NULL;
-    assert(json_object_set_new(graph.items[0].arguments,
+    assert(json_object_set_new(call.arguments,
                "max_output_tokens", json_integer(0)) == 0);
-    assert(snag_tools_run(&graph.items[0], &config, &credential, cwd,
+    assert(snag_tools_run(&call, &config, &credential, cwd,
                          NULL, NULL, -1, &result, error, sizeof(error)) == 0);
     assert(!strcmp(snag_json_string(result, "status"), "not_run"));
     json_decref(result);
     result = snag_tool_result_terminal(false, "invalid arguments");
     assert(result != NULL);
-    assert(snag_tools_attach_output_limit(&graph.items[0], &config, result) == 0);
+    assert(snag_tools_attach_output_limit(&call, &config, result) == 0);
     assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
     json_decref(result);
     snag_response_graph_free(&graph);
@@ -1186,7 +1191,8 @@ test_all_provider_secrets_removed_and_redacted(void)
     make_call(&graph,
               "printf \"${SECOND_PROVIDER_KEY-unset}:second-provider-secret\"",
               cwd, 1000, NULL);
-    assert(snag_tools_run(&graph.items[0], &config, &credential, cwd,
+    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
+    assert(snag_tools_run(&call, &config, &credential, cwd,
                          NULL, NULL, -1, &result, error, sizeof(error)) == 0);
     retained = snag_json_string(json_object_get(result, "stdout"), "retained");
     assert(strcmp(retained, "unset:<redacted:secret>") == 0);
@@ -1605,8 +1611,9 @@ test_process_capacity_and_ready_collection(void)
         uint32_t yield;
         json_t *result = NULL;
         make_call(&graph, "printf slot", cwd, 1000, NULL);
-        assert(snag_tools_prepare(&graph.items[0], &config, handles[i], &yield, &result) == 0);
-        assert(snag_tools_start(&graph.items[0], &config, &credential, &result, error, sizeof(error)) == 0);
+        struct snag_response_item call = snag_response_graph_item(&graph, 0u);
+        assert(snag_tools_prepare(&call, &config, handles[i], &yield, &result) == 0);
+        assert(snag_tools_start(&call, &config, &credential, &result, error, sizeof(error)) == 0);
         assert(!result);
         snag_response_graph_free(&graph);
     }
@@ -1620,7 +1627,8 @@ test_process_capacity_and_ready_collection(void)
     uint32_t yield;
     json_t *result = NULL;
     make_call(&graph, "printf forbidden", cwd, 1000, NULL);
-    assert(snag_tools_prepare(&graph.items[0], &config, unused, &yield, &result) == 1);
+    struct snag_response_item call = snag_response_graph_item(&graph, 0u);
+    assert(snag_tools_prepare(&call, &config, unused, &yield, &result) == 1);
     assert(!strcmp(snag_json_string(result, "reason"), "process_limit"));
     json_decref(result);
     snag_response_graph_free(&graph);
@@ -1686,8 +1694,9 @@ test_journal_failure_closes_owned_commands(void)
         uint32_t yield;
         json_t *result = NULL;
         make_call(&graph, "printf pending; sleep 5", cwd, 5000, NULL);
-        assert(snag_tools_prepare(&graph.items[0], &config, handle, &yield, &result) == 0);
-        assert(snag_tools_start(&graph.items[0], &config, &credential, &result, error, sizeof(error)) == 0);
+        struct snag_response_item call = snag_response_graph_item(&graph, 0u);
+        assert(snag_tools_prepare(&call, &config, handle, &yield, &result) == 0);
+        assert(snag_tools_start(&call, &config, &credential, &result, error, sizeof(error)) == 0);
         snag_response_graph_free(&graph);
     }
     fail_output = true;

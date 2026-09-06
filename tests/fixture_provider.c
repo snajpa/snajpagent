@@ -665,7 +665,7 @@ fixture_response(const char *prompt, const json_t *steering,
         if (snag_response_graph_add_public(
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_terminal_render", full) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  first, sizeof(first) - 1u) < 0)
             goto allocation;
         for (unsigned int i = 0u; i < 50u; ++i) {
@@ -674,11 +674,11 @@ fixture_response(const char *prompt, const json_t *steering,
             if (pump_rc != 0)
                 return pump_rc;
         }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  second_prefix, sizeof(second_prefix) - 1u) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  euro_first, sizeof(euro_first) - 1u) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  second_suffix, sizeof(second_suffix) - 1u) < 0)
             goto allocation;
         /* Leave time for the test to begin its second typing pause. */
@@ -688,7 +688,7 @@ fixture_response(const char *prompt, const json_t *steering,
             if (pump_rc != 0)
                 return pump_rc;
         }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  third, sizeof(third) - 1u) < 0)
             goto allocation;
         /* Keep the turn active until that paused output becomes visible. */
@@ -723,12 +723,12 @@ flood_done:
 
         if (snag_response_graph_add_public(graph, SNAG_ITEM_ASSISTANT,
                 SNAG_PHASE_FINAL_ANSWER, "msg_engine_blocked", text) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  text, 19u) < 0)
             goto allocation;
         /* Intentionally no pump: models a sync/lock/DNS/library stall. */
         (void)snag_sleep_ms(2500u);
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  text + 19u, sizeof(text) - 1u - 19u) < 0)
             goto allocation;
         return 0;
@@ -750,7 +750,7 @@ flood_done:
             if (pump_rc != 0)
                 return pump_rc;
         }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  first, sizeof(first) - 1u) < 0)
             goto allocation;
         for (unsigned int i = 0u; i < 60u; ++i) {
@@ -759,7 +759,7 @@ flood_done:
             if (pump_rc != 0)
                 return pump_rc;
         }
-        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+        if (emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  second, sizeof(second) - 1u) < 0)
             goto allocation;
         return 0;
@@ -786,9 +786,9 @@ flood_done:
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_index_one", "index one") < 0 ||
             emit(opaque, 1u, SNAG_ITEM_ASSISTANT,
-                 SNAG_PHASE_FINAL_ANSWER, graph->items[1u].provider_item_id, "index one", 9u) < 0 ||
+                 SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, 1u).provider_item_id, "index one", 9u) < 0 ||
             emit(opaque, 0u, SNAG_ITEM_ASSISTANT,
-                 SNAG_PHASE_COMMENTARY, graph->items[0u].provider_item_id, "index zero", 10u) < 0)
+                 SNAG_PHASE_COMMENTARY, snag_response_graph_item(graph, 0u).provider_item_id, "index zero", 10u) < 0)
             goto allocation;
         return 0;
     }
@@ -815,7 +815,7 @@ flood_done:
                 goto allocation;
             for (size_t part = 0u; part < fragment_count; ++part) {
                 if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, graph->items[index].provider_item_id, fragments[part],
+                         SNAG_PHASE_COMMENTARY, snag_response_graph_item(graph, index).provider_item_id, fragments[part],
                          strlen(fragments[part])) < 0)
                     goto allocation;
                 for (unsigned int wait = 0u;
@@ -869,7 +869,7 @@ flood_done:
         for (size_t part = 0u;
              part < sizeof(fragments) / sizeof(fragments[0]); ++part) {
             if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                     SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id, fragments[part],
+                     SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id, fragments[part],
                      strlen(fragments[part])) < 0)
                 goto allocation;
             for (unsigned int wait = 0u; wait < 4u; ++wait) {
@@ -897,7 +897,7 @@ flood_done:
         if (snag_response_graph_add_public(
                 graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER,
                 "msg_fixture_typing_stream", full) < 0 ||
-            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+            emit(opaque, index, SNAG_ITEM_ASSISTANT, SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                  first, sizeof(first) - 1u) < 0)
             goto allocation;
         for (unsigned int part = 0u; part < 2u; ++part) {
@@ -908,7 +908,7 @@ flood_done:
                     return pump_rc;
             }
             if (emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                     SNAG_PHASE_FINAL_ANSWER, graph->items[index].provider_item_id,
+                     SNAG_PHASE_FINAL_ANSWER, snag_response_graph_item(graph, index).provider_item_id,
                      part == 0u ? second : third,
                      part == 0u ? sizeof(second) - 1u :
                                   sizeof(third) - 1u) < 0)
@@ -946,7 +946,7 @@ flood_done:
                         graph, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
                         "msg_fixture_slow_utf8_commentary", euro) < 0 ||
                     emit(opaque, index, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, graph->items[index].provider_item_id, euro, 1u) < 0)
+                         SNAG_PHASE_COMMENTARY, snag_response_graph_item(graph, index).provider_item_id, euro, 1u) < 0)
                     goto allocation;
             } else if (emit_public(
                            graph, emit, opaque, SNAG_ITEM_ASSISTANT,
@@ -964,7 +964,7 @@ flood_done:
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";
                 if (emit(opaque, 0u, SNAG_ITEM_ASSISTANT,
-                         SNAG_PHASE_COMMENTARY, graph->items[0u].provider_item_id, euro + 1u,
+                         SNAG_PHASE_COMMENTARY, snag_response_graph_item(graph, 0u).provider_item_id, euro + 1u,
                          sizeof(euro) - 2u) < 0)
                     goto allocation;
             }

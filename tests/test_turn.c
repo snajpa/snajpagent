@@ -152,7 +152,7 @@ main(void)
     assert(snag_response_graph_classify(&copy, &decision,
                                        error, sizeof(error)) == 0);
     assert(decision.outcome == SNAG_GRAPH_FINAL);
-    assert(strcmp(copy.items[0].text, "pong") == 0);
+    assert(strcmp(snag_response_graph_item(&copy, 0).text, "pong") == 0);
     assert(snag_partial_public_validate(encoded,
                                        error, sizeof(error)) == 0);
     assert(json_array_append_new(encoded,
@@ -184,7 +184,7 @@ main(void)
     assert(snag_response_graph_set_provider_id(&copy, "resp_calls") == 0);
     assert(snag_response_graph_from_json(&copy, encoded,
                                         error, sizeof(error)) == 0);
-    assert(copy.items[1].local_item_id[0] == '\0');
+    assert(snag_response_graph_item(&copy, 1).local_item_id[0] == '\0');
     assert(copy.count == 2u);
     assert(snag_response_graph_classify(&copy, &decision,
                                        error, sizeof(error)) == 0);
@@ -202,7 +202,7 @@ main(void)
         assert(graph.encoded_bytes == a.len && copy.encoded_bytes == b.len);
         assert(json_object_set_new(json_object_get(json_array_get(roundtrip, 1u),
             "arguments"), "command", json_string("changed")) == 0);
-        assert(json_equal(copy.items[1].arguments, graph.items[1].arguments));
+        assert(json_equal(snag_response_graph_item(&copy, 1).arguments, snag_response_graph_item(&graph, 1).arguments));
         assert(!json_equal(roundtrip, encoded));
         snag_buf_free(&a);
         snag_buf_free(&b);
@@ -210,8 +210,9 @@ main(void)
     }
     json_decref(encoded);
     snag_response_graph_free(&copy);
-    assert(snag_tool_action_digest(&graph.items[1], "/tmp", action_a) == 0);
-    assert(snag_tool_action_digest(&graph.items[1], "/var/tmp", action_b) == 0);
+    struct snag_response_item call = snag_response_graph_item(&graph, 1u);
+    assert(snag_tool_action_digest(&call, "/tmp", action_a) == 0);
+    assert(snag_tool_action_digest(&call, "/var/tmp", action_b) == 0);
     assert(strcmp(action_a, action_b) != 0);
     assert(snag_response_graph_add_public(&graph, SNAG_ITEM_ASSISTANT,
                                          SNAG_PHASE_FINAL_ANSWER,
@@ -249,9 +250,9 @@ main(void)
     assert(snag_response_graph_set_provider_id(&copy, "resp_irc") == 0);
     assert(snag_response_graph_from_json(&copy, encoded,
                                         error, sizeof(error)) == 0);
-    assert(strcmp(copy.items[0].name, "irc_send") == 0);
-    assert(strcmp(copy.items[1].name, "irc_state") == 0);
-    assert(strcmp(copy.items[2].name, "irc_topic") == 0);
+    assert(strcmp(snag_response_graph_item(&copy, 0).name, "irc_send") == 0);
+    assert(strcmp(snag_response_graph_item(&copy, 1).name, "irc_state") == 0);
+    assert(strcmp(snag_response_graph_item(&copy, 2).name, "irc_topic") == 0);
     json_decref(encoded);
     snag_response_graph_free(&copy);
     snag_response_graph_free(&graph);

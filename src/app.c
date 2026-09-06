@@ -2610,7 +2610,7 @@ execute_calls(struct app_state *app, const char *turn_id,
               char *error, size_t error_size)
 {
     struct {
-        const struct snag_response_item *call;
+        struct snag_response_item call;
         char handle[SNAG_ID_HEX_LEN + 1u];
         bool started, finished, process;
     } calls[SNAG_MAX_CALLS_PER_RESPONSE] = {0};
@@ -2621,10 +2621,11 @@ execute_calls(struct app_state *app, const char *turn_id,
     bool first_wave = true;
 
     for (size_t i = 0u; i < graph->count; ++i) {
-        const struct snag_response_item *call = &graph->items[i];
+        struct snag_response_item view = snag_response_graph_item(graph, i);
+        const struct snag_response_item *call = &view;
         if (call->kind != SNAG_ITEM_TOOL_CALL)
             continue;
-        calls[count].call = call;
+        calls[count].call = *call;
 #ifndef SNAJPAGENT_TEST_FIXTURE
         calls[count].process = !app->session.active_read_only &&
             (!strcmp(call->name, "exec_command") || !strcmp(call->name, "write_stdin"));
@@ -2636,7 +2637,7 @@ execute_calls(struct app_state *app, const char *turn_id,
         size_t before = finished;
         bool pending = false;
         for (size_t i = 0u; i < count; ++i) {
-            const struct snag_response_item *call = calls[i].call;
+            const struct snag_response_item *call = &calls[i].call;
             json_t *result = NULL;
             if (calls[i].finished)
                 continue;
@@ -2806,7 +2807,7 @@ handoff:
             result = snag_tool_result_not_run(!strcmp(handoff, "steering_handoff") ?
                                               "superseded_by_steering" : handoff);
         }
-        if (finish_call(app, turn_id, calls[i].call, calls[i].started ? calls[i].handle : NULL,
+        if (finish_call(app, turn_id, &calls[i].call, calls[i].started ? calls[i].handle : NULL,
                          result, error, error_size) < 0)
             return -1;
     }
@@ -3581,7 +3582,8 @@ run_turn(struct app_state *app, const char *prompt,
                     "provider refused the response", error, sizeof(error));
                 goto out;
             }
-            const struct snag_response_item *final = &graph.items[decision.final_index];
+            struct snag_response_item view = snag_response_graph_item(&graph, decision.final_index);
+            const struct snag_response_item *final = &view;
             if (commit_event(app, "turn_completed",
                              snag_app_turn_completed_data(turn_id, response_id,
                                                  final->local_item_id),

@@ -585,7 +585,8 @@ append_response_items(struct context_builder *builder, const json_t *items,
     if (snag_response_graph_from_json(&graph, items, error, error_size) < 0)
         goto out;
     for (size_t i = 0; i < graph.count; ++i) {
-        const struct snag_response_item *item = &graph.items[i];
+        struct snag_response_item view = snag_response_graph_item(&graph, i);
+        const struct snag_response_item *item = &view;
         const char *text = item->text;
         struct snag_buf notice;
         bool historical = builder->session &&
