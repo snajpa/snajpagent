@@ -45,6 +45,15 @@ test_shutdown_signal(int number)
 static void
 test_home_environment(void)
 {
+    wchar_t *wide[] = {L"C:\\Program Files\\\x4e2d\\snajpagent.exe", L"", L"quoted \"value\"", L"\xd83d\xde00", L"*.c"};
+    char **args = snag_wide_arguments(5, wide);
+    assert(args && !args[5]);
+    assert(!strcmp(args[0], "C:\\Program Files\\\xe4\xb8\xad\\snajpagent.exe"));
+    assert(!args[1][0] && !strcmp(args[2], "quoted \"value\"") &&
+           !strcmp(args[3], "\xf0\x9f\x98\x80") && !strcmp(args[4], "*.c"));
+    snag_arguments_free(args);
+    wchar_t *invalid[] = {L"\xd800"};
+    assert(!snag_wide_arguments(1, invalid));
     const WCHAR *names[] = {L"HOME", L"USERPROFILE", L"SNAJPAGENT_TEST_ENV_UTF8"};
     WCHAR *saved[3] = {0};
     for (size_t i = 0; i < 3u; ++i) {

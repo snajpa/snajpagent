@@ -174,6 +174,35 @@ utf8_string(const wchar_t *wide)
     return out;
 }
 
+void
+snag_arguments_free(char **argv)
+{
+    if (!argv)
+        return;
+    for (size_t i = 0; argv[i]; ++i)
+        free(argv[i]);
+    free(argv);
+}
+
+char **
+snag_wide_arguments(int argc, wchar_t **wide)
+{
+    if (argc < 1 || !wide || (size_t)argc >= SIZE_MAX / sizeof(char *)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    char **out = calloc((size_t)argc + 1u, sizeof(*out));
+    if (!out)
+        return NULL;
+    for (int i = 0; i < argc; ++i) {
+        if (!wide[i] || !(out[i] = utf8_string(wide[i]))) {
+            snag_arguments_free(out);
+            return NULL;
+        }
+    }
+    return out;
+}
+
 char *
 snag_environment(const char *name)
 {

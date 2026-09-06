@@ -10,8 +10,8 @@
 #include <string.h>
 #include <unistd.h>
 
-int
-main(int argc, char **argv)
+static int
+run(int argc, char **argv)
 {
     struct snag_cli cli;
     char error[256] = "usage error";
@@ -47,3 +47,25 @@ main(int argc, char **argv)
     snag_cli_free(&cli);
     return rc;
 }
+
+#ifdef _WIN32
+/* Use native wide CRT startup (-municode); never apply the ANSI codepage. */
+int
+wmain(int argc, wchar_t **wide)
+{
+    char **argv = snag_wide_arguments(argc, wide);
+    if (!argv) {
+        (void)fprintf(stderr, "snajpagent: command-line arguments are not valid Unicode\n");
+        return 2;
+    }
+    int rc = run(argc, argv);
+    snag_arguments_free(argv);
+    return rc;
+}
+#else
+int
+main(int argc, char **argv)
+{
+    return run(argc, argv);
+}
+#endif
