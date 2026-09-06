@@ -310,8 +310,9 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
         return -1;
     }
     snag_buf_init(&data, SNAG_MODEL_CACHE_FILE_MAX);
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_uid != getuid() ||
-        (st.st_mode & 077u) != 0 || st.st_size <= 0 ||
+    struct snag_file_privacy privacy;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || snag_fd_privacy(fd, &privacy) < 0 ||
+        !privacy.real_owner || !privacy.private_access || st.st_size <= 0 ||
         (uintmax_t)st.st_size > SNAG_MODEL_CACHE_FILE_MAX) {
         snag_errorf(error, error_size,
                   "model cache must be a private user-owned regular file no larger than 8 MiB");

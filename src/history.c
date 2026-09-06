@@ -112,6 +112,7 @@ static int
 history_file_open(struct snag_history *term)
 {
     struct stat st;
+    struct snag_file_privacy privacy;
     int fd = open(term->path,
                   O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     int flags;
@@ -124,7 +125,7 @@ history_file_open(struct snag_history *term)
         errno = saved;
         return -1;
     }
-    if (!S_ISREG(st.st_mode) || st.st_uid != geteuid()) {
+    if (!S_ISREG(st.st_mode) || snag_fd_privacy(fd, &privacy) < 0 || !privacy.effective_owner) {
         (void)close(fd);
         errno = EACCES;
         return -1;

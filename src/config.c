@@ -1048,7 +1048,7 @@ unavailable:
 
 static int
 read_config(const char *path, bool require_file, struct snag_buf *text,
-            struct stat *file_stat, char *error, size_t error_size)
+            struct stat *file_stat, bool *private_file, char *error, size_t error_size)
 {
     struct stat st;
     int fd;
@@ -1071,6 +1071,13 @@ read_config(const char *path, bool require_file, struct snag_buf *text,
     }
     if (file_stat)
         *file_stat = st;
+    if (private_file) {
+        struct snag_file_privacy privacy;
+        int saved = errno;
+        *private_file = snag_fd_privacy(fd, &privacy) == 0 &&
+                        privacy.effective_owner && privacy.private_access;
+        errno = saved;
+    }
     for (;;) {
         unsigned char chunk[4096];
         ssize_t got = read(fd, chunk, sizeof(chunk));
@@ -1218,15 +1225,15 @@ snag_config_load(struct snag_config *config, const char *explicit_path,
     path = owned_path;
     (void)snag_strcpy(config->source_path, sizeof(config->source_path), path);
     snag_buf_init(&text, SNAG_CONFIG_FILE_MAX + 1u);
-    read_rc = read_config(path, explicit_path != NULL, &text, &file_stat,
+    bool private_file = false;
+    read_rc = read_config(path, explicit_path != NULL, &text, &file_stat, &private_file,
                           error, error_size);
     if (read_rc < 0)
         goto out;
     if (read_rc == 0 && parse_file(config, (char *)text.data,
                                    error, error_size) < 0)
         goto out;
-    rc = validate_config(config, read_rc != 0 ||
-        (file_stat.st_uid == geteuid() && !(file_stat.st_mode & 077u)), error, error_size);
+    rc = validate_config(config, read_rc != 0 || private_file, error, error_size);
 out:
     free(owned_path);
     snag_secret_clear(text.data, text.len);
@@ -1587,7 +1594,8 @@ save_config_settings(const char *path, bool allow_create,
         snag_errorf(error, error_size, "configuration directory is being updated; try again");
         goto out;
     }
-    read_rc = read_config(path, !allow_create, &input, &before,
+    bool private_file = false;
+    read_rc = read_config(path, !allow_create, &input, &before, &private_file,
                           error, error_size);
     if (read_rc < 0)
         goto out;
@@ -1608,7 +1616,7 @@ save_config_settings(const char *path, bool allow_create,
         output = selected;
     }
     if (validate_config_text(&output, path,
-                              read_rc != 0 || (before.st_uid == geteuid() && !(before.st_mode & 077u)),
+                              read_rc != 0 || private_file,
                               error, error_size) < 0)
         goto out;
     if (snag_random_id(id) < 0)

@@ -30,30 +30,20 @@ open_dir_path(const char *path)
 #endif
     return open(path, flags);
 }
-static bool
-private_dir_stat(const struct stat *st)
-{
-    return S_ISDIR(st->st_mode) && st->st_uid == getuid() &&
-           (st->st_mode & 077u) == 0;
-}
-static bool
-private_file_stat(const struct stat *st)
-{
-    return S_ISREG(st->st_mode) && st->st_uid == getuid() &&
-           (st->st_mode & 077u) == 0;
-}
 int
 snag_store_verify_private_fd(int fd, bool directory, const char *name,
                   char *error, size_t error_size)
 {
     struct stat st;
+    struct snag_file_privacy privacy;
     bool valid;
-    if (fstat(fd, &st) < 0) {
+    if (fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0) {
         snag_errorf(error, error_size, "cannot inspect %s: %s", name,
                   strerror(errno));
         return -1;
     }
-    valid = directory ? private_dir_stat(&st) : private_file_stat(&st);
+    valid = (directory ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode)) &&
+            privacy.real_owner && privacy.private_access;
     if (!valid) {
         snag_errorf(error, error_size, "%s must be private and user-owned", name);
         errno = EACCES;
@@ -88,10 +78,19 @@ ensure_directory(const char *path, bool require_private,
         errno = EINVAL;
         return -1;
     }
-    if (require_private && !private_dir_stat(&st)) {
-        snag_errorf(error, error_size, "%s must be private (mode 0700)", path);
-        errno = EACCES;
-        return -1;
+    if (require_private) {
+        int fd = open_dir_path(path), rc;
+        if (fd < 0)
+            return -1;
+        rc = snag_store_verify_private_fd(fd, true, path, error, error_size);
+        int saved = errno;
+        if (close(fd) < 0 && rc == 0)
+            return -1;
+        errno = saved;
+        if (rc < 0) {
+            snag_errorf(error, error_size, "%s must be private (mode 0700)", path);
+            return -1;
+        }
     }
     return 0;
 }
