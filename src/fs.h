@@ -27,5 +27,14 @@ int snag_lstat(const char *path, snag_file_info *out);
 int snag_lstat_at(int dirfd, const char *path, snag_file_info *out);
 int snag_unlink_at(int dirfd, const char *path, bool directory);
 int snag_rename_at(int from_dir, const char *from, int to_dir, const char *to);
+int snag_open_read(const char *path, bool directory);
+int snag_open_read_at(int dirfd, const char *path, bool directory);
+int snag_open_private_dir_at(int dirfd, const char *path);
+void snag_path_slashes(char *path);
+
+struct snag_directory;
+struct snag_directory *snag_directory_open(int fd);
+const char *snag_directory_next(struct snag_directory *dir);
+int snag_directory_close(struct snag_directory *dir);
 
 #endif

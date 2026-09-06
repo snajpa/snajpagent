@@ -4,7 +4,6 @@
 #include "base.h"
 
 #include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -59,7 +58,7 @@ open_entry(int parent, const char *name)
         errno = EINVAL;
         return -1;
     }
-    fd = openat(parent, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    fd = snag_open_read_at(parent, name, false);
     if (fd < 0)
         return -1;
     if (snag_fstat(fd, &after) < 0 || before.st_dev != after.st_dev ||
@@ -86,8 +85,17 @@ open_path(const char *workspace, const char *path)
         snag_buf_terminate(&full) < 0)
         goto out;
     copy = (char *)full.data;
-    fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    for (part = strtok_r(copy, "/", &save); fd >= 0 && part;
+    snag_path_slashes(copy);
+    size_t root = snag_path_root_len(copy);
+    if (!root) {
+        errno = EINVAL;
+        goto out;
+    }
+    char first = copy[root];
+    copy[root] = '\0';
+    fd = snag_open_read(copy, true);
+    copy[root] = first;
+    for (part = strtok_r(copy + root, "/", &save); fd >= 0 && part;
          part = strtok_r(NULL, "/", &save)) {
         int next = open_entry(fd, part);
         close(fd);
@@ -253,8 +261,8 @@ static int
 walk(struct read_query *q, int fd, const char *path, unsigned int depth)
 {
     snag_file_info st;
-    DIR *dir;
-    struct dirent *entry;
+    struct snag_directory *dir;
+    const char *entry;
     char **names = NULL;
     size_t count = 0;
     int rc = -1;
@@ -267,22 +275,22 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
         close(fd);
         return -1;
     }
-    dir = fdopendir(fd);
+    dir = snag_directory_open(fd);
     if (!dir) { close(fd); return -1; }
     while (checkpoint(q) == 0) {
         char **grown;
 
         errno = 0;
-        entry = readdir(dir);
+        entry = snag_directory_next(dir);
         if (!entry) { rc = errno ? -1 : 0; break; }
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+        if (strcmp(entry, ".") == 0 || strcmp(entry, "..") == 0)
             continue;
         if (++q->entries > RO_ENTRIES) {
             q->problem = "Directory entry limit reached; narrow the path.";
             break;
         }
-        if (!snag_utf8_valid((unsigned char *)entry->d_name,
-                            strlen(entry->d_name), true)) {
+        if (!snag_utf8_valid((unsigned char *)entry,
+                            strlen(entry), true)) {
             q->problem = "Non-UTF-8 filename; directory inspection is incomplete.";
             break;
         }
@@ -290,7 +298,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
         if (!grown)
             break;
         names = grown;
-        names[count] = strdup(entry->d_name);
+        names[count] = strdup(entry);
         if (!names[count])
             break;
         ++count;
@@ -346,7 +354,7 @@ out:
     for (size_t i = 0; i < count; ++i)
         free(names[i]);
     free(names);
-    closedir(dir);
+    snag_directory_close(dir);
     return rc;
 }
 

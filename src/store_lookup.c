@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
 #include "base.h"
+#include "fs.h"
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -16,19 +16,12 @@ struct resolved_session {
     bool trash;
 };
 
-static DIR *
+static struct snag_directory *
 open_store_dir(struct snag_store *store, const char *name, const char *label,
                char *error, size_t error_size)
 {
-    int fd = openat(store->root_fd, name, O_RDONLY | O_DIRECTORY
-#ifdef O_CLOEXEC
-                    | O_CLOEXEC
-#endif
-#ifdef O_NOFOLLOW
-                    | O_NOFOLLOW
-#endif
-    );
-    DIR *dir;
+    int fd = snag_open_private_dir_at(store->root_fd, name);
+    struct snag_directory *dir;
 
     if (fd < 0)
         return NULL;
@@ -36,7 +29,7 @@ open_store_dir(struct snag_store *store, const char *name, const char *label,
         (void)close(fd);
         return NULL;
     }
-    dir = fdopendir(fd);
+    dir = snag_directory_open(fd);
     if (!dir) {
         (void)close(fd);
         return NULL;
@@ -44,14 +37,14 @@ open_store_dir(struct snag_store *store, const char *name, const char *label,
     return dir;
 }
 
-static DIR *
+static struct snag_directory *
 open_sessions_dir(struct snag_store *store, char *error, size_t error_size)
 {
     return open_store_dir(store, "sessions", "sessions directory",
                           error, error_size);
 }
 
-static DIR *
+static struct snag_directory *
 open_trash_dir(struct snag_store *store, char *error, size_t error_size)
 {
     return open_store_dir(store, "trash", "trash directory", error, error_size);
@@ -88,8 +81,8 @@ static int
 resolve_prefix(struct snag_store *store, const char *prefix,
                struct resolved_session *target, char *error, size_t error_size)
 {
-    DIR *dir;
-    struct dirent *entry;
+    struct snag_directory *dir;
+    const char *entry;
     size_t len = strlen(prefix);
     unsigned int matches = 0;
 
@@ -102,26 +95,26 @@ resolve_prefix(struct snag_store *store, const char *prefix,
     dir = open_sessions_dir(store, error, error_size);
     if (!dir)
         return -1;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strlen(entry->d_name) != SNAG_ID_HEX_LEN ||
-            !snag_hex_is_lower(entry->d_name, SNAG_ID_HEX_LEN) ||
-            strncmp(entry->d_name, prefix, len) != 0)
+    while ((entry = snag_directory_next(dir)) != NULL) {
+        if (strlen(entry) != SNAG_ID_HEX_LEN ||
+            !snag_hex_is_lower(entry, SNAG_ID_HEX_LEN) ||
+            strncmp(entry, prefix, len) != 0)
             continue;
-        record_resolved(target, entry->d_name, NULL, &matches);
+        record_resolved(target, entry, NULL, &matches);
     }
-    (void)closedir(dir);
+    (void)snag_directory_close(dir);
 
     dir = open_trash_dir(store, error, error_size);
     if (!dir)
         return -1;
-    while ((entry = readdir(dir)) != NULL) {
+    while ((entry = snag_directory_next(dir)) != NULL) {
         char id[SNAG_ID_HEX_LEN + 1u];
-        if (!snag_store_trash_id(entry->d_name, id) ||
+        if (!snag_store_trash_id(entry, id) ||
             strncmp(id, prefix, len) != 0)
             continue;
-        record_resolved(target, id, entry->d_name, &matches);
+        record_resolved(target, id, entry, &matches);
     }
-    (void)closedir(dir);
+    (void)snag_directory_close(dir);
 
     if (matches != 1u) {
         snag_errorf(error, error_size, matches ? "session id prefix is ambiguous" :
@@ -278,21 +271,21 @@ snag_session_open_last(struct snag_store *store, struct snag_session *session,
                       const char *workspace, bool all, char *error,
                       size_t error_size)
 {
-    DIR *dir;
-    struct dirent *entry;
+    struct snag_directory *dir;
+    const char *entry;
     char best[SNAG_ID_HEX_LEN + 1u] = {0};
     uint64_t best_time = 0;
 
     dir = open_sessions_dir(store, error, error_size);
     if (!dir)
         return -1;
-    while ((entry = readdir(dir)) != NULL) {
+    while ((entry = snag_directory_next(dir)) != NULL) {
         uint64_t last, turns;
         char *first = NULL;
         char model[SNAG_MODEL_MAX_BYTES];
-        if (strlen(entry->d_name) != SNAG_ID_HEX_LEN ||
-            !snag_hex_is_lower(entry->d_name, SNAG_ID_HEX_LEN) ||
-            session_matches(store, entry->d_name, workspace, all, false,
+        if (strlen(entry) != SNAG_ID_HEX_LEN ||
+            !snag_hex_is_lower(entry, SNAG_ID_HEX_LEN) ||
+            session_matches(store, entry, workspace, all, false,
                             &last, &turns, &first, NULL, model,
                             sizeof(model), NULL) < 0) {
             free(first);
@@ -300,12 +293,12 @@ snag_session_open_last(struct snag_store *store, struct snag_session *session,
         }
         free(first);
         if (!best[0] || last > best_time ||
-            (last == best_time && strcmp(entry->d_name, best) > 0)) {
-            memcpy(best, entry->d_name, sizeof(best));
+            (last == best_time && strcmp(entry, best) > 0)) {
+            memcpy(best, entry, sizeof(best));
             best_time = last;
         }
     }
-    (void)closedir(dir);
+    (void)snag_directory_close(dir);
     if (!best[0]) {
         snag_errorf(error, error_size, "no matching active session");
         errno = ENOENT;
@@ -319,23 +312,23 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
                 bool include_archived, snag_store_emit_fn emit, void *opaque,
                 char *error, size_t error_size)
 {
-    DIR *dir;
-    struct dirent *entry;
+    struct snag_directory *dir;
+    const char *entry;
     unsigned int shown = 0;
 
     dir = open_sessions_dir(store, error, error_size);
     if (!dir)
         return -1;
-    while ((entry = readdir(dir)) != NULL) {
+    while ((entry = snag_directory_next(dir)) != NULL) {
         uint64_t last, turns;
         char *first = NULL;
         char *saved_workspace = NULL;
         char model[SNAG_MODEL_MAX_BYTES];
         bool archived = false;
         struct snag_buf row;
-        if (strlen(entry->d_name) != SNAG_ID_HEX_LEN ||
-            !snag_hex_is_lower(entry->d_name, SNAG_ID_HEX_LEN) ||
-            session_matches(store, entry->d_name, workspace, all,
+        if (strlen(entry) != SNAG_ID_HEX_LEN ||
+            !snag_hex_is_lower(entry, SNAG_ID_HEX_LEN) ||
+            session_matches(store, entry, workspace, all,
                             include_archived, &last, &turns, &first,
                             &saved_workspace, model, sizeof(model),
                             &archived) < 0) {
@@ -345,7 +338,7 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
         }
         snag_buf_init(&row, 8192u);
         if (snag_buf_printf(&row, "%.8s\t%s\t%llu\t%s\t%s%s%s\n",
-                           entry->d_name, model, (unsigned long long)turns,
+                           entry, model, (unsigned long long)turns,
                            archived ? "archived" : "active",
                            first ? first : "", all ? "\t" : "",
                            all ? saved_workspace : "") < 0 ||
@@ -353,7 +346,7 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
             snag_buf_free(&row);
             free(first);
             free(saved_workspace);
-            (void)closedir(dir);
+            (void)snag_directory_close(dir);
             snag_errorf(error, error_size, "cannot write session list");
             return -1;
         }
@@ -362,7 +355,7 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
         free(saved_workspace);
         ++shown;
     }
-    (void)closedir(dir);
+    (void)snag_directory_close(dir);
     if (!shown)
         snag_errorf(error, error_size, "no matching sessions");
     return 0;

@@ -378,6 +378,168 @@ out:
 }
 
 static int
+open_read(int dirfd, const char *path, bool relative, bool directory, bool security)
+{
+    struct nt_path name;
+    HANDLE handle = NULL;
+    snag_file_info info;
+    int fd = -1, error;
+    size_t root = snag_path_root_len(path);
+
+    if (!path || ((!root && (path[0] == '/' || path[0] == '\\')) ||
+                  strchr(path + root, ':'))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (nt_path_init(&name, dirfd, path, relative) < 0)
+        goto out;
+    handle = nt_open(&name, FILE_READ_DATA | FILE_READ_ATTRIBUTES | (security ? READ_CONTROL : 0), FILE_OPEN_REPARSE_POINT |
+                     (directory ? FILE_DIRECTORY_FILE : 0));
+    if (!handle || file_info(handle, &info) < 0)
+        goto out;
+    if (S_ISLNK(info.st_mode)) {
+        errno = ELOOP;
+        goto out;
+    }
+    if (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode)) {
+        errno = EACCES;
+        goto out;
+    }
+    fd = _open_osfhandle((intptr_t)handle, _O_RDONLY | _O_BINARY | _O_NOINHERIT);
+    if (fd >= 0)
+        handle = NULL;
+out:
+    error = errno;
+    if (handle)
+        (void)CloseHandle(handle);
+    nt_path_free(&name);
+    errno = error;
+    return fd;
+}
+
+int
+snag_open_read(const char *path, bool directory)
+{
+    return open_read(-1, path, false, directory, false);
+}
+
+int
+snag_open_read_at(int dirfd, const char *path, bool directory)
+{
+    return open_read(dirfd, path, true, directory, false);
+}
+
+int
+snag_open_private_dir_at(int dirfd, const char *path)
+{
+    return open_read(dirfd, path, true, true, true);
+}
+
+void
+snag_path_slashes(char *path)
+{
+    for (; *path; ++path)
+        if (*path == '\\')
+            *path = '/';
+}
+
+/* This native ABI predates the convenience Win32 directory-handle API. */
+NTSYSAPI NTSTATUS NTAPI NtQueryDirectoryFile(HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID,
+    PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS, BOOLEAN, PUNICODE_STRING, BOOLEAN);
+
+struct snag_directory {
+    int fd;
+    bool started, finished;
+    char name[1024];
+};
+
+struct snag_directory *
+snag_directory_open(int fd)
+{
+    snag_file_info info;
+    struct snag_directory *dir;
+
+    if (snag_fstat(fd, &info) < 0)
+        return NULL;
+    if (!S_ISDIR(info.st_mode)) {
+        errno = ENOTDIR;
+        return NULL;
+    }
+    dir = calloc(1u, sizeof(*dir));
+    if (dir)
+        dir->fd = fd;
+    return dir;
+}
+
+const char *
+snag_directory_next(struct snag_directory *dir)
+{
+    union {
+        FILE_NAMES_INFORMATION align;
+        unsigned char bytes[2048];
+    } record;
+    FILE_NAMES_INFORMATION *info = &record.align;
+    IO_STATUS_BLOCK io = {0};
+    NTSTATUS status;
+    int bytes;
+    size_t header = offsetof(FILE_NAMES_INFORMATION, FileName);
+
+    if (!dir) {
+        errno = EINVAL;
+        return NULL;
+    }
+    errno = 0;
+    if (dir->finished)
+        return NULL;
+    status = NtQueryDirectoryFile((HANDLE)_get_osfhandle(dir->fd), NULL, NULL, NULL,
+        &io, &record, sizeof(record), FileNamesInformation, TRUE, NULL, !dir->started);
+    dir->started = true;
+    if (status == (NTSTATUS)0x80000006u) { /* STATUS_NO_MORE_FILES */
+        dir->finished = true;
+        return NULL;
+    }
+    if (status < 0) {
+        path_error(RtlNtStatusToDosError(status));
+        return NULL;
+    }
+    if (io.Information < header || io.Information > sizeof(record) || !info->FileNameLength ||
+        info->FileNameLength > io.Information - header || info->FileNameLength % sizeof(WCHAR)) {
+        errno = EIO;
+        return NULL;
+    }
+    bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, info->FileName,
+        (int)(info->FileNameLength / sizeof(WCHAR)), dir->name, sizeof(dir->name) - 1u, NULL, NULL);
+    if (!bytes) {
+        DWORD code = GetLastError();
+        if (code == ERROR_INSUFFICIENT_BUFFER)
+            errno = ENAMETOOLONG;
+        else
+            path_error(code);
+        return NULL;
+    }
+    if (memchr(dir->name, '\0', (size_t)bytes)) {
+        errno = EILSEQ;
+        return NULL;
+    }
+    dir->name[bytes] = '\0';
+    return dir->name;
+}
+
+int
+snag_directory_close(struct snag_directory *dir)
+{
+    int rc;
+
+    if (!dir) {
+        errno = EINVAL;
+        return -1;
+    }
+    rc = _close(dir->fd);
+    free(dir);
+    return rc;
+}
+
+static int
 create_private(int dirfd, const char *path, bool relative, bool directory,
                bool exclusive, int *file_fd)
 {
@@ -891,6 +1053,96 @@ snag_sync_dir(int fd)
 #include <unistd.h>
 #include <wchar.h>
 #include <sys/stat.h>
+#include <dirent.h>
+
+static int
+open_read(int dirfd, const char *path, bool directory)
+{
+    int fd = openat(dirfd, path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK |
+                    (directory ? O_DIRECTORY : 0));
+    struct stat st;
+    int error, rc;
+
+    if (fd < 0)
+        return -1;
+    rc = fstat(fd, &st);
+    if (rc == 0 && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)))
+        return fd;
+    error = rc < 0 ? errno : EACCES;
+    (void)close(fd);
+    errno = error;
+    return -1;
+}
+
+int
+snag_open_read(const char *path, bool directory)
+{
+    return open_read(AT_FDCWD, path, directory);
+}
+
+int
+snag_open_read_at(int dirfd, const char *path, bool directory)
+{
+    return open_read(dirfd, path, directory);
+}
+
+int
+snag_open_private_dir_at(int dirfd, const char *path)
+{
+    return open_read(dirfd, path, true);
+}
+
+void
+snag_path_slashes(char *path)
+{
+    (void)path;
+}
+
+struct snag_directory {
+    DIR *native;
+};
+
+struct snag_directory *
+snag_directory_open(int fd)
+{
+    struct snag_directory *dir = malloc(sizeof(*dir));
+
+    if (dir && !(dir->native = fdopendir(fd))) {
+        int error = errno;
+        free(dir);
+        errno = error;
+        return NULL;
+    }
+    return dir;
+}
+
+const char *
+snag_directory_next(struct snag_directory *dir)
+{
+    struct dirent *entry;
+
+    if (!dir) {
+        errno = EINVAL;
+        return NULL;
+    }
+    errno = 0;
+    entry = readdir(dir->native);
+    return entry ? entry->d_name : NULL;
+}
+
+int
+snag_directory_close(struct snag_directory *dir)
+{
+    int rc;
+
+    if (!dir) {
+        errno = EINVAL;
+        return -1;
+    }
+    rc = closedir(dir->native);
+    free(dir);
+    return rc;
+}
 
 int
 snag_fstat(int fd, snag_file_info *out)
