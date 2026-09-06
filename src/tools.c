@@ -34,24 +34,14 @@
 #define SNAG_TOOL_DRAIN_GRACE_MS 2000u
 #define SNAG_TOOL_REDACTOR_MAX (8192u + SNAG_WIRE_SECRET_MAX)
 
-struct capture_stream {
+struct output_excerpt {
     struct snag_buf data;
     uint64_t bytes;
-    struct managed_process *owner;
-    unsigned int stream;
-};
-
-struct capture_redactor {
-    struct snag_buf pending;
-    struct capture_stream *stream;
-    const struct snag_wire_secrets *secrets;
-    size_t max_secret;
 };
 
 struct process_output {
     bool open;
-    struct capture_stream capture;
-    struct capture_redactor redactor;
+    struct snag_buf data, pending;
 };
 
 struct managed_process {
@@ -69,6 +59,7 @@ struct managed_process {
     uint32_t max_wait_ms;
     uint32_t max_output_tokens;
     struct snag_secret_set secrets;
+    size_t max_secret;
     struct process_output output[2];
     struct snag_buf input;
     size_t input_written;
@@ -170,135 +161,51 @@ absolute_dir_arg_valid(const char *path)
            snag_stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static void
-capture_init(struct capture_stream *stream)
-{
-    memset(stream, 0, sizeof(*stream));
-    snag_buf_init(&stream->data, 128u * 1024u);
-}
-
-static void
-capture_free(struct capture_stream *stream)
-{
-    snag_buf_free(&stream->data);
-    memset(stream, 0, sizeof(*stream));
-}
-
 static int
-capture_append(struct capture_stream *stream, const unsigned char *data,
-               size_t len)
+output_append(struct managed_process *proc, unsigned int stream,
+              const unsigned char *text, size_t len)
 {
-    if (len && !data)
-        return snag_errno(EINVAL);
-    if (len > stream->data.max - stream->data.len && stream->owner &&
-        flush_capture(stream->owner, stream->stream) < 0)
+    struct snag_buf *data = &proc->output[stream].data;
+
+    if (len > data->max - data->len && flush_capture(proc, stream) < 0)
         return -1;
-    if (snag_buf_append(&stream->data, data, len) < 0)
-        return -1;
-    stream->bytes += len;
-    return 0;
+    return snag_buf_append(data, text, len);
 }
 
 static int
-redactor_emit(struct capture_redactor *redactor,
-              const unsigned char *data, size_t len)
-{
-    return capture_append(redactor->stream, data, len);
-}
-
-static int
-redactor_drain(struct capture_redactor *redactor, bool final)
+redact_output(struct managed_process *proc, unsigned int stream, bool final)
 {
     static const unsigned char marker[] = "<redacted:secret>";
-    size_t limit;
-    size_t off = 0;
+    struct snag_buf *pending = &proc->output[stream].pending;
+    size_t limit = pending->len, off = 0u;
 
-    if (!redactor->pending.len)
-        return 0;
-    limit = redactor->pending.len;
-    if (!final && redactor->max_secret) {
-        if (limit <= redactor->max_secret - 1u)
-            limit = 0;
-        else
-            limit -= redactor->max_secret - 1u;
+    if (!final && proc->max_secret) {
+        size_t suffix = proc->max_secret - 1u;
+        limit = limit > suffix ? limit - suffix : 0u;
     }
-    if (!redactor->max_secret || !redactor->secrets ||
-        redactor->secrets->count == 0u) {
-        if (limit && redactor_emit(redactor, redactor->pending.data,
-                                   limit) < 0)
+    if (!proc->max_secret) {
+        if (limit && output_append(proc, stream, pending->data, limit) < 0)
             return -1;
         off = limit;
     } else {
         while (off < limit) {
-            size_t matched = snag_wire_secret_match(redactor->pending.data + off,
-                                redactor->pending.len - off, redactor->secrets);
-            if (matched) {
-                if (redactor_emit(redactor, marker, sizeof(marker) - 1u) < 0)
-                    return -1;
-                off += matched;
-            } else {
-                if (redactor_emit(redactor, redactor->pending.data + off, 1u) < 0)
-                    return -1;
-                ++off;
-            }
+            size_t matched = snag_wire_secret_match(pending->data + off,
+                                pending->len - off, &proc->secrets.wire);
+            if (output_append(proc, stream, matched ? marker : pending->data + off,
+                               matched ? sizeof(marker) - 1u : 1u) < 0)
+                return -1;
+            off += matched ? matched : 1u;
         }
     }
     if (off) {
-        memmove(redactor->pending.data, redactor->pending.data + off,
-                redactor->pending.len - off);
-        redactor->pending.len -= off;
+        memmove(pending->data, pending->data + off, pending->len - off);
+        pending->len -= off;
     }
-    return 0;
-}
-
-static void
-redactor_init(struct capture_redactor *redactor, struct capture_stream *stream,
-              const struct snag_wire_secrets *secrets)
-{
-    memset(redactor, 0, sizeof(*redactor));
-    snag_buf_init(&redactor->pending, SNAG_TOOL_REDACTOR_MAX);
-    redactor->stream = stream;
-    redactor->secrets = secrets;
-    if (secrets) {
-        for (size_t i = 0; i < secrets->count; ++i) {
-            size_t n;
-            if (!secrets->values[i])
-                continue;
-            n = strlen(secrets->values[i]);
-            if (n > redactor->max_secret)
-                redactor->max_secret = n;
-        }
-    }
-}
-
-static void
-redactor_free(struct capture_redactor *redactor)
-{
-    snag_buf_free(&redactor->pending);
-    memset(redactor, 0, sizeof(*redactor));
-}
-
-static int
-redactor_feed(struct capture_redactor *redactor,
-              const unsigned char *data, size_t len)
-{
-    if (len && snag_buf_append(&redactor->pending, data, len) < 0)
-        return -1;
-    return redactor_drain(redactor, false);
-}
-
-static int
-redactor_finish(struct capture_redactor *redactor)
-{
-    if (redactor_drain(redactor, true) < 0)
-        return -1;
-    if (redactor->pending.len)
-        return snag_errno(EIO);
     return 0;
 }
 
 static json_t *
-excerpt_json(const struct capture_stream *stream)
+excerpt_json(const struct output_excerpt *stream)
 {
     struct snag_buf encoded;
     const struct snag_buf *data = &stream->data;
@@ -323,7 +230,7 @@ done:
 
 static int
 append_stream_text(struct snag_buf *out, const char *label,
-                   const struct capture_stream *stream)
+                   const struct output_excerpt *stream)
 {
     if (!stream->data.len)
         return 0;
@@ -348,8 +255,8 @@ append_stream_text(struct snag_buf *out, const char *label,
 static char *
 model_text_for(const char *status, const char *reason, int64_t exit_code,
                int signal_number, const struct managed_process *proc, uint64_t wait_ms,
-               const struct capture_stream *stdout_stream,
-               const struct capture_stream *stderr_stream)
+               const struct output_excerpt *stdout_stream,
+               const struct output_excerpt *stderr_stream)
 {
     struct snag_buf text;
     char *out = NULL;
@@ -418,8 +325,8 @@ static json_t *
 result_json(const char *status, const char *reason, int64_t exit_code,
             int signal_number, uint64_t duration_ms, const char *handle,
             const struct managed_process *proc,
-            const struct capture_stream *stdout_stream,
-            const struct capture_stream *stderr_stream)
+            const struct output_excerpt *stdout_stream,
+            const struct output_excerpt *stderr_stream)
 {
     uint64_t wait_ms = snag_monotonic_ms() - proc->wait_started_ms;
     char *model_text = model_text_for(status, reason, exit_code, signal_number, proc, wait_ms,
@@ -576,8 +483,8 @@ managed_release(struct managed_process *proc)
         return;
     snag_child_free(&proc->child);
     for (unsigned int s = 0u; s < 2u; ++s) {
-        redactor_free(&proc->output[s].redactor);
-        capture_free(&proc->output[s].capture);
+        snag_buf_free(&proc->output[s].pending);
+        snag_buf_free(&proc->output[s].data);
     }
     snag_buf_free(&proc->input);
     for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i)
@@ -675,10 +582,10 @@ snag_tools_close_all(bool user_interrupt)
 static int
 flush_capture(struct managed_process *proc, unsigned int stream)
 {
-    struct capture_stream *capture = &proc->output[stream].capture;
+    struct snag_buf *data = &proc->output[stream].data;
     size_t consumed = 0u;
-    while (consumed < capture->data.len) {
-        size_t n = capture->data.len - consumed;
+    while (consumed < data->len) {
+        size_t n = data->len - consumed;
         bool open = proc->output[stream].open;
         if (n > 16384u)
             n = 16384u;
@@ -686,12 +593,12 @@ flush_capture(struct managed_process *proc, unsigned int stream)
          * encoded losslessly by the journal callback. */
         size_t full = n;
         for (size_t tail = 1u; tail <= 3u && tail <= full; ++tail) {
-            unsigned char c = capture->data.data[consumed + full - tail];
+            unsigned char c = data->data[consumed + full - tail];
             size_t width = c >= 0xc2u && c <= 0xdfu ? 2u :
                            c >= 0xe0u && c <= 0xefu ? 3u :
                            c >= 0xf0u && c <= 0xf4u ? 4u : 0u;
-            if (width > tail && (open || consumed + full < capture->data.len) &&
-                snag_utf8_valid(capture->data.data + consumed, full - tail, true)) {
+            if (width > tail && (open || consumed + full < data->len) &&
+                snag_utf8_valid(data->data + consumed, full - tail, true)) {
                 n = full - tail;
                 break;
             }
@@ -700,15 +607,14 @@ flush_capture(struct managed_process *proc, unsigned int stream)
             break;
         if (!journal_write ||
             journal_write(journal_opaque, proc->handle, stream,
-                          proc->output_offset[stream], capture->data.data + consumed, n) < 0)
+                          proc->output_offset[stream], data->data + consumed, n) < 0)
             return -1;
         proc->output_offset[stream] += n;
         consumed += n;
     }
-    if (capture->data.len > consumed)
-        memmove(capture->data.data, capture->data.data + consumed, capture->data.len - consumed);
-    capture->data.len -= consumed;
-    capture->bytes = capture->data.len;
+    if (data->len > consumed)
+        memmove(data->data, data->data + consumed, data->len - consumed);
+    data->len -= consumed;
     return 0;
 }
 
@@ -716,7 +622,7 @@ static int
 close_output(struct managed_process *proc, unsigned int stream)
 {
     struct process_output *output = &proc->output[stream];
-    if (redactor_finish(&output->redactor) < 0)
+    if (redact_output(proc, stream, true) < 0)
         return -1;
     output->open = false;
     snag_child_close_stream(&proc->child, stream);
@@ -732,7 +638,8 @@ process_read(struct managed_process *proc, unsigned int stream)
     unsigned char bytes[4096];
     ssize_t n = snag_child_read(&proc->child, stream, bytes, sizeof(bytes));
     if (n > 0) {
-        if (redactor_feed(&output->redactor, bytes, (size_t)n) < 0)
+        if (snag_buf_append(&output->pending, bytes, (size_t)n) < 0 ||
+            redact_output(proc, stream, false) < 0)
             return -1;
     } else if (n == 0) {
         return close_output(proc, stream);
@@ -882,7 +789,7 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result,
                     char *error, size_t error_size)
 {
     struct managed_process *proc = find_process(handle);
-    struct capture_stream streams[2] = {0};
+    struct output_excerpt streams[2] = {0};
     const char *status = "running";
     int64_t exit_code = -1;
     int signal_number = -1, rc = -1;
@@ -947,7 +854,7 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result,
     rc = 0;
 out:
     for (unsigned int s = 0u; s < 2u; ++s)
-        capture_free(&streams[s]);
+        snag_buf_free(&streams[s].data);
     if (rc < 0 && *result) {
         json_decref(*result);
         *result = NULL;
@@ -993,6 +900,11 @@ start_command(const char *handle, const char *command, const char *workdir,
     managed_register_cleanup();
     if (snag_secret_set_build(&proc->secrets, config, credential, error, error_size) < 0)
         goto out;
+    for (size_t i = 0u; i < proc->secrets.wire.count; ++i) {
+        size_t len = strlen(proc->secrets.values[i]);
+        if (len > proc->max_secret)
+            proc->max_secret = len;
+    }
     env = filtered_environment(config);
     if (!env) {
         snag_errorf(error, error_size, "cannot allocate tool environment");
@@ -1017,10 +929,8 @@ start_command(const char *handle, const char *command, const char *workdir,
     proc->input_eof = stdin_text != NULL;
     for (unsigned int s = 0u; s < 2u; ++s) {
         struct process_output *output = &proc->output[s];
-        capture_init(&output->capture);
-        output->capture.owner = proc;
-        output->capture.stream = s;
-        redactor_init(&output->redactor, &output->capture, &proc->secrets.wire);
+        snag_buf_init(&output->data, 128u * 1024u);
+        snag_buf_init(&output->pending, SNAG_TOOL_REDACTOR_MAX);
     }
     snag_environment_entries_free(env);
     env = NULL;
