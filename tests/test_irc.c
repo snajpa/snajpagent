@@ -721,8 +721,7 @@ test_server(void)
     assert(strcmp(capture.last_message.nick, "RENAMED") == 0);
     assert(capture.last_message.op);
     send_text(human, "PART #lab\r\nNICK away\r\nJOIN #lab\r\n");
-    tick(server, 10u);
-    drain_ready(server, human, wire, sizeof(wire));
+    wait_wire(server, human, wire, sizeof(wire), " 366 away #lab ");
     assert(strstr(wire, " NICK :away\r\n"));
     assert(strstr(wire, " 366 away #lab "));
     assert(capture.events[SNAG_IRC_NICK] == 2u);
