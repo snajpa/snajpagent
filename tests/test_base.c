@@ -621,6 +621,40 @@ test_realpath(void)
 }
 
 static void
+test_input_mode(void)
+{
+    if (!isatty(0))
+        return;
+    struct snag_term_host host = {0};
+    assert(snag_term_input_capture(&host) == 0);
+    assert(snag_term_input_raw(&host) == 0);
+#ifdef _WIN32
+    DWORD mode;
+    assert(GetConsoleMode((HANDLE)_get_osfhandle(0), &mode));
+    assert(!(mode & (ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT)));
+    assert(mode & ENABLE_VIRTUAL_TERMINAL_INPUT);
+    assert(GetConsoleCP() == CP_UTF8);
+#else
+    struct termios raw;
+    assert(tcgetattr(0, &raw) == 0 && !(raw.c_lflag & (ECHO | ICANON | ISIG)));
+#endif
+    assert(snag_term_input_flush() == 0);
+    assert(snag_term_input_restore(&host, false) == 0);
+#ifdef _WIN32
+    assert(GetConsoleMode((HANDLE)_get_osfhandle(0), &mode) && mode == host.input_mode);
+    assert(GetConsoleCP() == host.input_codepage);
+    int crt = _setmode(0, _O_BINARY);
+    assert(crt == host.input_crt_mode && _setmode(0, crt) >= 0);
+#else
+    struct termios restored;
+    assert(tcgetattr(0, &restored) == 0 && restored.c_lflag == host.input_mode.c_lflag &&
+           restored.c_iflag == host.input_mode.c_iflag);
+#endif
+    assert(snag_term_input_raw(&host) == 0 && snag_term_input_restore(&host, true) == 0);
+    assert(snag_term_host_columns() > 0u);
+}
+
+static void
 test_platform(void)
 {
     struct snag_signal_mask saved;
@@ -1015,6 +1049,7 @@ main(void)
     test_regex();
     test_wakeup();
     test_sockets();
+    test_input_mode();
 #ifdef _WIN32
     test_windows_privacy();
 #endif

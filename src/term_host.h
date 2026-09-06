@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SNAJPAGENT_TERM_HOST_H
 #define SNAJPAGENT_TERM_HOST_H
+#include <stdbool.h>
 
 #ifdef _WIN32
 struct snag_signal_mask { unsigned char unused; };
 struct snag_term_host {
     unsigned long input_mode;
+    unsigned int input_codepage;
+    int input_crt_mode;
+    bool binary_input;
     unsigned long output_mode[2];
 };
 #else
@@ -24,5 +28,11 @@ struct snag_term_host {
 int snag_term_signals_block(struct snag_signal_mask *saved);
 int snag_term_signals_restore(const struct snag_signal_mask *saved);
 int snag_term_signals_unblock(void);
+bool snag_term_host_capable(void);
+unsigned int snag_term_host_columns(void);
+int snag_term_input_capture(struct snag_term_host *host);
+int snag_term_input_raw(struct snag_term_host *host);
+int snag_term_input_restore(struct snag_term_host *host, bool flush);
+int snag_term_input_flush(void);
 
 #endif

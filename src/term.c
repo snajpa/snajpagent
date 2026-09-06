@@ -13,7 +13,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -459,29 +458,25 @@ snag_term_set_commands(struct snag_term *term,
 static bool
 term_control_capable(void)
 {
-    const char *name = getenv("TERM");
-
-    return name && strcmp(name, "dumb") != 0;
+    return snag_term_host_capable();
 }
 
 static void
 update_size(struct snag_term *term)
 {
-    struct winsize size;
-
-    memset(&size, 0, sizeof(size));
     if (!term_control_capable()) {
         term->columns = 80u;
         term->capable = false;
         return;
     }
-    if (ioctl(STDERR_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col != 0u) {
-        if (size.ws_col >= 20u) {
-            term->columns = size.ws_col;
+    unsigned int columns = snag_term_host_columns();
+    if (columns != 0u) {
+        if (columns >= 20u) {
+            term->columns = columns;
             if (term->raw)
                 term->capable = true;
         } else {
-            term->columns = size.ws_col;
+            term->columns = columns;
             term->capable = false;
         }
     } else {
@@ -492,13 +487,7 @@ update_size(struct snag_term *term)
 static int
 set_raw(struct snag_term *term)
 {
-    struct termios raw = term->host.input_mode;
-
-    raw.c_iflag &= (tcflag_t)~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-    raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | IEXTEN | ISIG);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 0;
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0)
+    if (snag_term_input_raw(&term->host) < 0)
         return -1;
     term->raw = true;
     return 0;
@@ -514,7 +503,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
         snag_errorf(error, error_size, "terminal already open: %s", strerror(errno));
         return -1;
     }
-    if (tcgetattr(STDIN_FILENO, &term->host.input_mode) < 0) {
+    if (snag_term_input_capture(&term->host) < 0) {
         snag_errorf(error, error_size, "cannot read terminal attributes: %s", strerror(errno));
         return -1;
     }
@@ -530,7 +519,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     if (sigaction(SIGINT, &action, &term->host.sigint) < 0) {
         int saved_errno = errno;
         if (term->raw)
-            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode);
+            (void)snag_term_input_restore(&term->host, true);
         term->raw = false;
         errno = saved_errno;
         snag_errorf(error, error_size, "cannot install terminal interrupt handler: %s", strerror(errno));
@@ -543,7 +532,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     if (sigaction(SIGWINCH, &action, &term->host.sigwinch) < 0) {
         int saved_errno = errno;
         if (term->raw)
-            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode);
+            (void)snag_term_input_restore(&term->host, true);
         (void)sigaction(SIGINT, &term->host.sigint, NULL);
         term->raw = false;
         term->sigint_installed = false;
@@ -579,7 +568,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     output_owner = term;
     if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
         int saved_errno = errno;
-        (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode);
+        (void)snag_term_input_restore(&term->host, true);
         (void)sigaction(SIGINT, &term->host.sigint, NULL);
         (void)sigaction(SIGWINCH, &term->host.sigwinch, NULL);
         term->opened = false;
@@ -610,7 +599,7 @@ snag_term_external_begin(struct snag_term *term,
         snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
         goto fail;
     term->bracketed_paste = false;
-    if (term->raw && tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode) < 0)
+    if (term->raw && snag_term_input_restore(&term->host, true) < 0)
         goto fail;
     term->raw = false;
     return 0;
@@ -2164,8 +2153,8 @@ suspend_terminal(struct snag_term *term)
         snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
         return -1;
     term->bracketed_paste = false;
-    if (tcflush(STDIN_FILENO, TCIFLUSH) < 0 ||
-        tcsetattr(STDIN_FILENO, TCSANOW, &term->host.input_mode) < 0)
+    if (snag_term_input_flush() < 0 ||
+        snag_term_input_restore(&term->host, false) < 0)
         return -1;
     term->raw = false;
     if (raise(SIGSTOP) < 0)
@@ -2715,7 +2704,7 @@ snag_term_close(struct snag_term *term)
         if (term->bracketed_paste)
             (void)snag_term_write(STDERR_FILENO, "\033[?2004l", 8u);
         if (term->raw)
-            (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->host.input_mode);
+            (void)snag_term_input_restore(&term->host, true);
     }
     if (term->sigwinch_installed)
         (void)sigaction(SIGWINCH, &term->host.sigwinch, NULL);
