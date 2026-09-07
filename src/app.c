@@ -2999,33 +2999,21 @@ run_turn(struct app_state *app, const char *prompt,
         provider_rc = snag_app_provider_count(app, projection.count_request.value, &credential,
             &projection.input_tokens_bound, &count_method,
             error, sizeof(error));
-        if (provider_rc == 1 && app->steering_requested) {
-            app->steering_requested = false;
-            --cycle;
-            continue;
-        }
-        if (provider_rc == 2 && app->interrupt_requested) {
-            result = finish_user_interrupt(app, turn_id, error, sizeof(error));
-            goto out;
-        }
+        if (provider_rc == 1 && app->steering_requested)
+            goto steered_before_response;
+        if (provider_rc == 2 && app->interrupt_requested)
+            goto user_interrupted;
         if (provider_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW) {
             bool compacted = false;
             int recovery = hard_compaction_attempts++ < 8u ?
                 snag_app_compact_after_capacity_rejection(app, &credential,
                     &compacted, error, sizeof(error)) : -1;
-            if (recovery == 0 && compacted) {
-                --cycle;
-                continue;
-            }
-            if (recovery == 1 && app->steering_requested) {
-                app->steering_requested = false;
-                --cycle;
-                continue;
-            }
-            if (recovery == 2 && app->interrupt_requested) {
-                result = finish_user_interrupt(app, turn_id, error, sizeof(error));
-                goto out;
-            }
+            if (recovery == 0 && compacted)
+                goto rebuild_request;
+            if (recovery == 1 && app->steering_requested)
+                goto steered_before_response;
+            if (recovery == 2 && app->interrupt_requested)
+                goto user_interrupted;
             result = finish_turn_failure(app, turn_id, NULL, "context",
                 error[0] ? error : "input-token counter rejected irreducible context",
                 error, sizeof(error));
@@ -3036,10 +3024,8 @@ run_turn(struct app_state *app, const char *prompt,
                 error[0] ? error : "input-token count failed", error, sizeof(error));
             goto out;
         }
-        if (app->irc_urgent.len) {
-            --cycle;
-            continue;
-        }
+        if (app->irc_urgent.len)
+            goto rebuild_request;
         {
             bool compacted = false;
             bool over_hard = app->turn_capacity.hard_input_known &&
@@ -3068,15 +3054,10 @@ run_turn(struct app_state *app, const char *prompt,
             compact_rc = snag_app_compact_before_response(app, &credential,
                     projection.input_tokens_bound, count_method, &compacted,
                     error, sizeof(error));
-            if (compact_rc == 1 && app->steering_requested) {
-                app->steering_requested = false;
-                --cycle;
-                continue;
-            }
-            if (compact_rc == 2 && app->interrupt_requested) {
-                result = finish_user_interrupt(app, turn_id, error, sizeof(error));
-                goto out;
-            }
+            if (compact_rc == 1 && app->steering_requested)
+                goto steered_before_response;
+            if (compact_rc == 2 && app->interrupt_requested)
+                goto user_interrupted;
             if (compact_rc != 0) {
                 result = finish_turn_failure(app, turn_id, NULL,
                     over_hard ? "context" : "provider",
@@ -3087,8 +3068,7 @@ run_turn(struct app_state *app, const char *prompt,
             if (compacted) {
                 if (over_hard)
                     ++hard_compaction_attempts;
-                --cycle;
-                continue;
+                goto rebuild_request;
             }
         }
         if (capacity_recovery_used &&
@@ -3188,8 +3168,7 @@ run_turn(struct app_state *app, const char *prompt,
             }
             if (steered)
                 continue;
-            result = finish_user_interrupt(app, turn_id, error, sizeof(error));
-            goto out;
+            goto user_interrupted;
         }
         bool cyber_clarification = provider_failure.output_correction ==
                                    SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
@@ -3310,11 +3289,8 @@ run_turn(struct app_state *app, const char *prompt,
                             app->steering_requested = false;
                             continue;
                         }
-                        if (recovery_rc == 2 && app->interrupt_requested) {
-                            result = finish_user_interrupt(app, turn_id,
-                                                            error, sizeof(error));
-                            goto out;
-                        }
+                        if (recovery_rc == 2 && app->interrupt_requested)
+                            goto user_interrupted;
                         break;
                     }
                     if (recovery_rc == 0 && compacted) {
@@ -3557,12 +3533,19 @@ run_turn(struct app_state *app, const char *prompt,
                                           "protocol", message, error, sizeof(error));
             goto out;
         }
+steered_before_response:
+        app->steering_requested = false;
+rebuild_request:
+        --cycle;
     }
     {
         static const char message[] = "response-cycle counter exhausted";
         result = finish_turn_failure(app, turn_id, "internal_failure",
                                       "resource", message, error, sizeof(error));
     }
+    goto out;
+user_interrupted:
+    result = finish_user_interrupt(app, turn_id, error, sizeof(error));
     goto out;
 fail:
     (void)app_error(app, error);
