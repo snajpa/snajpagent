@@ -1914,7 +1914,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         return 0;
     }
     if (strcmp(message.command, "353") == 0 && message.param_count >= 4u) {
-        char *cursor = message.params[3];
+        char *save = NULL;
 
         if (!link->room[0] ||
             irc_casecmp(message.params[2], link->room) != 0)
@@ -1924,23 +1924,10 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
             link->member_count = 0u;
             link->names_active = true;
         }
-        while (*cursor) {
-            char *end;
-            bool op;
-            while (*cursor == ' ')
-                ++cursor;
-            if (!*cursor)
-                break;
-            end = strchr(cursor, ' ');
-            if (end)
-                *end = '\0';
-            op = *cursor == '@';
-            if (op)
-                ++cursor;
-            (void)member_add(link, cursor, op);
-            if (!end)
-                break;
-            cursor = end + 1u;
+        for (char *nick = strtok_r(message.params[3], " ", &save); nick;
+             nick = strtok_r(NULL, " ", &save)) {
+            bool op = *nick == '@';
+            (void)member_add(link, nick + (size_t)op, op);
         }
         return 0;
     }

@@ -1263,7 +1263,7 @@ test_client_events(void)
         nick = peers[i] == operator_fd ? "remoteop" : "remoteagent";
         n = snprintf(joined, sizeof(joined),
             ":%s!u@fake JOIN #lab\r\n"
-            ":fake 353 %s = #lab :@remoteop remoteagent peer\r\n"
+            ":fake 353 %s = #lab :  @remoteop   remoteagent  peer  \r\n"
             ":fake 366 %s #lab :end\r\n"
             ":fake BATCH +h chathistory #lab\r\n"
             ":fake BATCH -h\r\n",
