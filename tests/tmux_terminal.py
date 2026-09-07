@@ -723,7 +723,7 @@ class TmuxTerminal:
             if self.dead():
                 return
             time.sleep(0.02)
-        raise AssertionError("snajpagent did not exit")
+        raise AssertionError(f"snajpagent did not exit:\n{self.capture()}")
 
     def exit(self):
         self.submit("/exit")
