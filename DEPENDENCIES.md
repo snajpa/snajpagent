@@ -161,6 +161,24 @@ object stays in the isolated build directory until dSYM generation, preserving
 optimized application debug information; it is not a runtime file or a new
 host-build default.
 
+The macOS recipe also accepts an internal `deployment` argument for legacy
+builds. Targets before 10.8 select the pinned cctools-port classic linker;
+it retains the old Mach-O startup and relocation formats. Its Linux-only host
+dependencies include TAPI and libdispatch. These tools are build dependencies,
+not libraries loaded by the agent. The i386 recipe uses Apple's complete
+10.12 SDK, downloaded from two official URLs with a pinned SHA-256.
+Production targets still use macOS 11 while legacy linkage and execution
+remain under investigation.
+
+Legacy source builds use optional native at-family calls where available.
+Otherwise, held-directory identity checks and `F_GETPATH` resolve an older
+pathname operation inside the platform layer. External directory renames can
+race that resolution, and removed directories may be inaccessible. Descriptor
+close-on-exec setup is non-atomic on older systems. Read-only tools retain
+no-follow/type checks and internal file operations. Legacy monotonic time uses
+Mach absolute time, which excludes system sleep; realtime uses gettimeofday.
+Pre-10.7 terminal ownership uses a pthread key with real per-thread isolation.
+
 `make -jN prod-macos-universal` uses independent slice prerequisites and
 `llvm-lipo` to combine the executables and their dSYM DWARF payloads. The
 per-slice code signatures remain intact: thinning the combined executable
