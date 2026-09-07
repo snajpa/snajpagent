@@ -225,8 +225,9 @@ Plain `make` builds only the host platform.
 
 Without configuration or existing credentials, the first interactive launch
 offers ChatGPT/Codex, OpenRouter, OpenAI, or custom-provider setup. Authenticate
-and choose a supported model. `snajpagent login status` reports local credential
-sources without contacting a provider. The manual explains login methods and logout.
+and choose a [supported model](#supported-providers). `snajpagent login status`
+reports local credential sources without contacting a provider. The manual
+explains login methods and logout.
 
 For manual configuration, create a private directory:
 
@@ -269,3 +270,17 @@ cover the full reference and troubleshooting. Both come from [one source](snajpa
 [project instructions](AGENTS.md) require updates alongside behavior changes.
 [Design notes](design/architecture.md) cover the implementation. GPL-2.0-only;
 see [COPYING](COPYING).
+
+## Supported providers
+
+Supported connections: OpenAI, ChatGPT/Codex, OpenRouter, and custom providers
+with an OpenAI-compatible Responses API.
+
+- **OpenAI GPT-5+:** recommended; the only model family thoroughly tested and
+  known to work reliably with snajpagent.
+- **DeepSeek:** an open-model option known to work well.
+- **Anthropic:** not supported. The project's assessment is that alignment
+  problems make its models unsuitable for long-horizon autonomous work without
+  oversight.
+- **Other models:** use at your own risk. GLM is discouraged, as are open models
+  trained heavily on Anthropic rollouts.
