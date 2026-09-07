@@ -73,10 +73,13 @@ let
       }) ];
   });
   target = runtime false compiler;
-  staticTarget = (runtime true sdkCompiler).extend (_: previous: {
+  staticTarget = (runtime true sdkCompiler).extend (_: previous:
+    pkgs.lib.optionalAttrs
+      (previous.stdenv.hostPlatform.config == settings.crossSystem.config) {
     # The agent needs libzstd, not its Bash/grep-dependent CLI scripts.
     zstd = previous.zstd.overrideAttrs (old: {
       buildInputs = [ ];
+      propagatedBuildInputs = [ ];
       cmakeFlags = old.cmakeFlags ++ [ "-DZSTD_BUILD_PROGRAMS=OFF" ];
       preInstall = "";
       outputs = [ "out" "dev" ];
