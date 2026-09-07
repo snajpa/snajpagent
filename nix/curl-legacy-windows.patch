@@ -3,11 +3,22 @@ SPDX-License-Identifier: curl
 Pre-Vista Windows support for curl 8.20.0 with c-ares and static winpthreads.
 Upstream curl license terms retained.
 
+--- a/lib/easy_lock.h
++++ b/lib/easy_lock.h
+@@ -27,7 +27,7 @@
+
+ #define GLOBAL_INIT_IS_THREADSAFE
+
+-#ifdef _WIN32
++#if defined(_WIN32) && _WIN32_WINNT >= 0x0600
+
+ #define curl_simple_lock      SRWLOCK
+ #define CURL_SIMPLE_LOCK_INIT SRWLOCK_INIT
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -1498,8 +1498,13 @@
    list(APPEND CURL_INCLUDES "ws2tcpip.h")
- 
+
    if(HAVE_WIN32_WINNT AND HAVE_WIN32_WINNT LESS 0x0600)
 -    # Windows Vista is required for freeaddrinfo, getaddrinfo, if_nametoindex
 -    message(FATAL_ERROR "Building for Windows Vista or newer is required.")
@@ -20,7 +31,7 @@ Upstream curl license terms retained.
 +    list(APPEND CURL_NETWORK_AND_TIME_LIBS "winpthread")
    endif()
  endif()
- 
+
 @@ -1827,7 +1832,11 @@
    if(NOT WINDOWS_STORE)
      list(APPEND CURL_NETWORK_AND_TIME_LIBS "iphlpapi")  # for if_nametoindex()
@@ -31,14 +42,14 @@ Upstream curl license terms retained.
 +  else()
 +    list(APPEND CURL_LIBS "bcrypt")  # for BCryptGenRandom()
 +  endif()
- 
+
    # We use crypto functions that are not available for UWP apps
    if(NOT WINDOWS_STORE)
 --- a/lib/curl_setup.h
 +++ b/lib/curl_setup.h
 @@ -160,8 +160,9 @@
  #endif /* HAVE_CONFIG_H */
- 
+
  #ifdef _WIN32
 -#  if defined(_WIN32_WINNT) && (_WIN32_WINNT < 0x0600)
 -#    error The minimum build target is Windows Vista (0x0600)
@@ -46,7 +57,7 @@ Upstream curl license terms retained.
 +      (!defined(USE_RESOLV_ARES) || !defined(HAVE_THREADS_POSIX))
 +#    error Legacy Windows requires c-ares and POSIX mutexes
  #  endif
- 
+
  #  if !defined(CURL_WINDOWS_UWP) && (defined(_MSC_VER) || defined(__MINGW32__))
 @@ -698,7 +699,7 @@
  /*
@@ -61,7 +72,7 @@ Upstream curl license terms retained.
 +++ b/lib/rand.c
 @@ -34,18 +34,40 @@
  #include "escape.h"
- 
+
  #ifdef _WIN32
 +#if _WIN32_WINNT < 0x0600
 +#include <wincrypt.h>
@@ -71,11 +82,11 @@ Upstream curl license terms retained.
  #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
  #endif
 +#endif
- 
+
  CURLcode Curl_win32_random(unsigned char *entropy, size_t length)
  {
    memset(entropy, 0, length);
- 
+
 +#if _WIN32_WINNT < 0x0600
 +  HCRYPTPROV provider = 0;
 +  if(!CryptAcquireContextW(&provider, NULL, NULL, PROV_RSA_FULL,
@@ -97,14 +108,14 @@ Upstream curl license terms retained.
                       BCRYPT_USE_SYSTEM_PREFERRED_RNG) != STATUS_SUCCESS)
      return CURLE_FAILED_INIT;
 +#endif
- 
+
    return CURLE_OK;
  }
 --- a/lib/url.c
 +++ b/lib/url.c
 @@ -1477,6 +1477,23 @@
  }
- 
+
  #ifdef USE_IPV6
 +#if defined(_WIN32) && _WIN32_WINNT < 0x0600
 +static unsigned int legacy_if_nametoindex(const char *name)
