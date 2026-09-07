@@ -1806,7 +1806,10 @@ snag_child_exited(struct snag_child *child)
         error = EIO;
     } else for (size_t i = 0; i < size / sizeof(*list); ++i) {
         if (list[i].ki_pid == child->pid && list[i].ki_ppid == getpid()) {
-            rc = list[i].ki_stat == SZOMB;
+            /* 5.5 fill_kinfo_thread reports zombies as SIDL; its list
+             * skips newborns. Require the exit flag as well as that state. */
+            rc = list[i].ki_stat == SZOMB ||
+                 (list[i].ki_stat == SIDL && (list[i].ki_flag & P_WEXIT));
             break;
         }
     }
