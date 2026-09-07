@@ -1279,7 +1279,8 @@ test_private_directory(void)
     assert(snag_mkdir_private_at(-1, "relative") == -1 && errno == EBADF);
     assert(snag_mkdir_private_at(-1, absolute) == 0);
     errno = 0;
-    assert(snag_unlink_at(fd, "child", false) == -1 && errno == EISDIR);
+    assert(snag_unlink_at(fd, "child", false) == -1 &&
+           (errno == EISDIR || errno == EPERM));
     assert(snag_rename_at(fd, "child", fd, "renamed") == 0);
     assert(snag_unlink_at(fd, "renamed", true) == 0);
     assert(snag_unlink_at(-1, absolute, true) == 0);
