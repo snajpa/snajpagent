@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 { pkgs, windows ? pkgs.pkgsCross.mingwW64, winver ? "0x0601" }:
 let
+  legacy = builtins.elem winver [ "0x0500" "0x0501" "0x0502" ];
   arch = if windows.stdenv.hostPlatform.isAarch64 then "arm64"
     else if windows.stdenv.hostPlatform.isx86_32 then "i686" else "x86_64";
   pthreadBase = windows.windows.pthreads.overrideAttrs (old:
@@ -74,13 +75,17 @@ let
     "-DUSE_SHARED_MBEDTLS_LIBRARY=OFF"
     "-DUSE_STATIC_MBEDTLS_LIBRARY=ON"
     "-DGEN_FILES=OFF"
-  ] [ pthreads ]).overrideAttrs (_: {
+  ] [ pthreads ]).overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ pkgs.lib.optional legacy ./mbedtls-legacy-entropy.patch;
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+    '' + pkgs.lib.optionalString legacy ''
+      substituteInPlace library/CMakeLists.txt \
+        --replace-fail 'ws2_32 bcrypt' 'ws2_32 advapi32'
     '';
     postInstall = ''
-      printf '\nLibs.private: -L${pthreads}/lib -lpthread -lbcrypt\n' \
+      printf '\nLibs.private: -L${pthreads}/lib -lpthread -l${if legacy then "advapi32" else "bcrypt"}\n' \
         >> "$out/lib/pkgconfig/mbedcrypto.pc"
     '';
   });

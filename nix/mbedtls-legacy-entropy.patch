@@ -1,0 +1,52 @@
+SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
+Use the Windows 2000 CryptoAPI entropy source on pre-Vista targets.
+
+--- a/library/entropy_poll.c
++++ b/library/entropy_poll.c
+@@ -39,6 +39,33 @@
+ #if defined(_WIN32) && !defined(EFIX64) && !defined(EFI32)
+-
++
+ #include <windows.h>
++#if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0600
++#include <wincrypt.h>
++#include <limits.h>
++
++int mbedtls_platform_entropy_poll(void *data, unsigned char *output, size_t len,
++                                  size_t *olen)
++{
++    HCRYPTPROV provider;
++    ((void) data);
++    *olen = 0;
++    if (!CryptAcquireContextW(&provider, NULL, NULL, PROV_RSA_FULL,
++                              CRYPT_VERIFYCONTEXT | CRYPT_SILENT)) {
++        return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
++    }
++    while (len != 0) {
++        DWORD amount = len > ULONG_MAX ? ULONG_MAX : (DWORD) len;
++        if (!CryptGenRandom(provider, amount, output)) {
++            CryptReleaseContext(provider, 0);
++            return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
++        }
++        output += amount;
++        *olen += amount;
++        len -= amount;
++    }
++    return CryptReleaseContext(provider, 0) ? 0 : MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
++}
++#else
+ #include <bcrypt.h>
+ #include <intsafe.h>
+-
++
+@@ -68,6 +95,7 @@
+-
++
+     return 0;
+ }
++#endif
+ #else /* _WIN32 && !EFIX64 && !EFI32 */
+-
++
+ /*
+

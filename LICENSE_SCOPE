@@ -10,6 +10,10 @@ These dependency patches do not change the agent's license. Corresponding
 library source and these patches must remain available when redistributing
 the legacy linked executable.
 
+`nix/mbedtls-legacy-entropy.patch` retains Mbed TLS's dual GPL-2.0-or-later
+or Apache-2.0 terms. Select the GPL-2.0-or-later option for this GPL-2.0-only
+application and distribute the corresponding library source and patch.
+
 Project design notes live under design/. System Jansson and system libcurl are
 build/runtime dependencies; no third-party
 Jansson or libcurl implementation source or upstream header source is vendored.
