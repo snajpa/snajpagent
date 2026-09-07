@@ -398,11 +398,8 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         bool deferred = term->defer_redraw;
         term->defer_redraw = deferred || item->action == SNAG_TERM_SUBMIT ||
                              item->action == SNAG_TERM_QUEUE;
-        if (!term->input_only && display->prompt.source && apply_prompt(display) < 0) {
-            free(item->text);
-            free(item);
-            return -1;
-        }
+        if (!term->input_only && display->prompt.source && apply_prompt(display) < 0)
+            goto fail;
         term->defer_redraw = deferred;
     }
     atomic_store(&runtime->pause_until,
@@ -425,24 +422,16 @@ read_input(struct snag_ui_display *display, int timeout_ms)
             else
                 (void)snprintf(display->feedback, sizeof(display->feedback),
                                "destination %u is unavailable; use /names", id);
-            if (!term->input_only && display->prompt.source && apply_prompt(display) < 0) {
-                free(item->text);
-                free(item);
-                return -1;
-            }
+            if (!term->input_only && display->prompt.source && apply_prompt(display) < 0)
+                goto fail;
             take_snapshot(display, &item->snapshot);
             item->local = true;
-            item->action = SNAG_TERM_NONE;
-            term->prompt_wanted = true;
-            display->local = item;
-            display->local_acknowledged = false;
-            return 0;
+        } else if (snag_verbosity_command(item->text, strlen(item->text))) {
+            verbosity_command(display, item->text);
+            item->local = true;
         }
     }
-    if (item->action == SNAG_TERM_SUBMIT && item->text &&
-        snag_verbosity_command(item->text, strlen(item->text))) {
-        verbosity_command(display, item->text);
-        item->local = true;
+    if (item->local) {
         item->action = SNAG_TERM_NONE;
         term->prompt_wanted = true;
         display->local = item;
@@ -479,6 +468,10 @@ read_input(struct snag_ui_display *display, int timeout_ms)
             snag_wakeup_send(runtime->actions.wake[1]);
     }
     return 0;
+fail:
+    free(item->text);
+    free(item);
+    return -1;
 }
 
 static int
