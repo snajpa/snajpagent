@@ -27,11 +27,10 @@ working through the existing provider path whenever practical.
 
 ## User documentation
 
-Write for someone using the program, not someone following its author's
-conversations. Supplied examples and screenshots are evidence, not mandatory
-public copy or a prescribed workflow. Do not overfit to a partial detail.
-Keep executable downloads primary; put runnable debug builds and maintenance
-artifacts separately. A symbol file is not a debug build.
+Follow [EDITORIAL.md](EDITORIAL.md) for project prose. It prohibits negation-led
+reframing, personal narratives, source-detail overfitting and defensive filler.
+Select information for the reader's action on that surface; preserve necessary
+technical conditions and safety limits. Apply corrections to surrounding copy.
 
 Website publication is manual-only. Source pushes do not deploy Pages.
 Deploy an authorized release only with its complete downloads; follow RELEASE.md.

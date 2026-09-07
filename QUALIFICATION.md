@@ -2,21 +2,20 @@
 
 # Qualification ledger
 
-This file records what the source archive itself can prove and what still needs
-an external release environment. It is intentionally conservative: local static
-or loopback tests are implementation evidence, not a substitute for running the
-binary on each advertised platform and against a live provider account.
+This file records test coverage and outstanding platform and provider checks.
+Static inspection, local loopback tests, target-platform execution and live-provider
+runs each cover different behavior. Report the actual scope of each result.
 
 ## Source-archive evidence
 
 The repository provides these existing checks. `make check` runs unit, CLI,
 terminal and source checks; bundle collection and matrix aggregation are
-separate opt-in tools, not steps implicitly run by `make check`:
+separate opt-in tools:
 
 | Gate | Evidence produced inside this tarball |
 |---|---|
 | `make depscheck` | rejects undeclared vendored dependency source/header drift and Jansson/libcurl include drift |
-| `make portabilitycheck` | verifies PTY support is capability-gated for both advertised OS families, Linux and macOS, instead of being accidentally Linux-only |
+| `make portabilitycheck` | verifies that PTY support is capability-gated for Linux and macOS |
 | `make depclosurecheck` | captures and validates the current-host dynamic executable dependency closure, including system libcurl and Jansson linkage plus detected libcurl backend evidence |
 | `make evidencebundle` / `make evidencecheck` | collects and validates a JSON evidence bundle for one concrete host, including source audits, dependency closure, and PTY terminal evidence when a fixture binary is supplied |
 | `make evidencetoolcheck` | exercises the single-bundle and matrix-evidence checkers against generated valid and invalid bundles, including path-escape, missing-record, duplicate-platform, version-mismatch, and extra-platform cases |
@@ -38,16 +37,15 @@ erase, wrap, and resize sequences as a real terminal does.
 
 [RELEASE.md](RELEASE.md) defines publication requirements: every implemented
 `PROD_TARGETS` executable ships from one clean tag with matching companions.
-Building the entire matrix is not the same as qualifying every platform.
-Experimental builds ship with explicit limitations rather than being omitted.
+Each target needs its own runtime coverage. Experimental builds ship with
+explicit limitations and outstanding checks.
 
 For 0.99.1, Linux x86-64, AArch64 and i686 use static musl/application libraries.
-Earlier Linux checks include native execution and local QEMU; the i686 CPU
-baseline is not a claim of Linux 2.4 compatibility. macOS Intel, ARM64 and
-universal are cross-builds targeting macOS 11; no actual macOS execution is
-claimed. ARM64 is ad-hoc signed, Intel unsigned; neither is Developer ID signed
+Earlier Linux checks include native execution and local QEMU. The 0.99.1 i686
+build remains unqualified on Linux 2.4. macOS Intel, ARM64 and universal are
+cross-builds targeting macOS 11; actual macOS execution is still untested. ARM64 is ad-hoc signed, Intel unsigned; neither is Developer ID signed
 or notarized. Earlier Windows checks ran in PE build 26100 (x64) and 28000
-(ARM64), not a full desktop or older Windows qualification. ARM64 requires the
+(ARM64). Full desktop and older Windows coverage is pending. ARM64 requires the
 OS UCRT. See [DEPENDENCIES.md](DEPENDENCIES.md) for the precise earlier scope.
 
 After 0.99.1, `linux-i686-legacy` adds a separate static non-PIE build with
@@ -56,13 +54,14 @@ TLS/CA roots. Its development binary ran on Debian Sarge's Linux 2.4.27-3-386
 under QEMU Pentium III: base/IRC units, internal RO and denied-write enforcement,
 parallel commands, PTY, interactive resume/exit, TLS distrust/explicit trust/
 wrong-hostname rejection and a hostname-based local provider connection.
-These are local fixture checks, not a paid provider or every 2.4 kernel pass.
+Coverage is limited to those local fixtures and that kernel. Paid-provider
+testing and other 2.4 kernel versions remain outstanding.
 Working procfs and replenished secure OS entropy are required; legacy descriptor
-flags are non-atomic. This target is not an asset of the existing 0.99.1 release.
+flags are non-atomic. This target currently requires a source build.
 
 Each release's notes distinguish checks of its exact binaries from earlier
-implementation evidence. Local fake-provider transport/terminal checks are not
-paid live-provider tests. Do not describe an unperformed platform or live-model
+implementation evidence. Record local fake-provider checks and paid-provider
+runs separately. Do not describe an unperformed platform or live-model
 run as passing, and do not turn the historical four-platform bundle defaults
 into the production matrix: `PROD_TARGETS` is its source of truth.
 

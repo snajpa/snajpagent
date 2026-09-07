@@ -39,19 +39,19 @@ typing alone does not interrupt it.
 In rollout, **Enter sends a correction now**: “Use the existing parser; don't
 add a dependency.” It interrupts the model's response and continues from the
 text already delivered. Commands already running stay alive; the model can
-wait for them or stop them rather than blindly restarting them.
+wait for them or stop them.
 
 **Tab at the end of an ordinary message queues a follow-up while work is active.**
 “Then add regression coverage” waits for the current turn to finish. Queued
-prompts run oldest first, one at a time, not as parallel agents. `(N)` in the
-prompt counts waiting turns, not the running one. The acknowledgement
+prompts run oldest first, one at a time. `(N)` in the prompt counts waiting
+turns, excluding current work. The acknowledgement
 `queued (/next or /q c) ›` confirms submission: `/next` resumes a paused queue,
 while `/q c` clears waiting prompts without stopping current work.
 
 Tab completes command names before it queues. Start a line with `/sta` and press
 Tab to get `/status `; press Enter to run it. Completion applies while the cursor
-is in or at the end of that first `/command`, not to ordinary words or command
-arguments. A unique match adds a space; ambiguous matches extend the common
+is in or at the end of that first `/command`. After that token, Tab follows
+the nickname-completion or idle/active behavior described below. A unique match adds a space; ambiguous matches extend the common
 prefix and a second Tab lists choices. No match leaves the draft unchanged,
 not queued. Completion never sends or queues text.
 
@@ -83,24 +83,24 @@ snajpagent -l
 snajpagent --resume --last
 ```
 
-**Exit is not goal pause:** a saved active goal continues on resume. Pause it
+**An active goal continues on resume.** Pause it
 before exiting if you want it to stay paused. Paused, blocked and finished goals
 retain their states. Queued prompts wait for `/next` after resume and take
-priority over automatic goal work. Resume restores saved context, not command
-processes that ended with the previous program.
+priority over automatic goal work. Resume restores saved context. Command
+processes that ended with the previous program stay stopped.
 
 ### Keep useful findings in files
 
 For longer work, have the model keep findings, decisions and corrections in
-project files, with pointers in `AGENTS.md`. These are working notes for later
-tasks, not just user documentation. Tests check the code; notes explain what was
-learned and what still needs doing. A recorded proposal is not permission to act.
+project files, with pointers in `AGENTS.md`. Keep the notes current so later
+tasks can use what was learned and pick up unfinished work. Record proposals
+and approvals separately.
 
 snajpagent tells the model where project guidance is; the model reads what it
 needs. `-d DIR` adds a documentation root containing `AGENTS.md` or
 `AGENTS.override.md`. Repeat it for several roots, including notes spanning
 repositories. Relative paths use the launch directory even with `-C`; the printed
-resume command retains them. Small tasks need not create documentation chores.
+resume command retains them.
 
 ## 2. Work together
 
@@ -121,17 +121,17 @@ machine. `-n` names the model, `-o` its operator, and `-r` the hosted room.
 Networked startup opens **chat**, the shared room. Enter sends as your operator
 name. `@builder check the empty-input case` asks builder to work; a mention during
 its work steers it at a safe boundary without cutting off its current response.
-Ordinary room conversation is background context, not a new task by itself.
+Ordinary room conversation supplies background context. A direct mention starts
+a task for the addressed model.
 
 Empty Tab switches to **rollout**, where Enter directs your local agent without
 sending your instruction to everyone. Each view keeps its own draft and history.
-Models use `irc_send` to publish chosen messages; the whole local transcript is
-not broadcast automatically. Local does not mean secret: the model can choose
-to share its contents.
+The local transcript stays in rollout. Models use `irc_send` to publish chosen
+messages, which can include material from that transcript.
 
 In chat, type `@bu` and press Tab. If `builder` is the only match, it becomes
 `@builder `, including the space. Keep typing after it. `@` begins a nickname
-word, not necessarily the whole message: `please ask @bu` also completes;
+word anywhere in a message: `please ask @bu` also completes;
 bare `bu` does not. No match leaves the text unchanged.
 
 At the end of the finished message, **Enter sends to the room**. **Tab queues
@@ -170,7 +170,7 @@ it. Select a displayed row by number, or use `/model PROVIDER/MODEL/EFFORT` whil
 idle. Add `save` to persist a selection.
 
 The prompt's context percentage shows the last measured request input against
-the resolved input budget, rounded up—not a bill or a local estimate. A fresh
+the resolved input budget, rounded up. It uses provider-reported input counts. A fresh
 session starts at `0%`; after a turn, unknown or incomparable measurements show
 `?%`. `/status` explains the accounting. Older context is automatically
 compacted into a summary as it fills, or use `/compact` while idle. The original
@@ -180,14 +180,12 @@ important requirements in project documents.
 For inspection without commands or edits, use `/ro QUERY`. It can list, read and
 search files and use provider-hosted web search, but cannot run commands, patch
 files, change goals or send IRC messages. `/queue /ro QUERY` asks it next during
-active work. This restricts actions, not confidentiality: readable files remain
-accessible and session history is recorded.
+active work. Readable local files remain accessible and session history is recorded.
 
 ## Install and choose a provider
 
 snajpagent is written in C so the agent itself can run on more of the systems
-where development happens, including unfamiliar ones. Implemented builds and
-runtime qualifications are separate from planned ports.
+where development happens, including unfamiliar ones.
 
 [Downloads](https://agent.snajpa.net/downloads.html) lists release availability
 and platform caveats. Every new version must ship the full implemented binary
@@ -211,8 +209,8 @@ for debugging; `make help` lists build options. See [dependency notes](DEPENDENC
 for platform scope.
 
 `make -jN prod-matrix` builds all implemented standalone targets into
-`build/matrix/`, without installation or VMs. Other planned ports
-remain unfinished; successful cross-builds are not runtime qualification.
+`build/matrix/`, without installation or VMs. See the
+[platform notes](DEPENDENCIES.md) for target-specific requirements and test coverage.
 `make prod-linux-i686` builds modern 32-bit Linux static PIE.
 `make prod-linux-i686-legacy` builds a separate static non-PIE executable
 exercised on Linux 2.4.27, with embedded TLS, roots and locale data.
@@ -265,7 +263,7 @@ printf '%s\n' 'review the current diff' | snajpagent -e
 
 Model text goes to stdout; diagnostics and the resume hint go to stderr.
 Redirected output has no terminal styling. Use exit status for failure handling;
-the internal pre-1.0 event-log format is not a stable integration API.
+the internal pre-1.0 event-log format can change between versions.
 
 The [user manual](https://agent.snajpa.net/manual.html) and `man snajpagent`
 cover the full reference and troubleshooting. Both come from [one source](snajpagent.1);

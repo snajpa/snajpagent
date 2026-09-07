@@ -112,7 +112,7 @@ while active.
 .PP
 Text starting with
 .B /
-is a command to snajpagent rather than a request to the model.  Type
+is handled as a command by snajpagent.  Type
 .B /help
 and press Enter to see the controls.
 .B /verbose 1
@@ -124,12 +124,12 @@ Typing during work opens an unsent draft; it does not interrupt the model.
 In rollout, Enter supplies immediate steering.  For example,
 "Use the existing parser; do not add a dependency" changes the current task.
 The model's response is interrupted and continued from its delivered text.
-An already-started command stays alive; it is not restarted or killed.
+An already-started command stays alive for the model to collect or stop.
 .PP
 For a separate follow-up, type "Then add regression coverage" and press Tab
-at the end while work is active.  That message joins the queue instead of
-changing the current model cycle.  Queued prompts run oldest first, one turn
-at a time in the same session, not as parallel agents.  The rollout prompt's
+at the end while work is active.  That message waits in the queue until the
+current turn ends.  Queued prompts run oldest first, one turn at a time in the
+same session.  The rollout prompt's
 .B (N)
 counts waiting turns, excluding current work.
 .PP
@@ -144,7 +144,7 @@ editor is open.  Enter saves the replacement; Ctrl-C abandons the edit.
 .B /queue pop
 removes the newest item;
 .B /queue clear
-removes all waiting items, not current work.
+removes all waiting items.  Current work continues.
 .PP
 After interruption, failure or session resume, the queue can be paused.
 Use
@@ -285,8 +285,7 @@ generation reaches a safe stream boundary and commands are handed back alive.
 .PP
 Other messages, joins, leaves, mode changes, and topic changes enter model
 context when convenient and do not force a reply.  First join and successful
-compaction inject bounded room history.  The runtime reconnects outgoing links
-without model babysitting.
+compaction inject bounded room history.  The runtime reconnects outgoing links automatically.
 .PP
 Implicit outgoing nicks form zero-based sequences:
 .BR agent0 ,
@@ -980,7 +979,8 @@ to summarize through ordinary Responses.  Direct ChatGPT/Codex also falls back
 once to Responses summarization when its native endpoint is unavailable;
 other native failures remain errors.  Manual
 .B /compact
-is idle only.  Compaction changes model context, not the append-only local log.
+is idle only.  Compaction changes model context and preserves the append-only
+local log.
 .SS Login
 Common options such as
 .BR --dotdir ,
@@ -1014,7 +1014,7 @@ before
 .TP
 .BI "login status " [provider]
 Report configured credential sources and local state without contacting a
-provider or refreshing tokens.  Stored status is not a remote entitlement check.
+provider or refreshing tokens.  Provider entitlements require a remote check.
 .TP
 .BI "logout " [provider]
 Remove only the selected provider's stored login.  If omitted, select the
@@ -1023,7 +1023,7 @@ are not modified; other provider logins remain intact.
 .PP
 Automatic setup never consumes piped task input or runs for execution, resume,
 session listing, or a missing explicitly specified configuration.  Invalid
-existing configuration is an error, not an invitation to overwrite it.
+existing configuration produces an error and remains on disk for correction.
 .SH "Configuration"
 The file is UTF-8 INI syntax.  Lines beginning with
 .B #
@@ -1503,7 +1503,7 @@ entries; special files and symlinks are labeled but not opened.  Reads require
 regular UTF-8 files without NUL bytes.  Search uses POSIX extended regex or
 explicit literal matching, with optional case folding, and reports skipped
 non-text/special files.  It does not interpret ignore files or shell syntax.
-This is not a confidentiality sandbox: local readable files are accessible.
+Local readable files remain accessible.
 Session/history persistence and filesystem access-time updates remain normal;
 independently running processes are not stopped or made read-only.
 .PP
@@ -1520,8 +1520,7 @@ input continue under a process handle; the model can wait, interact, or
 explicitly terminate them with
 .BR write_stdin .
 .PP
-Process handles belong to the current foreground process, not a detached job
-service.  Turn interruption, closure, or process exit closes managed commands;
+The current foreground process owns its command handles.  Turn interruption, closure, or process exit closes managed commands;
 resume does not revive an operating-system process.
 .PP
 Every
@@ -1711,7 +1710,7 @@ with added lines prefixed by plus, and
 .B *** Delete File:
 without a body.  File paths are relative to the workspace, not absolute;
 parent traversal, duplicate targets and symlink traversal are rejected.
-Update hunks use matching context rather than trusting a guessed line number.
+Update hunks locate changes by matching context.
 There is no move/rename operation in this patch grammar.
 .PP
 The tool validates targets and computes replacements before installation,
@@ -1748,15 +1747,15 @@ NUL.  Result, traversal and scan ceilings are listed under AUTOMATION AND
 INTEGRATION.  These tools do not interpret shell globs or ignore files.
 .SS Hosted search
 .B web_search
-is executed by the provider, not a local shell helper.  The model receives
+runs on the provider.  The model receives
 provider search results in the same turn; external pages remain untrusted data.
 OpenRouter's endpoint selects its corresponding native search declaration
 automatically.  Search availability and charges depend on the provider.
 .SS Model goal controls
 .B create_goal
 accepts objective text and is available only when creating a goal is explicitly
-requested and no unfinished goal already exists.  A sentence claiming a goal
-is active is not a substitute for a successful tool result.
+requested and no unfinished goal already exists.  Goal creation takes effect
+when the tool succeeds.
 .PP
 .B update_goal
 accepts action and text.  Action rewrite requires new wording; complete
@@ -1889,8 +1888,8 @@ under
 to disable both global and project discovery, but not explicit
 .B \-d
 roots.  The default working-document search location is the session workspace.
-Useful notes retain findings, decisions, scoped corrections and unfinished work;
-they are not a second goal controller.  Verify changeable facts when resuming,
+Useful notes retain findings, decisions, scoped corrections and unfinished work.
+Goal state is controlled through the goal commands and tools.  Verify changeable facts when resuming,
 keep proposals distinct from approval, and preserve local scope on each host.
 No notes layout, recursive Markdown scan, or memory service is required.
 .SS Environment
@@ -2092,7 +2091,8 @@ Version 0.99.1 is the first binary release.  Source builds remain available belo
 The downloads page also provides separate runnable debug builds.  These use
 unstripped application code with debug information and frame pointers; dependency
 libraries remain optimized.  macOS packages include the executable and its dSYM.
-They are not the symbol-only files for diagnosing a production executable.
+Production symbol archives remain available for diagnosing their matching
+production executables.
 
 .SS Source builds
 Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
@@ -2236,7 +2236,6 @@ Cross-compilation alone does not establish runtime support.
 .B make \-jN prod-matrix
 Build all currently implemented standalone production targets: Linux
 x86-64/AArch64/i686 and legacy i686, macOS ARM64/Intel/universal, and Windows x86-64/ARM64.
-Other planned ports remain unfinished.
 Targets use separate build/matrix outputs and shared immutable Nix inputs;
 each recipe permits one Nix job and core.  SDK availability does not silently
 remove targets.  Use make \-k \-jN prod-matrix to continue independent targets

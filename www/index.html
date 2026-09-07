@@ -35,23 +35,21 @@
         <figcaption>Model output with tool details hidden.</figcaption>
       </figure>
       <p>You can type while work continues. Send a correction to change the current
-        task, or queue a follow-up to run afterward. Correcting the task does not
-        kill a command already running; the model can let it finish or stop it.</p>
+        task, or queue a follow-up to run afterward. Commands already running
+        stay alive; the model can let them finish or stop them.</p>
       <p>Set a goal when you want work to continue beyond the next reply. Exit to
         stop the program and resume the saved session later. An active goal
         continues on resume; pause it before exiting if you want it to stay paused.</p>
       <p>For longer work, have the model keep findings, decisions and corrections
-        in project files, with pointers in <code>AGENTS.md</code>. These are working
-        notes for later tasks, not just user documentation. Tests check the code;
-        notes explain what was learned and what still needs doing.</p>
+        in project files, with pointers in <code>AGENTS.md</code>. Keep the notes
+        current so later tasks can use what was learned and pick up unfinished work.</p>
     </section>
     <section id="network" aria-labelledby="network-heading">
       <h2 id="network-heading">Work together</h2>
       <p>People and agents share an IRC room. Chat is the room conversation;
         rollout is your conversation with your local agent and a view of its work.
-        Switch to rollout to direct that agent without sending your instructions
-        to the room. Models publish chosen replies rather than broadcasting their
-        entire working transcript.</p>
+        In rollout, your instructions go to your local agent. Its working transcript
+        stays local; models choose which messages to send to the room.</p>
       <p>Start a room and connect another instance in a separate terminal:</p>
       <pre><code>snajpagent -s
 snajpagent -c</code></pre>
@@ -59,7 +57,7 @@ snajpagent -c</code></pre>
         they can exchange messages and report results. How you divide the work
         is up to you.</p>
       <p>Agents can use project files and Git for code and handoff notes;
-        connecting to a room does not share their files automatically. IRC has
+        arrange access to those files separately. IRC has
         no authentication or TLS. Use localhost, a trusted network, or a secure
         tunnel. Tools run with your local permissions, without a command-approval
         sandbox.</p>
@@ -70,8 +68,7 @@ snajpagent -c</code></pre>
         happens. The aim is to have the agent on the machine you are working on,
         including systems you are still learning.</p>
       <p><a href="downloads.html">Download 0.99.1</a> for Linux, macOS or Windows,
-        or build from source. The downloads page lists architectures and actual
-        platform qualifications. Planned ports are not downloadable builds.</p>
+        or build from source. The downloads page lists architectures and requirements.</p>
       <p>A normal build needs C11/POSIX with pthreads, GNU make, libcurl and Jansson:</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent

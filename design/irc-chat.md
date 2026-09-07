@@ -498,8 +498,8 @@ IRC batch and the exact `write_stdin` surface for that handle. The model can
 react immediately, wait for command completion, continue the command, or use
 the handle-bound explicit termination option. A steering-triggered result is
 distinguished as `reason=steering_handoff`; neither handoff itself signals the
-process. The IRC runtime does not require the model to babysit the socket or
-process. Ordinary terminal interrupt remains an explicit cancellation and is
+process. The runtime owns socket and process lifecycle. Ordinary terminal
+interrupt remains an explicit cancellation and is
 not changed by this rule.
 
 For a turn requested by a local operator mention, snajpagent tracks whether a

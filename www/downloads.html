@@ -48,31 +48,21 @@
         <code>.exe</code> extension. Run it in your project directory and follow
         the provider setup prompts.</p>
     </section>
-    <section aria-labelledby="legacy-heading">
-      <h2 id="legacy-heading">New in source: legacy Linux i686</h2>
-      <p><code>make prod-linux-i686-legacy</code> builds a separate single-file
-        executable exercised on Linux 2.4.27, including read-only tools,
-        parallel commands, PTY, resume and TLS verification. It uses static
-        LinuxThreads instead of musl/PIE and requires procfs and secure OS entropy.
-        See the <a href="https://github.com/snajpa/snajpagent/blob/master/DEPENDENCIES.md">platform limits</a>.</p>
-      <p>This target joins the next binary release. It is not included in the
-        existing 0.99.1 assets above; those versioned files are unchanged.</p>
-    </section>
     <section aria-labelledby="compatibility-heading">
       <h2 id="compatibility-heading">Requirements</h2>
       <ul>
         <li><strong>Linux:</strong> static musl and application libraries; no Nix,
           matching glibc, or system libcurl needed. x86-64 and i686 were tested
-          natively; AArch64 under local QEMU. i686 is a CPU baseline, not a
-          promise of Linux 2.4 support.</li>
+          natively; AArch64 under local QEMU. Use a modern Linux kernel with
+          these 0.99.1 executables.</li>
         <li><strong>macOS:</strong> experimental cross-builds targeting macOS 11;
           not tested on macOS. Universal contains Intel and Apple Silicon slices.
           ARM64 is ad-hoc signed; Intel is unsigned. Neither is Developer ID
           signed or notarized.</li>
         <li><strong>Windows:</strong> experimental x64 and ARM64 builds using
-          Windows system DLLs; ARM64 needs the OS UCRT. Earlier development
-          builds were tested in Windows PE, not these exact release files.
-          Full desktop and older Windows qualification remain outstanding.</li>
+          Windows system DLLs; ARM64 needs the OS UCRT. These release builds
+          are untested on Windows; earlier Windows PE checks are recorded in
+          the build details. Full desktop and older Windows coverage is pending.</li>
       </ul>
       <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/BUILDING-0.99.1.md">Exact build and test details</a>.
         Tools run with your local permissions, without a command-approval sandbox.</p>
