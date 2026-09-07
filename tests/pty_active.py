@@ -218,8 +218,7 @@ class Child:
 def test_resize_and_suspend_preserve_draft():
     for suspend in (False, True):
         text = b"suspend draft" if suspend else b"resize draft"
-        with Child(["-vvvv"]) as child:
-            child.wait(DEFAULT_IDLE_PROMPT)
+        with Child(["-vvvv"], ready=DEFAULT_IDLE_PROMPT) as child:
             typed_end = child.send_wait(text, text)
             if suspend:
                 child.send(b"\x1a")
@@ -469,8 +468,7 @@ def test_incremental_prompt_edit_and_utf8_cursor_column():
 
 
 def test_incremental_active_prompt_keeps_status_stable():
-    with Child([]) as child:
-        child.wait(DEFAULT_IDLE_PROMPT)
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"terminal_status\r", "»".encode())
         phase_start = len(child.buf)
         child.wait("◷".encode(), start=phase_start, timeout=1.0)
@@ -496,8 +494,7 @@ def test_static_zero_width_spinner_has_no_refresh():
     )
     idle = DEFAULT_IDLE_PROMPT
     active = DEFAULT_ACTIVE_PROMPT
-    with Child(["--config", str(config)]) as child:
-        child.wait(idle)
+    with Child(["--config", str(config)], ready=idle) as child:
         first = child.send_wait(b"terminal_status\r", b"status-first-fragment ")
         wait_prompt_painted(child, active, start=first)
         assert re.search("◆ [0-9]{2}:[0-9]{2}:[0-9]{2}".encode() +
@@ -588,8 +585,7 @@ def test_initial_unrenderable_prompt_is_rejected_atomically():
 
 
 def test_incremental_multiline_delete_clears_old_tail():
-    with Child([]) as child:
-        child.wait(DEFAULT_IDLE_PROMPT)
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"abcdef\nsecond", b"second")
         child.drain(0.05)
         child.send(b"\x1b[H" + b"\x1b[C" * 6)
@@ -609,8 +605,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
     prompt = f" openai/{model}/medium   0% › ".encode()
-    with Child(["-m", model]) as child:
-        child.wait(prompt)
+    with Child(["-m", model], ready=prompt) as child:
         start = len(child.buf)
         end = child.send_wait(b"x\n" * 8 + b"z", b"z", start=start)
         edit = bytes(child.buf[start:end])
@@ -799,8 +794,7 @@ def test_queue_prompt_counts():
                 return match.end()
             child.read_once(0.1)
         raise AssertionError(f"queue count {count} did not repaint: {bytes(child.buf)!r}")
-    with Child([]) as child:
-        child.wait(DEFAULT_IDLE_PROMPT)
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         after = child.send_wait(b"queue_slow\r", b"working slowly")
         for count in range(1, 11):
             child.send(f"entry-{count}\t".encode())
@@ -1279,8 +1273,7 @@ def test_active_ctrl_c_clears_draft():
 
 
 def test_ctrl_c_cancels_partial_editor_states():
-    with Child([]) as child:
-        child.wait(DEFAULT_IDLE_PROMPT)
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         escape_start = len(child.buf)
         child.send(b"escape-draft\x1b")
         escape_end = child.send_wait(b"\x03", b"^C\r\n", start=escape_start)
@@ -1637,8 +1630,7 @@ def test_goal_refusal_failure_block_and_restart_state():
 
 
 def test_saved_goal_restored_without_lookup():
-    with Child([]) as child:
-        child.wait_idle_prompt()
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"/goal slow goal\r", b"working on goal")
         paused = child.send_wait(b"/goal pause\r", b"Goal paused at the current turn boundary")
         checkpoint = child.wait(b"goal checkpoint", start=paused)
@@ -1675,8 +1667,7 @@ def test_saved_goal_restored_without_lookup():
 
 def test_resume_preserves_inactive_and_queued_goal_states():
     for state in ("blocked", "completed", "cancelled"):
-        with Child([]) as child:
-            child.wait_idle_prompt()
+        with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
             answer = child.send_wait(b"/goal blocked goal\r", b"goal done")
             child.wait_idle_prompt(start=answer)
             if state != "blocked":
@@ -1696,8 +1687,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
             resumed.exit_now()
         assert events(session_id) == original
 
-    with Child([]) as child:
-        child.wait_idle_prompt()
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"/goal slow goal\r", b"working on goal")
         child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
         session_id = child.session_id()
@@ -1838,8 +1828,7 @@ def test_preferences_and_verbosity():
 def test_active_verbosity():
     for key in (b"\r", b"\t"):
         for initial, level in ((0, 3), (3, 0)):
-            with Child(["-v"] * initial) as child:
-                child.wait_idle_prompt()
+            with Child(["-v"] * initial, ready=DEFAULT_IDLE_PROMPT) as child:
                 child.send_wait(b"managed_command_queue\r", "⠋".encode())
                 session = child.session_id()
                 start = len(child.buf)
@@ -1862,8 +1851,7 @@ def test_active_verbosity():
 
 def test_runtime_verbosity_resume():
     for level in (0, 1, 6):
-        with Child(["-vvv"]) as child:
-            child.wait_idle_prompt()
+        with Child(["-vvv"], ready=DEFAULT_IDLE_PROMPT) as child:
             answered = child.send_wait(b"ping\r", b"pong")
             child.wait_idle_prompt(start=answered)
             end = child.send_wait(f"/verbose {level}\r".encode(), f"verbosity: {level} (".encode())
@@ -2189,8 +2177,7 @@ def test_provider_local_models(native=True):
     )
     config.write_text(text, encoding="utf-8")
     before = session_ids()
-    with Child(["--config", str(config)]) as child:
-        child.wait(b"codex-lb/small/high")
+    with Child(["--config", str(config)], ready=b"codex-lb/small/high") as child:
         assert session_ids() == before
         child.send_wait(b"/status\r", b"hard-input=121600")
         child.wait(b"context rule: [model-limit codex-lb/small]")
@@ -2218,8 +2205,7 @@ def test_provider_local_models(native=True):
         prefix = (STATE_ROOT / sid / "events.jsonl").read_bytes()
         # A provider rename is recovered explicitly; old history stays byte-identical.
         config.write_text(config.read_text().replace("codex-lb", "renamed"))
-        with Child(["--config", str(config), "--provider", "renamed", "--resume", sid]) as resumed:
-            resumed.wait(b"renamed/large/high")
+        with Child(["--config", str(config), "--provider", "renamed", "--resume", sid], ready=b"renamed/large/high") as resumed:
             resumed.exit_now()
             assert (STATE_ROOT / sid / "events.jsonl").read_bytes().startswith(prefix)
             changes = [e["data"] for e in events(sid) if e["type"] == "model_selection_changed"]
@@ -4026,8 +4012,7 @@ def test_ctrl_d_exit():
     for prompt in (None, b"queue_slow", b"engine_blocked", b"/goal slow goal",
                    b"slow"):
         before = session_ids()
-        with Child([]) as child:
-            child.wait_idle_prompt()
+        with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
             if prompt:
                 child.send_wait(prompt + b"\r", b"engine-block-start" if prompt == b"engine_blocked"
                            else b"working on goal" if prompt.startswith(b"/goal")
@@ -4089,8 +4074,7 @@ def test_goal_orderly_quit_resume():
         if mode == "host":
             args = ["-v", "--listen", f"localhost:{free_port()}", "--no-client",
                     "-n", "goalagent", "-o", "goalop", "-r", "lab"]
-        with Child(args) as child:
-            child.wait(chat_prompt("goalop") if mode == "host" else PROMPT.rstrip())
+        with Child(args, ready=chat_prompt("goalop") if mode == "host" else PROMPT.rstrip()) as child:
             if mode == "host":
                 switched = child.send_wait(b"/rollout\r", "── rollout ──".encode())
                 child.wait_idle_prompt(start=switched)
@@ -4181,8 +4165,7 @@ def test_five_ctrl_c_exit():
 
 def test_ctrl_c_sequence_reset():
     before = session_ids()
-    with Child([]) as child:
-        child.wait_idle_prompt()
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send(b"\x03" * 4)
         child.drain(2.1)
         child.send(b"\x03")
@@ -4198,8 +4181,7 @@ def test_ctrl_c_sequence_reset():
 
 def test_full_input_queue_keeps_exit_live():
     for gesture in (b"\x03" * 5, b"\x15\x04"):
-        with Child([]) as child:
-            child.wait_idle_prompt()
+        with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
             child.send_wait(b"engine_blocked\r", b"engine-block-start")
             child.send_wait(b"/verbose 1\r" * 32 + b"retained-draft\r", b"input backlog is full", timeout=1.0)
             child.wait(b"\a", timeout=1.0)
@@ -4209,8 +4191,7 @@ def test_full_input_queue_keeps_exit_live():
 
 def test_history_lock_keeps_editing_live():
     before = session_ids()
-    with Child([]) as child:
-        child.wait_idle_prompt()
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         with (Path(DOTDIR) / "prompt_history").open("r+") as history:
             fcntl.lockf(history, fcntl.LOCK_EX)
             start = child.send_wait(b"\x12", b"reverse-i-search")
@@ -4229,8 +4210,7 @@ def test_history_lock_keeps_editing_live():
 
 def test_editor_during_render_flood():
     for mode in ("--markdown", "--no-markdown"):
-        with Child([mode]) as child:
-            child.wait_idle_prompt()
+        with Child([mode], ready=DEFAULT_IDLE_PROMPT) as child:
             start = child.send_wait(b"render_flood\r", b"row-0000")
             child.send(b"live-draft")
             deadline = time.monotonic() + 0.25
