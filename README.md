@@ -60,6 +60,9 @@ rollout and chat.** Nickname completion in chat is explained below.
 
 ### Keep working, or leave and come back
 
+Failed turns retry automatically three times. Set `[agent] max_turn_retries`
+to change the limit (`0` disables it). Active goals keep retrying without a limit.
+
 A normal final answer ends the turn. Set a goal when you want work to continue
 beyond it:
 

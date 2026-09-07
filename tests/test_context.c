@@ -2019,6 +2019,10 @@ main(void)
                               response_completed_call(turn2, resp2, call2, workspace),
                               NULL, error, sizeof(error)) == 0);
     assert(session.pending_call_count == 1u);
+    assert(snag_session_commit(&session, "turn_recovery",
+        json_pack("{s:s,s:s,s:s}", "class", "protocol", "message", "unsettled",
+                  "turn_id", turn2), NULL, error, sizeof(error)) < 0);
+    assert(session.pending_call_count == 1u);
     assert(snag_session_commit(&session, "tool_started",
                               tool_started_data(turn2, call2,
                                                 session.pending_calls[0].action_sha256,

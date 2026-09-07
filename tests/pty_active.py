@@ -704,10 +704,14 @@ def test_public_index_diagnostic():
     child.send(b"public_index_decrease\r")
     child.wait(b"index one")
     failure_end = child.wait(b"public output indexes did not increase")
-    child.exit_cleanly(failure_end)
+    exhausted = child.wait(b"turn failed; try /retry", start=failure_end, timeout=20.0)
+    child.exit_cleanly(exhausted)
 
     log = events(new_session(before))
-    failed = one(log, "response_failed")
+    failures = [item for item in log if item["type"] == "response_failed"]
+    assert len(failures) == 4
+    assert len([item for item in log if item["type"] == "turn_recovery"]) == 3
+    failed = failures[-1]
     assert failed["data"]["class"] == "protocol"
     assert failed["data"]["message"] == (
         "public output indexes did not increase"

@@ -383,11 +383,13 @@ $bin -e --resume "$crash_id" -- ping >"$root/crash-recovered.out" 2>"$root/crash
 [ "$(cat "$root/crash-recovered.out")" = pong ]
 grep -q 'recovered an interrupted turn' "$root/crash-recovered.err"
 
-$bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err" && exit 1
-[ ! -s "$root/fail.out" ]
+$bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err"
+[ -s "$root/fail.out" ]
 grep -q 'fixture provider failed' "$root/fail.err"
 [ "$(resume_count "$root/fail.err")" -eq 1 ]
 fail_id=$(grep -rl 'fixture provider failed' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
+[ "$(grep -c '"type":"turn_recovery"' "$dotdir/sessions/$fail_id/events.jsonl")" -eq 1 ]
+! grep -q '"type":"turn_failed"' "$dotdir/sessions/$fail_id/events.jsonl"
 $bin -e --resume "$fail_id" -- ping >"$root/recovered.out" 2>"$root/recovered.err"
 [ "$(cat "$root/recovered.out")" = pong ]
 strip_resume "$root/recovered.err"
@@ -476,8 +478,8 @@ for prompt in managed_final_violation; do
     $bin -e -- "$prompt" >"$root/$prompt.out" 2>"$root/$prompt.err"
     status=$?
     set -e
-    [ "$status" -eq 4 ]
-    [ ! -s "$root/$prompt.out" ]
+    [ "$status" -eq 0 ]
+    [ "$(cat "$root/$prompt.out")" = "managed process recovered" ]
     grep -q 'Unsettled commands remain' \
         "$root/$prompt.err"
     managed_id=$(grep -rl "\"text\":\"$prompt\"" \
@@ -489,13 +491,13 @@ import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 closed = [event for event in events if event["type"] == "process_closed"]
 failed = [event for event in events if event["type"] == "turn_failed"]
-assert len(closed) == 1
-assert closed[0]["data"]["cause"] == "protocol_failure"
+assert not closed
+assert len([event for event in events if event["type"] == "turn_recovery"]) == 1
 running = [event for event in events if event["type"] == "tool_finished"
            and event["data"]["result"]["status"] == "running"]
-assert closed[0]["data"]["handle"] == running[0]["data"]["call_id"]
-assert len(failed) == 1
-assert failed[0]["data"]["class"] == "protocol"
+assert len(running) == 1
+assert not failed
+assert len([event for event in events if event["type"] == "turn_completed"]) == 1
 PY
 done
 
@@ -569,6 +571,8 @@ grep -q 'terminal answer with tool calls' "$root/conflict.err"
 conflict_log=$(grep -rl 'protocol_conflict' "$dotdir/sessions" | head -n 1)
 grep -q '"status":"not_run"' "$conflict_log"
 ! grep -q '"type":"tool_started"' "$conflict_log"
+[ "$(grep -c '"type":"turn_recovery"' "$conflict_log")" -eq 3 ]
+[ "$(grep -c '"type":"turn_failed"' "$conflict_log")" -eq 1 ]
 
 set +e
 $bin -e -- tool_crash >"$root/tool-crash.out" 2>"$root/tool-crash.err"
@@ -1039,9 +1043,11 @@ assert starts[1]["data"]["hard_input_tokens"] == 89999
 assert starts[0]["seq"] < rejected[0]["seq"] < compacted[0]["seq"] < starts[1]["seq"]
 PY
 
-# A second typed rejection after recovery is terminal and is never replayed.
+# With outer retries disabled, a second typed rejection is terminal.
 second_state="$root/capacity-second-state"
 mkdir -m 700 "$second_state"
+printf '[agent]\nmax_turn_retries=0\n[provider openai]\n' > "$second_state/config.ini"
+chmod 600 "$second_state/config.ini"
 $bin --dotdir "$second_state" -e -- ping >/dev/null 2>"$root/second-first.err"
 second_id=$(find "$second_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 set +e

@@ -3319,18 +3319,20 @@ def run_provider_clarification_cases(binary, root, provider, environment):
             assert len(corrections) == count, (mode, len(corrections))
             relevant = requests[1:] if mode == "prior" else requests
             if mode in ("success", "exhausted", "prior"):
-                assert len(relevant) == 4, (mode, len(relevant))
+                assert len(relevant) == (7 if mode == "exhausted" else 4), (mode, len(relevant))
                 for attempt, request in enumerate(relevant):
                     assert any(item.get("role") == "user" and item.get("content") == original
                                for item in request["input"]), "original task was rewritten"
                     notes = [item["content"] for item in request["input"]
                              if item.get("role") == "developer" and
                              item.get("content", "").startswith("The provider rejected the preceding")]
-                    assert len(notes) == attempt, (mode, attempt, notes)
+                    assert len(notes) == min(attempt, 3), (mode, attempt, notes)
                     assert all("preserving its purpose, actions, targets, and authorization" in note and
                                "Do not conceal security-relevant details" in note for note in notes)
             elif mode == "partial":
-                assert len(relevant) == 1
+                assert len(relevant) == 4
+                assert len(event_list(events, "turn_recovery")) == 3
+                assert not event_list(events, "turn_failed")
             else:
                 assert len(relevant) == 3, (mode, len(relevant))
                 assert fresh in json.dumps(relevant[-1]), "new input did not reach model"
@@ -3365,6 +3367,7 @@ def run_goal_recovery_cases(binary, root, provider, environment):
         workspace.mkdir(mode=0o700, parents=True)
         config = case / "c.ini"
         write_irc_config(config, provider.port, "host-model")
+        config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
         requests, metadata = [], []
         ready = threading.Event()
         original = "recover this goal " + mode
@@ -3466,6 +3469,150 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_automatic_turn_retry_cases(binary, root, provider, environment):
+    modes = ("success", "exhaust", "zero", "one", "budget", "steer", "cancel", "running", "paused", "one-shot", "server")
+    for mode in modes:
+        case = root / ("ar-" + mode)
+        workspace = case / "w"
+        workspace.mkdir(mode=0o700, parents=True)
+        (workspace / "input.txt").write_text("retained read-only result")
+        config = case / "c.ini"
+        write_irc_config(config, provider.port, "host-model")
+        limit = 0 if mode == "zero" else 1 if mode == "one" else 3
+        if mode in ("zero", "one"):
+            config.write_text(config.read_text().replace("[agent]\n", f"[agent]\nmax_turn_retries={limit}\n", 1))
+        requests, failures, metadata = [], [], []
+        original = "automatic retry " + mode
+        terminal = None
+        def respond(handler, request, sequence):
+            if mode == "paused" and provider.latest_user(request) != original:
+                assert terminal is not None
+                terminal.submit("/goal pause")
+                terminal.wait("Goal paused at the current turn boundary")
+                body = provider.response_body(sequence, "paused seed").encode()
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Content-Length", str(len(body)))
+                handler.end_headers()
+                handler.wfile.write(body)
+                handler.wfile.flush()
+                return
+            requests.append(request)
+            n = len(requests)
+            metadata.append([i["content"] for i in request["input"]
+                if i.get("role") == "developer" and i.get("content", "").startswith("[snajpagent input metadata")])
+            if n == 1:
+                if mode == "success":
+                    body = provider.function_body(sequence, "read", "read_file", {
+                        "path": "input.txt", "start_line": None, "end_line": None})
+                else:
+                    command = "printf x >> once; printf retained-result"
+                    if mode == "running": command += "; sleep 1; printf survived"
+                    body = provider.function_body(sequence, "once", "exec_command", {
+                        "command": command, "workdir": str(workspace), "stdin": None, "pty": False,
+                        "timeout_ms": None, "yield_ms": 1 if mode == "running" else 1000,
+                        "max_output_tokens": 1000})
+            elif mode == "budget" and n == 3:
+                body = provider.function_body(sequence, "read", "read_file", {
+                    "path": "input.txt", "start_line": None, "end_line": None})
+            elif (mode in ("exhaust", "zero", "one", "budget", "cancel", "paused", "one-shot", "server") or
+                    len(failures) < 2) and not (mode == "steer" and provider.latest_user(request) == "fresh retry steer"):
+                failures.append(n)
+                body = provider.event("response.output_item.added", {
+                    "type": "response.output_item.added", "output_index": 0,
+                    "item": {"type": "message", "id": "bad", "role": "assistant", "status": "bad", "content": []}})
+            elif mode == "running" and not any(i.get("name") == "write_stdin" for i in request["input"]):
+                calls = {i["call_id"] for i in request["input"] if i.get("name") == "exec_command"}
+                output = next(i["output"] for i in request["input"]
+                              if i.get("type") == "function_call_output" and i.get("call_id") in calls)
+                handle = re.search(r'"handle"\s*:\s*"([a-f0-9]{32})"', output).group(1)
+                body = provider.function_body(sequence, "collect", "write_stdin", {
+                    "handle": handle, "data": "", "eof": False, "terminate": False,
+                    "yield_ms": 1000, "max_output_tokens": 1000})
+            else:
+                body = provider.response_body(sequence, "automatic retry finished")
+            body = body.encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body)
+            handler.wfile.flush()
+        provider.runtime_handler = respond
+        try:
+            if mode == "one-shot":
+                result = subprocess.run([binary, "--config", str(config), "--dotdir", str(case / "s"),
+                    "-e", "--", original], cwd=workspace, env={**os.environ, **environment},
+                    capture_output=True, text=True, timeout=20)
+                assert result.returncode == 4, result.stderr
+                screen = result.stderr
+            else:
+                args = ["-s", f"127.0.0.1:{free_loopback_port()}", "-n", "retrybot", "-o", "retryop"] if mode == "server" else []
+                terminal = TmuxTerminal(case / "t", binary, workspace, case / "s", config,
+                    150, 28, args=args, environment=environment)
+                if mode == "server":
+                    terminal.wait("retryop@")
+                    terminal.submit("/rollout")
+                terminal.wait("host-model/medium   0% ›")
+                if mode == "paused":
+                    terminal.submit("/goal retained paused goal")
+                    terminal.wait("paused seed")
+                terminal.submit(("/ro " if mode == "success" else "") + original)
+                if mode in ("cancel", "steer"):
+                    terminal.wait("Retrying turn after error")
+                    if mode == "cancel":
+                        terminal.send_key("C-c")
+                        terminal.wait("turn interrupted")
+                        count = len(requests)
+                        time.sleep(0.8)
+                        assert len(requests) == count
+                    else:
+                        terminal.submit("fresh retry steer")
+                if mode != "cancel":
+                    terminal.wait("turn failed; try /retry" if mode in ("exhaust", "zero", "one", "budget", "paused", "server")
+                                  else "automatic retry finished", timeout=20)
+                screen = terminal.capture()
+            _, events = read_events(case / "s")
+            assert len(event_list(events, "turn_started")) == (2 if mode == "paused" else 1)
+            exhausted = mode in ("exhaust", "zero", "one", "budget", "paused", "one-shot", "server")
+            if exhausted:
+                assert len(failures) == limit + 1, (mode, failures)
+                assert len(event_list(events, "turn_recovery")) == limit
+                assert len(event_list(events, "turn_failed")) == 1
+                assert screen.count("turn failed; try /retry") == 1
+            else:
+                assert not event_list(events, "turn_failed")
+            if mode == "paused":
+                assert len(event_list(events, "goal_paused")) == 1
+                assert not event_list(events, "goal_resumed")
+            else:
+                assert not event_list(events, "goal_paused")
+            if mode != "success":
+                assert (workspace / "once").read_text() == "x", mode
+            else:
+                assert all("exec_command" not in json.dumps(r["tools"]) for r in requests)
+            assert all(m[0] == metadata[0][0] for m in metadata)
+            for request in requests[2:]:
+                assert sum(i.get("role") == "user" and i.get("content") == original for i in request["input"]) == 1
+                assert sum(i.get("content", "").startswith("snajpagent recovery") for i in request["input"]) <= 2
+            if mode == "running": assert "survived" in json.dumps(requests[-1])
+            if mode == "exhaust":
+                # Explicit manual continuation receives a fresh budget and never repeats tools.
+                terminal.submit("/retry")
+                deadline = time.monotonic() + 15
+                while len(event_list(read_events(case / "s")[1], "turn_failed")) != 2:
+                    assert time.monotonic() < deadline, terminal.capture()
+                    time.sleep(0.02)
+                assert len(failures) == 8
+                assert (workspace / "once").read_text() == "x"
+                assert len(event_list(read_events(case / "s")[1], "turn_started")) == 2
+            if terminal: terminal.exit()
+            print(f"tmux_terminal automatic turn retry {mode}: ok", flush=True)
+        finally:
+            if terminal: terminal.close()
+            provider.runtime_handler = None
+
+
 def run_manual_retry_cases(binary, root, provider, environment):
     for mode in ("queue", "read-only-resume", "chat"):
         case = root / ("manual-" + mode)
@@ -3474,6 +3621,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
         (workspace / "input.txt").write_text("retained tool result\n")
         config = case / "config.ini"
         write_irc_config(config, provider.port, "host-model")
+        config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
         requests = []
         arrived, release = threading.Event(), threading.Event()
         original = "manual retry original " + mode
@@ -4008,6 +4156,7 @@ def run_irc_case(binary, root):
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
         run_goal_recovery_cases(binary, root, provider, environment)
+        run_automatic_turn_retry_cases(binary, root, provider, environment)
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)

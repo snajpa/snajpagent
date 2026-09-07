@@ -1395,7 +1395,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!snag_json_exact_keys(data, keys, 3u) || !session->active_turn ||
             !turn_id || strcmp(turn_id, session->active_turn_id) ||
             !snag_json_string(data, "class") || !message || strlen(message) > 8192u ||
-            session->response_open || session->pending_call_count)
+            session->response_open || !all_pending_finished(session))
             goto invalid;
         clear_response_state(session);
         if (session->recovery_count < UINT64_MAX) ++session->recovery_count;

@@ -178,3 +178,15 @@ New input carries host-generated UTC receipt and first-request-admission times.
 `input_admitted` records the latter before request projection, including counting
 requests. Replay keeps both fixed; optional receipt metadata preserves UI queue
 delays. User text/roles are unchanged, and older unavailable times stay absent.
+
+## Ordinary-turn retry budget
+
+`[agent] max_turn_retries` defaults to three additional attempts; zero disables
+ordinary automatic recovery. Reuse the retained-turn recovery path and capture
+one budget at logical turn start. A successful intermediate response or tool
+never refills it; a new prompt or manual `/retry` does. Emit `turn_failed` and
+its manual hint only after exhaustion. An active goal always bypasses this
+limit, even when configured to zero. User interruption and goal-state changes
+remain authoritative; an existing paused/blocked goal is never resumed by retry.
+Fresh queued/background input reported at request failure retains the existing
+next-turn handoff instead of waiting for ordinary retries to exhaust.

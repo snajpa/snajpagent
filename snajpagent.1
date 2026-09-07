@@ -837,9 +837,12 @@ The original prompt is not duplicated and completed tools are not replayed.
 Read-only mode is preserved; current next-turn model settings apply.
 Available in both views and after session resume, until another turn starts.
 Active turns cannot be retried. Queued work and paused goals stay paused.
-Turn failures outside active-goal recovery display a hint to try this command.
-Active goals recover automatically; a retrying response retains its turn,
-completed tool results and live command handles.
+Ordinary turns retry failures automatically up to
+.B max_turn_retries
+additional times (default three), then display the manual retry hint.
+A manual retry starts a fresh retry budget. Active goals recover without an
+attempt limit. Automatic recovery retains the turn, completed tool results and
+live command handles.
 .SS Input timestamps
 New prompts and steers carry separate host-generated timing metadata in model
 context.  The original user text and its authority remain unchanged.
@@ -1080,6 +1083,15 @@ and
 .TP
 .B max_goal_prompt_bytes
 Goal wording limit, 1 through 1048576.  Default: 262144.
+.TP
+.B max_turn_retries
+Additional automatic retries of an ordinary failed turn, 0 through 4294967295.
+Default: 3 (four attempts including the first).  Zero disables ordinary automatic
+retries. The budget is captured at turn start, including an explicit
+.BR /retry ,
+and is not reset by successful intermediate responses or tools.
+Active goals ignore this limit and retain unlimited recovery. Paused and blocked
+goals keep their state while ordinary prompts retry.
 .TP
 .B read_agents_md
 Discover global and project
@@ -2060,6 +2072,19 @@ a second owner.  Pre-1.0 internal formats can change; preserve older logs and
 use a compatible binary to inspect them rather than rewriting or deleting
 unknown data.  Archive/deletion of a session does not erase shared prompt history.
 .SS Provider failures
+Ordinary failures that otherwise offer
+.B /retry
+receive up to three automatic retries by default. Configure
+.B max_turn_retries
+in the
+.B agent
+section. Retries continue the same logical turn with retained context and tool
+results; they do not replay completed commands or duplicate the original prompt.
+Steering and explicit interruption remain responsive during backoff. Fresh queued
+or background chat input at a failed request keeps its normal next-turn handoff.
+Successful refusals and ordinary failed tool results retain their existing handling.
+The retry hint appears once when the ordinary budget is exhausted or disabled.
+.PP
 An active goal retries failed work indefinitely with paced, interruptible waits.
 Provider capacity exhaustion, protocol errors, context recovery failures and
 local prerequisites do not pause or block the goal.  Recovery preserves
@@ -2097,8 +2122,9 @@ instructions per turn.  The original task remains intact: the instruction asks
 for accurate restatement of ambiguous phrasing with purpose, actions, targets
 and authorization unchanged, and operator clarification where needed.  New input
 or observed output/activity prevents another automatic clarification.  A fourth
-rejection stops clarification; an active goal retains paced recovery without
-adding more clarification messages.  Other turns fail and can be retried manually.
+rejection stops clarification. Retained-turn recovery adds no more clarification
+messages: ordinary turns use their remaining retry budget, while active goals
+keep recovering without an attempt limit.
 There is no provider switch or concealed task scope.
 .PP
 Rollout shows one concise "provider clarification N/3" notice at every verbosity

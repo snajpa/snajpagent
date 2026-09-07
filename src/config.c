@@ -107,6 +107,7 @@ snag_config_init(struct snag_config *config)
         return;
     config->provider_count = 1u;
     config->max_goal_prompt_bytes = 256u * 1024u;
+    config->max_turn_retries = 3u;
     config->read_agents_md = true;
     config->color = SNAG_COLOR_AUTO;
     config->markdown = true;
@@ -688,6 +689,8 @@ parse_agent(struct parse_state *state, const char *key, const char *value)
         return copy_value(config->reasoning_effort,
                           sizeof(config->reasoning_effort), value);
     }
+    if (strcmp(key, "max_turn_retries") == 0)
+        return parse_u32(value, 0u, UINT32_MAX, &config->max_turn_retries);
     if (strcmp(key, "max_goal_prompt_bytes") == 0)
         return parse_u32(value, 1u, 1024u * 1024u,
                          &config->max_goal_prompt_bytes);

@@ -121,6 +121,28 @@ test_batch_settings(const char *path)
 }
 
 static void
+test_turn_retries(const char *path)
+{
+    const char *values[] = {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"};
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        struct snag_config config;
+        char text[96], error[256];
+        int n = snprintf(text, sizeof(text), "[agent]\nmax_turn_retries=%s\n", values[i]);
+        assert(n > 0 && (size_t)n < sizeof(text));
+        write_bytes(path, text, (size_t)n);
+        snag_config_init(&config);
+        assert(config.max_turn_retries == 3u);
+        int rc = snag_config_load(&config, path, "/tmp", error, sizeof(error));
+        assert((rc == 0) == (i < 5u));
+        if (rc == 0) assert(config.max_turn_retries == (uint32_t)strtoul(values[i], NULL, 10));
+        snag_config_free(&config);
+    }
+    static const char duplicate[] = "[agent]\nmax_turn_retries=3\nmax_turn_retries=0\n";
+    write_bytes(path, duplicate, sizeof(duplicate) - 1u);
+    expect_invalid(path);
+}
+
+static void
 test_auth_settings(const char *path)
 {
     struct snag_config config;
@@ -483,6 +505,7 @@ main(void)
     assert(config.provider[0] == '\0');
     assert(strcmp(config.reasoning_effort, "default") == 0);
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
+    assert(config.max_turn_retries == 3u);
     assert(config.read_agents_md);
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
@@ -751,6 +774,7 @@ main(void)
 
     test_compact_setting(path);
     test_batch_settings(path);
+    test_turn_retries(path);
     test_auth_settings(path);
     test_prompt_numbers(path);
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
@@ -807,6 +831,7 @@ main(void)
             "[agent]\n"
             "model = old\r\n"
             "max_goal_prompt_bytes = 123456\n"
+            "max_turn_retries = 7\n"
             "reasoning_effort=low\n"
             "\n"
             "[provider first]\n"
@@ -818,6 +843,7 @@ main(void)
             "[agent]\n"
             "model = new-model\r\n"
             "max_goal_prompt_bytes = 123456\n"
+            "max_turn_retries = 7\n"
             "reasoning_effort = ultra\n"
             "\n"
             "provider = second\n"
@@ -847,6 +873,7 @@ main(void)
         assert(memcmp(bytes, expected, sizeof(expected)) == 0);
         assert(strstr(bytes, "# keep this comment\n") != NULL);
         assert(strstr(bytes, "max_goal_prompt_bytes = 123456\n") != NULL);
+        assert(strstr(bytes, "max_turn_retries = 7\n") != NULL);
         assert(strstr(bytes, "base_url = https://first.example.test\n") != NULL);
         assert(strstr(bytes, "provider = second\n") != NULL);
         assert(strstr(bytes, "model = new-model\r\n") != NULL);
