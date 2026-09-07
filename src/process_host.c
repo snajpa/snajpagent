@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "process_host.h"
 #include "base.h"
+#include "fs.h"
 #ifdef _WIN32
 #include "net.h"
 #include <windows.h>
@@ -564,6 +565,7 @@ done:
 #include <poll.h>
 #if defined(__linux__)
 #define SNAJPAGENT_HAVE_PTY 1
+#define SNAJPAGENT_HAVE_PROC_CHILD 1
 #include <pty.h>
 #include <sys/ioctl.h>
 #elif defined(__APPLE__)
@@ -810,11 +812,62 @@ snag_child_signal(struct snag_child *child, enum snag_child_signal signal)
                          signal == SNAG_CHILD_INTERRUPT ? SIGINT : SIGTERM);
 }
 
+#if defined(SNAJPAGENT_HAVE_PROC_CHILD)
+static int
+proc_child_exited(struct snag_child *child)
+{
+    char path[64], record[1024], state, *end;
+    long pid, parent;
+    int length = snprintf(path, sizeof(path), "/proc/%ld/stat", (long)child->pid);
+    if (length < 0 || (size_t)length >= sizeof(path)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    int fd = snag_open_read(path, false);
+    if (fd < 0) {
+        if (errno == ENOENT || errno == ESRCH)
+            errno = ECHILD;
+        return -1;
+    }
+    ssize_t n;
+    do {
+        n = read(fd, record, sizeof(record) - 1u);
+    } while (n < 0 && errno == EINTR);
+    int error = errno;
+    (void)close(fd);
+    if (n < 0) {
+        errno = error;
+        return -1;
+    }
+    record[n] = '\0';
+    /* comm may contain spaces and parentheses; the final ')' ends it. */
+    pid = strtol(record, &end, 10);
+    char *comm_end = strrchr(end, ')');
+    if (pid != child->pid || strncmp(end, " (", 2u) || !comm_end ||
+        sscanf(comm_end + 1, " %c %ld", &state, &parent) != 2) {
+        errno = EIO;
+        return -1;
+    }
+    if (parent != (long)getpid()) {
+        errno = ECHILD;
+        return -1;
+    }
+    return state == 'Z';
+}
+#endif
+
 int
 snag_child_exited(struct snag_child *child)
 {
     siginfo_t info = {0};
     if (waitid(P_PID, (id_t)child->pid, &info, WEXITED | WNOHANG | WNOWAIT) < 0) {
+#if defined(SNAJPAGENT_HAVE_PROC_CHILD)
+        if (errno == ENOSYS) {
+            int rc = proc_child_exited(child);
+            if (rc >= 0)
+                return rc;
+        }
+#endif
         if (errno == ECHILD)
             child->reaped = true; /* Never signal a reused PID after ownership loss. */
         return -1;

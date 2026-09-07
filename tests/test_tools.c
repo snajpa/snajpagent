@@ -19,9 +19,32 @@
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define PATCH_MODEL_MAX_FOR_TEST (512u * 1024u)
+
+static void
+test_child_wait_ownership(void)
+{
+    struct snag_child child;
+    char *environment[] = {"PATH=/usr/bin:/bin", NULL};
+    snag_child_init(&child);
+    assert(snag_child_spawn(&child, "/bin/sh", "exit 7", "/", environment, false) == 0);
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    int exited;
+    while ((exited = snag_child_exited(&child)) == 0 && snag_monotonic_ms() < deadline)
+        assert(snag_sleep_ms(1u) == 0);
+    assert(exited == 1 && snag_child_exited(&child) == 1 && !child.reaped);
+    int status;
+    assert(waitpid(child.pid, &status, 0) == child.pid);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 7);
+    assert(snag_child_exited(&child) < 0 && errno == ECHILD && child.reaped);
+    snag_child_free(&child);
+    child.pid = getpid();
+    assert(snag_child_exited(&child) < 0 && errno == ECHILD && child.reaped);
+    snag_child_free(&child);
+}
 
 static void
 test_child_interrupt_mask(void)
@@ -1625,6 +1648,7 @@ test_journal_failure_closes_owned_commands(void)
 int
 main(void)
 {
+    test_child_wait_ownership();
     test_child_interrupt_mask();
     (void)signal(SIGPIPE, SIG_IGN);
     snag_tools_journal(retain_output, read_output, NULL);

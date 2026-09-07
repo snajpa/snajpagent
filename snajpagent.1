@@ -2179,6 +2179,10 @@ threading, clocks and dependency syscall requirements still apply.
 The standalone Linux libcurl uses its nonblocking pipe-and-fcntl wakeup
 backend, avoiding a runtime requirement for eventfd or pipe2 while retaining
 wakeup and asynchronous DNS support.
+If Linux lacks waitid, the process adapter checks its own child's parent and
+zombie state through procfs without reaping.  Normal collection still uses
+waitpid, retaining the process-group leader until family cleanup is finished.
+This fallback requires readable /proc/PID/stat files.
 .TP
 .BR "make prod-macos-arm64" , " make prod-macos-x86_64"
 Cross-build a macOS 11+ executable with static application libraries and CA

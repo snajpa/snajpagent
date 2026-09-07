@@ -2142,8 +2142,10 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     if (app->steering_requested)
         return 1;
     bool busy = snag_tools_busy();
-    if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, sizeof(error)) < 0)
+    if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, sizeof(error)) < 0) {
+        (void)app_error(app, error);
         return -1;
+    }
     for (size_t i = 0u; i < app->session.process_count; ++i)
         snag_tools_process_state(&app->session.processes[i]);
     if (busy != snag_tools_busy() &&
@@ -2586,8 +2588,10 @@ execute_calls(struct app_state *app, const char *turn_id,
             if (calls[i].finished)
                 continue;
             control = snag_app_active_input_pump(app, 0u);
-            if (control < 0)
+            if (control < 0) {
+                snag_errorf(error, error_size, "active input or command processing failed");
                 return -1;
+            }
             if (control == 2 || app->interrupt_requested) {
                 handoff = "turn_cancelled";
                 goto handoff;
