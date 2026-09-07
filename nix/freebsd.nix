@@ -196,7 +196,7 @@ in {
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
           'CFLAGS=-std=c11 ${cflags} -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
-          'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld -flto -Wl,--gc-sections,--as-needed'
+          'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld -flto -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
