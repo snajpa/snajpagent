@@ -905,13 +905,10 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
         goto native_error;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!SetInformationJobObject(native->job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
-        if (!isolated || GetLastError() != ERROR_INVALID_PARAMETER)
-            goto native_error;
-        JOBOBJECT_BASIC_LIMIT_INFORMATION basic = {0};
-        if (!SetInformationJobObject(native->job, JobObjectBasicLimitInformation, &basic, sizeof(basic)))
-            goto native_error;
-    }
+    /* The isolated broker explicitly terminates this job on parent death. */
+    if (!isolated && !SetInformationJobObject(native->job, JobObjectExtendedLimitInformation,
+                                               &limits, sizeof(limits)))
+        goto native_error;
     if (isolated) {
         if (pty) {
             errno = ENOTSUP; /* Native hidden-console collection is separate. */

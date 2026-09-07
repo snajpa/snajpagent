@@ -1229,12 +1229,27 @@ broker_orphan_ready(void *event)
 }
 
 static int
-broker_orphan_child(const char *value)
+broker_orphan_child(const char *value, bool spawn)
 {
     char *end;
     unsigned long long number = strtoull(value, &end, 10);
     assert(*value && !*end && number && (uintptr_t)number == number);
     HANDLE event = (HANDLE)(uintptr_t)number;
+    if (spawn) {
+        char *program = snag_program_path(NULL), *directory = snag_realpath(".");
+        char **environment = snag_environment_entries();
+        struct snag_child child;
+        snag_child_init(&child);
+        assert(program && directory && environment &&
+            snag_child_spawn_isolated(&child, program, "wait", directory, environment) == 0);
+        assert(SetEvent(event));
+        Sleep(10000u);
+        snag_child_free(&child);
+        snag_environment_entries_free(environment);
+        free(directory);
+        free(program);
+        return 1;
+    }
     int pair[2], sink = _open("NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT);
     struct snag_output_broker *broker = NULL;
     assert(sink >= 0 && snag_output_broker_write(&broker, sink, "ready", 5u, NULL, NULL) == 0);
@@ -1247,14 +1262,15 @@ broker_orphan_child(const char *value)
 }
 
 static void
-test_broker_parent_death(void)
+test_broker_parent_death(bool spawn)
 {
     SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
     HANDLE ready = CreateEventW(&security, TRUE, FALSE, NULL);
     wchar_t program[32768], command[32768];
     DWORD length = GetModuleFileNameW(NULL, program, 32768u);
     assert(ready && length && length < 32768u);
-    assert(swprintf(command, 32768u, L"\"%ls\" --broker-orphan %llu", program,
+    assert(swprintf(command, 32768u, L"\"%ls\" --%ls-orphan %llu", program,
+                      spawn ? L"spawn" : L"broker",
                       (unsigned long long)(uintptr_t)ready) > 0);
     STARTUPINFOW startup = {.cb = sizeof(startup)};
     PROCESS_INFORMATION child;
@@ -1272,13 +1288,30 @@ test_broker_parent_death(void)
             broker_id = entry.th32ProcessID;
         }
     } while (Process32NextW(snapshot, &entry));
-    assert(CloseHandle(snapshot) && broker_id);
+    assert(broker_id);
+    HANDLE process = NULL;
+    if (spawn) {
+        assert(Process32FirstW(snapshot, &entry));
+        do {
+            if (entry.th32ParentProcessID == broker_id) {
+                assert(!process);
+                process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, entry.th32ProcessID);
+                assert(process);
+            }
+        } while (Process32NextW(snapshot, &entry));
+        assert(process);
+    }
+    assert(CloseHandle(snapshot));
     HANDLE broker = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, broker_id);
     assert(broker && TerminateProcess(child.hProcess, 77u));
     assert(WaitForSingleObject(child.hProcess, 2000u) == WAIT_OBJECT_0 && CloseHandle(child.hProcess));
     assert(WaitForSingleObject(broker, 2000u) == WAIT_OBJECT_0);
     DWORD status;
     assert(GetExitCodeProcess(broker, &status) && status == 125u && CloseHandle(broker));
+    if (process) {
+        assert(WaitForSingleObject(process, 2000u) == WAIT_OBJECT_0);
+        assert(GetExitCodeProcess(process, &status) && status == 125u && CloseHandle(process));
+    }
 }
 
 static unsigned int __stdcall
@@ -1361,7 +1394,8 @@ test_console_output(void)
     assert(snag_output_broker_main(1, malformed) == -1);
     assert(snag_output_broker_main(2, malformed) == 125);
     assert(snag_output_broker_main(3, malformed) == 125);
-    test_broker_parent_death();
+    test_broker_parent_death(false);
+    test_broker_parent_death(true);
     struct snag_term_host host = {0};
     int pair[2];
     assert(_pipe(pair, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
@@ -2128,7 +2162,9 @@ run_base(int argc, char **argv)
 {
 #ifdef _WIN32
     if (argc == 3 && !strcmp(argv[1], "--broker-orphan"))
-        return broker_orphan_child(argv[2]);
+        return broker_orphan_child(argv[2], false);
+    if (argc == 3 && !strcmp(argv[1], "--spawn-orphan"))
+        return broker_orphan_child(argv[2], true);
     if (argc == 3 && !strcmp(argv[1], "--quote-probe")) {
         char *expected = snag_environment("SNAJPAGENT_QUOTE_EXPECT");
         if (!expected || strcmp(argv[2], expected + 1u)) {
