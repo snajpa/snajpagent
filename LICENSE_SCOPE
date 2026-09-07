@@ -12,6 +12,7 @@ development header; it contains no third-party implementation code and is
 inventoried by `make depscheck`. `make depclosurecheck` captures and validates
 the current-host dynamic executable closure, and `make evidencebundle`/
 `make evidencecheck` provide a machine-readable release-evidence record. A
-release must separately archive the complete concrete executable, Jansson,
-libcurl backend, terminal, and live-provider evidence for each shipped platform
-as required by the qualification checks.
+release follows RELEASE.md: every implemented target ships with matching
+source, licenses, symbols and checksums, with its actual platform/testing scope.
+Optional historical evidence bundles do not replace that production matrix or
+turn experimental cross-builds into runtime-qualified platforms.
