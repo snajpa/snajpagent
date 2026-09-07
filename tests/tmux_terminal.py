@@ -160,102 +160,58 @@ class FakeResponses:
 
     @staticmethod
     def event(kind, data):
+        data = {"type": kind, **data}
         return (
             f"event: {kind}\n"
             f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
         )
 
-    def response_body(self, sequence, text, explicit_empty=False):
+    def response_envelope(self, sequence, events):
         response_id = f"resp_irc_ui_{sequence}"
-        created = {
-            "type": "response.created",
-            "response": {"id": response_id, "status": "in_progress", "output": []},
-        }
-        completed = {
-            "type": "response.completed",
-            "response": {
-                "id": response_id,
-                "status": "completed",
-                "usage": {"input_tokens": 1, "output_tokens": 1,
-                          "total_tokens": 2},
-                "output": [],
-            },
-        }
-        body = self.event("response.created", created)
+        created = self.event("response.created", {"response": {
+            "id": response_id, "status": "in_progress", "output": []}})
+        completed = self.event("response.completed", {"response": {
+            "id": response_id, "status": "completed", "output": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}})
+        return created + "".join(events) + completed
+
+    def response_body(self, sequence, text, explicit_empty=False):
         if not text and not explicit_empty:
-            return body + self.event("response.completed", completed)
+            return self.response_envelope(sequence, [])
         item_id = f"msg_irc_ui_{sequence}"
-        added_item = {
-            "id": item_id,
-            "type": "message",
-            "status": "in_progress",
-            "role": "assistant",
-            "phase": "final_answer",
-            "content": [],
-        }
-        done_item = dict(added_item)
-        done_item["status"] = "completed"
-        done_item["content"] = [{"type": "output_text", "text": text,
-                                  "annotations": []}]
+        item = {"id": item_id, "type": "message", "status": "in_progress",
+                "role": "assistant", "phase": "final_answer", "content": []}
+        position = {"item_id": item_id, "output_index": 0, "content_index": 0}
         events = [
-            ("response.output_item.added", {
-                "type": "response.output_item.added", "output_index": 0,
-                "item": added_item,
-            }),
-            ("response.content_part.added", {
-                "type": "response.content_part.added", "item_id": item_id,
-                "output_index": 0, "content_index": 0,
-                "part": {"type": "output_text", "text": "",
-                         "annotations": []},
-            }),
+            self.event("response.output_item.added", {"output_index": 0, "item": item}),
+            self.event("response.content_part.added", {**position,
+                "part": {"type": "output_text", "text": "", "annotations": []}}),
         ]
         if text:
-            events.append(("response.output_text.delta", {
-                "type": "response.output_text.delta", "item_id": item_id,
-                "output_index": 0, "content_index": 0, "delta": text,
-            }))
-        events.extend([
-            ("response.output_text.done", {
-                "type": "response.output_text.done", "item_id": item_id,
-                "output_index": 0, "content_index": 0, "text": text,
-            }),
-            ("response.output_item.done", {
-                "type": "response.output_item.done", "output_index": 0,
-                "item": done_item,
-            }),
-            ("response.completed", completed),
-        ])
-        return body + "".join(self.event(kind, data) for kind, data in events)
+            events.append(self.event("response.output_text.delta", {**position, "delta": text}))
+        events.append(self.event("response.output_text.done", {**position, "text": text}))
+        item = dict(item, status="completed",
+                    content=[{"type": "output_text", "text": text, "annotations": []}])
+        events.append(self.event("response.output_item.done", {"output_index": 0, "item": item}))
+        return self.response_envelope(sequence, events)
 
     def function_body(self, sequence, call_id, name, arguments):
         return self.functions_body(sequence, [(call_id, name, arguments)])
 
     def functions_body(self, sequence, calls):
-        response_id = f"resp_irc_ui_{sequence}"
-        created = {"type": "response.created", "response": {
-            "id": response_id, "status": "in_progress", "output": []}}
-        events = [self.event("response.created", created)]
+        events = []
         for index, (call_id, name, arguments) in enumerate(calls):
             item_id = f"fc_irc_ui_{sequence}_{index}"
             encoded = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
             item = {"id": item_id, "type": "function_call", "status": "in_progress",
                     "call_id": call_id, "name": name, "arguments": ""}
-            events.append(self.event("response.output_item.added", {
-                "type": "response.output_item.added", "output_index": index, "item": item}))
-            events.append(self.event("response.function_call_arguments.delta", {
-                "type": "response.function_call_arguments.delta",
-                "item_id": item_id, "output_index": index, "delta": encoded}))
-            events.append(self.event("response.function_call_arguments.done", {
-                "type": "response.function_call_arguments.done",
-                "item_id": item_id, "output_index": index, "arguments": encoded}))
+            position = {"item_id": item_id, "output_index": index}
+            events.append(self.event("response.output_item.added", {"output_index": index, "item": item}))
+            events.append(self.event("response.function_call_arguments.delta", {**position, "delta": encoded}))
+            events.append(self.event("response.function_call_arguments.done", {**position, "arguments": encoded}))
             item = dict(item, status="completed", arguments=encoded)
-            events.append(self.event("response.output_item.done", {
-                "type": "response.output_item.done", "output_index": index, "item": item}))
-        events.append(self.event("response.completed", {
-            "type": "response.completed", "response": {
-                "id": response_id, "status": "completed", "output": [],
-                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}}))
-        return "".join(events)
+            events.append(self.event("response.output_item.done", {"output_index": index, "item": item}))
+        return self.response_envelope(sequence, events)
 
     def handle(self, handler):
         try:
@@ -2446,6 +2402,8 @@ def run_destination_case(binary, root, provider, environment):
                 case / "state", config, 120, 24, args=args, environment=environment)
             terminals[name] = terminal
             terminal.wait(f"{args[args.index('-o') + 1]}@{MACHINE_HOSTNAME} :")
+            if "-c" in args:
+                terminal.wait("── history replayed ──")
             terminal.submit("destination fixture setup")
             wait_event_count(terminal.dotdir, "session_created", 1)
         client = terminals["c"]
@@ -5006,6 +4964,8 @@ def run_irc_chat_case(binary, root):
             )
             terminals[name] = terminal
             terminal.wait(f"{operator}@{MACHINE_HOSTNAME} :")
+            if "-c" in args:
+                terminal.wait("── history replayed ──")
             terminal.submit("chat fixture setup")
             wait_event_count(terminal.dotdir, "session_created", 1)
 
