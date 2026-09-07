@@ -2176,6 +2176,9 @@ back to dup-plus-fcntl when the atomic close-on-exec command is unavailable;
 failure to set close-on-exec closes the new descriptor and returns an error.
 These fallbacks alone do not qualify a complete old-kernel runtime:
 threading, clocks and dependency syscall requirements still apply.
+The standalone Linux libcurl uses its nonblocking pipe-and-fcntl wakeup
+backend, avoiding a runtime requirement for eventfd or pipe2 while retaining
+wakeup and asynchronous DNS support.
 .TP
 .BR "make prod-macos-arm64" , " make prod-macos-x86_64"
 Cross-build a macOS 11+ executable with static application libraries and CA

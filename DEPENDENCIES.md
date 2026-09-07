@@ -52,6 +52,13 @@ gzip/Brotli/Zstd support remain available. No third-party shared libraries,
 Nix installation or certificate sidecar are required on the destination.
 This is distinct from the smaller native executable, which uses system libraries.
 
+The shared Linux recipe selects libcurl's existing nonblocking pipe-and-fcntl
+wakeup backend. Its eventfd/pipe2 branches assume those syscalls exist at runtime;
+on older kernels their failure can surface as a misleading out-of-memory error
+from multi-handle initialization. Wakeup and asynchronous DNS remain enabled;
+the compatible backend requires no extra runtime library or binary variant.
+Close-on-exec setup on this legacy-capable pipe path is not atomic.
+
 The TLS CA input is nixpkgs' pinned Mozilla/NSS standard-PEM export. It is
 embedded at build time, never fetched on startup. `SSL_CERT_FILE` explicitly
 replaces it for provider and login/refresh connections, including HTTPS proxies.

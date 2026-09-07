@@ -15,6 +15,9 @@ let
     c-aresSupport = true;
   }).overrideAttrs (old: {
     propagatedBuildInputs = old.propagatedBuildInputs ++ [ tls ];
+    # Keep curl's checked, nonblocking pipe wakeup on pre-eventfd/pipe2 kernels.
+    ac_cv_func_eventfd = "no";
+    ac_cv_func_pipe2 = "no";
     configureFlags = builtins.filter (flag: flag != "--without-ssl") old.configureFlags ++ [
       "--with-mbedtls=${pkgs.lib.getDev tls}"
       "--without-ca-bundle"
