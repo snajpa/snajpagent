@@ -855,6 +855,7 @@ test_provider_model_projection(struct snag_store *store, const char *temp)
     assert(snag_context_build(&session, "small", "high", 1u, empty, 16000u, true,
                               &config, NULL, &projection, error, sizeof(error)) == 0);
     assert(strcmp(session.default_model, "small") == 0 && strcmp(session.active_turn_model, "small") == 0);
+    assert(strcmp(snag_json_string(projection.model_input.value, "model"), "gpt-6-astra") == 0);
     assert(strcmp(snag_json_string(projection.create_request.value, "model"), "gpt-6-astra") == 0);
     assert(strcmp(snag_json_string(projection.count_request.value, "model"), "gpt-6-astra") == 0);
     assert(snag_json_digest(projection.create_request.value, digest) == 0);

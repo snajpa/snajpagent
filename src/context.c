@@ -1283,7 +1283,6 @@ snag_context_compact_request_build(struct snag_session *session,
     snag_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
     builder.session = session;
-    builder.model = model;
     builder.effort = effort;
     builder.request_input = json_array();
     builder.deferred_steering = json_array();
@@ -1512,17 +1511,13 @@ snag_context_build(struct snag_session *session, const char *model,
         projection->irc_seq = builder.deferred_irc_seq - 1u;
     if (ensure_conversation_input(builder.request_input) < 0)
         goto out;
+    builder.model = snag_config_model_upstream(
+        snag_config_provider(config, session->active_turn_provider), model);
     projection->model_input.value = model_input_object(&builder);
     projection->create_request.value = create_request_object(&builder);
     projection->count_request.value = count_request_object(projection->create_request.value);
     if (!projection->model_input.value || !projection->create_request.value ||
         !projection->count_request.value ||
-        snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
-                                     model, projection->model_input.value) < 0 ||
-        snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
-                                     model, projection->create_request.value) < 0 ||
-        snag_context_provider_model(snag_config_provider(config, session->active_turn_provider),
-                                     model, projection->count_request.value) < 0 ||
         snag_json_document_measure(&projection->model_input, SNAG_CONTEXT_MAX_REQUEST) < 0 ||
         snag_json_digest_bounded(json_object_get(projection->create_request.value, "input"),
                           SNAG_CONTEXT_MAX_REQUEST,
