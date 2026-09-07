@@ -1,6 +1,44 @@
 SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
 Use the Windows 2000 CryptoAPI entropy source on pre-Vista targets.
 
+--- a/tests/suites/test_suite_platform_printf.function
++++ b/tests/suites/test_suite_platform_printf.function
+@@ -140,0 +141,18 @@
++
++/* BEGIN_CASE depends_on:MBEDTLS_PLATFORM_HAS_NON_CONFORMING_SNPRINTF */
++void printf_truncated(int capacity)
++{
++    char output[16];
++    const char text[] = "0123456789";
++    memset(output, 'X', sizeof(output));
++    TEST_ASSERT(capacity >= 0 && capacity < 10);
++    TEST_EQUAL(mbedtls_snprintf(output, (size_t) capacity, "%s", text), -1);
++    TEST_EQUAL(output[capacity], 'X');
++    if (capacity) {
++        TEST_EQUAL(output[capacity - 1], 0);
++        TEST_MEMORY_COMPARE(output, (size_t) capacity - 1,
++                            text, (size_t) capacity - 1);
++    }
++exit:
++    return;
++}
++/* END_CASE */
+--- a/tests/suites/test_suite_platform_printf.data
++++ b/tests/suites/test_suite_platform_printf.data
+@@ -142,0 +143,12 @@
++
++Truncated printf, zero capacity
++printf_truncated:0
++
++Truncated printf, terminator only
++printf_truncated:1
++
++Truncated printf, short buffer
++printf_truncated:4
++
++Truncated printf, longer buffer
++printf_truncated:8
+
 --- a/library/platform.c
 +++ b/library/platform.c
 @@ -121,12 +121,12 @@
