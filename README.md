@@ -211,7 +211,7 @@ for debugging; `make help` lists build options. See [dependency notes](DEPENDENC
 for platform scope.
 
 `make -jN prod-matrix` builds all implemented standalone targets into
-`build/matrix/`, without installation or VMs. Legacy and other planned ports
+`build/matrix/`, without installation or VMs. Other planned ports
 remain unfinished; successful cross-builds are not runtime qualification.
 `make prod-linux-i686` builds modern 32-bit Linux static PIE.
 `make prod-linux-i686-legacy` builds a separate static non-PIE executable

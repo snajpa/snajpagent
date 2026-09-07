@@ -50,8 +50,8 @@ in `.debug/`. It retains the application libraries, embedded roots and UTF-8
 locale tables but uses uClibc-ng 1.0.55/LinuxThreads and GCC 14.3 TLS emulation.
 No compiler, locale package, certificate sidecar or third-party runtime library
 is needed on the destination. Use `LANG=en_US.UTF-8` if its current locale name
-is unavailable. Prefer the modern musl static-PIE target where it runs: the
-legacy artifact trades PIE/NPTL for the older kernel interface.
+is unavailable. Prefer the modern musl static-PIE target where it runs:
+it retains address randomization and its modern thread runtime.
 
 Actual Debian Sarge Linux **2.4.27-3-386**, on QEMU Pentium III, passes base and
 IRC units plus production RO list/read/grep and denied-write enforcement,

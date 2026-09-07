@@ -365,7 +365,7 @@ PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-macos-arm64 prod-macos-
 
 prod-matrix: $(PROD_TARGETS)
 	@printf '%s\n' 'Production matrix built: $(PROD_TARGETS:prod-%=%)' \
-		'Build success is not runtime qualification; legacy and other planned ports remain unfinished.'
+		'Build success is not runtime qualification; other planned ports remain unfinished.'
 
 prod-macos-universal: prod-macos-arm64 prod-macos-x86_64
 
