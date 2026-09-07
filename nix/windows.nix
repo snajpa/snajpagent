@@ -139,15 +139,18 @@ let
     patches = (old.patches or []) ++ pkgs.lib.optional legacy ./curl-legacy-windows.patch;
   });
   regex = import ./windows-regex.nix { inherit pkgs windows threads unistring winver; };
+  pty = if legacy && windows.stdenv.cc.isClang then
+    import ./windows-pty.nix { inherit pkgs windows threads; } else null;
 in {
-  inherit windows threads jansson tls curl networkLibraries regex;
+  inherit windows threads jansson tls curl networkLibraries regex pty;
   application = { source, packageName, version, revision }: windows.stdenv.mkDerivation {
     pname = "${packageName}-windows-${arch}";
     inherit version;
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ windows.buildPackages.pkg-config ];
-    buildInputs = [ threads jansson curl regex ] ++ networkLibraries;
+    buildInputs = [ threads jansson curl regex ] ++ networkLibraries
+      ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
     dontStrip = true;
     preBuild = ''
@@ -161,11 +164,11 @@ in {
         'DEBUG_SYMBOLS=debug-${packageName}.exe'
         "CC=$CC" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-        'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
+        'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY"}'
         'CFLAGS=-std=c11 -Os -g -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
-        'LDFLAGS=-static -municode -flto -Wl,--gc-sections'
+        'LDFLAGS=-static -municode -flto -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,0,--major-subsystem-version,5,--minor-subsystem-version,0"}'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
-        "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread"
+        "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread${pkgs.lib.optionalString (pty != null) " -lsnagpty -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind -luser32 -lshell32"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
         "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl | sed -E 's/(^| )-lz( |$)/\1-lzs\2/g')"
       )

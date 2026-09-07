@@ -1,0 +1,84 @@
+--- a/libunwind/src/RWMutex.hpp
++++ b/libunwind/src/RWMutex.hpp
+@@ -16,1 +16,1 @@
+-#if defined(_WIN32)
++#if defined(_WIN32) && _WIN32_WINNT >= 0x0600
+@@ -37,1 +37,1 @@
+-#elif defined(_WIN32)
++#elif defined(_WIN32) && _WIN32_WINNT >= 0x0600
+--- a/libunwind/src/AddressSpace.hpp
++++ b/libunwind/src/AddressSpace.hpp
+@@ -114,2 +114,1 @@
+ #include <windows.h>
+-#include <psapi.h>
+@@ -544,39 +543,35 @@
+-  HMODULE mods[1024];
+-  HANDLE process = GetCurrentProcess();
+-  DWORD needed;
+-
+-  if (!EnumProcessModules(process, mods, sizeof(mods), &needed)) {
+-    DWORD err = GetLastError();
+-    _LIBUNWIND_TRACE_UNWINDING("findUnwindSections: EnumProcessModules failed, "
+-                               "returned error %d", (int)err);
+-    (void)err;
++  // Query the image containing this instruction. VirtualQuery is available
++  // on NT5 and does not require an additional process-inspection DLL.
++  MEMORY_BASIC_INFORMATION region;
++  if (!VirtualQuery(reinterpret_cast<const void *>(targetAddr), &region,
++                    sizeof(region)) || region.State != MEM_COMMIT ||
++      region.Type != MEM_IMAGE || !region.AllocationBase)
+     return false;
+-  }
+-
+-  for (unsigned i = 0; i < (needed / sizeof(HMODULE)); i++) {
+-    PIMAGE_DOS_HEADER pidh = (PIMAGE_DOS_HEADER)mods[i];
+-    PIMAGE_NT_HEADERS pinh = (PIMAGE_NT_HEADERS)((BYTE *)pidh + pidh->e_lfanew);
+-    PIMAGE_FILE_HEADER pifh = (PIMAGE_FILE_HEADER)&pinh->FileHeader;
+-    PIMAGE_SECTION_HEADER pish = IMAGE_FIRST_SECTION(pinh);
+-    bool found_obj = false;
+-    bool found_hdr = false;
+-
+-    info.dso_base = (uintptr_t)mods[i];
+-    for (unsigned j = 0; j < pifh->NumberOfSections; j++, pish++) {
+-      uintptr_t begin = pish->VirtualAddress + (uintptr_t)mods[i];
+-      uintptr_t end = begin + pish->Misc.VirtualSize;
+-      if (!strncmp((const char *)pish->Name, ".text",
+-                   IMAGE_SIZEOF_SHORT_NAME)) {
+-        if (targetAddr >= begin && targetAddr < end)
+-          found_obj = true;
+-      } else if (!strncmp((const char *)pish->Name, ".eh_frame",
+-                          IMAGE_SIZEOF_SHORT_NAME)) {
+-        info.dwarf_section = begin;
+-        info.dwarf_section_length = pish->Misc.VirtualSize;
+-        found_hdr = true;
+-      }
+-      if (found_obj && found_hdr)
+-        return true;
++  auto *pidh = static_cast<PIMAGE_DOS_HEADER>(region.AllocationBase);
++  if (pidh->e_magic != IMAGE_DOS_SIGNATURE || pidh->e_lfanew <= 0)
++    return false;
++  auto *pinh = reinterpret_cast<PIMAGE_NT_HEADERS>(
++      reinterpret_cast<BYTE *>(pidh) + pidh->e_lfanew);
++  if (pinh->Signature != IMAGE_NT_SIGNATURE)
++    return false;
++  PIMAGE_SECTION_HEADER pish = IMAGE_FIRST_SECTION(pinh);
++  bool found_obj = false;
++  bool found_hdr = false;
++  info.dso_base = reinterpret_cast<uintptr_t>(region.AllocationBase);
++  for (unsigned j = 0; j < pinh->FileHeader.NumberOfSections; j++, pish++) {
++    uintptr_t begin = pish->VirtualAddress + info.dso_base;
++    uintptr_t end = begin + pish->Misc.VirtualSize;
++    if (!strncmp(reinterpret_cast<const char *>(pish->Name), ".text",
++                 IMAGE_SIZEOF_SHORT_NAME)) {
++      if (targetAddr >= begin && targetAddr < end)
++        found_obj = true;
++    } else if (!strncmp(reinterpret_cast<const char *>(pish->Name), ".eh_frame",
++                        IMAGE_SIZEOF_SHORT_NAME)) {
++      info.dwarf_section = begin;
++      info.dwarf_section_length = pish->Misc.VirtualSize;
++      found_hdr = true;
+     }
++    if (found_obj && found_hdr)
++      return true;
+   }
+   return false;

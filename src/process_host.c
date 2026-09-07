@@ -14,6 +14,11 @@
 #include <fcntl.h>
 #include <io.h>
 #include <stdatomic.h>
+#ifdef SNAG_LEGACY_PTY
+void *snag_legacy_console_open(HANDLE, HANDLE, HANDLE, HANDLE, COORD);
+int snag_legacy_console_run(void *);
+void snag_legacy_console_free(void *);
+#endif
 
 /* Dynamically detected API; keep the rest of the import floor independent. */
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
@@ -40,6 +45,9 @@ struct snag_child_windows {
     HRESULT (WINAPI *console_resize)(HANDLE, COORD);
     COORD dimensions;
     struct snag_output_broker *broker;
+    bool legacy_console;
+    bool collector_done;
+    int collector_error;
 };
 
 static int
@@ -150,21 +158,37 @@ out:
     return pipe;
 }
 
+static bool
+peer_transfer(HANDLE handle, bool write, void *bytes, DWORD size, bool asynchronous)
+{
+    OVERLAPPED io = {0};
+    DWORD count = 0;
+    if (asynchronous && !(io.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL)))
+        return false;
+    BOOL ok = write ? WriteFile(handle, bytes, size, &count, asynchronous ? &io : NULL) :
+                      ReadFile(handle, bytes, size, &count, asynchronous ? &io : NULL);
+    if (!ok && asynchronous && GetLastError() == ERROR_IO_PENDING) {
+        if (WaitForSingleObject(io.hEvent, 1000u) != WAIT_OBJECT_0)
+            (void)CancelIo(handle);
+        ok = GetOverlappedResult(handle, &io, &count, TRUE);
+    }
+    DWORD error = ok ? (count == size ? 0 : ERROR_INVALID_DATA) : GetLastError();
+    if (io.hEvent)
+        (void)CloseHandle(io.hEvent);
+    SetLastError(error);
+    return !error;
+}
+
 static int
-verify_pipe_pair(struct child_pipe *pipe, bool input, HANDLE other)
+verify_pipe_pair(struct child_pipe *pipe, bool input, HANDLE other, bool asynchronous)
 {
     unsigned char expected[16], received[16];
-    DWORD count;
     if (snag_random_bytes(expected, sizeof(expected)) < 0)
         return -1;
     if (input)
         memcpy(pipe->bytes, expected, sizeof(expected));
-    else if (!WriteFile(other, expected, sizeof(expected), &count, NULL))
+    else if (!peer_transfer(other, true, expected, sizeof(expected), asynchronous))
         return child_error(GetLastError());
-    else if (count != sizeof(expected)) {
-        errno = EIO;
-        return -1;
-    }
     /* Both endpoints are owned and empty; the challenge fits their quota. */
     pipe_begin(pipe, input, sizeof(expected));
     if (pipe->pending && WaitForSingleObject(pipe->io.hEvent, 1000u) != WAIT_OBJECT_0) {
@@ -173,12 +197,8 @@ verify_pipe_pair(struct child_pipe *pipe, bool input, HANDLE other)
     }
     if (!pipe_done(pipe) || pipe->error || pipe->count != sizeof(expected))
         return child_error(pipe->error ? pipe->error : ERROR_INVALID_DATA);
-    if (input && !ReadFile(other, received, sizeof(received), &count, NULL))
+    if (input && !peer_transfer(other, false, received, sizeof(received), asynchronous))
         return child_error(GetLastError());
-    if (input && count != sizeof(received)) {
-        errno = EIO;
-        return -1;
-    }
     const unsigned char *actual = input ? received : pipe->bytes;
     unsigned int difference = 0;
     for (size_t i = 0; i < sizeof(expected); ++i)
@@ -194,7 +214,7 @@ verify_pipe_pair(struct child_pipe *pipe, bool input, HANDLE other)
 }
 
 static int
-create_pipe(struct child_pipe *pipe, bool input, HANDLE *other)
+create_pipe(struct child_pipe *pipe, bool input, HANDLE *other, bool asynchronous)
 {
     char id[SNAG_ID_HEX_LEN + 1u];
     WCHAR name[96];
@@ -216,7 +236,7 @@ create_pipe(struct child_pipe *pipe, bool input, HANDLE *other)
     pipe->pending = !connected;
     SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
     *other = CreateFileW(name, input ? GENERIC_READ : GENERIC_WRITE, 0,
-                         &security, OPEN_EXISTING, 0, NULL);
+                         &security, OPEN_EXISTING, asynchronous ? FILE_FLAG_OVERLAPPED : 0, NULL);
     if (*other == INVALID_HANDLE_VALUE) {
         *other = NULL;
         return child_error(GetLastError());
@@ -232,7 +252,7 @@ create_pipe(struct child_pipe *pipe, bool input, HANDLE *other)
         return -1;
     }
 #endif
-    return verify_pipe_pair(pipe, input, *other);
+    return verify_pipe_pair(pipe, input, *other, asynchronous);
 }
 
 static void
@@ -256,10 +276,11 @@ static const wchar_t broker_prefix[] = L"\\\\.\\pipe\\snajpagent-writer-";
 static _Atomic(HANDLE) broker_owned_job;
 static CRITICAL_SECTION broker_spawn_lock;
 
-enum { BROKER_WRITE = 1, BROKER_SPAWN = 2, BROKER_READ_CONSOLE = 3 };
+enum { BROKER_WRITE = 1, BROKER_SPAWN = 2, BROKER_READ_CONSOLE = 3, BROKER_PTY = 4 };
 struct broker_spawn_request {
     uint64_t job, streams[3];
     uint32_t units[4]; /* executable, command line, cwd, double-NUL environment */
+    uint32_t columns, rows;
 };
 struct broker_spawn_reply {
     uint64_t process;
@@ -349,12 +370,16 @@ broker_transfer(struct snag_output_broker *broker, bool write,
 }
 
 static struct snag_output_broker *
-broker_open(int (*checkpoint)(void *), void *opaque)
+broker_open(int (*checkpoint)(void *), void *opaque, bool console)
 {
     struct snag_output_broker *broker = calloc(1, sizeof(*broker));
     HANDLE mapping = NULL, remote = NULL, parent = NULL;
     PROCESS_INFORMATION child = {0};
     STARTUPINFOW startup = {.cb = sizeof(startup)};
+    if (console) {
+        startup.dwFlags = STARTF_USESHOWWINDOW;
+        startup.wShowWindow = SW_HIDE;
+    }
     wchar_t program[32768], command[32768], name[96], environment[2] = {0};
     char id[SNAG_ID_HEX_LEN + 1u];
     unsigned char nonce[16], answer[16];
@@ -393,7 +418,8 @@ broker_open(int (*checkpoint)(void *), void *opaque)
         goto native_error;
     view = NULL;
     if (!CreateProcessW(program, command, NULL, NULL, FALSE,
-        CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
+        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT |
+        (console ? CREATE_NEW_CONSOLE : CREATE_NEW_PROCESS_GROUP),
         environment, NULL, &startup, &child))
         goto native_error;
     broker->process = child.hProcess;
@@ -449,7 +475,7 @@ snag_output_broker_write(struct snag_output_broker **owner, int fd,
     }
     if (!len)
         return 0;
-    if (!*owner && !(*owner = broker_open(checkpoint, opaque)))
+    if (!*owner && !(*owner = broker_open(checkpoint, opaque, false)))
         return -1;
     struct snag_output_broker *broker = *owner;
     while (len) {
@@ -516,7 +542,7 @@ snag_input_broker_read(struct snag_output_broker **owner, wchar_t *text, size_t 
         errno = EINVAL;
         return -1;
     }
-    if (!*owner && !(*owner = broker_open(checkpoint, opaque)))
+    if (!*owner && !(*owner = broker_open(checkpoint, opaque, false)))
         return -1;
     if (checkpoint && checkpoint(opaque) < 0)
         return -1;
@@ -549,14 +575,16 @@ broker_parent_wait(void *parent)
 }
 
 static bool
-broker_child_spawn(HANDLE pipe, HANDLE parent)
+broker_child_spawn(HANDLE pipe, HANDLE parent, bool pty)
 {
     struct broker_spawn_request request;
     struct broker_spawn_reply reply = {0};
     wchar_t *text[4] = {0};
     HANDLE streams[3] = {0};
+    HANDLE console_streams[2] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
     PROCESS_INFORMATION child = {0};
     bool sent = false;
+    void *collector = NULL;
     if (atomic_load(&broker_owned_job) ||
         !broker_child_transfer(pipe, false, &request, sizeof(request)))
         return false;
@@ -565,6 +593,8 @@ broker_child_spawn(HANDLE pipe, HANDLE parent)
     HANDLE job = (HANDLE)(uintptr_t)request.job;
     atomic_store(&broker_owned_job, job);
     for (size_t i = 0; i < 3u; ++i) {
+        if (pty && i == 1u)
+            continue;
         if (!request.streams[i] || (uint64_t)(uintptr_t)request.streams[i] != request.streams[i])
             goto out;
         streams[i] = (HANDLE)(uintptr_t)request.streams[i];
@@ -583,13 +613,38 @@ broker_child_spawn(HANDLE pipe, HANDLE parent)
     }
     STARTUPINFOW startup = {.cb = sizeof(startup), .dwFlags = STARTF_USESTDHANDLES,
         .hStdInput = streams[2], .hStdOutput = streams[0], .hStdError = streams[1]};
-    for (size_t i = 0; i < 3u; ++i)
-        if (!SetHandleInformation(streams[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+    if (pty) {
+#ifdef SNAG_LEGACY_PTY
+        if (!request.columns || !request.rows || request.columns > 2500u || request.rows > 2000u)
             goto out;
+        SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+        HANDLE input = console_streams[0] = CreateFileW(L"CONIN$", GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, 0, NULL);
+        HANDLE output = console_streams[1] = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, 0, NULL);
+        if (input == INVALID_HANDLE_VALUE || output == INVALID_HANDLE_VALUE)
+            goto out;
+        if (!SetStdHandle(STD_INPUT_HANDLE, input) || !SetStdHandle(STD_OUTPUT_HANDLE, output) ||
+            !SetStdHandle(STD_ERROR_HANDLE, output))
+            goto out;
+        collector = snag_legacy_console_open(streams[2], streams[0], pipe, job,
+            (COORD){(SHORT)request.columns, (SHORT)request.rows});
+        if (!collector)
+            goto out;
+        startup.hStdInput = input;
+        startup.hStdOutput = startup.hStdError = output;
+#else
+        goto out;
+#endif
+    } else {
+        for (size_t i = 0; i < 3u; ++i)
+            if (!SetHandleInformation(streams[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+                goto out;
+    }
     /* Parent death cannot interleave between creation and job assignment. */
     EnterCriticalSection(&broker_spawn_lock);
     if (!CreateProcessW(text[0], text[1], NULL, NULL, TRUE,
-        CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
+        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | (pty ? 0 : CREATE_NEW_PROCESS_GROUP),
         text[3], text[2], &startup, &child)) {
         reply.error = GetLastError();
     } else if (!AssignProcessToJobObject(job, child.hProcess)) {
@@ -616,9 +671,6 @@ out:
         (void)CloseHandle(child.hThread);
     if (child.hProcess)
         (void)CloseHandle(child.hProcess);
-    for (size_t i = 0; i < 3u; ++i)
-        if (streams[i])
-            (void)CloseHandle(streams[i]);
     for (size_t i = 0; i < 4u; ++i) {
         if (text[i]) {
             volatile wchar_t *wipe = text[i];
@@ -627,6 +679,23 @@ out:
         }
         free(text[i]);
     }
+#ifdef SNAG_LEGACY_PTY
+    if (collector && sent && !reply.error) {
+        sent = snag_legacy_console_run(collector) == 0;
+        uint32_t status = sent ? 0 : ERROR_GEN_FAILURE;
+        sent = broker_child_transfer(pipe, true, &status, sizeof(status)) && sent;
+    } else
+        snag_legacy_console_free(collector);
+#else
+    (void)collector;
+#endif
+    /* Publish collector completion before the last output handle reaches EOF. */
+    for (size_t i = 0; i < 3u; ++i)
+        if (streams[i])
+            (void)CloseHandle(streams[i]);
+    for (size_t i = 0; i < 2u; ++i)
+        if (console_streams[i] != INVALID_HANDLE_VALUE)
+            (void)CloseHandle(console_streams[i]);
     return sent && !reply.error;
 }
 
@@ -685,9 +754,13 @@ snag_output_broker_main(int argc, wchar_t **argv)
                 result = 0;
             break;
         }
-        if (operation == BROKER_SPAWN) {
-            if (!broker_child_spawn(pipe, (HANDLE)(uintptr_t)target[1]))
+        if (operation == BROKER_SPAWN || operation == BROKER_PTY) {
+            if (!broker_child_spawn(pipe, (HANDLE)(uintptr_t)target[1], operation == BROKER_PTY))
                 break;
+            if (operation == BROKER_PTY) {
+                result = 0;
+                break;
+            }
             continue;
         }
         if (operation == BROKER_READ_CONSOLE) {
@@ -828,16 +901,19 @@ broker_spawn(struct snag_child_windows *native, HANDLE ends[3],
     struct broker_spawn_request request = {0};
     struct broker_spawn_reply reply;
     wchar_t *texts[] = {exe, line, cwd, (wchar_t *)environment->data};
-    struct snag_output_broker *broker = broker_open(NULL, NULL);
+    struct snag_output_broker *broker = broker_open(NULL, NULL, native->legacy_console);
     if (!broker)
         return -1;
     native->broker = broker;
     HANDLE remote;
     if (!DuplicateHandle(GetCurrentProcess(), native->job, broker->process, &remote,
-                          JOB_OBJECT_ASSIGN_PROCESS | JOB_OBJECT_TERMINATE, FALSE, 0))
+                          JOB_OBJECT_ASSIGN_PROCESS | JOB_OBJECT_TERMINATE |
+                          (native->legacy_console ? JOB_OBJECT_QUERY : 0), FALSE, 0))
         return child_error(GetLastError());
     request.job = (uintptr_t)remote;
     for (size_t i = 0; i < 3u; ++i) {
+        if (native->legacy_console && i == 1u)
+            continue;
         if (!DuplicateHandle(GetCurrentProcess(), ends[i], broker->process, &remote,
                               0, FALSE, DUPLICATE_SAME_ACCESS))
             return child_error(GetLastError());
@@ -846,7 +922,10 @@ broker_spawn(struct snag_child_windows *native, HANDLE ends[3],
     for (size_t i = 0; i < 4u; ++i)
         request.units[i] = (uint32_t)(i == 3u ? environment->len / sizeof(wchar_t) :
                                      wcslen(texts[i]) + 1u);
-    uint64_t operation = BROKER_SPAWN, deadline = snag_monotonic_ms() + 5000u;
+    request.columns = (uint32_t)native->dimensions.X;
+    request.rows = (uint32_t)native->dimensions.Y;
+    uint64_t operation = native->legacy_console ? BROKER_PTY : BROKER_SPAWN;
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
     if (broker_transfer(broker, true, &operation, sizeof(operation), deadline, NULL, NULL) < 0 ||
         broker_transfer(broker, true, &request, sizeof(request), deadline, NULL, NULL) < 0)
         return -1;
@@ -896,6 +975,18 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
         return -1;
     child->native = native;
     child->pty = pty;
+#ifdef SNAG_LEGACY_PTY
+    native->legacy_console = pty && (isolated || !GetProcAddress(kernel, "CreatePseudoConsole") ||
+        !GetProcAddress(kernel, "ClosePseudoConsole") || !GetProcAddress(kernel, "ResizePseudoConsole"));
+    isolated |= native->legacy_console;
+    if (native->legacy_console) {
+        native->dimensions = console_dimensions();
+        if (native->dimensions.X > 2500)
+            native->dimensions.X = 2500;
+        if (native->dimensions.Y > 2000)
+            native->dimensions.Y = 2000;
+    }
+#endif
     snag_buf_init(&line, 256u * 1024u + 32768u);
     snag_buf_init(&env, SNAG_MEMORY_LIMIT);
     exe = snag_utf8_to_wide(shell);
@@ -961,7 +1052,8 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
     if (snag_buf_append(&env, zero, env.len ? sizeof(wchar_t) : sizeof(zero)) < 0)
         goto out;
     for (size_t i = 0; i < 3u; ++i)
-        if ((!pty || i != 1u) && create_pipe(&native->pipe[i], i == 2u, &ends[i]) < 0)
+        if ((!pty || i != 1u) &&
+            create_pipe(&native->pipe[i], i == 2u, &ends[i], native->legacy_console) < 0)
             goto out;
     native->job = CreateJobObjectW(NULL, NULL);
     if (!native->job)
@@ -973,7 +1065,7 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
                                                &limits, sizeof(limits)))
         goto native_error;
     if (isolated) {
-        if (pty) {
+        if (pty && !native->legacy_console) {
             errno = ENOTSUP; /* Native hidden-console collection is separate. */
             goto out;
         }
@@ -1077,6 +1169,15 @@ snag_child_spawn_isolated(struct snag_child *child, const char *shell, const cha
     return child_spawn(child, shell, command, directory, environment, false, true);
 }
 
+#ifdef SNAG_LEGACY_PTY
+int
+snag_child_spawn_legacy_pty(struct snag_child *child, const char *shell, const char *command,
+                            const char *directory, char **environment)
+{
+    return child_spawn(child, shell, command, directory, environment, true, true);
+}
+#endif
+
 static unsigned int __stdcall
 close_console(void *opaque)
 {
@@ -1105,6 +1206,10 @@ finish_console(struct snag_child_windows *native)
 int
 snag_child_exited(struct snag_child *child)
 {
+    struct snag_child_windows *native = child->native;
+    if (native->legacy_console && WaitForSingleObject(native->broker->process, 0) == WAIT_OBJECT_0 &&
+        WaitForSingleObject(native->process, 0) == WAIT_TIMEOUT)
+        (void)TerminateJobObject(native->job, 125u);
     if (finish_console(child->native) < 0)
         return -1;
     DWORD rc = WaitForSingleObject(child->native->process, 0);
@@ -1126,6 +1231,29 @@ void
 snag_child_resize(struct snag_child *child)
 {
     struct snag_child_windows *native = child->native;
+#ifdef SNAG_LEGACY_PTY
+    if (native && native->legacy_console) {
+        struct child_pipe *control = &native->broker->control;
+        if (control->pending && !pipe_done(control))
+            return;
+        if (control->error) {
+            (void)TerminateJobObject(native->job, 125u);
+            return;
+        }
+        COORD size = console_dimensions();
+        if (size.X > 2500)
+            size.X = 2500;
+        if (size.Y > 2000)
+            size.Y = 2000;
+        uint32_t packet[2] = {(uint32_t)size.X, (uint32_t)size.Y};
+        if (size.X != native->dimensions.X || size.Y != native->dimensions.Y) {
+            memcpy(control->bytes, packet, sizeof(packet));
+            pipe_begin(control, true, sizeof(packet));
+            native->dimensions = size;
+        }
+        return;
+    }
+#endif
     if (!native || !native->console || native->console_closer)
         return;
     COORD size = console_dimensions();
@@ -1142,8 +1270,24 @@ snag_child_read(struct snag_child *child, unsigned int stream, void *buffer, siz
         errno = EAGAIN;
         return -1;
     }
-    if (pipe->error)
-        return pipe->error == ERROR_BROKEN_PIPE || pipe->error == ERROR_NO_DATA ? 0 : child_error(pipe->error);
+    if (pipe->error) {
+        if (pipe->error != ERROR_BROKEN_PIPE && pipe->error != ERROR_NO_DATA)
+            return child_error(pipe->error);
+        struct snag_child_windows *native = child->native;
+        if (native->legacy_console && !stream && !native->collector_done) {
+            uint32_t status;
+            pipe_cancel(&native->broker->control);
+            int received = broker_transfer(native->broker, false, &status, sizeof(status),
+                                             snag_monotonic_ms() + 1000u, NULL, NULL);
+            native->collector_done = true;
+            native->collector_error = received < 0 || status ? EIO : 0;
+        }
+        if (native->collector_error) {
+            errno = native->collector_error;
+            return -1;
+        }
+        return 0;
+    }
     size_t count = pipe->count < size ? pipe->count : size;
     memcpy(buffer, pipe->bytes, count);
     memmove(pipe->bytes, pipe->bytes + count, pipe->count - count);

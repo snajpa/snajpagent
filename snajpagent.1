@@ -2328,8 +2328,14 @@ Windows terminal output selects native VT processing when available and
 native cursor, color, and erase operations for classic consoles.  The classic
 path preserves the initial console palette and supports prompt editing and
 wrapping.  Glyphs and text decorations depend on the console font; italics
-use underline where supported.  This display fallback does not provide
-ConPTY on operating systems that lack it.
+use underline where supported.
+.PP
+The internal legacy Windows build uses a hidden-console collector for PTY
+commands when ConPTY is unavailable.  The same executable hosts collection;
+input and output use authenticated private pipes, and command descendants
+belong to the agent's cleanup job.  The collector translates native console
+cells and keyboard events; font and code-page limitations of the underlying
+console still apply.  Modern production targets continue to use ConPTY.
 .PP
 See the repository's DEPENDENCIES.md for static dependency licenses, embedded
 trust, corresponding-source obligations and platform qualification details.

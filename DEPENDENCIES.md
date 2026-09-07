@@ -189,6 +189,18 @@ the platform sections retain the actual qualification limits.
 
 ## Experimental native Windows x86-64 and ARM64
 
+The internal `nix/windows-legacy.nix` i686 port additionally links WinPTY 0.4.3
+(MIT) console collection into the same executable. Its first-party C bridge
+retains the agent's authenticated pipe handles, suspended/job-owned spawning
+and explicit parent-death cleanup. The collector has its own hidden console;
+no WinPTY DLL, launcher or auxiliary executable is installed. LLVM 21.1.7
+libc++/libc++abi use static winpthreads, and the patched static libunwind uses
+pthread locks plus VirtualQuery image lookup. These LLVM components retain
+Apache-2.0 WITH LLVM-exception, including the GPLv2 compatibility provision.
+Preserve the pinned upstream sources, patches and license notices with binary
+distributions. The legacy port remains outside `PROD_TARGETS` pending complete
+runtime qualification.
+
 `nix/windows.nix` builds static x86-64 Windows Jansson, Mbed TLS, compression,
 c-ares, HTTP/2 and GNU Unicode/IDN libraries using the same pinned nixpkgs
 sources. It takes the `pkgs` exported by `nix/portable.nix`. The compile API

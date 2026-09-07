@@ -16,6 +16,10 @@ application and distribute the corresponding library source and patch.
 
 `nix/cares-legacy-windows.patch` retains c-ares's upstream MIT terms.
 `nix/curl-legacy-windows.patch` retains curl's upstream curl license terms.
+`nix/winpty-owned-pipes.patch` retains WinPTY's MIT terms.
+`nix/libunwind-legacy-windows.patch` retains LLVM's Apache-2.0 WITH
+LLVM-exception terms, including its GPLv2 compatibility provision.
+Preserve those notices and corresponding patched sources with distributions.
 
 Project design notes live under design/. System Jansson and system libcurl are
 build/runtime dependencies; no third-party

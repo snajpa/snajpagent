@@ -46,6 +46,10 @@ struct snag_output_broker;
 /* Native pipe command with an isolated handle-inheritance owner. */
 int snag_child_spawn_isolated(struct snag_child *child, const char *shell, const char *command,
                               const char *directory, char **environment);
+#ifdef SNAG_LEGACY_PTY
+int snag_child_spawn_legacy_pty(struct snag_child *child, const char *shell, const char *command,
+                               const char *directory, char **environment);
+#endif
 /* Private same-executable entry point; -1 means ordinary application startup. */
 int snag_output_broker_main(int argc, wchar_t **argv);
 int snag_output_broker_write(struct snag_output_broker **owner, int fd,

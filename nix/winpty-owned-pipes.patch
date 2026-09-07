@@ -1,0 +1,77 @@
+--- a/src/agent/NamedPipe.h
++++ b/src/agent/NamedPipe.h
+@@ -92,4 +92,5 @@
+     std::wstring name() const { return m_name; }
++    void adopt(HANDLE handle, OpenMode::t mode);
+     void openServerPipe(LPCWSTR pipeName, OpenMode::t openMode,
+                         int outBufferSize, int inBufferSize);
+     void connectToServer(LPCWSTR pipeName, OpenMode::t openMode);
+--- a/src/agent/NamedPipe.cc
++++ b/src/agent/NamedPipe.cc
+@@ -26,3 +26,4 @@
+ #include <algorithm>
++#include <stdexcept>
+ 
+ #include "EventLoop.h"
+@@ -294,1 +294,9 @@
++void NamedPipe::adopt(HANDLE handle, OpenMode::t mode)
++{
++    ASSERT(isClosed() && handle && handle != INVALID_HANDLE_VALUE);
++    m_handle = handle;
++    m_openMode = mode;
++    startPipeWorkers();
++}
++
+ void NamedPipe::startPipeWorkers()
+@@ -315,2 +324,14 @@
+     m_outQueue.append(reinterpret_cast<const char*>(data), size);
++    // The owner freezes console mutation while scraping. Bound this queue
++    // even when a slow terminal stops draining; the parent's independent
++    // watcher can still terminate this helper and its owned command job.
++    while (m_outQueue.size() >= 1024 * 1024) {
++        auto result = m_outputWorker->service();
++        if (result == ServiceResult::Error)
++            throw std::runtime_error("console output pipe failed");
++        HANDLE event = m_outputWorker->getWaitEvent();
++        if (m_outQueue.size() >= 1024 * 1024 && event &&
++            WaitForSingleObject(event, INFINITE) != WAIT_OBJECT_0)
++            throw std::runtime_error("console output wait failed");
++    }
+ }
+--- a/src/shared/winpty_snprintf.h
++++ b/src/shared/winpty_snprintf.h
+@@ -30,1 +30,1 @@
+-#if defined(__CYGWIN__) || defined(__MSYS__)
++#if defined(__CYGWIN__) || defined(__MSYS__) || defined(__clang__)
+--- a/src/agent/EventLoop.h
++++ b/src/agent/EventLoop.h
+@@ -39,1 +39,1 @@
+-    virtual void onPipeIo(NamedPipe &namedPipe)     {}
++    virtual void onPipeIo(NamedPipe &)             {}
+--- a/src/shared/StringBuilder.h
++++ b/src/shared/StringBuilder.h
+@@ -194,1 +194,1 @@
+-    operator<<(P ch) {
++    operator<<(P) {
+--- a/src/shared/WindowsSecurity.cc
++++ b/src/shared/WindowsSecurity.cc
+@@ -209,1 +209,1 @@
+-    return std::move(sd);
++    return sd;
+--- a/src/agent/ConsoleFont.cc
++++ b/src/agent/ConsoleFont.cc
+@@ -449,1 +449,1 @@
+-    AGENT_CONSOLE_FONT_INFOEX infoex = {0};
++    AGENT_CONSOLE_FONT_INFOEX infoex = {};
+@@ -462,1 +462,1 @@
+-    AGENT_CONSOLE_FONT_INFO info = {0};
++    AGENT_CONSOLE_FONT_INFO info = {};
+--- a/src/agent/ConsoleInput.cc
++++ b/src/agent/ConsoleInput.cc
+@@ -469,1 +469,1 @@
+-    INPUT_RECORD newRecord = {0};
++    INPUT_RECORD newRecord = {};
+--- a/src/agent/Terminal.cc
++++ b/src/agent/Terminal.cc
+@@ -70,1 +70,0 @@
+-const int SGR_BACK_HI = 100;

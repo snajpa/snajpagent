@@ -202,6 +202,34 @@ native_process_child(const char *mode)
         Sleep(30000u);
         return 0;
     }
+    if (!strcmp(mode, "flood")) {
+        memset(bytes, 'x', sizeof(bytes));
+        for (size_t i = 63u; i < sizeof(bytes); i += 64u)
+            bytes[i] = '\n';
+        for (;;)
+            assert(WriteFile(output, bytes, sizeof(bytes), &written, NULL) && written == sizeof(bytes));
+    }
+    if (!strcmp(mode, "unicode")) {
+        wchar_t text[32];
+        const wchar_t expected[] = {L'A', 0x4e2d, 0xd83d, 0xde00, L'Z', L'\r', L'\n'};
+        assert(ReadConsoleW(input, text, 32u, &got, NULL));
+        assert(got == sizeof(expected) / sizeof(expected[0]) &&
+               !memcmp(text, expected, sizeof(expected)));
+        assert(WriteFile(output, "unicode-ok\r\n", 12u, &written, NULL) && written == 12u);
+        for (;;) {
+            INPUT_RECORD event;
+            assert(ReadConsoleInputW(input, &event, 1u, &got) && got == 1u);
+            if (event.EventType != WINDOW_BUFFER_SIZE_EVENT)
+                continue;
+            CONSOLE_SCREEN_BUFFER_INFO info;
+            assert(GetConsoleScreenBufferInfo(output, &info));
+            if (info.srWindow.Right - info.srWindow.Left == 79 &&
+                info.srWindow.Bottom - info.srWindow.Top == 22)
+                break;
+        }
+        assert(WriteFile(output, "resize-ok\r\n", 11u, &written, NULL) && written == 11u);
+        return 0;
+    }
     do {
         if (!ReadFile(input, bytes, sizeof(bytes), &got, NULL)) {
             assert(GetLastError() == ERROR_BROKEN_PIPE);
@@ -233,17 +261,23 @@ test_native_process_input(bool pty, bool isolated)
         assert(snag_child_spawn_isolated(&child, "C:/no-such-snajpagent.exe", "echo", directory, env) < 0);
         assert(errno == ENOENT && !child.native);
     }
+#ifdef SNAG_LEGACY_PTY
+    if (pty && isolated)
+        assert(snag_child_spawn_legacy_pty(&child, executable, "unicode", directory, env) == 0);
+    else
+#endif
     assert((isolated ? snag_child_spawn_isolated(&child, executable, "echo", directory, env) :
             snag_child_spawn(&child, executable, pty ? "line" : "echo", directory, env, pty)) == 0);
     unsigned char payload[131072];
-    size_t size = pty ? 13u : sizeof(payload), written = 0;
+    size_t size = pty ? (isolated ? 10u : 13u) : sizeof(payload), written = 0;
     for (size_t i = 0; i < sizeof(payload); ++i)
         payload[i] = (unsigned char)(i % 251u);
     if (pty)
-        memcpy(payload, "native stdin\r", size);
+        memcpy(payload, isolated ? "A\xe4\xb8\xad\xf0\x9f\x98\x80Z\r" : "native stdin\r", size);
     struct snag_buf output;
     snag_buf_init(&output, 2u * sizeof(payload));
     bool input_open = true, open[2] = {true, !pty};
+    bool resized = false;
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     while (open[0] || open[1] || snag_child_exited(&child) == 0) {
         assert(snag_monotonic_ms() < deadline);
@@ -278,15 +312,32 @@ test_native_process_input(bool pty, bool isolated)
                 if (!n) {
                     open[stream] = false;
                     snag_child_close_stream(&child, stream);
-                } else if (!stream)
+                } else if (!stream) {
                     assert(snag_buf_append(&output, bytes, (size_t)n) == 0);
+                    if (pty && isolated && !resized) {
+                        assert(snag_buf_terminate(&output) == 0);
+                        if (strstr((char *)output.data, "unicode-ok")) {
+                            HANDLE original = GetStdHandle(STD_ERROR_HANDLE);
+                            HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
+                            SMALL_RECT size = {0, 0, 79, 22};
+                            assert(screen != INVALID_HANDLE_VALUE && SetConsoleWindowInfo(screen, TRUE, &size));
+                            assert(SetStdHandle(STD_ERROR_HANDLE, screen));
+                            snag_child_resize(&child);
+                            assert(SetStdHandle(STD_ERROR_HANDLE, original) && CloseHandle(screen));
+                            resized = true;
+                        }
+                    }
+                }
             }
         }
     }
     assert(written == size && snag_child_reap(&child) == 0 && child.exit_code == 0);
     if (pty) {
         assert(snag_buf_terminate(&output) == 0);
-        assert(strstr((char *)output.data, "native stdin"));
+        assert(strstr((char *)output.data, isolated ? "unicode-ok" : "native stdin"));
+        if (isolated)
+            assert(resized && strstr((char *)output.data, "resize-ok"));
     } else
         assert(output.len == size && !memcmp(output.data, payload, size));
     snag_child_free(&child);
@@ -299,7 +350,7 @@ test_native_process_input(bool pty, bool isolated)
 }
 
 static void
-test_native_process(bool pty)
+test_native_process(bool pty, bool legacy)
 {
     char *shell = snag_default_shell();
     char *canonical_shell = shell ? snag_realpath(shell) : NULL;
@@ -310,6 +361,14 @@ test_native_process(bool pty)
     struct snag_child child;
     snag_child_init(&child);
     assert(shell && env && directory);
+#ifdef SNAG_LEGACY_PTY
+    if (legacy)
+        assert(snag_child_spawn_legacy_pty(&child, shell,
+            "echo native-out&echo native-err 1>&2&exit /b 7", directory, env) == 0);
+    else
+#else
+    (void)legacy;
+#endif
     assert(snag_child_spawn(&child, shell, "echo native-out&echo native-err 1>&2&exit /b 7",
                             directory, env, pty) == 0);
     snag_child_close_stream(&child, 2u);
@@ -346,8 +405,15 @@ test_native_process(bool pty)
     assert(snag_child_reap(&child) == 0 && child.exit_code == 7);
     for (size_t i = 0; i < 2u; ++i)
         assert(snag_buf_terminate(&output[i]) == 0);
-    assert(strstr((char *)output[0].data, "native-out") &&
-           strstr((char *)output[pty ? 0u : 1u].data, "native-err"));
+    if (!strstr((char *)output[0].data, "native-out") ||
+        !strstr((char *)output[pty ? 0u : 1u].data, "native-err")) {
+        (void)fprintf(stderr, "native output pty=%u legacy=%u bytes=%zu/%zu\n",
+                       (unsigned int)pty, (unsigned int)legacy, output[0].len, output[1].len);
+        for (size_t i = 0; i < output[0].len && i < 512u; ++i)
+            (void)fprintf(stderr, "%02x ", output[0].data[i]);
+        (void)fprintf(stderr, "\n");
+        abort();
+    }
     snag_child_free(&child);
     snag_buf_free(&output[0]);
     snag_buf_free(&output[1]);
@@ -480,6 +546,39 @@ test_native_process_descendant(bool isolated)
     free(executable);
     free(directory);
 }
+
+#ifdef SNAG_LEGACY_PTY
+static void
+test_legacy_collector_failure(void)
+{
+    char *program = snag_program_path(NULL), *directory = snag_realpath(".");
+    char **environment = snag_environment_entries();
+    struct snag_child child;
+    snag_child_init(&child);
+    assert(program && directory && environment);
+    assert(snag_child_spawn_legacy_pty(&child, program, "wait", directory, environment) == 0);
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0), broker = NULL;
+    PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
+    assert(snapshot != INVALID_HANDLE_VALUE && Process32FirstW(snapshot, &entry));
+    do {
+        if (entry.th32ParentProcessID == GetCurrentProcessId()) {
+            assert(!broker);
+            broker = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
+            assert(broker);
+        }
+    } while (Process32NextW(snapshot, &entry));
+    assert(CloseHandle(snapshot) && broker && TerminateProcess(broker, 125u));
+    assert(WaitForSingleObject(broker, 2000u) == WAIT_OBJECT_0 && CloseHandle(broker));
+    struct snag_child_event output = {&child, 0u, SNAG_CHILD_READ, 0};
+    assert(snag_child_wait(&output, 1u, SNAG_WAKE_INVALID, 2000) > 0 && output.revents);
+    char bytes[4096];
+    assert(snag_child_read(&child, 0u, bytes, sizeof(bytes)) < 0 && errno == EIO);
+    snag_child_free(&child);
+    snag_environment_entries_free(environment);
+    free(directory);
+    free(program);
+}
+#endif
 
 static void
 test_home_environment(void)
@@ -1268,7 +1367,7 @@ input_orphan_checkpoint(void *opaque)
 }
 
 static int
-broker_orphan_child(const char *value, bool spawn, bool input)
+broker_orphan_child(const char *value, bool spawn, bool input, bool legacy)
 {
     char *end;
     unsigned long long number = strtoull(value, &end, 10);
@@ -1279,8 +1378,19 @@ broker_orphan_child(const char *value, bool spawn, bool input)
         char **environment = snag_environment_entries();
         struct snag_child child;
         snag_child_init(&child);
-        assert(program && directory && environment &&
-            snag_child_spawn_isolated(&child, program, "wait", directory, environment) == 0);
+        assert(program && directory && environment);
+#ifdef SNAG_LEGACY_PTY
+        if (legacy)
+            assert(snag_child_spawn_legacy_pty(&child, program, "flood", directory, environment) == 0);
+        else
+#else
+        (void)legacy;
+#endif
+            assert(snag_child_spawn_isolated(&child, program, "wait", directory, environment) == 0);
+        if (legacy) {
+            struct snag_child_event output = {&child, 0u, SNAG_CHILD_READ, 0};
+            assert(snag_child_wait(&output, 1u, SNAG_WAKE_INVALID, 3000) > 0 && output.revents);
+        }
         assert(SetEvent(event));
         Sleep(10000u);
         snag_child_free(&child);
@@ -1309,7 +1419,7 @@ broker_orphan_child(const char *value, bool spawn, bool input)
 }
 
 static void
-test_broker_parent_death(bool spawn, bool input)
+test_broker_parent_death(bool spawn, bool input, bool legacy)
 {
     SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
     HANDLE ready = CreateEventW(&security, TRUE, FALSE, NULL);
@@ -1317,7 +1427,7 @@ test_broker_parent_death(bool spawn, bool input)
     DWORD length = GetModuleFileNameW(NULL, program, 32768u);
     assert(ready && length && length < 32768u);
     assert(swprintf(command, 32768u, L"\"%ls\" --%ls-orphan %llu", program,
-                      spawn ? L"spawn" : input ? L"input" : L"broker",
+                      legacy ? L"pty" : spawn ? L"spawn" : input ? L"input" : L"broker",
                       (unsigned long long)(uintptr_t)ready) > 0);
     STARTUPINFOW startup = {.cb = sizeof(startup)};
     PROCESS_INFORMATION child;
@@ -1325,6 +1435,8 @@ test_broker_parent_death(bool spawn, bool input)
                            NULL, NULL, &startup, &child));
     assert(CloseHandle(child.hThread));
     assert(WaitForSingleObject(ready, 5000u) == WAIT_OBJECT_0 && CloseHandle(ready));
+    if (legacy)
+        assert(snag_sleep_ms(2000u) == 0); /* Deliberately leave collector output undrained. */
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
     DWORD broker_id = 0;
@@ -1338,9 +1450,12 @@ test_broker_parent_death(bool spawn, bool input)
     assert(broker_id);
     HANDLE process = NULL;
     if (spawn) {
+        const wchar_t *name = wcsrchr(program, L'\\');
+        name = name ? name + 1 : program;
         assert(Process32FirstW(snapshot, &entry));
         do {
-            if (entry.th32ParentProcessID == broker_id) {
+            /* A new console can also place conhost under this helper. */
+            if (entry.th32ParentProcessID == broker_id && !_wcsicmp(entry.szExeFile, name)) {
                 assert(!process);
                 process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, entry.th32ProcessID);
                 assert(process);
@@ -1589,9 +1704,12 @@ test_console_output(void)
     assert(snag_output_broker_main(1, malformed) == -1);
     assert(snag_output_broker_main(2, malformed) == 125);
     assert(snag_output_broker_main(3, malformed) == 125);
-    test_broker_parent_death(false, false);
-    test_broker_parent_death(true, false);
-    test_broker_parent_death(false, true);
+    test_broker_parent_death(false, false, false);
+    test_broker_parent_death(true, false, false);
+    test_broker_parent_death(false, true, false);
+#ifdef SNAG_LEGACY_PTY
+    test_broker_parent_death(true, false, true);
+#endif
     struct snag_term_host host = {0};
     int pair[2];
     assert(_pipe(pair, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
@@ -1951,11 +2069,16 @@ test_platform(void)
 {
 #ifdef _WIN32
     test_cmd_argument_probe();
-    test_native_process(false);
-    test_native_process(true);
+    test_native_process(false, false);
+    test_native_process(true, false);
     test_native_process_input(false, false);
     test_native_process_input(true, false);
     test_native_process_input(false, true);
+#ifdef SNAG_LEGACY_PTY
+    test_native_process(true, true);
+    test_native_process_input(true, true);
+    test_legacy_collector_failure();
+#endif
     test_native_process_fanout();
     test_native_process_descendant(false);
     test_native_process_descendant(true);
@@ -2406,11 +2529,15 @@ run_base(int argc, char **argv)
         return 0;
     }
     if (argc == 3 && !strcmp(argv[1], "--broker-orphan"))
-        return broker_orphan_child(argv[2], false, false);
+        return broker_orphan_child(argv[2], false, false, false);
     if (argc == 3 && !strcmp(argv[1], "--spawn-orphan"))
-        return broker_orphan_child(argv[2], true, false);
+        return broker_orphan_child(argv[2], true, false, false);
     if (argc == 3 && !strcmp(argv[1], "--input-orphan"))
-        return broker_orphan_child(argv[2], false, true);
+        return broker_orphan_child(argv[2], false, true, false);
+#ifdef SNAG_LEGACY_PTY
+    if (argc == 3 && !strcmp(argv[1], "--pty-orphan"))
+        return broker_orphan_child(argv[2], true, false, true);
+#endif
     if (argc == 3 && !strcmp(argv[1], "--quote-probe")) {
         char *expected = snag_environment("SNAJPAGENT_QUOTE_EXPECT");
         if (!expected || strcmp(argv[2], expected + 1u)) {

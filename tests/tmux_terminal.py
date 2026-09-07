@@ -1796,7 +1796,7 @@ def run_draft_navigation_case(binary, root):
         terminal.send_key("C-u")
         terminal.send_text(text)
         terminal.send_key("Enter")
-        wait_for_terminal_event(case / "state", {"turn_completed"}, 5.0)
+        wait_event_count(case / "state", "turn_completed", 2, timeout=5.0)
         terminal.exit()
         _, events = read_events(case / "state")
         turns = event_list(events, "turn_started")
@@ -4119,9 +4119,13 @@ def run_token_accounting_cases(binary, root):
             result = run("recover", sid)
             _, events = read_events(dotdir)
             if mode in ("summary-irreducible", "summary-auth"):
-                assert result.returncode != 0, (mode, result.stdout)
+                assert result.returncode == 0 and result.stdout.strip() == "recovered", (mode, result.stderr)
                 assert 1 <= len(summaries) <= 8
                 assert not event_list(events, "compaction_completed")
+                assert len(event_list(events, "turn_recovery")) == 1
+                assert not event_list(events, "turn_failed")
+                for i in range(4):
+                    assert f"seed-{i} " in json.dumps(creates[-1]["input"])
                 if mode == "summary-auth":
                     assert len(summaries) == 1
             else:
