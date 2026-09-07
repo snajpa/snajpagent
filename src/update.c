@@ -252,7 +252,12 @@ install_update(struct snag_update *update)
         snprintf(stage, sizeof(stage), ".%s.update-new", base) >= (int)sizeof(stage) ||
         snprintf(backup, sizeof(backup), ".%s.update-old.exe", base) >= (int)sizeof(backup))
         goto out;
+#ifdef _WIN32
+    /* Absolute NT paths ignore the directory descriptor. */
+    dir = snag_open_read_security_at(-1, path, true);
+#else
     dir = snag_open_read_security_at(AT_FDCWD, *path ? path : "/", true);
+#endif
     if (dir < 0 || snag_fstat(dir, &current) < 0 ||
         snag_fd_privacy(dir, &privacy) < 0 || !privacy.effective_owner)
         goto out;
