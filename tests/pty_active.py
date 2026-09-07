@@ -4513,11 +4513,15 @@ def test_ctrl_d_exit():
                 attrs[3] |= termios.ICANON
                 termios.tcsetattr(child.fd, termios.TCSANOW, attrs)
             child.send(b"\x04")
-            child.wait(RESUME_HEADER, timeout=4.0 if prompt == b"engine_blocked"
+            child.wait(RESUME_HEADER if prompt else b"\x1b[?2004l",
+                       timeout=4.0 if prompt == b"engine_blocked"
                        else 1.0)
             flags = termios.tcgetattr(child.fd)[3]
             assert flags & termios.ICANON and flags & termios.ECHO
-            command = child.finish()
+            command = child.finish(expect_resume=bool(prompt))
+            if not prompt:
+                assert session_ids() == before
+                continue
             log = events(new_session(before))
             if prompt:
                 assert one(log, "turn_interrupted")
@@ -4636,6 +4640,7 @@ def test_goal_orderly_quit_resume():
 
 def test_five_ctrl_c_exit():
     for prompt in (None, b"slow", b"engine_blocked"):
+        before = session_ids()
         child = Child([])
         child.wait_idle_prompt()
         if prompt:
@@ -4646,11 +4651,14 @@ def test_five_ctrl_c_exit():
         child.drain(0.1)
         assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
         child.send(b"\x03")
-        child.wait(RESUME_HEADER, timeout=4.0)
-        child.finish()
+        child.wait(RESUME_HEADER if prompt else b"\x1b[?2004l", timeout=4.0)
+        child.finish(expect_resume=bool(prompt))
+        if not prompt:
+            assert session_ids() == before
 
 
 def test_ctrl_c_sequence_reset():
+    before = session_ids()
     child = Child([])
     try:
         child.wait_idle_prompt()
@@ -4663,8 +4671,9 @@ def test_ctrl_c_sequence_reset():
         child.drain(0.05)
         assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
         child.send(b"\x03")
-        child.wait(RESUME_HEADER)
-        child.finish()
+        child.wait(b"\x1b[?2004l")
+        child.finish(expect_resume=False)
+        assert session_ids() == before
     finally:
         child.kill()
 
@@ -4687,6 +4696,7 @@ def test_full_input_queue_keeps_exit_live():
 
 
 def test_history_lock_keeps_editing_live():
+    before = session_ids()
     child = Child([])
     try:
         child.wait_idle_prompt()
@@ -4704,7 +4714,9 @@ def test_history_lock_keeps_editing_live():
             fcntl.lockf(history, fcntl.LOCK_UN)
         child.send(b"\x03")
         child.drain(0.1)
-        child.exit_now()
+        child.send(b"/exit\r")
+        child.finish(expect_resume=False)
+        assert session_ids() == before
     finally:
         child.kill()
 
