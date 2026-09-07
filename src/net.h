@@ -43,6 +43,7 @@ void snag_network_free(void);
 int snag_socket_error(int code);
 int snag_socket_addresses(const char *host, const char *service,
                           const struct addrinfo *hints, struct addrinfo **out);
+void snag_socket_addresses_free(struct addrinfo *addresses);
 snag_socket snag_socket_open(int family, int type, int protocol);
 snag_socket snag_socket_accept(snag_socket listener);
 int snag_socket_close(snag_socket fd);

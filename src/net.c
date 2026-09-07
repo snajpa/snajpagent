@@ -6,17 +6,80 @@
 #include <limits.h>
 #include <string.h>
 
+#if defined(_WIN32) && _WIN32_WINNT < 0x0501
+#include <pthread.h>
+#include <wspiapi.h>
+#undef getaddrinfo
+#undef freeaddrinfo
+#undef getnameinfo
+
+static pthread_once_t address_once = PTHREAD_ONCE_INIT;
+static WSPIAPI_PGETADDRINFO address_lookup = WspiapiLegacyGetAddrInfo;
+static WSPIAPI_PFREEADDRINFO address_free = WspiapiLegacyFreeAddrInfo;
+
+static bool
+address_api(HMODULE module)
+{
+    FARPROC lookup = module ? GetProcAddress(module, "getaddrinfo") : NULL;
+    FARPROC release = module ? GetProcAddress(module, "freeaddrinfo") : NULL;
+    if (!lookup || !release)
+        return false;
+    memcpy(&address_lookup, &lookup, sizeof(address_lookup));
+    memcpy(&address_free, &release, sizeof(address_free));
+    return true;
+}
+
+static void
+address_initialize(void)
+{
+    if (address_api(GetModuleHandleW(L"ws2_32.dll")))
+        return;
+    wchar_t path[32768];
+    DWORD length = GetSystemDirectoryW(path, 32756u);
+    if (!length || length >= 32756u)
+        return;
+    memcpy(path + length, L"\\wship6.dll", 12u * sizeof(wchar_t));
+    HMODULE module = LoadLibraryW(path);
+    /* A selected optional system implementation stays loaded with its results. */
+    if (module && !address_api(module))
+        (void)FreeLibrary(module);
+}
+
+static int
+lookup_addresses(const char *host, const char *service,
+                 const struct addrinfo *hints, struct addrinfo **out)
+{
+    if (pthread_once(&address_once, address_initialize) != 0)
+        return EAI_FAIL;
+    return address_lookup(host, service, hints, out);
+}
+#else
+#define lookup_addresses getaddrinfo
+#endif
+
+void
+snag_socket_addresses_free(struct addrinfo *addresses)
+{
+#if defined(_WIN32) && _WIN32_WINNT < 0x0501
+    if (pthread_once(&address_once, address_initialize) != 0)
+        abort();
+    address_free(addresses);
+#else
+    freeaddrinfo(addresses);
+#endif
+}
+
 int
 snag_socket_addresses(const char *host, const char *service,
                        const struct addrinfo *hints, struct addrinfo **out)
 {
-    int rc = getaddrinfo(host, service, hints, out);
+    int rc = lookup_addresses(host, service, hints, out);
 #ifdef _WIN32
     /* Minimal/old Windows environments may lack localhost resolver entries. */
     if (rc && host && !_stricmp(host, "localhost")) {
         struct addrinfo loopback = hints ? *hints : (struct addrinfo){0};
         loopback.ai_flags &= ~AI_PASSIVE;
-        rc = getaddrinfo(NULL, service, &loopback, out);
+        rc = lookup_addresses(NULL, service, &loopback, out);
     }
 #endif
     return rc;

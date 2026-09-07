@@ -619,7 +619,7 @@ open_listener(const char *endpoint, char *error, size_t error_size)
         if (saved == EADDRINUSE)
             break;
     }
-    freeaddrinfo(addresses);
+    snag_socket_addresses_free(addresses);
     if (fd == SNAG_SOCKET_INVALID) {
         snag_errorf(error, error_size, "cannot listen on IRC endpoint %s: %s",
                   endpoint, strerror(saved));
@@ -1795,18 +1795,18 @@ start_link(struct snag_irc_core *irc, struct irc_conn *link)
         snag_socket_nodelay(link->fd);
         rc = snag_socket_connect(link->fd, it->ai_addr, it->ai_addrlen);
         if (rc == 0) {
-            freeaddrinfo(addresses);
+            snag_socket_addresses_free(addresses);
             return client_handshake(irc, link);
         }
         if (errno == EINPROGRESS) {
             link->connecting = true;
-            freeaddrinfo(addresses);
+            snag_socket_addresses_free(addresses);
             return 0;
         }
         (void)snag_socket_close(link->fd);
         link->fd = SNAG_SOCKET_INVALID;
     }
-    freeaddrinfo(addresses);
+    snag_socket_addresses_free(addresses);
     return 1;
 }
 

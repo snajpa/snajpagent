@@ -27,6 +27,10 @@
 #include <io.h>
 #include <process.h>
 #include <tlhelp32.h>
+#include <wspiapi.h>
+#undef getaddrinfo
+#undef freeaddrinfo
+#undef getnameinfo
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -1948,6 +1952,27 @@ test_sockets(void)
     socklen_t address_size = sizeof(address);
 #endif
     assert(snag_network_init() == 0);
+#ifdef _WIN32
+    struct addrinfo legacy_hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM,
+        .ai_protocol = IPPROTO_TCP, .ai_flags = AI_NUMERICHOST};
+    struct addrinfo *legacy = NULL;
+    assert(WspiapiLegacyGetAddrInfo("127.0.0.1", "8080", &legacy_hints, &legacy) == 0 && legacy);
+    assert(legacy->ai_family == AF_INET && legacy->ai_socktype == SOCK_STREAM);
+    assert(((struct sockaddr_in *)legacy->ai_addr)->sin_port == htons(8080u));
+    WspiapiLegacyFreeAddrInfo(legacy);
+    legacy_hints.ai_flags = AI_PASSIVE;
+    assert(WspiapiLegacyGetAddrInfo(NULL, "80", &legacy_hints, &legacy) == 0 && legacy);
+    assert(((struct sockaddr_in *)legacy->ai_addr)->sin_addr.s_addr == htonl(INADDR_ANY));
+    WspiapiLegacyFreeAddrInfo(legacy);
+    legacy_hints.ai_flags = 0;
+    assert(WspiapiLegacyGetAddrInfo(NULL, "80", &legacy_hints, &legacy) == 0 && legacy);
+    assert(((struct sockaddr_in *)legacy->ai_addr)->sin_addr.s_addr == htonl(INADDR_LOOPBACK));
+    WspiapiLegacyFreeAddrInfo(legacy);
+    legacy_hints.ai_flags = AI_NUMERICHOST;
+    assert(WspiapiLegacyGetAddrInfo("not-an-address", "80", &legacy_hints, &legacy) == EAI_NONAME && !legacy);
+    legacy_hints.ai_family = AF_INET6;
+    assert(WspiapiLegacyGetAddrInfo("::1", "80", &legacy_hints, &legacy) == EAI_FAMILY && !legacy);
+#endif
 #if !defined(_WIN32) && defined(SOCK_CLOEXEC) && defined(SOCK_NONBLOCK)
     {
         int direct = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
@@ -1972,14 +1997,14 @@ test_sockets(void)
             assert(IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *)item->ai_addr)->sin6_addr));
         }
     }
-    freeaddrinfo(addresses);
+    snag_socket_addresses_free(addresses);
     addresses = NULL;
     hints.ai_family = AF_INET6;
     hints.ai_flags = AI_NUMERICHOST;
     assert(snag_socket_addresses("::1", "80", &hints, &addresses) == 0 && addresses);
     assert(addresses->ai_family == AF_INET6 &&
            IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *)addresses->ai_addr)->sin6_addr));
-    freeaddrinfo(addresses);
+    snag_socket_addresses_free(addresses);
     snag_socket listener = snag_socket_open(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     assert(listener != SNAG_SOCKET_INVALID);
     assert(snag_socket_reuse(listener) == 0);
