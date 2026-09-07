@@ -35,6 +35,40 @@
 #endif
 
 static atomic_int shutdown_signal_seen;
+static _Thread_local int thread_local_value = 7;
+
+#ifdef _WIN32
+static unsigned __stdcall
+#else
+static void *
+#endif
+thread_local_worker(void *unused)
+{
+    (void)unused;
+    assert(thread_local_value == 7);
+    thread_local_value = 13;
+    return 0;
+}
+
+static void
+test_thread_local(void)
+{
+    thread_local_value = 41;
+    for (int i = 0; i < 2; ++i) {
+#ifdef _WIN32
+        HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, thread_local_worker, NULL, 0, NULL);
+        DWORD status;
+        assert(thread && WaitForSingleObject(thread, 5000u) == WAIT_OBJECT_0);
+        assert(GetExitCodeThread(thread, &status) && status == 0 && CloseHandle(thread));
+#else
+        pthread_t thread;
+        void *result;
+        assert(pthread_create(&thread, NULL, thread_local_worker, NULL) == 0);
+        assert(pthread_join(thread, &result) == 0 && result == NULL);
+#endif
+        assert(thread_local_value == 41);
+    }
+}
 
 static void
 test_shutdown_signal(int number)
@@ -1983,6 +2017,7 @@ run_base(int argc, char **argv)
     test_private_directory();
     test_regex();
     test_wakeup();
+    test_thread_local();
     test_sockets();
     test_input_mode();
 #ifdef _WIN32

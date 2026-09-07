@@ -2497,13 +2497,14 @@ def test_provider_local_models(native=True):
     child = Child(["--config", str(config)])
     try:
         child.wait(b"codex-lb/small/high")
-        sid = new_session(before)
+        assert session_ids() == before
         child.send(b"/status\r")
         child.wait(b"hard-input=121600")
         child.wait(b"context rule: [model-limit codex-lb/small]")
         start = len(child.buf)
         child.send(b"ping\r")
         answer_end = child.wait(b"pong", start=start)
+        sid = new_session(before)
         wait_turn_completed(child, sid, "ping")
         child.wait_idle_prompt(start=answer_end)
         child.send(b"/compact\r")
