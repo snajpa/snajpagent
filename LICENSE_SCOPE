@@ -13,6 +13,8 @@ the legacy linked executable.
 `nix/mbedtls-legacy-entropy.patch` retains Mbed TLS's dual GPL-2.0-or-later
 or Apache-2.0 terms. Select the GPL-2.0-or-later option for this GPL-2.0-only
 application and distribute the corresponding library source and patch.
+`nix/mbedtls-legacy-darwin.patch` retains the same Mbed TLS license options
+for its pre-10.12 monotonic clock implementation.
 
 `nix/cares-legacy-windows.patch` retains c-ares's upstream MIT terms.
 `nix/curl-legacy-windows.patch` retains curl's upstream curl license terms.

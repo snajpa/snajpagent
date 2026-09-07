@@ -1,0 +1,26 @@
+SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
+Use Darwin's monotonic clock on deployment targets before clock_gettime.
+
+--- a/library/platform_util.c
++++ b/library/platform_util.c
+@@ -221,2 +221,19 @@
+-#if (defined(_POSIX_VERSION) && _POSIX_VERSION >= 199309L) || defined(__HAIKU__)
++#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
++#include <mach/mach_time.h>
++mbedtls_ms_time_t mbedtls_ms_time(void)
++{
++    mach_timebase_info_data_t scale;
++    if (mach_timebase_info(&scale) != 0 || !scale.denom) {
++        return 0;
++    }
++    uint64_t ticks = mach_absolute_time(), quotient = ticks / scale.denom;
++    uint64_t fraction = (ticks % scale.denom) * scale.numer / scale.denom;
++    fraction = ((quotient % 1000000u) * scale.numer + fraction) / 1000000u;
++    uint64_t whole = quotient / 1000000u;
++    if (scale.numer && whole > (INT64_MAX - fraction) / scale.numer) {
++        return INT64_MAX;
++    }
++    return (mbedtls_ms_time_t) (whole * scale.numer + fraction);
++}
++#elif (defined(_POSIX_VERSION) && _POSIX_VERSION >= 199309L) || defined(__HAIKU__)
+ mbedtls_ms_time_t mbedtls_ms_time(void)

@@ -118,7 +118,9 @@ let
     "-DENABLE_PROGRAMS=OFF"
     "-DENABLE_TESTING=OFF"
     "-DGEN_FILES=OFF"
-  ] []).overrideAttrs (_: {
+  ] []).overrideAttrs (old: {
+    patches = (old.patches or []) ++ lib.optional
+      (lib.versionOlder deployment "10.12") ./mbedtls-legacy-darwin.patch;
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
