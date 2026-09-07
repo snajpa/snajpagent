@@ -244,16 +244,18 @@ append_stream_text(struct snag_buf *out, const char *label,
     return 0;
 }
 
-static char *
-model_text_for(const char *status, const char *reason, int64_t exit_code,
-               int signal_number, const struct managed_process *proc, uint64_t wait_ms,
-               const struct output_excerpt *stdout_stream,
-               const struct output_excerpt *stderr_stream)
+static json_t *
+result_json(const char *status, const char *reason, int64_t exit_code,
+            int signal_number, uint64_t duration_ms, const char *handle,
+            const struct managed_process *proc,
+            const struct output_excerpt *stdout_stream,
+            const struct output_excerpt *stderr_stream)
 {
-    char *out = NULL;
+    uint64_t wait_ms = snag_monotonic_ms() - proc->wait_started_ms;
+    json_t *out = NULL;
     const char *msg = NULL;
-
     struct snag_buf text = {.max = SIZE_MAX};
+
     if (snag_string_in(status, "succeeded failed")) {
         if (snag_buf_printf(&text, "Process exited with code %lld.\n", (long long)exit_code) < 0)
             goto done;
@@ -304,41 +306,16 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
         goto done;
     if (snag_buf_terminate(&text) < 0)
         goto done;
-    out = (char *)text.data;
-    memset(&text, 0, sizeof(text));
+    out = json_pack("{s:I,s:o,s:s?,s:s,s:s?,s:o,s:s,s:o,s:o}",
+        "duration_ms", (json_int_t)duration_ms,
+        "exit_code", exit_code >= 0 ? json_integer(exit_code) : json_null(),
+        "handle", handle, "model_text", (const char *)text.data,
+        "reason", reason,
+        "signal", signal_number > 0 ? json_integer(signal_number) : json_null(),
+        "status", status, "stderr", excerpt_json(stderr_stream),
+        "stdout", excerpt_json(stdout_stream));
 done:
     snag_buf_free(&text);
-    return out;
-}
-
-static json_t *
-result_json(const char *status, const char *reason, int64_t exit_code,
-            int signal_number, uint64_t duration_ms, const char *handle,
-            const struct managed_process *proc,
-            const struct output_excerpt *stdout_stream,
-            const struct output_excerpt *stderr_stream)
-{
-    uint64_t wait_ms = snag_monotonic_ms() - proc->wait_started_ms;
-    char *model_text = model_text_for(status, reason, exit_code, signal_number, proc, wait_ms,
-                                     stdout_stream, stderr_stream);
-    json_t *stdout_json = excerpt_json(stdout_stream);
-    json_t *stderr_json = excerpt_json(stderr_stream);
-    json_t *out = json_pack("{s:I,s:n,s:s?,s:s,s:s?,s:n,s:s,s:O,s:O}",
-        "duration_ms", (json_int_t)duration_ms, "exit_code", "handle", handle,
-        "model_text", model_text, "reason", reason, "signal", "status", status,
-        "stderr", stderr_json, "stdout", stdout_json);
-
-    if (out &&
-        ((exit_code >= 0 &&
-          snag_json_set_new(out, "exit_code", json_integer(exit_code)) < 0) ||
-         (signal_number > 0 &&
-          snag_json_set_new(out, "signal", json_integer(signal_number)) < 0))) {
-        json_decref(out);
-        out = NULL;
-    }
-    free(model_text);
-    json_decref(stdout_json);
-    json_decref(stderr_json);
     return out;
 }
 
