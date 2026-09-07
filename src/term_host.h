@@ -25,6 +25,7 @@ struct snag_console_state {
     unsigned short initial_attributes;
     bool legacy, pending_wrap, bold, bright;
     COORD cursor;
+    short wrap_column;
     unsigned char sequence[64];
     unsigned int sequence_len;
 };

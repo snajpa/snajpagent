@@ -586,7 +586,8 @@ console_legacy(struct snag_term_host *host, struct snag_console_state *state,
         if (!GetConsoleScreenBufferInfo(output, &info))
             return console_failure();
         if (info.dwCursorPosition.X != state->cursor.X ||
-            info.dwCursorPosition.Y != state->cursor.Y)
+            info.dwCursorPosition.Y != state->cursor.Y ||
+            info.srWindow.Right != state->wrap_column)
             state->pending_wrap = false;
         if (c < 0x20u || c == 0x7fu) {
             state->pending_wrap = false;
@@ -631,10 +632,13 @@ console_legacy(struct snag_term_host *host, struct snag_console_state *state,
             if (output_plain(host, fd, text + at, span, input, checkpoint, opaque) < 0)
                 return -1;
             state->pending_wrap = state->pending_wrap || cells == remaining;
+            state->wrap_column = info.srWindow.Right;
             at += span;
         }
         if (!GetConsoleScreenBufferInfo(output, &info))
             return console_failure();
+        if (info.srWindow.Right != state->wrap_column)
+            state->pending_wrap = false;
         state->cursor = info.dwCursorPosition;
     }
     return 0;

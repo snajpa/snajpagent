@@ -1419,9 +1419,13 @@ test_hidden_console(void)
 static void
 test_classic_console(void)
 {
+    HANDLE original = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    assert(original != INVALID_HANDLE_VALUE);
     HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
     assert(screen != INVALID_HANDLE_VALUE);
+    assert(SetConsoleActiveScreenBuffer(screen));
     DWORD original_mode;
     assert(GetConsoleMode(screen, &original_mode));
     assert(SetConsoleMode(screen, ENABLE_PROCESSED_OUTPUT));
@@ -1482,6 +1486,7 @@ test_classic_console(void)
     DWORD mode;
     assert(GetConsoleMode(screen, &mode) && mode == original_mode);
     assert(SetConsoleTextAttribute(screen, original_attributes));
+    assert(SetConsoleActiveScreenBuffer(original) && CloseHandle(original));
     assert(close(fd) == 0);
 #undef CLASSIC
 }
