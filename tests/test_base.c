@@ -1497,6 +1497,42 @@ test_classic_console(void)
     CLASSIC("\033[?2004h\033[?2004l\033[H");
     assert(GetConsoleScreenBufferInfo(screen, &info) && info.dwCursorPosition.X == 0 &&
            info.dwCursorPosition.Y == info.srWindow.Top);
+    CLASSIC("\033[91mR\033[22mB\033[31mN\033[1mI\033[0m");
+    CHAR_INFO colors[4];
+    area = (SMALL_RECT){0, info.srWindow.Top, 3, info.srWindow.Top};
+    assert(ReadConsoleOutputW(screen, colors, (COORD){4, 1}, (COORD){0, 0}, &area));
+    assert((colors[0].Attributes & FOREGROUND_INTENSITY) &&
+           (colors[1].Attributes & FOREGROUND_INTENSITY) &&
+           !(colors[2].Attributes & FOREGROUND_INTENSITY) &&
+           (colors[3].Attributes & FOREGROUND_INTENSITY));
+    CLASSIC("\033[H");
+    line = malloc(columns);
+    assert(line);
+    memset(line, 'x', columns);
+    assert(snag_term_output_write(&host, fd, line, columns, false, NULL, NULL) == 0 &&
+           host.output_state[0].pending_wrap);
+    SMALL_RECT narrow = info.srWindow;
+    narrow.Right -= 5;
+    assert(SetConsoleWindowInfo(screen, TRUE, &narrow));
+    assert(SetConsoleScreenBufferSize(screen, (COORD){(SHORT)(columns - 5u), info.dwSize.Y}));
+    assert(SetConsoleCursorPosition(screen, (COORD){2, info.srWindow.Top}));
+    CLASSIC("Z");
+    assert(!host.output_state[0].pending_wrap);
+    assert(GetConsoleScreenBufferInfo(screen, &info) && info.dwCursorPosition.X == 3);
+    assert(SetConsoleScreenBufferSize(screen, original_info.dwSize));
+    assert(SetConsoleWindowInfo(screen, TRUE, &original_info.srWindow));
+    assert(SetConsoleCursorPosition(screen, (COORD){0, (SHORT)(original_info.dwSize.Y - 1)}));
+    assert(snag_term_output_write(&host, fd, line, columns, false, NULL, NULL) == 0 &&
+           host.output_state[0].pending_wrap);
+    CLASSIC("Y");
+    assert(GetConsoleScreenBufferInfo(screen, &info));
+    assert(info.dwCursorPosition.X == 1 && info.dwCursorPosition.Y == info.dwSize.Y - 1);
+    assert(ReadConsoleOutputCharacterW(screen, row, 1u, (COORD){0, info.dwCursorPosition.Y}, &got) &&
+           got == 1u && row[0] == L'Y');
+    free(line);
+    CLASSIC("\033[H\033[2K");
+    CLASSIC("A\xe4\xb8\xadZ");
+    assert(GetConsoleScreenBufferInfo(screen, &info) && info.dwCursorPosition.X == 4);
     snag_term_host_close(&host);
     assert(GetConsoleScreenBufferInfo(screen, &info) && info.wAttributes == theme);
     DWORD mode;
