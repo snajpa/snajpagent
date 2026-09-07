@@ -1749,13 +1749,17 @@ test_input_mode(void)
         assert(copy >= 0 && snag_isatty(copy));
 #ifdef _WIN32
         DWORD flags;
-        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) &&
-               (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING));
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode));
+        assert(output_host.output_state[1].legacy ?
+               !(changed_mode & (ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT)) :
+               (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0);
         assert(snag_term_output_mode(&output_host, false) == 0);
         assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) && changed_mode == original_mode);
         assert(snag_term_output_mode(&output_host, true) == 0);
-        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode) &&
-               (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING));
+        assert(GetConsoleMode((HANDLE)_get_osfhandle(copy), &changed_mode));
+        assert(output_host.output_state[1].legacy ?
+               !(changed_mode & (ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT)) :
+               (changed_mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0);
         assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &flags) &&
                !(flags & HANDLE_FLAG_INHERIT));
 #else
