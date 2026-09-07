@@ -485,7 +485,8 @@ def test_static_zero_width_spinner_has_no_refresh():
     try:
         child.wait(idle)
         child.send(b"terminal_status\r")
-        wait_prompt_painted(child, active)
+        first = child.wait(b"status-first-fragment ")
+        wait_prompt_painted(child, active, start=first)
         assert re.search("◆ [0-9]{2}:[0-9]{2}:[0-9]{2}".encode() +
                          re.escape(active), child.buf), bytes(child.buf)
         settled = len(child.buf)
