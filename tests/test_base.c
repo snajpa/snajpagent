@@ -1183,6 +1183,9 @@ test_private_directory(void)
         assert(!snag_directory_open(file) && errno == ENOTDIR);
         assert(snag_fstat(file, &info) == 0);
         assert(close(file) == 0);
+#ifndef _WIN32
+        assert(snag_open_read_at(fd, "data", true) == -1 && errno == ENOTDIR);
+#endif
         file = snag_open_read_security_at(fd, "data", false);
         assert(file >= 0 && snag_fd_privacy(file, &privacy) == 0 && privacy.private_access);
         assert(read(file, received, sizeof(received)) == sizeof(received));
