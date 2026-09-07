@@ -41,13 +41,16 @@ let
   libc = base.stdenv.cc.libc.overrideAttrs (old: {
     patches = (old.patches or [ ]) ++ [ ./uclibc-legacy-fs.patch ];
   });
-  compiler = base.stdenv.cc.override {
+  compiler = base.stdenv.cc.override (old: {
     inherit libc;
     bintools = base.stdenv.cc.bintools.override {
       inherit libc;
       sharedLibraryLoader = pkgs.lib.getLib libc;
     };
-  };
+    nixSupport = (old.nixSupport or { }) // {
+      cc-ldflags = toString (old.nixSupport.cc-ldflags or "") + " -specs=${./legacy-ssp.specs}";
+    };
+  });
   # pkgsStatic forces musl on Linux. Keep this ABI and reuse the compiler;
   # only the dependency build/link modes differ between these package sets.
   runtime = isStatic: import pkgs.path (settings // {

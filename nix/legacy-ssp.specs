@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Static libssp.a supplies both fail entry points; the nonshared shim duplicates one.
+*link_ssp:
+%{fstack-protector|fstack-protector-all|fstack-protector-strong|fstack-protector-explicit:%{static:-lssp;:-lssp_nonshared -lssp}}
+
