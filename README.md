@@ -187,12 +187,9 @@ active work. Readable local files remain accessible and session history is recor
 snajpagent is written in C so the agent itself can run on more of the systems
 where development happens, including unfamiliar ones.
 
-[Downloads](https://agent.snajpa.net/downloads.html) lists release availability
-and platform caveats. Every new version must ship the full implemented binary
-matrix; see the [release policy](RELEASE.md). **0.99.1 is the first binary
-release.** Download a matching executable and verify `SHA256SUMS`.
-[Debug builds](https://agent.snajpa.net/downloads.html#debug) are separate from
-normal downloads. To build from source:
+[Download an executable](https://agent.snajpa.net/downloads.html) for your platform
+and verify `SHA256SUMS`. [Debug builds](https://agent.snajpa.net/downloads.html#debug)
+are also available.
 
 The normal build needs C11/POSIX with pthreads, GNU make, libcurl, and Jansson:
 
@@ -210,18 +207,16 @@ for platform scope.
 
 `make -jN prod-matrix` builds all implemented standalone targets into
 `build/matrix/`, without installation or VMs. See the
-[platform notes](DEPENDENCIES.md) for target-specific requirements and test coverage.
+[platform notes](DEPENDENCIES.md) for target-specific requirements.
 `make prod-linux-i686` builds modern 32-bit Linux static PIE.
-`make prod-linux-i686-legacy` builds a separate static non-PIE executable
-exercised on Linux 2.4.27, with embedded TLS, roots and locale data.
+`make prod-linux-i686-legacy` builds a separate static non-PIE executable for
+Linux 2.4.27, with embedded TLS, roots and locale data.
 It needs working procfs and secure OS entropy; see [platform limits](DEPENDENCIES.md).
 
 For experimental Windows x64 or ARM64, use `make prod-windows-x86_64` or
 `make prod-windows-arm64` with pinned Nix dependencies. Copy the resulting
 `build/matrix/windows-ARCH/bin/snajpagent.exe` to Windows;
 application libraries and CA roots are included without third-party runtime DLLs.
-The [platform notes](DEPENDENCIES.md) describe actual Windows PE test coverage;
-full desktop and older Windows qualification remain in progress.
 Plain `make` builds only the host platform.
 
 Without configuration or existing credentials, the first interactive launch

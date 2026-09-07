@@ -23,7 +23,10 @@ manuals, release descriptions and task-facing explanations about this project.
   plans, audit precautions, editorial choices or evidence collection on a page
   where they have no bearing on the reader's action. Delete irrelevant material.
   Avoid repeating a fact as a disclaimer or explaining what an absent feature
-  would have meant.
+  would have meant. Keep test history, validation methods, earlier-build
+  comparisons, evidence provenance and qualification TODOs out of homepage,
+  download and introductory workflow copy. A sentence pointing to those records
+  is still process commentary. Link references for a reader's actual task.
 - **Promotional padding.** Omit generic praise, anthropomorphism, superlatives
   and claims of simplicity or usefulness that add no concrete information.
 
@@ -41,9 +44,11 @@ Every paragraph must answer a question relevant to that location:
 
 Preserve concrete facts that affect safety, compatibility, privacy or execution.
 State the condition and consequence where the reader needs them. A warning such
-as “IRC has no authentication or TLS” is required information. Explain measured
-coverage directly; report outstanding coverage explicitly in the appropriate
-reference. Keep enough detail for a correct decision or action.
+as “IRC has no authentication or TLS” is required information. On introductory
+surfaces, give runtime requirements, known compatibility limits and concise status
+labels such as “experimental”. Keep test coverage and outstanding checks in
+qualification or release records. Do not replace unsupported claims with implied
+support when shortening copy.
 
 Negation in a factual restriction, command, code sample or necessary permission
 boundary is allowed. Comparisons belong where a reader actually chooses between

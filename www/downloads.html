@@ -51,21 +51,15 @@
     <section aria-labelledby="compatibility-heading">
       <h2 id="compatibility-heading">Requirements</h2>
       <ul>
-        <li><strong>Linux:</strong> static musl and application libraries; no Nix,
-          matching glibc, or system libcurl needed. x86-64 and i686 were tested
-          natively; AArch64 under local QEMU. Use a modern Linux kernel with
-          these 0.99.1 executables.</li>
-        <li><strong>macOS:</strong> experimental cross-builds targeting macOS 11;
-          not tested on macOS. Universal contains Intel and Apple Silicon slices.
-          ARM64 is ad-hoc signed; Intel is unsigned. Neither is Developer ID
-          signed or notarized.</li>
+        <li><strong>Linux:</strong> requires a modern Linux kernel. Application
+          libraries are included; no Nix, matching glibc, or system libcurl needed.</li>
+        <li><strong>macOS:</strong> experimental; requires macOS 11 or later.
+          Universal contains Intel and Apple Silicon slices. ARM64 is ad-hoc
+          signed; Intel is unsigned. Neither is Developer ID signed or notarized.</li>
         <li><strong>Windows:</strong> experimental x64 and ARM64 builds using
-          Windows system DLLs; ARM64 needs the OS UCRT. These release builds
-          are untested on Windows; earlier Windows PE checks are recorded in
-          the build details. Full desktop and older Windows coverage is pending.</li>
+          Windows system DLLs; ARM64 needs the OS UCRT.</li>
       </ul>
-      <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/BUILDING-0.99.1.md">Exact build and test details</a>.
-        Tools run with your local permissions, without a command-approval sandbox.</p>
+      <p>Tools run with your local permissions, without a command-approval sandbox.</p>
     </section>
     <section aria-labelledby="source-heading">
       <h2 id="source-heading">Source and documentation</h2>
