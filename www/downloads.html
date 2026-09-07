@@ -48,6 +48,16 @@
         <code>.exe</code> extension. Run it in your project directory and follow
         the provider setup prompts.</p>
     </section>
+    <section aria-labelledby="legacy-heading">
+      <h2 id="legacy-heading">New in source: legacy Linux i686</h2>
+      <p><code>make prod-linux-i686-legacy</code> builds a separate single-file
+        executable exercised on Linux 2.4.27, including read-only tools,
+        parallel commands, PTY, resume and TLS verification. It uses static
+        LinuxThreads instead of musl/PIE and requires procfs and secure OS entropy.
+        See the <a href="https://github.com/snajpa/snajpagent/blob/master/DEPENDENCIES.md">platform limits</a>.</p>
+      <p>This target joins the next binary release. It is not included in the
+        existing 0.99.1 assets above; those versioned files are unchanged.</p>
+    </section>
     <section aria-labelledby="compatibility-heading">
       <h2 id="compatibility-heading">Requirements</h2>
       <ul>

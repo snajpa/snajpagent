@@ -50,6 +50,16 @@ or notarized. Earlier Windows checks ran in PE build 26100 (x64) and 28000
 (ARM64), not a full desktop or older Windows qualification. ARM64 requires the
 OS UCRT. See [DEPENDENCIES.md](DEPENDENCIES.md) for the precise earlier scope.
 
+After 0.99.1, `linux-i686-legacy` adds a separate static non-PIE build with
+uClibc-ng/LinuxThreads, compiler TLS emulation, embedded locale data and modern
+TLS/CA roots. Its development binary ran on Debian Sarge's Linux 2.4.27-3-386
+under QEMU Pentium III: base/IRC units, internal RO and denied-write enforcement,
+parallel commands, PTY, interactive resume/exit, TLS distrust/explicit trust/
+wrong-hostname rejection and a hostname-based local provider connection.
+These are local fixture checks, not a paid provider or every 2.4 kernel pass.
+Working procfs and replenished secure OS entropy are required; legacy descriptor
+flags are non-atomic. This target is not an asset of the existing 0.99.1 release.
+
 Each release's notes distinguish checks of its exact binaries from earlier
 implementation evidence. Local fake-provider transport/terminal checks are not
 paid live-provider tests. Do not describe an unperformed platform or live-model

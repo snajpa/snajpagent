@@ -336,6 +336,7 @@ help:
 		'make prod-linux-x86_64 Self-contained Linux x86-64 via pinned Nix; network/cache on first build' \
 		'make prod-linux-aarch64 Self-contained Linux ARM64 via pinned Nix' \
 		'make prod-linux-i686   Self-contained 32-bit Linux i686 via pinned Nix' \
+		'make prod-linux-i686-legacy Static non-PIE i686; exercised on Linux 2.4.27' \
 		'make prod-windows-x86_64 Native Windows x64 with static libraries and embedded roots via Nix' \
 		'make prod-windows-arm64 Native Windows ARM64 with static libraries and embedded roots via Nix' \
 		'make prod-macos-arm64  macOS ARM64 with static application libraries via pinned Nix' \
@@ -360,7 +361,7 @@ help:
 		'Live targets (livecheck, terminallivecheck, releaseevidence) use network/' \
 		'credentials and may incur provider charges; never part of make or help.'
 
-PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686
+PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-linux-i686-legacy
 
 prod-matrix: $(PROD_TARGETS)
 	@printf '%s\n' 'Production matrix built: $(PROD_TARGETS:prod-%=%)' \

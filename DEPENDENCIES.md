@@ -40,9 +40,43 @@ Existing static units and TLS work under Pentium II/III CPU emulation, without
 SSE/SSE2; actual guest tests run on Alpine 3.22.5 x86 / Linux 6.12.94 with its
 own SSE2-capable CPU requirement. Guest RO, parallel commands and POSIX PTY
 provider round trips pass. This is not Linux 2.4 or every earlier kernel
-qualification; the old threading/syscall runtime remains separate work.
+qualification; use the separate legacy target below for that runtime.
 Output is `build/matrix/linux-i686/bin/snajpagent`, with optional matching
 symbols in `.debug/`. A 32-bit process still has a 32-bit address space.
+
+`make prod-linux-i686-legacy` builds a static **non-PIE** executable at
+`build/matrix/linux-i686-legacy/bin/snajpagent`, with optional matching symbols
+in `.debug/`. It retains the application libraries, embedded roots and UTF-8
+locale tables but uses uClibc-ng 1.0.55/LinuxThreads and GCC 14.3 TLS emulation.
+No compiler, locale package, certificate sidecar or third-party runtime library
+is needed on the destination. Use `LANG=en_US.UTF-8` if its current locale name
+is unavailable. Prefer the modern musl static-PIE target where it runs: the
+legacy artifact trades PIE/NPTL for the older kernel interface.
+
+Actual Debian Sarge Linux **2.4.27-3-386**, on QEMU Pentium III, passes base and
+IRC units plus production RO list/read/grep and denied-write enforcement,
+overlapping commands, POSIX PTY, interactive resume/exit, TLS trust/name checks
+and a hostname-based local provider connection. This is not every 2.4 release
+or paid live-provider qualification. Working procfs and secure OS entropy are
+required; PTY commands also require devpts. No guest test helper is part of
+the executable.
+
+The legacy recipe keeps native calls first, with runtime fallbacks for metadata,
+rename and flagged sockets. Nonblocking/close-on-exec socket flags are set with
+checked `fcntl` operations only after the kernel rejects their atomic form;
+that old-kernel setup is not atomic. The clock adapter first tries available
+kernel clocks; otherwise realtime uses the old gettimeofday syscall and
+monotonic time uses `/proc/uptime`, at 10 ms resolution. It extends the standard
+i386 100 Hz jiffies wrap and clamps late samples; unambiguous extension requires
+samples less than half a wrap apart (about 248 days). It never substitutes
+wall-clock time for monotonic time.
+
+GCC's existing pthread-key TLS emulation keeps real per-thread state; static
+link roots retain its required pthread callbacks. The narrow dependency patches
+retain their upstream LGPL terms in `LICENSE_SCOPE`. Preserve the matching
+uClibc source/patches and GCC runtime notices/relinking materials when distributing
+this executable. The compiler and stable SDK are cached independently of
+implementation-only runtime libc corrections.
 
 `make prod-linux-x86_64` explicitly uses the pinned nixpkgs revision in
 `nix/portable.nix`. Its independent Nix build does not replace the ordinary
@@ -129,7 +163,7 @@ compatibility, signing identity or notarization.
 
 ## Parallel production matrix
 
-`make -jN prod-matrix` explicitly builds Linux x86-64/AArch64/i686, macOS
+`make -jN prod-matrix` explicitly builds Linux x86-64/AArch64/i686 and legacy i686, macOS
 ARM64/Intel/universal, and Windows x86-64/ARM64. This is the full implemented
 set, not the completed legacy/exotic portability roadmap. The remaining ports
 are still in development. SDK availability never silently

@@ -50,6 +50,9 @@ in assert buildRevision == null || buildRevision == revision; rec {
   linux-i686 = (linux pkgs.pkgsCross.musl32).application {
     inherit source packageName version revision;
   };
+  linux-i686-legacy = (import ./linux-legacy.nix { inherit pkgs; }).application {
+    inherit source packageName version revision;
+  };
   linux-aarch64 = (linux pkgs.pkgsCross.aarch64-multiplatform-musl).application {
     inherit source packageName version revision;
   };

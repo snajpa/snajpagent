@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Internal Linux 2.4 dependency work; not a qualified production target.
+# Static i686 LinuxThreads build, exercised on Linux 2.4.27.
 { pkgs ? (import ./portable.nix { }).pkgs }:
 let
   settings = {

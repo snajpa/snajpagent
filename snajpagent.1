@@ -2196,6 +2196,27 @@ The OS must supply secure entropy.  Mbed TLS retains /dev/random; on Linux
 before 5.6, it may block when entropy is depleted even after initial seeding.
 Maintain the system's entropy source rather than weakening TLS randomness.
 .TP
+.B make prod-linux-i686-legacy
+Build a separate static non-PIE i686 executable using uClibc-ng/LinuxThreads
+and GCC's pthread-key TLS emulation, with embedded CA and locale data.
+Output is
+.IR build/matrix/linux-i686-legacy/bin/snajpagent ,
+with optional symbols in the adjacent .debug directory.
+Actual Linux 2.4.27-3-386 on QEMU Pentium III has exercised base/IRC checks,
+read-only enforcement, parallel commands, PTY, resume, TLS verification and
+a hostname-based local provider connection.  This is not a claim for every
+2.4 kernel or a paid provider test.  Prefer the modern i686 static-PIE build
+where it runs; the legacy variant requires working procfs, secure OS entropy,
+and devpts for PTY commands.  LANG=en_US.UTF-8 selects an included UTF-8 locale.
+.PP
+Native kernel interfaces stay first.  Rejected atomic socket flags fall back
+to checked fcntl nonblocking/close-on-exec setup.  If kernel clocks are absent,
+realtime uses the old gettimeofday syscall and monotonic time uses /proc/uptime
+at 10 ms resolution.  The standard i386 jiffies wrap is extended while late
+samples are clamped; samples must be less than about 248 days apart to
+disambiguate wrap.  Wall-clock time is never used as a monotonic substitute.
+Legacy flag setup remains non-atomic; no external helper command is invoked.
+.TP
 .BR "make prod-macos-arm64" , " make prod-macos-x86_64"
 Cross-build a macOS 11+ executable with static application libraries and CA
 data; only the OS libSystem remains dynamic.  Output is
@@ -2214,7 +2235,7 @@ Cross-compilation alone does not establish runtime support.
 .TP
 .B make \-jN prod-matrix
 Build all currently implemented standalone production targets: Linux
-x86-64/AArch64/i686, macOS ARM64/Intel/universal, and Windows x86-64/ARM64.
+x86-64/AArch64/i686 and legacy i686, macOS ARM64/Intel/universal, and Windows x86-64/ARM64.
 Legacy and other planned ports remain unfinished.
 Targets use separate build/matrix outputs and shared immutable Nix inputs;
 each recipe permits one Nix job and core.  SDK availability does not silently
