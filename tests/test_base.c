@@ -1724,6 +1724,17 @@ test_sockets(void)
     socklen_t address_size = sizeof(address);
 #endif
     assert(snag_network_init() == 0);
+#if !defined(_WIN32) && defined(SOCK_CLOEXEC) && defined(SOCK_NONBLOCK)
+    {
+        int direct = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+        assert(direct >= 0);
+        int flags = fcntl(direct, F_GETFD);
+        assert(flags >= 0 && (flags & FD_CLOEXEC));
+        flags = fcntl(direct, F_GETFL);
+        assert(flags >= 0 && (flags & O_NONBLOCK));
+        assert(close(direct) == 0);
+    }
+#endif
     struct addrinfo hints = {0}, *addresses = NULL;
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;

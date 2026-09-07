@@ -1,6 +1,46 @@
 SPDX-License-Identifier: LGPL-2.1-or-later
 Keep native interfaces with i386 ABI fallbacks and LinuxThreads process exits.
 
+diff -ruN old/libc/inet/socketcalls.c new/libc/inet/socketcalls.c
+--- old/libc/inet/socketcalls.c
++++ new/libc/inet/socketcalls.c
+@@ -425,4 +425,6 @@
+ #ifdef L_socket
+-int socket(int family, int type, int protocol)
++# include <errno.h>
++# include <fcntl.h>
++static int socket_raw(int family, int type, int protocol)
+ {
+ # ifdef __NR_socket
+@@ -437,4 +439,28 @@
+ # endif
+ }
++int socket(int family, int type, int protocol)
++{
++	int fd = socket_raw(family, type, protocol);
++	int flags, saved;
++	if (fd >= 0 || errno != EINVAL || !(type & (SOCK_CLOEXEC | SOCK_NONBLOCK)))
++		return fd;
++	fd = socket_raw(family, type & ~(SOCK_CLOEXEC | SOCK_NONBLOCK), protocol);
++	if (fd < 0)
++		return fd;
++	/* Old kernels cannot create these flags atomically. */
++	if ((type & SOCK_CLOEXEC) && fcntl(fd, F_SETFD, FD_CLOEXEC) < 0)
++		goto fail;
++	if (type & SOCK_NONBLOCK) {
++		flags = fcntl(fd, F_GETFL);
++		if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
++			goto fail;
++	}
++	return fd;
++fail:
++	saved = errno;
++	(void)INLINE_SYSCALL(close, 1, fd);
++	errno = saved;
++	return -1;
++}
+ libc_hidden_def(socket)
+ #endif
 diff -ruN old/libc/sysdeps/linux/common/_exit.c new/libc/sysdeps/linux/common/_exit.c
 --- old/libc/sysdeps/linux/common/_exit.c	2025-09-19 01:14:04.000000000 +0200
 +++ new/libc/sysdeps/linux/common/_exit.c	2026-09-07 06:33:40.253599363 +0200
