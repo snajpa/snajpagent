@@ -198,50 +198,31 @@ redact_output(struct managed_process *proc, unsigned int stream, bool final)
 }
 
 static json_t *
-excerpt_json(const struct output_excerpt *stream)
+excerpt_json(struct snag_buf *text, const char *label,
+             const struct output_excerpt *stream)
 {
     const struct snag_buf *data = &stream->data;
     bool textual = snag_utf8_valid(data->data, data->len, true);
-    json_t *out = NULL;
+    size_t offset = text->len, length = 0u;
 
-    struct snag_buf encoded = {.max = SIZE_MAX};
-    if (!textual) {
-        if (snag_base64_append(&encoded, data->data, data->len) < 0)
-            goto done;
-        data = &encoded;
+    if (data->len) {
+        if (snag_buf_printf(text, "%s%s:\n", text->len ? "\n" : "", label) < 0 ||
+            (!textual && snag_buf_printf(text, "<%llu binary bytes; base64 follows>\n",
+                                        (unsigned long long)data->len) < 0))
+            return NULL;
+        offset = text->len;
+        if ((textual ? snag_buf_append(text, data->data, data->len) :
+                       snag_base64_append(text, data->data, data->len)) < 0)
+            return NULL;
+        length = text->len - offset;
+        if (text->data[text->len - 1u] != '\n' && snag_buf_putc(text, '\n') < 0)
+            return NULL;
     }
-    out = json_pack("{s:I,s:s,s:I,s:s%,s:I}",
-        "discarded_bytes", (json_int_t)(stream->bytes - stream->data.len), "encoding", textual ? "utf8" : "base64",
+    return json_pack("{s:I,s:s,s:I,s:s%,s:I}",
+        "discarded_bytes", (json_int_t)(stream->bytes - data->len), "encoding", textual ? "utf8" : "base64",
         "original_bytes", (json_int_t)stream->bytes,
-        "retained", data->len ? (const char *)data->data : "", data->len,
-        "retained_bytes", (json_int_t)stream->data.len);
-done:
-    snag_buf_free(&encoded);
-    return out;
-}
-
-static int
-append_stream_text(struct snag_buf *out, const char *label,
-                   const struct output_excerpt *stream)
-{
-    if (!stream->data.len)
-        return 0;
-    if (snag_buf_printf(out, "%s%s:\n", out->len ? "\n" : "", label) < 0)
-        return -1;
-    if (snag_utf8_valid(stream->data.data, stream->data.len, true)) {
-        if (snag_buf_append(out, stream->data.data, stream->data.len) < 0)
-            return -1;
-        if (stream->data.data[stream->data.len - 1u] != '\n' &&
-            snag_buf_putc(out, '\n') < 0)
-            return -1;
-    } else {
-        if (snag_buf_printf(out, "<%llu binary bytes; base64 follows>\n",
-                           (unsigned long long)stream->data.len) < 0 ||
-            snag_base64_append(out, stream->data.data, stream->data.len) < 0 ||
-            snag_buf_putc(out, '\n') < 0)
-            return -1;
-    }
-    return 0;
+        "retained", length ? (const char *)text->data + offset : "", length,
+        "retained_bytes", (json_int_t)data->len);
 }
 
 static json_t *
@@ -252,7 +233,7 @@ result_json(const char *status, const char *reason, int64_t exit_code,
             const struct output_excerpt *stderr_stream)
 {
     uint64_t wait_ms = snag_monotonic_ms() - proc->wait_started_ms;
-    json_t *out = NULL;
+    json_t *out = NULL, *stdout_json = NULL, *stderr_json = NULL;
     const char *msg = NULL;
     struct snag_buf text = {.max = SIZE_MAX};
 
@@ -301,20 +282,20 @@ result_json(const char *status, const char *reason, int64_t exit_code,
         if (snag_buf_append(&text, warning, strlen(warning)) < 0)
             goto done;
     }
-    if (append_stream_text(&text, "stdout", stdout_stream) < 0 ||
-        append_stream_text(&text, "stderr", stderr_stream) < 0)
+    stdout_json = excerpt_json(&text, "stdout", stdout_stream);
+    stderr_json = excerpt_json(&text, "stderr", stderr_stream);
+    if (!stdout_json || !stderr_json || snag_buf_terminate(&text) < 0)
         goto done;
-    if (snag_buf_terminate(&text) < 0)
-        goto done;
-    out = json_pack("{s:I,s:o,s:s?,s:s,s:s?,s:o,s:s,s:o,s:o}",
+    out = json_pack("{s:I,s:o,s:s?,s:s,s:s?,s:o,s:s,s:O,s:O}",
         "duration_ms", (json_int_t)duration_ms,
         "exit_code", exit_code >= 0 ? json_integer(exit_code) : json_null(),
         "handle", handle, "model_text", (const char *)text.data,
         "reason", reason,
         "signal", signal_number > 0 ? json_integer(signal_number) : json_null(),
-        "status", status, "stderr", excerpt_json(stderr_stream),
-        "stdout", excerpt_json(stdout_stream));
+        "status", status, "stderr", stderr_json, "stdout", stdout_json);
 done:
+    json_decref(stdout_json);
+    json_decref(stderr_json);
     snag_buf_free(&text);
     return out;
 }
