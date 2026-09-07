@@ -4604,6 +4604,8 @@ def run_interrupted_history_case(binary, root):
         terminal = TmuxTerminal(root / "term", binary, root / "work", root / "state", config,
             140, 28, args=["-c", endpoint, "-n", "agent", "-o", "operator"],
             environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+        terminal.wait("── history replayed ──")
+        terminal.submit("interrupted history fixture setup")
         deadline = time.monotonic() + 12
         while True:
             _, events = maybe_events(terminal.dotdir)
