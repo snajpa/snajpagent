@@ -2133,6 +2133,26 @@ snag_fsync(int fd)
 #include <mach/mach_time.h>
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101000
 #define SNAG_LEGACY_MAC_AT 1
+/* Optional imports retain the SDK's ABI symbol suffixes, without the
+ * version-check runtime required by __builtin_available. */
+extern int mac_openat(int, const char *, int, ...) __DARWIN_NOCANCEL(openat) __attribute__((weak_import));
+extern DIR *mac_fdopendir(int) __DARWIN_ALIAS_I(fdopendir) __attribute__((weak_import));
+extern int mac_fstatat(int, const char *, struct stat *, int) __DARWIN_INODE64(fstatat) __attribute__((weak_import));
+extern int mac_unlinkat(int, const char *, int) __asm("_unlinkat") __attribute__((weak_import));
+extern int mac_renameat(int, const char *, int, const char *) __asm("_renameat") __attribute__((weak_import));
+extern int mac_linkat(int, const char *, int, const char *, int) __asm("_linkat") __attribute__((weak_import));
+extern int mac_mkdirat(int, const char *, mode_t) __asm("_mkdirat") __attribute__((weak_import));
+#define openat mac_openat
+#define fdopendir mac_fdopendir
+#define fstatat mac_fstatat
+#define unlinkat mac_unlinkat
+#define renameat mac_renameat
+#define linkat mac_linkat
+#define mkdirat mac_mkdirat
+#endif
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
+extern int mac_clock_gettime(clockid_t, struct timespec *) __asm("_clock_gettime") __attribute__((weak_import));
+#define clock_gettime mac_clock_gettime
 #endif
 #endif
 #if defined(SNAJPAGENT_LEGACY_LINUX_CLOCK)
@@ -2480,7 +2500,7 @@ open_at(int dirfd, const char *path, int flags, mode_t mode)
 {
 #ifdef SNAG_LEGACY_MAC_AT
     int fd;
-    if (__builtin_available(macOS 10.10, *)) {
+    if (openat != NULL) {
         fd = openat(dirfd, path, flags, mode);
     } else {
         char resolved[PATH_MAX];
@@ -2620,7 +2640,7 @@ snag_directory_open(int fd)
     if (!dir)
         return NULL;
 #ifdef SNAG_LEGACY_MAC_AT
-    if (__builtin_available(macOS 10.10, *)) {
+    if (fdopendir != NULL) {
         dir->native = fdopendir(fd);
     } else {
         char resolved[PATH_MAX];
@@ -2706,7 +2726,7 @@ int
 snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 {
 #ifdef SNAG_LEGACY_MAC_AT
-    if (__builtin_available(macOS 10.10, *))
+    if (fstatat != NULL)
         return fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
     char resolved[PATH_MAX];
     const char *legacy = legacy_at_path(dirfd, path, resolved);
@@ -2728,7 +2748,7 @@ int
 snag_unlink_at(int dirfd, const char *path, bool directory)
 {
 #ifdef SNAG_LEGACY_MAC_AT
-    if (__builtin_available(macOS 10.10, *))
+    if (unlinkat != NULL)
         return unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
     char resolved[PATH_MAX];
     const char *legacy = legacy_at_path(dirfd, path, resolved);
@@ -2750,7 +2770,7 @@ int
 snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 {
 #ifdef SNAG_LEGACY_MAC_AT
-    if (__builtin_available(macOS 10.10, *))
+    if (renameat != NULL)
         return renameat(from_dir, from, to_dir, to);
     char source[PATH_MAX], destination[PATH_MAX];
     const char *old = legacy_at_path(from_dir, from, source);
@@ -2774,7 +2794,7 @@ int
 snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
 {
 #ifdef SNAG_LEGACY_MAC_AT
-    if (__builtin_available(macOS 10.10, *))
+    if (linkat != NULL)
         return linkat(from_dir, from, to_dir, to, 0);
     char source[PATH_MAX], destination[PATH_MAX];
     const char *old = legacy_at_path(from_dir, from, source);
@@ -2810,7 +2830,7 @@ int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
 #ifdef SNAG_LEGACY_MAC_AT
-    if (__builtin_available(macOS 10.10, *))
+    if (mkdirat != NULL)
         return mkdirat(dirfd, path, 0700);
     char resolved[PATH_MAX];
     const char *legacy = legacy_at_path(dirfd, path, resolved);
@@ -3120,9 +3140,9 @@ uint64_t
 snag_time_ms(void)
 {
 #if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
-    if (__builtin_available(macOS 10.12, *)) {
+    if (clock_gettime != NULL) {
         struct timespec ts;
-        if (clock_gettime(CLOCK_REALTIME, &ts) < 0 || ts.tv_sec < 0)
+        if (clock_gettime((clockid_t)0, &ts) < 0 || ts.tv_sec < 0) /* Darwin CLOCK_REALTIME */
             return 0;
         return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
     }
@@ -3145,9 +3165,9 @@ uint64_t
 snag_monotonic_ms(void)
 {
 #if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
-    if (__builtin_available(macOS 10.12, *)) {
+    if (clock_gettime != NULL) {
         struct timespec now;
-        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0 || now.tv_sec < 0)
+        if (clock_gettime((clockid_t)6, &now) < 0 || now.tv_sec < 0) /* Darwin CLOCK_MONOTONIC */
             return 0;
         return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
     }
