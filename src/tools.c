@@ -258,6 +258,7 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
                const struct output_excerpt *stderr_stream)
 {
     char *out = NULL;
+    const char *msg = NULL;
 
     struct snag_buf text = {.max = SIZE_MAX};
     if (snag_string_in(status, "succeeded failed")) {
@@ -268,9 +269,7 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
                            signal_number) < 0)
             goto done;
     } else if (strcmp(status, "cancelled") == 0) {
-        const char *msg = "Process was cancelled by the user.\n";
-        if (snag_buf_append(&text, msg, strlen(msg)) < 0)
-            goto done;
+        msg = "Process was cancelled by the user.\n";
     } else if (strcmp(status, "running") == 0) {
         const char *msg;
 
@@ -296,12 +295,12 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
                 goto done;
         }
     } else if (strcmp(status, "io_failed") == 0) {
-        const char *msg = "Tool I/O failed.\n";
-        if (snag_buf_append(&text, msg, strlen(msg)) < 0)
-            goto done;
+        msg = "Tool I/O failed.\n";
     } else if (snag_buf_printf(&text, "Tool status: %s.\n", status) < 0) {
         goto done;
     }
+    if (msg && snag_buf_append(&text, msg, strlen(msg)) < 0)
+        goto done;
     if (proc->output_incomplete) {
         const char *warning = "Post-exit output drain reached its 2000 ms limit; output may be incomplete. The command has exited; remaining capture streams were closed without signalling unrelated descriptor owners.\n";
         if (snag_buf_append(&text, warning, strlen(warning)) < 0)

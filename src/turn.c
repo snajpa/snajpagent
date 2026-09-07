@@ -131,24 +131,6 @@ snag_response_graph_item(const struct snag_response_graph *graph, size_t index)
     return item;
 }
 
-static int
-nullable_usage_member(const json_t *object, const char *key,
-                      uint64_t *number, bool *known)
-{
-    json_t *value = json_object_get(object, key);
-
-    if (json_is_null(value)) {
-        *number = 0u;
-        *known = false;
-        return 0;
-    }
-    if (!json_is_integer(value) || json_integer_value(value) < 0)
-        return -1;
-    *number = (uint64_t)json_integer_value(value);
-    *known = true;
-    return 0;
-}
-
 int
 snag_response_usage_valid(const struct snag_response_usage *usage)
 {
@@ -199,13 +181,13 @@ snag_response_usage_from_json(const json_t *value,
     memset(&parsed, 0, sizeof(parsed));
     if (!usage || !snag_json_exact_keys(value,
         "input_tokens output_tokens reasoning_tokens total_tokens") ||
-        nullable_usage_member(value, "input_tokens", &parsed.input_tokens,
+        snag_json_optional_u64(value, "input_tokens", &parsed.input_tokens,
                               &parsed.input_known) < 0 ||
-        nullable_usage_member(value, "output_tokens", &parsed.output_tokens,
+        snag_json_optional_u64(value, "output_tokens", &parsed.output_tokens,
                               &parsed.output_known) < 0 ||
-        nullable_usage_member(value, "reasoning_tokens", &parsed.reasoning_tokens,
+        snag_json_optional_u64(value, "reasoning_tokens", &parsed.reasoning_tokens,
                               &parsed.reasoning_known) < 0 ||
-        nullable_usage_member(value, "total_tokens", &parsed.total_tokens,
+        snag_json_optional_u64(value, "total_tokens", &parsed.total_tokens,
                               &parsed.total_known) < 0 ||
         snag_response_usage_valid(&parsed) < 0)
         return snag_errno(EINVAL);

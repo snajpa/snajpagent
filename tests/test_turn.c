@@ -307,6 +307,11 @@ main(void)
         assert(usage_json);
         assert(snag_response_usage_from_json(usage_json, &parsed) == 0);
         assert(parsed.input_tokens == 10u && parsed.total_tokens == 14u);
+        assert(json_object_set_new(usage_json, "input_tokens", json_null()) == 0);
+        assert(snag_response_usage_from_json(usage_json, &parsed) == 0);
+        assert(!parsed.input_known && parsed.input_tokens == 0u);
+        assert(json_object_del(usage_json, "input_tokens") == 0);
+        assert(snag_response_usage_from_json(usage_json, &parsed) < 0);
         json_decref(usage_json);
         usage.total_tokens = 99u;
         assert(snag_response_usage_valid(&usage) < 0);

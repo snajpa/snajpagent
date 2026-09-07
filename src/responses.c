@@ -758,24 +758,6 @@ handle_arguments(struct snag_responses_stream *stream, const json_t *root,
 }
 
 static int
-provider_usage_member(const json_t *object, const char *key,
-                      uint64_t *number, bool *known)
-{
-    json_t *value = json_object_get(object, key);
-
-    if (!value || json_is_null(value)) {
-        *number = 0u;
-        *known = false;
-        return 0;
-    }
-    if (!json_is_integer(value) || json_integer_value(value) < 0)
-        return -1;
-    *number = (uint64_t)json_integer_value(value);
-    *known = true;
-    return 0;
-}
-
-static int
 parse_provider_usage(struct snag_responses_stream *stream,
                      const json_t *response)
 {
@@ -789,17 +771,17 @@ parse_provider_usage(struct snag_responses_stream *stream,
         return 0;
     }
     if (!json_is_object(value) ||
-        provider_usage_member(value, "input_tokens", &usage.input_tokens,
+        snag_json_optional_u64(value, "input_tokens", &usage.input_tokens,
                               &usage.input_known) < 0 ||
-        provider_usage_member(value, "output_tokens", &usage.output_tokens,
+        snag_json_optional_u64(value, "output_tokens", &usage.output_tokens,
                               &usage.output_known) < 0 ||
-        provider_usage_member(value, "total_tokens", &usage.total_tokens,
+        snag_json_optional_u64(value, "total_tokens", &usage.total_tokens,
                               &usage.total_known) < 0)
         return stream_fail(stream, EPROTO, "invalid response usage");
     details = json_object_get(value, "output_tokens_details");
     if (details && !json_is_null(details)) {
         if (!json_is_object(details) ||
-            provider_usage_member(details, "reasoning_tokens",
+            snag_json_optional_u64(details, "reasoning_tokens",
                                   &usage.reasoning_tokens,
                                   &usage.reasoning_known) < 0)
             return stream_fail(stream, EPROTO,

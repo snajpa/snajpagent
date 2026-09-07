@@ -372,6 +372,22 @@ snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out)
 }
 
 int
+snag_json_optional_u64(const json_t *object, const char *key, uint64_t *out, bool *known)
+{
+    json_t *value = json_object_get(object, key);
+
+    if (!value || json_is_null(value)) {
+        *out = 0u;
+        *known = false;
+        return 0;
+    }
+    if (snag_json_integer_u64(object, key, out) < 0)
+        return -1;
+    *known = true;
+    return 0;
+}
+
+int
 snag_json_set_new(json_t *object, const char *key, json_t *value)
 {
     if (!value)

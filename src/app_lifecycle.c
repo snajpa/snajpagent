@@ -374,12 +374,9 @@ set_goal_prompt(struct app_state *app, const char *argument)
         rc = commit_goal_event(app, "goal_reworded",
                                goal_text_data(&app->session, "user", prompt),
                                error, sizeof(error));
-        free(prompt);
-        if (rc < 0)
-            return goal_error(app, error);
-        return 0;
+    } else {
+        rc = start_goal(app, prompt, error, sizeof(error));
     }
-    rc = start_goal(app, prompt, error, sizeof(error));
     free(prompt);
     if (rc < 0)
         return goal_error(app, error);
@@ -396,9 +393,8 @@ snag_app_goal_pause(struct app_state *app, const char *reason,
         app->goal_armed = false;
         return 0;
     }
-    data = goal_id_data(&app->session);
-    if (!data || snag_json_set_new(data, "reason", json_string(reason)) < 0) {
-        json_decref(data);
+    data = json_pack("{s:s,s:s}", "goal_id", app->session.goal_id, "reason", reason);
+    if (!data) {
         return snag_errorf(error, error_size, "cannot allocate goal pause event");
     }
     if (commit_goal_event(app, "goal_paused", data,
@@ -442,9 +438,8 @@ goal_simple_command(struct app_state *app, const char *command)
             return snag_ui_text(&app->ui, SNAG_UI_WARNING,
                 locked ? "goal wording is already locked" :
                          "goal wording is already unlocked");
-        data = goal_id_data(&app->session);
-        if (!data || snag_json_set_new(data, "locked", json_boolean(locked)) < 0) {
-            json_decref(data);
+        data = json_pack("{s:s,s:b}", "goal_id", app->session.goal_id, "locked", locked);
+        if (!data) {
             return goal_error(app, "cannot allocate goal lock event");
         }
         if (commit_goal_event(app, "goal_lock_changed", data,
@@ -518,6 +513,13 @@ tool_result(bool succeeded, const char *message, json_t **result)
     return *result ? 0 : -1;
 }
 
+static bool
+goal_text_valid(const char *text, size_t limit)
+{
+    return text && *text && !snag_text_blank(text) && strlen(text) <= limit &&
+           snag_utf8_valid((const unsigned char *)text, strlen(text), true);
+}
+
 int
 snag_app_goal_tool(struct app_state *app,
                   const struct snag_response_item *call,
@@ -527,11 +529,14 @@ snag_app_goal_tool(struct app_state *app,
     const char *text;
     json_t *text_value;
     json_t *data;
+    size_t prompt_limit = app->config->max_goal_prompt_bytes;
+
+    if (prompt_limit > SNAG_MAX_GOAL_PROMPT)
+        prompt_limit = SNAG_MAX_GOAL_PROMPT;
 
     *result = NULL;
     if (call && call->name && strcmp(call->name, "create_goal") == 0) {
         const char *objective;
-        size_t len;
         char message[128];
 
         if (!snag_json_exact_keys(call->arguments, "objective") ||
@@ -539,10 +544,7 @@ snag_app_goal_tool(struct app_state *app,
             return tool_result(false, "create_goal arguments are invalid", result);
         if (snag_goal_unfinished(app->session.goal_status))
             return tool_result(false, "an unfinished goal already exists", result);
-        if (!*objective || snag_text_blank(objective) ||
-            (len = strlen(objective)) > app->config->max_goal_prompt_bytes ||
-            len > SNAG_MAX_GOAL_PROMPT ||
-            !snag_utf8_valid((const unsigned char *)objective, len, true))
+        if (!goal_text_valid(objective, prompt_limit))
             return tool_result(false,
                 "goal objective is blank, invalid, or exceeds the configured limit",
                 result);
@@ -561,12 +563,8 @@ snag_app_goal_tool(struct app_state *app,
     if (app->session.goal_status != SNAG_GOAL_ACTIVE)
         return tool_result(false, "there is no active goal to update", result);
     if (strcmp(action, "rewrite") == 0) {
-        size_t len;
         text = snag_json_string(call->arguments, "text");
-        if (!text || !*text || snag_text_blank(text) ||
-            (len = strlen(text)) > app->config->max_goal_prompt_bytes ||
-            len > SNAG_MAX_GOAL_PROMPT ||
-            !snag_utf8_valid((const unsigned char *)text, len, true))
+        if (!goal_text_valid(text, prompt_limit))
             return tool_result(false,
                 "new goal wording is blank, invalid, or exceeds the configured limit",
                 result);
@@ -595,16 +593,13 @@ snag_app_goal_tool(struct app_state *app,
         return tool_result(true, "goal marked complete", result);
     }
     if (strcmp(action, "block") == 0) {
-        size_t len;
         text = snag_json_string(call->arguments, "text");
-        if (!text || !*text || snag_text_blank(text) ||
-            (len = strlen(text)) > SNAG_MAX_GOAL_BLOCKER ||
-            !snag_utf8_valid((const unsigned char *)text, len, true))
+        if (!goal_text_valid(text, SNAG_MAX_GOAL_BLOCKER))
             return tool_result(false,
                                "block requires a bounded nonblank reason", result);
-        data = goal_actor_data(&app->session, "model");
-        if (!data || snag_json_set_new(data, "reason", json_string(text)) < 0) {
-            json_decref(data);
+        data = json_pack("{s:s,s:s,s:s}", "goal_id", app->session.goal_id,
+                         "actor", "model", "reason", text);
+        if (!data) {
             return snag_errorf(error, error_size, "cannot allocate goal block event");
         }
         if (commit_goal_event(app, "goal_blocked", data,

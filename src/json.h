@@ -34,5 +34,7 @@ bool snag_json_exact_keys(const json_t *object, const char *keys);
 const char *snag_json_string(const json_t *object, const char *key);
 int snag_json_set_new(json_t *object, const char *key, json_t *value);
 int snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out);
+/* Missing or null is unknown; a present value must be a nonnegative integer. */
+int snag_json_optional_u64(const json_t *object, const char *key, uint64_t *out, bool *known);
 
 #endif
