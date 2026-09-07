@@ -1252,6 +1252,21 @@ broker_orphan_ready(void *event)
     return 0;
 }
 
+struct input_orphan_ready {
+    HANDLE event;
+    unsigned int calls;
+};
+
+static int
+input_orphan_checkpoint(void *opaque)
+{
+    struct input_orphan_ready *ready = opaque;
+    /* The first read checkpoint registers ownership before sending the op. */
+    if (++ready->calls > 1u)
+        assert(SetEvent(ready->event));
+    return 0;
+}
+
 static int
 broker_orphan_child(const char *value, bool spawn, bool input)
 {
@@ -1279,8 +1294,9 @@ broker_orphan_child(const char *value, bool spawn, bool input)
     assert(sink >= 0 && snag_output_broker_write(&broker, sink, "ready", 5u, NULL, NULL) == 0);
     if (input) {
         wchar_t text[4];
+        struct input_orphan_ready ready = {.event = event};
         assert(close(sink) == 0);
-        (void)snag_input_broker_read(&broker, text, 4u, broker_orphan_ready, event);
+        (void)snag_input_broker_read(&broker, text, 4u, input_orphan_checkpoint, &ready);
         snag_output_broker_close(broker);
         return 1;
     }
