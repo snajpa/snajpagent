@@ -26,6 +26,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <process.h>
+#include <tlhelp32.h>
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -1202,6 +1203,66 @@ cancel_console_output(void *opaque)
     return -1;
 }
 
+static int
+broker_orphan_ready(void *event)
+{
+    assert(SetEvent(event));
+    return 0;
+}
+
+static int
+broker_orphan_child(const char *value)
+{
+    char *end;
+    unsigned long long number = strtoull(value, &end, 10);
+    assert(*value && !*end && number && (uintptr_t)number == number);
+    HANDLE event = (HANDLE)(uintptr_t)number;
+    int pair[2], sink = _open("NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT);
+    struct snag_output_broker *broker = NULL;
+    assert(sink >= 0 && snag_output_broker_write(&broker, sink, "ready", 5u, NULL, NULL) == 0);
+    assert(close(sink) == 0 && _pipe(pair, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
+    unsigned char output[65536];
+    memset(output, 'x', sizeof(output));
+    (void)snag_output_broker_write(&broker, pair[1], output, sizeof(output), broker_orphan_ready, event);
+    snag_output_broker_close(broker);
+    return 1;
+}
+
+static void
+test_broker_parent_death(void)
+{
+    SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+    HANDLE ready = CreateEventW(&security, TRUE, FALSE, NULL);
+    wchar_t program[32768], command[32768];
+    DWORD length = GetModuleFileNameW(NULL, program, 32768u);
+    assert(ready && length && length < 32768u);
+    assert(swprintf(command, 32768u, L"\"%ls\" --broker-orphan %llu", program,
+                      (unsigned long long)(uintptr_t)ready) > 0);
+    STARTUPINFOW startup = {.cb = sizeof(startup)};
+    PROCESS_INFORMATION child;
+    assert(CreateProcessW(program, command, NULL, NULL, TRUE, CREATE_NEW_PROCESS_GROUP,
+                           NULL, NULL, &startup, &child));
+    assert(CloseHandle(child.hThread));
+    assert(WaitForSingleObject(ready, 5000u) == WAIT_OBJECT_0 && CloseHandle(ready));
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
+    DWORD broker_id = 0;
+    assert(snapshot != INVALID_HANDLE_VALUE && Process32FirstW(snapshot, &entry));
+    do {
+        if (entry.th32ParentProcessID == child.dwProcessId) {
+            assert(!broker_id);
+            broker_id = entry.th32ProcessID;
+        }
+    } while (Process32NextW(snapshot, &entry));
+    assert(CloseHandle(snapshot) && broker_id);
+    HANDLE broker = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, broker_id);
+    assert(broker && TerminateProcess(child.hProcess, 77u));
+    assert(WaitForSingleObject(child.hProcess, 2000u) == WAIT_OBJECT_0 && CloseHandle(child.hProcess));
+    assert(WaitForSingleObject(broker, 2000u) == WAIT_OBJECT_0);
+    DWORD status;
+    assert(GetExitCodeProcess(broker, &status) && status == 125u && CloseHandle(broker));
+}
+
 static unsigned int __stdcall
 interrupt_hidden_console(void *opaque)
 {
@@ -1278,6 +1339,11 @@ test_hidden_console(void)
 static void
 test_console_output(void)
 {
+    wchar_t *malformed[] = {L"test", L"--snajpagent-private-writer", L"not-a-pipe"};
+    assert(snag_output_broker_main(1, malformed) == -1);
+    assert(snag_output_broker_main(2, malformed) == 125);
+    assert(snag_output_broker_main(3, malformed) == 125);
+    test_broker_parent_death();
     struct snag_term_host host = {0};
     int pair[2];
     assert(_pipe(pair, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
@@ -2041,6 +2107,8 @@ static int
 run_base(int argc, char **argv)
 {
 #ifdef _WIN32
+    if (argc == 3 && !strcmp(argv[1], "--broker-orphan"))
+        return broker_orphan_child(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "--quote-probe")) {
         char *expected = snag_environment("SNAJPAGENT_QUOTE_EXPECT");
         if (!expected || strcmp(argv[2], expected + 1u)) {
