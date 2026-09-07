@@ -2830,7 +2830,9 @@ int
 __wrap_clock_gettime(clockid_t clock, struct timespec *out)
 {
     int rc = __real_clock_gettime(clock, out);
-    if (rc == 0 || errno != ENOSYS)
+    /* musl translates an absent clock syscall into EINVAL for MONOTONIC.
+     * The raw probe below still requires kernel ENOSYS before emulation. */
+    if (rc == 0 || (errno != ENOSYS && !(clock == CLOCK_MONOTONIC && errno == EINVAL)))
         return rc;
     if (!out) {
         errno = EFAULT;
