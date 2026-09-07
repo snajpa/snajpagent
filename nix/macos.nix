@@ -138,7 +138,9 @@ let
     "-DCARES_SHARED=OFF" "-DCARES_STATIC=ON" "-DCARES_STATIC_PIC=ON"
     "-DCARES_BUILD_TOOLS=OFF" "-DCARES_BUILD_TESTS=OFF"
   ] ++ lib.optional (lib.versionOlder deployment "10.11") "-DHAVE_CONNECTX=OFF"
-    ++ lib.optional (lib.versionOlder deployment "10.7") "-DHAVE_ARC4RANDOM_BUF=OFF")
+    ++ lib.optionals (lib.versionOlder deployment "10.7") [
+      "-DHAVE_ARC4RANDOM_BUF=OFF" "-DHAVE_STRNLEN=OFF" "-DHAVE_MEMMEM=OFF"
+    ])
   []).overrideAttrs (old: {
     patches = (old.patches or []) ++ lib.optional
       (lib.versionOlder deployment "10.12") ./cares-legacy-darwin.patch;
