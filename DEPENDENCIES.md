@@ -138,15 +138,26 @@ Mozilla certificate-data license, and corresponding source/build instructions
 when redistributing a linked executable. Pinned dependencies live in the Nix
 store; external non-Nix media/SDK inputs belong in the ignored `.assets-cache/`.
 
-## FreeBSD platform foundation
+## FreeBSD amd64
 
-The existing base test runs on FreeBSD 8.4 amd64 with static system libraries.
+`make prod-freebsd-amd64` builds the full static executable at
+`build/matrix/freebsd-amd64/bin/snajpagent`, with matching symbols in `.debug`.
+The pinned 8.4 release disc supplies libc, pthreads, libutil, CRT and headers;
+the same pinned application libraries and embedded roots used by other targets
+are cross-built with LLVM. The ELF executable has no shared-library imports.
+It is non-PIE at this old ABI baseline; retain the modern Linux static-PIE
+artifacts for Linux. Third-party notices include the FreeBSD base components
+and their GCC runtime licensing alongside the application dependency notices.
+
+Actual FreeBSD 8.4 amd64 qualification covers base and IRC tests, internal
+read-only inspection and denied writes, parallel commands, PTY output/status,
+interactive resume and TLS distrust/trust/hostname checks with local fixtures.
+Earlier and newer releases remain unverified.
 The platform layer uses native PTYs, non-reaping `waitpid` polling, `fsync`
 and the kernel random device. Directory streams preserve caller descriptor
 ownership across older libc failure paths. Native GNU make builds select BSD
-API declarations and libutil automatically. Full application dependencies and
-old/new-release qualification remain under development; FreeBSD has no
-production matrix target yet.
+API declarations and libutil automatically. Use a UTF-8 locale and mounted
+devfs; the qualification guest used `en_US.UTF-8` and UFS for large sparse files.
 
 ## macOS ARM64 and Intel cross-builds
 
