@@ -299,28 +299,27 @@ snag_history_add(struct snag_history *term, const char *text)
 {
     bool damaged = false, dropped = false, retained = false;
     int fd, rc = -1, saved;
+    struct snag_buf encoded = {.max = HISTORY_FILE_BYTES};
 
     if (!term || !text || !*text)
         return 0;
     if (!term->path)
         return history_memory_add(term, text, NULL);
     fd = history_file_open(term);
-    if (fd < 0)
-        goto memory;
-    if (history_load_locked(term, fd, &damaged) < 0)
-        goto close_memory;
-    struct snag_buf encoded = {.max = HISTORY_FILE_BYTES};
+    if (fd < 0 || history_load_locked(term, fd, &damaged) < 0)
+        goto out;
     if (history_encode(&encoded, text) < 0 ||
         snag_write_full(fd, encoded.data, encoded.len) < 0 ||
         snag_write_full(fd, "\n", 1u) < 0 ||
         history_memory_add(term, text, &dropped) < 0)
-        goto encoded_out;
+        goto out;
     retained = true;
     rc = dropped ? history_rewrite(term, fd) : snag_sync_file(fd);
-encoded_out:
-    snag_buf_free(&encoded);
+out:
     saved = errno;
-    (void)close(fd);
+    snag_buf_free(&encoded);
+    if (fd >= 0)
+        (void)close(fd);
     errno = saved;
     if (rc == 0) {
         if (damaged)
@@ -330,13 +329,5 @@ encoded_out:
     history_note_warning(term);
     if (!retained)
         (void)history_memory_add(term, text, NULL);
-    return -1;
-close_memory:
-    saved = errno;
-    (void)close(fd);
-    errno = saved;
-memory:
-    history_note_warning(term);
-    (void)history_memory_add(term, text, NULL);
     return -1;
 }
