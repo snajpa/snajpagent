@@ -2721,13 +2721,10 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 if first:
                     arrived.set()
                     assert release.wait(15.0), "runtime commands did not finish during the request"
-                if not streaming:
-                    handler.send_response(200)
-                    handler.send_header("Content-Type", "text/event-stream")
-                    handler.send_header("Content-Length", str(len(body)))
-                    handler.send_header("Connection", "close")
-                    handler.end_headers()
-                handler.wfile.write(body[split:] if streaming else body)
+                if streaming:
+                    handler.wfile.write(body[split:])
+                else:
+                    provider.reply(handler, body, close_header=True)
 
             provider.runtime_handler = respond
             terminal = TmuxTerminal(case / "terminal", binary, workspace,
@@ -4377,9 +4374,8 @@ def run_interrupted_history_case(binary, root):
     def respond(handler, request, seq):
         requests.append(request)
         body = provider.response_body(seq, "history received").encode()
-        handler.send_response(200); handler.send_header("Content-Type", "text/event-stream")
-        handler.send_header("Content-Length", str(len(body))); handler.end_headers()
-        handler.wfile.write(body); handler.close_connection = True
+        provider.reply(handler, body)
+        handler.close_connection = True
     provider.runtime_handler = respond
     def serve(link):
         try:
@@ -4490,11 +4486,8 @@ def run_token_accounting_cases(binary, root):
 
         def send(handler, status, payload, sse=False):
             body = payload.encode() if sse else json.dumps(payload).encode()
-            handler.send_response(status)
-            handler.send_header("Content-Type", "text/event-stream" if sse else "application/json")
-            handler.send_header("Content-Length", str(len(body)))
-            handler.end_headers()
-            handler.wfile.write(body)
+            provider.reply(handler, body,
+                           "text/event-stream" if sse else "application/json", status)
 
         def overflow(handler, sequence):
             if mode == "openrouter":
