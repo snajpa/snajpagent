@@ -502,7 +502,7 @@ test_native_process_fanout(void)
 }
 
 static void
-test_native_process_descendant(bool isolated)
+test_native_process_descendant(bool isolated, bool legacy)
 {
     WCHAR program[32768];
     assert(GetModuleFileNameW(NULL, program, 32768u));
@@ -511,10 +511,15 @@ test_native_process_descendant(bool isolated)
     struct snag_child child;
     snag_child_init(&child);
     assert(executable && directory && env);
+#ifdef SNAG_LEGACY_PTY
+    if (legacy)
+        assert(snag_child_spawn_legacy_pty(&child, executable, "tree", directory, env) == 0);
+    else
+#endif
     assert((isolated ? snag_child_spawn_isolated(&child, executable, "tree", directory, env) :
             snag_child_spawn(&child, executable, "tree", directory, env, false)) == 0);
     snag_child_close_stream(&child, 2u);
-    char message[64] = {0};
+    char message[512] = {0};
     size_t used = 0;
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     while (!strchr(message, '\n')) {
@@ -527,8 +532,9 @@ test_native_process_descendant(bool isolated)
             used += (size_t)n;
         }
     }
-    assert(!strncmp(message, "descendant=", 11u));
-    DWORD pid = (DWORD)strtoul(message + 11u, NULL, 10);
+    char *marker = legacy ? strstr(message, "descendant=") : message;
+    assert(marker && !strncmp(marker, "descendant=", 11u));
+    DWORD pid = (DWORD)strtoul(marker + 11u, NULL, 10);
     HANDLE descendant = OpenProcess(SYNCHRONIZE, FALSE, pid);
     assert(descendant);
     while (!snag_child_exited(&child)) {
@@ -537,7 +543,13 @@ test_native_process_descendant(bool isolated)
     }
     assert(WaitForSingleObject(descendant, 0) == WAIT_TIMEOUT);
     struct snag_child_event quiet = {&child, 0u, SNAG_CHILD_READ, 0};
-    assert(snag_child_wait(&quiet, 1u, SNAG_WAKE_INVALID, 20) == 0);
+    if (legacy) {
+        while (snag_child_wait(&quiet, 1u, SNAG_WAKE_INVALID, 20) > 0) {
+            assert(snag_monotonic_ms() < deadline);
+            assert(snag_child_read(&child, 0u, message, sizeof(message)) > 0);
+        }
+    } else
+        assert(snag_child_wait(&quiet, 1u, SNAG_WAKE_INVALID, 20) == 0);
     snag_child_signal(&child, SNAG_CHILD_KILL);
     assert(WaitForSingleObject(descendant, 1000u) == WAIT_OBJECT_0 && CloseHandle(descendant));
     assert(snag_child_reap(&child) == 0 && child.exit_code == 0);
@@ -573,6 +585,36 @@ test_legacy_collector_failure(void)
     assert(snag_child_wait(&output, 1u, SNAG_WAKE_INVALID, 2000) > 0 && output.revents);
     char bytes[4096];
     assert(snag_child_read(&child, 0u, bytes, sizeof(bytes)) < 0 && errno == EIO);
+    snag_child_free(&child);
+    snag_environment_entries_free(environment);
+    free(directory);
+    free(program);
+}
+
+static void
+test_legacy_console_interrupt(void)
+{
+    char *program = snag_program_path(NULL), *directory = snag_realpath(".");
+    char **environment = snag_environment_entries();
+    struct snag_child child;
+    snag_child_init(&child);
+    assert(program && directory && environment);
+    assert(snag_child_spawn_legacy_pty(&child, program, "wait", directory, environment) == 0);
+    snag_child_signal(&child, SNAG_CHILD_INTERRUPT);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    for (;;) {
+        assert(snag_monotonic_ms() < deadline);
+        struct snag_child_event output = {&child, 0u, SNAG_CHILD_READ, 0};
+        assert(snag_child_wait(&output, 1u, SNAG_WAKE_INVALID, 20) >= 0);
+        if (!output.revents)
+            continue;
+        char bytes[4096];
+        ssize_t n = snag_child_read(&child, 0u, bytes, sizeof(bytes));
+        assert(n >= 0);
+        if (!n)
+            break;
+    }
+    assert(snag_child_reap(&child) == 0 && child.exit_code == 0xc000013aU);
     snag_child_free(&child);
     snag_environment_entries_free(environment);
     free(directory);
@@ -2078,10 +2120,12 @@ test_platform(void)
     test_native_process(true, true);
     test_native_process_input(true, true);
     test_legacy_collector_failure();
+    test_legacy_console_interrupt();
+    test_native_process_descendant(true, true);
 #endif
     test_native_process_fanout();
-    test_native_process_descendant(false);
-    test_native_process_descendant(true);
+    test_native_process_descendant(false, false);
+    test_native_process_descendant(true, false);
     test_home_environment();
 #endif
     assert(!snag_environment(NULL) && errno == EINVAL);
