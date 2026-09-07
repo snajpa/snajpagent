@@ -49,6 +49,7 @@ class Child:
         self.kill()
 
     def __init__(self, args, ready=None):
+        self.sessions_before = session_ids()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(WORKSPACE)
@@ -64,12 +65,16 @@ class Child:
     @classmethod
     def from_command(cls, command):
         child = cls.__new__(cls)
+        child.sessions_before = session_ids()
         child.pid, child.fd = pty.fork()
         if child.pid == 0:
             os.chdir(WORKSPACE)
             os.execl("/bin/sh", "sh", "-c", "exec " + command)
         child.buf = bytearray()
         return child
+
+    def session_id(self):
+        return new_session(self.sessions_before)
 
     def read_once(self, timeout):
         ready, _, _ = select.select([self.fd], [], [], timeout)
@@ -209,7 +214,6 @@ class Child:
 def test_resize_and_suspend_preserve_draft():
     for suspend in (False, True):
         text = b"suspend draft" if suspend else b"resize draft"
-        before = session_ids()
         with Child(["-vvvv"]) as child:
             child.wait(DEFAULT_IDLE_PROMPT)
             typed_end = child.send_wait(text, text)
@@ -243,7 +247,7 @@ def test_resize_and_suspend_preserve_draft():
             child.exit_now()
             if not suspend:
                 assert b"\x1b[?2004l" in child.buf[idle:], bytes(child.buf)
-        turn = one(events(new_session(before)), "turn_started")
+        turn = one(events(child.session_id()), "turn_started")
         assert turn["data"]["text"] == text.decode(), turn
 
 
@@ -611,14 +615,13 @@ def test_incremental_wrapped_long_prompt_multiline_indent():
 
 
 def test_steering():
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", "»".encode())
     child.wait(b"working slowly")
     answer_end = child.send_wait(b"change course\r", b"steered: change course")
     child.exit_cleanly(answer_end)
 
-    session_id = new_session(before)
+    session_id = child.session_id()
     log = events(session_id)
     steering = one(log, "steering_added")
     interrupted = one(log, "response_interrupted")
@@ -631,7 +634,6 @@ def test_steering():
 
 
 def test_repeated_steering_rearms_composer():
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow_resteer\r", b"working slowly")
 
@@ -647,7 +649,7 @@ def test_repeated_steering_rearms_composer():
     answer_end = child.wait(b"repeated steering complete")
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     steering = [item for item in log if item["type"] == "steering_added"]
     starts = [item for item in log if item["type"] == "response_started"]
     interrupted = [item for item in log
@@ -662,13 +664,12 @@ def test_repeated_steering_rearms_composer():
 
 
 def test_public_index_gap():
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     commentary_end = child.send_wait(b"public_index_gap\r", b"Checking hidden work.")
     answer_end = child.wait(b"Gap-safe final.", start=commentary_end)
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     completed = one(log, "response_completed")
     assert [item["kind"] for item in completed["data"]["items"]] == [
         "assistant", "assistant"
@@ -678,14 +679,13 @@ def test_public_index_gap():
 
 
 def test_public_index_diagnostic():
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"public_index_decrease\r", b"index one")
     failure_end = child.wait(b"public output indexes did not increase")
     exhausted = child.wait(b"turn failed; try /retry", start=failure_end, timeout=20.0)
     child.exit_cleanly(exhausted)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     failures = [item for item in log if item["type"] == "response_failed"]
     assert len(failures) == 4
     assert len([item for item in log if item["type"] == "turn_recovery"]) == 3
@@ -720,7 +720,6 @@ def test_typing_pause_and_transient_composer():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
         "typing-pause.ini"
     config.write_text("[provider openai]\n[ui]\ntyping_pause_ms = 300\n", encoding="utf-8")
-    before = session_ids()
     child = Child(["--config", str(config)], DEFAULT_IDLE_PROMPT)
     first_end = child.send_wait(b"typing_stream\r", b"model-output-one")
 
@@ -753,14 +752,13 @@ def test_typing_pause_and_transient_composer():
     os.close(child.fd)
     assert os.waitstatus_to_exitcode(status) == 0
 
-    completed = one(events(new_session(before)), "response_completed")
+    completed = one(events(child.session_id()), "response_completed")
     assert completed["data"]["items"][0]["text"] == (
         "model-output-one model-output-two model-output-three"
     )
 
 
 def test_armed_fifo():
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", b"working slowly")
     child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
@@ -772,7 +770,7 @@ def test_armed_fifo():
     child.send(b"\x15")
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     queued = one(log, "future_turn_queued")
     turns = [item for item in log if item["type"] == "turn_started"]
     assert len(turns) == 2
@@ -818,7 +816,6 @@ def test_queue_prompt_counts():
 
 def test_read_only_queries():
     Path(WORKSPACE, "ro-input.txt").write_text("native text\nsecond line\n", encoding="utf-8")
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     end = child.send_wait(b"/ro\r", b"usage: /ro QUERY")
     child.wait_idle_prompt(start=end)
@@ -830,7 +827,7 @@ def test_read_only_queries():
     child.wait_idle_prompt(start=end)
     end = child.send_wait(b"//ro ping\r", b"fixture answer", start=end)
     child.exit_cleanly(end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     turns = [x["data"] for x in log if x["type"] == "turn_started"]
     assert [x["read_only"] for x in turns] == [True, True, False, False]
     assert turns[-1]["text"] == "/ro ping"
@@ -843,7 +840,6 @@ def test_read_only_queries():
                for x in results[3:])
     assert not any(x["type"] == "goal_started" for x in log)
 
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", b"working slowly")
     end = child.send_wait(b"/ro ping\r", b"/ro cannot steer an active turn")
@@ -855,19 +851,18 @@ def test_read_only_queries():
     end = child.wait(b"haha", start=end)
     end = child.wait(b"fixture answer", start=end)
     child.exit_cleanly(end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     turns = [x["data"] for x in log if x["type"] == "turn_started"]
     assert [x["read_only"] for x in turns] == [False, True, True, False]
     assert [x["text"] for x in turns] == ["slow", "ping", "repeat", "/ro ping"]
     assert not any(x["type"] in ("steering_added", "response_interrupted") for x in log)
 
     # Ordinary steers keep the existing read-only turn read-only.
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"/ro slow\r", b"working slowly")
     end = child.send_wait(b"replacement\r", b"steered: replacement")
     child.exit_cleanly(end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert one(log, "turn_started")["data"]["read_only"] is True
     one(log, "steering_added")
 
@@ -915,11 +910,10 @@ def test_read_only_multiline_compaction_and_chat():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     config = root / "config" / "ro-compaction.ini"
     config.write_text("[provider openai]\nauto_compact_input_tokens = 1\n", encoding="utf-8")
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(end)
-    sid = new_session(before)
+    sid = child.session_id()
     child = Child(["--config", str(config), "--resume", sid], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     end = child.send_wait(b"/ro ro_native\r", b"native complete")
     child.exit_cleanly(end)
@@ -927,7 +921,6 @@ def test_read_only_multiline_compaction_and_chat():
     assert any(x["type"] == "compaction_completed" for x in log)
     assert [x for x in log if x["type"] == "turn_started"][-1]["data"]["read_only"] is True
 
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", b"working slowly")
     end = child.send_wait(b"\x1b[200~/ro inspect\nmultiline\x1b[201~\r", b"/ro cannot steer an active turn")
@@ -938,18 +931,17 @@ def test_read_only_multiline_compaction_and_chat():
     end = child.wait(b"fixture answer", start=end)
     end = child.wait(b"fixture answer", start=end)
     child.exit_cleanly(end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     turns = [x["data"] for x in log if x["type"] == "turn_started"]
     assert [x["text"] for x in turns[1:]] == ["inspect\nmultiline", "another\nquery"]
     assert all(x["read_only"] for x in turns[1:])
     assert not any(x["type"] == "steering_added" for x in log)
 
-    before = session_ids()
     child = Child(["--no-color", "-s", f"127.0.0.1:{free_port()}",
                    "-n", "roagent", "-o", "rooperator", "-r", "lab"], chat_prompt("rooperator"))
     end = child.send_wait(b"/ro ro_native\r", b"native complete")
     child.exit_cleanly(end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     turn = one(log, "turn_started")["data"]
     assert turn["read_only"] and turn["text"] == "ro_native"
     assert not any(x["type"] in ("irc_reply_reminder", "turn_failed") for x in log)
@@ -958,7 +950,6 @@ def test_read_only_multiline_compaction_and_chat():
 
 
 def test_read_only_queue_replay_and_edit():
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"queue_slow\r", b"working slowly")
     child.send_wait(b"/ro ping\t", b"queued (/next or /q c) " + PROMPT + b"/ro ping")
@@ -968,7 +959,7 @@ def test_read_only_queue_replay_and_edit():
     child.wait(f"openai/{DEFAULT_MODEL}/medium".encode(), start=end)
     end = child.send_wait(b"\x03", b"turn interrupted")
     child.exit_cleanly(end)
-    sid = new_session(before)
+    sid = child.session_id()
     log = events(sid)
     assert one(log, "future_turn_edited")["data"]["read_only"] is True
     child = Child(["--resume", sid])
@@ -984,7 +975,6 @@ def test_read_only_queue_replay_and_edit():
     assert turns[1]["input_kind"] == "queued" and turns[1]["read_only"] is True
     assert turns[1]["text"] == "repeat"
 
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"/goal slow goal\r", b"working on goal")
     end = child.send_wait(b"/ro ping\t", b"queued (/next or /q c) " + PROMPT + b"/ro ping")
@@ -997,14 +987,13 @@ def test_read_only_queue_replay_and_edit():
     end = child.send_wait(b"/next\r", b"haha", start=end)
     end = child.wait(b"goal done", start=end)
     child.exit_cleanly(end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert [x["data"]["input_kind"] for x in log if x["type"] == "turn_started"] == [
         "goal", "queued", "goal"
     ]
 
 
 def test_managed_command_steering_and_tab_queue():
-    before = session_ids()
     child = Child(["-v"], DEFAULT_IDLE_PROMPT)
     tool_start = child.send_wait(b"managed_command_steer\r", b"fixture managed steering wait")
     deadline = time.monotonic() + 1.0
@@ -1017,7 +1006,7 @@ def test_managed_command_steering_and_tab_queue():
     answer_end = child.wait(b"managed command steering complete")
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     steering = one(log, "steering_added")
     running = next(
         item for item in log
@@ -1029,7 +1018,6 @@ def test_managed_command_steering_and_tab_queue():
     assert running["data"]["result"]["handle"] is not None
     assert not [item for item in log if item["type"] == "process_closed"]
 
-    before = session_ids()
     child = Child(["-v"], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"managed_command_queue\r", b"fixture managed queue wait")
     child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
@@ -1037,7 +1025,7 @@ def test_managed_command_steering_and_tab_queue():
     answer_end = child.wait(b"pong", start=command_end)
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     queued = one(log, "future_turn_queued")
     turns = [item for item in log if item["type"] == "turn_started"]
     first_turn_id = turns[0]["data"]["turn_id"]
@@ -1064,11 +1052,10 @@ def test_steering_during_pre_response_compaction():
         "[provider openai]\nauto_compact_input_tokens = 1\n",
         encoding="utf-8",
     )
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     answer_end = child.send_wait(b"context_anchor_chain\r", b"context anchor complete")
     child.exit_cleanly(answer_end)
-    session_id = new_session(before)
+    session_id = child.session_id()
 
     child = Child(["--config", str(config), "--resume", session_id], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     child.send_wait(b"compaction_steer\r", "»".encode())
@@ -1100,11 +1087,10 @@ def test_steering_during_pre_response_compaction():
 
 
 def test_steering_during_capacity_recovery_compaction():
-    before = session_ids()
     child = Child([], DEFAULT_IDLE_PROMPT)
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
-    session_id = new_session(before)
+    session_id = child.session_id()
 
     child = Child(["--resume", session_id], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     child.send(b"capacity_recovery_steer\r")
@@ -1194,11 +1180,10 @@ def test_agents_md_config():
         "[provider openai]\n[agent]\nread_agents_md = true\n",
         encoding="utf-8",
     )
-    before = session_ids()
     child = Child(["--config", str(enabled_config), "-C", str(workspace)], PROMPT.rstrip())
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
-    turn = one(events(new_session(before)), "turn_started")
+    turn = one(events(child.session_id()), "turn_started")
     instructions = turn["data"]["instructions"]
     assert instructions
     assert instructions[-1] == str(agents)
@@ -1208,11 +1193,10 @@ def test_agents_md_config():
         "[provider openai]\n[agent]\nread_agents_md = false\n",
         encoding="utf-8",
     )
-    before = session_ids()
     child = Child(["--config", str(disabled_config), "-C", str(workspace)], PROMPT.rstrip())
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
-    turn = one(events(new_session(before)), "turn_started")
+    turn = one(events(child.session_id()), "turn_started")
     assert turn["data"]["instructions"] == []
 
     # Explicit roots survive disabled automatic discovery, compaction and resume.
@@ -1246,7 +1230,6 @@ def test_agents_md_config():
 
 
 def test_interrupt():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"slow\r", b"working slowly")
     interrupted_end = child.send_wait(b"\x03", b"turn interrupted")
@@ -1259,7 +1242,7 @@ def test_interrupt():
     assert bytes(child.buf[idle_cancel:]).count(b"^C\r\n") == 1
     child.exit_now()
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     response = one(log, "response_interrupted")
     turn = one(log, "turn_interrupted")
     assert response["data"]["origin"] == "user"
@@ -1269,7 +1252,6 @@ def test_interrupt():
 
 
 def test_active_ctrl_c_clears_draft():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"queue_slow\r", b"working slowly")
 
@@ -1284,7 +1266,7 @@ def test_active_ctrl_c_clears_draft():
     answer_end = child.send_wait(b"replacement\r", b"steered: replacement", start=clear_end)
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     steering = one(log, "steering_added")
     response = one(log, "response_interrupted")
     assert steering["data"]["text"] == "replacement"
@@ -1407,24 +1389,22 @@ def test_prompt_history_and_reverse_search():
 
 
 def test_multiline_and_paste():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     first_end = child.send_wait(b"line one\nline two\r", b"fixture answer")
     child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=first_end)
     answer_end = child.send_wait(b"\x1b[200~ping\x1b[201~\r", b"pong")
     child.exit_cleanly(answer_end)
 
-    turns = [item for item in events(new_session(before))
+    turns = [item for item in events(child.session_id())
              if item["type"] == "turn_started"]
     assert [item["data"]["text"] for item in turns] == ["line one\nline two", "ping"]
 
 
 def test_resume_pauses_fifo():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"slow\r", b"working slowly")
     child.send_wait(b"/queue ping\r", b"queued (/next or /q c) " + PROMPT + b"ping")
-    session_id = new_session(before)
+    session_id = child.session_id()
     child.kill()
 
     resumed = Child(["--resume", session_id], b"1 queued paused")
@@ -1445,7 +1425,6 @@ def test_resume_pauses_fifo():
 
 
 def test_goal_quoted_reserved_wording():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     error_end = child.send_wait(b"/goal pause after release\r", b"reserved /goal command has extra text")
     child.wait(PROMPT.rstrip(), start=error_end)
@@ -1455,7 +1434,7 @@ def test_goal_quoted_reserved_wording():
     child.wait(PROMPT.rstrip(), start=wording_end)
     child.exit_now()
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     started = one(log, "goal_started")
     completed = one(log, "goal_completed")
     turns = [item for item in log if item["type"] == "turn_started"]
@@ -1465,13 +1444,12 @@ def test_goal_quoted_reserved_wording():
 
 
 def test_goal_automatic_continuation():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     checkpoint_end = child.send_wait(b"/goal automatic goal\r", b"goal checkpoint")
     answer_end = child.wait(b"goal done", start=checkpoint_end)
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     turns = [item for item in log if item["type"] == "turn_started"]
     assert [item["data"]["input_kind"] for item in turns] == ["goal", "goal"]
     assert all(item["data"]["text"] ==
@@ -1481,7 +1459,6 @@ def test_goal_automatic_continuation():
 
 
 def test_model_created_goal_continuation():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     started_end = child.send_wait(b"please create a persistent goal\r", GOAL_SET)
     checkpoint_end = child.wait(b"model-created checkpoint", start=started_end)
@@ -1489,7 +1466,7 @@ def test_model_created_goal_continuation():
     answer_end = child.wait(b"goal done", start=cleared_end)
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     started = one(log, "goal_started")
     turns = [item for item in log if item["type"] == "turn_started"]
     assert started["data"]["prompt"] == "model-created goal"
@@ -1504,28 +1481,26 @@ def test_goal_configured_wording_limit():
         "[provider openai]\n[agent]\nmax_goal_prompt_bytes = 4\n",
         encoding="utf-8",
     )
-    before = session_ids()
     child = Child(["--config", str(config)], PROMPT.rstrip())
     error_end = child.send_wait(b"/goal abcde\r", b"goal wording must contain 1..4 UTF-8 bytes")
     child.wait(PROMPT.rstrip(), start=error_end)
     answer_end = child.send_wait(b"/goal tiny\r", b"goal done")
     child.exit_cleanly(answer_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert one(log, "goal_started")["data"]["prompt"] == "tiny"
     assert len([item for item in log if item["type"] == "goal_reworded"]) == 0
     assert one(log, "goal_completed")["data"]["actor"] == "model"
 
 
 def test_goal_model_rewrite_and_lock():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     set_end = child.send_wait(b"/goal rewrite goal\r", GOAL_SET)
     rewritten_end = child.wait(GOAL_UPDATED, start=set_end)
     cleared_end = child.wait(GOAL_CLEARED, start=rewritten_end)
     answer_end = child.wait(b"goal done", start=cleared_end)
     child.exit_cleanly(answer_end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     reworded = one(log, "goal_reworded")
     assert reworded["data"] == {
         "actor": "model",
@@ -1533,20 +1508,18 @@ def test_goal_model_rewrite_and_lock():
         "prompt": "rewritten goal",
     }
 
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal locked goal\r", b"preparing goal rewrite")
     lock_end = child.send_wait(b"/goal lock\r", b"Goal wording locked against model changes")
     answer_end = child.wait(b"goal done", start=lock_end)
     child.exit_cleanly(answer_end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert len([item for item in log if item["type"] == "goal_reworded"]) == 0
     assert one(log, "goal_lock_changed")["data"]["locked"] is True
     assert one(log, "goal_completed")["data"]["actor"] == "model"
 
 
 def test_goal_pause_resume_and_queue_priority():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal slow goal\r", b"working on goal")
     pause_end = child.send_wait(b"/goal pause\r", b"Goal paused at the current turn boundary")
@@ -1556,13 +1529,12 @@ def test_goal_pause_resume_and_queue_priority():
     assert b"goal done" not in child.buf[checkpoint_end:]
     answer_end = child.send_wait(b"/goal resume\r", b"goal done", start=checkpoint_end)
     child.exit_cleanly(answer_end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert one(log, "goal_paused")["data"]["reason"] == "user"
     one(log, "goal_resumed")
     turns = [item for item in log if item["type"] == "turn_started"]
     assert [item["data"]["input_kind"] for item in turns] == ["goal", "goal"]
 
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal slow goal\r", b"working on goal")
     child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
@@ -1573,7 +1545,7 @@ def test_goal_pause_resume_and_queue_priority():
     pong_end = child.wait(b"pong", start=pong_end)
     answer_end = child.wait(b"goal done", start=pong_end)
     child.exit_cleanly(answer_end)
-    log = events(new_session(before))
+    log = events(child.session_id())
     turns = [item for item in log if item["type"] == "turn_started"]
     assert [item["data"]["input_kind"] for item in turns] == [
         "goal", "queued", "queued", "queued", "goal"
@@ -1581,7 +1553,6 @@ def test_goal_pause_resume_and_queue_priority():
 
 
 def test_goal_user_terminal_commands_and_unlock():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     set_end = child.send_wait(b"/goal slow goal\r", GOAL_SET)
     child.wait(b"working on goal", start=set_end)
@@ -1597,7 +1568,7 @@ def test_goal_user_terminal_commands_and_unlock():
     cancel_end = child.send_wait(b"/goal cancel\r", GOAL_CLEARED, start=set_end)
     child.exit_cleanly(cancel_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     completed = one(log, "goal_completed")
     assert completed["data"]["actor"] == "user"
     one(log, "goal_cancelled")
@@ -1614,29 +1585,26 @@ def test_goal_user_terminal_commands_and_unlock():
 
 
 def test_goal_refusal_failure_block_and_restart_state():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal refusing goal\r", b"I cannot continue this goal.")
     child.wait(b"Goal active; retrying")
     child.send(b"/goal pause\r")
     paused = child.wait(b"Goal paused at the current turn boundary")
     child.exit_cleanly(paused)
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert one(log, "goal_paused")["data"]["reason"] == "user"
 
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal failing goal\r", b"fixture goal provider failed")
     child.wait(b"Goal active; retrying")
     done = child.wait(b"goal done", timeout=20.0)
     child.exit_cleanly(done)
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert not [e for e in log if e["type"] == "goal_paused"]
     assert len([e for e in log if e["type"] == "turn_recovery"]) == 4
     assert len([e for e in log if e["type"] == "turn_started"]) == 1
     one(log, "goal_completed")
 
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal blocked goal\r", b"Goal blocked by model")
     answer_end = child.wait(b"goal done")
@@ -1644,14 +1612,13 @@ def test_goal_refusal_failure_block_and_restart_state():
     blocker_end = child.wait(b"fixture dependency is unavailable", start=status_end)
     child.wait(PROMPT.rstrip(), start=blocker_end)
     child.exit_now()
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert one(log, "goal_blocked")["data"]["reason"] == \
         "fixture dependency is unavailable"
 
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal slow goal\r", b"working on goal")
-    session_id = new_session(before)
+    session_id = child.session_id()
     child.kill()
     resumed = Child(["--resume", session_id])
     status_end = resumed.wait(b": active")
@@ -1666,7 +1633,6 @@ def test_goal_refusal_failure_block_and_restart_state():
 
 
 def test_saved_goal_restored_without_lookup():
-    before = session_ids()
     with Child([]) as child:
         child.wait_idle_prompt()
         child.send_wait(b"/goal slow goal\r", b"working on goal")
@@ -1679,7 +1645,7 @@ def test_saved_goal_restored_without_lookup():
         locked = child.send_wait(b"/goal lock\r", b"Goal wording locked against model changes", start=changed)
         child.wait_idle_prompt(start=locked)
         child.exit_now()
-    session_id = new_session(before)
+    session_id = child.session_id()
     original = events(session_id)
     goal_id = one(original, "goal_started")["data"]["goal_id"]
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "goal-resume.ini"
@@ -1705,7 +1671,6 @@ def test_saved_goal_restored_without_lookup():
 
 def test_resume_preserves_inactive_and_queued_goal_states():
     for state in ("blocked", "completed", "cancelled"):
-        before = session_ids()
         with Child([]) as child:
             child.wait_idle_prompt()
             answer = child.send_wait(b"/goal blocked goal\r", b"goal done")
@@ -1715,7 +1680,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
                 cleared = child.send_wait(b"/goal " + (b"complete" if state == "completed" else b"cancel") + b"\r", GOAL_CLEARED, start=start)
                 child.wait_idle_prompt(start=cleared)
             child.exit_now()
-        session_id = new_session(before)
+        session_id = child.session_id()
         original = events(session_id)
         goal_id = one(original, "goal_started")["data"]["goal_id"]
         with Child(["--resume", session_id]) as resumed:
@@ -1727,12 +1692,11 @@ def test_resume_preserves_inactive_and_queued_goal_states():
             resumed.exit_now()
         assert events(session_id) == original
 
-    before = session_ids()
     with Child([]) as child:
         child.wait_idle_prompt()
         child.send_wait(b"/goal slow goal\r", b"working on goal")
         child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
-        session_id = new_session(before)
+        session_id = child.session_id()
         child.send_wait(b"\x04", RESUME_HEADER, timeout=4.0)
         command = child.finish()
     original = events(session_id)
@@ -1755,7 +1719,6 @@ def test_resume_preserves_inactive_and_queued_goal_states():
 
 
 def test_queue_mutation_commands():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"queue_slow\r", b"working slowly")
 
@@ -1794,7 +1757,7 @@ def test_queue_mutation_commands():
     os.close(child.fd)
     assert os.waitstatus_to_exitcode(status) == 0
 
-    session_id = new_session(before)
+    session_id = child.session_id()
     resumed = Child(["--resume", session_id], b"2 queued paused")
     resumed.wait(b"/medium   ?% (2) \xe2\x80\xba ")
     resumed.wait(PROMPT.rstrip())
@@ -1834,7 +1797,6 @@ def test_queue_mutation_commands():
 
 
 def test_preferences_and_verbosity():
-    before = session_ids()
     child = Child([], PROMPT.rstrip())
 
     for level in range(7):
@@ -1858,7 +1820,7 @@ def test_preferences_and_verbosity():
     terminal_end = child.wait(b"turn_completed synced", start=answer_end)
     child.exit_cleanly(terminal_end)
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     effort = one(log, "model_selection_changed")
     turn = one(log, "turn_started")
     assert effort["data"] == {
@@ -1872,11 +1834,10 @@ def test_preferences_and_verbosity():
 def test_active_verbosity():
     for key in (b"\r", b"\t"):
         for initial, level in ((0, 3), (3, 0)):
-            before = session_ids()
             with Child(["-v"] * initial) as child:
                 child.wait_idle_prompt()
                 child.send_wait(b"managed_command_queue\r", "⠋".encode())
-                session = new_session(before)
+                session = child.session_id()
                 start = len(child.buf)
                 after = child.send_wait(f"/verbose {level}".encode() + key, f"verbosity: {level} (".encode(),
                                    start=start, timeout=0.25)
@@ -2277,7 +2238,6 @@ def test_model_cache_and_selection():
         "api_key = ${SECOND_API_KEY}\n",
         encoding="utf-8",
     )
-    before = session_ids()
     child = Child(["--config", str(config)], PROMPT.rstrip())
 
     # Explicit refresh creates the complete all-provider cache.
@@ -2365,7 +2325,7 @@ def test_model_cache_and_selection():
     answer_end = child.send_wait(b"ping\r", b"pong", start=end)
     child.exit_cleanly(answer_end)
 
-    session_id = new_session(before)
+    session_id = child.session_id()
     log = events(session_id)
     changes = [event for event in log
                if event["type"] == "model_selection_changed"]
@@ -2429,7 +2389,6 @@ def test_model_configuration_save():
     )
     original = config.read_bytes()
     original_mode = config.stat().st_mode & 0o777
-    before = session_ids()
     child = Child(["--config", str(config)], PROMPT.rstrip())
 
     # Selection without a suffix remains session-only.
@@ -2501,7 +2460,7 @@ def test_model_configuration_save():
     child.wait_idle_prompt(start=answered)
     child.exit_now()
 
-    log = events(new_session(before))
+    log = events(child.session_id())
     assert not [
         event for event in log
         if event["type"] == "model_selection_changed" and
@@ -2798,7 +2757,6 @@ def test_config_and_cli_model_passthrough():
         "[model-alias openai/future]\nmodel=vendor/future-model\n",
         encoding="utf-8",
     )
-    before = session_ids()
     child = Child(["--config", str(config)], b" openai/openai/gpt-5.6/medium   0% \xe2\x80\xba ")
 
     end = child.send_wait(b"/status\r", b"model: openai/gpt-5.6")
@@ -2807,7 +2765,7 @@ def test_config_and_cli_model_passthrough():
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
 
-    session_id = new_session(before)
+    session_id = child.session_id()
     log = events(session_id)
     turn = one(log, "turn_started")
     assert turn["data"]["config"]["model"] == "openai/gpt-5.6"
@@ -3390,7 +3348,6 @@ def test_prompt_identity_is_terminal_safe():
     unsafe_model = "unsafe\x1bmodel"
     unsafe_effort = "odd\u202eeffort"
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
-    before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort], b" openai/" + visible + "   0% › ".encode())
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
@@ -3398,7 +3355,7 @@ def test_prompt_identity_is_terminal_safe():
     answer_end = child.wait(b"pong")
     child.exit_cleanly(answer_end)
 
-    turn = one(events(new_session(before)), "turn_started")
+    turn = one(events(child.session_id()), "turn_started")
     assert turn["data"]["config"]["model"] == unsafe_model
     assert turn["data"]["config"]["effort"] == unsafe_effort
 
@@ -3419,7 +3376,6 @@ def test_model_message_corrections_are_private_and_specific():
         ),
     ]
     for prompt, correction, recovered in cases:
-        before = session_ids()
         child = Child([], DEFAULT_IDLE_PROMPT)
         start = len(child.buf)
         recovered_end = child.send_wait(prompt.encode() + b"\r", recovered, start=start)
@@ -3428,7 +3384,7 @@ def test_model_message_corrections_are_private_and_specific():
         assert correction.encode() not in visible
         child.exit_cleanly(recovered_end)
 
-        log = events(new_session(before))
+        log = events(child.session_id())
         corrections = [
             event for event in log
             if event["type"] == "response_output_correction"
@@ -4269,7 +4225,6 @@ def test_history_lock_keeps_editing_live():
 
 def test_editor_during_render_flood():
     for mode in ("--markdown", "--no-markdown"):
-        before = session_ids()
         with Child([mode]) as child:
             child.wait_idle_prompt()
             start = child.send_wait(b"render_flood\r", b"row-0000")
@@ -4286,7 +4241,7 @@ def test_editor_during_render_flood():
             child.send(b"\x03")
             child.drain(0.1)
             child.exit_now()
-        completed = one(events(new_session(before)), "response_completed")
+        completed = one(events(child.session_id()), "response_completed")
         text = completed["data"]["items"][0]["text"]
         expected = "| row | text |\n| --- | --- |\n" + "".join(
             f"| row-{i:04} | **bold** and `code` |\n" for i in range(2048)
@@ -4337,7 +4292,6 @@ def test_editor_during_blocked_engine(key=b"\r"):
 
 def test_stalled_output_consumes_input():
     for level in range(7):
-        before = session_ids()
         child = Child(["-v"] * level + ["--no-markdown"])
         slave = None
         try:
@@ -4371,7 +4325,7 @@ def test_stalled_output_consumes_input():
             if slave is not None:
                 os.close(slave)
             child.kill()
-        log = events(new_session(before))
+        log = events(child.session_id())
         inputs = [event["data"]["text"] for event in log if event["type"] == "turn_started"]
         assert inputs == ["render_flood", "ping"], inputs
 
