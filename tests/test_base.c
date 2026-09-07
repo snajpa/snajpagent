@@ -1307,7 +1307,12 @@ test_broker_parent_death(bool spawn)
     assert(WaitForSingleObject(child.hProcess, 2000u) == WAIT_OBJECT_0 && CloseHandle(child.hProcess));
     assert(WaitForSingleObject(broker, 2000u) == WAIT_OBJECT_0);
     DWORD status;
-    assert(GetExitCodeProcess(broker, &status) && status == 125u && CloseHandle(broker));
+    assert(GetExitCodeProcess(broker, &status));
+    /* An idle spawn helper may process pipe EOF before its parent watcher. */
+    if (status != 125u && !(spawn && status == 0u))
+        (void)fprintf(stderr, "broker parent-death spawn=%u status=%lu\n",
+                       (unsigned int)spawn, (unsigned long)status);
+    assert((status == 125u || (spawn && status == 0u)) && CloseHandle(broker));
     if (process) {
         assert(WaitForSingleObject(process, 2000u) == WAIT_OBJECT_0);
         assert(GetExitCodeProcess(process, &status) && status == 125u && CloseHandle(process));
