@@ -2236,6 +2236,66 @@ test_input_mode(void)
         assert(snag_term_host_columns() == 0u);
 }
 
+#ifndef _WIN32
+static void
+test_posix_process(bool pty)
+{
+    char **env = snag_environment_entries();
+    char *directory = snag_realpath(".");
+    struct snag_child child;
+    snag_child_init(&child);
+    assert(env && directory);
+    const char *command = pty ? "test -t 1 && printf native-pty; exit 7" :
+        "read value; printf native-out; printf native-err >&2; exit 7";
+    assert(snag_child_spawn(&child, "/bin/sh", command, directory, env, pty) == 0);
+    if (!pty) {
+        assert(snag_child_exited(&child) == 0 && !child.reaped);
+        assert(snag_child_write(&child, "ready\n", 6u) == 6);
+        snag_child_close_stream(&child, 2u);
+    }
+    char output[2][128] = {{0}};
+    size_t used[2] = {0};
+    bool open[2] = {true, !pty};
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    while (open[0] || open[1]) {
+        assert(snag_monotonic_ms() < deadline);
+        struct snag_child_event events[2];
+        size_t count = 0;
+        for (unsigned int i = 0; i < 2u; ++i)
+            if (open[i])
+                events[count++] = (struct snag_child_event){&child, i, SNAG_CHILD_READ, 0};
+        assert(snag_child_wait(events, count, SNAG_WAKE_INVALID, 20) >= 0);
+        for (size_t i = 0; i < count; ++i) {
+            unsigned int stream = events[i].stream;
+            if (!events[i].revents)
+                continue;
+            ssize_t n = snag_child_read(&child, stream, output[stream] + used[stream],
+                                       sizeof(output[stream]) - used[stream] - 1u);
+            assert(n >= 0 || errno == EAGAIN || errno == EINTR);
+            if (n > 0) {
+                used[stream] += (size_t)n;
+            } else if (!n) {
+                open[stream] = false;
+                snag_child_close_stream(&child, stream);
+            }
+        }
+    }
+    int exited;
+    while ((exited = snag_child_exited(&child)) == 0) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_sleep_ms(1u) == 0);
+    }
+    assert(exited == 1 && !child.reaped);
+    assert(snag_child_exited(&child) == 1 && !child.reaped);
+    assert(!strcmp(output[0], pty ? "native-pty" : "native-out"));
+    assert(!strcmp(output[1], pty ? "" : "native-err"));
+    assert(snag_child_reap(&child) == 0 && child.reaped && child.exit_code == 7);
+    snag_child_free(&child);
+    snag_environment_entries_free(env);
+    free(directory);
+}
+#endif
+
 static void
 test_platform(void)
 {
@@ -2257,6 +2317,11 @@ test_platform(void)
     test_native_process_descendant(false, false);
     test_native_process_descendant(true, false);
     test_home_environment();
+#else
+    test_posix_process(false);
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+    test_posix_process(true);
+#endif
 #endif
     assert(!snag_environment(NULL) && errno == EINVAL);
     char *shell = snag_default_shell();
