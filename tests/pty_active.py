@@ -48,11 +48,15 @@ class Child:
     def __exit__(self, *_):
         self.kill()
 
-    def __init__(self, args, ready=None):
+    def __init__(self, args, ready=None, *, term=None, cols=None):
         self.sessions_before = session_ids()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(WORKSPACE)
+            if term is not None:
+                os.environ["TERM"] = term
+            if cols is not None:
+                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, cols, 0, 0))
             os.execv(BINARY, [BINARY, "--dotdir", DOTDIR, *args])
         self.buf = bytearray()
         if ready is not None:
@@ -92,23 +96,29 @@ class Child:
         return False
 
     def wait(self, needle, start=0, timeout=8.0):
-        end = time.monotonic() + timeout
         # Active/idle changes repaint only the changed label span. Full cell
         # layout and unchanged margins are covered by the renderer/tmux tests.
         if needle in (DEFAULT_IDLE_PROMPT, DEFAULT_ACCOUNTED_IDLE_PROMPT):
             return self.wait_idle_prompt(start, timeout)
+        return self.wait_text(needle, start, timeout)
+
+    def wait_text(self, needle, start=0, timeout=8.0):
         # Live prose can park/resume between fragments; match that exact
         # reversible detour, not arbitrary escapes, and return a raw offset.
         gap = b"(?:" + LIVE_GAP + b")*"
         pattern = re.compile(gap.join(re.escape(bytes([c])) for c in needle))
+        return self.wait_pattern(pattern, start, timeout)
+
+    def wait_pattern(self, pattern, start=0, timeout=8.0):
+        end = time.monotonic() + timeout
         while True:
             match = pattern.search(self.buf, start)
-            if match:
+            if match is not None:
                 return match.end()
             remaining = end - time.monotonic()
             if remaining <= 0 or not self.read_once(remaining):
                 raise AssertionError(
-                    f"timeout waiting for {needle!r}; got {bytes(self.buf)!r}"
+                    f"timeout waiting for {pattern.pattern!r}; got {bytes(self.buf)!r}"
                 )
 
     def wait_idle_prompt(self, start=0, timeout=8.0):
@@ -119,16 +129,7 @@ class Child:
             re.escape(DEFAULT_ACCOUNTED_IDLE_PROMPT.rstrip()) +
             rb"|(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba"
             rb"|\r(?:\x1b\[\d+C)?(?:[0-9? ]{0,3}% )?\xe2\x80\xba(?=\r)")
-        end = time.monotonic() + timeout
-        while True:
-            match = pattern.search(self.buf, start)
-            if match is not None:
-                return match.end()
-            remaining = end - time.monotonic()
-            if remaining <= 0 or not self.read_once(remaining):
-                raise AssertionError(
-                    f"timeout waiting for idle prompt; got {bytes(self.buf)!r}"
-                )
+        return self.wait_pattern(pattern, start, timeout)
 
     def send(self, data):
         os.write(self.fd, data)
@@ -150,7 +151,7 @@ class Child:
         self.send(b"/exit\r")
         return self.finish(expect_resume=expect_resume)
 
-    def finish(self, expected=0, expect_resume=True):
+    def reap(self):
         deadline = time.monotonic() + 8.0
         while True:
             pid, status = os.waitpid(self.pid, os.WNOHANG)
@@ -163,7 +164,10 @@ class Child:
         while self.read_once(0.05):
             pass
         os.close(self.fd)
-        code = os.waitstatus_to_exitcode(status)
+        return os.waitstatus_to_exitcode(status)
+
+    def finish(self, expected=0, expect_resume=True):
+        code = self.reap()
         if code != expected:
             raise AssertionError(
                 f"exit status {code}, expected {expected}; "
