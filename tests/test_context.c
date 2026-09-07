@@ -185,6 +185,31 @@ compaction_completed_data(const char *compact_id,
         "source_sha256", source_hash));
 }
 
+static void
+commit_counted_compaction(struct snag_session *session, const char *id,
+                         const char *reason, const char *model,
+                         const struct snag_context_projection *projection,
+                         const json_t *output)
+{
+    struct snag_json_document count = {0};
+    char error[256], hash[SNAG_SHA256_HEX_LEN + 1u];
+    size_t bytes;
+
+    assert(snag_context_compact_output_valid(output, hash, &bytes,
+                                             error, sizeof(error)) == 0);
+    assert(snag_context_compact_output_count_request_build(output, model, &count,
+                                                           error, sizeof(error)) == 0);
+    assert(count.value && count.bytes > 0u);
+    commit_event(session, "compaction_started",
+        compaction_started_data(session, id, reason, projection->source_seq,
+            projection->model_input.sha256, projection->create_request.sha256,
+            projection->model_input.bytes));
+    commit_event(session, "compaction_completed",
+        compaction_completed_data(id, projection->model_input.sha256, hash,
+            count.sha256, projection->model_input.bytes, bytes, output));
+    snag_json_document_free(&count);
+}
+
 static json_t *
 empty_excerpt(void)
 {
@@ -1108,9 +1133,6 @@ main(void)
     {
         struct snag_context_projection compact = {0};
         json_t *compact_output = compact_output_fixture();
-        struct snag_json_document output_count = {0};
-        char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-        size_t output_bytes = 0u;
         assert(snag_context_compact_request_build(&session,
                                                  session.default_model,
                                                  session.default_effort,
@@ -1121,36 +1143,18 @@ main(void)
         assert(compact.count_request.value != NULL);
         assert(compact.source_seq == session.next_seq - 1u);
         assert(compact.model_input.bytes > 0u && compact.create_request.bytes > 0u);
-        assert(snag_context_compact_output_valid(compact_output, output_hash,
-                                                &output_bytes,
-                                                error, sizeof(error)) == 0);
-        assert(snag_context_compact_output_count_request_build(compact_output,
-                   session.default_model, &output_count,
-                   error, sizeof(error)) == 0);
-        assert(output_count.value != NULL && output_count.bytes > 0u);
-        commit_event(&session, "compaction_started",
-                     compaction_started_data(&session, compact1,
-                         "manual", compact.source_seq, compact.model_input.sha256,
-                         compact.create_request.sha256, (uint64_t)compact.model_input.bytes));
-        commit_event(&session, "compaction_completed",
-                     compaction_completed_data(compact1,
-                         compact.model_input.sha256, output_hash, output_count.sha256,
-                         (uint64_t)compact.model_input.bytes,
-                         (uint64_t)output_bytes, compact_output));
+        commit_counted_compaction(&session, compact1, "manual",
+                                  session.default_model, &compact, compact_output);
         assert(strcmp(session.compact_id, compact1) == 0);
         snag_context_projection_free(&compact);
-        snag_json_document_free(&output_count);
         json_decref(compact_output);
     }
     {
         struct snag_session active;
         struct snag_context_projection compact = {0};
         json_t *compact_output = compact_output_fixture();
-        struct snag_json_document output_count = {0};
         json_t *active_steering = json_array();
         json_t *input;
-        char output_hash[SNAG_SHA256_HEX_LEN + 1u];
-        size_t output_bytes = 0u;
         uint64_t active_prefix_seq;
         const char *active_turn1 = "08080808080808080808080808080808";
         const char *active_resp1 = "09090909090909090909090909090909";
@@ -1210,22 +1214,8 @@ main(void)
         assert(compact.create_request.value != NULL && compact.count_request.value != NULL);
         assert(compact.source_seq == active_prefix_seq);
         assert(compact.model_input.bytes > 0u && compact.create_request.bytes > 0u);
-        assert(snag_context_compact_output_valid(compact_output, output_hash,
-                                                &output_bytes,
-                                                error, sizeof(error)) == 0);
-        assert(snag_context_compact_output_count_request_build(compact_output,
-                   active_model, &output_count,
-                   error, sizeof(error)) == 0);
-        commit_event(&active, "compaction_started",
-                     compaction_started_data(&active,
-                         active_compact, "hard_budget", compact.source_seq,
-                         compact.model_input.sha256, compact.create_request.sha256,
-                         (uint64_t)compact.model_input.bytes));
-        commit_event(&active, "compaction_completed",
-                     compaction_completed_data(active_compact,
-                         compact.model_input.sha256, output_hash, output_count.sha256,
-                         (uint64_t)compact.model_input.bytes,
-                         (uint64_t)output_bytes, compact_output));
+        commit_counted_compaction(&active, active_compact, "hard_budget",
+                                  active_model, &compact, compact_output);
         assert(active.active_turn);
         assert(strcmp(active.compact_id, active_compact) == 0);
         assert(snag_context_build(&active, SNAJPAGENT_MODEL, "medium", 1,
@@ -1252,7 +1242,6 @@ main(void)
         assert(strstr(snag_json_string(json_array_get(input, 4), "content"),
                       "create_goal") != NULL);
         snag_context_projection_free(&compact);
-        snag_json_document_free(&output_count);
         json_decref(compact_output);
         json_decref(active_steering);
         snag_context_projection_free(&active_projection);
@@ -1396,12 +1385,9 @@ main(void)
         struct snag_session bounded;
         struct snag_context_projection compact = {0};
         json_t *compact_output = NULL;
-        struct snag_json_document output_count = {0};
         json_t *bounded_steering = NULL;
         json_t *input;
-        char output_hash[SNAG_SHA256_HEX_LEN + 1u];
         size_t first_bytes = 0u;
-        size_t output_bytes = 0u;
         uint64_t first_turn_end;
         uint64_t second_turn_end;
         const char *bounded_compact = "15151515151515151515151515151515";
@@ -1465,22 +1451,8 @@ main(void)
         assert(compact.source_seq == first_turn_end);
         assert(compact.model_input.bytes > 1u);
         compact_output = compact_output_fixture();
-        assert(snag_context_compact_output_valid(compact_output, output_hash,
-                                                &output_bytes,
-                                                error, sizeof(error)) == 0);
-        assert(snag_context_compact_output_count_request_build(compact_output,
-                   bounded.default_model, &output_count,
-                   error, sizeof(error)) == 0);
-        commit_event(&bounded, "compaction_started",
-                     compaction_started_data(&bounded,
-                         bounded_compact, "hard_budget", compact.source_seq,
-                         compact.model_input.sha256, compact.create_request.sha256,
-                         (uint64_t)compact.model_input.bytes));
-        commit_event(&bounded, "compaction_completed",
-                     compaction_completed_data(bounded_compact,
-                         compact.model_input.sha256, output_hash, output_count.sha256,
-                         (uint64_t)compact.model_input.bytes,
-                         (uint64_t)output_bytes, compact_output));
+        commit_counted_compaction(&bounded, bounded_compact, "hard_budget",
+                                  bounded.default_model, &compact, compact_output);
         assert(bounded.compact_seq == first_turn_end);
         struct snag_context_projection bounded_projection = {0};
         bounded_steering = json_array();
@@ -1511,7 +1483,6 @@ main(void)
         assert(compact.source_seq == second_turn_end);
         snag_context_projection_free(&bounded_projection);
         json_decref(bounded_steering);
-        snag_json_document_free(&output_count);
         json_decref(compact_output);
         snag_context_projection_free(&compact);
         snag_session_close(&bounded);
