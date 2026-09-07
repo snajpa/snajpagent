@@ -325,7 +325,7 @@ static struct snag_output_broker *
 broker_open(int (*checkpoint)(void *), void *opaque)
 {
     struct snag_output_broker *broker = calloc(1, sizeof(*broker));
-    HANDLE mapping = NULL, remote = NULL;
+    HANDLE mapping = NULL, remote = NULL, parent = NULL;
     PROCESS_INFORMATION child = {0};
     STARTUPINFOW startup = {.cb = sizeof(startup)};
     wchar_t program[32768], command[32768], name[96], environment[2] = {0};
@@ -377,10 +377,12 @@ broker_open(int (*checkpoint)(void *), void *opaque)
         goto fail;
     /* The real client clears startup stdio before opening this pipe. */
     if (!DuplicateHandle(GetCurrentProcess(), mapping, child.hProcess,
-                          &remote, FILE_MAP_READ, FALSE, 0))
+                          &remote, FILE_MAP_READ, FALSE, 0) ||
+        !DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), child.hProcess,
+                          &parent, SYNCHRONIZE, FALSE, 0))
         goto native_error;
-    uint64_t target = (uintptr_t)remote;
-    if (broker_transfer(broker, true, &target, sizeof(target), deadline, checkpoint, opaque) < 0 ||
+    uint64_t target[2] = {(uintptr_t)remote, (uintptr_t)parent};
+    if (broker_transfer(broker, true, target, sizeof(target), deadline, checkpoint, opaque) < 0 ||
         broker_transfer(broker, false, answer, sizeof(answer), deadline, checkpoint, opaque) < 0)
         goto fail;
     unsigned int difference = 0;
@@ -479,6 +481,14 @@ broker_child_transfer(HANDLE pipe, bool write, void *data, DWORD size)
     return true;
 }
 
+static unsigned int __stdcall
+broker_parent_wait(void *parent)
+{
+    (void)WaitForSingleObject(parent, INFINITE);
+    ExitProcess(125u);
+    return 0;
+}
+
 int
 snag_output_broker_main(int argc, wchar_t **argv)
 {
@@ -501,12 +511,13 @@ snag_output_broker_main(int argc, wchar_t **argv)
                               OPEN_EXISTING, 0, NULL);
     if (pipe == INVALID_HANDLE_VALUE)
         return 125;
-    uint64_t target;
+    uint64_t target[2];
     int result = 125;
-    if (!broker_child_transfer(pipe, false, &target, sizeof(target)) ||
-        !target || (uint64_t)(uintptr_t)target != target)
+    if (!broker_child_transfer(pipe, false, target, sizeof(target)) ||
+        !target[0] || (uint64_t)(uintptr_t)target[0] != target[0] ||
+        !target[1] || (uint64_t)(uintptr_t)target[1] != target[1])
         goto out;
-    HANDLE mapping = (HANDLE)(uintptr_t)target;
+    HANDLE mapping = (HANDLE)(uintptr_t)target[0];
     const void *view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 16u);
     if (!view) {
         (void)CloseHandle(mapping);
@@ -516,6 +527,11 @@ snag_output_broker_main(int argc, wchar_t **argv)
     memcpy(nonce, view, sizeof(nonce));
     (void)UnmapViewOfFile(view);
     (void)CloseHandle(mapping);
+    HANDLE watcher = (HANDLE)_beginthreadex(NULL, 0, broker_parent_wait,
+                                            (void *)(uintptr_t)target[1], 0, NULL);
+    if (!watcher)
+        goto out;
+    (void)CloseHandle(watcher);
     if (!broker_child_transfer(pipe, true, nonce, sizeof(nonce)))
         goto out;
     for (;;) {
