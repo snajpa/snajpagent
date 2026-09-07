@@ -3176,9 +3176,13 @@ snag_monotonic_ms(void)
     mach_timebase_info_data_t scale;
     if (mach_timebase_info(&scale) != 0 || !scale.denom)
         return 0;
-    __uint128_t value = (__uint128_t)mach_absolute_time() * scale.numer /
-                        ((__uint128_t)scale.denom * 1000000u);
-    return value > UINT64_MAX ? UINT64_MAX : (uint64_t)value;
+    uint64_t ticks = mach_absolute_time(), quotient = ticks / scale.denom;
+    uint64_t fraction = (ticks % scale.denom) * scale.numer / scale.denom;
+    fraction = ((quotient % 1000000u) * scale.numer + fraction) / 1000000u;
+    uint64_t whole = quotient / 1000000u;
+    if (scale.numer && whole > (UINT64_MAX - fraction) / scale.numer)
+        return UINT64_MAX;
+    return whole * scale.numer + fraction;
 #else
     struct timespec now;
 
