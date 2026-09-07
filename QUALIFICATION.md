@@ -56,6 +56,10 @@ paid live-provider tests. Do not describe an unperformed platform or live-model
 run as passing, and do not turn the historical four-platform bundle defaults
 into the production matrix: `PROD_TARGETS` is its source of truth.
 
+External evidence still required for stronger platform claims includes actual
+macOS execution and broader Windows desktop/legacy coverage. These disclosed
+gaps do not prevent shipping explicitly experimental builds under RELEASE.md.
+
 ## Evidence bundle layout
 
 `make evidencebundle` writes `$(EVIDENCE_DIR)` (default
