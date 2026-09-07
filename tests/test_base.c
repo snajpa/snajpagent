@@ -1460,6 +1460,12 @@ test_classic_console(void)
     assert(snag_term_output_write(&host, fd, line, columns, false, NULL, NULL) == 0);
     free(line);
     assert(GetConsoleScreenBufferInfo(screen, &info));
+    if (info.dwCursorPosition.X != info.srWindow.Right ||
+        info.dwCursorPosition.Y != info.srWindow.Top || !host.output_state[0].pending_wrap)
+        (void)fprintf(stderr, "classic margin: cursor=%d,%d viewport=%d,%d-%d,%d buffer=%d,%d pending=%u\n",
+                       info.dwCursorPosition.X, info.dwCursorPosition.Y,
+                       info.srWindow.Left, info.srWindow.Top, info.srWindow.Right, info.srWindow.Bottom,
+                       info.dwSize.X, info.dwSize.Y, (unsigned int)host.output_state[0].pending_wrap);
     assert(info.dwCursorPosition.X == info.srWindow.Right &&
            info.dwCursorPosition.Y == info.srWindow.Top && host.output_state[0].pending_wrap);
     CLASSIC("\033[32mY");
