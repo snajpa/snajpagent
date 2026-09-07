@@ -968,6 +968,39 @@ capture_markdown_width(const char *text, bool enabled, bool split,
     return used;
 }
 
+static void
+test_markdown_fences(void)
+{
+    static const struct { const char *source, *expected; } cases[] = {
+        { "```text\nplain\n```\n", "┌─\n│ plain\n└─\n" },
+        { "~~~ txt  \nplain\n~~~\n", "┌─\n│ plain\n└─\n" },
+        { "```plaintext\nplain\n```", "┌─\n│ plain\n└─" },
+        { "```c\nint x;\n```\n", "┌─ c\n│ int x;\n└─\n" },
+        { "```text example\nplain\n```\n",
+          "┌─ text example\n│ plain\n└─\n" },
+        { "```\n    **literal**\n| A |\n| --- |\n| B |\n```\n",
+          "┌─\n│     **literal**\n│ | A |\n│ | --- |\n│ | B |\n└─\n" },
+    };
+    char output[2048];
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        for (unsigned int split = 0; split < 2u; ++split) {
+            struct snag_buf delivered;
+            snag_buf_init(&delivered, 1024u);
+            assert(capture_markdown(cases[i].source, true, split != 0u,
+                                   SNAG_COLOR_NEVER, output, sizeof(output),
+                                   &delivered) > 0u);
+            assert(strcmp(output, cases[i].expected) == 0);
+            assert(snag_buf_terminate(&delivered) == 0);
+            assert(strcmp((const char *)delivered.data, cases[i].source) == 0);
+            snag_buf_free(&delivered);
+        }
+        assert(capture_markdown(cases[i].source, false, true, SNAG_COLOR_NEVER,
+                               output, sizeof(output), NULL) > 0u);
+        assert(strcmp(output, cases[i].source) == 0);
+    }
+}
+
 static size_t
 capture_prompt_boundary(const char *text, bool markdown,
                         char *out, size_t out_size)
@@ -2048,7 +2081,7 @@ main(void)
         "• item with code and [docs] <https://example.test>\n"
         "│ old new\n"
         "┌─ c\n│ int main(void) { return 0; }\n└─\n"
-        "┌─ text\n│ tilde fence\n└─\n"
+        "┌─\n│ tilde fence\n└─\n"
         "\n• First prose line\ncontinued prose\n\n• second paragraph\n\n";
     char output[4096];
     struct snag_render render;
@@ -2156,6 +2189,7 @@ main(void)
     test_completion_choices();
     test_destination_editor();
     test_markdown_streaming();
+    test_markdown_fences();
     test_markdown_tables();
     test_tool_previews();
     test_semantic_history();

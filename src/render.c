@@ -1841,6 +1841,13 @@ markdown_open_fence(struct snag_render *render, bool newline)
         ++begin;
     while (end > begin && md->fence_info[end - 1u] == ' ')
         --end;
+    if ((end - begin == 4u &&
+         memcmp(md->fence_info + begin, "text", 4u) == 0) ||
+        (end - begin == 3u &&
+         memcmp(md->fence_info + begin, "txt", 3u) == 0) ||
+        (end - begin == 9u &&
+         memcmp(md->fence_info + begin, "plaintext", 9u) == 0))
+        end = begin;
     md->fence_header = false;
     md->fence_info_len = 0u;
     if (markdown_style_changed(render) < 0 ||
@@ -1894,9 +1901,9 @@ markdown_line_prefix(struct snag_render *render,
         return 0;
     }
     if (spaces == md->prefix_len)
-        return spaces <= 3u ? 0 : markdown_prefix_literal(render);
-    if (!md->table_disabled && body[0] == '|')
-        return markdown_table_start_line(render);
+        return spaces <= 3u ? 0 :
+            (md->fence ? markdown_code_prefix_literal(render) :
+                         markdown_prefix_literal(render));
     if (md->fence) {
         size_t marks = 0u;
         while (marks < body_len && body[marks] == md->fence)
@@ -1906,6 +1913,8 @@ markdown_line_prefix(struct snag_render *render,
             return 0;
         return markdown_code_prefix_literal(render);
     }
+    if (!md->table_disabled && body[0] == '|')
+        return markdown_table_start_line(render);
     if (body[0] == '#' && body_len >= 2u && body_len <= 7u &&
         body[body_len - 1u] == ' ') {
         for (size_t i = 0u; i + 1u < body_len; ++i)
