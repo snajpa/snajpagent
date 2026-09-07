@@ -1,6 +1,21 @@
 SPDX-License-Identifier: LGPL-2.1-or-later
-Preserve native statx and renameat2 with legacy i386 filesystem ABI fallbacks.
+Keep native interfaces with i386 ABI fallbacks and LinuxThreads process exits.
 
+diff -ruN old/libc/sysdeps/linux/common/_exit.c new/libc/sysdeps/linux/common/_exit.c
+--- old/libc/sysdeps/linux/common/_exit.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/_exit.c	2026-09-07 06:33:40.253599363 +0200
+@@ -17,9 +17,9 @@
+ # warning "no abort instruction defined for this arch"
+ #endif
+ 
+-/* have to check for kernel 2.5.35 too, since NR was earlier present */
++/* LinuxThreads uses separate kernel processes, not an NPTL thread group. */
+ #if defined __NR_exit_group && __LINUX_KERNEL_VERSION >= 0x020600 \
+-	&& defined __UCLIBC_HAS_THREADS__
++	&& defined __UCLIBC_HAS_THREADS_NATIVE__
+ # undef __NR_exit
+ # define __NR_exit __NR_exit_group
+ #endif
 diff -ruN old/libc/sysdeps/linux/common/fstat.c new/libc/sysdeps/linux/common/fstat.c
 --- old/libc/sysdeps/linux/common/fstat.c	2025-09-19 01:14:04.000000000 +0200
 +++ new/libc/sysdeps/linux/common/fstat.c	2026-09-07 05:30:55.800600430 +0200

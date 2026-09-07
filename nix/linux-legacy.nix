@@ -39,37 +39,41 @@ let
   # These implementation fixes do not change installed headers or the C ABI.
   # ABI/configuration changes belong in settings and rebuild the base compiler.
   libc = base.stdenv.cc.libc.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [ ./uclibc-legacy-fs.patch ];
+    patches = (old.patches or [ ]) ++ [ ./uclibc-legacy.patch ];
   });
-  compiler = base.stdenv.cc.override (old: {
-    inherit libc;
+  wrapCompiler = runtimeLibc: base.stdenv.cc.override (old: {
+    libc = runtimeLibc;
     bintools = base.stdenv.cc.bintools.override {
-      inherit libc;
-      sharedLibraryLoader = pkgs.lib.getLib libc;
+      libc = runtimeLibc;
+      sharedLibraryLoader = pkgs.lib.getLib runtimeLibc;
     };
     nixSupport = (old.nixSupport or { }) // {
       cc-cflags = toString (old.nixSupport.cc-cflags or "") + " -specs=${./legacy-ssp.specs}";
     };
   });
+  compiler = wrapCompiler libc;
+  # Static dependency archives only need the stable ABI. The final executable
+  # links the patched libc; runtime-only changes need not rebuild every archive.
+  sdkCompiler = wrapCompiler base.stdenv.cc.libc;
   # pkgsStatic forces musl on Linux. Keep this ABI and reuse the compiler;
   # only the dependency build/link modes differ between these package sets.
-  runtime = isStatic: import pkgs.path (settings // {
+  runtime = isStatic: cc: import pkgs.path (settings // {
     overlays = settings.overlays ++ [ (_: previous:
       pkgs.lib.optionalAttrs
         (previous.stdenv.hostPlatform.config == settings.crossSystem.config) {
-        uclibc-ng = libc;
+        uclibc-ng = cc.libc;
         stdenv = let
           platform = pkgs.lib.systems.elaborate (settings.crossSystem // { inherit isStatic; });
           env = previous.stdenv.override {
-            cc = compiler;
+            inherit cc;
             hostPlatform = platform;
             targetPlatform = platform;
           };
         in if isStatic then previous.stdenvAdapters.makeStatic env else env;
       }) ];
   });
-  target = runtime false;
-  staticTarget = runtime true;
+  target = runtime false compiler;
+  staticTarget = runtime true sdkCompiler;
 in {
   inherit libc compiler;
   application = args: ((import ./linux.nix {
