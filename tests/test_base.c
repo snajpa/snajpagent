@@ -1380,6 +1380,8 @@ test_private_directory(void)
         const char *entry;
         size_t found = 0u;
         assert(read_fd >= 0 && dir);
+        assert(snag_fstat(read_fd, &path_info) == 0);
+        assert(snag_lstat_at(read_fd, long_name, &path_info) == 0);
         errno = 0;
         while ((entry = snag_directory_next(dir)))
             if (strcmp(entry, ".") && strcmp(entry, "..")) {

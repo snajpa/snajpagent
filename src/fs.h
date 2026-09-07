@@ -84,7 +84,7 @@ int snag_permissions_match(int fd, const struct snag_permissions *permissions);
 void snag_permissions_free(struct snag_permissions *permissions);
 
 struct snag_directory;
-/* Open takes fd ownership only on success; close releases it. */
+/* Open takes ownership on success; fd remains usable until stream close. */
 struct snag_directory *snag_directory_open(int fd);
 /* Borrowed UTF-8 name; NULL with errno=0 means EOF, otherwise an error. */
 const char *snag_directory_next(struct snag_directory *dir);

@@ -2632,6 +2632,7 @@ snag_path_slashes(char *path)
 
 struct snag_directory {
     DIR *native;
+    int held_fd;
 };
 
 struct snag_directory *
@@ -2641,6 +2642,7 @@ snag_directory_open(int fd)
 
     if (!dir)
         return NULL;
+    dir->held_fd = -1;
 #ifdef SNAG_LEGACY_MAC_AT
     if (fdopendir != NULL) {
         dir->native = fdopendir(fd);
@@ -2657,8 +2659,8 @@ snag_directory_open(int fd)
                 error = errno;
             else if (held.st_dev != opened.st_dev || held.st_ino != opened.st_ino)
                 error = ESTALE;
-            else if (close(fd) < 0)
-                error = errno;
+            else
+                dir->held_fd = fd;
             if (error) {
                 (void)closedir(dir->native);
                 dir->native = NULL;
@@ -2671,7 +2673,7 @@ snag_directory_open(int fd)
     int copy = snag_dup_read(fd);
     dir->native = copy < 0 ? NULL : fdopendir(copy);
     if (dir->native)
-        (void)close(fd);
+        dir->held_fd = fd;
 #else
     dir->native = fdopendir(fd);
 #endif
@@ -2708,7 +2710,13 @@ snag_directory_close(struct snag_directory *dir)
         return -1;
     }
     rc = closedir(dir->native);
+    int error = errno;
+    if (dir->held_fd >= 0 && close(dir->held_fd) < 0 && rc == 0) {
+        rc = -1;
+        error = errno;
+    }
     free(dir);
+    errno = error;
     return rc;
 }
 
