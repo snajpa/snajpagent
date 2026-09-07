@@ -139,7 +139,7 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
     size_t partial_max;
     size_t remaining;
     bool partial_created;
-    int fd = STDOUT_FILENO;
+    int fd = STDOUT_FILENO, rc = -1;
     const char *label = NULL;
 
     if (snag_app_active_input_pump(app, 0u) < 0)
@@ -212,29 +212,22 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
     remaining = SNAG_MAX_RESPONSE_GRAPH - app->partial_bytes;
     if (partial->text.len > SIZE_MAX - remaining) {
         errno = EOVERFLOW;
-        goto fail_partial;
+        goto out;
     }
     if (partial->text.max > partial->text.len + remaining)
         partial->text.max = partial->text.len + remaining;
     if (snag_ui_public(&app->ui, text, len, &partial->text) < 0)
-        goto fail_partial;
-    partial->text.max = partial_max;
+        goto out;
     app->partial_bytes += partial->text.len - partial_before;
-    if (partial_created && partial->text.len == 0u) {
-        snag_buf_free(&partial->text);
-        memset(partial, 0, sizeof(*partial));
-        --app->partial_count;
-    }
-    return 0;
-
-fail_partial:
+    rc = 0;
+out:
     partial->text.max = partial_max;
     if (partial_created && partial->text.len == 0u) {
         snag_buf_free(&partial->text);
         memset(partial, 0, sizeof(*partial));
         --app->partial_count;
     }
-    return stream_fail(app, errno,
+    return rc == 0 ? 0 : stream_fail(app, errno,
                        errno == EOVERFLOW ?
                        "public output exceeds its limit" :
                        "public output could not be rendered");
