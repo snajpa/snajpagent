@@ -167,8 +167,14 @@ it retains the old Mach-O startup and relocation formats. Its Linux-only host
 dependencies include TAPI and libdispatch. These tools are build dependencies,
 not libraries loaded by the agent. The i386 recipe uses Apple's complete
 10.12 SDK, downloaded from two official URLs with a pinned SHA-256.
-Production targets still use macOS 11 while legacy linkage and execution
-remain under investigation.
+Full x86-64 and i386 agents cross-link at deployment 10.5 with static
+application dependencies, embedded roots, LTO and matching dSYMs. The classic
+linker loads the pinned LLVM LTO library explicitly; its companion strip tool
+preserves the old loader format. Required integer-division builtins from
+LLVM compiler-rt 21.1.7 are linked statically. Preserve their Apache-2.0 with
+LLVM-exception notices and corresponding source with redistributed binaries.
+Production targets still use macOS 11; legacy Darwin execution remains
+unverified.
 
 Legacy source builds use optional native at-family calls where available.
 Otherwise, held-directory identity checks and `F_GETPATH` resolve an older
