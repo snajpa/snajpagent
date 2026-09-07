@@ -883,6 +883,10 @@ test_private_directory(void)
 #else
         assert(symlink(data, alias) == 0);
 #endif
+        char *resolved_alias = snag_realpath(alias), *resolved_data = snag_realpath(data);
+        assert(resolved_alias && resolved_data && !strcmp(resolved_alias, resolved_data));
+        free(resolved_alias);
+        free(resolved_data);
         assert(snag_lstat(alias, &linked) == 0 && S_ISLNK(linked.st_mode));
         assert(snag_open_read_at(fd, "alias", false) == -1);
         assert(snag_open_private_append_at(fd, "alias", false) == -1);

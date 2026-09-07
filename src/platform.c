@@ -1751,6 +1751,125 @@ out:
     return rc;
 }
 
+static wchar_t *
+final_path(HANDLE handle)
+{
+#if _WIN32_WINNT < 0x0600
+    ULONG capacity = 0;
+    NTSTATUS status = NtQueryObject(handle, ObjectNameInformation, NULL, 0, &capacity);
+    if (!capacity) {
+        path_error(RtlNtStatusToDosError(status));
+        return NULL;
+    }
+    if (capacity < sizeof(OBJECT_NAME_INFORMATION)) {
+        errno = EIO;
+        return NULL;
+    }
+    if (capacity > sizeof(OBJECT_NAME_INFORMATION) + (SNAG_PATH_MAX_BYTES + 64u) * sizeof(wchar_t)) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    OBJECT_NAME_INFORMATION *info = malloc((size_t)capacity + sizeof(wchar_t));
+    wchar_t *result = NULL, *device = NULL;
+    if (!info)
+        return NULL;
+    status = NtQueryObject(handle, ObjectNameInformation, info, capacity, NULL);
+    if (status < 0) {
+        path_error(RtlNtStatusToDosError(status));
+        goto out;
+    }
+    uintptr_t offset = (uintptr_t)info->Name.Buffer - (uintptr_t)info;
+    size_t count = info->Name.Length / sizeof(wchar_t);
+    if (offset < sizeof(*info) || offset > capacity ||
+        !count || info->Name.Length % sizeof(wchar_t) || offset % sizeof(wchar_t) ||
+        info->Name.Length > capacity - offset) {
+        errno = EIO;
+        goto out;
+    }
+    wchar_t *name = info->Name.Buffer;
+    name[count] = 0;
+    if (wcslen(name) != count) {
+        errno = EIO;
+        goto out;
+    }
+    const wchar_t *body = NULL;
+    const wchar_t *redirectors[] = {L"\\Device\\Mup\\", L"\\Device\\LanmanRedirector\\"};
+    for (size_t i = 0; i < 2u; ++i) {
+        size_t len = wcslen(redirectors[i]);
+        if (_wcsnicmp(name, redirectors[i], len) == 0) {
+            body = name + len;
+            if (*body == L';') {
+                body = wcschr(body, L'\\');
+                if (body)
+                    ++body;
+            }
+            break;
+        }
+    }
+    wchar_t drive = 0;
+    if (!body) {
+        /* The first MULTI_SZ entry is the current DOS-device mapping. */
+        device = malloc((SNAG_PATH_MAX_BYTES + 1u) * sizeof(*device));
+        if (!device)
+            goto out;
+        size_t longest = 0;
+        for (wchar_t letter = L'A'; letter <= L'Z'; ++letter) {
+            wchar_t dos[] = {letter, L':', 0};
+            if (!QueryDosDeviceW(dos, device, SNAG_PATH_MAX_BYTES + 1u))
+                continue;
+            size_t len = wcslen(device);
+            if (len > longest && len <= count && _wcsnicmp(name, device, len) == 0 &&
+                (!name[len] || name[len] == L'\\')) {
+                longest = len;
+                drive = letter;
+                body = name + len;
+            }
+        }
+    }
+    if (!body) {
+        errno = ENOTSUP;
+        goto out;
+    }
+    size_t len = wcslen(body);
+    result = malloc((len + 4u) * sizeof(*result));
+    if (!result)
+        goto out;
+    result[0] = drive ? drive : L'\\';
+    result[1] = drive ? L':' : L'\\';
+    memcpy(result + 2u, body, (len + 1u) * sizeof(*result));
+    if (drive && !len) {
+        result[2] = L'\\';
+        result[3] = 0;
+    }
+out:
+    free(device);
+    free(info);
+    return result;
+#else
+    DWORD capacity = GetFinalPathNameByHandleW(handle, NULL, 0, FILE_NAME_NORMALIZED);
+    if (!capacity) {
+        path_error(GetLastError());
+        return NULL;
+    }
+    if (capacity > SNAG_PATH_MAX_BYTES + 9u) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    wchar_t *final = malloc(((size_t)capacity + 1u) * sizeof(*final));
+    if (!final)
+        return NULL;
+    DWORD got = GetFinalPathNameByHandleW(handle, final, capacity + 1u, FILE_NAME_NORMALIZED);
+    if (got && got <= capacity)
+        return final;
+    if (got)
+        errno = ENAMETOOLONG;
+    else
+        path_error(GetLastError());
+    free(final);
+    return NULL;
+#endif
+}
+
 char *
 snag_realpath(const char *path)
 {
@@ -1759,7 +1878,6 @@ snag_realpath(const char *path)
     const wchar_t *body;
     char *result = NULL;
     size_t prefix = 0u;
-    DWORD capacity, got;
     int bytes, error;
 
     if (!wide)
@@ -1769,23 +1887,9 @@ snag_realpath(const char *path)
                          NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
     if (handle == INVALID_HANDLE_VALUE)
         goto native_error;
-    capacity = GetFinalPathNameByHandleW(handle, NULL, 0, FILE_NAME_NORMALIZED);
-    if (!capacity)
-        goto native_error;
-    if (capacity > SNAG_PATH_MAX_BYTES + 9u) {
-        errno = ENAMETOOLONG;
-        goto out;
-    }
-    final = malloc(((size_t)capacity + 1u) * sizeof(*final));
+    final = final_path(handle);
     if (!final)
         goto out;
-    got = GetFinalPathNameByHandleW(handle, final, capacity + 1u, FILE_NAME_NORMALIZED);
-    if (!got)
-        goto native_error;
-    if (got > capacity) {
-        errno = ENAMETOOLONG;
-        goto out;
-    }
     body = final;
     if (wcsncmp(body, L"\\\\?\\UNC\\", 8u) == 0) {
         body += 8u;
