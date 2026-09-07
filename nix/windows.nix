@@ -140,7 +140,7 @@ let
   });
   regex = import ./windows-regex.nix { inherit pkgs windows threads unistring winver; };
   pty = if legacy && windows.stdenv.cc.isClang then
-    import ./windows-pty.nix { inherit pkgs windows threads; } else null;
+    import ./windows-pty.nix { inherit pkgs windows threads winver; } else null;
 in {
   inherit windows threads jansson tls curl networkLibraries regex pty;
   application = { source, packageName, version, revision }: windows.stdenv.mkDerivation {
@@ -166,7 +166,7 @@ in {
         'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
         'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY"}'
         'CFLAGS=-std=c11 -Os -g -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
-        'LDFLAGS=-static -municode -flto -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,0,--major-subsystem-version,5,--minor-subsystem-version,0"}'
+        'LDFLAGS=-static -municode -flto -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,${if arch == "x86_64" then "2" else "0"},--major-subsystem-version,5,--minor-subsystem-version,${if arch == "x86_64" then "2" else "0"}"}'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread${pkgs.lib.optionalString (pty != null) " -lsnagpty -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind -luser32 -lshell32"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"

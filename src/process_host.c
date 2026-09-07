@@ -136,9 +136,8 @@ private_pipe(const wchar_t *name, DWORD access)
         goto fail;
     SECURITY_ATTRIBUTES security = {sizeof(security), &descriptor, FALSE};
     DWORD mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT;
-#if _WIN32_WINNT >= 0x0600
-    mode |= PIPE_REJECT_REMOTE_CLIENTS;
-#endif
+    if (GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetNamedPipeClientProcessId"))
+        mode |= PIPE_REJECT_REMOTE_CLIENTS;
     pipe = CreateNamedPipeW(name, access | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
                             mode, 1, 65536u, 65536u, 0, &security);
     if (pipe != INVALID_HANDLE_VALUE)
@@ -245,13 +244,16 @@ create_pipe(struct child_pipe *pipe, bool input, HANDLE *other, bool asynchronou
     if (!connected && !GetOverlappedResult(pipe->handle, &pipe->io, &bytes, TRUE))
         return child_error(GetLastError());
     pipe->pending = false;
-#if _WIN32_WINNT >= 0x0600
-    DWORD pid;
-    if (!GetNamedPipeClientProcessId(pipe->handle, &pid) || pid != GetCurrentProcessId()) {
-        errno = EACCES;
-        return -1;
+    BOOL (WINAPI *client_pid)(HANDLE, PULONG);
+    FARPROC function = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetNamedPipeClientProcessId");
+    memcpy(&client_pid, &function, sizeof(client_pid));
+    if (client_pid) {
+        ULONG pid;
+        if (!client_pid(pipe->handle, &pid) || pid != GetCurrentProcessId()) {
+            errno = EACCES;
+            return -1;
+        }
     }
-#endif
     return verify_pipe_pair(pipe, input, *other, asynchronous);
 }
 

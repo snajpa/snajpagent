@@ -1,25 +1,26 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Static console collection for the internal LLVM/NT5 port.
-{ pkgs, windows, threads }:
+{ pkgs, windows, threads, winver ? "0x0500" }:
 let
+  arch = if windows.stdenv.hostPlatform.isx86_32 then "i686" else "x86_64";
   unwind = (windows.llvmPackages_21.libunwind.override {
     enableShared = false;
     doFakeLibgcc = false;
   }).overrideAttrs (old: {
-    pname = "libunwind-windows-i686-legacy";
+    pname = "libunwind-windows-${arch}-legacy";
     prePatch = "cd ..; chmod u+w libunwind/src libunwind/src/RWMutex.hpp libunwind/src/AddressSpace.hpp";
     postPatch = "cd runtimes";
     patches = (old.patches or []) ++ [ ./libunwind-legacy-windows.patch ];
     buildInputs = (old.buildInputs or []) ++ [ threads ];
     cmakeFlags = old.cmakeFlags ++ [
-      "-DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0500"
-      "-DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0500"
+      "-DCMAKE_C_FLAGS=-D_WIN32_WINNT=${winver}"
+      "-DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=${winver}"
     ];
   });
   cxx = (windows.llvmPackages_21.libcxx.override {
     enableShared = false;
   }).overrideAttrs (old: {
-    pname = "libcxx-windows-i686-pthread";
+    pname = "libcxx-windows-${arch}-pthread";
     buildInputs = (old.buildInputs or []) ++ [ threads ];
     cmakeFlags = old.cmakeFlags ++ [
       "-DLIBCXX_HAS_PTHREAD_API=ON" "-DLIBCXX_HAS_WIN32_THREAD_API=OFF"
@@ -50,7 +51,7 @@ let
                     ${./winpty-console.cc}; do
         $CXX -std=c++11 -Os -g -flto -ffunction-sections -fdata-sections \
           -Wall -Wextra -Werror -DUNICODE -D_UNICODE -DWINPTY_AGENT_ASSERT \
-          -D_WIN32_WINNT=0x0500 -DWINVER=0x0500 -Isrc -nostdinc++ \
+          -D_WIN32_WINNT=${winver} -DWINVER=${winver} -Isrc -nostdinc++ \
           -isystem ${pkgs.lib.getDev cxx}/include/c++/v1 \
           -c "$source" -o "objects/$(basename "$source").o" || result=1
       done

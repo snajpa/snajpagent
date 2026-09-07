@@ -56,7 +56,7 @@ in assert buildRevision == null || buildRevision == revision; rec {
   linux-aarch64 = (linux pkgs.pkgsCross.aarch64-multiplatform-musl).application {
     inherit source packageName version revision;
   };
-  windows-x86_64 = (import ./windows.nix { inherit pkgs; }).application {
+  windows-x86_64 = (import ./windows-legacy.nix { inherit pkgs; arch = "x86_64"; }).application {
     inherit source packageName version revision;
   };
   windows-arm64 = (import ./windows.nix {

@@ -1752,9 +1752,8 @@ out:
 }
 
 static wchar_t *
-final_path(HANDLE handle)
+legacy_final_path(HANDLE handle)
 {
-#if _WIN32_WINNT < 0x0600
     ULONG capacity = 0;
     NTSTATUS status = NtQueryObject(handle, ObjectNameInformation, NULL, 0, &capacity);
     if (!capacity) {
@@ -1845,8 +1844,17 @@ out:
     free(device);
     free(info);
     return result;
-#else
-    DWORD capacity = GetFinalPathNameByHandleW(handle, NULL, 0, FILE_NAME_NORMALIZED);
+}
+
+static wchar_t *
+final_path(HANDLE handle)
+{
+    DWORD (WINAPI *get_path)(HANDLE, LPWSTR, DWORD, DWORD);
+    FARPROC function = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetFinalPathNameByHandleW");
+    memcpy(&get_path, &function, sizeof(get_path));
+    if (!get_path)
+        return legacy_final_path(handle);
+    DWORD capacity = get_path(handle, NULL, 0, 0); /* FILE_NAME_NORMALIZED */
     if (!capacity) {
         path_error(GetLastError());
         return NULL;
@@ -1858,7 +1866,7 @@ out:
     wchar_t *final = malloc(((size_t)capacity + 1u) * sizeof(*final));
     if (!final)
         return NULL;
-    DWORD got = GetFinalPathNameByHandleW(handle, final, capacity + 1u, FILE_NAME_NORMALIZED);
+    DWORD got = get_path(handle, final, capacity + 1u, 0);
     if (got && got <= capacity)
         return final;
     if (got)
@@ -1867,7 +1875,6 @@ out:
         path_error(GetLastError());
     free(final);
     return NULL;
-#endif
 }
 
 char *

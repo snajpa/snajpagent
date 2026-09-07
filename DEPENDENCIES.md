@@ -189,8 +189,8 @@ the platform sections retain the actual qualification limits.
 
 ## Experimental native Windows x86-64 and ARM64
 
-The internal `nix/windows-legacy.nix` i686 port additionally links WinPTY 0.4.3
-(MIT) console collection into the same executable. Its first-party C bridge
+The x86-64 recipe and internal i686 port link WinPTY 0.4.3 (MIT) console
+collection into the same executable. Its first-party C interface
 retains the agent's authenticated pipe handles, suspended/job-owned spawning
 and explicit parent-death cleanup. The collector has its own hidden console;
 no WinPTY DLL, launcher or auxiliary executable is installed. LLVM 21.1.7
@@ -198,15 +198,17 @@ libc++/libc++abi use static winpthreads, and the patched static libunwind uses
 pthread locks plus VirtualQuery image lookup. These LLVM components retain
 Apache-2.0 WITH LLVM-exception, including the GPLv2 compatibility provision.
 Preserve the pinned upstream sources, patches and license notices with binary
-distributions. The legacy port remains outside `PROD_TARGETS` pending complete
-runtime qualification.
+distributions. The internal i686 port remains outside `PROD_TARGETS` pending
+complete runtime qualification.
 
-`nix/windows.nix` builds static x86-64 Windows Jansson, Mbed TLS, compression,
+`nix/windows-legacy.nix` selects LLVM/msvcrt and the shared `nix/windows.nix`
+recipe builds static x86-64 Windows Jansson, Mbed TLS, compression,
 c-ares, HTTP/2 and GNU Unicode/IDN libraries using the same pinned nixpkgs
-sources. It takes the `pkgs` exported by `nix/portable.nix`. The compile API
-baseline is Windows 7; actual execution so far is in Windows PE
-10.0.26100.6584 from Microsoft's 25H2 evaluation media. A version macro does
-not establish an older-OS runtime pass. `make prod-windows-x86_64` packages the
+sources. It takes the `pkgs` exported by `nix/portable.nix`. The compile API and
+PE subsystem baseline is NT 5.2 (XP x64/Server 2003); actual execution is in
+Windows PE 10.0.26100.6584 from Microsoft's 25H2 evaluation media. The old-OS
+runtime remains unverified. One x64 artifact selects modern native APIs where
+available and uses the legacy adapters otherwise. `make prod-windows-x86_64` packages the
 complete native executable with static application libraries and embedded roots
 at `build/matrix/windows-x86_64/bin/snajpagent.exe`; `.debug/` contains optional
 matching symbols. Nix and third-party runtime DLLs are not needed on Windows.
@@ -219,8 +221,8 @@ in progress.
 `ucrtAarch64`, LLVM 21.1.7 and statically linked winpthreads. Its native PE32+
 executable is at `build/matrix/windows-arm64/bin/snajpagent.exe`; optional
 symbols use the same adjacent `.debug/` layout. The OS UCRT is already part of
-Windows ARM64, not an extra application DLL to install. The x64 GCC/msvcrt
-closure is unchanged. LLVM resource tools receive explicit Windows headers;
+Windows ARM64, not an extra application DLL to install. Its UCRT recipe is
+independent of the x64 msvcrt baseline. LLVM resource tools receive explicit Windows headers;
 autotools and Gnulib probes use their actual pthread link flags.
 
 The ARM64 production build has run in official Windows PE 10.0.28000.1 under
@@ -246,9 +248,9 @@ rejection. No paid model was needed for those checks.
 Unicode scalar width. Existing POSIX builds retain libc width behavior;
 Windows uses the already statically linked libunistring so supplementary
 characters are not truncated to 16-bit `wchar_t`. Keep the upstream license
-notices and corresponding source, including the MinGW thread runtime's
-GCC runtime exception. Older Windows still needs genuine thread/crypto/API
-fallbacks and qualification; a DLL import archive renamed to `.a` is never
+notices and corresponding source, including winpthreads' MIT/BSD notices
+and LLVM's Apache-2.0 WITH LLVM-exception terms. Older Windows still needs
+runtime qualification; a DLL import archive renamed to `.a` is never
 a self-contained static dependency.
 
 The Windows-only `regex` library attribute imports Gnulib's POSIX ERE module

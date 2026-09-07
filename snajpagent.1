@@ -2335,12 +2335,12 @@ same-executable helper.  Inheritable standard console buffers are retained at
 helper creation, including inactive buffers; other descriptors use exact
 handle transfer.  An unsupported transfer reports an error.
 .PP
-The internal legacy Windows build uses a hidden-console collector for PTY
+Windows x64 and the internal i686 build use a hidden-console collector for PTY
 commands when ConPTY is unavailable.  The same executable hosts collection;
 input and output use authenticated private pipes, and command descendants
 belong to the agent's cleanup job.  The collector translates native console
 cells and keyboard events; font and code-page limitations of the underlying
-console still apply.  Modern production targets continue to use ConPTY.
+console still apply.  ConPTY is selected whenever available.
 .PP
 See the repository's DEPENDENCIES.md for static dependency licenses, embedded
 trust, corresponding-source obligations and platform qualification details.
