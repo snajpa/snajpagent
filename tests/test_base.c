@@ -2348,6 +2348,19 @@ static int
 run_base(int argc, char **argv)
 {
 #ifdef _WIN32
+    if (argc == 2 && !strcmp(argv[1], "--console-capability")) {
+        HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode;
+        assert(GetConsoleMode(output, &mode));
+        BOOL supported = SetConsoleMode(output, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
+                                         DISABLE_NEWLINE_AUTO_RETURN);
+        DWORD error = supported ? ERROR_SUCCESS : GetLastError();
+        if (supported)
+            assert(SetConsoleMode(output, mode));
+        (void)printf("console VT supported=%u error=%lu original-mode=%lu\n",
+                       (unsigned int)supported, (unsigned long)error, (unsigned long)mode);
+        return 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "--broker-orphan"))
         return broker_orphan_child(argv[2], false);
     if (argc == 3 && !strcmp(argv[1], "--spawn-orphan"))
