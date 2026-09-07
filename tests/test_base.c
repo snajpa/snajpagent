@@ -1422,9 +1422,13 @@ test_classic_console(void)
     HANDLE original = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     assert(original != INVALID_HANDLE_VALUE);
+    CONSOLE_SCREEN_BUFFER_INFO original_info;
+    assert(GetConsoleScreenBufferInfo(original, &original_info));
     HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
     assert(screen != INVALID_HANDLE_VALUE);
+    assert(SetConsoleScreenBufferSize(screen, original_info.dwSize));
+    assert(SetConsoleWindowInfo(screen, TRUE, &original_info.srWindow));
     assert(SetConsoleActiveScreenBuffer(screen));
     DWORD original_mode;
     assert(GetConsoleMode(screen, &original_mode));
@@ -1457,6 +1461,7 @@ test_classic_console(void)
     assert(ReadConsoleOutputCharacterW(screen, row, 3u, (COORD){0, info.srWindow.Top}, &got) && got == 3u);
     assert(row[0] == L'A' && row[1] == L' ' && row[2] == L' ');
     CLASSIC("\033[H");
+    assert(GetConsoleScreenBufferInfo(screen, &info));
     size_t columns = (size_t)(info.srWindow.Right - info.srWindow.Left + 1);
     char *line = malloc(columns);
     assert(line);
