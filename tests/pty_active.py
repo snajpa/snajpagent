@@ -719,8 +719,11 @@ def test_split_utf8_steering():
     child = Child([])
     child.wait(PROMPT.rstrip())
     child.send(b"slow_utf8\r")
-    session = new_session(before)
     deadline = time.monotonic() + 4.0
+    while session_ids() == before:
+        assert time.monotonic() < deadline
+        child.read_once(0.02)
+    session = new_session(before)
     while not any(e["type"] == "response_started" for e in events(session)):
         assert time.monotonic() < deadline
         child.read_once(0.02)
