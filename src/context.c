@@ -596,14 +596,12 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq,
             json_array_size(builder->request_input);
         return 0;
     }
-    if (!builder->compact_best_known) {
-        snag_errorf(error, error_size,
-                  "oldest complete response/tool group through event %llu is %zu bytes, above compaction source budget %llu bytes; use exact counting/a larger model or reduce irreducible input",
-                  (unsigned long long)seq,
-                  source_bytes,
-                  (unsigned long long)builder->compact_budget);
-        return snag_errno(EOVERFLOW);
-    }
+    if (!builder->compact_best_known)
+        return snag_fail(error, error_size, EOVERFLOW,
+            "oldest complete response/tool group through event %llu is %zu bytes, above compaction source budget %llu bytes; use exact counting/a larger model or reduce irreducible input",
+            (unsigned long long)seq,
+            source_bytes,
+            (unsigned long long)builder->compact_budget);
 trim:
     if (truncate_array(builder->request_input, builder->compact_best_request_count) < 0)
         return -1;

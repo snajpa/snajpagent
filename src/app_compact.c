@@ -35,10 +35,8 @@ commit_rendered(struct app_state *app, const char *type, json_t *data,
 {
     uint64_t seq;
 
-    if (!data) {
-        snprintf(error, error_size, "cannot allocate %s event", type);
-        return snag_errno(ENOMEM);
-    }
+    if (!data)
+        return snag_fail(error, error_size, ENOMEM, "cannot allocate %s event", type);
     if (snag_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;
@@ -54,27 +52,21 @@ compaction_state_valid(const struct app_state *app, const char *reason,
                        bool active_prefix, char *error, size_t error_size)
 {
     if (!app || !app->config || !reason ||
-        (strcmp(reason, "manual") != 0 && !active_reason(reason))) {
-        snprintf(error, error_size, "invalid compaction reason");
-        return snag_errno(EINVAL);
-    }
+        (strcmp(reason, "manual") != 0 && !active_reason(reason)))
+        return snag_fail(error, error_size, EINVAL, "invalid compaction reason");
     if (active_prefix) {
         if (!active_reason(reason) || !app->session.active_turn ||
             app->session.response_open ||
             app->session.pending_call_count ||
-            app->session.active_compact_id[0] != '\0') {
-            snprintf(error, error_size,
-                     "pre-response compaction requires an active turn before response");
-            return snag_errno(EINVAL);
-        }
+            app->session.active_compact_id[0] != '\0')
+            return snag_fail(error, error_size, EINVAL,
+                "pre-response compaction requires an active turn before response");
         return 0;
     }
     if (app->session.active_turn || app->session.response_open ||
         app->session.process_count ||
-        app->session.active_compact_id[0] != '\0') {
-        snprintf(error, error_size, "compaction requires an idle session");
-        return snag_errno(EINVAL);
-    }
+        app->session.active_compact_id[0] != '\0')
+        return snag_fail(error, error_size, EINVAL, "compaction requires an idle session");
     return 0;
 }
 
@@ -496,10 +488,8 @@ snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
     uint64_t threshold;
 
     if (!app || !app->config || !app->turn_provider ||
-        !count_method_valid(count_method)) {
-        snprintf(error, error_size, "invalid proactive compaction state");
-        return snag_errno(EINVAL);
-    }
+        !count_method_valid(count_method))
+        return snag_fail(error, error_size, EINVAL, "invalid proactive compaction state");
     threshold = snag_model_compact_threshold(app->turn_provider,
                                            &app->turn_capacity);
     if (!snag_app_measured_input(app, &input_tokens_bound) ||
@@ -518,10 +508,8 @@ snag_app_compact_before_response(struct app_state *app,
     if (compacted)
         *compacted = false;
     if (!app || !app->config || !app->turn_provider || !compacted ||
-        !count_method_valid(count_method)) {
-        snprintf(error, error_size, "invalid pre-response compaction state");
-        return snag_errno(EINVAL);
-    }
+        !count_method_valid(count_method))
+        return snag_fail(error, error_size, EINVAL, "invalid pre-response compaction state");
     {
         uint64_t threshold = snag_model_compact_threshold(app->turn_provider,
                                                         &app->turn_capacity);
@@ -540,13 +528,11 @@ snag_app_compact_before_response(struct app_state *app,
                             true, credential, compacted, error, error_size);
         if (rc != 0)
             return rc;
-        if (over_hard && !*compacted) {
-            snprintf(error, error_size,
-                     "context input count %llu (%s) exceeds hard budget %llu; no complete older turn can be compacted",
-                     (unsigned long long)input_tokens_bound, count_method,
-                     (unsigned long long)app->turn_capacity.hard_input_tokens);
-            return snag_errno(EOVERFLOW);
-        }
+        if (over_hard && !*compacted)
+            return snag_fail(error, error_size, EOVERFLOW,
+                "context input count %llu (%s) exceeds hard budget %llu; no complete older turn can be compacted",
+                (unsigned long long)input_tokens_bound, count_method,
+                (unsigned long long)app->turn_capacity.hard_input_tokens);
         return 0;
     }
 }
@@ -558,11 +544,8 @@ snag_app_compact_after_capacity_rejection(
 {
     if (compacted)
         *compacted = false;
-    if (!app || !credential || !compacted) {
-        snprintf(error, error_size,
-                 "invalid provider-rejection compaction state");
-        return snag_errno(EINVAL);
-    }
+    if (!app || !credential || !compacted)
+        return snag_fail(error, error_size, EINVAL, "invalid provider-rejection compaction state");
     return run_compaction(app, "provider_rejection", true, credential,
                           compacted, error, error_size);
 }

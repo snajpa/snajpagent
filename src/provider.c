@@ -824,11 +824,9 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
     root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
                                 SNAG_WIRE_BODY_MAX, json_error,
                                 sizeof(json_error));
-    if (!root) {
-        (void)snprintf(error, error_size,
-                       "invalid input-token count response: %s", json_error);
-        return snag_errno(EPROTO);
-    }
+    if (!root)
+        return snag_fail(error, error_size, EPROTO,
+            "invalid input-token count response: %s", json_error);
     object = snag_json_string(root, "object");
     if (!snag_json_exact_keys(root, "input_tokens object") ||
         !object || strcmp(object, "response.input_tokens") != 0 ||
@@ -859,11 +857,8 @@ parse_compact_body(struct provider_ctx *ctx, struct snag_json_document *output,
     root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
                                 SNAG_CONTEXT_MAX_COMPACT, json_error,
                                 sizeof(json_error));
-    if (!root) {
-        (void)snprintf(error, error_size,
-                       "invalid compact response: %s", json_error);
-        return snag_errno(EPROTO);
-    }
+    if (!root)
+        return snag_fail(error, error_size, EPROTO, "invalid compact response: %s", json_error);
     object = snag_json_string(root, "object");
     body_output = json_object_get(root, "output");
     if (!object || strcmp(object, "response.compaction") != 0 ||

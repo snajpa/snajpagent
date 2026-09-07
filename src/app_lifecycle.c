@@ -331,10 +331,8 @@ start_goal(struct app_state *app, const char *prompt,
 {
     char goal_id[SNAG_ID_HEX_LEN + 1u];
 
-    if (snag_goal_unfinished(app->session.goal_status)) {
-        (void)snprintf(error, error_size, "an unfinished goal already exists");
-        return snag_errno(EINVAL);
-    }
+    if (snag_goal_unfinished(app->session.goal_status))
+        return snag_fail(error, error_size, EINVAL, "an unfinished goal already exists");
     if (snag_random_id(goal_id) < 0) {
         return snag_errorf(error, error_size,
                        "cryptographic goal id generation failed");

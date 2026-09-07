@@ -1162,9 +1162,7 @@ load_model_cache(struct app_state *app, bool refresh,
         for (size_t i = 0; i < app->config->provider_count; ++i)
             if (app->config->providers[i].model_count)
                 return 0; /* Configured models do not require discovery. */
-        snag_errorf(error, error_size,
-                  "model cache is empty; use /model cache while idle");
-        return snag_errno(ENOENT);
+        return snag_fail(error, error_size, ENOENT, "model cache is empty; use /model cache while idle");
     }
     return rc;
 }

@@ -176,10 +176,8 @@ execute(struct irc_owner *owner, struct irc_request *request)
     char *error = request->error;
     size_t size = sizeof(request->error);
 
-    if (request->revision && request->revision != owner->sent.revision) {
-        snag_errorf(error, size, "destination room changed; not performed");
-        return snag_errno(ESTALE);
-    }
+    if (request->revision && request->revision != owner->sent.revision)
+        return snag_fail(error, size, ESTALE, "destination room changed; not performed");
     if (request->event)
         return snag_irc_core_restore_event(core, request->event);
     return snag_irc_core_send(core, request->model, request->kind,
