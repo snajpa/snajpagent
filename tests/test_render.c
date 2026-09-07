@@ -2032,6 +2032,30 @@ test_append_only_views(unsigned int verbosity)
     close(capture.fd);
 }
 
+static void
+test_safe_text_width(void)
+{
+    const struct { const char *input, *output; size_t width; } cases[] = {
+        {"\xff", "\\xFF", 4u},
+        {"\xe2\x82", "\\xE2\\x82", 8u},
+        {"\xc2\x9b", "\\x9B", 4u},
+        {"\xe2\x80\xae", "\\u{202E}", 8u},
+        {"\x1b[31m", "\\x1B[31m", 8u},
+        {"a\t", "a   ", 4u},
+        {"café界", "café界", 6u},
+        {"a\nb", "a\nb", 6u}
+    };
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct snag_buf safe = {.max = 64u};
+        const char *input = cases[i].input;
+        assert(snag_term_append_safe(&safe, input, strlen(input)) == 0);
+        assert(snag_buf_terminate(&safe) == 0);
+        assert(strcmp((const char *)safe.data, cases[i].output) == 0);
+        assert(snag_term_text_width(input, strlen(input)) == cases[i].width);
+        snag_buf_free(&safe);
+    }
+}
+
 int
 main(void)
 {
@@ -2053,6 +2077,7 @@ main(void)
     struct snag_render render;
 
     assert(setlocale(LC_ALL, "") != NULL);
+    test_safe_text_width();
     assert(setenv("TZ", "UTC0", 1) == 0);
     tzset();
     test_local_mention_highlight();

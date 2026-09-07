@@ -50,12 +50,29 @@ format_unsafe(uint32_t cp)
            (cp >= 0xfff9u && cp <= 0xfffbu);
 }
 
-static int
-append_escape(struct snag_buf *out, uint32_t cp)
+struct safe_glyph {
+    size_t bytes;
+    uint32_t cp;
+    int width;
+    char escape[16];
+};
+
+static struct safe_glyph
+safe_glyph(const unsigned char *text, size_t len)
 {
-    if (cp <= 0xffu)
-        return snag_buf_printf(out, "\\x%02X", (unsigned int)cp);
-    return snag_buf_printf(out, "\\u{%X}", (unsigned int)cp);
+    struct safe_glyph glyph = {0};
+    glyph.bytes = snag_utf8_decode(text, len, &glyph.cp);
+    if (!glyph.bytes)
+        glyph.cp = *text;
+    glyph.width = snag_char_width(glyph.cp);
+    if (!glyph.bytes || glyph.cp < 0x20u || glyph.cp == 0x7fu ||
+        (glyph.cp >= 0x80u && glyph.cp <= 0x9fu) ||
+        format_unsafe(glyph.cp) || glyph.width < 0)
+        glyph.width = snprintf(glyph.escape, sizeof(glyph.escape),
+            glyph.cp <= 0xffu ? "\\x%02X" : "\\u{%X}", (unsigned int)glyph.cp);
+    if (!glyph.bytes)
+        glyph.bytes = 1u;
+    return glyph;
 }
 
 static int
@@ -71,16 +88,13 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
     if (cursor_byte)
         *cursor_byte = reverse ? 0u : out->len;
     while (i < len) {
-        uint32_t cp;
-        size_t n = snag_utf8_decode(text + i, len - i, &cp);
+        struct safe_glyph glyph = safe_glyph(text + i, len - i);
+        uint32_t cp = glyph.cp;
+        size_t n = glyph.bytes;
         int width = 0;
-        size_t before = out->len;
-        bool invalid = !n;
 
-        if (!n) {
-            cp = text[i];
-            n = 1u;
-        }
+        if (glyph.width < 0)
+            return -1;
         /* A displayed wrap never changes the draft or its byte offsets. */
         if (prompt && columns >= 20u && !word_space(text[i]) &&
             (i == 0u || word_space(text[i - 1u]))) {
@@ -96,7 +110,7 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
         }
         if (cursor_byte && (reverse ? out->len <= stop : i == stop))
             *cursor_byte = reverse ? i : out->len;
-        before = out->len;
+        size_t before = out->len;
         if (cp == '\n') {
             if (prompt) {
                 if (snag_buf_append(out, "\r\n", 2u) < 0)
@@ -116,22 +130,12 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
                 if (snag_buf_putc(out, ' ') < 0)
                     return -1;
             width = (int)spaces;
-        } else if (invalid || cp < 0x20u || cp == 0x7fu ||
-                   (cp >= 0x80u && cp <= 0x9fu) || format_unsafe(cp)) {
-            if (append_escape(out, cp) < 0)
-                return -1;
-            width = (int)(out->len - before);
         } else {
-            int w = snag_char_width(cp);
-            if (w < 0) {
-                if (append_escape(out, cp) < 0)
-                    return -1;
-                width = (int)(out->len - before);
-            } else {
-                if (snag_buf_append(out, text + i, n) < 0)
-                    return -1;
-                width = w;
-            }
+            width = glyph.width;
+            if (snag_buf_append(out, glyph.escape[0] ?
+                    (const void *)glyph.escape : text + i,
+                    glyph.escape[0] ? (size_t)width : n) < 0)
+                return -1;
         }
         if (cp != '\n' || !prompt) {
             if (columns >= 20u && width > 0) {
@@ -160,35 +164,15 @@ snag_term_text_width(const char *value, size_t len)
     size_t width = 0u;
 
     for (size_t i = 0u; i < len;) {
-        uint32_t cp;
-        size_t n = snag_utf8_decode(text + i, len - i, &cp);
-        size_t amount;
-        int w;
-
-        if (!n) {
-            cp = text[i];
-            n = 1u;
-        }
-        w = snag_char_width(cp);
-        if (cp == '\t')
-            amount = 4u - (width % 4u);
-        else if (cp < 0x20u || cp == 0x7fu ||
-                 (cp >= 0x80u && cp <= 0x9fu) || format_unsafe(cp) || w < 0) {
-            char escaped[16];
-            int count = snprintf(escaped, sizeof(escaped),
-                                 cp <= 0xffu ? "\\x%02X" : "\\u{%X}",
-                                 (unsigned int)cp);
-            if (count < 0)
-                return SIZE_MAX;
-            amount = (size_t)count;
-        } else {
-            amount = (size_t)w;
-        }
+        struct safe_glyph glyph = safe_glyph(text + i, len - i);
+        if (glyph.width < 0)
+            return SIZE_MAX;
+        size_t amount = glyph.cp == '\t' ? 4u - (width % 4u) : (size_t)glyph.width;
         if (!snag_size_add(width, amount, &width)) {
             errno = EOVERFLOW;
             return SIZE_MAX;
         }
-        i += n;
+        i += glyph.bytes;
     }
     return width;
 }
