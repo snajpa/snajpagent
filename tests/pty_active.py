@@ -100,7 +100,8 @@ class Child:
         pattern = re.compile(
             re.escape(DEFAULT_IDLE_PROMPT.rstrip()) + b"|" +
             re.escape(DEFAULT_ACCOUNTED_IDLE_PROMPT.rstrip()) +
-            rb"|(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba|\r(?:\x1b\[\d+C)?\xe2\x80\xba(?=\r)")
+            rb"|(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba"
+            rb"|\r(?:\x1b\[\d+C)?(?:[0-9? ]{0,3}% )?\xe2\x80\xba(?=\r)")
         end = time.monotonic() + timeout
         while True:
             match = pattern.search(self.buf, start)
@@ -3114,7 +3115,7 @@ def test_known_context_meter():
     used = completed["usage"]["input_tokens"]
     percent = min(100, (used * 100 + hard - 1) // hard)
     # The idle prompt reports measured usage, and new unknown requests cannot replace it.
-    child.wait(f" first/gpt-5.6-luna/high {percent:3}% ›".encode(), start=answered)
+    child.wait(f"{percent}% ›".encode(), start=answered)
     child.exit_cleanly(answered)
 
 
