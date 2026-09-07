@@ -3117,16 +3117,15 @@ def test_network_collision_prompts():
     address = f"127.0.0.1:{port}"
     children = []
     peer = None
-    old_user = os.environ.get("USER")
-    os.environ["USER"] = "root"
+    env = dict(os.environ, USER="root")
     try:
-        server = Child(["--no-color", "-vvvvvv", "-s", address, "-r", "lab"])
+        server = Child(["--no-color", "-vvvvvv", "-s", address, "-r", "lab"], env=env)
         children.append(server)
         server.wait(chat_prompt("root0"))
         names_end = server.send_wait(b"/names\r", b"model nick: agent0")
         server.wait(b"operator nick: root0", start=names_end)
         for suffix in (1, 2):
-            client = Child(["--no-color", "-c", address])
+            client = Child(["--no-color", "-c", address], env=env)
             children.append(client)
             deadline = time.monotonic() + 8.0
             while (chat_prompt(f"root{suffix}") not in client.buf and
@@ -3159,19 +3158,13 @@ def test_network_collision_prompts():
         for suffix, child in enumerate(children):
             child.send_wait(b"resume setup\r", f"root{suffix} › resume setup".encode())
     finally:
-        try:
-            if peer:
-                peer.close()
-            for child in reversed(children):
-                child.send(b"\x04")
-                arguments = command_arguments(child.finish())
-                assert "--model-nick" not in arguments
-                assert "--operator-nick" not in arguments
-        finally:
-            if old_user is None:
-                os.environ.pop("USER", None)
-            else:
-                os.environ["USER"] = old_user
+        if peer:
+            peer.close()
+        for child in reversed(children):
+            child.send(b"\x04")
+            arguments = command_arguments(child.finish())
+            assert "--model-nick" not in arguments
+            assert "--operator-nick" not in arguments
 
 
 def test_network_live_nick_prompt():
