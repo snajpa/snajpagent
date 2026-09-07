@@ -2422,6 +2422,13 @@ inspection, parallel commands, PTY execution, interactive resume and TLS
 trust/hostname verification with local fixtures. Use a UTF-8 locale and mounted
 devfs. The executable is non-PIE at this old ABI baseline. Other releases
 remain unverified.
+.PP
+Source builds targeting pre-8 FreeBSD use validated pathname fallbacks for
+missing descriptor-relative filesystem calls. Avoid concurrent directory
+renames: external renames can race validation and access, and moves to a
+different parent require reopening the directory. Close-on-exec flag setup is
+non-atomic on these old kernels. The production target above keeps its 8.4
+baseline; FreeBSD 5.5 currently has platform-layer qualification only.
 .TP
 .BR "make prod-windows-x86_64" , " make prod-windows-arm64"
 Build the experimental native Windows x64 or ARM64 executable using pinned Nix

@@ -163,6 +163,31 @@ ownership across older libc failure paths. Native GNU make builds select BSD
 API declarations and libutil automatically. Use a UTF-8 locale and mounted
 devfs; the qualification guest used `en_US.UTF-8` and UFS for large sparse files.
 
+### Earlier FreeBSD source support
+
+The platform layer also builds against FreeBSD 5.5. Its existing base tests
+pass on a real 5.5 amd64 QEMU guest, including descriptor-relative operations,
+same-parent directory rename, sparse files, Unicode, threads, terminal modes,
+pipe/PTY output and repeated child-exit observation followed by exit-status
+collection. The full application and dependency build for 5.5 remains open;
+`prod-freebsd-amd64` retains its 8.4 baseline.
+
+Pre-8 builds retain validated paths for managed directory descriptors and
+reopen directory streams with identity checks. Closed/reused descriptors are
+pruned on subsequent cache access. Same-parent renames can be rediscovered;
+a move to a different parent requires reopening the directory. These pathname
+fallbacks have an external rename race between validation and access. Avoid
+concurrent renames of workspace/state directories; no process-wide cwd changes
+or external filesystem helpers are used. Close-on-exec setup is non-atomic on
+these kernels. Native at-family APIs remain selected on newer build baselines.
+
+For old kernels lacking non-reaping wait flags, process-list snapshots preserve
+child ownership. PID and parentage are checked before interpreting the old
+zombie representation; the owner still collects status with waitpid. Source
+checks and the focused tests cover this path independently of full-agent
+qualification. The old libc realpath call uses a caller-owned buffer and checks
+that the original path exists before normalization.
+
 ## macOS ARM64 and Intel cross-builds
 
 `make prod-macos-arm64` and `make prod-macos-x86_64` use the same pinned upstream dependency sources via
