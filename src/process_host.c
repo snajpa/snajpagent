@@ -1486,6 +1486,10 @@ done:
 #define SNAJPAGENT_HAVE_PTY 1
 #include <sys/ioctl.h>
 #include <util.h>
+#elif defined(__FreeBSD__)
+#define SNAJPAGENT_HAVE_PTY 1
+#include <sys/ioctl.h>
+#include <libutil.h>
 #endif
 #include <signal.h>
 #include <stdbool.h>
@@ -1773,6 +1777,14 @@ proc_child_exited(struct snag_child *child)
 int
 snag_child_exited(struct snag_child *child)
 {
+#if defined(__FreeBSD__)
+    /* FreeBSD supports polling without releasing child ownership. */
+    int status;
+    pid_t pid = waitpid(child->pid, &status, WNOHANG | WNOWAIT);
+    if (pid < 0 && errno == ECHILD)
+        child->reaped = true;
+    return pid < 0 ? -1 : pid == child->pid;
+#else
     siginfo_t info = {0};
     if (waitid(P_PID, (id_t)child->pid, &info, WEXITED | WNOHANG | WNOWAIT) < 0) {
 #if defined(SNAJPAGENT_HAVE_PROC_CHILD)
@@ -1787,6 +1799,7 @@ snag_child_exited(struct snag_child *child)
         return -1;
     }
     return info.si_pid == child->pid;
+#endif
 }
 
 int

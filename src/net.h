@@ -24,6 +24,7 @@ typedef struct {
 #define SNAG_NET_INVALID 32
 #else
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <poll.h>

@@ -3195,7 +3195,7 @@ snag_monotonic_ms(void)
 int
 snag_sync_file(int fd)
 {
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
     return fsync(fd);
 #else
     if (fdatasync(fd) == 0)
