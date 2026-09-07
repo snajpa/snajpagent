@@ -684,6 +684,10 @@ class TmuxTerminal:
         self.send_text(text)
         self.send_key("Enter")
 
+    def submit_wait(self, text, needle, timeout=10.0, join_wrapped=False):
+        self.submit(text)
+        return self.wait(needle, timeout=timeout, join_wrapped=join_wrapped)
+
     def resize(self, cols, rows):
         self.run(
             "resize-window", "-t", f"{self.session}:0",
@@ -823,8 +827,7 @@ def run_status_case(binary, root):
         idle = terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         assert re.search(r"(?m)^   [0-9]{2}:[0-9]{2}:[0-9]{2}" +
                          re.escape(DEFAULT_IDLE_PROMPT), idle), idle
-        terminal.submit("terminal_status")
-        active = terminal.wait(DEFAULT_ACTIVE_PROMPT, timeout=3.0,
+        active = terminal.submit_wait("terminal_status", DEFAULT_ACTIVE_PROMPT, timeout=3.0,
                                join_wrapped=True)
         assert re.search(r"(?m)^◴  [0-9]{2}:[0-9]{2}:[0-9]{2}" +
                          re.escape(DEFAULT_ACTIVE_PROMPT), active), active
@@ -1107,8 +1110,7 @@ def run_narrow_markdown_table_case(binary, root):
         args=("--color=never",),
     ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
-        terminal.submit("terminal_markdown")
-        terminal.wait("┌─ table", timeout=3.0, join_wrapped=True)
+        terminal.submit_wait("terminal_markdown", "┌─ table", timeout=3.0, join_wrapped=True)
         terminal.wait("│ Item: alpha", timeout=3.0, join_wrapped=True)
         terminal.wait("│ State: ready", timeout=3.0, join_wrapped=True)
         terminal.wait("│ Count: 7", timeout=3.0, join_wrapped=True)
@@ -1139,8 +1141,7 @@ def run_render_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 32, 18
     ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
-        terminal.submit("terminal_render")
-        terminal.wait("alpha beta gamma delta-")
+        terminal.submit_wait("terminal_render", "alpha beta gamma delta-")
         terminal.send_text("draft")
         first = wait_wrapped_fragment(
             terminal, f"{DEFAULT_ACTIVE_PROMPT} draft"
@@ -1232,8 +1233,7 @@ def run_render_case(binary, root):
             raise AssertionError(f"unexpected AGENTS.md metadata {instructions!r}")
 
         terminal.send_key("C-u")
-        terminal.submit("slow")
-        terminal.wait("working slowly")
+        terminal.submit_wait("slow", "working slowly")
         terminal.send_text("change course")
         steering_screen = terminal.wait(
             f"{DEFAULT_ACTIVE_PROMPT} change course", join_wrapped=True
@@ -1309,8 +1309,7 @@ def run_queue_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 48, 20
     ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
-        terminal.submit("queue_slow")
-        terminal.wait("working slowly")
+        terminal.submit_wait("queue_slow", "working slowly")
         for count, text in enumerate(("first", "second", "third", "fourth"), 1):
             terminal.send_text(text)
             terminal.send_key("Tab")
@@ -1330,8 +1329,7 @@ def run_queue_case(binary, root):
         terminal.submit("/queue 1 delete")
         wait_event_count(dotdir, "future_turn_cancelled", 3)
         wait_idle_prompt_at_bottom(terminal, "/medium   ?% (1) »")
-        terminal.submit("/q 1e")
-        terminal.wait(" ◴  ?% edit 1 › second")
+        terminal.submit_wait("/q 1e", " ◴  ?% edit 1 › second")
         terminal.send_text(" active")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 1)
@@ -1346,8 +1344,7 @@ def run_queue_case(binary, root):
         terminal.send_key("C-c")
         terminal.wait("turn interrupted")
         wait_idle_prompt_at_bottom(terminal, "/medium   ?% (2) ›")
-        terminal.submit("/queue 1 edit")
-        terminal.wait("    ?% edit 1 › second active")
+        terminal.submit_wait("/queue 1 edit", "    ?% edit 1 › second active")
         terminal.send_text(" idle")
         terminal.send_key("Enter")
         wait_event_count(dotdir, "future_turn_edited", 2)
@@ -1355,8 +1352,7 @@ def run_queue_case(binary, root):
         wait_event_count(dotdir, "future_turn_cancelled", 4)
         terminal.wait("2 future turns cancelled")
         wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
-        terminal.submit("/q")
-        empty = terminal.wait("future-turn queue is empty")
+        empty = terminal.submit_wait("/q", "future-turn queue is empty")
         assert_order(
             empty,
             [
@@ -1477,10 +1473,8 @@ def run_tool_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 52, 18
     ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT)
-        terminal.submit("/verbose 3")
-        terminal.wait("verbosity: 3")
-        terminal.submit("text_tool")
-        screen = terminal.wait("fixture command succeeded", join_wrapped=True)
+        terminal.submit_wait("/verbose 3", "verbosity: 3")
+        screen = terminal.submit_wait("text_tool", "fixture command succeeded", join_wrapped=True)
         terminal.wait("done", join_wrapped=True)
         assert_order(screen, [
             "→ exec_command",
@@ -1894,8 +1888,7 @@ def run_draft_navigation_case(binary, root, regression=None):
         terminal.resize(25, 16)
         draft(["> alpha beta gamma delta", "epsilon zeta eta!"])
         terminal.send_key("C-u")
-        terminal.submit("history draft")
-        terminal.wait("fixture answer")
+        terminal.submit_wait("history draft", "fixture answer")
         terminal.send_text("unsent")
         terminal.send_key("C-p")
         draft(["> history draft"])
@@ -1993,8 +1986,7 @@ def run_lifecycle_case(binary, root):
         args=("--color=always",),
     ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT)
-        terminal.submit("/goal slow goal")
-        terminal.wait("• Goal set")
+        terminal.submit_wait("/goal slow goal", "• Goal set")
         terminal.wait("working on goal")
         terminal.send_text("/goal cancel")
         active, _ = wait_normalized(terminal, f"{DEFAULT_ACTIVE_PROMPT.strip()} /goal cancel",
@@ -2009,8 +2001,7 @@ def run_lifecycle_case(binary, root):
         wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
         wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
 
-        terminal.submit("/compact")
-        terminal.wait("• Compacted")
+        terminal.submit_wait("/compact", "• Compacted")
         wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
         screen = terminal.capture(join_wrapped=True)
         assert_order(screen, ["• Goal set", "• Goal cleared", "• Compacted"])
@@ -2055,10 +2046,8 @@ def run_bullet_class_case(binary, root):
             case / "t", binary, workspace, case / "s", config, 100, 20),
             case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT)
-        terminal.submit("/goal slow goal")
-        terminal.wait("working on goal")
-        terminal.submit("/goal pause")
-        terminal.wait("Goal paused at the current turn boundary")
+        terminal.submit_wait("/goal slow goal", "working on goal")
+        terminal.submit_wait("/goal pause", "Goal paused at the current turn boundary")
         terminal.wait("goal checkpoint")
         wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
         terminal.send_key("Tab")
@@ -2176,11 +2165,9 @@ def run_model_catalog_case(binary, root, provider, environment):
         100, 24, environment=environment,
     ), case / "screen.txt") as terminal:
         terminal.wait(" ordinary/uncached-start/low   0% ›")
-        terminal.submit("/verbose 6")
-        terminal.wait("verbosity: 6")
+        terminal.submit_wait("/verbose 6", "verbosity: 6")
         before = provider.catalog_paths()
-        terminal.submit("/model cache")
-        screen = terminal.wait("5. codex / codex-late / ultra",
+        screen = terminal.submit_wait("/model cache", "5. codex / codex-late / ultra",
                                join_wrapped=True)
         for expected in (
                 "1. ordinary / standard-model / medium",
@@ -2226,8 +2213,7 @@ def run_model_catalog_case(binary, root, provider, environment):
             raise AssertionError("mixed refresh used unexpected catalog endpoints")
 
         paths_before_list = provider.catalog_paths()
-        terminal.submit("/model list")
-        terminal.wait("5. codex / codex-late / ultra", join_wrapped=True)
+        terminal.submit_wait("/model list", "5. codex / codex-late / ultra", join_wrapped=True)
         wait_current_prompt(terminal, None, timeout=5.0)
         if provider.catalog_paths() != paths_before_list:
             raise AssertionError("offline model list contacted a provider")
@@ -2237,8 +2223,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         with provider.lock:
             provider.catalog_failure = expected_paths[1]
         failure_start = len(provider.catalog_paths())
-        terminal.submit("/model cache")
-        terminal.wait("cannot refresh provider codex:", join_wrapped=True)
+        terminal.submit_wait("/model cache", "cannot refresh provider codex:", join_wrapped=True)
         wait_current_prompt(terminal, None, timeout=5.0)
         with provider.lock:
             provider.catalog_failure = None
@@ -2508,8 +2493,7 @@ def run_destination_case(binary, root, provider, environment):
         deliveries("destination-once-two", {"b": 1, "c": 1})
         client.submit("destination-still-one")
         deliveries("destination-still-one", {"a": 1, "c": 1})
-        client.submit("/2")
-        client.wait("destination: 2")
+        client.submit_wait("/2", "destination: 2")
         client.wait("[2 #beta]")
         client.submit("destination-selected-two")
         deliveries("destination-selected-two", {"b": 1, "c": 1})
@@ -2517,13 +2501,11 @@ def run_destination_case(binary, root, provider, environment):
         deliveries("destination-broadcast", {"a": 1, "b": 1, "c": 2})
         client.submit("/1 /all literal-command")
         deliveries("/all literal-command", {"a": 1, "c": 1})
-        client.submit("/names")
-        client.wait("selected destination: 2")
+        client.submit_wait("/names", "selected destination: 2")
         client.wait(f"destination[1]: {endpoints[0]}")
         client.wait(f"destination[2]: {endpoints[1]}")
 
-        client.submit("/rollout")
-        client.wait("fake/two-model/medium   ?% ›")
+        client.submit_wait("/rollout", "fake/two-model/medium   ?% ›")
         client.submit("destination-model 1 model-to-one")
         deliveries("model-to-one", {"a": 1, "c": 1})
         client.wait("destination model done")
@@ -2540,21 +2522,16 @@ def run_destination_case(binary, root, provider, environment):
         assert any("Select a destination" in output for output in outputs), outputs
         deliveries("ambiguous-model", {})
 
-        client.submit(f"/disconnect {endpoints[1]}")
-        client.wait("outgoing connection removed")
-        client.submit("/chat")
-        client.wait("[2 unavailable]")
-        client.submit("/1")
-        client.wait("destination: 1")
+        client.submit_wait(f"/disconnect {endpoints[1]}", "outgoing connection removed")
+        client.submit_wait("/chat", "[2 unavailable]")
+        client.submit_wait("/1", "destination: 1")
         client.submit("/1 single-still-valid")
         deliveries("single-still-valid", {"a": 1, "c": 1})
         assert "[1 #alpha]" not in client.capture().rstrip().splitlines()[-1]
-        client.submit(f"/connect {endpoints[1]}")
-        client.wait("outgoing connection added")
+        client.submit_wait(f"/connect {endpoints[1]}", "outgoing connection added")
         client.submit("/names")
         client.wait(f"destination[3]: {endpoints[1]}")
-        client.submit("/2 removed-target")
-        client.wait("destination 2 is unavailable; use /names")
+        client.submit_wait("/2 removed-target", "destination 2 is unavailable; use /names")
         client.wait(": /2 removed-target")
         deliveries("removed-target", {})
         for terminal in reversed(list(terminals.values())):
@@ -2770,8 +2747,7 @@ def run_output_cap_cases(binary, root, provider, environment):
                                 case / "state", config, 120, 24,
                                 args=("-v",), environment=environment) as terminal:
             terminal.wait("host-model/medium   0% ›")
-            terminal.submit(f"tool-cap {ceiling} {json.dumps(selected)}")
-            terminal.wait("tool cap confirmed")
+            terminal.submit_wait(f"tool-cap {ceiling} {json.dumps(selected)}", "tool cap confirmed")
             _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
             result = event_list(events, "tool_finished")[0]["data"]["result"]
             assert result["max_output_tokens"] == min(ceiling, selected or ceiling)
@@ -2884,10 +2860,8 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 initial = json.dumps(requests[0], sort_keys=True)
                 assert "irc_send" not in {tool.get("name") for tool in requests[0]["tools"]}
                 if view == "chat":
-                    terminal.submit("/chat")
-                    terminal.wait("chat is offline")
-                terminal.submit(f"/server start {endpoint}")
-                terminal.wait(f"hosting started on {endpoint}", join_wrapped=True)
+                    terminal.submit_wait("/chat", "chat is offline")
+                terminal.submit_wait(f"/server start {endpoint}", f"hosting started on {endpoint}", join_wrapped=True)
                 peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
                 peer.sendall(b"NICK runtimepeer\r\nUSER runtimepeer 0 * :human\r\nJOIN #lab\r\n")
                 backgrounds = ["runtime-background café € " + "long ordinary text " * 185]
@@ -2910,8 +2884,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                     time.sleep(0.02)
                 assert all(any(event["text"] == message for event in received) for message in backgrounds)
                 assert len(requests) == 1, "IRC input interrupted a live provider response"
-                terminal.submit("/server stop")
-                terminal.wait("hosting stopped; outgoing connections unchanged", join_wrapped=True)
+                terminal.submit_wait("/server stop", "hosting stopped; outgoing connections unchanged", join_wrapped=True)
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
                     assert probe.connect_ex(("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))) != 0
                 assert json.dumps(requests[0], sort_keys=True) == initial
@@ -2950,8 +2923,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 assert len(requests) == expected, "received input was admitted as duplicate work"
                 if view == "chat":
                     assert "runtime completion" not in terminal.capture(), "private response leaked into offline chat"
-                    terminal.submit("/rollout")
-                    terminal.wait("runtime completion 3")
+                    terminal.submit_wait("/rollout", "runtime completion 3")
                 terminal.exit()
                 screen = terminal.capture(join_wrapped=True)
                 resume = screen.split("You can resume this session with the following command:", 1)[1]
@@ -3023,22 +2995,18 @@ def run_runtime_routing_cases(binary, root, provider, environment):
         peer = None
         try:
             terminal.wait(f"runtimeop@{MACHINE_HOSTNAME} :")
-            terminal.submit("/rollout")
-            terminal.wait("host-model/medium   0% ›")
+            terminal.submit_wait("/rollout", "host-model/medium   0% ›")
             terminal.submit("runtime-routing")
             assert arrived.wait(5.0)
             frozen = counts[0] if phase == "count" else requests[0]
             assert tool in {item.get("name") for item in frozen["tools"]}
             if change == "noop":
-                terminal.submit(f"/server start {endpoint}")
-                terminal.wait(f"already hosting {endpoint}")
+                terminal.submit_wait(f"/server start {endpoint}", f"already hosting {endpoint}")
                 destination = endpoint
             else:
-                terminal.submit("/server stop")
-                terminal.wait("hosting stopped; outgoing connections unchanged", join_wrapped=True)
+                terminal.submit_wait("/server stop", "hosting stopped; outgoing connections unchanged", join_wrapped=True)
                 if change != "off":
-                    terminal.submit(f"/server start {destination}")
-                    terminal.wait(f"hosting started on {destination}", join_wrapped=True)
+                    terminal.submit_wait(f"/server start {destination}", f"hosting started on {destination}", join_wrapped=True)
             if change != "off":
                 peer = socket.create_connection(("127.0.0.1", int(destination.rsplit(":", 1)[1])))
                 peer.sendall(b"NICK routepeer\r\nUSER routepeer 0 * :human\r\nJOIN #lab\r\n")
@@ -3166,8 +3134,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
         peer = None
         try:
             terminal.wait(f"runtimeop@{MACHINE_HOSTNAME} :")
-            terminal.submit("/rollout")
-            terminal.wait("host-model/medium   0% ›")
+            terminal.submit_wait("/rollout", "host-model/medium   0% ›")
             terminal.submit("/goal set runtime-goal" if boundary == "goal" else "runtime-boundary")
             if boundary == "tool":
                 deadline = time.monotonic() + 5.0
@@ -3176,10 +3143,8 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                     time.sleep(0.02)
                 pid = int((workspace / "command.pid").read_text())
                 os.kill(pid, 0)
-                terminal.submit(f"/connect 127.0.0.1:{free_loopback_port()}")
-                terminal.wait("outgoing connection added")
-                terminal.submit("/disconnect")
-                terminal.wait("outgoing connections removed; hosting unchanged", join_wrapped=True)
+                terminal.submit_wait(f"/connect 127.0.0.1:{free_loopback_port()}", "outgoing connection added")
+                terminal.submit_wait("/disconnect", "outgoing connections removed; hosting unchanged", join_wrapped=True)
                 os.kill(pid, 0)
             else:
                 assert arrived.wait(5.0), terminal.capture()
@@ -3201,8 +3166,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                     break
                 assert time.monotonic() < deadline
                 time.sleep(0.02)
-            terminal.submit("/server stop")
-            terminal.wait("hosting stopped; outgoing connections unchanged", join_wrapped=True)
+            terminal.submit_wait("/server stop", "hosting stopped; outgoing connections unchanged", join_wrapped=True)
             if boundary == "steer":
                 terminal.submit("boundary direct steer")
                 deadline = time.monotonic() + 5.0
@@ -3213,8 +3177,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                 assert "boundary direct steer" in second and "boundary delivered prefix" in second
                 assert "boundary ordinary message" not in second
             elif boundary == "queue":
-                terminal.submit("/queue boundary future input")
-                terminal.wait("queued (/next or /q c) › boundary future input")
+                terminal.submit_wait("/queue boundary future input", "queued (/next or /q c) › boundary future input")
                 assert len(requests) == 1
             release.set()
             expected = 4 if boundary == "tool" else 3
@@ -3317,14 +3280,12 @@ def run_runtime_history_case(binary, root, provider, environment):
         historical = [event["data"] for event in event_list(log, "irc_event")
                       if event["data"]["text"] == history]
         assert len(historical) == 1 and historical[0]["historical"]
-        terminal.submit("/chat")
-        screen = terminal.wait("── history replayed ──", join_wrapped=True)
+        screen = terminal.submit_wait("/chat", "── history replayed ──", join_wrapped=True)
         assert screen.count("── history replayed ──") == 1, screen
         assert re.search(r"\d{2}:\d{2}:\d{2} peer › " + re.escape(history), screen), screen
         assert not re.search(r"\d{2}:\d{2}:\d{2} history ", screen), screen
         assert screen.index(history) < screen.index("── history replayed ──"), screen
-        terminal.submit("/disconnect")
-        terminal.wait("outgoing connections removed; hosting unchanged", join_wrapped=True)
+        terminal.submit_wait("/disconnect", "outgoing connections removed; hosting unchanged", join_wrapped=True)
         release.set()
         deadline = time.monotonic() + 8.0
         while len(requests) < 2:
@@ -3400,8 +3361,7 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
             peer.sendall(b"NICK retrypeer\r\nUSER retrypeer 0 * :human\r\nJOIN #lab\r\n")
             terminal.wait("retrypeer joined")
             wait_irc_idle([terminal])
-            terminal.submit("/rollout")
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.submit_wait("/rollout", "host-model/medium   ?% ›")
             terminal.submit("retry-original")
             assert arrived.wait(5.0)
             if mode not in ("before", "zero", "healthy"):
@@ -3519,8 +3479,7 @@ def run_provider_clarification_cases(binary, root, provider, environment):
             peer.sendall(b"NICK clarifypeer\r\nUSER clarifypeer 0 * :human\r\nJOIN #lab\r\n")
             terminal.wait("clarifypeer joined")
             wait_irc_idle([terminal])
-            terminal.submit("/rollout")
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.submit_wait("/rollout", "host-model/medium   ?% ›")
             terminal.submit(original)
             if mode in ("steer", "chat", "queue"):
                 assert arrived.wait(5.0)
@@ -4073,16 +4032,13 @@ def run_manual_retry_cases(binary, root, provider, environment):
             140, 28, environment=environment)
         try:
             terminal.wait("host-model/medium   0% ›")
-            terminal.submit("/retry")
-            terminal.wait("no failed turn to retry")
+            terminal.submit_wait("/retry", "no failed turn to retry")
             assert not requests
             terminal.submit(("/ro " if mode == "read-only-resume" else "") + original)
             assert arrived.wait(5.0)
-            terminal.submit("/retry")
-            terminal.wait("that command is unavailable while a turn is active")
+            terminal.submit_wait("/retry", "that command is unavailable while a turn is active")
             if mode == "queue":
-                terminal.submit("/queue still paused")
-                terminal.wait("queued (/next or /q c) › still paused")
+                terminal.submit_wait("/queue still paused", "queued (/next or /q c) › still paused")
             release.set()
             terminal.wait("manual retry failure 2")
             terminal.wait("turn failed; try /retry to continue")
@@ -4096,10 +4052,8 @@ def run_manual_retry_cases(binary, root, provider, environment):
                     140, 28, args=["--resume", log_path.parent.name], environment=environment)
                 terminal.wait("host-model/medium   ?% ›")
             if mode == "chat":
-                terminal.submit("/chat")
-                terminal.wait("chat is offline")
-            terminal.submit("/retry")
-            terminal.wait("manual retry failure 3")
+                terminal.submit_wait("/chat", "chat is offline")
+            terminal.submit_wait("/retry", "manual retry failure 3")
             wait_irc_idle([terminal])
             terminal.submit("/retry")
             if mode == "chat":
@@ -4455,8 +4409,7 @@ def run_incremental_history_case(binary, root):
         assert client.capture().count("one original conversation marker") == 1
         assert all(sum("one original conversation marker" in str(i.get("content", "")) for i in r.get("input", [])) <= 1
                    for r in captured if r.get("model") == "one-model")
-        client.submit("/disconnect")
-        client.wait("outgoing connections removed")
+        client.submit_wait("/disconnect", "outgoing connections removed")
         host.submit("identical legitimate message")
         wait_record(host, "identical legitimate message")
         host.submit("identical legitimate message")
@@ -4491,13 +4444,11 @@ def run_incremental_history_case(binary, root):
             time.sleep(0.02)
         wait_irc_idle([host, client])
         assert len(wait_record(client, "pending at process exit")) == 1
-        client.submit("/disconnect")
-        client.wait("outgoing connections removed")
+        client.submit_wait("/disconnect", "outgoing connections removed")
         for number in range(16):
             host.submit(f"retention-gap-{number}")
             wait_record(host, f"retention-gap-{number}")
-        client.submit("/connect " + endpoint)
-        client.wait("history gap")
+        client.submit_wait("/connect " + endpoint, "history gap")
         wait_record(client, "retention-gap-15")
         wait_irc_idle([host, client])
         ids = [(e["data"]["stream"], e["data"]["sequence"]) for e in records(client) if e["data"]["stream"]]

@@ -2945,9 +2945,7 @@ run_turn(struct app_state *app, const char *prompt,
         if (snag_instructions_discover(&app->turn_instructions,
                                       app->session.workspace,
                                       error, sizeof(error)) < 0) {
-            (void)app_error(app, error);
-            result = 3;
-            goto out;
+            goto fail;
         }
     } else {
         snag_instructions_free(&app->turn_instructions);
@@ -2955,9 +2953,7 @@ run_turn(struct app_state *app, const char *prompt,
     for (size_t i = 0; i < app->cli->doc_instructions.count; ++i) {
         if (snag_instructions_add_file(&app->turn_instructions,
                 app->cli->doc_instructions.paths[i], error, sizeof(error)) < 0) {
-            (void)app_error(app, error);
-            result = 3;
-            goto out;
+            goto fail;
         }
     }
     if (continuing) {
@@ -2971,9 +2967,7 @@ run_turn(struct app_state *app, const char *prompt,
                      snag_app_turn_started_data(app, turn_prompt, turn_id, queued,
                                                goal_turn, read_only),
                      error, sizeof(error)) < 0) {
-        (void)app_error(app, error);
-        result = 3;
-        goto out;
+        goto fail;
     }
     if (!continuing) consume_staged_settings(app);
     if (app_textf(app, SNAG_UI_RUNTIME,
@@ -3384,9 +3378,7 @@ run_turn(struct app_state *app, const char *prompt,
                                "protocol_failure" : "output_failure") :
                               "provider_failure",
                               error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-                goto out;
+                goto fail;
             }
             (void)app_error(app, failure);
             result = !app->stream_failed && provider_failure.new_input ?
@@ -3416,9 +3408,7 @@ run_turn(struct app_state *app, const char *prompt,
             if (fail_response(app, turn_id, response_id, cycle, "protocol",
                               failure, partial, provider_retry_count,
                               "protocol_failure", error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-                goto out;
+                goto fail;
             }
             (void)app_error(app, failure);
             result = 4;
@@ -3428,9 +3418,7 @@ run_turn(struct app_state *app, const char *prompt,
         if (commit_event(app, "response_completed",
                          snag_app_response_completed_data(turn_id, response_id, cycle, &graph),
                          error, sizeof(error)) < 0) {
-            (void)app_error(app, error);
-            result = 3;
-            goto out;
+            goto fail;
         }
         error[0] = '\0';
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
@@ -3471,9 +3459,7 @@ run_turn(struct app_state *app, const char *prompt,
                                     error, sizeof(error)) < 0 ||
                 fail_turn(app, turn_id, "protocol_failure",
                           "protocol", message, error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-                goto out;
+                goto fail;
             }
             (void)app_error(app, message);
             result = 4;
@@ -3483,9 +3469,7 @@ run_turn(struct app_state *app, const char *prompt,
             if (decision.outcome == SNAG_GRAPH_CALLS &&
                 terminalize_pending(app, turn_id, "superseded_by_steering",
                                     error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-                goto out;
+                goto fail;
             }
             continue;
         }
@@ -3546,9 +3530,7 @@ run_turn(struct app_state *app, const char *prompt,
                              snag_app_turn_completed_data(turn_id, response_id,
                                                  final->local_item_id),
                              error, sizeof(error)) < 0) {
-                (void)app_error(app, error);
-                result = 3;
-                goto out;
+                goto fail;
             }
             app->last_turn_refused = decision.outcome == SNAG_GRAPH_REFUSAL;
             if (app_textf(app, SNAG_UI_RUNTIME,
@@ -3612,6 +3594,10 @@ run_turn(struct app_state *app, const char *prompt,
         result = finish_turn_failure(app, turn_id, "internal_failure",
                                       "resource", message, error, sizeof(error));
     }
+    goto out;
+fail:
+    (void)app_error(app, error);
+    result = 3;
 out:
     snag_app_response_cycle_release(app, &graph, &steering,
                                        &projection,
@@ -4364,8 +4350,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     }
     workspace = current_workspace(error, sizeof(error));
     if (!workspace) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-        goto out;
+        goto fail;
     }
     if (cli->list) {
         rc = snag_store_list(&app.store, workspace, cli->all, true, list_row, &app,
@@ -4400,9 +4385,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             goto out;
         }
         if (rc < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-            rc = 3;
-            goto out;
+            goto fail;
         }
         resume_provider = cli->model ? selection.provider : snag_config_provider(&config,
             cli->provider ? cli->provider : app.session.default_provider);
@@ -4426,9 +4409,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error); rc = 3; goto out;
         }
         if (recover_session(&app, error, sizeof(error)) < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-            rc = 3;
-            goto out;
+            goto fail;
         }
         app.goal_armed = app.session.goal_status == SNAG_GOAL_ACTIVE;
         if (relocated_workspace &&
@@ -4437,17 +4418,13 @@ snag_app_run(const struct snag_cli *cli, const char *program)
                          json_pack("{s:s,s:s}", "new_workspace", relocated_workspace,
                                    "old_workspace", app.session.workspace),
                          error, sizeof(error)) < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-            rc = 3;
-            goto out;
+            goto fail;
         }
         if (cli->provider &&
             record_model_selection(&app, resume_provider->name, resume_model,
                 cli->model || cli->effort ? new_effort : app.session.default_effort,
                 error, sizeof(error)) < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-            rc = 3;
-            goto out;
+            goto fail;
         }
         app.staged_provider = !cli->provider && cli->model ? selection.provider : NULL;
         app.staged_model = cli->provider ? NULL : cli->model ? new_model : NULL;
@@ -4471,8 +4448,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         if (snag_session_prepare(&app.session, selected_workspace,
                                selected_provider->name, new_model, new_effort,
                                error, sizeof(error)) < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-            goto out;
+            goto fail;
         }
         app.turn_model = next_model(&app);
         app.turn_effort = resolve_effort(app.session.default_effort);
@@ -4500,9 +4476,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     }
     if (snag_ui_open(&app.ui, error, sizeof(error)) < 0) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-        rc = 3;
-        goto out;
+        goto fail;
     }
     (void)snag_ui_history_open(&app.ui, dotdir);
     history_warning(&app);
@@ -4520,6 +4494,10 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     }
     rc = interactive_loop(&app, cli->prompt);
+    goto out;
+fail:
+    (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
+    rc = 3;
 out:
     (void)capture_shutdown_signal(&app);
     (void)snag_ui_text(&app.ui, SNAG_UI_CLOSE, NULL);
