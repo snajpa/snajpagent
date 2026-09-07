@@ -383,58 +383,31 @@ emit_text(struct snag_responses_stream *stream, size_t output_index,
 }
 
 static int
-append_part_delta(struct snag_responses_stream *stream, size_t output_index,
-                  struct snag_wire_item *item, size_t content_index,
-                  enum snag_wire_part_kind kind, const char *delta)
-{
-    struct snag_wire_part *part;
-    size_t len;
-
-    if (!delta || !snag_utf8_valid((const unsigned char *)delta,
-                                  strlen(delta), true))
-        return stream_fail(stream, EPROTO, "invalid public output delta");
-    len = strlen(delta);
-    part = part_at(stream, item, content_index, kind, false);
-    if (!part)
-        return -1;
-    if (part->complete)
-        return stream_fail(stream, EPROTO, "public delta follows completion");
-    if (len > SNAG_MAX_PUBLIC_ITEM - part->text.len) {
-        stream->output_correction = SNAG_OUTPUT_CORRECTION_OVERSIZED;
-        return stream_fail(stream, EOVERFLOW,
-                           SNAG_OVERSIZED_OUTPUT_CORRECTION);
-    }
-    if (account_bytes(stream, len) < 0 ||
-        snag_buf_append(&part->text, delta, len) < 0)
-        return stream_fail(stream, EOVERFLOW,
-                           "public response item exceeds its limit");
-    part->value_seen = true;
-    return emit_text(stream, output_index, item, kind, delta, len);
-}
-
-static int
 reconcile_part(struct snag_responses_stream *stream, size_t output_index,
                struct snag_wire_item *item, size_t content_index,
                enum snag_wire_part_kind kind, const char *text,
-               bool complete)
+               bool delta, bool complete)
 {
     struct snag_wire_part *part;
     size_t len;
 
-    if (!text)
+    if (!text && !delta)
         return stream_fail(stream, EPROTO, "public snapshot has no text");
-    len = strlen(text);
-    if (!snag_utf8_valid((const unsigned char *)text, len, true))
-        return stream_fail(stream, EPROTO, "invalid public snapshot text");
-    part = part_at(stream, item, content_index, kind, true);
+    len = text ? strlen(text) : 0u;
+    if (!text || !snag_utf8_valid((const unsigned char *)text, len, true))
+        return stream_fail(stream, EPROTO, delta ?
+                           "invalid public output delta" : "invalid public snapshot text");
+    part = part_at(stream, item, content_index, kind, !delta);
     if (!part)
         return -1;
-    if (len > SNAG_MAX_PUBLIC_ITEM) {
+    if (delta && part->complete)
+        return stream_fail(stream, EPROTO, "public delta follows completion");
+    if (len > SNAG_MAX_PUBLIC_ITEM - (delta ? part->text.len : 0u)) {
         stream->output_correction = SNAG_OUTPUT_CORRECTION_OVERSIZED;
         return stream_fail(stream, EOVERFLOW,
                            SNAG_OVERSIZED_OUTPUT_CORRECTION);
     }
-    if (part->value_seen) {
+    if (!delta && part->value_seen) {
         if (!text_equal(&part->text, text, len))
             return stream_fail(stream, EPROTO,
                                "public delta and snapshot disagree");
@@ -465,12 +438,12 @@ part_snapshot(struct snag_responses_stream *stream, size_t output_index,
     if (strcmp(type, "output_text") == 0) {
         text = snag_json_string(part, "text");
         return reconcile_part(stream, output_index, item, content_index,
-                              SNAG_WIRE_PART_TEXT, text, complete);
+                              SNAG_WIRE_PART_TEXT, text, false, complete);
     }
     if (strcmp(type, "refusal") == 0) {
         text = snag_json_string(part, "refusal");
         return reconcile_part(stream, output_index, item, content_index,
-                              SNAG_WIRE_PART_REFUSAL, text, complete);
+                              SNAG_WIRE_PART_REFUSAL, text, false, complete);
     }
     {
         struct snag_wire_part *wire_part = part_at(stream, item, content_index,
@@ -487,20 +460,22 @@ part_snapshot(struct snag_responses_stream *stream, size_t output_index,
 static int
 reconcile_arguments(struct snag_responses_stream *stream,
                     struct snag_wire_item *item, const char *arguments,
-                    bool complete)
+                    bool delta, bool complete)
 {
     size_t len;
 
     if (!arguments)
-        return stream_fail(stream, EPROTO,
+        return stream_fail(stream, EPROTO, delta ?
+                           "function argument delta is not text" :
                            "function call snapshot has no arguments");
     len = strlen(arguments);
-    if (len > SNAG_MAX_TOOL_ARGUMENTS ||
+    if ((delta ? item->arguments_complete : len > SNAG_MAX_TOOL_ARGUMENTS) ||
         !snag_utf8_valid((const unsigned char *)arguments, len, true))
-        return stream_fail(stream, EPROTO,
+        return stream_fail(stream, EPROTO, delta ?
+                           "invalid function argument delta order" :
                            "invalid function call arguments snapshot");
     /* Empty in-progress snapshots and deltas carry no argument bytes. */
-    if (item->arguments.len || item->arguments_complete) {
+    if (!delta && (item->arguments.len || item->arguments_complete)) {
         if (!text_equal(&item->arguments, arguments, len))
             return stream_fail(stream, EPROTO,
                                "function argument delta and snapshot disagree");
@@ -513,28 +488,6 @@ reconcile_arguments(struct snag_responses_stream *stream,
     }
     if (complete)
         item->arguments_complete = true;
-    return 0;
-}
-
-static int
-append_arguments_delta(struct snag_responses_stream *stream,
-                       struct snag_wire_item *item, const char *delta)
-{
-    size_t len;
-
-    if (!delta)
-        return stream_fail(stream, EPROTO,
-                           "function argument delta is not text");
-    len = strlen(delta);
-    if (!snag_utf8_valid((const unsigned char *)delta, len, true) ||
-        item->arguments_complete)
-        return stream_fail(stream, EPROTO,
-                           "invalid function argument delta order");
-    if (account_bytes(stream, len) < 0 ||
-        snag_buf_append(&item->arguments, delta, len) < 0)
-        return stream_fail(stream, EOVERFLOW,
-                           "function arguments exceed their limit");
-    item->arguments_seen = true;
     return 0;
 }
 
@@ -602,7 +555,7 @@ function_snapshot(struct snag_responses_stream *stream, size_t output_index,
         copy_once(stream, &item->call_id, call_id, SNAG_MAX_PROVIDER_ID,
                   "provider call id") < 0 ||
         copy_once(stream, &item->name, name, 64u, "function name") < 0 ||
-        reconcile_arguments(stream, item, arguments,
+        reconcile_arguments(stream, item, arguments, false,
                             complete || strcmp(status, "completed") == 0) < 0)
         return -1;
     if (complete || strcmp(status, "completed") == 0)
@@ -729,9 +682,8 @@ handle_public_text(struct snag_responses_stream *stream, const json_t *root,
     item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_MESSAGE);
     if (!item)
         return -1;
-    return complete ?
-        reconcile_part(stream, output_index, item, content_index, kind, text, true) :
-        append_part_delta(stream, output_index, item, content_index, kind, text);
+    return reconcile_part(stream, output_index, item, content_index, kind,
+                          text, !complete, complete);
 }
 
 static int
@@ -750,8 +702,7 @@ handle_arguments(struct snag_responses_stream *stream, const json_t *root,
                      SNAG_WIRE_ITEM_FUNCTION_CALL);
     if (!item)
         return -1;
-    return complete ? reconcile_arguments(stream, item, arguments, true) :
-                      append_arguments_delta(stream, item, arguments);
+    return reconcile_arguments(stream, item, arguments, !complete, complete);
 }
 
 static int
