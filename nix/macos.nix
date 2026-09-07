@@ -167,8 +167,11 @@ let
         runHook postInstall
       '';
     });
-  unistring = autotoolsLibrary sourcePkgs.libunistring
-    [ "--with-libiconv-prefix=${iconv}" ] [ iconv ];
+  unistring = (autotoolsLibrary sourcePkgs.libunistring
+    [ "--with-libiconv-prefix=${iconv}" ] [ iconv ]).overrideAttrs (_:
+    lib.optionalAttrs (lib.versionOlder deployment "10.7") {
+      env.ac_cv_func_strnlen = "no";
+    });
   idn2 = (autotoolsLibrary sourcePkgs.libidn2 [
     "--disable-doc" "--with-libiconv-prefix=${iconv}"
     "--with-libunistring-prefix=${unistring}"
