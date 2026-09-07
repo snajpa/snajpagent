@@ -311,6 +311,13 @@ snag_app_irc_trace(void *opaque, unsigned int level, char direction,
     if (!snag_ui_enabled(&app->ui, level == 6u ? SNAG_PRESENT_WIRE : SNAG_PRESENT_PROTOCOL))
         return 0;
     struct snag_buf safe = {.max = 4u * SNAG_IRC_LINE_MAX};
+    if (level == 6u) {
+        safe.max += SNAG_CONFIG_IRC_ENDPOINT_MAX + 8u;
+        if (snag_buf_printf(&safe, "IRC [%s] ", endpoint) < 0)
+            goto out;
+        if (safe.max > safe.len + 4u * SNAG_IRC_LINE_MAX)
+            safe.max = safe.len + 4u * SNAG_IRC_LINE_MAX;
+    }
     for (size_t i = 0u; i < len; ++i) {
         unsigned char c = (unsigned char)text[i];
         if (c < 0x20u || c == 0x7fu) {
@@ -321,18 +328,8 @@ snag_app_irc_trace(void *opaque, unsigned int level, char direction,
         }
     }
     if (level == 6u) {
-        struct snag_buf line;
-
-        snag_buf_init(&line, 4u * SNAG_IRC_LINE_MAX +
-                            SNAG_CONFIG_IRC_ENDPOINT_MAX + 8u);
-        if (snag_buf_printf(&line, "IRC [%s] ", endpoint) < 0 ||
-            snag_buf_append(&line, safe.data, safe.len) < 0) {
-            snag_buf_free(&line);
-            goto out;
-        }
         rc = snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_TRANSPORT, .data.value = direction, .text = (const char *)line.data, .len = line.len});
-        snag_buf_free(&line);
+            .kind = SNAG_UI_TRANSPORT, .data.value = direction, .text = (const char *)safe.data, .len = safe.len});
     } else {
         int n = snprintf(label, sizeof(label), "irc.command %c %s",
                          direction, endpoint);
