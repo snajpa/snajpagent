@@ -13,6 +13,7 @@ let
     postPatch = old.postPatch + ''
       sed -i -E 's/^(_ZNK?4tapi2v119LinkerInterfaceFile).*/\1*/' tapi/tools/libtapi/libtapi.exports
     '';
+    preBuild = ''ninja -j"$NIX_BUILD_CORES" vt_gen'';
     ninjaFlags = [ "libtapi" ];
     installTargets = [ "install-libtapi" "install-tapi-headers" ];
     postInstall = "";
