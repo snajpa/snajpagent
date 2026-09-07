@@ -1,0 +1,16 @@
+SPDX-License-Identifier: LGPL-2.0-or-later
+Expose the GNU pthread-key presence probe used by libgcc's TLS emulation.
+
+--- a/libpthread/linuxthreads/specific.c
++++ b/libpthread/linuxthreads/specific.c
+@@ -56,7 +56,9 @@
+   __pthread_mutex_unlock(&pthread_keys_mutex);
+   return EAGAIN;
+ }
+-
++/* GCC probes this GNU-libc ABI name before using its pthread TLS emulation. */
++strong_alias(pthread_key_create, __pthread_key_create)
++
+ /* Delete a key */
+ int pthread_key_delete(pthread_key_t key)
+ {

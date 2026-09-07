@@ -38,11 +38,13 @@ let
   base = import pkgs.path settings;
   # IPv6 is a library feature, not a compiler ABI change. Rebuild dependency
   # archives against its updated feature header while retaining the compiler.
-  sdkLibc = base.stdenv.cc.libc.override (old: {
+  sdkLibc = (base.stdenv.cc.libc.override (old: {
     extraConfig = (old.extraConfig or "") + "\nUCLIBC_HAS_IPV6 y\n";
+  })).overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ [ ./uclibc-thread-probe.patch ];
   });
   # These implementation fixes do not change installed headers or the C ABI.
-  # ABI/configuration changes belong in settings and rebuild the base compiler.
+  # Architecture/time/thread layout changes belong in the base settings.
   libc = sdkLibc.overrideAttrs (old: {
     patches = (old.patches or [ ]) ++ [ ./uclibc-legacy.patch ];
   });
@@ -59,7 +61,7 @@ let
       sharedLibraryLoader = pkgs.lib.getLib runtimeLibc;
     };
     nixSupport = (old.nixSupport or { }) // {
-      cc-cflags = toString (old.nixSupport.cc-cflags or "") + " -specs=${./legacy-ssp.specs}";
+      cc-cflags = toString (old.nixSupport.cc-cflags or "") + " -specs=${./legacy-link.specs}";
     };
   });
   compiler = wrapCompiler libc;

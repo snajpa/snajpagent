@@ -4,9 +4,11 @@ All first-party source, tests, build files, and documentation in this tree are
 licensed GPL-2.0-only, with no later-version option and no linking exception.
 
 `nix/uclibc-legacy.patch` contains uClibc-ng library changes and context
-under the upstream LGPL-2.1-or-later terms (COPYING.LIB). This dependency patch
-does not change the agent's license. Corresponding library source and this
-patch must remain available when redistributing the legacy linked executable.
+under the upstream LGPL-2.1-or-later terms (COPYING.LIB).
+`nix/uclibc-thread-probe.patch` retains the LinuxThreads LGPL-2.0-or-later terms.
+These dependency patches do not change the agent's license. Corresponding
+library source and these patches must remain available when redistributing
+the legacy linked executable.
 
 Project design notes live under design/. System Jansson and system libcurl are
 build/runtime dependencies; no third-party

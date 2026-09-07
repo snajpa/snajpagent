@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-only
+%rename lib legacy_lib
+
+# GNU emutls uses weak pthread callbacks, which cannot pull archive members in.
+*lib:
+%{static:-u pthread_once -u pthread_mutex_lock -u pthread_mutex_unlock} %(legacy_lib)
+
 # Static libssp.a supplies both fail entry points; the nonshared shim duplicates one.
 *link_ssp:
 %{fstack-protector|fstack-protector-all|fstack-protector-strong|fstack-protector-explicit:%{static:-lssp;:-lssp_nonshared -lssp}}
-
