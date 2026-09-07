@@ -219,7 +219,7 @@ test_failures(void)
                           error, sizeof(error));
         if (rc == 0)
             rc = snag_sse_finish(&parser, error, sizeof(error));
-        assert(rc < 0);
+        assert(rc < 0 && errno == EPROTO);
         assert(error[0]);
         assert(snag_sse_feed(&parser, "", 0u, error, sizeof(error)) < 0);
         snag_sse_free(&parser);

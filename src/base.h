@@ -7,6 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <time.h>
+#include <errno.h>
+
+#ifndef EPROTO
+#define EPROTO EIO /* Old BSD has no distinct protocol-error number. */
+#endif
 
 #define SNAG_VERBOSITY_MAX 6u
 
