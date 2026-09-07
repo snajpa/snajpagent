@@ -2279,6 +2279,7 @@ def cached_timestamp(cache):
 
 
 def test_uncached_typed_model_selection():
+    before = session_ids()
     cache_path = Path(DOTDIR) / "models.json"
     default_codex_cache = Path(os.environ["HOME"]) / ".codex" / "models_cache.json"
     custom_codex_home = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "codex-home"
@@ -2318,7 +2319,9 @@ def test_uncached_typed_model_selection():
         )
         child.wait(PROMPT.rstrip(), start=end)
         assert not cache_path.exists()
-        child.exit_now()
+        child.send(b"/exit\r")
+        child.finish(expect_resume=False)
+        assert session_ids() == before
 
         # The conventional ~/.codex cache is ignored as well.
         os.environ.pop("CODEX_HOME", None)
@@ -2328,7 +2331,9 @@ def test_uncached_typed_model_selection():
         end = child.wait(b"model cache is empty; use /model cache while idle")
         child.wait(PROMPT.rstrip(), start=end)
         assert not cache_path.exists()
-        child.exit_now()
+        child.send(b"/exit\r")
+        child.finish(expect_resume=False)
+        assert session_ids() == before
     finally:
         if previous_codex_home is None:
             os.environ.pop("CODEX_HOME", None)
