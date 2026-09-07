@@ -490,8 +490,7 @@ def test_static_zero_width_spinner_has_no_refresh():
     active = DEFAULT_ACTIVE_PROMPT
     with Child(["--config", str(config)]) as child:
         child.wait(idle)
-        child.send(b"terminal_status\r")
-        first = child.wait(b"status-first-fragment ")
+        first = child.send_wait(b"terminal_status\r", b"status-first-fragment ")
         wait_prompt_painted(child, active, start=first)
         assert re.search("◆ [0-9]{2}:[0-9]{2}:[0-9]{2}".encode() +
                          re.escape(active), child.buf), bytes(child.buf)

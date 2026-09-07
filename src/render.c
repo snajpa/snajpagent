@@ -639,7 +639,6 @@ snag_render_before_prompt(struct snag_render *render)
 }
 
 static int public_write(struct snag_render *render, const char *text, size_t len);
-static int close_public_output(struct snag_render *render);
 static int markdown_finish(struct snag_render *render);
 static int markdown_abort(struct snag_render *render);
 static int markdown_write(struct snag_render *render,

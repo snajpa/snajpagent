@@ -1484,8 +1484,9 @@ capture_color(enum snag_color_mode mode, bool chat_view,
               char *out, size_t out_size)
 {
     struct snag_render render;
-    struct snag_irc_event event;
-    struct snag_response_item call;
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1000u,
+                                   .nick = "agent", .text = "answer"};
+    struct snag_response_item call = {.name = "exec_command"};
     json_t *arguments;
     json_t *result;
     size_t used = 0u;
@@ -1500,11 +1501,9 @@ capture_color(enum snag_color_mode mode, bool chat_view,
     assert(snag_render_error_ctx(&render, "broken") == 0);
     assert(snag_render_host(&render, "status") == 0);
     assert(snag_render_event(&render, 7u, "compaction_completed") == 0);
-    memset(&call, 0, sizeof(call));
     arguments = json_pack("{s:s,s:o}", "command", "printf plain", "timeout_ms",
                           timeout_ms < 0 ? json_null() : json_integer(timeout_ms));
     assert(arguments != NULL);
-    call.name = "exec_command";
     call.arguments = arguments;
     {
         struct snag_render_block block;
@@ -1526,11 +1525,6 @@ capture_color(enum snag_color_mode mode, bool chat_view,
         snag_render_block_free(&block);
     }
     json_decref(result);
-    memset(&event, 0, sizeof(event));
-    event.kind = SNAG_IRC_MESSAGE;
-    event.timestamp_ms = 1000u;
-    memcpy(event.nick, "agent", 6u);
-    memcpy(event.text, "answer", 7u);
     /* Immediate and queued chat use the same role colors, independent of
      * locality and history. Notices retain the same sender palette. */
     for (unsigned int flags = 0u; flags < 16u; ++flags) {
