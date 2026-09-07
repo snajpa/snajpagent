@@ -37,6 +37,12 @@ RESUME_HEADER = \
     "• You can resume this session with the following command:".encode()
 
 
+def write_config(name, text):
+    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / name
+    config.write_text(text, encoding="utf-8")
+    return config
+
+
 def chat_prompt(operator):
     return f"{operator}@{socket.gethostname()} : ".encode()
 
@@ -484,16 +490,12 @@ def test_incremental_active_prompt_keeps_status_stable():
 
 
 def test_static_zero_width_spinner_has_no_refresh():
-    config = (Path(os.environ["SNAJPAGENT_TEST_ROOT"]) /
-              "config" / "static-spinner.ini")
-    config.write_text(
+    config = write_config("static-spinner.ini",
         "[provider openai]\n[ui]\n"
         'prompt_spinner_goal = "\\0"\n'
         'prompt_spinner_provider = "\\0◆"\n'
         'prompt_spinner_tool = "\\0"\n'
-        "prompt_spinner_per_second = 60\n",
-        encoding="utf-8",
-    )
+        "prompt_spinner_per_second = 60\n")
     idle = DEFAULT_IDLE_PROMPT
     active = DEFAULT_ACTIVE_PROMPT
     with Child(["--config", str(config)], ready=idle) as child:
@@ -718,9 +720,7 @@ def test_split_utf8_steering():
 
 
 def test_typing_pause_and_transient_composer():
-    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
-        "typing-pause.ini"
-    config.write_text("[provider openai]\n[ui]\ntyping_pause_ms = 300\n", encoding="utf-8")
+    config = write_config("typing-pause.ini", "[provider openai]\n[ui]\ntyping_pause_ms = 300\n")
     child = Child(["--config", str(config)], DEFAULT_IDLE_PROMPT)
     first_end = child.send_wait(b"typing_stream\r", b"model-output-one")
 
@@ -871,10 +871,10 @@ def test_compaction_ignores_legacy_samples():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     state = root / "statistical-compact"
     state.mkdir(mode=0o700)
-    config = root / "config" / "statistical-compact.ini"
-    config.write_text("[agent]\nread_agents_md = false\n[provider openai]\n"
-                      "exact_token_count = false\nnative_compaction = false\n"
-                      "auto_compact_input_tokens = 1\n", encoding="utf-8")
+    config = write_config("statistical-compact.ini",
+        "[agent]\nread_agents_md = false\n[provider openai]\n"
+        "exact_token_count = false\nnative_compaction = false\n"
+        "auto_compact_input_tokens = 1\n")
     model = {
         "id": DEFAULT_MODEL, "count_capability": "unsupported",
         "default_effort": "medium", "efforts": ["medium"],
@@ -907,9 +907,7 @@ def test_compaction_ignores_legacy_samples():
 
 def test_read_only_multiline_compaction_and_chat():
     Path(WORKSPACE, "ro-input.txt").write_text("native text\nsecond line\n", encoding="utf-8")
-    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
-    config = root / "config" / "ro-compaction.ini"
-    config.write_text("[provider openai]\nauto_compact_input_tokens = 1\n", encoding="utf-8")
+    config = write_config("ro-compaction.ini", "[provider openai]\nauto_compact_input_tokens = 1\n")
     child = Child([], DEFAULT_IDLE_PROMPT)
     end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(end)
@@ -1046,12 +1044,7 @@ def test_managed_command_steering_and_tab_queue():
 
 
 def test_steering_during_pre_response_compaction():
-    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
-    config = root / "config" / "steering-compaction.ini"
-    config.write_text(
-        "[provider openai]\nauto_compact_input_tokens = 1\n",
-        encoding="utf-8",
-    )
+    config = write_config("steering-compaction.ini", "[provider openai]\nauto_compact_input_tokens = 1\n")
     child = Child([], DEFAULT_IDLE_PROMPT)
     answer_end = child.send_wait(b"context_anchor_chain\r", b"context anchor complete")
     child.exit_cleanly(answer_end)
@@ -1175,11 +1168,7 @@ def test_agents_md_config():
     contents = "Always answer fixture prompts normally.\n"
     agents.write_text(contents, encoding="utf-8")
 
-    enabled_config = root / "config" / "agents-enabled.ini"
-    enabled_config.write_text(
-        "[provider openai]\n[agent]\nread_agents_md = true\n",
-        encoding="utf-8",
-    )
+    enabled_config = write_config("agents-enabled.ini", "[provider openai]\n[agent]\nread_agents_md = true\n")
     child = Child(["--config", str(enabled_config), "-C", str(workspace)], PROMPT.rstrip())
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
@@ -1188,11 +1177,8 @@ def test_agents_md_config():
     assert instructions
     assert instructions[-1] == str(agents)
 
-    disabled_config = root / "config" / "agents-disabled.ini"
-    disabled_config.write_text(
-        "[provider openai]\n[agent]\nread_agents_md = false\n",
-        encoding="utf-8",
-    )
+    disabled_config = write_config("agents-disabled.ini",
+        "[provider openai]\n[agent]\nread_agents_md = false\n")
     child = Child(["--config", str(disabled_config), "-C", str(workspace)], PROMPT.rstrip())
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
@@ -1474,12 +1460,7 @@ def test_model_created_goal_continuation():
 
 
 def test_goal_configured_wording_limit():
-    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / \
-        "goal-limit.ini"
-    config.write_text(
-        "[provider openai]\n[agent]\nmax_goal_prompt_bytes = 4\n",
-        encoding="utf-8",
-    )
+    config = write_config("goal-limit.ini", "[provider openai]\n[agent]\nmax_goal_prompt_bytes = 4\n")
     child = Child(["--config", str(config)], PROMPT.rstrip())
     error_end = child.send_wait(b"/goal abcde\r", b"goal wording must contain 1..4 UTF-8 bytes")
     child.wait(PROMPT.rstrip(), start=error_end)
@@ -1646,10 +1627,10 @@ def test_saved_goal_restored_without_lookup():
     session_id = child.session_id()
     original = events(session_id)
     goal_id = one(original, "goal_started")["data"]["goal_id"]
-    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "goal-resume.ini"
-    config.write_text("[ui]\nresume_history_turns = 0\n"
-                      "[provider openai]\nbase_url = http://127.0.0.1:1/v1\n"
-                      "api_key = fixture-only\n", encoding="utf-8")
+    config = write_config("goal-resume.ini",
+        "[ui]\nresume_history_turns = 0\n"
+        "[provider openai]\nbase_url = http://127.0.0.1:1/v1\n"
+        "api_key = fixture-only\n")
     for selector in ([session_id], ["--last"]):
         with Child(["--config", str(config), "--resume", *selector]) as resumed:
             status = resumed.wait(f"goal {goal_id[:8]}: paused · wording locked".encode())
@@ -2109,15 +2090,14 @@ def test_compaction_policy_selection():
     before = session_ids()
     cache_path = Path(DOTDIR) / "models.json"
     old_cache = cache_path.read_bytes() if cache_path.exists() else None
-    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "compact-auto.ini"
-    config.write_text(
+    config = write_config("compact-auto.ini",
         "[agent]\nmodel=gpt-5.6-luna\nreasoning_effort=high\n"
         "[provider first]\nbase_url=https://example.test/backend-api/codex\n"
         "[provider second]\nauto_compact_input_tokens=30000\n"
         "[provider third]\nauto_compact_input_tokens=0\n"
         "[model-limit first/gpt-5.6-luna]\ncontext_window_tokens=872000\n"
         "[model-limit first/small]\ncontext_window_tokens=100000\n"
-        "max_output_tokens=20000\n", encoding="utf-8")
+        "max_output_tokens=20000\n")
     original_config = config.read_bytes()
     child = Child(["--config", str(config), "--no-color"])
     try:
@@ -2206,17 +2186,14 @@ def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
     initial_prompt = b" first/uncached-start/low   0% \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
-    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
-    config.write_text(
+    config = write_config("models.ini",
         "[agent]\n"
         "model = uncached-start\n"
         "reasoning_effort = low\n"
         "[provider first]\n"
         "api_key = ${FIRST_API_KEY}\n"
         "[provider second]\n"
-        "api_key = ${SECOND_API_KEY}\n",
-        encoding="utf-8",
-    )
+        "api_key = ${SECOND_API_KEY}\n")
     child = Child(["--config", str(config)], PROMPT.rstrip())
 
     # Explicit refresh creates the complete all-provider cache.
@@ -2333,9 +2310,7 @@ def test_model_cache_and_selection():
 
 
 def test_model_configuration_save():
-    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
-    config = root / "config" / "model-save.ini"
-    config.write_text(
+    config = write_config("model-save.ini",
         "# unrelated comment stays byte-for-byte\n"
         "[agent]\n"
         "model = save-base\n"
@@ -2344,9 +2319,7 @@ def test_model_configuration_save():
         "[provider first]\n"
         "api_key = ${FIRST_API_KEY}\n"
         "[provider second]\n"
-        "api_key = ${SECOND_API_KEY}\n",
-        encoding="utf-8",
-    )
+        "api_key = ${SECOND_API_KEY}\n")
     original = config.read_bytes()
     original_mode = config.stat().st_mode & 0o777
     child = Child(["--config", str(config)], PROMPT.rstrip())
@@ -2592,8 +2565,8 @@ def test_config_editor_reload():
     outgoing = f"127.0.0.1:{upstream.getsockname()[1]}"
     end = child.send_wait(f"/connect {outgoing}\r".encode(), b"outgoing connection added", start=end)
     links = accept_connections(upstream, 2)
-    edited_network = root / "config" / "editor-network-unrelated.ini"
-    edited_network.write_text(network.read_text() + "[ui]\ntyping_pause_ms = 26\n", encoding="utf-8")
+    edited_network = write_config("editor-network-unrelated.ini",
+        network.read_text() + "[ui]\ntyping_pause_ms = 26\n")
     try:
         plan.write_text(str(edited_network), encoding="utf-8")
         end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
@@ -2693,12 +2666,9 @@ def test_known_context_meter():
 
 
 def test_config_and_cli_model_passthrough():
-    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "model-passthrough.ini"
-    config.write_text(
+    config = write_config("model-passthrough.ini",
         "[provider openai]\n[agent]\nmodel = openai/gpt-5.6\nreasoning_effort = default\n"
-        "[model-alias openai/future]\nmodel=vendor/future-model\n",
-        encoding="utf-8",
-    )
+        "[model-alias openai/future]\nmodel=vendor/future-model\n")
     child = Child(["--config", str(config)], b" openai/openai/gpt-5.6/medium   0% \xe2\x80\xba ")
 
     end = child.send_wait(b"/status\r", b"model: openai/gpt-5.6")
@@ -2920,10 +2890,9 @@ def test_runtime_network_commands():
     upstream.bind(("127.0.0.1", 0))
     upstream.listen(8)
     outgoing = f"127.0.0.1:{upstream.getsockname()[1]}"
-    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "runtime.ini"
-    config.write_text(
+    config = write_config("runtime.ini",
         "[provider openai]\napi_key = ${OPENAI_API_KEY}\n[irc]\n"
-        f"listen = {endpoint}\nclient = {outgoing}\n", encoding="utf-8")
+        f"listen = {endpoint}\nclient = {outgoing}\n")
     before = session_ids()
     child = Child(["--no-color", "--config", str(config), "--no-listen", "--no-client",
                    "-n", "runtimeagent", "-o", "runtimeop", "-r", "lab"])
