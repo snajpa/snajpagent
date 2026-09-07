@@ -533,16 +533,14 @@ done:
 }
 
 static int
-append_response_items(struct context_builder *builder, const json_t *items,
-                      char *error, size_t error_size)
+append_response_items(struct context_builder *builder, const json_t *items)
 {
     struct snag_response_graph graph = {
         .items = (json_t *)items, .count = json_array_size(items)
     }; /* Borrowed validated journal items. */
+    struct snag_buf notice = {.max = 4096u};
     int rc = -1;
 
-    (void)error;
-    (void)error_size;
     for (size_t i = 0; i < graph.count; ++i) {
         struct snag_response_item view = snag_response_graph_item(&graph, i);
         const struct snag_response_item *item = &view;
@@ -550,7 +548,7 @@ append_response_items(struct context_builder *builder, const json_t *items,
         bool historical = builder->session &&
             strcmp(builder->active_turn_id, builder->target_turn_id) != 0;
 
-        struct snag_buf notice = {.max = 4096u};
+        snag_buf_reset(&notice);
         if (text && historical && strlen(text) > 64u * 1024u) {
             char digest[SNAG_SHA256_HEX_LEN + 1u];
             snag_sha256_hex(text, strlen(text), digest);
@@ -558,27 +556,17 @@ append_response_items(struct context_builder *builder, const json_t *items,
                     "[historical assistant material omitted from model context; type=%s; bytes=%zu; sha256=%s; durable_log=%s/events.jsonl]",
                     item->kind == SNAG_ITEM_REFUSAL ? "refusal" : "message",
                     strlen(text), digest, builder->session->dir_path) < 0 ||
-                snag_buf_terminate(&notice) < 0) {
-                snag_buf_free(&notice);
+                snag_buf_terminate(&notice) < 0)
                 goto out;
-            }
             text = (const char *)notice.data;
         }
-        if (item->kind == SNAG_ITEM_ASSISTANT || item->kind == SNAG_ITEM_REFUSAL) {
-            if (append_message(builder, "assistant", text) < 0) {
-                snag_buf_free(&notice);
-                goto out;
-            }
-        } else {
-            if (append_tool_call(builder, item) < 0) {
-                snag_buf_free(&notice);
-                goto out;
-            }
-        }
-        snag_buf_free(&notice);
+        if ((item->kind == SNAG_ITEM_ASSISTANT || item->kind == SNAG_ITEM_REFUSAL ?
+             append_message(builder, "assistant", text) : append_tool_call(builder, item)) < 0)
+            goto out;
     }
     rc = 0;
 out:
+    snag_buf_free(&notice);
     return rc;
 }
 
@@ -672,7 +660,7 @@ append_interrupted_prefix(struct context_builder *builder, const json_t *data,
     json_t *partial = json_object_get(data, "partial_public");
 
     if (!json_is_array(partial) ||
-        append_response_items(builder, partial, error, error_size) < 0) {
+        append_response_items(builder, partial) < 0) {
         return snag_fail(error, error_size, EINVAL,
                   "invalid interrupted public response context");
     }
@@ -826,7 +814,7 @@ context_event(void *opaque, const struct snag_session *state,
     if (!strcmp(type, "response_interrupted"))
         return append_interrupted_prefix(builder, data, error, error_size);
     if (!strcmp(type, "response_completed"))
-        return append_response_items(builder, json_object_get(data, "items"), error, error_size);
+        return append_response_items(builder, json_object_get(data, "items"));
     if (!strcmp(type, "tool_finished"))
         return append_tool_result(builder, snag_json_string(data, "call_id"),
                                    json_object_get(data, "result"));
