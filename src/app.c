@@ -1411,27 +1411,23 @@ select_cached_model(struct app_state *app, const char *value, bool save)
                                   save);
 }
 static int
-select_typed_model(struct app_state *app, const char *value, bool save)
+select_typed_model(struct app_state *app, char *value, bool save)
 {
     const struct snag_provider_config *provider;
     const char *model;
     const char *effort;
-    char *copy = snag_strdup_checked(value, SNAG_CONFIG_PATH_MAX);
     char *parts[3];
     size_t count = 0u;
     bool known_in_cache = false;
-    int rc = -1;
 
-    if (!copy)
-        return app_error(app, "model selector is too long");
-    parts[count++] = copy;
-    for (char *p = copy; *p; ++p) {
+    parts[count++] = value;
+    for (char *p = value; *p; ++p) {
         if (*p != '/')
             continue;
         if (count == 3u) {
             (void)app_error(app,
                 "model selector has more than three slash-separated components; use a cached number for model IDs containing slash");
-            goto out;
+            return -1;
         }
         *p = '\0';
         parts[count++] = p + 1u;
@@ -1440,7 +1436,7 @@ select_typed_model(struct app_state *app, const char *value, bool save)
         parts[i] = trim_selector_part(parts[i]);
         if (!parts[i][0]) {
             (void)app_error(app, "model selector contains an empty component");
-            goto out;
+            return -1;
         }
     }
     provider = count == 3u ? snag_config_provider(app->config, parts[0]) :
@@ -1449,7 +1445,7 @@ select_typed_model(struct app_state *app, const char *value, bool save)
         (void)app_error(app, count == 3u ?
             "model selector names an unconfigured provider" :
             "no provider is configured");
-        goto out;
+        return -1;
     }
     model = parts[count == 3u ? 1u : 0u];
     effort = count >= 2u ? parts[count - 1u] : next_effort(app);
@@ -1458,7 +1454,7 @@ select_typed_model(struct app_state *app, const char *value, bool save)
         !resolve_effort(effort)) {
         (void)app_error(app,
             "model or effort exceeds the supported structural bounds");
-        goto out;
+        return -1;
     }
     {
         char ignored[256] = {0};
@@ -1471,11 +1467,8 @@ select_typed_model(struct app_state *app, const char *value, bool save)
                                                       resolve_effort(effort));
         }
     }
-    rc = commit_model_selection(app, provider, model, resolve_effort(effort),
-                                known_in_cache, save);
-out:
-    free(copy);
-    return rc;
+    return commit_model_selection(app, provider, model, resolve_effort(effort),
+                                  known_in_cache, save);
 }
 
 static bool
@@ -1557,10 +1550,9 @@ static int
 snapshot_config(const char *path, struct config_snapshot *snapshot,
                 char *error, size_t error_size)
 {
-    struct snag_sha256 digest;
+    struct snag_buf text = {.max = SNAG_CONFIG_FILE_MAX};
     snag_file_info st;
-    unsigned char hash[32];
-    int fd;
+    int fd, rc = -1;
 
     memset(snapshot, 0, sizeof(*snapshot));
     fd = snag_open_read(path, false);
@@ -1574,35 +1566,21 @@ snapshot_config(const char *path, struct config_snapshot *snapshot,
         (uintmax_t)st.st_size > SNAG_CONFIG_FILE_MAX) {
         (void)snag_fail(error, error_size, EINVAL,
             "configuration must be a regular file no larger than 64 KiB");
-        (void)close(fd);
-        return -1;
+        goto out;
     }
-    snag_sha256_init(&digest);
-    for (;;) {
-        unsigned char bytes[4096];
-        ssize_t got = read(fd, bytes, sizeof(bytes));
-        if (got > 0) {
-            snag_sha256_update(&digest, bytes, (size_t)got);
-            continue;
-        }
-        if (got < 0 && errno == EINTR)
-            continue;
-        if (got < 0) {
-            snag_errorf(error, error_size, "cannot read configuration: %s",
-                      strerror(errno));
-            (void)close(fd);
-            return -1;
-        }
-        break;
+    if (snag_buf_read(&text, fd) < 0) {
+        snag_errorf(error, error_size, "cannot read configuration: %s", strerror(errno));
+        goto out;
     }
-    if (close(fd) < 0)
-        return snag_errorf(error, error_size, "cannot close configuration: %s",
-                  strerror(errno));
-    snag_sha256_final(&digest, hash);
-    for (size_t i = 0u; i < sizeof(hash); ++i)
-        (void)snprintf(snapshot->sha256 + i * 2u, 3u, "%02x", hash[i]);
+    snag_sha256_hex(text.data, text.len, snapshot->sha256);
     snapshot->exists = true;
-    return 0;
+    rc = 0;
+out:
+    snag_secret_clear(text.data, text.len);
+    snag_buf_free(&text);
+    if (close(fd) < 0 && rc == 0)
+        rc = snag_errorf(error, error_size, "cannot close configuration: %s", strerror(errno));
+    return rc;
 }
 
 static bool

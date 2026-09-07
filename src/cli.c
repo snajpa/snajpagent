@@ -157,34 +157,18 @@ bounded_preference(const char *value, size_t max)
 static int
 read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
 {
-    struct snag_buf prompt;
-    unsigned char chunk[4096];
+    struct snag_buf prompt = {.max = SNAG_MAX_DIRECT_PROMPT + 2u};
 
     if (snag_isatty(STDIN_FILENO) == 1) {
         return snag_fail(error, error_size, EINVAL,
                   "-e requires a prompt after -- or non-terminal stdin");
     }
-    snag_buf_init(&prompt, SNAG_MAX_DIRECT_PROMPT + 2u);
-    for (;;) {
-        ssize_t got = read(STDIN_FILENO, chunk, sizeof(chunk));
-
-        if (got > 0) {
-            if (snag_buf_append(&prompt, chunk, (size_t)got) < 0) {
-                snag_errorf(error, error_size,
-                          "stdin prompt is invalid or exceeds 1 MiB");
-                snag_buf_free(&prompt);
-                return -1;
-            }
-            continue;
-        }
-        if (got < 0 && errno == EINTR)
-            continue;
-        if (got < 0) {
-            snag_errorf(error, error_size, "stdin prompt could not be read");
-            snag_buf_free(&prompt);
-            return -1;
-        }
-        break;
+    int rc = snag_buf_read(&prompt, STDIN_FILENO);
+    if (rc < 0) {
+        snag_errorf(error, error_size, rc == -2 ?
+            "stdin prompt is invalid or exceeds 1 MiB" : "stdin prompt could not be read");
+        snag_buf_free(&prompt);
+        return -1;
     }
     if (prompt.len != 0u && prompt.data[prompt.len - 1u] == '\n') {
         --prompt.len;
