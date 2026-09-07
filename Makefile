@@ -40,8 +40,8 @@ LIVE_CONFIG ?= $(HOME)/.$(NAME)/config.ini
 LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
-PLATFORM_SRC = src/base.c src/platform.c src/term_host.c src/wake.c src/net.c
-COMMON_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/process_host.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
+PLATFORM_SRC = src/base.c src/platform.c src/term_host.c src/wake.c src/net.c src/process_host.c
+COMMON_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
 HEADERS = src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h
 DEPFLAGS = -MMD -MP
@@ -119,7 +119,7 @@ $(FIXTURE_BIN): $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS)
 	done; \
 	$(CC) $(LDFLAGS) -o $@ $$objs $(LDLIBS) $(CURL_LIBS)
 
-tests/test_base: $(PLATFORM_SRC) src/process_host.c tests/test_base.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/process_host.h
+tests/test_base: $(PLATFORM_SRC) tests/test_base.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/process_host.h
 
 tests/test_config: $(PLATFORM_SRC) src/config.c src/secret_source.c tests/test_config.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h
 
@@ -151,7 +151,7 @@ tests/test_render: $(PLATFORM_SRC) src/json.c src/history.c src/term.c src/rende
 
 tests/test_turn: $(PLATFORM_SRC) src/json.c src/turn.c src/tools_read.c tests/test_turn.c $(HEADERS)
 
-tests/test_tools: $(PLATFORM_SRC) src/json.c src/wire.c src/credential.c src/secret.c src/config.c src/secret_source.c src/turn.c src/tools.c src/process_host.c src/tools_read.c src/tools_patch.c tests/test_tools.c $(HEADERS)
+tests/test_tools: $(PLATFORM_SRC) src/json.c src/wire.c src/credential.c src/secret.c src/config.c src/secret_source.c src/turn.c src/tools.c src/tools_read.c src/tools_patch.c tests/test_tools.c $(HEADERS)
 
 tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(HEADERS)
 
