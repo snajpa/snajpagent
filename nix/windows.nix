@@ -122,7 +122,7 @@ let
   ] [ iconv unistring ];
   networkLibraries = [ tls pthreads zlib brotli zstd cares nghttp2
                        iconv unistring idn2 ];
-  curl = cmakeLibrary windows.curlMinimal [
+  curl = (cmakeLibrary windows.curlMinimal [
     "-DBUILD_STATIC_LIBS=ON" "-DBUILD_CURL_EXE=OFF" "-DCURL_BUILD_EVERYTHING=OFF"
     "-DCURL_USE_MBEDTLS=ON" "-DCURL_USE_OPENSSL=OFF" "-DCURL_USE_SCHANNEL=OFF"
     "-DCURL_DEFAULT_SSL_BACKEND=mbedtls" "-DENABLE_ARES=ON"
@@ -135,7 +135,9 @@ let
     "-DCURL_USE_LIBPSL=OFF" "-DCURL_USE_LIBSSH2=OFF" "-DCURL_USE_LIBSSH=OFF"
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
-  ] networkLibraries;
+  ] networkLibraries).overrideAttrs (old: {
+    patches = (old.patches or []) ++ pkgs.lib.optional legacy ./curl-legacy-windows.patch;
+  });
   regex = import ./windows-regex.nix { inherit pkgs windows threads unistring winver; };
 in {
   inherit windows threads jansson tls curl networkLibraries regex;

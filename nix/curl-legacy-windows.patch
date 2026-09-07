@@ -1,0 +1,128 @@
+SPDX-License-Identifier: curl
+
+Pre-Vista Windows support for curl 8.20.0 with c-ares and static winpthreads.
+Upstream curl license terms retained.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1498,8 +1498,13 @@
+   list(APPEND CURL_INCLUDES "ws2tcpip.h")
+ 
+   if(HAVE_WIN32_WINNT AND HAVE_WIN32_WINNT LESS 0x0600)
+-    # Windows Vista is required for freeaddrinfo, getaddrinfo, if_nametoindex
+-    message(FATAL_ERROR "Building for Windows Vista or newer is required.")
++    if(NOT ENABLE_ARES)
++      message(FATAL_ERROR "Legacy Windows requires the c-ares resolver.")
++    endif()
++    set(HAVE_GETADDRINFO 0)
++    set(HAVE_FREEADDRINFO 0)
++    set(HAVE_THREADS_POSIX 1)
++    list(APPEND CURL_NETWORK_AND_TIME_LIBS "winpthread")
+   endif()
+ endif()
+ 
+@@ -1827,7 +1832,11 @@
+   if(NOT WINDOWS_STORE)
+     list(APPEND CURL_NETWORK_AND_TIME_LIBS "iphlpapi")  # for if_nametoindex()
+   endif()
+-  list(APPEND CURL_LIBS "bcrypt")  # for BCryptGenRandom()
++  if(HAVE_WIN32_WINNT AND HAVE_WIN32_WINNT LESS 0x0600)
++    list(APPEND CURL_LIBS "advapi32")  # for CryptGenRandom()
++  else()
++    list(APPEND CURL_LIBS "bcrypt")  # for BCryptGenRandom()
++  endif()
+ 
+   # We use crypto functions that are not available for UWP apps
+   if(NOT WINDOWS_STORE)
+--- a/lib/curl_setup.h
++++ b/lib/curl_setup.h
+@@ -160,8 +160,9 @@
+ #endif /* HAVE_CONFIG_H */
+ 
+ #ifdef _WIN32
+-#  if defined(_WIN32_WINNT) && (_WIN32_WINNT < 0x0600)
+-#    error The minimum build target is Windows Vista (0x0600)
++#  if defined(_WIN32_WINNT) && (_WIN32_WINNT < 0x0600) && \
++      (!defined(USE_RESOLV_ARES) || !defined(HAVE_THREADS_POSIX))
++#    error Legacy Windows requires c-ares and POSIX mutexes
+ #  endif
+ 
+ #  if !defined(CURL_WINDOWS_UWP) && (defined(_MSC_VER) || defined(__MINGW32__))
+@@ -698,7 +699,7 @@
+ /*
+  * Mutually exclusive CURLRES_* definitions.
+  */
+-#if defined(USE_IPV6) && defined(HAVE_GETADDRINFO)
++#if defined(USE_IPV6) && (defined(HAVE_GETADDRINFO) || defined(USE_RESOLV_ARES))
+ #  define CURLRES_IPV6
+ #elif defined(USE_IPV6) && (defined(_WIN32) || defined(__CYGWIN__))
+ /* assume on Windows that IPv6 without getaddrinfo is a broken build */
+--- a/lib/rand.c
++++ b/lib/rand.c
+@@ -34,18 +34,40 @@
+ #include "escape.h"
+ 
+ #ifdef _WIN32
++#if _WIN32_WINNT < 0x0600
++#include <wincrypt.h>
++#else
+ #include <bcrypt.h>
+ #ifndef STATUS_SUCCESS
+ #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
+ #endif
++#endif
+ 
+ CURLcode Curl_win32_random(unsigned char *entropy, size_t length)
+ {
+   memset(entropy, 0, length);
+ 
++#if _WIN32_WINNT < 0x0600
++  HCRYPTPROV provider = 0;
++  if(!CryptAcquireContextW(&provider, NULL, NULL, PROV_RSA_FULL,
++                           CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
++    return CURLE_FAILED_INIT;
++  while(length) {
++    DWORD count = length > MAXDWORD ? MAXDWORD : (DWORD)length;
++    if(!CryptGenRandom(provider, count, entropy)) {
++      CryptReleaseContext(provider, 0);
++      return CURLE_FAILED_INIT;
++    }
++    entropy += count;
++    length -= count;
++  }
++  if(!CryptReleaseContext(provider, 0))
++    return CURLE_FAILED_INIT;
++#else
+   if(BCryptGenRandom(NULL, entropy, (ULONG)length,
+                      BCRYPT_USE_SYSTEM_PREFERRED_RNG) != STATUS_SUCCESS)
+     return CURLE_FAILED_INIT;
++#endif
+ 
+   return CURLE_OK;
+ }
+--- a/lib/url.c
++++ b/lib/url.c
+@@ -1477,6 +1477,23 @@
+ }
+ 
+ #ifdef USE_IPV6
++#if defined(_WIN32) && _WIN32_WINNT < 0x0600
++static unsigned int legacy_if_nametoindex(const char *name)
++{
++  typedef unsigned int (WINAPI *name_to_index)(const char *);
++  name_to_index query;
++  /* The required c-ares resolver imports this system library. */
++  HMODULE helper = GetModuleHandleW(L"iphlpapi.dll");
++  FARPROC function = helper ? GetProcAddress(helper, "if_nametoindex") : NULL;
++  if(!function) {
++    errno = ENODEV;
++    return 0;
++  }
++  memcpy(&query, &function, sizeof(query));
++  return query(name);
++}
++#define if_nametoindex legacy_if_nametoindex
++#endif
+ /*
+  * If the URL was set with an IPv6 numerical address with a zone id part, set
+  * the scope_id based on that!
