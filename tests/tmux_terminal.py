@@ -3397,7 +3397,7 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
             terminal.wait("retrypeer joined")
             wait_irc_idle([terminal])
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             terminal.submit("retry-original")
             assert arrived.wait(5.0)
             if mode not in ("before", "zero", "healthy"):
@@ -3514,7 +3514,7 @@ def run_provider_clarification_cases(binary, root, provider, environment):
             terminal.wait("clarifypeer joined")
             wait_irc_idle([terminal])
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             terminal.submit(original)
             if mode in ("steer", "chat", "queue"):
                 assert arrived.wait(5.0)
@@ -4193,7 +4193,7 @@ def run_tool_cases(binary, root, provider, environment):
     provider.runtime_handler = respond
     try:
         with terminal:
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             (workspace / "a.txt").write_bytes(b"one\ntwo\n")
             (workspace / "a.txt").chmod(0o751)
             (workspace / "old.txt").write_bytes(b"bye\n")
