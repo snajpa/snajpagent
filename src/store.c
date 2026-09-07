@@ -1502,27 +1502,21 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *response_id = snag_json_string(data, "response_id");
         const char *status = snag_json_string(data, "status");
         struct snag_graph_decision decision;
-        int graph_rc;
-
-        struct snag_response_graph graph = {0};
+        /* The event owns these values until admission finishes. Retained session
+         * fields copy their text; classification does not mutate this view. */
+        struct snag_response_graph graph = {
+            .provider_response_id = (char *)provider_response_id,
+            .items = items, .count = json_array_size(items)
+        };
         if (!snag_json_exact_keys(data,
             "cycle items provider_response_id response_id status turn_id "
             "usage") || !current_response(session, data) ||
             !status || strcmp(status, "completed") != 0 ||
-            !provider_response_id ||
-            snag_response_graph_set_provider_id(&graph, provider_response_id) < 0 ||
+            !json_is_array(items) ||
             snag_response_usage_from_json(json_object_get(data, "usage"),
                                          &graph.usage) < 0 ||
-            snag_response_graph_from_json(&graph, items, error, error_size) < 0) {
-            snag_response_graph_free(&graph);
+            snag_response_graph_classify(&graph, &decision, error, error_size) < 0)
             goto invalid;
-        }
-        graph_rc = snag_response_graph_classify(&graph, &decision,
-                                               error, error_size);
-        if (graph_rc < 0) {
-            snag_response_graph_free(&graph);
-            goto invalid;
-        }
         if (graph.usage.input_known) {
             session->usage_anchor = session->active_accounting;
             /* An already-started compaction may finish during the response.
@@ -1546,14 +1540,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 item->kind == SNAG_ITEM_REFUSAL) {
                 if (replace_text(session, &session->last_assistant, "last_assistant", item->text,
                                  SNAG_MAX_PUBLIC_ITEM) < 0) {
-                    snag_response_graph_free(&graph);
                     return -1;
                 }
             }
             if (item->kind == SNAG_ITEM_TOOL_CALL) {
                 struct snag_pending_call *pending;
                 if (session->pending_call_count >= SNAG_MAX_CALLS_PER_RESPONSE) {
-                    snag_response_graph_free(&graph);
                     goto invalid;
                 }
                 pending = &session->pending_calls[session->pending_call_count++];
@@ -1562,7 +1554,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                        sizeof(pending->call_id));
                 if (!snag_strcpy(pending->tool_name,
                                 sizeof(pending->tool_name), item->name)) {
-                    snag_response_graph_free(&graph);
                     goto invalid;
                 }
                 if (strcmp(item->name, "write_stdin") == 0) {
@@ -1578,7 +1569,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 }
                 if (snag_tool_action_digest(item, session->workspace,
                                            pending->action_sha256) < 0) {
-                    snag_response_graph_free(&graph);
                     return -1;
                 }
             }
@@ -1592,7 +1582,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             memcpy(session->final_response_id, response_id,
                    sizeof(session->final_response_id));
         }
-        snag_response_graph_free(&graph);
     } else if (strcmp(type, "tool_started") == 0) {
         const char *action = snag_json_string(data, "action_sha256");
         const char *call_id = snag_json_string(data, "call_id");

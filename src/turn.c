@@ -377,7 +377,8 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
     size_t bad_index = 0;
 
     memset(decision, 0, sizeof(*decision));
-    if (!graph->provider_response_id || graph->count > SNAG_MAX_RESPONSE_ITEMS) {
+    if (!provider_id_valid(graph->provider_response_id) ||
+        graph->count > SNAG_MAX_RESPONSE_ITEMS) {
         return snag_fail(error, error_size, EINVAL, "response graph has no valid response id");
     }
     if (identifiers_valid(graph, error, error_size) < 0)

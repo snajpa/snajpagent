@@ -1127,7 +1127,27 @@ main(void)
     assert(session.context_meter.compact_id[0] == '\0');
     assert(strcmp(session.context_meter.provider_source_sha256,
                   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff") == 0);
-    commit_event(&session, "response_completed", response_completed(turn1, resp1, "pong"));
+    for (unsigned int variant = 0u; variant < 4u; ++variant) {
+        json_t *data = response_completed(turn1, resp1, "pong");
+        json_t *response_items = json_object_get(data, "items");
+        if (variant == 0u)
+            assert(json_object_set_new(data, "provider_response_id", json_string("bad\nid")) == 0);
+        else if (variant == 1u)
+            assert(json_object_set_new(data, "items", json_object()) == 0);
+        else if (variant == 2u)
+            assert(json_object_del(json_array_get(response_items, 0u), "phase") == 0);
+        else
+            assert(json_array_append(response_items, json_array_get(response_items, 0u)) == 0);
+        struct snag_session before = session;
+        assert(snag_session_commit(&session, "response_completed", data, NULL, error, sizeof(error)) < 0);
+        assert(memcmp(&before, &session, sizeof(session)) == 0);
+    }
+    json_t *completed = response_completed(turn1, resp1, "pong");
+    commit_event(&session, "response_completed", json_incref(completed));
+    assert(json_string_set(json_object_get(json_array_get(json_object_get(completed, "items"), 0u),
+                                          "text"), "caller changed") == 0);
+    assert(!strcmp(session.last_assistant, "pong"));
+    json_decref(completed);
     assert(session.usage_anchor.model_input_bytes == 4000u);
     assert(session.usage_anchor.request_input_bytes == 3000u);
     assert(session.usage_anchor.request_input_count == 1u);
