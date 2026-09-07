@@ -905,84 +905,68 @@ build_message(struct snag_responses_stream *stream,
               struct snag_response_graph *graph,
               const struct snag_wire_item *item)
 {
-    enum snag_wire_part_kind kind;
-    enum snag_item_phase phase;
+    enum snag_wire_part_kind kind = SNAG_WIRE_PART_NONE;
+    enum snag_item_phase phase = item->phase ? phase_value(item->phase) : SNAG_PHASE_COMMENTARY;
     size_t public_parts = 0u;
-    int rc;
-
-    phase = item->phase ? phase_value(item->phase) : SNAG_PHASE_COMMENTARY;
-    if ((!item->complete && !message_observations_complete(item)) ||
-        phase == SNAG_PHASE_NONE)
-        return stream_fail(stream, EPROTO,
-                           "assistant message did not complete coherently");
-    kind = SNAG_WIRE_PART_NONE;
+    const char *failure = "cannot retain assistant message";
+    int code = ENOMEM, rc = 0;
     struct snag_buf text = {.max = SNAG_MAX_PUBLIC_ITEM + 1u};
+
+    if ((!item->complete && !message_observations_complete(item)) || phase == SNAG_PHASE_NONE)
+        return stream_fail(stream, EPROTO, "assistant message did not complete coherently");
     for (size_t i = 0; i < item->part_count; ++i) {
         const struct snag_wire_part *part = &item->parts[i];
 
-        if (!part->complete) {
-            snag_buf_free(&text);
-            return stream_fail(stream, EPROTO,
-                               "assistant message has mixed or invalid content");
+        if (!part->complete || (part->kind != SNAG_WIRE_PART_INERT &&
+            kind != SNAG_WIRE_PART_NONE && part->kind != kind)) {
+            failure = "assistant message has mixed or invalid content";
+            code = EPROTO;
+            goto fail;
         }
         if (part->kind == SNAG_WIRE_PART_INERT)
             continue;
-        if (kind == SNAG_WIRE_PART_NONE)
-            kind = part->kind;
-        if (part->kind != kind) {
-            snag_buf_free(&text);
-            return stream_fail(stream, EPROTO,
-                               "assistant message has mixed or invalid content");
-        }
+        kind = part->kind;
         if (part->text.len > SNAG_MAX_PUBLIC_ITEM - text.len) {
             stream->output_correction = SNAG_OUTPUT_CORRECTION_OVERSIZED;
-            snag_buf_free(&text);
-            return 1;
+            rc = 1;
+            goto out;
         }
-        if (snag_buf_append(&text, part->text.data, part->text.len) < 0) {
-            snag_buf_free(&text);
-            return stream_fail(stream, errno ? errno : ENOMEM,
-                               "cannot retain assistant message");
-        }
+        if (snag_buf_append(&text, part->text.data, part->text.len) < 0)
+            goto allocation;
         ++public_parts;
     }
-    if (kind == SNAG_WIRE_PART_NONE) {
-        snag_buf_free(&text);
-        if (!item->part_count) {
-            stream->output_correction = SNAG_OUTPUT_CORRECTION_EMPTY;
-            return 1;
-        }
-        return 0;
-    }
+    if (kind == SNAG_WIRE_PART_NONE && item->part_count)
+        goto out;
     if (!text.len) {
         stream->output_correction = SNAG_OUTPUT_CORRECTION_EMPTY;
-        snag_buf_free(&text);
-        return 1;
+        rc = 1;
+        goto out;
     }
-    if (snag_buf_terminate(&text) < 0) {
-        snag_buf_free(&text);
-        return stream_fail(stream, errno ? errno : ENOMEM,
-                           "cannot terminate assistant message");
-    }
+    failure = "cannot terminate assistant message";
+    if (snag_buf_terminate(&text) < 0)
+        goto allocation;
     if (kind == SNAG_WIRE_PART_REFUSAL) {
-        if (public_parts != 1u ||
-            (item->phase && phase != SNAG_PHASE_FINAL_ANSWER)) {
-            snag_buf_free(&text);
-            return stream_fail(stream, EPROTO,
-                               "refusal has an invalid phase or content shape");
+        if (public_parts != 1u || (item->phase && phase != SNAG_PHASE_FINAL_ANSWER)) {
+            failure = "refusal has an invalid phase or content shape";
+            code = EPROTO;
+            goto fail;
         }
-        rc = snag_response_graph_add_public(graph, SNAG_ITEM_REFUSAL,
-                                            SNAG_PHASE_FINAL_ANSWER,
-                                            item->id, (char *)text.data);
-    } else {
-        rc = snag_response_graph_add_public(graph, SNAG_ITEM_ASSISTANT, phase,
-                                            item->id, (char *)text.data);
+        phase = SNAG_PHASE_FINAL_ANSWER;
     }
+    if (snag_response_graph_add_public(graph, public_kind(kind), phase,
+                                      item->id, (char *)text.data) < 0) {
+        failure = "cannot build canonical assistant item";
+        code = errno ? errno : EPROTO;
+        goto fail;
+    }
+    goto out;
+allocation:
+    code = errno ? errno : ENOMEM;
+fail:
+    rc = stream_fail(stream, code, "%s", failure);
+out:
     snag_buf_free(&text);
-    if (rc < 0)
-        return stream_fail(stream, errno ? errno : EPROTO,
-                           "cannot build canonical assistant item");
-    return 0;
+    return rc;
 }
 
 static int

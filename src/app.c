@@ -3180,32 +3180,23 @@ run_turn(struct app_state *app, const char *prompt,
         } else if (snag_app_finish_stream_item(app) < 0) {
             app->stream_failed = true;
         }
-        if (provider_rc == 1 && app->steering_requested && !app->stream_failed) {
+        bool steered = provider_rc == 1 && app->steering_requested;
+        bool interrupted = provider_rc == 2 && app->interrupt_requested;
+        if ((steered || interrupted) && !app->stream_failed) {
             json_t *partial = snag_app_partial_public_json(app);
             if (!partial ||
                 commit_event(app, "response_interrupted",
                     snag_app_response_interrupted_data(turn_id, response_id, cycle,
-                                              "steering", "steered", partial),
+                        steered ? "steering" : "user", steered ? "steered" : "cancelled", partial),
                     error, sizeof(error)) < 0) {
-                (void)app_error(app, error[0] ? error :
-                                       "active-turn response could not be persisted");
+                (void)app_error(app, error[0] ? error : steered ?
+                    "active-turn response could not be persisted" :
+                    "interruption could not be persisted");
                 result = 3;
                 goto out;
             }
-            continue;
-        }
-        if (provider_rc == 2 && app->interrupt_requested && !app->stream_failed) {
-            json_t *partial = snag_app_partial_public_json(app);
-            if (!partial ||
-                commit_event(app, "response_interrupted",
-                    snag_app_response_interrupted_data(turn_id, response_id, cycle,
-                                              "user", "cancelled", partial),
-                    error, sizeof(error)) < 0) {
-                (void)app_error(app, error[0] ? error :
-                                "interruption could not be persisted");
-                result = 3;
-                goto out;
-            }
+            if (steered)
+                continue;
             result = finish_user_interrupt(app, turn_id, error, sizeof(error));
             goto out;
         }
