@@ -184,7 +184,8 @@ snag_app_sync_destinations(struct app_state *app)
     if (app->irc_destinations_ready &&
         memcmp(&current, &app->irc_destinations, sizeof(current)) == 0)
         return 0;
-    if (snag_ui_destinations(&app->ui, &current) < 0)
+    if (snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_DESTINATIONS, .data.destinations = &current}) < 0)
         return -1;
     prune_replies(&app->irc_urgent_replies, &current, app->irc_urgent_reply_offsets);
     prune_replies(&app->irc_turn_replies, &current, NULL);
@@ -246,7 +247,8 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (snag_app_commit_event(app, "irc_event", snag_irc_event_data(&accepted),
                              error, sizeof(error)) < 0)
         return -1;
-    if (snag_ui_irc_event(&app->ui, event) < 0)
+    if (snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_IRC, .data.irc = event}) < 0)
         return -1;
     if (event->kind == SNAG_IRC_DISCONNECTED &&
         strstr(event->text, "endpoint removed; discarded ") == event->text &&
@@ -328,8 +330,8 @@ snag_app_irc_trace(void *opaque, unsigned int level, char direction,
             snag_buf_free(&line);
             goto out;
         }
-        rc = snag_ui_transport(&app->ui, direction,
-                                  (const char *)line.data, line.len);
+        rc = snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_TRANSPORT, .data.value = direction, .text = (const char *)line.data, .len = line.len});
         snag_buf_free(&line);
     } else {
         int n = snprintf(label, sizeof(label), "irc.command %c %s",
@@ -338,8 +340,8 @@ snag_app_irc_trace(void *opaque, unsigned int level, char direction,
             errno = EOVERFLOW;
             goto out;
         }
-        rc = snag_ui_protocol(&app->ui, label,
-                                 (const char *)safe.data, safe.len);
+        rc = snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_PROTOCOL, .label = label, .text = (const char *)safe.data, .len = safe.len});
     }
 out:
     snag_buf_free(&safe);

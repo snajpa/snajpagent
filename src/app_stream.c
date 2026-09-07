@@ -182,8 +182,8 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
             app->stream_item_hidden = true;
         }
         if (!app->stream_item_hidden) {
-            if (snag_ui_public_begin(&app->ui, fd, label,
-                                    SNAG_PRESENT_CONVERSATION) < 0) {
+            if (snag_ui_send(&app->ui, (struct snag_ui_command){
+                .kind = SNAG_UI_PUBLIC_BEGIN, .label = label, .data.public = {fd, SNAG_PRESENT_CONVERSATION}}) < 0) {
                 return stream_fail(app, errno,
                                    "public output item could not be started");
             }

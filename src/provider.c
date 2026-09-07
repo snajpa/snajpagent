@@ -168,8 +168,8 @@ render_config_header(struct provider_ctx *ctx, struct snag_buf *redacted,
     if (snag_buf_printf(&line, "%s: %s", name, value) < 0 ||
         snag_wire_header_redact(line.data, line.len, &ctx->secrets.wire,
                                redacted) < 0 ||
-        snag_ui_transport(ctx->render, '>', (const char *)redacted->data,
-                             redacted->len) < 0)
+        snag_ui_send(ctx->render, (struct snag_ui_command){
+            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = (const char *)redacted->data, .len = redacted->len}) < 0)
         rc = -1;
     snag_buf_free(&line);
     return rc;
@@ -189,20 +189,19 @@ render_request_headers(struct provider_ctx *ctx, const char *request_line,
     if (append_host_header(&host, ctx->provider->base_url) < 0 ||
         snag_buf_printf(&accept_line, "accept: %s", accept) < 0)
         goto fail;
-    if (snag_ui_transport(ctx->render, '>',
-                             request_line, strlen(request_line)) < 0 ||
-        snag_ui_transport(ctx->render, '>',
-                             (const char *)host.data, host.len) < 0 ||
-        snag_ui_transport(ctx->render, '>',
-                             (const char *)accept_line.data,
-                             accept_line.len) < 0 ||
-        (has_body && snag_ui_transport(ctx->render, '>',
-             "content-type: application/json",
-             strlen("content-type: application/json")) < 0) ||
+    if (snag_ui_send(ctx->render, (struct snag_ui_command){
+        .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = request_line, .len = strlen(request_line)}) < 0 ||
+        snag_ui_send(ctx->render, (struct snag_ui_command){
+            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = (const char *)host.data, .len = host.len}) < 0 ||
+        snag_ui_send(ctx->render, (struct snag_ui_command){
+            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = (const char *)accept_line.data, .len = accept_line.len}) < 0 ||
+        (has_body && snag_ui_send(ctx->render, (struct snag_ui_command){
+            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = "content-type: application/json",
+            .len = strlen("content-type: application/json")}) < 0) ||
         snag_wire_header_redact((const unsigned char *)"authorization: Bearer x",
                                23u, &ctx->secrets.wire, &redacted) < 0 ||
-        snag_ui_transport(ctx->render, '>', (const char *)redacted.data,
-                             redacted.len) < 0)
+        snag_ui_send(ctx->render, (struct snag_ui_command){
+            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = (const char *)redacted.data, .len = redacted.len}) < 0)
         rc = -1;
     snag_buf_reset(&redacted);
     if (rc == 0 &&
@@ -275,8 +274,8 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
     if (snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE)) {
         if (status_line) {
             if (!ascii_printable(line, clean_len) ||
-                snag_ui_transport(ctx->render, '<', (const char *)line,
-                                     clean_len) < 0) {
+                snag_ui_send(ctx->render, (struct snag_ui_command){
+                    .kind = SNAG_UI_TRANSPORT, .data.value = '<', .text = (const char *)line, .len = clean_len}) < 0) {
                 ctx_error(ctx, "HTTP status diagnostics could not be rendered");
                 return 0;
             }
@@ -284,8 +283,8 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
             snag_buf_init(&redacted, SNAG_WIRE_HEADER_MAX);
             if (snag_wire_header_redact(line, clean_len, &ctx->secrets.wire,
                                        &redacted) < 0 ||
-                snag_ui_transport(ctx->render, '<', (const char *)redacted.data,
-                                     redacted.len) < 0) {
+                snag_ui_send(ctx->render, (struct snag_ui_command){
+                    .kind = SNAG_UI_TRANSPORT, .data.value = '<', .text = (const char *)redacted.data, .len = redacted.len}) < 0) {
                 snag_buf_free(&redacted);
                 ctx_error(ctx, "HTTP header diagnostics could not be rendered");
                 return 0;
@@ -800,8 +799,8 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
                               &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));
     if (rc == 0 && snag_ui_enabled(ctx->render, SNAG_PRESENT_PROTOCOL))
-        (void)snag_ui_protocol(ctx->render, "response.error.body",
-                                  (const char *)redacted.data, redacted.len);
+        (void)snag_ui_send(ctx->render, (struct snag_ui_command){
+            .kind = SNAG_UI_PROTOCOL, .label = "response.error.body", .text = (const char *)redacted.data, .len = redacted.len});
     if (ctx->error_body.len) {
         if (rc == 0)
             (void)snprintf(error, error_size,

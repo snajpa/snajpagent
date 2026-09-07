@@ -1223,7 +1223,8 @@ test_ui_output_order_and_failure(void)
     assert(snag_ui_init(&ui) == 0);
     for (unsigned int i = 0u; i < 128u; ++i) {
         memset(text, (int)i, sizeof(text));
-        assert(snag_ui_raw(&ui, pipefd[1], (char *)text, sizeof(text)) == 0);
+        assert(snag_ui_send(&ui, (struct snag_ui_command){
+            .kind = SNAG_UI_RAW, .data.value = (unsigned int)(pipefd[1]), .text = (char *)text, .len = sizeof(text)}) == 0);
     }
     assert(waitpid(reader, &status, 0) == reader);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
@@ -1231,7 +1232,8 @@ test_ui_output_order_and_failure(void)
     {
         struct snag_buf delivered = {.max = 16u};
         snag_ui_signal(&ui);
-        assert(snag_ui_public_begin(&ui, STDOUT_FILENO, NULL, SNAG_PRESENT_CONVERSATION) == 0);
+        assert(snag_ui_send(&ui, (struct snag_ui_command){
+            .kind = SNAG_UI_PUBLIC_BEGIN, .label = NULL, .data.public = {STDOUT_FILENO, SNAG_PRESENT_CONVERSATION}}) == 0);
         assert(snag_ui_public(&ui, "stopped", 7u, &delivered) == 0);
         assert(delivered.len == 0u);
         assert(snag_ui_text(&ui, SNAG_UI_ROLLOUT_END, NULL) == 0);
@@ -1240,8 +1242,10 @@ test_ui_output_order_and_failure(void)
         snag_buf_free(&delivered);
     }
     assert(close(pipefd[1]) == 0);
-    assert(snag_ui_raw(&ui, -1, "x", 1u) < 0 && errno == EBADF);
-    assert(snag_ui_raw(&ui, pipefd[1], "x", 1u) < 0);
+    assert(snag_ui_send(&ui, (struct snag_ui_command){
+        .kind = SNAG_UI_RAW, .data.value = (unsigned int)(-1), .text = "x", .len = 1u}) < 0 && errno == EBADF);
+    assert(snag_ui_send(&ui, (struct snag_ui_command){
+        .kind = SNAG_UI_RAW, .data.value = (unsigned int)(pipefd[1]), .text = "x", .len = 1u}) < 0);
     assert(snag_ui_poll(&ui, 0, false, &action, &line) < 0);
     snag_ui_free(&ui);
 }

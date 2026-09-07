@@ -24,9 +24,50 @@ struct snag_ui {
 
 enum snag_ui_operation {
     SNAG_UI_HOST, SNAG_UI_RUNTIME, SNAG_UI_ERROR, SNAG_UI_WARNING,
-    SNAG_UI_ROLLOUT_END, SNAG_UI_ROLLOUT_ABORT,
-    SNAG_UI_CLOSE
+    SNAG_UI_ROLLOUT_END, SNAG_UI_ROLLOUT_ABORT, SNAG_UI_CLOSE,
+    SNAG_UI_LEVEL, SNAG_UI_COLOR, SNAG_UI_MARKDOWN, SNAG_UI_DESTINATIONS,
+    SNAG_UI_SELECT, SNAG_UI_ROUTE, SNAG_UI_COMMANDS, SNAG_UI_PAUSE,
+    SNAG_UI_OPEN, SNAG_UI_EXTERNAL, SNAG_UI_PROMPT, SNAG_UI_SPINNERS, SNAG_UI_DRAFT,
+    SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
+    SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
+    SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT, SNAG_UI_STOP
 };
+
+struct snag_ui_prompt {
+    char *source;
+    bool active;
+    uint32_t rate;
+    unsigned int states, mode;
+    char frames[SNAG_TERM_SPINNER_COUNT][80];
+    char *values[SNAG_PROMPT_HOUR];
+};
+
+/* Borrowed command bytes remain valid until the synchronous call returns.
+ * Prompt/history payloads transfer their retained ownership to the UI. */
+struct snag_ui_command {
+    enum snag_ui_operation kind;
+    const char *text;
+    const char *label;
+    size_t len;
+    union {
+        unsigned int value;
+        struct snag_ui_prompt prompt;
+        struct { uint32_t typing_pause_ms, tool_spinner_off_delay_ms; } timing;
+        struct { int fd; enum snag_presentation kind; } public;
+        struct { uint64_t turns; size_t queued; bool resumed; } orientation;
+        const struct snag_irc_event *irc;
+        struct { int fd; struct snag_render_source source;
+                 uint32_t timeout_ms, max_output_bytes; } durable;
+        uint64_t seq;
+        /* The immutable command catalog must outlive the UI. */
+        struct { const struct snag_term_command *items; size_t count; } commands;
+        struct { struct snag_history_snapshot entries; bool refresh; } history;
+        const struct snag_irc_destinations *destinations;
+        struct snag_irc_route *route;
+    } data;
+};
+
+int snag_ui_send(struct snag_ui *ui, struct snag_ui_command command);
 
 int snag_ui_init(struct snag_ui *ui);
 int snag_ui_set_verbosity(struct snag_ui *ui, unsigned int level);
@@ -34,16 +75,7 @@ unsigned int snag_ui_verbosity(const struct snag_ui *ui);
 bool snag_ui_enabled(const struct snag_ui *ui, enum snag_presentation kind);
 void snag_ui_free(struct snag_ui *ui);
 int snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text);
-int snag_ui_color(struct snag_ui *ui, enum snag_color_mode mode);
-int snag_ui_markdown(struct snag_ui *ui, bool enabled);
-int snag_ui_destinations(struct snag_ui *ui,
-                          const struct snag_irc_destinations *destinations);
-int snag_ui_select_destination(struct snag_ui *ui, uint32_t id);
 int snag_ui_capture_route(struct snag_ui *ui, const char *text);
-/* The immutable command catalog must outlive the UI (the app uses static data). */
-int snag_ui_commands(struct snag_ui *ui, const struct snag_term_command *commands,
-                      size_t count);
-int snag_ui_timing(struct snag_ui *ui, const struct snag_config *config);
 uint32_t snag_ui_pause_remaining(struct snag_ui *ui);
 int snag_ui_open(struct snag_ui *ui, char *error, size_t error_size);
 int snag_ui_external(struct snag_ui *ui, bool begin,
@@ -59,30 +91,15 @@ int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                     uint32_t per_second);
 int snag_ui_simple_prompt(struct snag_ui *ui, bool active);
-int snag_ui_spinner_states(struct snag_ui *ui, unsigned int states);
-int snag_ui_restore_draft(struct snag_ui *ui, const char *text);
 int snag_ui_poll(struct snag_ui *ui, int timeout_ms,
                   bool active, enum snag_term_action *action, char **text);
-int snag_ui_set_view(struct snag_ui *ui, enum snag_render_view view);
 int snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text,
                        bool input);
-int snag_ui_public_begin(struct snag_ui *ui, int fd, const char *label,
-                        enum snag_presentation kind);
 int snag_ui_public(struct snag_ui *ui, const char *text, size_t len,
                    struct snag_buf *delivered);
 int snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
                          bool resumed);
 int snag_ui_history(struct snag_ui *ui, const struct snag_session *session);
-int snag_ui_irc_event(struct snag_ui *ui, const struct snag_irc_event *event);
-int snag_ui_durable(struct snag_ui *ui, int fd, struct snag_render_source source,
-                    const char *type, uint32_t timeout_ms, uint32_t max_output_bytes);
-int snag_ui_event(struct snag_ui *ui, uint64_t seq, const char *type);
-int snag_ui_resume_hint(struct snag_ui *ui, const char *text, size_t len);
-int snag_ui_protocol(struct snag_ui *ui, const char *label,
-                      const char *text, size_t len);
-int snag_ui_transport(struct snag_ui *ui, char direction,
-                       const char *text, size_t len);
-int snag_ui_raw(struct snag_ui *ui, int fd, const char *text, size_t len);
 int snag_ui_history_open(struct snag_ui *ui, const char *dotdir);
 int snag_ui_history_add(struct snag_ui *ui, const char *text);
 bool snag_ui_history_warning(struct snag_ui *ui);

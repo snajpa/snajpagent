@@ -351,9 +351,11 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
         ++app->input_generation;
     struct snag_render_source source = {offset, (size_t)(app->session.log_end - offset)};
     if ((!app->session.pending_log &&
-         snag_ui_durable(&app->ui, app->session.log_fd, source, type,
-                         app->config->default_timeout_ms, app->config->max_output_bytes) < 0) ||
-        snag_ui_event(&app->ui, seq, type) < 0) {
+         snag_ui_send(&app->ui, (struct snag_ui_command){
+             .kind = SNAG_UI_DURABLE, .text = type, .data.durable = {app->session.log_fd, source,
+                 app->config->default_timeout_ms, app->config->max_output_bytes}}) < 0) ||
+        snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_EVENT, .text = type, .data.seq = seq}) < 0) {
         return snag_errorf(error, error_size, "durable event output failed");
     }
     if (strcmp(type, "turn_failed") == 0 && app->session.goal_status != SNAG_GOAL_ACTIVE)
@@ -650,7 +652,8 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
     if (draft_rc == 0)
         draft_rc = snag_buf_terminate(&draft);
     if (draft_rc == 0 && set_input_prompt(app, active) == 0)
-        draft_rc = snag_ui_restore_draft(&app->ui, (char *)draft.data);
+        draft_rc = snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_DRAFT, .text = (char *)draft.data});
     else draft_rc = -1;
     snag_buf_free(&draft);
     if (draft_rc < 0) {
@@ -692,7 +695,8 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
         (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
         error[0] = '\0';
         if (set_input_prompt(app, active) < 0 ||
-            snag_ui_restore_draft(&app->ui, original) < 0)
+            snag_ui_send(&app->ui, (struct snag_ui_command){
+                .kind = SNAG_UI_DRAFT, .text = original}) < 0)
             return -1;
         return 1;
     }
@@ -702,7 +706,8 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
                                "queue_id", queued->queue_id, "text", text),
                      error, error_size) < 0) {
         if (set_input_prompt(app, active) == 0)
-            (void)snag_ui_restore_draft(&app->ui, original);
+            (void)snag_ui_send(&app->ui, (struct snag_ui_command){
+                .kind = SNAG_UI_DRAFT, .text = original});
         return -1;
     }
     if (snag_ui_submitted(&app->ui,
@@ -1719,10 +1724,14 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     app->turn_provider = snag_config_provider(app->config, selected_provider);
     app->turn_model = app->session.default_model;
     app->staged_provider = NULL;
-    snag_ui_color(&app->ui, snag_cli_color(app->cli, app->config->color));
-    snag_ui_markdown(&app->ui, snag_cli_markdown(app->cli, app->config->markdown));
-    snag_ui_commands(&app->ui, commands, command_count());
-    snag_ui_timing(&app->ui, app->config);
+    snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_COLOR, .data.value = snag_cli_color(app->cli, app->config->color)});
+    snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_MARKDOWN, .data.value = snag_cli_markdown(app->cli, app->config->markdown)});
+    snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_COMMANDS, .data.commands = {commands, command_count()}});
+    snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_PAUSE, .data.timing = {app->config->typing_pause_ms, app->config->prompt_tool_spinner_off_delay_ms}});
     snag_config_free(&previous);
     rc = 0;
 out:
@@ -1826,7 +1835,8 @@ change_effort(struct app_state *app, const char *value, bool active)
 static int
 select_view(struct app_state *app, enum snag_render_view view, bool active)
 {
-    if (snag_ui_set_view(&app->ui, view) < 0 ||
+    if (snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_VIEW, .data.value = view}) < 0 ||
         set_input_prompt(app, active) < 0)
         return -1;
     return 0;
@@ -1962,7 +1972,8 @@ send_operator_routed(struct app_state *app, const char *line, const char *text,
     }
     snag_buf_free(&report);
     if (rc == 1)
-        return snag_ui_restore_draft(&app->ui, line);
+        return snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_DRAFT, .text = line});
     return rc < 0 ? -1 : 0;
 }
 
@@ -1979,17 +1990,20 @@ handle_destination_command(struct app_state *app, const char *line, bool *handle
     if (command == SNAG_IRC_TARGET_INVALID) {
         if (app_error(app, "use /N to select, /N TEXT to send once, or /all TEXT") < 0)
             return -1;
-        return snag_ui_restore_draft(&app->ui, line);
+        return snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_DRAFT, .text = line});
     }
     if (command == SNAG_IRC_TARGET_SELECT)
-        return snag_ui_select_destination(&app->ui, id) < 0 ?
+        return snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_SELECT, .data.value = id}) < 0 ?
             app_error(app, "destination unavailable; use /names") : 0;
     if (command == SNAG_IRC_TARGET_SEND && !app->ui.input_route.count) {
         char error[96u];
         (void)snprintf(error, sizeof(error), "destination %u is unavailable; use /names", id);
         if (app_error(app, error) < 0)
             return -1;
-        return snag_ui_restore_draft(&app->ui, line);
+        return snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_DRAFT, .text = line});
     }
     return send_operator_routed(app, line, line + body, SNAG_IRC_MESSAGE);
 }
@@ -2135,7 +2149,8 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     for (size_t i = 0u; i < app->session.process_count; ++i)
         snag_tools_process_state(&app->session.processes[i]);
     if (busy != snag_tools_busy() &&
-        snag_ui_spinner_states(&app->ui, prompt_spinner_states(app, app->ui.active)) < 0)
+        snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app, app->ui.active)}) < 0)
         return -1;
     if (app->networked) {
         error[0] = '\0';
@@ -2204,7 +2219,8 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         if (rc != 0) {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
             if (set_input_prompt(app, true) < 0 ||
-                snag_ui_restore_draft(&app->ui, line) < 0)
+                snag_ui_send(&app->ui, (struct snag_ui_command){
+                    .kind = SNAG_UI_DRAFT, .text = line}) < 0)
                 rc = -1;
         } else rc = set_input_prompt(app, true);
     } else {
@@ -2219,7 +2235,8 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 "/ro cannot steer an active turn; press Tab or use /queue /ro QUERY");
             rc = set_input_prompt(app, true);
             if (rc == 0)
-                rc = snag_ui_restore_draft(&app->ui, line);
+                rc = snag_ui_send(&app->ui, (struct snag_ui_command){
+                    .kind = SNAG_UI_DRAFT, .text = line});
             goto active_done;
         }
         rc = handle_input_command(app, line, true, &handled, &prompt_ready);
@@ -2249,7 +2266,8 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                         error[0] ? error : "IRC message could not be queued");
                     rc = set_input_prompt(app, true);
                     if (rc == 0)
-                        rc = snag_ui_restore_draft(&app->ui, line);
+                        rc = snag_ui_send(&app->ui, (struct snag_ui_command){
+                            .kind = SNAG_UI_DRAFT, .text = line});
                 } else rc = set_input_prompt(app, true);
             } else if (app->recovery_wait && !app->session.active_turn) {
                 rc = queue_future_turn(app, text, true, error, sizeof(error));
@@ -2268,7 +2286,8 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                     (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error[0] ? error :
                                                "active-turn input could not be persisted");
                     if (set_input_prompt(app, true) == 0)
-                        (void)snag_ui_restore_draft(&app->ui, line);
+                        (void)snag_ui_send(&app->ui, (struct snag_ui_command){
+                            .kind = SNAG_UI_DRAFT, .text = line});
                 } else {
                     app->steering_requested = true;
                     rc = set_input_prompt(app, true);
@@ -2668,7 +2687,8 @@ execute_calls(struct app_state *app, const char *turn_id,
                 }
             }
             app->tool_active = true;
-            if (snag_ui_spinner_states(&app->ui, prompt_spinner_states(app, true)) < 0)
+            if (snag_ui_send(&app->ui, (struct snag_ui_command){
+                .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app, true)}) < 0)
                 return -1;
             int rc = calls[i].process ?
                 snag_tools_start(call, app->config, credential, &result, error, error_size) :
@@ -2697,7 +2717,8 @@ execute_calls(struct app_state *app, const char *turn_id,
             } else {
                 pending = true;
             }
-            if (snag_ui_spinner_states(&app->ui, prompt_spinner_states(app, true)) < 0)
+            if (snag_ui_send(&app->ui, (struct snag_ui_command){
+                .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app, true)}) < 0)
                 return -1;
         }
         first_wave = false;
@@ -3113,9 +3134,8 @@ run_turn(struct app_state *app, const char *prompt,
             goto out;
         }
         if (request_body.len &&
-            snag_ui_protocol(&app->ui, "request.body",
-                                (const char *)request_body.data,
-                                request_body.len) < 0) {
+            snag_ui_send(&app->ui, (struct snag_ui_command){
+                .kind = SNAG_UI_PROTOCOL, .label = "request.body", .text = (const char *)request_body.data, .len = request_body.len}) < 0) {
             json_t *partial = json_array();
             static const char failure[] =
                 "request diagnostics could not be rendered";
@@ -3508,8 +3528,8 @@ run_turn(struct app_state *app, const char *prompt,
                 goto out;
             }
             if (app->execute &&
-                snag_ui_raw(&app->ui, STDOUT_FILENO, final->text,
-                               strlen(final->text)) < 0) {
+                snag_ui_send(&app->ui, (struct snag_ui_command){
+                    .kind = SNAG_UI_RAW, .data.value = (unsigned int)(STDOUT_FILENO), .text = final->text, .len = strlen(final->text)}) < 0) {
                 (void)app_error(app, "final answer could not be written to stdout");
                 result = 6;
                 goto out;
@@ -3887,8 +3907,8 @@ write_resume_command(struct app_state *app, const char *program,
     struct snag_buf command = {.max = RESUME_COMMAND_MAX};
     if (build_resume_command(app, program, dotdir, &command) == 0 &&
         snag_command_finish(&command) == 0 && snag_buf_terminate(&command) == 0)
-        (void)snag_ui_resume_hint(&app->ui, (char *)command.data,
-                                     command.len);
+        (void)snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_RESUME, .text = (char *)command.data, .len = command.len});
     snag_buf_free(&command);
 }
 
@@ -3896,8 +3916,8 @@ static int
 list_row(void *opaque, const char *text, size_t len)
 {
     struct app_state *app = opaque;
-    return snag_ui_raw(&app->ui, app->cli->list ? STDOUT_FILENO : STDERR_FILENO,
-                      text, len);
+    return snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_RAW, .data.value = (unsigned int)(app->cli->list ? STDOUT_FILENO : STDERR_FILENO), .text = text, .len = len});
 }
 
 static int
@@ -4179,7 +4199,8 @@ ui_failed:
 static int
 render_room_history(void *opaque, const struct snag_irc_event *event)
 {
-    return snag_ui_irc_event(opaque, event);
+    return snag_ui_send(opaque, (struct snag_ui_command){
+        .kind = SNAG_UI_IRC, .data.irc = event});
 }
 
 int
@@ -4211,7 +4232,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (snag_ui_init(&app.ui) < 0)
         return 3;
     atomic_store(&shutdown_ui, &app.ui);
-    snag_ui_color(&app.ui, snag_cli_color(cli, SNAG_COLOR_AUTO));
+    snag_ui_send(&app.ui, (struct snag_ui_command){
+        .kind = SNAG_UI_COLOR, .data.value = snag_cli_color(cli, SNAG_COLOR_AUTO)});
     app.cli = cli;
     app.config = &config;
     snag_tools_journal(snag_app_tool_output, snag_app_tool_read, &app);
@@ -4270,8 +4292,10 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     }
     app.config_path = config_path;
     app.irc_file_config = config.irc;
-    snag_ui_color(&app.ui, snag_cli_color(cli, config.color));
-    snag_ui_markdown(&app.ui, snag_cli_markdown(cli, config.markdown));
+    snag_ui_send(&app.ui, (struct snag_ui_command){
+        .kind = SNAG_UI_COLOR, .data.value = snag_cli_color(cli, config.color)});
+    snag_ui_send(&app.ui, (struct snag_ui_command){
+        .kind = SNAG_UI_MARKDOWN, .data.value = snag_cli_markdown(cli, config.markdown)});
     if (!cli->execute && !cli->list &&
         snag_irc_apply_cli(&config, cli, error, sizeof(error)) < 0) {
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
@@ -4279,10 +4303,13 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     }
     app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
-    snag_ui_commands(&app.ui, commands, command_count());
-    if (app.networked && snag_ui_set_view(&app.ui, SNAG_RENDER_CHAT) < 0)
+    snag_ui_send(&app.ui, (struct snag_ui_command){
+        .kind = SNAG_UI_COMMANDS, .data.commands = {commands, command_count()}});
+    if (app.networked && snag_ui_send(&app.ui, (struct snag_ui_command){
+        .kind = SNAG_UI_VIEW, .data.value = SNAG_RENDER_CHAT}) < 0)
         goto out;
-    snag_ui_timing(&app.ui, &config);
+    snag_ui_send(&app.ui, (struct snag_ui_command){
+        .kind = SNAG_UI_PAUSE, .data.timing = {config.typing_pause_ms, config.prompt_tool_spinner_off_delay_ms}});
     if (snag_ui_set_verbosity(&app.ui, cli->verbosity) < 0)
         goto out;
     if (!cli->execute && !cli->list &&

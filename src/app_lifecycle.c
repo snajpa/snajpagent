@@ -9,7 +9,8 @@
 static int
 render_event_seq(struct app_state *app, uint64_t seq, const char *type)
 {
-    return snag_ui_event(&app->ui, seq, type) < 0 ? -1 : 0;
+    return snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_EVENT, .text = type, .data.seq = seq}) < 0 ? -1 : 0;
 }
 
 static bool
