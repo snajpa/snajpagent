@@ -2431,7 +2431,9 @@ def test_provider_login_and_first_run():
                     child.send(b"vendor/model\n")
                     end = child.wait(b"Default model: openrouter / vendor/model")
                     child.wait(PROMPT.rstrip(), start=end)
-                    child.exit_now()
+                    child.send(b"/exit\r")
+                    child.finish(expect_resume=False)
+                    assert not list((fresh / "sessions").glob("*/events.jsonl"))
                     assert (fresh / "auth" / "openrouter.json").exists()
                     assert b"hidden-first-run-key" not in child.buf
             finally:
@@ -2444,6 +2446,7 @@ def test_provider_login_and_first_run():
 
 
 def test_compaction_policy_selection():
+    before = session_ids()
     cache_path = Path(DOTDIR) / "models.json"
     old_cache = cache_path.read_bytes() if cache_path.exists() else None
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "compact-auto.ini"
@@ -2481,7 +2484,9 @@ def test_compaction_policy_selection():
                 child.wait(PROMPT.rstrip(), start=end)
         assert config.read_bytes() == original_config
         assert cache_path.read_bytes() == original_cache
-        child.exit_now()
+        child.send(b"/exit\r")
+        child.finish(expect_resume=False)
+        assert session_ids() == before
     finally:
         child.kill()
         if old_cache is None:
@@ -2816,6 +2821,9 @@ def test_model_configuration_save():
     config.rmdir()
     config.write_bytes(saved)
     os.chmod(config, original_mode)
+    child.send(b"ping\r")
+    answered = child.wait(b"pong", start=status_end)
+    child.wait_idle_prompt(start=answered)
     child.exit_now()
 
     log = events(new_session(before))
@@ -2826,6 +2834,7 @@ def test_model_configuration_save():
     ]
 
     # A new session consumes the saved provider and defaults from that path.
+    before_new = session_ids()
     child = Child(["--config", str(config)])
     child.wait(PROMPT.rstrip())
     child.send(b"/status\r")
@@ -2833,7 +2842,9 @@ def test_model_configuration_save():
     child.wait(b"model: durable-new", start=end)
     end = child.wait(b"effort: cosmic", start=end)
     child.wait(PROMPT.rstrip(), start=end)
-    child.exit_now()
+    child.send(b"/exit\r")
+    child.finish(expect_resume=False)
+    assert session_ids() == before_new
 
 
 def test_config_editor_reload():
