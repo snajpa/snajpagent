@@ -15,7 +15,6 @@
 #include "wire.h"
 #include "ui.h"
 
-#include <curl/curl.h>
 #include <errno.h>
 #include "snag_jansson.h"
 #include <stdint.h>

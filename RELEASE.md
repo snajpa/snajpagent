@@ -148,3 +148,11 @@ Maintain compact highlights in `www/downloads.html#changelog`: version/date,
 one headline and a few user-facing bullets, 80-column lines, newest first.
 Keep download selection first and detailed development evidence elsewhere.
 The banner links to this page; it does not parse or inject release prose.
+
+Stage a completed matrix with `python3 tools/release.py stage --version VERSION
+--output STAGE --release https://github.com/snajpa/snajpagent/releases/download/VERSION`.
+This copies standalone executables and symbols and writes the channel descriptors.
+Add the corresponding dependency sources, notices, and checksums to the stage;
+publish those immutable files, then copy the descriptors to `www/latest/` or
+`www/latest-dev/`. Update the downloads page and run the manual Pages workflow.
+`python3 tools/release.py pages` performs the same channel materialization locally.
