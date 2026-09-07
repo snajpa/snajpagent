@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "checked_json.h"
 #include "base.h"
 #include "app_internal.h"
 #include "config.h"
@@ -561,16 +562,8 @@ stop_server(struct local_server *server)
 static json_t *
 request_with_marker(const char *marker)
 {
-    json_t *request = json_object();
-    json_t *input = json_array();
-    json_t *message = json_object();
-    assert(request && input && message);
-    assert(snag_json_set_new(message, "role", json_string("user")) == 0);
-    assert(snag_json_set_new(message, "content", json_string(marker)) == 0);
-    assert(json_array_append_new(input, message) == 0);
-    assert(snag_json_set_new(request, "model", json_string("gpt-transport-test")) == 0);
-    assert(snag_json_set_new(request, "input", input) == 0);
-    return request;
+    return checked_json(json_pack("{s:s,s:[{s:s,s:s}]}", "model", "gpt-transport-test",
+        "input", "role", "user", "content", marker));
 }
 
 static int

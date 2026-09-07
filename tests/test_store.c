@@ -373,20 +373,10 @@ main(void)
 
         memset(text, 'x', sizeof(text) - 1u);
         text[sizeof(text) - 1u] = '\0';
-        event = json_object();
-        assert(event);
-        assert(snag_json_set_new(event, "endpoint", json_string("local")) == 0);
-        assert(snag_json_set_new(event, "historical", json_false()) == 0);
-        assert(snag_json_set_new(event, "kind", json_string("message")) == 0);
-        assert(snag_json_set_new(event, "local", json_true()) == 0);
-        assert(snag_json_set_new(event, "nick", json_string("agent")) == 0);
-        assert(snag_json_set_new(event, "op", json_false()) == 0);
-        assert(snag_json_set_new(event, "room", json_string("#lab")) == 0);
-        assert(snag_json_set_new(event, "text", json_string(text)) == 0);
-        assert(snag_json_set_new(event, "timestamp_ms", json_integer(1000)) == 0);
-        assert(snag_json_set_new(event, "stream", json_string("")) == 0);
-        assert(snag_json_set_new(event, "sequence", json_integer(0)) == 0);
-        assert(snag_json_set_new(event, "input", json_false()) == 0);
+        event = checked_json(json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:i,s:s,s:i,s:b}",
+            "endpoint", "local", "historical", 0, "kind", "message", "local", 1,
+            "nick", "agent", "op", 0, "room", "#lab", "text", text,
+            "timestamp_ms", 1000, "stream", "", "sequence", 0, "input", 0));
         oversized = json_deep_copy(event);
         assert(oversized);
         durable_seq = session.next_seq;
@@ -470,25 +460,15 @@ main(void)
         assert(snag_session_commit(&session, "goal_resumed",
             goal_reason_data(goal1, NULL, "unused", "bad"), NULL,
             error, sizeof(error)) < 0);
-        {
-            json_t *resume = json_object();
-            assert(resume);
-            assert(snag_json_set_new(resume, "goal_id",
-                                    json_string(goal1)) == 0);
-            commit_event(&session, "goal_resumed", resume);
-        }
+        commit_event(&session, "goal_resumed",
+                     checked_json(json_pack("{s:s}", "goal_id", goal1)));
         commit_event(&session, "goal_blocked",
                      goal_reason_data(goal1, "model", "reason",
                          "dependency unavailable"));
         assert(session.goal_status == SNAG_GOAL_BLOCKED);
         assert(strcmp(session.goal_blocker, "dependency unavailable") == 0);
-        {
-            json_t *resume = json_object();
-            assert(resume);
-            assert(snag_json_set_new(resume, "goal_id",
-                                    json_string(goal1)) == 0);
-            commit_event(&session, "goal_resumed", resume);
-        }
+        commit_event(&session, "goal_resumed",
+                     checked_json(json_pack("{s:s}", "goal_id", goal1)));
         assert(session.goal_blocker == NULL);
         commit_event(&session, "goal_completed", goal_actor_data(goal1, "model"));
         assert(session.goal_status == SNAG_GOAL_COMPLETED);
@@ -496,13 +476,8 @@ main(void)
             goal_started_data(goal1, "duplicate id"), NULL,
             error, sizeof(error)) < 0);
         commit_event(&session, "goal_started", goal_started_data(goal2, "next goal"));
-        {
-            json_t *cancel = json_object();
-            assert(cancel);
-            assert(snag_json_set_new(cancel, "goal_id",
-                                    json_string(goal2)) == 0);
-            commit_event(&session, "goal_cancelled", cancel);
-        }
+        commit_event(&session, "goal_cancelled",
+                     checked_json(json_pack("{s:s}", "goal_id", goal2)));
         snag_session_close(&session);
         snag_session_init(&session);
         assert(snag_session_open(&store, &session, id,
