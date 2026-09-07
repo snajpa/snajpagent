@@ -1,6 +1,24 @@
 SPDX-License-Identifier: GPL-2.0-or-later OR Apache-2.0
 Use the Windows 2000 CryptoAPI entropy source on pre-Vista targets.
 
+--- a/library/platform.c
++++ b/library/platform.c
+@@ -121,12 +121,12 @@
+         return -1;
+     }
+
+-#if defined(_TRUNCATE)
++#if defined(_TRUNCATE) && (!defined(__MINGW32__) || _WIN32_WINNT >= 0x0600)
+     ret = vsnprintf_s(s, n, _TRUNCATE, fmt, arg);
+ #else
+     ret = vsnprintf(s, n, fmt, arg);
+-    if (ret < 0 || (size_t) ret == n) {
++    if (ret < 0 || (size_t) ret >= n) {
+         s[n-1] = '\0';
+         ret = -1;
+     }
+ #endif
+
 --- a/library/entropy_poll.c
 +++ b/library/entropy_poll.c
 @@ -39,6 +39,33 @@
