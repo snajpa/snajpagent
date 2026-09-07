@@ -5,7 +5,23 @@ let
   llvm = pkgs.llvmPackages_21;
   sdkInfo = (builtins.fromJSON (builtins.readFile
     (pkgs.path + "/pkgs/by-name/ap/apple-sdk/metadata/versions.json")))."15";
-  sdk = (pkgs.callPackage
+  sdk = if arch == "i386" then pkgs.stdenvNoCC.mkDerivation {
+    pname = "macOS-SDK";
+    version = "10.12";
+    src = pkgs.fetchurl {
+      urls = [
+        "https://swcdn.apple.com/content/downloads/22/62/041-88607/wg8avdk0jo75k9a13gentz9stwqgrqmcv6/CLTools_SDK_OSX1012.pkg"
+        "https://swdist.apple.com/content/downloads/22/62/041-88607/wg8avdk0jo75k9a13gentz9stwqgrqmcv6/CLTools_SDK_OSX1012.pkg"
+      ];
+      sha256 = "724a1a41d93d0ac8ea7e1869f5113ad2772c63b2869ff751bf2f95ae9292a10d";
+    };
+    nativeBuildInputs = [ pkgs.pbzx pkgs.cpio ];
+    unpackPhase = ''pbzx "$src" | cpio -idm --no-absolute-filenames'';
+    dontConfigure = true;
+    dontBuild = true;
+    dontFixup = true;
+    installPhase = ''mv Library/Developer/CommandLineTools/SDKs/MacOSX.sdk "$out"'';
+  } else (pkgs.callPackage
     (pkgs.path + "/pkgs/by-name/ap/apple-sdk/common/fetch-sdk.nix") {}) sdkInfo;
   target = "${arch}-apple-macos${deployment}";
   processor = if arch == "arm64" then "aarch64" else arch;
