@@ -1432,7 +1432,7 @@ def test_prompt_history_and_reverse_search():
     before_second = session_ids()
     second = Child([])
     second.wait(DEFAULT_IDLE_PROMPT)
-    second_id = new_session(before_second)
+    assert session_ids() == before_second
     first = Child([])
     first.wait(DEFAULT_IDLE_PROMPT)
     for entry in (
@@ -1446,6 +1446,7 @@ def test_prompt_history_and_reverse_search():
         first.wait_idle_prompt(start=answer)
     first.exit_cleanly(answer)
 
+    before_second = session_ids()
     second.send(b"draft-restore")
     second.send(b"\x12")
     # The terminal may reuse the existing trailing blank instead of emitting it.
@@ -1455,6 +1456,7 @@ def test_prompt_history_and_reverse_search():
     second.send(b"\r")
     answer = second.wait(b"fixture answer", start=restored)
     second.wait_idle_prompt(start=answer)
+    second_id = new_session(before_second)
     assert one(events(second_id), "turn_started")["data"]["text"] == "draft-restore"
     cancel = len(second.buf)
     second.send(b"draft-cancel\x03")
@@ -3510,8 +3512,15 @@ def test_network_resume_roles():
         "-n", "clientagent", "-o", "clientop",
     ])
     client.wait(chat_prompt("clientop"))
-    client_id = new_session(before)
+    assert session_ids() == before
     first_links = accept_connections(upstream, 2)
+    client.send(b"/rollout\r")
+    switched = client.wait("── rollout ──".encode())
+    client.wait_idle_prompt(start=switched)
+    client.send(b"ping\r")
+    answered = client.wait(b"pong", start=switched)
+    client.wait_idle_prompt(start=answered)
+    client_id = new_session(before)
     client_command = client.exit_now()
     for connection in first_links:
         connection.close()
@@ -3536,10 +3545,11 @@ def test_network_resume_roles():
         "-n", "serveragent", "-o", "serverop", "-r", "lab",
     ])
     server.wait(chat_prompt("serverop"))
-    server_id = new_session(before)
+    assert session_ids() == before
     peer = IRCClient(server_port, "firstpeer")
     peer.message("retained room message")
     server.wait("firstpeer › retained room message".encode())
+    server_id = new_session(before)
     peer.close()
     server.send(b"\x04")
     server_command = server.finish()
@@ -3576,11 +3586,13 @@ def test_network_resume_roles():
         "-n", "combinedagent", "-o", "combinedop", "-r", "lab",
     ])
     combined.wait(chat_prompt("combinedop"))
-    combined_id = new_session(before)
+    assert session_ids() == before
     first_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "combinedpeer")
     peer.close()
-    combined_command = combined.exit_now()
+    combined.send(b"\x04")
+    combined_command = combined.finish()
+    combined_id = new_session(before)
     for connection in first_links:
         connection.close()
     combined_arguments = command_arguments(combined_command)
@@ -3594,7 +3606,8 @@ def test_network_resume_roles():
     resumed_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "resumedpeer")
     peer.close()
-    resumed_combined.exit_now()
+    resumed_combined.send(b"\x04")
+    resumed_combined.finish()
     for connection in resumed_links:
         connection.close()
     upstream.close()
