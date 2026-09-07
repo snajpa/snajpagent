@@ -1,12 +1,19 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, windows ? pkgs.pkgsCross.mingwW64 }:
+{ pkgs, windows ? pkgs.pkgsCross.mingwW64, winver ? "0x0601" }:
 let
-  arch = if windows.stdenv.hostPlatform.isAarch64 then "arm64" else "x86_64";
-  pthreads = if windows.stdenv.cc.isClang then windows.windows.pthreads.overrideAttrs (old: {
+  arch = if windows.stdenv.hostPlatform.isAarch64 then "arm64"
+    else if windows.stdenv.hostPlatform.isx86_32 then "i686" else "x86_64";
+  pthreadBase = windows.windows.pthreads.overrideAttrs (old:
+    pkgs.lib.optionalAttrs (winver != "0x0601") {
+      env = (old.env or { }) // {
+        CFLAGS = "-Os -g -D_WIN32_WINNT=${winver} -DWINVER=${winver}";
+      };
+    });
+  pthreads = if windows.stdenv.cc.isClang then pthreadBase.overrideAttrs (old: {
     makeFlags = (old.makeFlags or []) ++ [
       "RCFLAGS=-I${windows.windows.mingw_w64_headers}/include"
     ];
-  }) else windows.windows.pthreads;
+  }) else pthreadBase;
   threads = if windows.stdenv.cc.isClang then pthreads else windows.windows.mcfgthreads.overrideAttrs (old: {
     pname = "mcfgthread-static";
     mesonFlags = (old.mesonFlags or []) ++ [ "-Ddefault_library=static" ];
@@ -23,7 +30,7 @@ let
       enableParallelBuilding = true;
       cmakeBuildType = "MinSizeRel";
       preConfigure = ''
-        cmakeFlagsArray+=("-DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DWINVER=0x0601")
+        cmakeFlagsArray+=("-DCMAKE_C_FLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver}")
       '';
       cmakeFlags = [
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
@@ -44,7 +51,7 @@ let
       buildInputs = dependencies ++ [ threads ];
       strictDeps = true;
       enableParallelBuilding = true;
-      env.CFLAGS = "-Os -g -D_WIN32_WINNT=0x0601 -DWINVER=0x0601"
+      env.CFLAGS = "-Os -g -D_WIN32_WINNT=${winver} -DWINVER=${winver}"
         + pkgs.lib.optionalString windows.stdenv.cc.isClang " -pthread";
       configureFlags = [ "--disable-shared" "--enable-static"
                          "--disable-dependency-tracking" ] ++ flags;
@@ -120,7 +127,7 @@ let
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
   ] networkLibraries;
-  regex = import ./windows-regex.nix { inherit pkgs windows threads unistring; };
+  regex = import ./windows-regex.nix { inherit pkgs windows threads unistring winver; };
 in {
   inherit windows threads jansson tls curl networkLibraries regex;
   application = { source, packageName, version, revision }: windows.stdenv.mkDerivation {
@@ -143,7 +150,7 @@ in {
         'DEBUG_SYMBOLS=debug-${packageName}.exe'
         "CC=$CC" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-        'CPPFLAGS=-D_WIN32_WINNT=0x0601 -DWINVER=0x0601 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
+        'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
         'CFLAGS=-std=c11 -Os -g -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=-static -municode -flto -Wl,--gc-sections'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, windows, threads, unistring }:
+{ pkgs, windows, threads, unistring, winver ? "0x0601" }:
 let
   revision = "58df1afe785d3067cfa474ab57ccf283665dfa38";
   gnulib = pkgs.fetchzip {
@@ -58,7 +58,7 @@ in windows.stdenv.mkDerivation {
   nativeBuildInputs = [ pkgs.autoconf pkgs.automake pkgs.python3 pkgs.perl
                         pkgs.gettext windows.buildPackages.pkg-config ];
   buildInputs = [ threads unistring ];
-  env.CFLAGS = "-Os -g -D_WIN32_WINNT=0x0601 -DWINVER=0x0601"
+  env.CFLAGS = "-Os -g -D_WIN32_WINNT=${winver} -DWINVER=${winver}"
     + pkgs.lib.optionalString windows.stdenv.cc.isClang " -pthread";
   preConfigure = ''
     cp ${configure} configure.ac
