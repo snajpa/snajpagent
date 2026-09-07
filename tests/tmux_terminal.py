@@ -4394,6 +4394,9 @@ def run_incremental_history_case(binary, root):
                          state, configs[name], 140, 28, args=args, environment=environment)
         terminals[name] = t
         t.wait(("hostop" if name == "host" else "clientop") + f"@{MACHINE_HOSTNAME} :")
+        if name == "client" and not session:
+            t.wait("── history replayed ──")
+            t.submit("catchup fixture setup")
         return t
 
     def sid(t):
@@ -4403,6 +4406,7 @@ def run_incremental_history_case(binary, root):
         return event_list(maybe_events(t.dotdir)[1], "irc_event")
 
     def wait_record(t, text, count=1):
+        wait_event_count(t.dotdir, "session_created", 1)
         deadline = time.monotonic() + 10
         while sum(e["data"]["text"] == text for e in records(t)) < count:
             assert time.monotonic() < deadline, (text, t.capture(), provider.failure)
