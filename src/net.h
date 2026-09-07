@@ -38,6 +38,11 @@ typedef struct pollfd snag_socket_event;
 
 typedef snag_wake_fd snag_socket;
 #define SNAG_SOCKET_INVALID ((snag_socket)-1)
+#ifdef _WIN32
+/* Blocking native socket for wake-channel setup; errors use WSAGetLastError. */
+snag_socket snag_socket_native(int family, int type, int protocol);
+int snag_socket_noinherit(snag_socket fd);
+#endif
 int snag_network_init(void);
 void snag_network_free(void);
 int snag_socket_error(int code);

@@ -127,16 +127,43 @@ snag_network_free(void)
     (void)WSACleanup();
 }
 
+int
+snag_socket_noinherit(snag_socket fd)
+{
+    DWORD flags;
+    if (!GetHandleInformation((HANDLE)fd, &flags)) {
+        WSASetLastError(WSAENOTSOCK);
+        return -1;
+    }
+    if ((flags & HANDLE_FLAG_INHERIT) &&
+        !SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0)) {
+        WSASetLastError(WSAEACCES);
+        return -1;
+    }
+    return 0;
+}
+
+snag_socket
+snag_socket_native(int family, int type, int protocol)
+{
+    SOCKET fd = WSASocketW(family, type, protocol, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+    if (fd == INVALID_SOCKET && WSAGetLastError() == WSAEINVAL)
+        fd = WSASocketW(family, type, protocol, NULL, 0, 0);
+    if (fd != INVALID_SOCKET && snag_socket_noinherit(fd) < 0) {
+        int error = WSAGetLastError();
+        (void)closesocket(fd);
+        WSASetLastError(error);
+        return SNAG_SOCKET_INVALID;
+    }
+    return fd;
+}
+
 static int
 nonblocking(snag_socket fd)
 {
     unsigned long yes = 1;
-    DWORD flags;
-
-    if (!GetHandleInformation((HANDLE)fd, &flags) || (flags & HANDLE_FLAG_INHERIT)) {
-        errno = EACCES;
-        return -1;
-    }
+    if (snag_socket_noinherit(fd) < 0)
+        return snag_socket_error(WSAGetLastError());
     return ioctlsocket(fd, FIONBIO, &yes) < 0 ? snag_socket_error(WSAGetLastError()) : 0;
 }
 
@@ -243,8 +270,7 @@ snag_socket
 snag_socket_open(int family, int type, int protocol)
 {
 #ifdef _WIN32
-    return prepare_socket(WSASocketW(family, type, protocol, NULL, 0,
-                                     WSA_FLAG_NO_HANDLE_INHERIT));
+    return prepare_socket(snag_socket_native(family, type, protocol));
 #else
     return prepare_socket(socket(family, type, protocol));
 #endif

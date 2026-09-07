@@ -1973,6 +1973,15 @@ test_sockets(void)
 #endif
     assert(snag_network_init() == 0);
 #ifdef _WIN32
+    SOCKET inherited = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, 0);
+    DWORD inherited_flags;
+    assert(inherited != INVALID_SOCKET);
+    assert(SetHandleInformation((HANDLE)inherited, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT));
+    assert(snag_socket_noinherit(inherited) == 0);
+    assert(GetHandleInformation((HANDLE)inherited, &inherited_flags) &&
+           !(inherited_flags & HANDLE_FLAG_INHERIT));
+    assert(closesocket(inherited) == 0);
+    assert(snag_socket_noinherit(SNAG_SOCKET_INVALID) < 0 && WSAGetLastError() == WSAENOTSOCK);
     struct addrinfo legacy_hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM,
         .ai_protocol = IPPROTO_TCP, .ai_flags = AI_NUMERICHOST};
     struct addrinfo *legacy = NULL;

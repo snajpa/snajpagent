@@ -37,8 +37,8 @@ snag_wakeup_create(snag_wake_fd pair[2])
     pair[0] = pair[1] = SNAG_WAKE_INVALID;
     if (snag_network_init() < 0)
         return -1;
-    listener = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
-    writer = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+    listener = snag_socket_native(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    writer = snag_socket_native(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listener == INVALID_SOCKET || writer == INVALID_SOCKET)
         goto fail;
     address.sin_family = AF_INET;
@@ -60,12 +60,8 @@ snag_wakeup_create(snag_wake_fd pair[2])
         WSASetLastError(WSAEACCES);
         goto fail;
     }
-    DWORD inherited;
-    if (!GetHandleInformation((HANDLE)reader, &inherited) ||
-        (inherited & HANDLE_FLAG_INHERIT)) {
-        WSASetLastError(WSAEACCES);
+    if (snag_socket_noinherit(reader) < 0)
         goto fail;
-    }
     if (setsockopt(writer, IPPROTO_TCP, TCP_NODELAY, (char *)&yes, sizeof(yes)) < 0 ||
         ioctlsocket(reader, FIONBIO, &nonblocking) < 0 ||
         ioctlsocket(writer, FIONBIO, &nonblocking) < 0)
