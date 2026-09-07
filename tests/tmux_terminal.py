@@ -2004,7 +2004,7 @@ def run_model_catalog_case(binary, root, provider, environment):
         100, 24, environment=environment,
     )
     try:
-        terminal.wait(" ordinary/uncached-start/low   ?% ›")
+        terminal.wait(" ordinary/uncached-start/low   0% ›")
         terminal.submit("/verbose 6")
         terminal.wait("verbosity: 6")
         before = provider.catalog_paths()
@@ -2092,7 +2092,7 @@ def run_model_catalog_case(binary, root, provider, environment):
 def wait_current_prompt(terminal, operator, timeout=10.0):
     deadline = time.monotonic() + timeout
     expected = (f"{operator}@{MACHINE_HOSTNAME} :" if operator else
-                " ordinary/uncached-start/low   ?% ›")
+                " ordinary/uncached-start/low   0% ›")
     timestamped = re.compile(
         rf"(?m)^   \d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
     ) if operator else None
@@ -2455,7 +2455,7 @@ def run_multi_tool_cases(binary, root, provider, environment):
                                 case / "state", config, 120, 24,
                                 args=("-vvv" if mode == "full-output" else "-v",), environment=environment)
         try:
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             terminal.submit("multi-tools " + mode)
             if mode in ("steer", "cancel"):
                 deadline = time.monotonic() + 4.0
@@ -2521,7 +2521,7 @@ def run_output_cap_cases(binary, root, provider, environment):
                                 case / "state", config, 120, 24,
                                 args=("-v",), environment=environment)
         try:
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             terminal.submit(f"tool-cap {ceiling} {json.dumps(selected)}")
             terminal.wait("tool cap confirmed")
             _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
@@ -2550,7 +2550,7 @@ def run_ctrl_d_cases(binary, root, provider, environment):
                                 case / "state", config, 120, 24,
                                 environment=environment)
         try:
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             terminal.submit("exit-" + mode)
             if mode in ("tool", "managed"):
                 deadline = time.monotonic() + 5.0
@@ -2632,7 +2632,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 environment=environment)
             peer = None
             try:
-                terminal.wait("host-model/medium   ?% ›")
+                terminal.wait("host-model/medium   0% ›")
                 terminal.submit("runtime-main")
                 assert arrived.wait(5.0), "provider did not receive the initial request"
                 initial = json.dumps(requests[0], sort_keys=True)
@@ -2787,7 +2787,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
         try:
             terminal.wait(f"runtimeop@{MACHINE_HOSTNAME} :")
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             terminal.submit("runtime-routing")
             assert arrived.wait(5.0)
             frozen = counts[0] if phase == "count" else requests[0]
@@ -2935,7 +2935,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
         try:
             terminal.wait(f"runtimeop@{MACHINE_HOSTNAME} :")
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             terminal.submit("/goal set runtime-goal" if boundary == "goal" else "runtime-boundary")
             if boundary == "tool":
                 deadline = time.monotonic() + 5.0
@@ -3053,7 +3053,7 @@ def run_runtime_history_case(binary, root, provider, environment):
         config, 120, 24, args=["-n", "agent", "-o", "operator"], environment=environment)
     links = []
     try:
-        terminal.wait("host-model/medium   ?% ›")
+        terminal.wait("host-model/medium   0% ›")
         terminal.submit("runtime history main")
         assert arrived.wait(5.0)
         terminal.submit(f"/connect {endpoint}")
@@ -3403,7 +3403,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
         terminal = TmuxTerminal(case / "term", binary, workspace, case / "state", config,
             140, 28, environment=environment)
         try:
-            terminal.wait("host-model/medium   ?% ›")
+            terminal.wait("host-model/medium   0% ›")
             terminal.submit("/retry")
             terminal.wait("no failed turn to retry")
             assert not requests
