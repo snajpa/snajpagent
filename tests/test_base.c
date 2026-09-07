@@ -1364,6 +1364,14 @@ test_console_output(void)
         abort();
     }
     assert(result[0] == L'A' && result[1] == 0x4e2du);
+    broker = NULL;
+    assert(SetConsoleCursorPosition(screen, (COORD){0, 2}));
+    assert(snag_output_broker_write(&broker, fd, "A\xe4\xb8\xad\xf0\x9f\x98\x80Z", 9u,
+                                    NULL, NULL) == 0);
+    memset(result, 0, sizeof(result));
+    assert(ReadConsoleOutputCharacterW(screen, result, 10u, (COORD){0, 2}, &got));
+    assert(got == direct_count && !memcmp(result, direct, got * sizeof(*result)));
+    snag_output_broker_close(broker);
     bool suffix = false;
     for (DWORD i = 0; i < got; ++i)
         suffix |= result[i] == L'Z';
