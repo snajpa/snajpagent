@@ -836,7 +836,7 @@ proc_child_exited(struct snag_child *child)
     int error = errno;
     (void)close(fd);
     if (n < 0) {
-        errno = error;
+        errno = error == ENOENT || error == ESRCH ? ECHILD : error;
         return -1;
     }
     record[n] = '\0';
