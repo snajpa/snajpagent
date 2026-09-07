@@ -10,6 +10,20 @@
 #include <errno.h>
 #include <limits.h>
 
+#if defined(__FreeBSD__) && __FreeBSD__ < 8
+#define SNAG_LEGACY_BSD_AT 1
+#include <fcntl.h>
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+#ifndef O_DIRECTORY
+#define O_DIRECTORY 0
+#endif
+#ifndef AT_FDCWD
+#define AT_FDCWD (-100)
+#endif
+#endif
+
 #ifdef _WIN32
 #define SNAG_NAME_MAX_BYTES (255u * 4u)
 #else

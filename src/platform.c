@@ -2445,7 +2445,144 @@ snag_directory_lock_release(struct snag_directory_lock *lock)
     return rc;
 }
 
-#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT)
+#ifdef SNAG_LEGACY_BSD_AT
+#include <pthread.h>
+
+/* Old BSD has neither at-family calls nor an fd-to-path query. Retain paths
+ * for managed directory descriptors; prune closed/reused fds on each access.
+ * Identity checks fail closed, but pathname operations still have an external
+ * rename race. Moves to a different parent require reopening the directory. */
+struct legacy_directory_path {
+    struct legacy_directory_path *next;
+    int fd;
+    dev_t device;
+    ino_t inode;
+    char *path;
+};
+static struct legacy_directory_path *legacy_paths;
+static pthread_mutex_t legacy_paths_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static bool
+legacy_same_directory(const struct stat *st, dev_t device, ino_t inode)
+{
+    return S_ISDIR(st->st_mode) && st->st_dev == device && st->st_ino == inode;
+}
+
+static void
+legacy_paths_prune(void)
+{
+    struct legacy_directory_path **at = &legacy_paths;
+    while (*at) {
+        struct legacy_directory_path *entry = *at;
+        struct stat st;
+        if (fstat(entry->fd, &st) < 0 ||
+            !legacy_same_directory(&st, entry->device, entry->inode)) {
+            *at = entry->next;
+            free(entry->path);
+            free(entry);
+        } else {
+            at = &entry->next;
+        }
+    }
+}
+
+static int
+legacy_remember_directory(int fd, const char *path)
+{
+    struct stat held, linked;
+    char canonical[PATH_MAX];
+    if (fstat(fd, &held) < 0)
+        return -1;
+    if (!S_ISDIR(held.st_mode))
+        return 0;
+    if (!realpath(path, canonical) || lstat(canonical, &linked) < 0)
+        return -1;
+    if (!legacy_same_directory(&linked, held.st_dev, held.st_ino)) {
+        errno = ESTALE;
+        return -1;
+    }
+    char *copy = strdup(canonical);
+    if (!copy)
+        return -1;
+    (void)pthread_mutex_lock(&legacy_paths_lock);
+    legacy_paths_prune();
+    struct legacy_directory_path *entry = legacy_paths;
+    while (entry && entry->fd != fd)
+        entry = entry->next;
+    if (!entry) {
+        entry = calloc(1u, sizeof(*entry));
+        if (entry) {
+            entry->next = legacy_paths;
+            legacy_paths = entry;
+        }
+    }
+    if (entry) {
+        free(entry->path);
+        entry->path = copy;
+        entry->fd = fd;
+        entry->device = held.st_dev;
+        entry->inode = held.st_ino;
+    } else {
+        free(copy);
+    }
+    (void)pthread_mutex_unlock(&legacy_paths_lock);
+    return entry ? 0 : -1;
+}
+
+static int
+legacy_directory_path(int fd, char out[PATH_MAX])
+{
+    int rc = -1, error = ESTALE;
+    struct stat linked;
+    (void)pthread_mutex_lock(&legacy_paths_lock);
+    legacy_paths_prune();
+    struct legacy_directory_path *entry = legacy_paths;
+    while (entry && entry->fd != fd)
+        entry = entry->next;
+    if (!entry)
+        goto done;
+    if (lstat(entry->path, &linked) == 0 &&
+        legacy_same_directory(&linked, entry->device, entry->inode)) {
+        (void)snprintf(out, PATH_MAX, "%s", entry->path);
+        rc = 0;
+        goto done;
+    }
+    /* Recover a same-parent rename without following a replacement symlink. */
+    (void)snprintf(out, PATH_MAX, "%s", entry->path);
+    char *leaf = strrchr(out, '/');
+    size_t prefix = (size_t)(leaf - out) + 1u;
+    out[prefix] = '\0';
+    DIR *parent = opendir(out);
+    if (!parent)
+        goto done;
+    struct dirent *name;
+    while ((name = readdir(parent))) {
+        if (!strcmp(name->d_name, ".") || !strcmp(name->d_name, ".."))
+            continue;
+        int n = snprintf(out + prefix, PATH_MAX - prefix, "%s", name->d_name);
+        if (n < 0 || (size_t)n >= PATH_MAX - prefix || lstat(out, &linked) < 0 ||
+            !legacy_same_directory(&linked, entry->device, entry->inode))
+            continue;
+        char *copy = strdup(out);
+        if (copy) {
+            free(entry->path);
+            entry->path = copy;
+            rc = 0;
+        } else {
+            error = ENOMEM;
+        }
+        break;
+    }
+    (void)closedir(parent);
+done:
+    (void)pthread_mutex_unlock(&legacy_paths_lock);
+    if (rc < 0)
+        errno = error;
+    return rc;
+}
+#endif
+
+#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 /* Never change cwd in the threaded process. Darwin's pathname fallback has
  * an external rename race; Linux procfs follows the held directory itself. */
 static const char *
@@ -2465,8 +2602,12 @@ legacy_at_path(int dirfd, const char *path, char out[PATH_MAX])
         errno = ENOTDIR;
         return NULL;
     }
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(SNAG_LEGACY_BSD_AT)
+#ifdef SNAG_LEGACY_BSD_AT
+    if (legacy_directory_path(dirfd, out) < 0)
+#else
     if (fcntl(dirfd, F_GETPATH, out) < 0)
+#endif
         return NULL;
     size_t prefix = 0;
     while (prefix < PATH_MAX && out[prefix])
@@ -2511,6 +2652,18 @@ open_at(int dirfd, const char *path, int flags, mode_t mode)
             return -1;
         fd = open(legacy, flags, mode);
     }
+#elif defined(SNAG_LEGACY_BSD_AT)
+    char resolved[PATH_MAX];
+    const char *legacy = legacy_at_path(dirfd, path, resolved);
+    if (!legacy)
+        return -1;
+    int fd = open(legacy, flags, mode);
+    if (fd >= 0 && legacy_remember_directory(fd, legacy) < 0) {
+        int error = errno;
+        (void)close(fd);
+        errno = error;
+        return -1;
+    }
 #else
     int fd = openat(dirfd, path, flags, mode);
 #endif
@@ -2523,10 +2676,10 @@ open_at(int dirfd, const char *path, int flags, mode_t mode)
         fd = open(legacy, flags, mode);
     }
 #endif
-#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT)
+#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
     /* Older kernels can ignore O_CLOEXEC, even when openat exists.
      * This cannot make the legacy open/exec race atomic. */
-    if (fd >= 0 && (flags & O_CLOEXEC) && snag_fd_cloexec(fd) < 0) {
+    if (fd >= 0 && snag_fd_cloexec(fd) < 0) {
         int error = errno;
         (void)close(fd);
         errno = error;
@@ -2586,6 +2739,19 @@ snag_dup_read(int fd)
         errno = error;
         return -1;
     }
+#ifdef SNAG_LEGACY_BSD_AT
+    if (copy >= 0) {
+        struct stat st;
+        char path[PATH_MAX];
+        if (fstat(copy, &st) < 0 || (S_ISDIR(st.st_mode) &&
+            (legacy_directory_path(fd, path) < 0 || legacy_remember_directory(copy, path) < 0))) {
+            int error = errno;
+            (void)close(copy);
+            errno = error;
+            return -1;
+        }
+    }
+#endif
     return copy;
 }
 
@@ -2643,10 +2809,13 @@ snag_directory_open(int fd)
     if (!dir)
         return NULL;
     dir->held_fd = -1;
+#if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (fdopendir != NULL) {
         dir->native = fdopendir(fd);
-    } else {
+    } else
+#endif
+    {
         char resolved[PATH_MAX];
         const char *path = legacy_at_path(fd, ".", resolved);
         struct stat held, opened;
@@ -2741,9 +2910,11 @@ snag_lstat(const char *path, snag_file_info *out)
 int
 snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 {
+#if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (fstatat != NULL)
         return fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
+#endif
     char resolved[PATH_MAX];
     const char *legacy = legacy_at_path(dirfd, path, resolved);
     return legacy ? lstat(legacy, out) : -1;
@@ -2763,9 +2934,11 @@ snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 int
 snag_unlink_at(int dirfd, const char *path, bool directory)
 {
+#if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (unlinkat != NULL)
         return unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
+#endif
     char resolved[PATH_MAX];
     const char *legacy = legacy_at_path(dirfd, path, resolved);
     return legacy ? (directory ? rmdir(legacy) : unlink(legacy)) : -1;
@@ -2785,9 +2958,11 @@ snag_unlink_at(int dirfd, const char *path, bool directory)
 int
 snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 {
+#if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (renameat != NULL)
         return renameat(from_dir, from, to_dir, to);
+#endif
     char source[PATH_MAX], destination[PATH_MAX];
     const char *old = legacy_at_path(from_dir, from, source);
     const char *next = old ? legacy_at_path(to_dir, to, destination) : NULL;
@@ -2809,9 +2984,11 @@ snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 int
 snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
 {
+#if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (linkat != NULL)
         return linkat(from_dir, from, to_dir, to, 0);
+#endif
     char source[PATH_MAX], destination[PATH_MAX];
     const char *old = legacy_at_path(from_dir, from, source);
     const char *next = old ? legacy_at_path(to_dir, to, destination) : NULL;
@@ -2845,9 +3022,11 @@ snag_mkdir_private(const char *path)
 int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
+#if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (mkdirat != NULL)
         return mkdirat(dirfd, path, 0700);
+#endif
     char resolved[PATH_MAX];
     const char *legacy = legacy_at_path(dirfd, path, resolved);
     return legacy ? mkdir(legacy, 0700) : -1;

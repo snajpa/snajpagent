@@ -1500,6 +1500,11 @@ done:
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__FreeBSD__) && !defined(WNOWAIT)
+#include <sys/param.h>
+#include <sys/sysctl.h>
+#include <sys/user.h>
+#endif
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -1777,7 +1782,41 @@ proc_child_exited(struct snag_child *child)
 int
 snag_child_exited(struct snag_child *child)
 {
-#if defined(__FreeBSD__)
+#if defined(__FreeBSD__) && !defined(WNOWAIT)
+    /* KERN_PROC_PID omits zombies on old FreeBSD; the process list includes
+     * them. Validate parentage and leave reaping exclusively to the owner. */
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC};
+    size_t size = 0;
+    if (sysctl(mib, 3u, NULL, &size, NULL, 0) < 0)
+        return -1;
+    struct kinfo_proc *list = malloc(size ? size : 1u);
+    if (!list)
+        return -1;
+    int rc = sysctl(mib, 3u, list, &size, NULL, 0), error = errno;
+    if (rc < 0) {
+        free(list);
+        if (error == ENOMEM || error == EAGAIN)
+            return 0; /* The snapshot changed; retry on the next poll. */
+        errno = error;
+        return -1;
+    }
+    rc = -1;
+    error = ECHILD;
+    if (size % sizeof(*list)) {
+        error = EIO;
+    } else for (size_t i = 0; i < size / sizeof(*list); ++i) {
+        if (list[i].ki_pid == child->pid && list[i].ki_ppid == getpid()) {
+            rc = list[i].ki_stat == SZOMB;
+            break;
+        }
+    }
+    free(list);
+    if (rc < 0) {
+        child->reaped = error == ECHILD;
+        errno = error;
+    }
+    return rc;
+#elif defined(__FreeBSD__)
     /* FreeBSD supports polling without releasing child ownership. */
     int status;
     pid_t pid = waitpid(child->pid, &status, WNOHANG | WNOWAIT);

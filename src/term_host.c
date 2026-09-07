@@ -1455,7 +1455,19 @@ snag_term_output_open(struct snag_term_host *host, int fd)
     (void)host;
     char path[SNAG_PATH_MAX_BYTES];
     snag_file_info original, owned;
+#if defined(__FreeBSD__) && __FreeBSD__ < 6
+    struct stat st;
+    int error = fstat(fd, &st) < 0 ? errno : 0;
+    if (!error && !S_ISCHR(st.st_mode))
+        error = ENOTTY;
+    if (!error) {
+        memcpy(path, "/dev/", 5u);
+        if (!devname_r(st.st_rdev, S_IFCHR, path + 5u, (int)sizeof(path) - 5))
+            error = ENOTTY;
+    }
+#else
     int error = ttyname_r(fd, path, sizeof(path));
+#endif
     int copy = error ? -1 : open(path, O_WRONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
 
     if (copy >= 0 && snag_fd_cloexec(copy) < 0) {

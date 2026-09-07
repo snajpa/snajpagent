@@ -1123,7 +1123,7 @@ test_private_directory(void)
     assert(pattern && mkdtemp(pattern));
     root = snag_realpath(pattern);
     free(pattern);
-    fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    fd = snag_open_read(root, true);
 #endif
     assert(cwd && root && fd >= 0);
     snag_file_info root_info, path_info;
