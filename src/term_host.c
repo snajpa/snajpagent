@@ -17,21 +17,36 @@
 #include <windows.h>
 #include <io.h>
 #include <process.h>
+#include <pthread.h>
 
-static SRWLOCK console_read_lock = SRWLOCK_INIT;
+static pthread_mutex_t console_read_lock = PTHREAD_MUTEX_INITIALIZER;
 static HANDLE console_reader;
 static atomic_bool console_read_cancelled;
+
+static void
+control_lock(pthread_mutex_t *mutex)
+{
+    if (pthread_mutex_lock(mutex) != 0)
+        abort();
+}
+
+static void
+control_unlock(pthread_mutex_t *mutex)
+{
+    if (pthread_mutex_unlock(mutex) != 0)
+        abort();
+}
 
 static void
 cancel_console_read(void)
 {
     atomic_store(&console_read_cancelled, true);
     for (;;) {
-        AcquireSRWLockShared(&console_read_lock);
+        control_lock(&console_read_lock);
         bool active = console_reader != NULL;
         BOOL sent = active && CancelSynchronousIo(console_reader);
         DWORD error = GetLastError();
-        ReleaseSRWLockShared(&console_read_lock);
+        control_unlock(&console_read_lock);
         if (!active || sent || error != ERROR_NOT_FOUND)
             break;
         /* The reader either starts its I/O or observes the cancellation flag. */
@@ -42,51 +57,51 @@ cancel_console_read(void)
 static BOOL
 read_console(HANDLE input, WCHAR *wide, DWORD size, DWORD *got)
 {
-    AcquireSRWLockExclusive(&console_read_lock);
+    control_lock(&console_read_lock);
     if (console_reader) {
-        ReleaseSRWLockExclusive(&console_read_lock);
+        control_unlock(&console_read_lock);
         SetLastError(ERROR_BUSY);
         return FALSE;
     }
     if (atomic_exchange(&console_read_cancelled, false)) {
-        ReleaseSRWLockExclusive(&console_read_lock);
+        control_unlock(&console_read_lock);
         SetLastError(ERROR_OPERATION_ABORTED);
         return FALSE;
     }
     if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
                           &console_reader, THREAD_TERMINATE, FALSE, 0)) {
-        ReleaseSRWLockExclusive(&console_read_lock);
+        control_unlock(&console_read_lock);
         return FALSE;
     }
-    ReleaseSRWLockExclusive(&console_read_lock);
+    control_unlock(&console_read_lock);
     BOOL ok = FALSE;
     DWORD error = ERROR_OPERATION_ABORTED;
     if (!atomic_load(&console_read_cancelled)) {
         ok = ReadConsoleW(input, wide, size, got, NULL);
         error = GetLastError();
     }
-    AcquireSRWLockExclusive(&console_read_lock);
+    control_lock(&console_read_lock);
     (void)CloseHandle(console_reader);
     console_reader = NULL;
     if (atomic_exchange(&console_read_cancelled, false)) {
         ok = FALSE;
         error = ERROR_OPERATION_ABORTED;
     }
-    ReleaseSRWLockExclusive(&console_read_lock);
+    control_unlock(&console_read_lock);
     SetLastError(error);
     return ok;
 }
 
-static SRWLOCK shutdown_lock = SRWLOCK_INIT;
+static pthread_mutex_t shutdown_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct snag_shutdown *shutdown_owner;
 
 static void
 shutdown_signal(int number)
 {
-    AcquireSRWLockShared(&shutdown_lock);
+    control_lock(&shutdown_lock);
     if (shutdown_owner)
         shutdown_owner->handler(number);
-    ReleaseSRWLockShared(&shutdown_lock);
+    control_unlock(&shutdown_lock);
     cancel_console_read();
 }
 
@@ -97,7 +112,7 @@ shutdown_control(DWORD event)
     if (!closing && event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT)
         return FALSE;
     HANDLE done = NULL;
-    AcquireSRWLockShared(&shutdown_lock);
+    control_lock(&shutdown_lock);
     bool owned = shutdown_owner != NULL;
     if (owned) {
         shutdown_owner->handler(closing ? SIGTERM : SIGINT);
@@ -105,7 +120,7 @@ shutdown_control(DWORD event)
             (void)DuplicateHandle(GetCurrentProcess(), shutdown_owner->done,
                                   GetCurrentProcess(), &done, SYNCHRONIZE, FALSE, 0);
     }
-    ReleaseSRWLockShared(&shutdown_lock);
+    control_unlock(&shutdown_lock);
     if (owned)
         cancel_console_read();
     if (done) {
@@ -123,10 +138,10 @@ snag_shutdown_detach(struct snag_shutdown *saved)
         (void)SetConsoleCtrlHandler(shutdown_control, FALSE);
         saved->console = false;
     }
-    AcquireSRWLockExclusive(&shutdown_lock);
+    control_lock(&shutdown_lock);
     if (shutdown_owner == saved)
         shutdown_owner = NULL;
-    ReleaseSRWLockExclusive(&shutdown_lock);
+    control_unlock(&shutdown_lock);
     const int numbers[] = {SIGINT, SIGTERM};
     while (saved->count) {
         --saved->count;
@@ -159,13 +174,13 @@ snag_shutdown_install(struct snag_shutdown *saved, void (*handler)(int), bool ha
         errno = EIO;
         return -1;
     }
-    AcquireSRWLockExclusive(&shutdown_lock);
+    control_lock(&shutdown_lock);
     bool busy = shutdown_owner != NULL;
     if (!busy) {
         saved->handler = handler;
         shutdown_owner = saved;
     }
-    ReleaseSRWLockExclusive(&shutdown_lock);
+    control_unlock(&shutdown_lock);
     if (busy) {
         snag_shutdown_finish(saved);
         errno = EBUSY;
@@ -368,7 +383,7 @@ snag_term_output_write(struct snag_term_host *host, int fd,
 }
 
 static _Atomic(void (*)(int)) console_interrupt;
-static SRWLOCK console_control_lock = SRWLOCK_INIT;
+static pthread_mutex_t console_control_lock = PTHREAD_MUTEX_INITIALIZER;
 static HANDLE console_control_event;
 
 static BOOL WINAPI
@@ -376,16 +391,16 @@ console_control(DWORD event)
 {
     if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT)
         return FALSE;
-    AcquireSRWLockShared(&console_control_lock);
+    control_lock(&console_control_lock);
     void (*interrupt)(int) = atomic_load(&console_interrupt);
     if (!interrupt) {
-        ReleaseSRWLockShared(&console_control_lock);
+        control_unlock(&console_control_lock);
         return FALSE;
     }
     interrupt(SIGINT);
     cancel_console_read();
     (void)SetEvent(console_control_event);
-    ReleaseSRWLockShared(&console_control_lock);
+    control_unlock(&console_control_lock);
     return TRUE;
 }
 
@@ -399,10 +414,10 @@ snag_term_controls_install(struct snag_term_host *host,
         errno = EIO;
         return -1;
     }
-    AcquireSRWLockExclusive(&console_control_lock);
+    control_lock(&console_control_lock);
     void (*absent)(int) = NULL;
     if (!interrupt || !atomic_compare_exchange_strong(&console_interrupt, &absent, interrupt)) {
-        ReleaseSRWLockExclusive(&console_control_lock);
+        control_unlock(&console_control_lock);
         (void)CloseHandle(event);
         errno = interrupt ? EBUSY : EINVAL;
         return -1;
@@ -412,12 +427,12 @@ snag_term_controls_install(struct snag_term_host *host,
     if (!SetConsoleCtrlHandler(console_control, TRUE)) {
         atomic_store(&console_interrupt, NULL);
         console_control_event = host->control_event = NULL;
-        ReleaseSRWLockExclusive(&console_control_lock);
+        control_unlock(&console_control_lock);
         (void)CloseHandle(event);
         errno = EIO;
         return -1;
     }
-    ReleaseSRWLockExclusive(&console_control_lock);
+    control_unlock(&console_control_lock);
     return 0;
 }
 
@@ -425,13 +440,13 @@ void
 snag_term_controls_restore(struct snag_term_host *host)
 {
     (void)SetConsoleCtrlHandler(console_control, FALSE);
-    AcquireSRWLockExclusive(&console_control_lock);
+    control_lock(&console_control_lock);
     atomic_store(&console_interrupt, NULL);
     console_control_event = NULL;
     if (host->control_event)
         (void)CloseHandle(host->control_event);
     host->control_event = NULL;
-    ReleaseSRWLockExclusive(&console_control_lock);
+    control_unlock(&console_control_lock);
 }
 
 static void
