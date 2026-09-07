@@ -189,6 +189,9 @@ in {
           ${pkgs.cacert}/etc/ssl/certs/ca-no-trust-rules-bundle.crt -o build/ca_bundle.zst
         od -An -v -t u1 build/ca_bundle.zst |
           sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
+        # Native libc reads each release's locale data. Keep application libs
+        # and libutil static, but use one native threading runtime with libc.
+        # c-ares' pkg-config pthread flags must not pull in old static libthr.
         makeFlagsArray+=(
           'TARGET_OS=FreeBSD'
           'CC=${compiler} --target=${target} --sysroot=${sdk}'

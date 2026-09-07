@@ -346,7 +346,7 @@ help:
 		'make prod-macos-arm64  macOS ARM64 with static application libraries via pinned Nix' \
 		'make prod-macos-x86_64 macOS Intel with static application libraries via pinned Nix' \
 		'make prod-macos-universal Native ARM64+Intel Mach-O file and matching dSYM' \
-		'make prod-freebsd-amd64 Static FreeBSD amd64 agent; exercised on FreeBSD 8.4' \
+		'make prod-freebsd-amd64 FreeBSD amd64 with static application libraries and native libc/threads' \
 		'make install          Build/install production by default' \
 		'make DEBUG=1 install  Deliberately build/install debug instead' \
 		'make check            Unit, CLI, terminal (if tmux exists), source/dependency checks' \

@@ -140,19 +140,23 @@ store; external non-Nix media/SDK inputs belong in the ignored `.assets-cache/`.
 
 ## FreeBSD amd64
 
-`make prod-freebsd-amd64` builds the full static executable at
+`make prod-freebsd-amd64` builds the executable at
 `build/matrix/freebsd-amd64/bin/snajpagent`, with matching symbols in `.debug`.
-The pinned 8.4 release disc supplies libc, pthreads, libutil, CRT and headers;
+The pinned 8.4 release disc supplies system libraries, CRT and headers;
 the same pinned application libraries and embedded roots used by other targets
-are cross-built with LLVM. The ELF executable has no shared-library imports.
-It is non-PIE at this old ABI baseline; retain the modern Linux static-PIE
-artifacts for Linux. Third-party notices include the FreeBSD base components
-and their GCC runtime licensing alongside the application dependency notices.
+are cross-built with LLVM. Application dependencies and libutil are static;
+the only shared imports are the native `libc.so.7` and `libthr.so.3`, loaded by
+`/libexec/ld-elf.so.1`. Native libc handles the host release's locale-data format;
+8.4's static libc cannot load 14.4's UTF-8 locale data. Keep threading dynamic
+with libc rather than mixing the old static and native shared thread runtimes.
+The executable is non-PIE at this old ABI baseline. Third-party notices include
+the FreeBSD base components and their GCC runtime licensing alongside the
+application dependency notices.
 
-Actual FreeBSD 8.4 amd64 qualification covers base and IRC tests, internal
+Actual FreeBSD 8.4 and 14.4 amd64 qualification covers base and IRC tests, internal
 read-only inspection and denied writes, parallel commands, PTY output/status,
 interactive resume and TLS distrust/trust/hostname checks with local fixtures.
-Earlier and newer releases remain unverified.
+Other releases remain unverified.
 The platform layer uses native PTYs, non-reaping `waitpid` polling, `fsync`
 and the kernel random device. Directory streams preserve caller descriptor
 ownership across older libc failure paths. Native GNU make builds select BSD

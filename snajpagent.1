@@ -2361,14 +2361,16 @@ This does not install, replace the native executable, boot VMs, or contact a
 model.  Cross-build success does not establish runtime qualification.
 .TP
 .B make prod-freebsd-amd64
-Build a static FreeBSD amd64 executable with embedded CA data. Copy
+Build a FreeBSD amd64 executable with static application libraries and embedded
+CA data. The system must provide libc.so.7, libthr.so.3 and /libexec/ld-elf.so.1.
+Copy
 .I build/matrix/freebsd-amd64/bin/snajpagent
 to the target; optional matching symbols are in the adjacent .debug directory.
-Runtime qualification covers FreeBSD 8.4 base/IRC tests, internal read-only
+Runtime qualification covers FreeBSD 8.4 and 14.4 base/IRC tests, internal read-only
 inspection, parallel commands, PTY execution, interactive resume and TLS
 trust/hostname verification with local fixtures. Use a UTF-8 locale and mounted
-devfs. The executable is non-PIE at this old ABI baseline. Earlier and newer
-releases remain unverified.
+devfs. The executable is non-PIE at this old ABI baseline. Other releases
+remain unverified.
 .TP
 .BR "make prod-windows-x86_64" , " make prod-windows-arm64"
 Build the experimental native Windows x64 or ARM64 executable using pinned Nix
