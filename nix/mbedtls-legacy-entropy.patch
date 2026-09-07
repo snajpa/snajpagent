@@ -3,7 +3,7 @@ Use the Windows 2000 CryptoAPI entropy source on pre-Vista targets.
 
 --- a/tests/suites/test_suite_platform_printf.function
 +++ b/tests/suites/test_suite_platform_printf.function
-@@ -140,0 +141,18 @@
+@@ -140,0 +141,19 @@
 +
 +/* BEGIN_CASE depends_on:MBEDTLS_PLATFORM_HAS_NON_CONFORMING_SNPRINTF */
 +void printf_truncated(int capacity)
