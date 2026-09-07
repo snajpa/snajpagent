@@ -46,7 +46,13 @@ let
   libc = sdkLibc.overrideAttrs (old: {
     patches = (old.patches or [ ]) ++ [ ./uclibc-legacy.patch ];
   });
+  # LinuxThreads has no native ELF TLS. Use GCC's pthread-key TLS emulation,
+  # including for C11 _Thread_local in the agent and its static dependencies.
+  gcc = base.stdenv.cc.cc.overrideAttrs (old: {
+    configureFlags = old.configureFlags ++ [ "--disable-tls" ];
+  });
   wrapCompiler = runtimeLibc: base.stdenv.cc.override (old: {
+    cc = gcc;
     libc = runtimeLibc;
     bintools = base.stdenv.cc.bintools.override {
       libc = runtimeLibc;
