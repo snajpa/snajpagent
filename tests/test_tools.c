@@ -149,33 +149,18 @@ call_args_yield(const char *command, const char *workdir, int timeout_ms,
         "stdin", stdin_text ? json_string(stdin_text) : json_null()));
 }
 
-static json_t *
-call_args(const char *command, const char *workdir, int timeout_ms,
-          const char *stdin_text)
-{
-    return call_args_yield(command, workdir, timeout_ms, 0, stdin_text);
-}
-
 static void
-make_call_with_pty(struct snag_response_graph *graph, const char *command,
-                   const char *workdir, int timeout_ms, const char *stdin_text,
-                   bool pty)
+make_call(struct snag_response_graph *graph, const char *command,
+          const char *workdir, int timeout_ms, const char *stdin_text)
 {
-    json_t *args = call_args(command, workdir, timeout_ms, stdin_text);
+    json_t *args = call_args_yield(command, workdir, timeout_ms, 0, stdin_text);
     assert(args != NULL);
-    assert(snag_json_set_new(args, "pty", json_boolean(pty)) == 0);
+    assert(snag_json_set_new(args, "pty", json_false()) == 0);
     *graph = (struct snag_response_graph){0};
     assert(snag_response_graph_set_provider_id(graph, "resp_tool_test") == 0);
     assert(snag_response_graph_add_call(graph, "item_tool_test",
                                        "call_tool_test", "exec_command",
                                        args) == 0);
-}
-
-static void
-make_call(struct snag_response_graph *graph, const char *command,
-          const char *workdir, int timeout_ms, const char *stdin_text)
-{
-    make_call_with_pty(graph, command, workdir, timeout_ms, stdin_text, false);
 }
 
 static json_t *
@@ -282,22 +267,15 @@ run_tool_with_args(const char *name, json_t *args)
 }
 
 static json_t *
-run_managed_exec_with_pty(const char *command, int timeout_ms, int yield_ms,
-                         bool pty)
+run_managed_exec(const char *command, int timeout_ms, int yield_ms)
 {
     char cwd[4096];
     json_t *args;
 
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     args = call_args_yield(command, cwd, timeout_ms, yield_ms, NULL);
-    assert(snag_json_set_new(args, "pty", json_boolean(pty)) == 0);
+    assert(snag_json_set_new(args, "pty", json_false()) == 0);
     return run_tool_with_args("exec_command", args);
-}
-
-static json_t *
-run_managed_exec(const char *command, int timeout_ms, int yield_ms)
-{
-    return run_managed_exec_with_pty(command, timeout_ms, yield_ms, false);
 }
 
 static json_t *
@@ -316,15 +294,6 @@ run_write_stdin_call(const char *handle, const char *data, bool eof,
                      int yield_ms)
 {
     return run_write_stdin_call_limit(handle, data, eof, yield_ms, -1);
-}
-
-static json_t *
-run_terminate_call(const char *handle, const char *data, bool eof)
-{
-    json_t *args = checked_json(json_pack("{s:s,s:s,s:o,s:b,s:I,s:n}",
-        "handle", handle, "data", data, "eof", eof ? json_true() : json_false(), "terminate", 1,
-        "yield_ms", (json_int_t)(0), "max_output_tokens"));
-    return run_tool_with_args("write_stdin", args);
 }
 
 static void
@@ -708,25 +677,9 @@ test_managed_close_kills_process_family(void)
 }
 
 static void
-test_provider_secret_redacted_from_output(void)
+test_provider_secret_redacted(const char *command)
 {
-    json_t *result = run_command_with_credential("printf secret-value-for-test",
-                                                 1000,
-                                                 "secret-value-for-test");
-    const char *retained = snag_json_string(json_object_get(result, "stdout"),
-                                           "retained");
-    assert(strstr(retained, "secret-value-for-test") == NULL);
-    assert(strstr(retained, "<redacted:secret>") != NULL);
-    json_decref(result);
-}
-
-static void
-test_provider_secret_redacted_across_read_boundary(void)
-{
-    json_t *result = run_command_with_credential(
-        "printf '%8190ssecret-value-for-test' ''",
-        1000,
-        "secret-value-for-test");
+    json_t *result = run_command_with_credential(command, 1000, "secret-value-for-test");
     const char *retained = snag_json_string(json_object_get(result, "stdout"),
                                            "retained");
     assert(strstr(retained, "secret-value-for-test") == NULL);
@@ -1013,7 +966,10 @@ test_steering_with_blocked_stdin(void)
     json_t *rejected = run_write_stdin_call(handle, "duplicate", false, 0);
     assert(!strcmp(snag_json_string(rejected, "reason"), "stdin_busy"));
     json_decref(rejected);
-    json_t *closed = run_terminate_call(handle, "", false);
+    json_t *closed = run_tool_with_args("write_stdin",
+        checked_json(json_pack("{s:s,s:s,s:b,s:b,s:i,s:n}",
+            "handle", handle, "data", "", "eof", 0, "terminate", 1,
+            "yield_ms", 0, "max_output_tokens")));
     assert(strcmp(snag_json_string(closed, "status"), "running"));
     assert(json_int_member(json_object_get(closed, "output_ref"), "stdin_pending") == 0);
     json_decref(closed);
@@ -1075,8 +1031,8 @@ main(void)
     test_all_provider_secrets_removed_and_redacted();
     test_secret_snapshot_rotation();
     test_apply_patch_rejects_null_result();
-    test_provider_secret_redacted_from_output();
-    test_provider_secret_redacted_across_read_boundary();
+    test_provider_secret_redacted("printf secret-value-for-test");
+    test_provider_secret_redacted("printf '%8190ssecret-value-for-test' ''");
     puts("test_tools: ok");
     snag_tools_shutdown();
     for (size_t i = 0u; i < output_count; ++i)

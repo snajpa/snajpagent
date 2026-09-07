@@ -20,27 +20,23 @@ capture_record(void *opaque, const struct snag_sse_record *record)
 {
     struct capture *capture = opaque;
 
+    assert(record->data_len < sizeof(capture->data));
+    if (record->data_len)
+        memcpy(capture->data, record->data, record->data_len);
+    capture->data[record->data_len] = '\0';
     if (record->kind == SNAG_SSE_COMMENT) {
         ++capture->comments;
-        assert(record->data_len < sizeof(capture->data));
-        if (record->data_len)
-            memcpy(capture->data, record->data, record->data_len);
-        capture->data[record->data_len] = '\0';
         return 0;
     }
     ++capture->events;
     assert(record->event_len < sizeof(capture->event));
     assert(record->id_len < sizeof(capture->id));
-    assert(record->data_len < sizeof(capture->data));
     if (record->event_len)
         memcpy(capture->event, record->event, record->event_len);
     capture->event[record->event_len] = '\0';
     if (record->id_len)
         memcpy(capture->id, record->id, record->id_len);
     capture->id[record->id_len] = '\0';
-    if (record->data_len)
-        memcpy(capture->data, record->data, record->data_len);
-    capture->data[record->data_len] = '\0';
     return 0;
 }
 
@@ -64,76 +60,51 @@ reject_record(void *opaque, const struct snag_sse_record *record)
 }
 
 static void
-test_chunked_crlf_and_fields(void)
+test_streams(void)
 {
-    static const char first[] =
-        "id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r";
-    static const char second[] =
-        "\ndata: {\"delta\":\"ha\"}\r\nretry: 1000\r\n\r\n";
-    struct snag_sse_parser parser;
-    struct capture capture = {0};
-    char error[128] = {0};
+    static const struct {
+        const char *wire;
+        size_t split;
+        struct capture expected;
+    } cases[] = {
+        {
+            "id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r"
+            "\ndata: {\"delta\":\"ha\"}\r\nretry: 1000\r\n\r\n",
+            sizeof("id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r") - 1u,
+            {1u, 0u, "response.output_text.delta", "one",
+             "{\"delta\":\"ha\"}\n{\"delta\":\"ha\"}"}
+        },
+        {
+            ": keepalive\n\nid: stable\n\nevent: empty\ndata:\n\n"
+            "data:\ndata:\n\ndata: final\n\n",
+            0u, {3u, 1u, "", "stable", "final"}
+        },
+        {
+            "data: {\"delta\":\"\xe2\x82\xac\"}\n\n"
+            "data: {\"delta\":\"ha\"}\n\ndata: {\"delta\":\"ha\"}\n\n",
+            18u, {3u, 0u, "", "", "{\"delta\":\"ha\"}"}
+        }
+    };
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct snag_sse_parser parser;
+        struct capture capture = {0};
+        char error[128] = {0};
 
-    snag_sse_init(&parser, capture_record, &capture);
-    assert(snag_sse_feed(&parser, first, sizeof(first) - 1u,
-                        error, sizeof(error)) == 0);
-    assert(snag_sse_feed(&parser, second, sizeof(second) - 1u,
-                        error, sizeof(error)) == 0);
-    assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
-    assert(capture.events == 1u);
-    assert(strcmp(capture.id, "one") == 0);
-    assert(strcmp(capture.event, "response.output_text.delta") == 0);
-    assert(strcmp(capture.data,
-                  "{\"delta\":\"ha\"}\n{\"delta\":\"ha\"}") == 0);
-    snag_sse_free(&parser);
-}
-
-static void
-test_comments_ids_and_empty_data(void)
-{
-    static const char stream[] =
-        ": keepalive\n\n"
-        "id: stable\n\n"
-        "event: empty\ndata:\n\n"
-        "data:\ndata:\n\n"
-        "data: final\n\n";
-    struct snag_sse_parser parser;
-    struct capture capture = {0};
-    char error[128] = {0};
-
-    snag_sse_init(&parser, capture_record, &capture);
-    assert(snag_sse_feed(&parser, stream, sizeof(stream) - 1u,
-                        error, sizeof(error)) == 0);
-    assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
-    assert(capture.comments == 1u);
-    assert(capture.events == 3u);
-    assert(strcmp(capture.id, "stable") == 0);
-    assert(strcmp(capture.event, "") == 0);
-    assert(strcmp(capture.data, "final") == 0);
-    snag_sse_free(&parser);
-}
-
-static void
-test_split_utf8_and_identical_events(void)
-{
-    static const unsigned char stream[] =
-        "data: {\"delta\":\"\xe2\x82\xac\"}\n\n"
-        "data: {\"delta\":\"ha\"}\n\n"
-        "data: {\"delta\":\"ha\"}\n\n";
-    struct snag_sse_parser parser;
-    struct capture capture = {0};
-    char error[128] = {0};
-    size_t split = 18u;
-
-    snag_sse_init(&parser, capture_record, &capture);
-    assert(snag_sse_feed(&parser, stream, split, error, sizeof(error)) == 0);
-    assert(snag_sse_feed(&parser, stream + split,
-                        sizeof(stream) - 1u - split,
-                        error, sizeof(error)) == 0);
-    assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
-    assert(capture.events == 3u);
-    assert(strcmp(capture.data, "{\"delta\":\"ha\"}") == 0);
-    snag_sse_free(&parser);
+        snag_sse_init(&parser, capture_record, &capture);
+        if (cases[i].split)
+            assert(snag_sse_feed(&parser, cases[i].wire, cases[i].split,
+                                error, sizeof(error)) == 0);
+        assert(snag_sse_feed(&parser, cases[i].wire + cases[i].split,
+                            strlen(cases[i].wire) - cases[i].split,
+                            error, sizeof(error)) == 0);
+        assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
+        assert(capture.events == cases[i].expected.events);
+        assert(capture.comments == cases[i].expected.comments);
+        assert(strcmp(capture.id, cases[i].expected.id) == 0);
+        assert(strcmp(capture.event, cases[i].expected.event) == 0);
+        assert(strcmp(capture.data, cases[i].expected.data) == 0);
+        snag_sse_free(&parser);
+    }
 }
 
 static void
@@ -245,9 +216,7 @@ test_consumer_failure(void)
 int
 main(void)
 {
-    test_chunked_crlf_and_fields();
-    test_comments_ids_and_empty_data();
-    test_split_utf8_and_identical_events();
+    test_streams();
     test_bounds();
     test_failures();
     test_consumer_failure();

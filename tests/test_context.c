@@ -33,22 +33,17 @@ write_file(const char *path, const char *text)
 }
 
 static json_t *
-turn_config(void)
-{
-    return checked_json(json_pack("{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b}",
-        "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "medium",
-        "max_output_tokens", "model", SNAJPAGENT_MODEL, "provider", "default",
-        "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1,
-        "replay_schema", 1, "tool_schema", 1,
-        "max_parallel_commands", 4, "parallel_tool_calls", 1));
-}
-
-static json_t *
 turn_started(const char *turn_id, unsigned int number, const char *text,
              const char *workspace, json_t *instructions)
 {
-    return checked_json(json_pack("{s:o,s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
-        "config", turn_config(), "input_kind", "direct", "read_only", 0,
+    return checked_json(json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+        "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "medium",
+        "max_output_tokens", "model", SNAJPAGENT_MODEL, "provider", "default",
+        "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1,
+        "replay_schema", 1, "tool_schema", 1,
+        "max_parallel_commands", 4, "parallel_tool_calls", 1,
+        "input_kind", "direct", "read_only", 0,
         "instructions", instructions ? instructions : json_array(), "queue_id", "queue_seq",
         "text", text, "turn_id", turn_id, "turn_number", (json_int_t)number,
         "workspace", workspace));
@@ -62,18 +57,6 @@ turn_started_model(const char *turn_id, unsigned int number, const char *text,
     json_t *config = json_object_get(data, "config");
 
     assert(json_object_set_new(config, "model", json_string(model)) == 0);
-    return data;
-}
-
-static json_t *
-goal_turn_started(const char *turn_id, unsigned int number,
-                  const char *workspace, json_t *instructions)
-{
-    json_t *data = turn_started(turn_id, number,
-                                SNAG_GOAL_CONTINUATION_TEXT,
-                                workspace, instructions);
-    assert(json_object_set_new(data, "input_kind",
-                               json_string("goal")) == 0);
     return data;
 }
 
@@ -104,16 +87,6 @@ response_started(const char *turn_id, const char *response_id,
         "request_sha256", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "requested_output_tokens", "response_id", response_id, "source_bound", 0,
         "steering_ids", "turn_id", turn_id));
-}
-
-static json_t *
-response_started_model(const char *turn_id, const char *response_id,
-                       const char *compact_id, const char *model)
-{
-    json_t *data = response_started(turn_id, response_id, compact_id);
-
-    assert(json_object_set_new(data, "model", json_string(model)) == 0);
-    return data;
 }
 
 static json_t *
@@ -1237,9 +1210,9 @@ main(void)
         commit_event(&active, "turn_started",
                      turn_started_model(active_turn2, 2, "new",
                          workspace, active_model));
-        commit_event(&active, "response_started",
-                     response_started_model(active_turn2,
-                         active_resp1, NULL, active_model));
+        json_t *started = response_started(active_turn2, active_resp1, NULL);
+        assert(json_object_set_new(started, "model", json_string(active_model)) == 0);
+        commit_event(&active, "response_started", started);
         commit_event(&active, "response_capacity_rejected",
                      response_capacity_rejected(active_turn2,
                          active_resp1));
@@ -1807,9 +1780,10 @@ main(void)
     commit_event(&session, "turn_interrupted", turn_interrupted_data(turn2));
     commit_event(&session, "goal_lock_changed", checked_json(json_pack("{s:s,s:b}",
         "goal_id", goal, "locked", true)));
-    commit_event(&session, "turn_started",
-                 goal_turn_started(goal_turn, 3, workspace,
-                     snag_instructions_metadata_json(&instructions)));
+    json_t *started = turn_started(goal_turn, 3, SNAG_GOAL_CONTINUATION_TEXT,
+        workspace, snag_instructions_metadata_json(&instructions));
+    assert(json_object_set_new(started, "input_kind", json_string("goal")) == 0);
+    commit_event(&session, "turn_started", started);
     assert(session.goal_turn_count == 1u);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
                              empty_steering, 0u, false, NULL,

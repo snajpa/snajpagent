@@ -323,9 +323,7 @@ test_prompt_spinners(void)
     }
     {
         const char *frames[] = {" ⚑", " P", " ⠋"};
-        int fds[2], saved_fd;
         char output[512];
-        ssize_t bytes;
 
         /* The longest activity variant must fit even while the slot is idle. */
         memset(oversized, 'x', sizeof(oversized));
@@ -338,22 +336,14 @@ test_prompt_spinners(void)
         term.cursor = term.draft.len;
         term.columns = 80u;
         term.opened = term.capable = true;
-        assert(pipe(fds) == 0);
-        saved_fd = dup(STDERR_FILENO);
-        assert(saved_fd >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-        close(fds[1]);
+        struct output_capture capture = capture_open(false, true);
         assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe  9%> ",
                                             frames, 8u, 2u) == 0);
-        assert(read(fds[0], output, sizeof(output)) > 0);
+        assert(read(capture.fd, output, sizeof(output)) > 0);
         assert(snag_term_set_spinner_states(&term, 6u) == 0);
         assert(snag_term_set_spinner_states(&term, 2u) == 0);
         assert(term.cursor == 5u && term.rendered_cursor_col == 13u);
-        assert(dup2(saved_fd, STDERR_FILENO) >= 0);
-        close(saved_fd);
-        bytes = read(fds[0], output, sizeof(output) - 1u);
-        assert(bytes > 0);
-        output[bytes] = '\0';
-        close(fds[0]);
+        assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
         assert(strstr(output, "⠋") && strstr(output, "P"));
         assert(!strstr(output, "9%") && !strstr(output, "draft"));
         assert(!strstr(output, "\033[2K") && !strchr(output, '\n'));
@@ -1284,8 +1274,24 @@ test_input_model_boundaries(void)
 static size_t
 capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
 {
+    static const struct {
+        enum snag_irc_event_kind kind;
+        const char *nick, *text;
+        bool op;
+    } events[] = {
+        {SNAG_IRC_MESSAGE, "agent", "**answer** and `code`", false},
+        {SNAG_IRC_MESSAGE, "agent", "- actual list item", false},
+        {SNAG_IRC_MESSAGE, "operator", "**literal operator**", true},
+        {SNAG_IRC_MESSAGE, "remote", "```c", false},
+        {SNAG_IRC_MESSAGE, "remote", "int value = 1;", false},
+        {SNAG_IRC_MESSAGE, "remote", "```", false},
+        {SNAG_IRC_NOTICE, "remote", "**literal notice**", false},
+        {SNAG_IRC_MESSAGE, "remote", "```c", false},
+        {SNAG_IRC_QUIT, "remote", "gone", false},
+        {SNAG_IRC_MESSAGE, "remote", "plain after quit", false}
+    };
     struct snag_render render;
-    struct snag_irc_event event;
+    struct snag_irc_event event = {.timestamp_ms = 1000u, .endpoint = "local", .local = true};
     size_t used = 0u;
 
     struct output_capture capture = capture_open(false, true);
@@ -1293,40 +1299,13 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
-    memset(&event, 0, sizeof(event));
-    event.kind = SNAG_IRC_MESSAGE;
-    event.timestamp_ms = 1000u;
-    memcpy(event.endpoint, "local", 6u);
-    memcpy(event.nick, "agent", 6u);
-    memcpy(event.text, "**answer** and `code`", 22u);
-    event.local = true;
-    assert(snag_render_irc_event(&render, &event) == 0);
-    memcpy(event.text, "- actual list item", 19u);
-    assert(snag_render_irc_event(&render, &event) == 0);
-    memcpy(event.nick, "operator", 9u);
-    memcpy(event.text, "**literal operator**", 21u);
-    event.op = true;
-    assert(snag_render_irc_event(&render, &event) == 0);
-    event.op = false;
-    memcpy(event.nick, "remote", 7u);
-    memcpy(event.text, "```c", 5u);
-    assert(snag_render_irc_event(&render, &event) == 0);
-    memcpy(event.text, "int value = 1;", 15u);
-    assert(snag_render_irc_event(&render, &event) == 0);
-    memcpy(event.text, "```", 4u);
-    assert(snag_render_irc_event(&render, &event) == 0);
-    event.kind = SNAG_IRC_NOTICE;
-    memcpy(event.text, "**literal notice**", 19u);
-    assert(snag_render_irc_event(&render, &event) == 0);
-    event.kind = SNAG_IRC_MESSAGE;
-    memcpy(event.text, "```c", 5u);
-    assert(snag_render_irc_event(&render, &event) == 0);
-    event.kind = SNAG_IRC_QUIT;
-    memcpy(event.text, "gone", 5u);
-    assert(snag_render_irc_event(&render, &event) == 0);
-    event.kind = SNAG_IRC_MESSAGE;
-    memcpy(event.text, "plain after quit", 17u);
-    assert(snag_render_irc_event(&render, &event) == 0);
+    for (size_t i = 0u; i < sizeof(events) / sizeof(events[0]); ++i) {
+        event.kind = events[i].kind;
+        event.op = events[i].op;
+        strcpy(event.nick, events[i].nick);
+        strcpy(event.text, events[i].text);
+        assert(snag_render_irc_event(&render, &event) == 0);
+    }
     assert(snag_render_history(&render, "**literal user**", "## Saved *answer*") == 0);
     snag_render_set_markdown(&render, false);
     event.kind = SNAG_IRC_MESSAGE;

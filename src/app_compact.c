@@ -24,46 +24,6 @@ active_reason(const char *reason)
 }
 
 static json_t *
-compaction_started_data(const struct snag_session *session,
-                        const char *model, const char *compact_id,
-                        const char *reason, const char *count_method,
-                        const struct snag_context_projection *projection,
-                        uint64_t input_tokens_bound)
-{
-    return json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s?,s:s,s:s,s:s,s:I,s:s}",
-        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
-        "compact_id", compact_id, "count_method", count_method,
-        "count_request_sha256", projection->count_request.sha256,
-        "input_tokens_bound", (json_int_t)input_tokens_bound, "model", model,
-        "predecessor_compact_id", session->compact_id[0] ? session->compact_id : NULL,
-        "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
-        "request_sha256", projection->create_request.sha256,
-        "source_seq", (json_int_t)projection->source_seq,
-        "source_sha256", projection->model_input.sha256);
-}
-
-static json_t *
-compaction_completed_data(const char *compact_id,
-                          const char *source_hash,
-                          const char *output_hash,
-                          const char *count_method,
-                          const char *output_count_method,
-                          const char *output_count_request_hash,
-                          uint64_t input_tokens_bound,
-                          uint64_t output_tokens_bound,
-                          const json_t *output)
-{
-    return json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s}",
-        "compact_id", compact_id, "count_method", count_method,
-        "input_tokens_bound", (json_int_t)input_tokens_bound, "output", output,
-        "output_count_method", output_count_method,
-        "output_count_request_sha256", output_count_request_hash,
-        "output_sha256", output_hash,
-        "output_tokens_bound", (json_int_t)output_tokens_bound,
-        "source_sha256", source_hash);
-}
-
-static json_t *
 compaction_interrupted_data(const char *compact_id, const char *reason)
 {
     return json_pack("{s:s,s:s}", "compact_id", compact_id, "reason", reason);
@@ -387,8 +347,16 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 goto out;
             }
             if (commit_rendered(app, "compaction_started",
-                    compaction_started_data(&app->session, model, compact_id, reason,
-                        count_method, &projection, input_tokens_bound), error, error_size) < 0)
+                    json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s?,s:s,s:s,s:s,s:I,s:s}",
+                        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+                        "compact_id", compact_id, "count_method", count_method,
+                        "count_request_sha256", projection.count_request.sha256,
+                        "input_tokens_bound", (json_int_t)input_tokens_bound, "model", model,
+                        "predecessor_compact_id", app->session.compact_id[0] ? app->session.compact_id : NULL,
+                        "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
+                        "request_sha256", projection.create_request.sha256,
+                        "source_seq", (json_int_t)projection.source_seq,
+                        "source_sha256", projection.model_input.sha256), error, error_size) < 0)
                 goto out;
             started = true;
             stage_rc = native ?
@@ -453,11 +421,14 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         goto out;
     }
     if (commit_rendered(app, "compaction_completed",
-            compaction_completed_data(compact_id, projection.model_input.sha256, output.sha256,
-                                      count_method, output_count_method,
-                                      output_count.sha256,
-                                      input_tokens_bound, output_tokens_bound,
-                                      output.value),
+            json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s}",
+                "compact_id", compact_id, "count_method", count_method,
+                "input_tokens_bound", (json_int_t)input_tokens_bound, "output", output.value,
+                "output_count_method", output_count_method,
+                "output_count_request_sha256", output_count.sha256,
+                "output_sha256", output.sha256,
+                "output_tokens_bound", (json_int_t)output_tokens_bound,
+                "source_sha256", projection.model_input.sha256),
             error, error_size) < 0)
         goto out;
     if (app->networked &&

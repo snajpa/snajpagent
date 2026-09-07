@@ -13,11 +13,14 @@
 #include <string.h>
 #include <time.h>
 
-static json_t *
-turn_config(const struct app_state *app)
+json_t *
+snag_app_turn_started_data(const struct app_state *app, const char *prompt,
+                  const char *turn_id, const struct snag_queued_turn *queued,
+                  bool goal_turn, bool read_only)
 {
-    return json_pack("{s:s,s:s,s:o,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b}",
-        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+    return json_pack("{s:{s:s,s:s,s:o,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+        "s:s,s:o,s:I,s:b,s:s?,s:o,s:s,s:s,s:I,s:s}",
+        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
         "effort", app->turn_effort, "max_output_tokens",
         app->turn_capacity.max_output_tokens ?
             json_integer((json_int_t)app->turn_capacity.max_output_tokens) : json_null(),
@@ -25,16 +28,8 @@ turn_config(const struct app_state *app)
         "provider", app->turn_provider->name, "profile_id", SNAJPAGENT_PROFILE_ID,
         "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1,
         "max_parallel_commands", (int)app->config->max_parallel_commands,
-        "parallel_tool_calls", app->turn_provider->parallel_tool_calls);
-}
-
-json_t *
-snag_app_turn_started_data(const struct app_state *app, const char *prompt,
-                  const char *turn_id, const struct snag_queued_turn *queued,
-                  bool goal_turn, bool read_only)
-{
-    return json_pack("{s:o,s:s,s:o,s:I,s:b,s:s?,s:o,s:s,s:s,s:I,s:s}",
-        "config", turn_config(app), "input_kind", goal_turn ? "goal" : queued ? "queued" : "direct",
+        "parallel_tool_calls", app->turn_provider->parallel_tool_calls,
+        "input_kind", goal_turn ? "goal" : queued ? "queued" : "direct",
         "instructions", snag_instructions_metadata_json(&app->turn_instructions),
         "received_at_ms", (json_int_t)(queued ? queued->received_ms : app->input_received_ms),
         "read_only", read_only, "queue_id", queued ? queued->queue_id : NULL,
