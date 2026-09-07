@@ -1018,7 +1018,8 @@ test_private_directory(void)
         int file = snag_create_private_at(fd, "after-rename/data", true);
         assert(file >= 0 && snag_write_full(file, "held", 4u) == 0);
 #ifndef _WIN32
-        assert((fcntl(file, F_GETFD) & FD_CLOEXEC) != 0);
+        int flags = fcntl(file, F_GETFD);
+        assert(flags >= 0 && (flags & FD_CLOEXEC) != 0);
         assert(snag_open_read_at(file, "child", false) < 0 && errno == ENOTDIR);
         assert(snag_open_read_at(-1, "child", false) < 0 && errno == EBADF);
         assert(snag_open_read_at(fd, "", false) < 0 && errno == ENOENT);
@@ -1350,7 +1351,8 @@ test_input_mode(void)
         assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &flags) &&
                !(flags & HANDLE_FLAG_INHERIT));
 #else
-        assert(fcntl(copy, F_GETFD) & FD_CLOEXEC);
+        int flags = fcntl(copy, F_GETFD);
+        assert(flags >= 0 && (flags & FD_CLOEXEC) != 0);
 #endif
         snag_term_host_close(&output_host);
 #ifdef _WIN32
@@ -1587,7 +1589,8 @@ test_platform(void)
     assert(GetHandleInformation((HANDLE)_get_osfhandle(copy), &inherited) &&
            !(inherited & HANDLE_FLAG_INHERIT));
 #else
-    assert(fcntl(copy, F_GETFD) & FD_CLOEXEC);
+    int copy_flags = fcntl(copy, F_GETFD);
+    assert(copy_flags >= 0 && (copy_flags & FD_CLOEXEC) != 0);
 #endif
     assert(close(copy) == 0);
     assert(snag_dup_read(-1) < 0 && errno == EBADF);
@@ -1603,7 +1606,8 @@ test_platform(void)
     assert(GetHandleInformation((HANDLE)_get_osfhandle(fd), &flags));
     assert(!(flags & HANDLE_FLAG_INHERIT));
 #else
-    assert(fcntl(fd, F_GETFD) & FD_CLOEXEC);
+    int flags = fcntl(fd, F_GETFD);
+    assert(flags >= 0 && (flags & FD_CLOEXEC) != 0);
 #endif
     assert(snag_write_full(fd, NULL, 0u) == 0);
     assert(snag_write_full(fd, "abc", 3u) == 0);
@@ -1646,7 +1650,8 @@ test_wakeup(void)
         DWORD flags;
         assert(GetHandleInformation((HANDLE)pair[i], &flags) && !(flags & HANDLE_FLAG_INHERIT));
 #else
-        assert(fcntl(pair[i], F_GETFD) & FD_CLOEXEC);
+        int flags = fcntl(pair[i], F_GETFD);
+        assert(flags >= 0 && (flags & FD_CLOEXEC) != 0);
 #endif
     }
     assert(snag_wakeup_wait(pair[0], 0) == 0);

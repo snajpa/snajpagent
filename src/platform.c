@@ -2357,7 +2357,22 @@ snag_open_secret_file(const char *path)
 int
 snag_dup_read(int fd)
 {
-    return fcntl(fd, F_DUPFD_CLOEXEC, 0);
+    int copy;
+
+#ifdef F_DUPFD_CLOEXEC
+    copy = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+    if (copy >= 0 || (errno != EINVAL && errno != ENOSYS))
+        return copy;
+#endif
+    /* Old kernels cannot duplicate and set close-on-exec atomically. */
+    copy = fcntl(fd, F_DUPFD, 0);
+    if (copy >= 0 && snag_fd_cloexec(copy) < 0) {
+        int error = errno;
+        (void)close(copy);
+        errno = error;
+        return -1;
+    }
+    return copy;
 }
 
 struct tm *
