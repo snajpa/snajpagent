@@ -2171,7 +2171,9 @@ procfs, change the process working directory or invoke external commands.
 No-follow, file-type, private-permission and exclusive-creation checks remain.
 The extra pathname prefix can reduce the usable path length, and procfs
 replacement or concurrent descriptor closure is not made race-free.
-Legacy close-on-exec setup is non-atomic.
+Legacy close-on-exec setup is non-atomic.  Descriptor duplication also falls
+back to dup-plus-fcntl when the atomic close-on-exec command is unavailable;
+failure to set close-on-exec closes the new descriptor and returns an error.
 These fallbacks alone do not qualify a complete old-kernel runtime:
 threading, clocks and dependency syscall requirements still apply.
 .TP
