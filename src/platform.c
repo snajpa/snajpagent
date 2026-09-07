@@ -3169,7 +3169,13 @@ snag_realpath(const char *path)
         errno = EINVAL;
         return NULL;
     }
+#ifdef SNAG_LEGACY_BSD_AT
+    /* This libc requires the caller to provide its PATH_MAX-byte buffer. */
+    char resolved[PATH_MAX];
+    return realpath(path, resolved) ? strdup(resolved) : NULL;
+#else
     return realpath(path, NULL);
+#endif
 }
 
 size_t
