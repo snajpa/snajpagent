@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 { pkgs, musl, static ? musl.pkgsStatic }:
 let
+  clockFallback = musl.stdenv.hostPlatform.isx86_64;
   tls = static.mbedtls;
   curl = (static.curlMinimal.override {
     opensslSupport = false;
@@ -44,9 +45,9 @@ in {
         'TARGET_OS=Linux'
         "CC=$CC" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         "GIT_HEAD=${revision}" "BUILD_VERSION=${version}"
-        'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
+        'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString clockFallback " -DSNAJPAGENT_LEGACY_LINUX_CLOCK"}'
         'CFLAGS=-std=c11 -Os -g -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
-        'LDFLAGS=-static-pie -flto -Wl,--gc-sections'
+        'LDFLAGS=-static-pie -flto -Wl,--gc-sections${pkgs.lib.optionalString clockFallback ",--wrap=clock_gettime"}'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson)"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
