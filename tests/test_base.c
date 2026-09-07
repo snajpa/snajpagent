@@ -1014,6 +1014,26 @@ test_private_directory(void)
     }
     assert(snag_mkdir_private_at(fd, "after-rename") == 0);
     nested = snag_path_join(renamed, "after-rename");
+    {
+        int file = snag_create_private_at(fd, "after-rename/data", true);
+        assert(file >= 0 && snag_write_full(file, "held", 4u) == 0);
+#ifndef _WIN32
+        assert((fcntl(file, F_GETFD) & FD_CLOEXEC) != 0);
+        assert(snag_open_read_at(file, "child", false) < 0 && errno == ENOTDIR);
+        assert(snag_open_read_at(-1, "child", false) < 0 && errno == EBADF);
+        assert(snag_open_read_at(fd, "", false) < 0 && errno == ENOENT);
+#endif
+        assert(close(file) == 0);
+        assert(snag_link_at(fd, "after-rename/data", fd, "after-rename/link") == 0);
+        assert(snag_rename_at(fd, "after-rename/link", fd, "after-rename/moved") == 0);
+        assert(snag_lstat_at(fd, "after-rename/moved", &path_info) == 0 && path_info.st_size == 4);
+        file = snag_open_read_at(fd, "after-rename/moved", false);
+        char received[4];
+        assert(file >= 0 && read(file, received, sizeof(received)) == sizeof(received));
+        assert(!memcmp(received, "held", sizeof(received)) && close(file) == 0);
+        assert(snag_unlink_at(fd, "after-rename/moved", false) == 0);
+        assert(snag_unlink_at(fd, "after-rename/data", false) == 0);
+    }
     assert(nested && rmdir(nested) == 0);
     free(nested);
     assert(close(fd) == 0);

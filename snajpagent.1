@@ -2155,6 +2155,18 @@ directory.  These target modern Linux with x86-64, ARMv8-A or i686 baselines;
 older-kernel compatibility requires separate qualification.
 The i686 executable is 32-bit with 64-bit file offsets and musl time_t;
 Pentium II/III CPU probes do not establish Linux 2.4 kernel support.
+.PP
+On Linux, filesystem operations first use native descriptor-relative calls.
+If the kernel reports ENOSYS, the platform layer uses the held directory
+through /proc/self/fd and older open/lstat/link/rename/mkdir/unlink calls.
+This fallback requires working procfs descriptor traversal; it does not mount
+procfs, change the process working directory or invoke external commands.
+No-follow, file-type, private-permission and exclusive-creation checks remain.
+The extra pathname prefix can reduce the usable path length, and procfs
+replacement or concurrent descriptor closure is not made race-free.
+Legacy close-on-exec setup is non-atomic.
+These fallbacks alone do not qualify a complete old-kernel runtime:
+threading, clocks and dependency syscall requirements still apply.
 .TP
 .BR "make prod-macos-arm64" , " make prod-macos-x86_64"
 Cross-build a macOS 11+ executable with static application libraries and CA

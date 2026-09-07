@@ -2259,11 +2259,75 @@ snag_directory_lock_release(struct snag_directory_lock *lock)
     return rc;
 }
 
+#if defined(__linux__)
+/* Old kernels lack *at syscalls. Procfs resolves through the held directory,
+ * including after rename; never change the multithreaded process's cwd. */
+static const char *
+legacy_at_path(int dirfd, const char *path, char out[PATH_MAX])
+{
+    struct stat held, linked;
+
+    if (!*path) {
+        errno = ENOENT;
+        return NULL;
+    }
+    if (*path == '/' || dirfd == AT_FDCWD)
+        return path;
+    if (fstat(dirfd, &held) < 0)
+        return NULL;
+    if (!S_ISDIR(held.st_mode)) {
+        errno = ENOTDIR;
+        return NULL;
+    }
+    int prefix = snprintf(out, PATH_MAX, "/proc/self/fd/%d", dirfd);
+    if (prefix < 0 || prefix >= PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    if (stat(out, &linked) < 0)
+        return NULL;
+    if (held.st_dev != linked.st_dev || held.st_ino != linked.st_ino || !S_ISDIR(linked.st_mode)) {
+        errno = ESTALE;
+        return NULL;
+    }
+    int length = snprintf(out + prefix, PATH_MAX - (size_t)prefix, "/%s", path);
+    if (length < 0 || (size_t)length >= PATH_MAX - (size_t)prefix) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    return out;
+}
+#endif
+
+static int
+open_at(int dirfd, const char *path, int flags, mode_t mode)
+{
+    int fd = openat(dirfd, path, flags, mode);
+#if defined(__linux__)
+    if (fd < 0 && errno == ENOSYS) {
+        char resolved[PATH_MAX];
+        const char *legacy = legacy_at_path(dirfd, path, resolved);
+        if (!legacy)
+            return -1;
+        fd = open(legacy, flags, mode);
+        /* Linux before 2.6.23 ignores O_CLOEXEC: set it explicitly. This
+         * cannot make the legacy open/exec race atomic. */
+        if (fd >= 0 && (flags & O_CLOEXEC) && fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+            int error = errno;
+            (void)close(fd);
+            errno = error;
+            return -1;
+        }
+    }
+#endif
+    return fd;
+}
+
 static int
 open_read(int dirfd, const char *path, bool directory)
 {
-    int fd = openat(dirfd, path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK |
-                    (directory ? O_DIRECTORY : 0));
+    int fd = open_at(dirfd, path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK |
+                    (directory ? O_DIRECTORY : 0), 0);
     struct stat st;
     int error, rc;
 
@@ -2404,31 +2468,65 @@ snag_lstat(const char *path, snag_file_info *out)
 int
 snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 {
-    return fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
+    int rc = fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
+#if defined(__linux__)
+    if (rc < 0 && errno == ENOSYS) {
+        char resolved[PATH_MAX];
+        const char *legacy = legacy_at_path(dirfd, path, resolved);
+        return legacy ? lstat(legacy, out) : -1;
+    }
+#endif
+    return rc;
 }
 
 int
 snag_unlink_at(int dirfd, const char *path, bool directory)
 {
-    return unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
+    int rc = unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
+#if defined(__linux__)
+    if (rc < 0 && errno == ENOSYS) {
+        char resolved[PATH_MAX];
+        const char *legacy = legacy_at_path(dirfd, path, resolved);
+        return legacy ? (directory ? rmdir(legacy) : unlink(legacy)) : -1;
+    }
+#endif
+    return rc;
 }
 
 int
 snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 {
-    return renameat(from_dir, from, to_dir, to);
+    int rc = renameat(from_dir, from, to_dir, to);
+#if defined(__linux__)
+    if (rc < 0 && errno == ENOSYS) {
+        char source[PATH_MAX], destination[PATH_MAX];
+        const char *old = legacy_at_path(from_dir, from, source);
+        const char *next = old ? legacy_at_path(to_dir, to, destination) : NULL;
+        return next ? rename(old, next) : -1;
+    }
+#endif
+    return rc;
 }
 
 int
 snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
 {
-    return linkat(from_dir, from, to_dir, to, 0);
+    int rc = linkat(from_dir, from, to_dir, to, 0);
+#if defined(__linux__)
+    if (rc < 0 && errno == ENOSYS) {
+        char source[PATH_MAX], destination[PATH_MAX];
+        const char *old = legacy_at_path(from_dir, from, source);
+        const char *next = old ? legacy_at_path(to_dir, to, destination) : NULL;
+        return next ? link(old, next) : -1;
+    }
+#endif
+    return rc;
 }
 
 int
 snag_create_output_at(int dirfd, const char *path)
 {
-    return openat(dirfd, path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0666);
+    return open_at(dirfd, path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0666);
 }
 
 int
@@ -2440,7 +2538,15 @@ snag_mkdir_private(const char *path)
 int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
-    return mkdirat(dirfd, path, 0700);
+    int rc = mkdirat(dirfd, path, 0700);
+#if defined(__linux__)
+    if (rc < 0 && errno == ENOSYS) {
+        char resolved[PATH_MAX];
+        const char *legacy = legacy_at_path(dirfd, path, resolved);
+        return legacy ? mkdir(legacy, 0700) : -1;
+    }
+#endif
+    return rc;
 }
 
 static int
@@ -2448,7 +2554,7 @@ open_private(int dirfd, const char *path, int flags, bool tighten)
 {
     struct stat st;
     struct snag_file_privacy privacy;
-    int fd = openat(dirfd, path, O_RDWR | O_CLOEXEC | O_NOFOLLOW | flags, 0600);
+    int fd = open_at(dirfd, path, O_RDWR | O_CLOEXEC | O_NOFOLLOW | flags, 0600);
 
     if (fd < 0)
         return -1;
