@@ -1415,7 +1415,7 @@ def run_tool_spinner_delay_case(binary, root):
                                 80, 16, args=("--no-listen", "--no-client"))
         def bottom():
             return terminal.capture().rstrip().splitlines()[-1]
-        try:
+        with fixture_terminal(terminal, case / "screen.txt"):
             terminal.wait("IDLE>")
             terminal.submit("text_tool")
             wait_for_terminal_event(case / "s", {"turn_completed"}, 5.0)
@@ -1445,8 +1445,6 @@ def run_tool_spinner_delay_case(binary, root):
                 terminal.send_key("C-u")
             terminal.exit()
             print(f"tool spinner off-delay {delay}: ok", flush=True)
-        finally:
-            close_fixture_terminal(terminal)
 
 
 def run_tool_case(binary, root):

@@ -3389,7 +3389,6 @@ def test_network_live_nick_prompt():
         child.send_wait(b"network_view_stream\r", "@operator8 › network_view_stream".encode(), start=start)
         session_id = new_session(before, child)
         end = child.wait("◴".encode(), start=start)
-        session_id = new_session(before)
         visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", child.buf[start:end])
         assert re.search("[0-9]{2}:[0-9]{2}:[0-9]{2} operator8@".encode(),
                          visible), visible
@@ -3557,11 +3556,6 @@ def test_network_view_routing_and_atomic_catchup():
         session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
         peer_agent = IRCClient(port, "peerbot", agent=True)
-        deadline = time.monotonic() + 8.0
-        while session_ids() == before:
-            assert time.monotonic() < deadline, bytes(child.buf)
-            child.read_once(0.02)
-        session_id = new_session(before)
 
         # Membership events also start turns. Finish setup before testing two
         # distinct messages, or the second may legitimately steer a join turn.
@@ -3704,11 +3698,6 @@ def test_chat_mention_completion_and_steering():
         child.send_wait(b"session setup\r", "localop › session setup".encode())
         session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
-        deadline = time.monotonic() + 8.0
-        while session_ids() == before:
-            assert time.monotonic() < deadline, bytes(child.buf)
-            child.read_once(0.02)
-        session_id = new_session(before)
         wait_turn_completed(child, session_id, "event=join sender=remoteop")
         for prompt, marker in (("slow", b"working slowly"),
                                ("managed_command_steer", b"fixture managed steering wait")):
@@ -3821,11 +3810,6 @@ def test_network_chat_and_managed_mention():
         peer_agent = IRCClient(port, "peerbot", agent=True)
 
         stream_start = len(child.buf)
-        deadline = time.monotonic() + 8.0
-        while session_ids() == before:
-            assert time.monotonic() < deadline, bytes(child.buf)
-            child.read_once(0.02)
-        session_id = new_session(before)
         for nick in ("remoteop", "peerbot"):
             wait_turn_completed(child, session_id, f"event=join sender={nick}")
         model_wire_start = len(human.buf)
