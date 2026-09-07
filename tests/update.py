@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 
-old, new, local, stable = (Path(p).resolve() for p in sys.argv[1:])
+old, new, local, stable, aside = (Path(p).resolve() for p in sys.argv[1:])
 marker = b"\nsnajpagent-update-v1\nsnajpagent\nlinux-x86_64\nhttps://publisher.test\n"
 assert marker in old.read_bytes() and marker in new.read_bytes()
 assert marker not in local.read_bytes()
@@ -127,6 +127,24 @@ with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ["TMPDIR"]) as 
     result = run(exe)
     assert "updated ===" in result.stderr and exe.read_bytes() == new.read_bytes()
     print("PASS: cancellation, concurrent instances and recovery after interrupted download")
+    exe = reset("aside")
+    shutil.copyfile(aside, exe)
+    result = run(exe)
+    assert "updated ===" in result.stderr and exe.read_bytes() == new.read_bytes()
+    backup = exe.parent / ".snajpagent.update-old.exe"
+    assert backup.read_bytes() == aside.read_bytes()
+    exe = reset("aside-crash")
+    shutil.copyfile(aside, exe)
+    result = subprocess.run([exe, url, "10000"], capture_output=True,
+                            env=dict(os.environ, SNAJPAGENT_TEST_RENAME_CRASH="1"), timeout=10)
+    assert result.returncode == 79 and not exe.exists()
+    backup = exe.parent / ".snajpagent.update-old.exe"
+    assert backup.read_bytes() == aside.read_bytes()
+    result = run(backup)
+    assert not result.stderr and exe.read_bytes() == aside.read_bytes()
+    result = run(exe)
+    assert "updated ===" in result.stderr and exe.read_bytes() == new.read_bytes()
+    print("PASS: rename-aside replacement and recovery after interrupted installation")
     exe = reset("local")
     shutil.copyfile(local, exe)
     result = run(exe)

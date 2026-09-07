@@ -28,6 +28,7 @@
 /tests/update-new
 /tests/update-local
 /tests/update-stable
+/tests/update-aside
 
 # Release and evidence artifacts
 /build/

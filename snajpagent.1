@@ -1177,6 +1177,51 @@ Explicit
 .B \-d
 roots are independent of this setting.  See
 .BR FILES .
+.TP
+.B auto_update
+Check and install binary updates in a background thread on ordinary launch.
+Default: true in official stable binaries; false in development binaries whose
+version has a commit suffix.  Set true to opt a development installation in.
+Ordinary local builds have no updater unless explicitly enabled at build time;
+setting this option cannot enable a capability omitted from the executable.
+Help, version, login and session-listing commands do not run the updater.
+Configuration changes apply to the next launch's update attempt.
+.TP
+.B update_url
+HTTPS URL for the latest executable matching this installation.  The built-in
+URL uses the publisher's latest or latest-dev directory and the exact build
+target; universal macOS and legacy Linux remain their original variants.
+The updater reads the URL with .json appended, then downloads the immutable
+version URL it describes.  Treat a URL override as a publisher trust decision.
+Only HTTPS transfers are allowed; verification checks the declared SHA-256,
+size, version and embedded product, target and publisher identity.  Trust comes
+from HTTPS and its certificate roots, not a separate release-signing key.
+.PP
+An update does not delay ordinary startup or provider work.  The existing process
+continues running its original version.  After successful installation one
+local, distinct banner gives restart advice and a changelog URL.  No automatic
+restart, modal confirmation or recurring reminder occurs.  Script output is
+unchanged; the banner uses stderr.  The running version remains unchanged until
+restart, including the version shown by the current process.
+.PP
+The executable and its directory must be writable and owned by the running
+user; shared-writable, privileged, symlinked final files and hardlinked files
+are rejected.  Prefer a user-owned standalone install.  Do not enable updates
+for package-managed installations.  The updater never elevates privileges.
+Failed checks/downloads leave the old executable in place and ordinary work
+continues; there is one attempt per launch.  The bundled resolver is asynchronous;
+a custom libcurl without asynchronous DNS disables updating to preserve exit
+responsiveness.  HTTPS proxy and SSL_CERT_FILE settings also apply to updates;
+provider API credentials are never sent.
+.PP
+A private sibling .EXECUTABLE.update-lock coordinates updater instances.  A
+partial .EXECUTABLE.update-new is discarded under that lock on the next attempt.
+Unix installs use same-directory rename.  Windows keeps the old executable as
+.EXECUTABLE.update-old.exe when the mapped file cannot be replaced directly.
+If interrupted between the renames, run that retained executable to restore
+the missing original name, or rename it back while the agent is stopped.
+Do not delete it while another instance is using it.  There is no session-format
+rollback promise: keeping an older executable does not undo newer session data.
 .SS "provider NAME"
 Up to 16 ordered named sections are accepted.  The spelling
 .B [provider]

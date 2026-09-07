@@ -217,6 +217,7 @@ check: $(TEST_BIN)
 	else \
 		printf '%s\n' 'tmux_terminal: skipped (tmux unavailable)'; \
 	fi
+	$(MAKE) updatecheck
 	$(MAKE) stylecheck
 	$(MAKE) depscheck
 	$(MAKE) portabilitycheck
@@ -342,7 +343,7 @@ sizecheck:
 		test "$$test_c" -le "$$test_c_hard"
 
 clean:
-	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN) tests/update-old tests/update-new tests/update-local tests/update-stable
+	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN) tests/update-old tests/update-new tests/update-local tests/update-stable tests/update-aside
 	rm -rf tests/.fixture-obj build debug-$(BIN) $(BIN).debug $(BIN).dSYM
 
 help:
@@ -413,12 +414,12 @@ FORCE:
 # Focused loopback tests build real executable variants from the same source.
 UPDATE_TEST_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/http.c src/update.c tests/test_update.c
 UPDATE_TEST_FLAGS = -DSNAJPAGENT_TEST_UPDATE=1 -DSNAJPAGENT_UPDATE_BASE='"https://publisher.test"' -DSNAJPAGENT_UPDATE_TARGET='"linux-x86_64"'
-tests/update-old tests/update-new tests/update-local tests/update-stable: $(UPDATE_TEST_SRC) $(HEADERS)
+tests/update-old tests/update-new tests/update-local tests/update-stable tests/update-aside: $(UPDATE_TEST_SRC) $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CURL_CFLAGS) $(CFLAGS) -O0 $(LDFLAGS) -Isrc \
 		-USNAJPAGENT_VERSION -USNAJPAGENT_UPDATE_BASE -USNAJPAGENT_UPDATE_URL -USNAJPAGENT_UPDATE_TARGET \
 		-DSNAJPAGENT_VERSION='"$(if $(filter tests/update-new,$@),0.99.2-bbbbbbb,$(if $(filter tests/update-stable,$@),0.99.2,0.99.2-aaaaaaa))"' \
 		$(if $(filter-out tests/update-local,$@),$(UPDATE_TEST_FLAGS) -DSNAJPAGENT_UPDATE_URL='"https://publisher.test/$(if $(filter tests/update-stable,$@),latest,latest-dev)/snajpagent-linux-x86_64"') \
-		-o $@ $(UPDATE_TEST_SRC) $(LDLIBS) $(CURL_LIBS)
-updatecheck: tests/update-old tests/update-new tests/update-local tests/update-stable
+		$(if $(filter tests/update-aside,$@),-DSNAJPAGENT_TEST_RENAME_ASIDE=1) -o $@ $(UPDATE_TEST_SRC) $(LDLIBS) $(CURL_LIBS)
+updatecheck: tests/update-old tests/update-new tests/update-local tests/update-stable tests/update-aside
 	python3 tests/update.py $^
 .PHONY: updatecheck
