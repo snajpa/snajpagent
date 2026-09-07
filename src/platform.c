@@ -3009,7 +3009,12 @@ snag_random_bytes(unsigned char *out, size_t len)
 
     if (!len)
         return 0;
+#if defined(__FreeBSD__)
+    /* FreeBSD's urandom is a symlink; open its kernel device directly. */
+    fd = open("/dev/random", O_RDONLY
+#else
     fd = open("/dev/urandom", O_RDONLY
+#endif
 #ifdef O_CLOEXEC
         | O_CLOEXEC
 #endif
