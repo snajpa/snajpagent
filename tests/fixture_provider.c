@@ -249,45 +249,28 @@ fixture_response(const char *prompt, const json_t *steering,
     int control;
     if (strcmp(prompt, "crash") == 0 && cycle == 1u)
         _exit(99);
-    if (strcmp(prompt, "provider_fail") == 0 && cycle == 1u) {
-        if (error_size)
-            (void)snprintf(error, error_size, "fixture provider failed");
-        return -1;
-    }
+    if (strcmp(prompt, "provider_fail") == 0 && cycle == 1u)
+        return snag_errorf(error, error_size, "fixture provider failed");
     if (strcmp(prompt, "empty_message_recovery") == 0 && cycle == 1u) {
         if (failure)
             failure->output_correction = SNAG_OUTPUT_CORRECTION_EMPTY;
-        if (error_size)
-            (void)snprintf(error, error_size, "%s",
-                           SNAG_EMPTY_OUTPUT_CORRECTION);
-        return -1;
+        return snag_errorf(error, error_size, "%s", SNAG_EMPTY_OUTPUT_CORRECTION);
     }
     if (strcmp(prompt, "oversized_message_recovery") == 0 && cycle == 1u) {
         if (failure)
             failure->output_correction = SNAG_OUTPUT_CORRECTION_OVERSIZED;
-        if (error_size)
-            (void)snprintf(error, error_size, "%s",
-                           SNAG_OVERSIZED_OUTPUT_CORRECTION);
-        return -1;
+        return snag_errorf(error, error_size, "%s", SNAG_OVERSIZED_OUTPUT_CORRECTION);
     }
     if (set_response_id(graph, cycle, "complete") < 0)
         goto allocation;
     if (strcmp(prompt, "empty_message_recovery") == 0) {
-        if (!steering_contains(steering, SNAG_EMPTY_OUTPUT_CORRECTION)) {
-            if (error_size)
-                (void)snprintf(error, error_size,
-                               "fixture did not receive empty correction");
-            return -1;
-        }
+        if (!steering_contains(steering, SNAG_EMPTY_OUTPUT_CORRECTION))
+            return snag_errorf(error, error_size, "fixture did not receive empty correction");
         return final_answer(&out, "msg_fixture_empty_recovered", "empty message recovered");
     }
     if (strcmp(prompt, "oversized_message_recovery") == 0) {
-        if (!steering_contains(steering, SNAG_OVERSIZED_OUTPUT_CORRECTION)) {
-            if (error_size)
-                (void)snprintf(error, error_size,
-                               "fixture did not receive oversized correction");
-            return -1;
-        }
+        if (!steering_contains(steering, SNAG_OVERSIZED_OUTPUT_CORRECTION))
+            return snag_errorf(error, error_size, "fixture did not receive oversized correction");
         return final_answer(&out, "msg_fixture_oversized_recovered", "oversized message recovered");
     }
     if (strcmp(prompt, "context_anchor_chain") == 0) {
@@ -300,12 +283,8 @@ fixture_response(const char *prompt, const json_t *steering,
     if (strcmp(prompt, SNAG_GOAL_CONTINUATION_TEXT) == 0) {
         if (!goal_prompt)
             goto allocation;
-        if (strcmp(goal_prompt, "failing goal") == 0 && cycle <= 4u) {
-            if (error_size)
-                (void)snprintf(error, error_size,
-                               "fixture goal provider failed");
-            return -1;
-        }
+        if (strcmp(goal_prompt, "failing goal") == 0 && cycle <= 4u)
+            return snag_errorf(error, error_size, "fixture goal provider failed");
         if (strcmp(goal_prompt, "refusing goal") == 0)
             return emit_public(&out, SNAG_ITEM_REFUSAL,
                 SNAG_PHASE_FINAL_ANSWER, "msg_fixture_goal_refusal", "I cannot continue this goal.", 0);
@@ -431,12 +410,9 @@ fixture_response(const char *prompt, const json_t *steering,
     }
     if (strstr(prompt, "network_count_wait")) {
         if (cycle == 1u &&
-            !steering_contains(steering, "network count mention")) {
-            if (error_size)
-                (void)snprintf(error, error_size,
+            !steering_contains(steering, "network count mention"))
+            return snag_errorf(error, error_size,
                                "fixture count request was not rebuilt for IRC mention");
-            return -1;
-        }
         if (cycle == 1u)
             return add_irc_send_call(graph, cycle, 0u,
                                      "network count mention reply");
@@ -449,12 +425,8 @@ fixture_response(const char *prompt, const json_t *steering,
             return final_answer(&out, "msg_fixture_network_reminder_unsent",
                 "network reminder unsent local reply");
         if (cycle == 3u) {
-            if (!steering_contains(steering, "Use irc_send")) {
-                if (error_size)
-                    (void)snprintf(error, error_size,
-                                   "fixture did not receive irc_send reminder");
-                return -1;
-            }
+            if (!steering_contains(steering, "Use irc_send"))
+                return snag_errorf(error, error_size, "fixture did not receive irc_send reminder");
             return add_irc_send_call(graph, cycle, 0u,
                                      "network reminder reply");
         }
@@ -478,12 +450,9 @@ fixture_response(const char *prompt, const json_t *steering,
             return add_stdin_call(graph, cycle, 0u, managed_handle, false);
         }
         if (cycle == 3u) {
-            if (!steering_contains(steering, "network managed mention")) {
-                if (error_size)
-                    (void)snprintf(error, error_size,
+            if (!steering_contains(steering, "network managed mention"))
+                return snag_errorf(error, error_size,
                                    "fixture did not receive managed IRC mention");
-                return -1;
-            }
             if (add_irc_send_call(graph, cycle, 0u,
                                   "network managed reaction") < 0 ||
                 add_stdin_call(graph, cycle, 1u,
@@ -498,12 +467,8 @@ fixture_response(const char *prompt, const json_t *steering,
             return add_call(graph, workspace, cycle, 0u,
                             "fixture managed steering wait");
         if (cycle == 2u) {
-            if (!steering_contains(steering, "terminate it")) {
-                if (error_size)
-                    (void)snprintf(error, error_size,
-                                   "fixture did not receive command steering");
-                return -1;
-            }
+            if (!steering_contains(steering, "terminate it"))
+                return snag_errorf(error, error_size, "fixture did not receive command steering");
             return add_terminate_call(graph, cycle, 0u, managed_handle);
         }
         return final_answer(&out, "msg_fixture_managed_steered", "managed command steering complete");
@@ -880,9 +845,7 @@ flood_done:
     return final_answer(&out, "msg_fixture_default", "fixture answer");
 
 allocation:
-    if (error_size)
-        (void)snprintf(error, error_size, "fixture allocation failed");
-    return -1;
+    return snag_errorf(error, error_size, "fixture allocation failed");
 }
 
 int
@@ -893,11 +856,8 @@ snag_fixture_tool(const struct snag_response_item *call,
     const char *command;
     const char *handle;
 
-    if (!call || call->kind != SNAG_ITEM_TOOL_CALL) {
-        if (error_size)
-            (void)snprintf(error, error_size, "fixture received an invalid tool call");
-        return -1;
-    }
+    if (!call || call->kind != SNAG_ITEM_TOOL_CALL)
+        return snag_errorf(error, error_size, "fixture received an invalid tool call");
     if (strcmp(call->name, "write_stdin") == 0) {
         handle = snag_json_string(call->arguments, "handle");
         if (!handle || strcmp(handle, managed_handle) != 0) {
@@ -915,11 +875,8 @@ snag_fixture_tool(const struct snag_response_item *call,
         return 0;
     }
     if (strcmp(call->name, "exec_command") != 0 ||
-        !(command = snag_json_string(call->arguments, "command"))) {
-        if (error_size)
-            (void)snprintf(error, error_size, "fixture received an invalid tool call");
-        return -1;
-    }
+        !(command = snag_json_string(call->arguments, "command")))
+        return snag_errorf(error, error_size, "fixture received an invalid tool call");
     if (strstr(command, "crash"))
         _exit(98);
     if (strstr(command, "managed steering wait") ||
@@ -965,17 +922,12 @@ snag_fixture_tool(const struct snag_response_item *call,
                                       strstr(command, "fail") == NULL ?
                                       "fixture command succeeded" :
                                       "fixture command failed");
-    if (!*result) {
-        if (error_size)
-            (void)snprintf(error, error_size, "fixture result allocation failed");
-        return -1;
-    }
+    if (!*result)
+        return snag_errorf(error, error_size, "fixture result allocation failed");
     return 0;
 
 allocation:
-    if (error_size)
-        (void)snprintf(error, error_size, "fixture allocation failed");
-    return -1;
+    return snag_errorf(error, error_size, "fixture allocation failed");
 }
 
 /* Resolve scheduler references against the actual provider request. Fixture
