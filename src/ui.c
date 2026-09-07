@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "ui.h"
 #include "wake.h"
+#include "update.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -10,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 
 struct ui_snapshot {
     enum snag_render_view view;
@@ -64,6 +66,7 @@ struct snag_ui_display {
     struct snag_render render;
     struct snag_term term;
     struct snag_ui_prompt prompt;
+    struct snag_update *update;
     struct snag_ui_runtime *runtime;
     uint64_t turn_generation;
     bool suspended;
@@ -355,6 +358,11 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_HISTORY_SNAPSHOT:
         return snag_term_history_set(term, &command->data.history.entries,
                                     command->data.history.refresh);
+    case SNAG_UI_UPDATE:
+        if (!display->update)
+            display->update = snag_update_start(command->label, command->text,
+                                                display->runtime->commands[1]);
+        return 0;
     case SNAG_UI_STOP: return 0;
     case SNAG_UI_PUBLIC: case SNAG_UI_RAW: break; /* Sliced by apply_display. */
     }
@@ -577,7 +585,10 @@ presentation_main(void *opaque)
         struct ui_message *message;
         snag_wakeup_drain(runtime->commands[0]);
         message = atomic_exchange_explicit(&runtime->request, NULL, memory_order_acquire);
-        if (read_input(&display, message ? 0 : -1) < 0) {
+        const char *banner = display.suspended ? NULL : snag_update_take(display.update);
+        if (banner)
+            (void)snag_render_update(&display.render, banner);
+        if (read_input(&display, message || banner ? 0 : -1) < 0) {
             atomic_store(&runtime->fatal, errno ? errno : EIO);
             display.input_closed = true;
             snag_wakeup_send(runtime->actions.wake[1]);
@@ -603,6 +614,7 @@ presentation_main(void *opaque)
                 break;
         }
     }
+    snag_update_stop(display.update);
     snag_render_free(&display.render);
     if (display.local) {
         free(display.local->text);
@@ -735,6 +747,13 @@ snag_ui_free(struct snag_ui *ui)
     free(runtime);
     ui->runtime = NULL;
     snag_history_free(&ui->history);
+}
+
+int
+snag_ui_update(struct snag_ui *ui, const char *program, const char *url)
+{
+    struct ui_message message = {.command = {.kind = SNAG_UI_UPDATE, .label = program}};
+    return send_message(ui, &message, url);
 }
 
 int

@@ -2,6 +2,7 @@
 #include "config.h"
 #include "fs.h"
 #include "base.h"
+#include "snajpagent.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -103,6 +104,10 @@ snag_config_init(struct snag_config *config)
     config->max_goal_prompt_bytes = 256u * 1024u;
     config->max_turn_retries = 3u;
     config->read_agents_md = true;
+#ifdef SNAJPAGENT_UPDATE_URL
+    config->auto_update = strchr(SNAJPAGENT_VERSION, '-') == NULL;
+    (void)snag_strcpy(config->update_url, sizeof(config->update_url), SNAJPAGENT_UPDATE_URL);
+#endif
     config->color = SNAG_COLOR_AUTO;
     config->markdown = true;
     config->resume_history_turns = 2u;
@@ -608,7 +613,7 @@ claim_key(struct parse_state *state, const char *key)
 }
 
 enum setting_kind {
-    SET_TEXT, SET_HEADER, SET_U32, SET_U64, SET_BOOL, SET_SPINNER
+    SET_TEXT, SET_HEADER, SET_HTTPS, SET_U32, SET_U64, SET_BOOL, SET_SPINNER
 };
 
 static int
@@ -625,6 +630,8 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         void *target;
         uint64_t min, max;
     } settings[] = {
+        {SECTION_AGENT, "auto_update", SET_BOOL, &config->auto_update, 0, 0},
+        {SECTION_AGENT, "update_url", SET_HTTPS, config->update_url, 0, sizeof(config->update_url)},
         {SECTION_AGENT, "provider", SET_TEXT, config->provider, 0, sizeof(config->provider)},
         {SECTION_AGENT, "model", SET_TEXT, config->model, 0, sizeof(config->model)},
         {SECTION_AGENT, "reasoning_effort", SET_TEXT, config->reasoning_effort, 0, sizeof(config->reasoning_effort)},

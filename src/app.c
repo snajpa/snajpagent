@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "http.h"
 #include "fs.h"
 #include "base.h"
 #include "config.h"
@@ -4169,6 +4170,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     app.model_cache = (struct snag_model_cache){0};
     snag_store_init(&app.store);
     snag_session_init(&app.session);
+    (void)snag_http_init();
     if (snag_ui_init(&app.ui) < 0)
         return 3;
     atomic_store(&shutdown_ui, &app.ui);
@@ -4255,6 +4257,10 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         invalid_message = "reasoning effort is empty, oversized, or invalid UTF-8";
         goto invalid;
     }
+#ifdef SNAJPAGENT_UPDATE_URL
+    if (!cli->list && config.auto_update)
+        (void)snag_ui_update(&app.ui, program, config.update_url);
+#endif
     workspace = current_workspace(error, sizeof(error));
     if (!workspace) {
         goto fail;

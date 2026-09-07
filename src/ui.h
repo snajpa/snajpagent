@@ -30,7 +30,7 @@ enum snag_ui_operation {
     SNAG_UI_OPEN, SNAG_UI_EXTERNAL, SNAG_UI_PROMPT, SNAG_UI_SPINNERS, SNAG_UI_DRAFT,
     SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
-    SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT, SNAG_UI_STOP
+    SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT, SNAG_UI_UPDATE, SNAG_UI_STOP
 };
 
 struct snag_ui_prompt {
@@ -70,6 +70,7 @@ struct snag_ui_command {
 int snag_ui_send(struct snag_ui *ui, struct snag_ui_command command);
 
 int snag_ui_init(struct snag_ui *ui);
+int snag_ui_update(struct snag_ui *ui, const char *program, const char *url);
 int snag_ui_set_verbosity(struct snag_ui *ui, unsigned int level);
 unsigned int snag_ui_verbosity(const struct snag_ui *ui);
 bool snag_ui_enabled(const struct snag_ui *ui, enum snag_presentation kind);

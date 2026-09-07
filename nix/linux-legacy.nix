@@ -106,11 +106,11 @@ in {
     static = staticTarget;
   }).application args).overrideAttrs (old: {
     preBuild = builtins.replaceStrings
-      [ "-D_FILE_OFFSET_BITS=64 -Ibuild" "-static-pie -flto -Wl,--gc-sections"
-        "-std=c11 -Os" ]
+      [ "-D_FILE_OFFSET_BITS=64 -Ibuild" "-static-pie "
+        "-std=c11 " ]
       [ "-D_FILE_OFFSET_BITS=64 -DSNAJPAGENT_LEGACY_LINUX_CLOCK -Ibuild"
-        "-static -no-pie -flto -Wl,--gc-sections,--wrap=clock_gettime"
-        "-std=c11 -Os -fno-pie" ]
+        "-static -no-pie -Wl,--wrap=clock_gettime "
+        "-std=c11 -fno-pie " ]
       old.preBuild;
   });
 }

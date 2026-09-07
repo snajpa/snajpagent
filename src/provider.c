@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "provider.h"
+#include "http.h"
 
 #include "base.h"
 #include "auth.h"
@@ -24,49 +25,6 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
-#ifdef SNAJPAGENT_CA_BUNDLE
-#include <zstd.h>
-#endif
-
-static CURLcode
-provider_trust(CURL *curl)
-{
-    const char *file = getenv("SSL_CERT_FILE");
-    CURLcode rc;
-
-    if (file && *file) {
-        rc = curl_easy_setopt(curl, CURLOPT_CAINFO, file);
-        return rc != CURLE_OK ? rc :
-            curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO, file);
-    }
-#ifdef SNAJPAGENT_CA_BUNDLE
-    static const unsigned char compressed[] = {
-#include SNAJPAGENT_CA_BUNDLE
-    };
-    unsigned long long size = ZSTD_getFrameContentSize(compressed, sizeof(compressed));
-    if (size == ZSTD_CONTENTSIZE_ERROR || size == ZSTD_CONTENTSIZE_UNKNOWN || size >= SIZE_MAX)
-        return CURLE_SSL_CACERT_BADFILE;
-    char *certificates = malloc((size_t)size + 1u);
-    if (!certificates)
-        return CURLE_OUT_OF_MEMORY;
-    size_t decoded = ZSTD_decompress(certificates, (size_t)size, compressed, sizeof(compressed));
-    if (ZSTD_isError(decoded) || decoded != size) {
-        free(certificates);
-        return CURLE_SSL_CACERT_BADFILE;
-    }
-    certificates[decoded] = '\0';
-    struct curl_blob bundle = {
-        certificates, decoded + 1u, CURL_BLOB_COPY
-    };
-    rc = curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &bundle);
-    if (rc == CURLE_OK)
-        rc = curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO_BLOB, &bundle);
-    free(certificates);
-    return rc;
-#else
-    return CURLE_OK;
-#endif
-}
 
 struct provider_ctx {
     struct snag_sse_parser sse;
@@ -89,7 +47,6 @@ struct provider_ctx {
     uint32_t retry_after_ms;
     bool retry_after_present;
     bool body_failed;
-    bool curl_global;
     bool semantic_body_seen;
     bool request_may_have_been_sent;
     bool new_input;
@@ -435,20 +392,18 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
     struct curl_slist *headers = NULL;
     CURL *curl = NULL;
     int rc = -1;
-    bool initialized = false;
 
     *response = NULL;
     *status = 0;
     struct snag_buf output = {.max = (96u * 1024u)};
     if (snprintf(url, sizeof(url), "%s%s", issuer, path) >= (int)sizeof(url) ||
-        curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+        snag_http_init() != CURLE_OK)
         goto out;
-    initialized = true;
     curl = curl_easy_init();
     (void)snprintf(header, sizeof(header), "Content-Type: %s", type);
     headers = curl_slist_append(NULL, header);
     if (!curl || !headers ||
-        provider_trust(curl) != CURLE_OK ||
+        snag_http_trust(curl) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
@@ -483,8 +438,6 @@ out:
     if (curl)
         curl_easy_cleanup(curl);
     curl_slist_free_all(headers);
-    if (initialized)
-        curl_global_cleanup();
     if (output.data)
         memset(output.data, 0, output.len);
     snag_buf_free(&output);
@@ -1316,8 +1269,6 @@ provider_ctx_finish(struct provider_ctx *ctx, int rc, char *error, size_t error_
     if (ctx->curl)
         curl_easy_cleanup(ctx->curl);
     curl_slist_free_all(ctx->headers);
-    if (ctx->curl_global)
-        curl_global_cleanup();
     snag_buf_free(&ctx->body);
     snag_buf_free(&ctx->error_body);
     snag_sse_free(&ctx->sse);
@@ -1392,10 +1343,9 @@ provider_request_setup(struct provider_ctx *ctx,
     if (written <= 0 || (size_t)written >= sizeof(request_line)) {
         return snag_fail(error, error_size, ENAMETOOLONG, "provider request line is too long");
     }
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
+    if (snag_http_init() != 0) {
         return snag_fail(error, error_size, EIO, "libcurl could not initialize");
     }
-    ctx->curl_global = true;
     ctx->curl = curl_easy_init();
     if (!ctx->curl) {
         return snag_fail(error, error_size, ENOMEM, "libcurl easy handle could not initialize");
@@ -1405,7 +1355,7 @@ provider_request_setup(struct provider_ctx *ctx,
     if (render_request_headers(ctx, request_line, accept, has_body) < 0)
         return snag_errorf(error, error_size, ctx->error[0] ? ctx->error :
                    "provider request headers could not be rendered");
-    if (provider_trust(ctx->curl) != CURLE_OK ||
+    if (snag_http_trust(ctx->curl) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK ||
